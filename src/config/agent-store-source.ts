@@ -6,7 +6,7 @@ import {
   readAgentRosterProperty,
   resolveEffectiveAgentDir,
 } from "../agents/agent-scope-config.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { resolveUserPath } from "../utils.js";
 import { cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import {
@@ -30,9 +30,7 @@ export function readAgentStorePathsFromConfig(env: NodeJS.ProcessEnv, stateDir: 
   try {
     raw = fs.readFileSync(configPath, "utf8");
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
   }
   const parsed = parseConfigJson5(raw);
   if (!parsed.ok) {

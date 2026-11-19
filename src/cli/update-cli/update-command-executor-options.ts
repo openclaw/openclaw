@@ -5,18 +5,16 @@ import type { ManagedUpdateLeaseAuthority } from "./update-command-executor-stat
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 export type UpdateCommandExecutorOptions =
-  | {
-      existingAuthority: Omit<ManagedUpdateLeaseAuthority, "owner">;
-      legacyManagedParent?: never;
-      legacyPackageParent?: never;
-      legacyPackageHandoff?: never;
-    }
-  | {
-      existingAuthority?: never;
-      legacyManagedParent: { runId: string; handoffId: string; root: string };
-      legacyPackageParent?: never;
-      legacyPackageHandoff?: never;
-    }
+  | ({ legacyPackageParent?: never; legacyPackageHandoff?: never } & (
+      | {
+          existingAuthority: Omit<ManagedUpdateLeaseAuthority, "owner">;
+          legacyManagedParent?: never;
+        }
+      | {
+          existingAuthority?: never;
+          legacyManagedParent: { runId: string; handoffId: string; root: string };
+        }
+    ))
   | {
       existingAuthority?: never;
       legacyManagedParent?: never;

@@ -5,6 +5,7 @@ import type {
   OpenClawConfig,
   OpenClawPluginApi,
   PluginLogger,
+  PluginServiceSchedulerV1,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CARD_LOOKBACK_MS,
@@ -25,7 +26,7 @@ import {
   OBSERVATION_JSON_SCHEMA,
 } from "./prompts.js";
 import { LogbookStore } from "./store.js";
-import type { LogbookBatch, LogbookStatus } from "./types.js";
+import type { LogbookBatch } from "./types.js";
 
 const ANALYSIS_TICK_MS = 60 * 1000;
 const PRUNE_TICK_MS = 60 * 60 * 1000;
@@ -62,8 +63,7 @@ function unwrapInvokePayload(raw: unknown): SnapshotPayload | null {
       return null;
     }
   }
-  // Tolerate transports that already deliver the bare node payload.
-  return "base64" in envelope || "error" in envelope ? (envelope as SnapshotPayload) : null;
+  return null;
 }
 
 /** Capture commands in preference order: app nodes first, headless node hosts second. */
@@ -73,11 +73,6 @@ export class LogbookService {
   private store: LogbookStore | null = null;
   private readonly operations = new Set<Promise<unknown>>();
   private stopping: Promise<void> | undefined;
-  private starting: Promise<void> | undefined;
-  private captureTimer: NodeJS.Timeout | null = null;
-  private analysisTimer: NodeJS.Timeout | null = null;
-  private pruneTimer: NodeJS.Timeout | null = null;
-  private captureInFlight = false;
   private analysisInFlight = false;
   private capturePaused = false;
   private captureFailures = 0;
@@ -98,71 +93,56 @@ export class LogbookService {
       logger: PluginLogger;
       dataDir: string;
       workerModuleUrl: URL;
+      scheduler: PluginServiceSchedulerV1;
     },
   ) {}
 
   async start(): Promise<void> {
-    if (this.starting || this.stopping) {
-      throw new Error("Logbook service cannot be started again");
-    }
-    this.starting = this.trackOperation(async () => {
-      const store = await LogbookStore.open(this.deps.dataDir, this.deps.workerModuleUrl);
-      this.store = store;
-      try {
-        if (this.stopping) {
-          return;
-        }
-        // Batches interrupted by a gateway restart go back to pending.
-        await store.resetRunningBatches();
-        if (this.stopping) {
-          return;
-        }
-        await this.pruneStore(store);
-        if (this.stopping) {
-          return;
-        }
-        this.captureTimer = setInterval(() => {
-          void this.captureTick();
-        }, this.config.captureIntervalSeconds * 1000);
-        this.captureTimer.unref?.();
-        this.analysisTimer = setInterval(() => {
-          void this.analysisTick();
-        }, ANALYSIS_TICK_MS);
-        this.analysisTimer.unref?.();
-        this.pruneTimer = setInterval(() => {
-          void this.prune();
-        }, PRUNE_TICK_MS);
-        this.pruneTimer.unref?.();
-        this.deps.logger.info(
-          `logbook: started (capture every ${this.config.captureIntervalSeconds}s, analysis window ${this.config.analysisIntervalMinutes}m, data ${this.deps.dataDir})`,
-        );
-      } catch (error) {
-        this.store = null;
-        await store.close();
-        throw error;
+    const store = await LogbookStore.open(this.deps.dataDir, this.deps.workerModuleUrl);
+    this.store = store;
+    try {
+      if (this.deps.scheduler.signal.aborted) {
+        return;
       }
-    });
-    await this.starting;
+      // Batches interrupted by a gateway restart go back to pending.
+      await store.resetRunningBatches();
+      if (this.deps.scheduler.signal.aborted) {
+        return;
+      }
+      await this.pruneStore(store);
+      if (this.deps.scheduler.signal.aborted) {
+        return;
+      }
+      for (const [id, everyMs, run] of [
+        ["capture", this.config.captureIntervalSeconds * 1000, () => this.captureTick()],
+        ["analysis", ANALYSIS_TICK_MS, () => this.analysisTick()],
+        ["prune", PRUNE_TICK_MS, () => this.prune()],
+      ] as const) {
+        this.deps.scheduler.schedule({ id, delayMs: everyMs, everyMs, run });
+      }
+      this.deps.logger.info(
+        `logbook: started (capture every ${this.config.captureIntervalSeconds}s, analysis window ${this.config.analysisIntervalMinutes}m, data ${this.deps.dataDir})`,
+      );
+    } catch (error) {
+      this.store = null;
+      await store.close();
+      throw error;
+    }
   }
 
   stop(): Promise<void> {
     if (this.stopping) {
       return this.stopping;
     }
-    for (const timer of [this.captureTimer, this.analysisTimer, this.pruneTimer]) {
-      if (timer) {
-        clearInterval(timer);
-      }
-    }
-    this.captureTimer = null;
-    this.analysisTimer = null;
-    this.pruneTimer = null;
+    this.deps.scheduler.beginClose();
     // Admitted work retains its connection through its final writes and error recording.
-    this.stopping = Promise.allSettled(this.operations).then(async () => {
-      const store = this.store;
-      this.store = null;
-      await store?.close();
-    });
+    this.stopping = Promise.allSettled([this.deps.scheduler.stop(), ...this.operations]).then(
+      async () => {
+        const store = this.store;
+        this.store = null;
+        await store?.close();
+      },
+    );
     return this.stopping;
   }
 
@@ -176,7 +156,7 @@ export class LogbookService {
   }
 
   private requireStore(): LogbookStore {
-    if (this.stopping || !this.store) {
+    if (this.deps.scheduler.signal.aborted || !this.store) {
       throw new Error("Logbook service is not running");
     }
     return this.store;
@@ -241,10 +221,9 @@ export class LogbookService {
   private async captureTick(): Promise<void> {
     const store = this.store;
     if (
-      this.stopping ||
+      this.deps.scheduler.signal.aborted ||
       !this.config.captureEnabled ||
       this.capturePaused ||
-      this.captureInFlight ||
       !store
     ) {
       return;
@@ -253,7 +232,6 @@ export class LogbookService {
       this.captureBackoffTicks -= 1;
       return;
     }
-    this.captureInFlight = true;
     return this.trackOperation(async () => {
       try {
         const resolved = await this.resolveNode();
@@ -319,15 +297,13 @@ export class LogbookService {
             `logbook: capture failing (${this.lastCaptureError}); backing off for ${CAPTURE_FAILURE_PAUSE_TICKS} ticks`,
           );
         }
-      } finally {
-        this.captureInFlight = false;
       }
     });
   }
 
   private resolveVisionModel(): {
     ref?: { provider: string; model: string; profile?: string; preferredProfile?: string };
-    source: LogbookStatus["visionModelSource"];
+    source: "config" | "media-defaults" | "missing";
   } {
     if (this.config.visionModel) {
       const ref = parseModelRef(this.config.visionModel);
@@ -373,7 +349,6 @@ export class LogbookService {
     }
     this.analysisInFlight = true;
     return this.trackOperation(async () => {
-      let handedOff = false;
       try {
         // Explicit user action is the retry path for failed batches; automatic
         // retries could loop model spend on a persistently failing batch.
@@ -385,21 +360,17 @@ export class LogbookService {
           }
         }
         this.requireStore();
-        this.analysisInFlight = false;
-        void this.analysisTick();
-        handedOff = true;
-        return { started: true };
       } finally {
-        if (!handedOff) {
-          this.analysisInFlight = false;
-        }
+        this.analysisInFlight = false;
       }
+      void this.analysisTick();
+      return { started: true };
     });
   }
 
   private async analysisTick(): Promise<void> {
     const store = this.store;
-    if (this.stopping || this.analysisInFlight || !store) {
+    if (this.deps.scheduler.signal.aborted || this.analysisInFlight || !store) {
       return;
     }
     // Without a vision model, leave frames unbatched and batches pending so
@@ -408,21 +379,32 @@ export class LogbookService {
     if (!this.resolveVisionModel().ref) {
       const now = Date.now();
       if (now - this.lastModelMissingLogMs > MODEL_MISSING_LOG_INTERVAL_MS) {
-        this.lastModelMissingLogMs = now;
-        this.deps.logger.warn(`logbook: analysis paused; ${MODEL_MISSING_MESSAGE}`);
+        try {
+          const hasPendingWork =
+            (await store.countUnbatchedActiveFrames()) > 0 ||
+            Boolean(await store.nextPendingBatch());
+          if (hasPendingWork && !this.deps.scheduler.signal.aborted) {
+            this.lastModelMissingLogMs = now;
+            this.deps.logger.warn(`logbook: analysis paused; ${MODEL_MISSING_MESSAGE}`);
+          }
+        } catch (error) {
+          if (!this.deps.scheduler.signal.aborted) {
+            this.deps.logger.error(`logbook: analysis tick failed: ${String(error)}`);
+          }
+        }
       }
       return;
     }
     this.analysisInFlight = true;
     return this.trackOperation(async () => {
       try {
-        if (this.stopping) {
+        if (this.deps.scheduler.signal.aborted) {
           return;
         }
         await this.enqueueElapsedWindow(store);
-        for (let i = 0; i < 4 && !this.stopping; i += 1) {
+        for (let i = 0; i < 4 && !this.deps.scheduler.signal.aborted; i += 1) {
           const batch = await store.nextPendingBatch();
-          if (!batch || this.stopping) {
+          if (!batch || this.deps.scheduler.signal.aborted) {
             return;
           }
           await this.runBatch(store, batch);
@@ -457,7 +439,7 @@ export class LogbookService {
   private async enqueueElapsedWindow(store: LogbookStore): Promise<void> {
     // Windows close on elapsed wall-clock or on a capture gap; both cases are
     // resolved by selectBatchFrames against the oldest unbatched frame.
-    while (!this.stopping && (await this.enqueueNextBatch(store))) {}
+    while (!this.deps.scheduler.signal.aborted && (await this.enqueueNextBatch(store))) {}
   }
 
   private async runBatch(store: LogbookStore, batch: LogbookBatch): Promise<void> {
@@ -523,11 +505,7 @@ export class LogbookService {
       startMs: lookbackStart,
       endMs: batch.endMs,
     });
-    const observations = await store.observationsInRange(
-      batch.day,
-      Math.min(lookbackStart, batch.startMs),
-      batch.endMs,
-    );
+    const observations = await store.observationsInRange(batch.day, lookbackStart, batch.endMs);
     const window = revisionWindow({
       batchStartMs: batch.startMs,
       batchEndMs: batch.endMs,
@@ -583,15 +561,10 @@ export class LogbookService {
     if (!parsed.ok) {
       throw new Error(`card synthesis failed validation: ${parsed.error}`);
     }
-    await store.replaceCardsInWindow(batch.day, window.startMs, window.endMs, parsed.drafts, {
-      selectKeyframes: true,
-    });
+    await store.replaceCardsInWindow(batch.day, window.startMs, window.endMs, parsed.drafts);
   }
 
-  async standup(
-    day: string,
-    refresh: boolean,
-  ): Promise<{ day: string; text: string; updatedMs: number }> {
+  async standup(day: string, refresh: boolean) {
     const store = this.requireStore();
     return this.trackOperation(async () => {
       if (!refresh) {
@@ -615,12 +588,7 @@ export class LogbookService {
         purpose: "logbook.standup",
         maxTokens: 800,
       });
-      await store.saveStandup(day, result.text.trim());
-      const saved = await store.getStandup(day);
-      if (!saved) {
-        throw new Error("standup save failed");
-      }
-      return saved;
+      return await store.saveStandup(day, result.text.trim());
     });
   }
 
@@ -667,7 +635,7 @@ export class LogbookService {
     return this.trackOperation(() => store.framesInRange(startMs, endMs));
   }
 
-  async status(): Promise<LogbookStatus> {
+  async status() {
     const store = this.requireStore();
     return this.trackOperation(async () => {
       const today = dayKeyFor(Date.now());
@@ -705,7 +673,7 @@ export class LogbookService {
 
   private async prune(): Promise<void> {
     const store = this.store;
-    if (this.stopping || !store) {
+    if (this.deps.scheduler.signal.aborted || !store) {
       return;
     }
     return this.trackOperation(async () => {

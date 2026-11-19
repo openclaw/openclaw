@@ -1,12 +1,5 @@
 import type { BoardFace } from "../board/settings.ts";
 
-type SessionNavigationHandoff = {
-  pathname: string;
-  sessionKey: string;
-  client: object | null;
-  hello: object | null;
-};
-
 type SessionNavigationHandoffOwner = {
   readonly snapshot: {
     readonly client: object | null;
@@ -29,7 +22,12 @@ type SessionNavigationIntentOwner = {
 };
 const sessionNavigationHandoffs = new WeakMap<
   SessionNavigationHandoffOwner,
-  SessionNavigationHandoff
+  {
+    pathname: string;
+    sessionKey: string;
+    client: object | null;
+    hello: object | null;
+  }
 >();
 const sessionNavigationIntents = new WeakMap<SessionNavigationIntentOwner, object>();
 

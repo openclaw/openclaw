@@ -6,10 +6,12 @@ import {
   createVitestProcessCompletion,
   forceKillVitestProcessGroup,
 } from "../../scripts/vitest-process-group.mts";
-import { withTestTimeout } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 
 describe.skipIf(process.platform !== "linux")("fork OS diagnostics", () => {
-  it("observes a blocked event loop, native threads, and child ancestry without private fields", async () => {
+  it("observes a blocked event loop, native threads, and child ancestry without private fields", async ({
+    signal,
+  }) => {
     const fixture = spawn(
       process.execPath,
       [
@@ -37,15 +39,13 @@ describe.skipIf(process.platform !== "linux")("fork OS diagnostics", () => {
     );
     const completion = createVitestProcessCompletion({ child: fixture, detached: true });
     try {
-      const [ready] = await withTestTimeout(
-        Promise.race([
+      const [ready] = await withinTest(
+        awaitGateBeforeSettlement(
           once(fixture.stdout, "data"),
-          completion.then(() => {
-            throw new Error("diagnostic fixture exited before readiness");
-          }),
-        ]),
-        5_000,
-        "diagnostic fixture did not become ready",
+          completion,
+          "diagnostic fixture exited before readiness",
+        ),
+        signal,
       );
       const descendant = Number(String(ready).trim());
       expect(descendant).toBeGreaterThan(0);

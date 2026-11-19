@@ -10,7 +10,10 @@ export function shortenPathWithHome(
   if (input === home) {
     return prefix;
   }
-  if (input.startsWith(`${home}/`) || input.startsWith(`${home}\\`)) {
+  if (
+    input.startsWith(`${home}/`) ||
+    (process.platform === "win32" && input.startsWith(`${home}\\`))
+  ) {
     return `${prefix}${input.slice(home.length)}`;
   }
   if (process.platform === "win32" && path.win32.isAbsolute(input) && isPathInside(home, input)) {

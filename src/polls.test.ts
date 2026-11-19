@@ -25,6 +25,27 @@ describe("polls", () => {
     ).toThrow(/at most 2/);
   });
 
+  it("floors finite poll numbers and defaults non-finite values", () => {
+    expect(
+      normalizePollInput({
+        question: "Q",
+        options: ["A", "B"],
+        maxSelections: 1.9,
+        durationSeconds: 60.9,
+        durationHours: Number.NaN,
+      }),
+    ).toMatchObject({ maxSelections: 1, durationSeconds: 60, durationHours: undefined });
+    expect(
+      normalizePollInput({
+        question: "Q",
+        options: ["A", "B"],
+        maxSelections: Number.POSITIVE_INFINITY,
+        durationSeconds: Number.NEGATIVE_INFINITY,
+        durationHours: 2.9,
+      }),
+    ).toMatchObject({ maxSelections: 1, durationSeconds: undefined, durationHours: 2 });
+  });
+
   it.each([
     { durationHours: undefined, expected: 24 },
     { durationHours: 999, expected: 48 },
@@ -34,6 +55,13 @@ describe("polls", () => {
       expected,
     );
   });
+
+  it.each([undefined, Number.NaN, Number.POSITIVE_INFINITY])(
+    "preserves the fractional duration fallback for %s",
+    (value) => {
+      expect(normalizePollDurationHours(value, { defaultHours: 2.5, maxHours: 48 })).toBe(2.5);
+    },
+  );
 
   it("rejects both durationSeconds and durationHours", () => {
     expect(() =>

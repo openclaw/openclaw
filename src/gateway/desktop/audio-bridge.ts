@@ -6,9 +6,13 @@ import { WebSocket, WebSocketServer } from "../../../packages/gateway-client/src
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
+import { getRemoteControlUiIngressContext } from "../ingress-attribution.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import type { DesktopAudioSource } from "./managed-linux-audio.js";
-import type { DesktopObserveRequester } from "./observe-requester.js";
+import {
+  hasCurrentDesktopObserveRequester,
+  type DesktopObserveRequester,
+} from "./observe-requester.js";
 
 const DESKTOP_AUDIO_PATH = "/desktop/audio";
 // A quarter second of stereo PCM. Slow viewers disconnect instead of hearing stale audio.
@@ -16,9 +20,9 @@ const MAX_BUFFERED_BYTES = (48_000 * 2 * 2) / 4;
 const audioWss = new WebSocketServer({ noServer: true, maxPayload: 128 });
 
 type AudioObservation = {
-  attach(ws: WebSocket): void;
+  attach(ws: WebSocket, req: IncomingMessage): void;
   close(): void;
-  isCurrent(): boolean;
+  isCurrent(req?: IncomingMessage): boolean;
 };
 const tickets = createOneTimeTicketStore<AudioObservation>({
   ttlMs: 60_000,
@@ -33,7 +37,8 @@ export function mintDesktopAudioObserver(params: {
   const lifetime = new AbortController();
   const ready = createDeferredCore<boolean>();
   let closeSocket: (() => void) | undefined;
-  const isCurrent = () => !lifetime.signal.aborted && params.requester?.isCurrent() !== false;
+  const isCurrent = (req?: IncomingMessage) =>
+    !lifetime.signal.aborted && hasCurrentDesktopObserveRequester(params.requester, req);
   const close = () => {
     if (lifetime.signal.aborted) {
       return;
@@ -47,8 +52,9 @@ export function mintDesktopAudioObserver(params: {
   const minted = tickets.mint({
     close,
     isCurrent,
-    attach(ws) {
-      let generation = 0;
+    attach(ws, req) {
+      const ingress = getRemoteControlUiIngressContext(req);
+      const isAttachCurrent = () => isCurrent(req);
       let captureAbort: AbortController | undefined;
       let transition: Promise<void> | undefined;
       let pending: (() => Promise<void>) | undefined;
@@ -71,17 +77,17 @@ export function mintDesktopAudioObserver(params: {
       };
       const stopKeepalive = startWebSocketKeepalive(ws);
       const sendState = (state: "started" | "stopped" | "error", message?: string) => {
-        if (ws.readyState === WebSocket.OPEN) {
+        if (isAttachCurrent() && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ state, ...(message ? { message } : {}) }));
         }
       };
       const stop = () => {
-        generation += 1;
         pending = undefined;
         captureAbort?.abort();
         captureAbort = undefined;
       };
       closeSocket = () => {
+        ingress?.signal.removeEventListener("abort", close);
         stop();
         stopKeepalive();
         ws.close(1000, "desktop audio observation closed");
@@ -92,9 +98,10 @@ export function mintDesktopAudioObserver(params: {
         // Closing audio must not close the screen, but this one-use audio session is retired.
         close();
       });
+      ingress?.signal.addEventListener("abort", close, { once: true });
       ws.once("error", close);
       ws.on("message", (raw, binary) => {
-        if (!isCurrent()) {
+        if (!isAttachCurrent()) {
           close();
           return;
         }
@@ -121,14 +128,10 @@ export function mintDesktopAudioObserver(params: {
           sendState("stopped");
           return;
         }
-        const currentGeneration = generation;
         const controller = new AbortController();
         captureAbort = controller;
         const current = () =>
-          isCurrent() &&
-          currentGeneration === generation &&
-          !controller.signal.aborted &&
-          ws.readyState === WebSocket.OPEN;
+          isAttachCurrent() && !controller.signal.aborted && ws.readyState === WebSocket.OPEN;
         // Serialize capture teardown and startup so repeated clicks never overlap recorders.
         schedule(async () => {
           if (!(await ready.promise) || !current()) {
@@ -156,22 +159,16 @@ export function mintDesktopAudioObserver(params: {
                 stream.off("error", fail);
                 stream.off("data", forward);
               };
-              const finish = () => {
+              const settle = (complete: () => void) => {
                 if (settled) {
                   return;
                 }
                 settled = true;
                 cleanup();
-                resolve();
+                complete();
               };
-              const fail = (error: Error) => {
-                if (settled) {
-                  return;
-                }
-                settled = true;
-                cleanup();
-                reject(error);
-              };
+              const finish = () => settle(resolve);
+              const fail = (error: Error) => settle(() => reject(error));
               const forward = (chunk: Buffer) => {
                 if (!current()) {
                   controller.abort();
@@ -216,8 +213,8 @@ export function mintDesktopAudioObserver(params: {
           }
         });
       });
-      if (!isCurrent()) {
-        closeSocket();
+      if (!isAttachCurrent()) {
+        close();
       }
     },
   });
@@ -251,11 +248,11 @@ export function handleDesktopAudioUpgrade(
     return false;
   }
   const entry = tickets.consume(resource.searchParams.get("token") ?? "");
-  if (!entry || !entry.isCurrent()) {
+  if (!entry || !entry.isCurrent(req)) {
     entry?.close();
     rejectWebSocketUpgrade(socket, { status: 401 });
     return true;
   }
-  audioWss.handleUpgrade(req, socket, head, (ws) => entry.attach(ws));
+  audioWss.handleUpgrade(req, socket, head, (ws) => entry.attach(ws, req));
   return true;
 }

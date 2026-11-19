@@ -15,6 +15,10 @@ export function canSelectQuestion(
   id: string,
   client: GatewayClient | null,
 ): boolean {
+  const decisionAccess = manager.observe(id)?.authorizeClient;
+  if (decisionAccess) {
+    return decisionAccess(client);
+  }
   return (
     !usesOwnRunQuestionAccess(client) ||
     manager.observe(id)?.sessionAccess?.canSelect(client) === true

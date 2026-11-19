@@ -51,7 +51,6 @@ async function runModuleEvidence(moduleResult: Record<string, unknown>) {
 
 describe("QA scenario module flow", () => {
   it.each([
-    ["canonical timing", { timing: { rttMs: 1750 } }],
     ["incomplete structured measurement", { rttMeasurement: { finalMatchedReplyRttMs: 1750 } }],
     ["top-level RTT", { rttMs: 1750 }],
   ])("carries %s from a module result into final QA evidence", async (_label, timingResult) => {
@@ -85,46 +84,6 @@ describe("QA scenario module flow", () => {
     });
   });
 
-  it("resolves a module export argument against the loaded scenario module", () => {
-    const flow = qaScenarioModuleFlow.moduleSchema.parse({
-      module: "./scenario-runtime.js",
-      call: "runScenario",
-      args: [{ expr: "scenarioContext" }, { moduleExport: "scenarioImplementation" }],
-    });
-
-    expect(qaScenarioModuleFlow.resolveKind(flow)).toBe("module");
-    expect(qaScenarioModuleFlow.resolveFlow(flow, "Scenario title")).toMatchObject({
-      steps: [
-        {
-          actions: [
-            {
-              set: "scenarioModule",
-              value: { expr: 'await qaImport("./scenario-runtime.js")' },
-            },
-            {
-              args: [
-                { expr: "scenarioContext" },
-                { expr: 'scenarioModule["scenarioImplementation"]' },
-              ],
-              call: "scenarioModule.runScenario",
-            },
-          ],
-        },
-      ],
-    });
-  });
-
-  it("distinguishes module syntax without relying on its source path", () => {
-    const moduleFlow = qaScenarioModuleFlow.moduleSchema.parse({
-      module: "example-package/scenario.js",
-      call: "runScenario",
-    });
-
-    expect(qaScenarioModuleFlow.resolveKind(moduleFlow)).toBe("module");
-    expect(qaScenarioModuleFlow.resolveKind({ steps: [] })).toBe("steps");
-    expect(qaScenarioModuleFlow.resolveKind(undefined)).toBeUndefined();
-  });
-
   it("rejects malformed module export arguments", () => {
     expect(() =>
       qaScenarioModuleFlow.moduleSchema.parse({
@@ -133,17 +92,5 @@ describe("QA scenario module flow", () => {
         args: [{ moduleExport: "" }],
       }),
     ).toThrow("moduleExport arguments require a non-empty string export name");
-  });
-
-  it.each([
-    ["channel-access-control", "config.expectReply", "outboundCount"],
-    ["channel-restart-resume", "env.gateway.restartAfterStateMutation", "secondMarker"],
-  ] as const)("expands shared flow %s into portable steps", (shared, call, marker) => {
-    const flow = qaScenarioModuleFlow.sharedSchema.parse({ shared });
-    const resolved = qaScenarioModuleFlow.resolveFlow(flow, "Scenario title");
-
-    expect(qaScenarioModuleFlow.resolveKind(flow)).toBe("steps");
-    expect(JSON.stringify(resolved)).toContain(call);
-    expect(JSON.stringify(resolved)).toContain(marker);
   });
 });

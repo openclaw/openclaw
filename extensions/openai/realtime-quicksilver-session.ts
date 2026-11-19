@@ -13,7 +13,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import type { RealtimeVoiceAgentConsultTranscriptEntry } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
-import WebSocket, { type RawData } from "ws";
+import { type RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { hangupOpenAILiveCall } from "./realtime-live-api.js";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
@@ -97,6 +97,15 @@ type PendingOffer = {
   timer: NodeJS.Timeout;
 };
 
+export type OpenAIQuicksilverBrowserSessionBroker = {
+  capabilities: Partial<RealtimeVoiceProviderCapabilities> & { handlesAgentConsult: true };
+  createBrowserSession: (
+    request: OpenAIQuicksilverSessionRequest,
+    auth: OpenAIQuicksilverAuth,
+  ) => Promise<RealtimeVoiceBrowserSession>;
+  cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
+};
+
 export function createOpenAIQuicksilverBrowserSessionBroker(
   params: {
     getConfig: () => OpenClawConfig | undefined;
@@ -106,24 +115,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     onCleanupComplete?: () => void;
   },
   context: OpenAIRealtimeHost,
-): {
-  broker: {
-    capabilities: Partial<RealtimeVoiceProviderCapabilities> & { handlesAgentConsult: true };
-    createBrowserSession: (
-      request: OpenAIQuicksilverSessionRequest,
-      auth: OpenAIQuicksilverAuth,
-    ) => Promise<RealtimeVoiceBrowserSession>;
-    cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
-  };
-  handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-  cleanup: () => Promise<void>;
-  getSessionCounts: () => {
-    pending: number;
-    inFlight: number;
-    active: number;
-    reservations: number;
-  };
-} {
+) {
   const pendingOffers = new Map<string, PendingOffer>();
   const inFlightOffers = new Map<
     string,
@@ -203,7 +195,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     }
   };
 
-  const broker = {
+  const broker: OpenAIQuicksilverBrowserSessionBroker = {
     capabilities: OPENAI_QUICKSILVER_CAPABILITIES,
     createBrowserSession: async (
       request: OpenAIQuicksilverSessionRequest,
@@ -254,9 +246,8 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
         timer: setTimeout(
           () => expirePendingOffer(token, offer),
           OPENAI_QUICKSILVER_PENDING_TTL_MS,
-        ),
+        ).unref(),
       };
-      offer.timer.unref?.();
       pendingOffers.set(token, offer);
       reservations.add(token);
       return {
@@ -440,24 +431,25 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
         });
         activeSessionLease.expireIn(session, OPENAI_QUICKSILVER_SESSION_TTL_MS);
       };
+      if (gaSideband && offer.auth.type !== "api-key") {
+        throw new Error("OpenAI Realtime Gateway control requires a Platform API key");
+      }
+      const callStartedAt = gaSideband ? Date.now() : 0;
+      const call = await createOpenAIQuicksilverCall(
+        {
+          auth: offer.auth,
+          requestIds: offer.requestIds,
+          sdp,
+          session: sessionConfig,
+          ...(gaSideband
+            ? { gaSideband: true, onCallAllocated: adoptAllocatedCall }
+            : { onCallAllocated: publicApi ? adoptAllocatedCall : undefined }),
+          signal: upstreamSignal,
+          fetchImpl: params.fetchImpl,
+        },
+        context,
+      );
       if (gaSideband) {
-        if (offer.auth.type !== "api-key") {
-          throw new Error("OpenAI Realtime Gateway control requires a Platform API key");
-        }
-        const callStartedAt = Date.now();
-        const call = await createOpenAIQuicksilverCall(
-          {
-            auth: offer.auth,
-            requestIds: offer.requestIds,
-            sdp,
-            session: sessionConfig,
-            gaSideband: true,
-            onCallAllocated: adoptAllocatedCall,
-            signal: upstreamSignal,
-            fetchImpl: params.fetchImpl,
-          },
-          context,
-        );
         const active = activeSessions.get(token);
         if (call.kind !== "ga-sideband" || !active) {
           throw new Error("OpenAI Realtime call did not retain an active sideband session");
@@ -497,18 +489,6 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
         );
         return true;
       }
-      const call = await createOpenAIQuicksilverCall(
-        {
-          auth: offer.auth,
-          requestIds: offer.requestIds,
-          sdp,
-          session: sessionConfig,
-          onCallAllocated: publicApi ? adoptAllocatedCall : undefined,
-          signal: upstreamSignal,
-          fetchImpl: params.fetchImpl,
-        },
-        context,
-      );
       if (call.kind === "ga-realtime") {
         respondRealtimeOffer(res, call.status, call.answerSdp, "application/sdp");
         return true;
@@ -701,9 +681,6 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     shutdownController.abort(new Error("OpenAI realtime broker stopped"));
     for (const [token, offer] of pendingOffers) {
       expirePendingOffer(token, offer);
-    }
-    for (const { controller } of inFlightOffers.values()) {
-      controller.abort(new Error("OpenAI realtime broker stopped"));
     }
     return cleanupInFlight.finally(() => {
       cleanupInFlight = undefined;

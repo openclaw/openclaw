@@ -36,7 +36,7 @@ Enterprise Grid organization installation, use the dedicated
 {
   "display_information": {
     "name": "OpenClaw",
-    "description": "Slack connector for OpenClaw"
+    "description": "Slack app for OpenClaw"
   },
   "features": {
     "bot_user": { "display_name": "OpenClaw", "always_online": true },
@@ -123,7 +123,7 @@ Enterprise Grid organization installation, use the dedicated
 {
   "display_information": {
     "name": "OpenClaw",
-    "description": "Slack connector for OpenClaw"
+    "description": "Slack app for OpenClaw"
   },
   "features": {
     "bot_user": { "display_name": "OpenClaw", "always_online": true },
@@ -256,7 +256,7 @@ openclaw gateway
 {
   "display_information": {
     "name": "OpenClaw",
-    "description": "Slack connector for OpenClaw"
+    "description": "Slack app for OpenClaw"
   },
   "features": {
     "bot_user": { "display_name": "OpenClaw", "always_online": true },
@@ -349,7 +349,7 @@ openclaw gateway
 {
   "display_information": {
     "name": "OpenClaw",
-    "description": "Slack connector for OpenClaw"
+    "description": "Slack app for OpenClaw"
   },
   "features": {
     "bot_user": { "display_name": "OpenClaw", "always_online": true },
@@ -552,6 +552,7 @@ OpenClaw automatically drops user-scope message events authored by the resolved 
 - `botToken`, `appToken`, `signingSecret`, `relay.authToken`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Config tokens override env fallback.
+- Top-level credentials, including SecretRefs, keep the implicit `default` account active alongside named accounts when its transport credentials are complete. An explicit `accounts.default` entry overrides that implicit account.
 - `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_USER_TOKEN` env fallback each apply only to the default account.
 - `userToken` defaults to read-only behavior (`userTokenReadOnly: true`).
 

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
@@ -11,10 +10,12 @@ import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModel,
 } from "../agents/simple-completion-runtime.js";
+import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Context, Model, ProviderStreamOptions } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { summarizeText } from "../plugin-sdk/speech-core.js";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -23,6 +24,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture, nativeFixtureEnv } from "../plugins/native-resource.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -152,14 +154,7 @@ function nativeSummaryFixture() {
           model: model.id,
           stopReason: "stop",
           timestamp: 0,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
+          usage: createZeroUsageFixture(),
         },
       });
       stream.end();
@@ -187,14 +182,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   });
 }};`,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      providers: [id],
-      configSchema: { type: "object", properties: {}, additionalProperties: false },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    providers: [id],
+    configSchema: { type: "object", properties: {}, additionalProperties: false },
+  });
   const config: OpenClawConfig = {
     agents: {
       entries: { main: {} },
@@ -236,53 +228,41 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     get acquire() {
       return acquire;
     },
-    async run(test: () => Promise<void>) {
+    async run(test: (fixtureState: typeof state) => Promise<void>) {
       try {
-        await withEnvAsync(
-          {
-            OPENCLAW_HOME: dir,
-            OPENCLAW_STATE_DIR: path.join(dir, "state"),
-            OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-          },
-          async () => {
-            useNoBundledPlugins();
-            lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
-              {
-                config,
-                agentId: "main",
-                agentDir,
-                workspaceDir: dir,
-                loadRuntimePlugins: true,
-                skipCredentials: true,
-                runtimePluginSelections: [{ provider: id, modelId: "summary-model" }],
-              },
-              { catalogMode: "static" },
-            );
-            acquire = vi
-              .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")
-              .mockResolvedValue(lease);
-            try {
-              await test();
-            } finally {
-              state.finishSetup.resolve();
-              state.finishSetupTail.resolve();
-              state.finish.resolve();
-              state.finishTail.resolve();
-              state.finishCleanup.resolve();
-              await Promise.all(outcomes);
-              await parent.drain();
-              await lease[Symbol.asyncDispose]();
-              await closePreparedModelRuntimeSnapshots();
-            }
-          },
-        );
-      } finally {
-        for (const connection of connections) {
-          if (connection.database.isOpen) {
-            connection.database.close();
+        await withEnvAsync(nativeFixtureEnv(dir, path.join(dir, "state")), async () => {
+          useNoBundledPlugins();
+          lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
+            {
+              config,
+              agentId: "main",
+              agentDir,
+              workspaceDir: dir,
+              loadRuntimePlugins: true,
+              skipCredentials: true,
+              runtimePluginSelections: [{ provider: id, modelId: "summary-model" }],
+            },
+            { catalogMode: "static" },
+          );
+          acquire = vi
+            .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")
+            .mockResolvedValue(lease);
+          try {
+            await test(state);
+          } finally {
+            state.finishSetup.resolve();
+            state.finishSetupTail.resolve();
+            state.finish.resolve();
+            state.finishTail.resolve();
+            state.finishCleanup.resolve();
+            await Promise.all(outcomes);
+            await parent.drain();
+            await lease[Symbol.asyncDispose]();
+            await closePreparedModelRuntimeSnapshots();
           }
-        }
-        Reflect.deleteProperty(globalThis, key);
+        });
+      } finally {
+        cleanupNativeFixture(key, connections);
       }
     },
     summarize(timeoutMs = 1000, deps?: Parameters<typeof summarizeText>[1]) {
@@ -342,54 +322,46 @@ afterEach(async () => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-it.each([false, true])(
-  "owns the selected summary model through completion and cleanup (tail=%s)",
-  async (tail) => {
-    const fixture = nativeSummaryFixture();
-    await fixture.run(async () => {
-      fixture.state.completionTail = tail;
-      fixture.state.finish.resolve();
-      const outcome = await fixture.summarize();
-      expect(fixture.state.connections[0]?.openAtCompletion).toBe(true);
-      expect(outcome).toMatchObject({
-        result: { summary: "Spoken summary 42." },
-      });
-      expect(fixture.state.calls.map((call) => call.model)).toEqual(["summary-model"]);
-      if (tail) {
-        await setImmediate();
-        expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
-        fixture.state.finishTail.resolve();
-      }
-      await fixture.assertClosed();
-      expect(fixture.state.connections[0]?.completionReads).toBe(1);
-      expect(fixture.state.connections[0]?.cleanupReads).toBe(tail ? 1 : 0);
-      expect(fixture.state.cancellation.failure).toBeUndefined();
-    });
-  },
-);
+it("owns the selected summary model through completion and its cleanup tail", async () => {
+  const fixture = nativeSummaryFixture();
+  await fixture.run(async (state) => {
+    state.completionTail = true;
+    state.finish.resolve();
+    const outcome = await fixture.summarize();
+    expect(state.connections[0]?.openAtCompletion).toBe(true);
+    expect(outcome).toMatchObject({ result: { summary: "Spoken summary 42." } });
+    expect(state.calls.map((call) => call.model)).toEqual(["summary-model"]);
+    await setImmediate();
+    expect(state.connections[0]?.database.isOpen).toBe(true);
+    state.finishTail.resolve();
+    await fixture.assertClosed();
+    expect(state.connections[0]).toMatchObject({ completionReads: 1, cleanupReads: 1 });
+    expect(state.cancellation.failure).toBeUndefined();
+  });
+});
 
 it("starts the summary deadline after preparation and keeps an uncooperative provider owned", async () => {
   const fixture = nativeSummaryFixture();
-  await fixture.run(async () => {
+  await fixture.run(async (state) => {
     vi.useFakeTimers();
-    fixture.state.holdSetup = true;
+    state.holdSetup = true;
     const outcome = fixture.summarize(25);
     let settled = false;
     void outcome.then(() => {
       settled = true;
     });
-    await entered(fixture.state.setupStarted.promise, outcome);
+    await entered(state.setupStarted.promise, outcome);
     await vi.advanceTimersByTimeAsync(100);
-    expect(fixture.state.calls).toHaveLength(0);
+    expect(state.calls).toHaveLength(0);
     expect(settled).toBe(false);
-    fixture.state.finishSetup.resolve();
-    await entered(fixture.state.started.promise, outcome);
-    expect(fixture.state.cancellation.requestSignal?.aborted).toBe(false);
+    state.finishSetup.resolve();
+    await entered(state.started.promise, outcome);
+    expect(state.cancellation.requestSignal?.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(25);
-    expect(fixture.state.cancellation.requestSignal?.aborted).toBe(true);
+    expect(state.cancellation.requestSignal?.aborted).toBe(true);
     expect(settled).toBe(false);
-    expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
-    fixture.state.finish.resolve();
+    expect(state.connections[0]?.database.isOpen).toBe(true);
+    state.finish.resolve();
     expect(await outcome).toMatchObject({ result: { summary: "Spoken summary 42." } });
     await fixture.assertClosed();
   });
@@ -399,10 +371,10 @@ it.each(["normal", "parent"] as const)(
   "drains summary cancellation work in the captured %s context",
   async (mode) => {
     const fixture = nativeSummaryFixture();
-    await fixture.run(async () => {
-      fixture.state.watchCleanup = true;
+    await fixture.run(async (state) => {
+      state.watchCleanup = true;
       const outcome = fixture.summarize();
-      await entered(fixture.state.started.promise, outcome);
+      await entered(state.started.promise, outcome);
       if (mode === "parent") {
         const reason = new Error("synthetic parent shutdown");
         withPluginRuntimeGenerationScope(
@@ -412,40 +384,40 @@ it.each(["normal", "parent"] as const)(
           },
           () => fixture.parent.beginClose(reason),
         );
-        expect(fixture.state.cancellation.signal?.reason).toBe(reason);
+        expect(state.cancellation.signal?.reason).toBe(reason);
       }
-      fixture.state.finish.resolve();
+      state.finish.resolve();
       expect(await outcome).toMatchObject({ result: { summary: "Spoken summary 42." } });
       await setImmediate();
-      expect(fixture.state.cancellation.signal?.aborted).toBe(true);
-      await fixture.state.cleanupStarted.promise;
-      expect(fixture.state.cancellation.cleanupSignal?.aborted).toBe(true);
-      expect(fixture.state.cancellation.registry).toBe(fixture.lease.snapshot.pluginRegistry);
-      expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
-      fixture.state.finishCleanup.resolve();
+      expect(state.cancellation.signal?.aborted).toBe(true);
+      await state.cleanupStarted.promise;
+      expect(state.cancellation.cleanupSignal?.aborted).toBe(true);
+      expect(state.cancellation.registry).toBe(fixture.lease.snapshot.pluginRegistry);
+      expect(state.connections[0]?.database.isOpen).toBe(true);
+      state.finishCleanup.resolve();
       await fixture.assertClosed();
-      expect(fixture.state.cancellation.afterRegistry).toBe(fixture.lease.snapshot.pluginRegistry);
-      expect(fixture.state.cancellation.failure).toBeUndefined();
-      expect(fixture.state.connections[0]?.cleanupReads).toBe(1);
+      expect(state.cancellation.afterRegistry).toBe(fixture.lease.snapshot.pluginRegistry);
+      expect(state.cancellation.failure).toBeUndefined();
+      expect(state.connections[0]?.cleanupReads).toBe(1);
     });
   },
 );
 
 it("owns a failed summary preparation until its auth descendant settles", async () => {
   const fixture = nativeSummaryFixture();
-  await fixture.run(async () => {
-    fixture.state.setupTail = true;
-    fixture.state.rejectSetup = true;
+  await fixture.run(async (state) => {
+    state.setupTail = true;
+    state.rejectSetup = true;
     expect(await fixture.summarize()).toMatchObject({
       error: expect.objectContaining({ message: "synthetic summary setup failure" }),
     });
     await setImmediate();
-    expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
-    expect(fixture.state.calls).toHaveLength(0);
-    fixture.state.finishSetupTail.resolve();
+    expect(state.connections[0]?.database.isOpen).toBe(true);
+    expect(state.calls).toHaveLength(0);
+    state.finishSetupTail.resolve();
     await fixture.assertClosed();
-    expect(fixture.state.connections[0]?.setupReads).toBe(1);
-    expect(fixture.state.cancellation.failure).toBeUndefined();
+    expect(state.connections[0]?.setupReads).toBe(1);
+    expect(state.cancellation.failure).toBeUndefined();
   });
 });
 
@@ -453,8 +425,8 @@ it.each(["success", "auth-abort", "completion-abort"] as const)(
   "keeps injected model ownership and error classification for %s",
   async (mode) => {
     const fixture = nativeSummaryFixture();
-    await fixture.run(async () => {
-      fixture.state.finish.resolve();
+    await fixture.run(async (state) => {
+      state.finish.resolve();
       const abort = new Error("synthetic injected abort");
       abort.name = "AbortError";
       const outcome = await fixture.summarize(1000, {
@@ -486,8 +458,7 @@ it.each(["success", "auth-abort", "completion-abort"] as const)(
         });
       }
       expect(fixture.acquire).not.toHaveBeenCalled();
-      expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
-      expect(fixture.state.connections[0]?.disposals).toBe(0);
+      expect(state.connections[0]).toMatchObject({ database: { isOpen: true }, disposals: 0 });
       await fixture.lease[Symbol.asyncDispose]();
       await fixture.assertClosed();
     });
@@ -496,16 +467,18 @@ it.each(["success", "auth-abort", "completion-abort"] as const)(
 
 it("leaves a raw provider registration with its owner", async () => {
   const fixture = nativeSummaryFixture();
-  await fixture.run(async () => {
+  await fixture.run(async (state) => {
     const raw = loadPluginRegistryHandle({ config: fixture.config });
     const snapshot = { ...fixture.lease.snapshot, pluginRegistry: raw };
     fixture.acquire.mockResolvedValue({ ...fixture.lease, snapshot });
-    fixture.state.finish.resolve();
+    state.finish.resolve();
     expect(await fixture.summarize()).toMatchObject({ result: { summary: "Spoken summary 42." } });
     await fixture.parent.drain();
-    const rawSource = fixture.state.connections.at(-1);
-    expect(rawSource?.completionReads).toBe(1);
-    expect(rawSource?.disposals).toBe(0);
-    expect(rawSource?.database.isOpen).toBe(true);
+    const rawSource = state.connections.at(-1);
+    expect(rawSource).toMatchObject({
+      completionReads: 1,
+      disposals: 0,
+      database: { isOpen: true },
+    });
   });
 });

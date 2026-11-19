@@ -57,13 +57,19 @@ export function reserveChildAdmissionSlot(
   const reservation = params.childSessionKey ?? Symbol("pending child admission");
   pending.add(reservation);
   pendingChildAdmissions.set(params.controllerSessionKey, pending);
+  let released = false;
   return {
     ...admission,
     release() {
-      if (!pending.delete(reservation)) {
+      if (released) {
         return;
       }
-      if (pending.size === 0) {
+      released = true;
+      pending.delete(reservation);
+      if (
+        pending.size === 0 &&
+        pendingChildAdmissions.get(params.controllerSessionKey) === pending
+      ) {
         pendingChildAdmissions.delete(params.controllerSessionKey);
       }
     },

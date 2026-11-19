@@ -18,6 +18,8 @@ internal enum class WearScreenshotScene(
   Chat("chat", WearHomePage.Chat),
   Voice("voice", WearHomePage.Voice),
   Controls("controls", WearHomePage.Controls),
+  CheckingPhone("checking-phone", WearHomePage.Chat),
+  PhoneUnavailable("phone-unavailable", WearHomePage.Chat),
   ;
 
   companion object {
@@ -90,9 +92,9 @@ internal fun OpenClawWearScreenshotApp(scene: WearScreenshotScene) {
   OpenClawWearTheme(themeMode = themeMode) {
     AppScaffold {
       OpenClawWearScreens(
-        snapshot = WearScreenshotFixture.snapshot,
-        failure = null,
-        loading = false,
+        snapshot = if (scene == WearScreenshotScene.CheckingPhone || scene == WearScreenshotScene.PhoneUnavailable) null else WearScreenshotFixture.snapshot,
+        failure = WearConversationFailure.PHONE_UNAVAILABLE.takeIf { scene == WearScreenshotScene.PhoneUnavailable },
+        loading = scene == WearScreenshotScene.CheckingPhone,
         interaction = WearInteractionState.READY,
         speaking = false,
         realtimeCapturing = false,

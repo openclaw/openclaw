@@ -22,9 +22,6 @@ export async function readInterruptedUpdateCandidateAsync(
   if (!reply) {
     return undefined;
   }
-  if (!reply.ok || reply.type !== "updateRuns.interruptedCandidate") {
-    throw new Error("Unexpected interrupted update lookup result");
-  }
   return reply.run;
 }
 

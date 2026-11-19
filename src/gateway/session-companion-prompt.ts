@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { redactToolPayloadText } from "../logging/redact.js";
 import {
   selectSessionCompanionReferenceItems,
   type SessionCompanionThread,
@@ -41,7 +40,7 @@ export function formatObserverDigest(snapshot: SessionObserverCompanionSnapshot)
 
 export function buildReferenceContext(params: {
   thread: SessionCompanionThread;
-  deltaNotes: Array<{ sequence: number; text: string }>;
+  deltaNotes: SessionObserverCompanionSnapshot["notes"];
 }): string {
   const history =
     params.thread.context.messages.length === 0
@@ -74,12 +73,13 @@ export function selectDeltaNotes(
   snapshot: SessionObserverCompanionSnapshot,
   afterSequence: number,
 ): {
-  notes: Array<{ sequence: number; text: string }>;
+  notes: SessionObserverCompanionSnapshot["notes"];
   lastSequence: number;
 } {
   const candidates = snapshot.notes
     .filter((note) => note.sequence > afterSequence)
-    .toSorted((left, right) => left.sequence - right.sequence);
+    // oxlint-disable-next-line unicorn/no-array-sort -- filter creates a private array, preserving snapshot note order.
+    .sort((left, right) => left.sequence - right.sequence);
   return {
     notes: selectSessionCompanionReferenceItems(candidates.toReversed(), DELTA_MAX_BYTES),
     lastSequence: candidates.at(-1)?.sequence ?? afterSequence,
@@ -110,13 +110,9 @@ export function composePromptMessages(params: {
   return messages;
 }
 
-function isPrivateReferenceEcho(value: string): boolean {
-  return value.includes(PRIVATE_REFERENCE_BEGIN) || value.includes(PRIVATE_REFERENCE_END);
-}
-
 export function sanitizeAnswer(value: string): string {
-  const redacted = redactToolPayloadText(value).trim();
-  if (isPrivateReferenceEcho(redacted)) {
+  const redacted = value.trim();
+  if (redacted.includes(PRIVATE_REFERENCE_BEGIN) || redacted.includes(PRIVATE_REFERENCE_END)) {
     return "";
   }
   return truncateUtf16Safe(redacted, ANSWER_MAX_CHARS);

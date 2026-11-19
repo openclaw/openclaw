@@ -56,8 +56,9 @@ extension DashboardWindowController {
 
     func publishBrowserState(_ state: DashboardBrowserState) {
         guard self.canUseBrowserDocument(sourceID: self.notificationSourceID),
-              let data = try? JSONEncoder().encode(state), let json = String(data: data, encoding: .utf8)
+              let data = try? JSONEncoder().encode(state)
         else { return }
+        let json = String(bytes: data, encoding: .utf8)!
         let script = """
         window.__OPENCLAW_NATIVE_BROWSER__ = \(json);
         window.dispatchEvent(new CustomEvent("openclaw:native-browser-state", {
@@ -71,7 +72,7 @@ extension DashboardWindowController {
 
     private func canUseBrowserDocument(sourceID: String) -> Bool {
         self.window != nil && !self.isHiddenForExperience && self.canDeliverNativeCommands &&
-            self.notificationSourceID == sourceID && self.hasCurrentBrowserSession &&
+            self.notificationSourceID == sourceID && self.documentHost.hasCurrentBrowserSession &&
             ControlUIDocumentHost.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
     }
 

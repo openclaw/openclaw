@@ -1,82 +1,155 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeWithCachedStatement } from "../../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { prepareSqliteReadCache } from "../../infra/sqlite-read-cache.js";
+import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../../infra/sqlite-schema-facts.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   acquireAuthProfileReadDatabase,
   closeAuthProfileReadDatabase,
-  closeAuthProfileReadPool,
+  type AuthProfileReadDatabaseOpener,
 } from "./sqlite-read-pool.js";
 import type { AuthProfileRowRead, PersistedAuthProfileStoreInspection } from "./types.js";
 
-type AgentAuthProfileDatabase = Pick<
+export type AgentAuthProfileDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   "auth_profile_store" | "auth_profile_state"
 >;
-type SharedAuthProfileDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
+export type SharedAuthProfileDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 
 // Auth profiles store one JSON blob for secrets and one JSON blob for runtime
 // state. SQLite owns durability/transactions; JSON shape owns compatibility.
-export const PRIMARY_ROW_KEY = "primary";
+export const AUTH_PROFILE_PRIMARY_ROW_KEY = "primary";
+export const AGENT_AUTH_CELLS = {
+  store: { table: "auth_profile_store", key: "store_key", value: "store_json" },
+  state: { table: "auth_profile_state", key: "state_key", value: "state_json" },
+} as const;
 // Shared-state auth payloads live in config_machine_state; the keys are listed
 // in STATE_SECRET_CONFIG_STATE_KEY_PREFIXES so git backups never carry them.
-export const SHARED_STORE_STATE_KEY = "authProfiles.store";
-export const SHARED_STATE_STATE_KEY = "authProfiles.state";
+export const SHARED_AUTH_CELL_KEYS = { store: "authProfiles.store", state: "authProfiles.state" };
 export const SHARED_AUTH_STORE_STATE_KEY = "auth.sharedStore";
 
-// Callers own transactions; opening another here would nest.
-export function readSharedAuthKvCell(db: DatabaseSync, stateKey: string): string | undefined {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getSharedAuthProfileKysely(db)
-      .selectFrom("config_machine_state")
-      .select("value_json")
-      .where("state_key", "=", stateKey),
-  );
-  return row?.value_json;
+function authProfileTableName(
+  target: "store" | "state",
+  databaseKind: "agent" | "shared-state",
+): string {
+  return databaseKind === "shared-state" ? "config_machine_state" : AGENT_AUTH_CELLS[target].table;
 }
 
-export function getAgentAuthProfileKysely(db: DatabaseSync) {
-  return getNodeSqliteKysely<AgentAuthProfileDatabase>(db);
+function inspectAuthProfileTableType(type: unknown): PersistedAuthProfileStoreInspection | null {
+  if (type === undefined) {
+    // Older agent databases acquire the additive auth tables on writable bootstrap.
+    return { status: "missing", reason: "table" };
+  }
+  return type === "table" ? null : { status: "unreadable" };
 }
 
-function getSharedAuthProfileKysely(db: DatabaseSync) {
-  return getNodeSqliteKysely<SharedAuthProfileDatabase>(db);
+function authProfileSchemaObjectType(schema: SqliteSchemaFacts, name: string): string | undefined {
+  if (schema.tables.has(name)) {
+    return "table";
+  }
+  return schema.views.has(name) || schema.indexes.has(name) || schema.triggers.has(name)
+    ? "other"
+    : undefined;
 }
 
 function inspectAuthProfileTable(
-  db: DatabaseSync,
+  db: EngineConnection,
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection | null {
-  const tableName =
-    databaseKind === "shared-state"
-      ? "config_machine_state"
-      : target === "store"
-        ? "auth_profile_store"
-        : "auth_profile_state";
+  // The selected PostgreSQL owner admits the complete generated schema before reads.
+  if (isPostgresSqlConnection(db)) {
+    return null;
+  }
+  const tableName = authProfileTableName(target, databaseKind);
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (schema) {
+    return inspectAuthProfileTableType(authProfileSchemaObjectType(schema, tableName));
+  }
   const schemaObject = executeWithCachedStatement(
     db,
     "SELECT type FROM sqlite_master WHERE name = ?",
     [tableName],
     (statement) => statement.get(tableName),
   );
-  if (!schemaObject) {
-    // Agent databases shipped before SQLite auth storage do not have these
-    // additive tables until their next writable bootstrap.
-    return { status: "missing", reason: "table" };
+  return inspectAuthProfileTableType(schemaObject?.type);
+}
+
+/** Read admitted auth cells without discarding malformed JSON needed for migration backups. */
+export function readAuthProfileJsonCellText(
+  db: EngineConnection,
+  target: "store" | "state",
+  databaseKind: "agent" | "shared-state",
+): string | undefined {
+  if (databaseKind === "shared-state") {
+    return executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<SharedAuthProfileDatabase>(db)
+        .selectFrom("config_machine_state")
+        .select("value_json")
+        .where("state_key", "=", SHARED_AUTH_CELL_KEYS[target]),
+    )?.value_json;
   }
-  return schemaObject.type === "table" ? null : { status: "unreadable" };
+  const cell = AGENT_AUTH_CELLS[target];
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<AgentAuthProfileDatabase>(db)
+      .selectFrom(cell.table)
+      .select(cell.value)
+      .where(cell.key, "=", AUTH_PROFILE_PRIMARY_ROW_KEY),
+  )?.[cell.value];
+}
+
+/** Read admitted credential and health cells in one statement without classifying errors. */
+export function readAuthProfileJsonCellTexts(
+  database: EngineConnection,
+  databaseKind: "agent" | "shared-state",
+): { store: string | undefined; state: string | undefined } {
+  const rows =
+    databaseKind === "shared-state"
+      ? executeSqliteQuerySync(
+          database,
+          getNodeSqliteKysely<SharedAuthProfileDatabase>(database)
+            .selectFrom("config_machine_state")
+            .select(["state_key as target", "value_json as contents"])
+            .where("state_key", "in", [SHARED_AUTH_CELL_KEYS.store, SHARED_AUTH_CELL_KEYS.state]),
+        ).rows
+      : executeSqliteQuerySync(
+          database,
+          getNodeSqliteKysely<AgentAuthProfileDatabase>(database)
+            .selectFrom("auth_profile_store")
+            .select("store_json as contents")
+            .select((expression) => expression.val("store").as("target"))
+            .where("store_key", "=", AUTH_PROFILE_PRIMARY_ROW_KEY)
+            .unionAll(
+              getNodeSqliteKysely<AgentAuthProfileDatabase>(database)
+                .selectFrom("auth_profile_state")
+                .select("state_json as contents")
+                .select((expression) => expression.val("state").as("target"))
+                .where("state_key", "=", AUTH_PROFILE_PRIMARY_ROW_KEY),
+            ),
+        ).rows;
+  const texts = new Map(rows.map((row) => [row.target, row.contents]));
+  return {
+    store: texts.get(databaseKind === "shared-state" ? SHARED_AUTH_CELL_KEYS.store : "store"),
+    state: texts.get(databaseKind === "shared-state" ? SHARED_AUTH_CELL_KEYS.state : "state"),
+  };
 }
 
 export function inspectAuthProfileJsonCell(
-  db: DatabaseSync,
+  db: EngineConnection,
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection {
@@ -84,40 +157,20 @@ export function inspectAuthProfileJsonCell(
   if (tableInspection) {
     return tableInspection;
   }
-  let raw: string;
-  if (databaseKind === "shared-state") {
-    const cell = readSharedAuthKvCell(
-      db,
-      target === "store" ? SHARED_STORE_STATE_KEY : SHARED_STATE_STATE_KEY,
-    );
-    if (cell === undefined) {
-      return { status: "missing", reason: "row" };
-    }
-    raw = cell;
-  } else if (target === "store") {
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getAgentAuthProfileKysely(db)
-        .selectFrom("auth_profile_store")
-        .select("store_json")
-        .where("store_key", "=", PRIMARY_ROW_KEY),
-    );
-    if (!row) {
-      return { status: "missing", reason: "row" };
-    }
-    raw = row.store_json;
-  } else {
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getAgentAuthProfileKysely(db)
-        .selectFrom("auth_profile_state")
-        .select("state_json")
-        .where("state_key", "=", PRIMARY_ROW_KEY),
-    );
-    if (!row) {
-      return { status: "missing", reason: "row" };
-    }
-    raw = row.state_json;
+  return inspectAuthProfileJsonCellContents(db, target, databaseKind);
+}
+
+function inspectAuthProfileJsonCellContents(
+  db: EngineConnection,
+  target: "store" | "state",
+  databaseKind: "agent" | "shared-state",
+): PersistedAuthProfileStoreInspection {
+  return inspectAuthProfileJsonText(readAuthProfileJsonCellText(db, target, databaseKind));
+}
+
+function inspectAuthProfileJsonText(raw: string | undefined): PersistedAuthProfileStoreInspection {
+  if (raw === undefined) {
+    return { status: "missing", reason: "row" };
   }
   try {
     return { status: "readable", raw: JSON.parse(raw) as unknown };
@@ -129,8 +182,9 @@ export function inspectAuthProfileJsonCell(
 export function inspectAgentAuthProfileJsonCellReadOnly(
   databasePath: string,
   target: "store" | "state",
+  openReadOnlyDatabase: AuthProfileReadDatabaseOpener,
 ): PersistedAuthProfileStoreInspection {
-  const acquired = acquireAuthProfileReadDatabase(databasePath);
+  const acquired = acquireAuthProfileReadDatabase(databasePath, openReadOnlyDatabase);
   if (acquired.status === "missing") {
     return { status: "missing", reason: "database" };
   }
@@ -145,36 +199,135 @@ export function inspectAgentAuthProfileJsonCellReadOnly(
   }
 }
 
-/** The isolated reader closes its native pool before transferring credential rows. */
-export function readAuthProfileRowsReadOnly(databasePath: string): AuthProfileRowRead {
+/** Reuse the worker-owned reader; each statement observes the latest committed rows. */
+export function readAuthProfileRowsReadOnly(
+  databasePath: string,
+  openReadOnlyDatabase: AuthProfileReadDatabaseOpener,
+  schema?: SqliteAuthSchema,
+  expectedIdentity?: string,
+  retainReader = true,
+): AuthProfileRowRead {
+  const acquired = acquireAuthProfileReadDatabase(
+    databasePath,
+    openReadOnlyDatabase,
+    schema,
+    expectedIdentity,
+  );
+  if (acquired.status !== "readable") {
+    const inspection: PersistedAuthProfileStoreInspection =
+      acquired.status === "missing"
+        ? { status: "missing", reason: "database" }
+        : { status: "unreadable" };
+    return { store: inspection, state: inspection, cacheable: false };
+  }
+  let keepReader = retainReader;
   try {
-    const acquired = acquireAuthProfileReadDatabase(databasePath);
-    if (acquired.status !== "readable") {
-      const inspection: PersistedAuthProfileStoreInspection =
-        acquired.status === "missing"
-          ? { status: "missing", reason: "database" }
-          : { status: "unreadable" };
-      return { store: inspection, state: inspection, cacheable: false };
+    const rows = readAuthProfileRows(acquired.db, databasePath, "agent", schema);
+    // Another process initializes new agent files; empty schema facts cannot stay pooled.
+    if (
+      rows.store.status === "missing" &&
+      rows.store.reason === "table" &&
+      rows.state.status === "missing" &&
+      rows.state.reason === "table"
+    ) {
+      keepReader = false;
     }
-    try {
-      return readAuthProfileRows(acquired.db, databasePath, "agent");
-    } catch {
-      return { store: { status: "unreadable" }, state: { status: "unreadable" }, cacheable: false };
-    }
+    return rows;
+  } catch {
+    closeAuthProfileReadDatabase(databasePath);
+    return { store: { status: "unreadable" }, state: { status: "unreadable" }, cacheable: false };
   } finally {
-    closeAuthProfileReadPool({ kind: "database", databasePath });
+    if (isArtifactPreservingStateRead("agent", databasePath)) {
+      acquired.db.close();
+    } else if (!keepReader) {
+      closeAuthProfileReadDatabase(databasePath);
+    }
   }
 }
 
-/** Shared and agent rows use one connection for their committed-generation proof. */
+/** Worker reads acquire both cells in one SQLite snapshot. */
 export function readAuthProfileRows(
-  database: DatabaseSync,
+  database: EngineConnection,
   databasePath: string,
   databaseKind: "agent" | "shared-state",
+  authSchema?: SqliteAuthSchema,
 ): AuthProfileRowRead {
-  const canCache = prepareSqliteReadCache(database, databasePath);
-  const store = inspectAuthProfileJsonCell(database, "store", databaseKind);
-  const state = inspectAuthProfileJsonCell(database, "state", databaseKind);
+  const canCache = isPostgresSqlConnection(database)
+    ? () => false
+    : prepareSqliteReadCache(database, databasePath);
+  const storeTable = authProfileTableName("store", databaseKind);
+  const stateTable = authProfileTableName("state", databaseKind);
+  let schemaObjects: Array<Record<string, unknown>>;
+  try {
+    const schema = authSchema ? undefined : getAdmittedSqliteSchemaFacts(database);
+    if (isPostgresSqlConnection(database)) {
+      schemaObjects = [storeTable, stateTable].map((name) => ({ name, type: "table" }));
+    } else if (authSchema) {
+      schemaObjects = [
+        { name: storeTable, type: authSchema.store === "missing" ? undefined : authSchema.store },
+        { name: stateTable, type: authSchema.state === "missing" ? undefined : authSchema.state },
+      ];
+    } else if (schema) {
+      schemaObjects = [storeTable, stateTable].map((name) => ({
+        name,
+        type: authProfileSchemaObjectType(schema, name),
+      }));
+    } else {
+      // Legacy and authorizer-controlled readers still classify both tables natively.
+      schemaObjects = executeWithCachedStatement(
+        database,
+        "SELECT name, type FROM sqlite_master WHERE name IN (?, ?)",
+        [storeTable, stateTable],
+        (statement) => statement.all(storeTable, stateTable),
+      );
+    }
+  } catch (error) {
+    if (databaseKind === "shared-state") {
+      throw error;
+    }
+    return { store: { status: "unreadable" }, state: { status: "unreadable" }, cacheable: false };
+  }
+  const inspect = (target: "store" | "state"): PersistedAuthProfileStoreInspection => {
+    const tableName = target === "store" ? storeTable : stateTable;
+    const tableInspection = inspectAuthProfileTableType(
+      schemaObjects.find((row) => row.name === tableName)?.type,
+    );
+    if (tableInspection) {
+      return tableInspection;
+    }
+    try {
+      return inspectAuthProfileJsonCellContents(database, target, databaseKind);
+    } catch (error) {
+      // Shared-state read ownership handles native failures and poisoned-handle eviction.
+      if (databaseKind === "shared-state") {
+        throw error;
+      }
+      // A broken state table must not turn an absent credential row into a present source.
+      return { status: "unreadable" };
+    }
+  };
+  let store: PersistedAuthProfileStoreInspection;
+  let state: PersistedAuthProfileStoreInspection;
+  const hasBothTables = [storeTable, stateTable].every((name) =>
+    schemaObjects.some((row) => row.name === name && row.type === "table"),
+  );
+  if (hasBothTables) {
+    try {
+      const texts = readAuthProfileJsonCellTexts(database, databaseKind);
+      store = inspectAuthProfileJsonText(texts.store);
+      state = inspectAuthProfileJsonText(texts.state);
+    } catch (error) {
+      if (databaseKind === "shared-state") {
+        throw error;
+      }
+      // A damaged legacy table must not hide the other cell's independent presence.
+      store = inspect("store");
+      state = inspect("state");
+    }
+  } else {
+    store = inspect("store");
+    state = inspect("state");
+  }
   return {
     store,
     state,
@@ -182,81 +335,24 @@ export function readAuthProfileRows(
   };
 }
 
-/** Write one canonical auth cell on the caller's admitted transaction connection. */
-export function writeAuthProfileJsonCell(
-  database: DatabaseSync,
+function inspectAuthProfileRow(
+  database: EngineConnection,
   target: "store" | "state",
-  kind: "agent" | "shared-state",
-  payload: unknown,
-): void {
-  const value = JSON.stringify(payload);
-  const now = Date.now();
-  if (kind === "shared-state") {
-    executeSqliteQuerySync(
-      database,
-      getSharedAuthProfileKysely(database)
-        .insertInto("config_machine_state")
-        .values({
-          state_key: target === "store" ? SHARED_STORE_STATE_KEY : SHARED_STATE_STATE_KEY,
-          value_json: value,
-          updated_at_ms: now,
-        })
-        .onConflict((conflict) =>
-          conflict.column("state_key").doUpdateSet({ value_json: value, updated_at_ms: now }),
-        ),
-    );
-  } else if (target === "store") {
-    executeSqliteQuerySync(
-      database,
-      getAgentAuthProfileKysely(database)
-        .insertInto("auth_profile_store")
-        .values({ store_key: PRIMARY_ROW_KEY, store_json: value, updated_at: now })
-        .onConflict((conflict) =>
-          conflict.column("store_key").doUpdateSet({ store_json: value, updated_at: now }),
-        ),
-    );
-  } else {
-    executeSqliteQuerySync(
-      database,
-      getAgentAuthProfileKysely(database)
-        .insertInto("auth_profile_state")
-        .values({ state_key: PRIMARY_ROW_KEY, state_json: value, updated_at: now })
-        .onConflict((conflict) =>
-          conflict.column("state_key").doUpdateSet({ state_json: value, updated_at: now }),
-        ),
-    );
+): PersistedAuthProfileStoreInspection {
+  try {
+    return inspectAuthProfileJsonCell(database, target, "agent");
+  } catch {
+    // A broken state table must not turn an absent credential row into a present source.
+    return { status: "unreadable" };
   }
 }
 
-export function deleteAuthProfileJsonCell(
-  database: DatabaseSync,
-  target: "store" | "state",
-  kind: "agent" | "shared-state",
-): void {
-  if (kind === "shared-state") {
-    executeSqliteQuerySync(
-      database,
-      getSharedAuthProfileKysely(database)
-        .deleteFrom("config_machine_state")
-        .where(
-          "state_key",
-          "=",
-          target === "store" ? SHARED_STORE_STATE_KEY : SHARED_STATE_STATE_KEY,
-        ),
-    );
-  } else if (target === "store") {
-    executeSqliteQuerySync(
-      database,
-      getAgentAuthProfileKysely(database)
-        .deleteFrom("auth_profile_store")
-        .where("store_key", "=", PRIMARY_ROW_KEY),
-    );
-  } else {
-    executeSqliteQuerySync(
-      database,
-      getAgentAuthProfileKysely(database)
-        .deleteFrom("auth_profile_state")
-        .where("state_key", "=", PRIMARY_ROW_KEY),
-    );
+/** The selected worker returns source presence without transferring credential rows. */
+export function hasAgentAuthProfileSourceInDatabase(database: EngineConnection): boolean {
+  const store = inspectAuthProfileRow(database, "store");
+  if (store.status !== "missing") {
+    return true;
   }
+  const state = inspectAuthProfileRow(database, "state");
+  return state.status === "readable" && Boolean(state.raw);
 }

@@ -1,12 +1,17 @@
 // Imported by agent.test.ts to share its existing Gateway fixture and module graph.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  dailySessionResetConfig,
+  mockClonedSessionStoreUpdate,
+} from "./agent.session-store-fixtures.test-support.js";
+import {
   backendGatewayClient,
   describe0AfterEach0,
   expectRespondError,
   getAgentTestMocks,
   invokeAgent,
   mockMainSessionEntry,
+  mockSuccessfulAgentCommand,
   primeMainAgentRun,
   waitForAgentCommandCall,
 } from "./agent.test-harness.js";
@@ -124,29 +129,10 @@ describe("gateway expected-session admission", () => {
           sessionStartedAt: now - 25 * 60 * 60_000,
           lastInteractionAt: now - 25 * 60 * 60_000,
         },
-        {
-          session: {
-            reset: {
-              mode: "daily",
-              atHour: 4,
-            },
-          },
-        },
+        dailySessionResetConfig(),
       );
-      const loaded = mocks.loadSessionEntry();
-      let capturedEntry: Record<string, unknown> | undefined;
-      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        const store: Record<string, unknown> = {
-          [loaded.canonicalKey]: structuredClone(loaded.entry),
-        };
-        const result = await updater(store);
-        capturedEntry = result as Record<string, unknown>;
-        return result;
-      });
-      mocks.agentCommand.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: { durationMs: 100 },
-      });
+      const getCapturedEntry = mockClonedSessionStoreUpdate();
+      mockSuccessfulAgentCommand();
 
       await invokeAgent(
         {
@@ -168,7 +154,7 @@ describe("gateway expected-session admission", () => {
       }>();
       expect(call.sessionKey).toBe("agent:main:main");
       expect(call.sessionId).toBe("expected-stale-session-id");
-      expect(capturedEntry?.sessionId).toBe("expected-stale-session-id");
+      expect(getCapturedEntry()?.sessionId).toBe("expected-stale-session-id");
       expect(mocks.emitGatewaySessionEndPluginHook).not.toHaveBeenCalled();
       expect(mocks.emitGatewaySessionStartPluginHook).not.toHaveBeenCalled();
     } finally {

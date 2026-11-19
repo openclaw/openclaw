@@ -39,20 +39,19 @@ export function resolveWorkboardRouteLocation(
   const boardFilter =
     pathBoardId ??
     (isValidWorkboardBoardId(legacyBoardValue) ? legacyBoardValue : WORKBOARD_ALL_BOARDS_FILTER);
-  return {
+  const route: WorkboardRouteData = {
     boardFilter,
     search: search ? `?${search}` : "",
-    ...(hadLegacyBoard
-      ? {
-          canonicalLocation: {
-            pathname:
-              boardFilter === WORKBOARD_ALL_BOARDS_FILTER
-                ? pathForRoute("workboard", basePath)
-                : pathForWorkboardBoard(boardFilter, basePath),
-            search: search ? `?${search}` : "",
-            hash: location.hash,
-          },
-        }
-      : {}),
   };
+  if (hadLegacyBoard) {
+    route.canonicalLocation = {
+      pathname:
+        boardFilter === WORKBOARD_ALL_BOARDS_FILTER
+          ? pathForRoute("workboard", basePath)
+          : pathForWorkboardBoard(boardFilter, basePath),
+      search: route.search,
+      hash: location.hash,
+    };
+  }
+  return route;
 }

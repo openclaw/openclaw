@@ -71,6 +71,21 @@ public final class OpenClawWebConversation {
     public var mode = Mode.probing
     public var state: NativeConversationState?
     public var navigate: ((NativeConversationContext, NavigationSource) -> Void)?
+    public var sessionFacts: [NativeConversationSessionFacts.Session]?
+    public var openSessionActions: ((NativeConversationContext) -> Void)?
+
+    public func sidebarFacts(for context: NativeConversationContext) -> NativeConversationSessionFacts.Session? {
+        guard self.mode == .web else { return nil }
+        return self.sessionFacts?.first { $0.context == context }
+    }
+
+    public func sessionActions(for context: NativeConversationContext) -> (() -> Void)? {
+        guard self.mode == .web, let openSessionActions = self.openSessionActions else { return nil }
+        return { [weak self] in
+            guard let self, self.mode == .web else { return }
+            openSessionActions(context)
+        }
+    }
 
     public init() {}
     public var ownsConversation: Bool {
@@ -93,20 +108,30 @@ extension OpenClawChatViewModel {
         return NativeConversationContext(agentId: agent, sessionKey: self.sessionKey)
     }
 
+    /// The visible composer only; a destination draft may still be loading,
+    /// which the async checks below wait for.
     public var hasPendingNativeConversationInput: Bool {
-        // Session selection restores the destination draft before the renderer changes.
         self.hasDraftToSend || self.isAttachmentOwnerPinned || self.isSending || self.isSubmittingDraft
     }
 
-    public func hasPendingNativeConversationInput(for context: NativeConversationContext) -> Bool {
+    public func hasPendingNativeConversationInput(for context: NativeConversationContext) async -> Bool {
+        await self.composerDraftSync.load?.value
         guard !self.hasPendingNativeConversationInput else { return true }
         guard !self.matchesWebConversationContext(context) else { return false }
         // Web-originated routes report their destination before native selection restores its draft.
         let key = self.composerSessionKey(for: context.sessionKey, agentID: context.agentId)
-        return self.draftsBySession[key]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        // A switch-away save that lands releases its in-memory copy.
+        await self.composerDraftWrites?.value
+        if self.draftsBySession[key]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return true
+        }
+        guard let store = self.composerDraftStore else { return false }
+        guard let draft = await store.loadComposerDraft(key: key) else { return true }
+        return !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachments.isEmpty
     }
 
     public func hasPendingNativeConversationWork() async -> Bool {
+        await self.composerDraftSync.load?.value
         if self.hasPendingNativeConversationInput { return true }
         guard let outbox else { return false }
         let session = self.currentSessionSnapshot()
@@ -162,7 +187,7 @@ extension OpenClawChatViewModel {
             if ok { self.loadWebConversationChrome()
                 self.refreshAgentsIfRequested()
             }
-        case .routeChanged, .seqGap:
+        case .routeChanged, .reconnected, .seqGap:
             self.invalidateSessionMetadataReadiness()
             self.invalidateOutboxBranchReconciliation()
             self.invalidateModelChoices()
@@ -175,12 +200,8 @@ extension OpenClawChatViewModel {
         case let .sessionsChanged(change):
             self.applySessionChangeProjection(change, ownedSwarmActivityNote: false)
             if change.reason == "groups" { self.sessionGroupsRevision += 1 }
-        case let .questionRequested(question):
-            self.upsertQuestion(question)
-            self.reconcileQuestionsAfterEvent()
-        case let .questionResolved(resolved):
-            self.resolveQuestionEvent(resolved)
-            self.reconcileQuestionsAfterEvent()
+        case .questionRequested, .questionResolved:
+            _ = self.handleQuestionEvent(evt)
         case let .sessionObserver(digest):
             self.sessions = ChatSessionSidebarModel.applying(
                 observerDigest: digest,

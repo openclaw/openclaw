@@ -1,9 +1,11 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
-import { logVerbose } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
@@ -12,7 +14,7 @@ import {
   createCompactionHookNoticePayload,
   createCompactionNoticePayload,
   formatCompactionModelRef,
-  readCompactionHookMessages,
+  deliverCompactionNoticePayload as deliverNotice,
 } from "./compaction-notice.js";
 
 const agentCompactionLog = createSubsystemLogger("auto-reply/compaction");
@@ -23,15 +25,11 @@ export type MessageToolDeliveryState = {
   completed: boolean;
 };
 
-function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
-  return value === "turn" || value === "session" ? value : undefined;
-}
-
-/** Bridges embedded-agent events into channel progress and compaction notices. */
 export function createAgentRunEventHandler(params: {
   turn: AgentTurnParams;
   lifecycleBackstop: AgentLifecycleTerminalBackstop;
-  notifyAgentRunStart: () => void;
+  prepareAgentRunStart: () => void | Promise<void>;
+  notifyAgentRunStart: (transcriptStart?: PreparedReplyTranscriptStart | null) => void;
   sourceRepliesAreToolOnly: boolean;
   provider: string;
   model: string;
@@ -45,18 +43,15 @@ export function createAgentRunEventHandler(params: {
     params.messageToolDeliveryState.completed &&
     params.turn.opts?.allowProgressCallbacksWhenSourceDeliverySuppressed !== true;
 
+  let modelWaitActive = false;
   const currentMessageId =
     params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid;
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
-    const deliver = params.turn.opts?.onBlockReply ?? params.turn.onCompactionNoticePayload;
-    if (!deliver) {
-      return;
-    }
-    try {
-      await deliver(noticePayload);
-    } catch (err) {
-      logVerbose(`compaction ${label} notice delivery failed (non-fatal): ${String(err)}`);
-    }
+    await deliverNotice(
+      noticePayload,
+      params.turn.opts?.onBlockReply ?? params.turn.onCompactionNoticePayload,
+      label,
+    );
   };
 
   return async (evt) => {
@@ -64,16 +59,38 @@ export function createAgentRunEventHandler(params: {
     params.lifecycleBackstop.note(evt);
     const hasLifecyclePhase = evt.stream === "lifecycle" && typeof evt.data.phase === "string";
     if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
-      params.notifyAgentRunStart();
+      const preparation =
+        evt.transcriptStart === undefined ? params.prepareAgentRunStart() : undefined;
+      if (preparation) {
+        await preparation;
+      }
+      params.notifyAgentRunStart(evt.transcriptStart);
+    }
+    if (evt.stream === "run_status" && !shouldSuppressProgressAfterMessageToolDelivery()) {
+      const waiting = evt.data.phase === "waiting_for_model";
+      if (waiting || (modelWaitActive && evt.data.phase === "starting_model")) {
+        modelWaitActive = waiting;
+        await params.turn.opts?.onItemEvent?.({
+          itemId: "model-wait",
+          kind: "model-wait",
+          suppressDurableProgress: true,
+          phase: waiting ? "update" : "end",
+          ...(waiting
+            ? {
+                progressText:
+                  evt.data.reason === "slot"
+                    ? "Waiting for a free model slot"
+                    : "Waiting for the local model to respond",
+              }
+            : {}),
+        });
+      }
     }
     if (evt.stream === "tool" && evt.data.hideFromChannelProgress !== true) {
       const phase = readStringValue(evt.data.phase) ?? "";
       const name = readStringValue(evt.data.name);
       const toolCallId = readStringValue(evt.data.toolCallId) ?? "";
-      const args =
-        evt.data.args && typeof evt.data.args === "object"
-          ? (evt.data.args as Record<string, unknown>)
-          : undefined;
+      const args = asOptionalObjectRecord(evt.data.args);
       if (
         params.sourceRepliesAreToolOnly &&
         toolCallId &&
@@ -162,6 +179,7 @@ export function createAgentRunEventHandler(params: {
       });
     }
     if (evt.stream === "approval" && !shouldSuppressProgressAfterMessageToolDelivery()) {
+      const scope = evt.data.scope;
       await params.turn.opts?.onApprovalEvent?.({
         phase: readStringValue(evt.data.phase),
         kind: readStringValue(evt.data.kind),
@@ -174,17 +192,20 @@ export function createAgentRunEventHandler(params: {
         command: readStringValue(evt.data.command),
         host: readStringValue(evt.data.host),
         reason: readStringValue(evt.data.reason),
-        scope: readApprovalScopeValue(evt.data.scope),
+        scope: scope === "turn" || scope === "session" ? scope : undefined,
         message: readStringValue(evt.data.message),
       });
     }
+    const readToolEventIdentity = () => ({
+      itemId: readStringValue(evt.data.itemId),
+      phase: readStringValue(evt.data.phase),
+      title: readStringValue(evt.data.title),
+      toolCallId: readStringValue(evt.data.toolCallId),
+      name: readStringValue(evt.data.name),
+    });
     if (evt.stream === "command_output" && !shouldSuppressProgressAfterMessageToolDelivery()) {
       await params.turn.opts?.onCommandOutput?.({
-        itemId: readStringValue(evt.data.itemId),
-        phase: readStringValue(evt.data.phase),
-        title: readStringValue(evt.data.title),
-        toolCallId: readStringValue(evt.data.toolCallId),
-        name: readStringValue(evt.data.name),
+        ...readToolEventIdentity(),
         output: readStringValue(evt.data.output),
         status: readStringValue(evt.data.status),
         exitCode:
@@ -196,21 +217,15 @@ export function createAgentRunEventHandler(params: {
       });
     }
     if (evt.stream === "patch" && !shouldSuppressProgressAfterMessageToolDelivery()) {
+      const readPaths = (value: unknown) =>
+        Array.isArray(value)
+          ? value.filter((entry): entry is string => typeof entry === "string")
+          : undefined;
       await params.turn.opts?.onPatchSummary?.({
-        itemId: readStringValue(evt.data.itemId),
-        phase: readStringValue(evt.data.phase),
-        title: readStringValue(evt.data.title),
-        toolCallId: readStringValue(evt.data.toolCallId),
-        name: readStringValue(evt.data.name),
-        added: Array.isArray(evt.data.added)
-          ? evt.data.added.filter((entry): entry is string => typeof entry === "string")
-          : undefined,
-        modified: Array.isArray(evt.data.modified)
-          ? evt.data.modified.filter((entry): entry is string => typeof entry === "string")
-          : undefined,
-        deleted: Array.isArray(evt.data.deleted)
-          ? evt.data.deleted.filter((entry): entry is string => typeof entry === "string")
-          : undefined,
+        ...readToolEventIdentity(),
+        added: readPaths(evt.data.added),
+        modified: readPaths(evt.data.modified),
+        deleted: readPaths(evt.data.deleted),
         summary: readStringValue(evt.data.summary),
       });
     }
@@ -220,22 +235,30 @@ export function createAgentRunEventHandler(params: {
 
     const phase = readStringValue(evt.data.phase) ?? "";
     const backend = readStringValue(evt.data.backend);
-    const hookMessages = readCompactionHookMessages(evt.data.messages);
-    const sendCompactionUserNotices = async (noticePhase: "start" | "end" | "incomplete") => {
-      if (hookMessages.length > 0) {
-        const noticePayload = createCompactionHookNoticePayload({
-          messages: hookMessages,
-          currentMessageId,
-          applyReplyToMode: params.turn.applyReplyToMode,
-        });
-        if (noticePayload) {
-          await deliverCompactionNoticePayload(noticePayload, "hook");
-        }
+    const hookMessages = normalizeTrimmedStringList(evt.data.messages);
+    const sendCompactionUserNotices = async (
+      noticePhase?: "start" | "end" | "incomplete" | "degraded" | "context_bounded",
+    ) => {
+      const noticePayload = createCompactionHookNoticePayload({
+        messages: hookMessages,
+        currentMessageId,
+        applyReplyToMode: params.turn.applyReplyToMode,
+      });
+      if (noticePayload) {
+        await deliverCompactionNoticePayload(noticePayload, "hook");
       }
-      if (params.notifyUserAboutCompaction) {
+      if (!noticePhase) {
+        return;
+      }
+      if (
+        noticePhase === "degraded" ||
+        noticePhase === "context_bounded" ||
+        params.notifyUserAboutCompaction
+      ) {
         await deliverCompactionNoticePayload(
           createCompactionNoticePayload({
             phase: noticePhase,
+            summaryRefused: evt.data.summaryRefused === true,
             currentMessageId,
             applyReplyToMode: params.turn.applyReplyToMode,
           }),
@@ -243,6 +266,14 @@ export function createAgentRunEventHandler(params: {
         );
       }
     };
+    if (phase === "notice") {
+      await sendCompactionUserNotices();
+      return;
+    }
+    if (phase === "context_bounded") {
+      await sendCompactionUserNotices("context_bounded");
+      return;
+    }
     if (phase === "start") {
       await params.turn.opts?.onCompactionStart?.();
       await sendCompactionUserNotices("start");
@@ -278,6 +309,6 @@ export function createAgentRunEventHandler(params: {
       });
     }
     await params.turn.opts?.onCompactionEnd?.({ completed: true });
-    await sendCompactionUserNotices("end");
+    await sendCompactionUserNotices(evt.data.qualityDegraded === true ? "degraded" : "end");
   };
 }

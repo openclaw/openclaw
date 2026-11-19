@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { applyLocalTsgoPolicy, resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -51,14 +52,7 @@ const DEFAULT_GRAPHS = [
   ...TSGO_CORE_TEST_SHARDS.map((shard) => `core-test-${shard.name}` as CoreTestGraphName),
   "extensions-test",
 ] satisfies GraphName[];
-type ProfileOptions = {
-  all: boolean;
-  deep: boolean;
-  explain: boolean;
-  json: boolean;
-  reuse: boolean;
-  outDir: string;
-};
+type ProfileOptions = ReturnType<typeof parseArgs>["options"];
 type Diagnostics = Record<string, number>;
 type ProfileGraphResult = ReturnType<typeof profileGraph>;
 type ProfileReport = {
@@ -90,9 +84,9 @@ function usage(): string {
   ].join("\n");
 }
 
-function parseArgs(argv: string[]): { options: ProfileOptions; selectedGraphs: GraphName[] } {
+function parseArgs(argv: string[]) {
   const graphNames: GraphName[] = [];
-  const options: ProfileOptions = {
+  const options = {
     all: false,
     deep: false,
     explain: false,
@@ -120,7 +114,7 @@ function parseArgs(argv: string[]): { options: ProfileOptions; selectedGraphs: G
       options.outDir = path.resolve(repoRoot, arg.slice("--out=".length));
       continue;
     }
-    if (!(arg in GRAPH_DEFINITIONS)) {
+    if (!Object.hasOwn(GRAPH_DEFINITIONS, arg)) {
       throw new Error(`Unknown graph: ${arg}\n\n${usage()}`);
     }
     graphNames.push(arg as GraphName);
@@ -146,8 +140,7 @@ function runTsgo(
   params: { maxBuffer?: number } = {},
 ): { elapsedMs: number; stdout: string; stderr: string } {
   const { args: finalArgs, env } = applyLocalTsgoPolicy(args, process.env, {
-    logicalCpuCount:
-      typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
+    logicalCpuCount: os.availableParallelism(),
     totalMemoryBytes: os.totalmem(),
   });
   const startedAt = Date.now();
@@ -419,6 +412,7 @@ function profileGraph(name: GraphName, options: ProfileOptions) {
 
 async function main(argv: string[]): Promise<void> {
   const { options, selectedGraphs } = parseArgs(argv);
+  await ensureKyselyTypes(repoRoot);
   ensureDirs(options.outDir);
   const report: ProfileReport = {
     generatedAt: new Date().toISOString(),

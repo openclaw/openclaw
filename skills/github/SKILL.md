@@ -42,10 +42,9 @@ gh pr view 55 --repo owner/repo --json title,body,author,files,commits,reviews,r
 gh pr checks 55 --repo owner/repo
 gh pr diff 55 --repo owner/repo
 gh pr create --repo owner/repo --title "feat: title" --body-file /tmp/pr.md
-gh pr merge 55 --repo owner/repo --squash
 ```
 
-When creating or refreshing a PR body, append this final footer only when the Runtime line supplies `sessionUrl=<exact-url>`. Replace `<sessionUrl>` with that URL verbatim; do not construct or modify it. Omit the footer when `sessionUrl` is absent. Preserve any publication marker before exactly one footer, and keep the footer final:
+When creating or refreshing a PR body, append this final footer only when the Runtime line supplies `sessionUrl=<exact-url>`. Replace `<sessionUrl>` with that URL verbatim; do not construct or modify it. `sessionUrl` is supplied only for an explicitly public session. Omit the footer when it is absent; never substitute a private chat URL or enable sharing to obtain one. Preserve any publication marker before exactly one footer, and keep the footer final:
 
 ```text
 ---
@@ -53,6 +52,45 @@ When creating or refreshing a PR body, append this final footer only when the Ru
 ```
 
 URLs work directly: `gh pr view https://github.com/owner/repo/pull/55`.
+
+### Async merges
+
+Use the repository's native landing workflow when provided. For authorized
+programmatic merges elsewhere, use GitHub's [async merge API](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request-asynchronously)
+through `gh api`; `gh pr merge` does not select this API. Supply the reviewed head
+SHA, preserve required reviews/checks, and check stack membership first: submitting
+a stacked PR also merges or queues its open downstack PRs, which need their own
+review and authorization.
+
+```bash
+gh api -H 'X-Octopool-Require: merge-async-v1' \
+  --method PUT repos/owner/repo/pulls/55/merge-async \
+  -H 'X-GitHub-Api-Version: 2026-03-10' \
+  -f sha=REVIEWED_HEAD_SHA -f merge_method=squash -f merge_action=direct_merge
+gh api -H 'X-Octopool-Require: merge-async-v1' \
+  repos/owner/repo/pulls/55/merge-async/REQUEST_UUID \
+  -H 'X-GitHub-Api-Version: 2026-03-10' -H 'Cache-Control: max-age=0'
+```
+
+Keep the Octopool guard header first after `api`. Protected older wrappers reject
+it before they can rewrite merge authority; use an Octopool build containing
+[the async guard](https://github.com/openclaw/octopool/pull/231) if it is refused.
+The supported wrapper preserves SHA/method/action/bypass and only rewrites commit
+text. Native `gh` can pass the header through. Do not remove it, disable policy,
+or select a raw binary to work around a rejection.
+
+Retain `details.uuid` from a `202` response before polling. `pending` means wait;
+`merged` includes `details.sha`, which still needs final PR/head verification.
+`enqueued` means queued, not merged: monitor the PR itself. To honor a configured
+queue, use `merge_action=default` (or `merge_queue` to explicitly enqueue), omitting
+direct-only method/title/message fields. Never enable `bypass_rules` without authorization.
+
+On `failed`, report `details.message`. A `409` identifies an existing request;
+inspect its UUID and options without resubmitting. Lost replies, polling errors,
+and result expiry after 24 hours require reconciliation, never a blind retry or
+synchronous fallback. Poll with bounded waits and fresh reads. Async processing
+does not arm auto-merge for unmet checks; use the native workflow or `gh pr merge
+--auto` when that behavior is authorized.
 
 ### Landing ownership
 
@@ -90,6 +128,46 @@ gh run view <run-id> --repo owner/repo --json status,conclusion,headSha,url
 gh run view <run-id> --repo owner/repo --log-failed
 gh run rerun <run-id> --repo owner/repo --failed
 ```
+
+### Wait for CI
+
+Run the waiter below as a single background `exec` (`background: true`, `timeoutSeconds` above the expected CI time). When its running result says the exit wakes this conversation, end the turn: the wake carries the exit code and the output tail. Otherwise, collect it with `process poll`. Do not start a second waiter for the same checks. Polling loops and one-shot automations cost a model turn per check ([#199122](https://github.com/openclaw/openclaw/pull/199122)).
+
+Pin the commit you pushed. A waiter that reads the PR head live can see the old head as settled right after a push and exit at once; `gh pr checks --watch` has this race ([#199663](https://github.com/openclaw/openclaw/pull/199663)).
+
+```bash
+# Exit 0: every check passed. 1: a check failed. 11: the PR head moved. 12: no check ran.
+# 2: GitHub API reads failed 5 times in a row.
+pr=55 repo=owner/repo sha=$(git rev-parse HEAD) # the exact commit you pushed
+seen=0 n=0 e=0
+while :; do
+  head=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid)
+  if [ "$head" = "$sha" ]; then
+    seen=1
+    if ! runs=$(gh api --paginate "repos/$repo/commits/$sha/check-runs" \
+      --jq '.check_runs[] | "\(.status) \(.conclusion) \(.name)"') ||
+      ! st=$(gh api "repos/$repo/commits/$sha/status" --jq 'select(.total_count > 0) | .state'); then
+      e=$((e + 1)); [ "$e" -ge 5 ] && { echo "API-ERROR $sha"; exit 2; }
+      n=$((n + 1)); sleep 30; continue
+    fi
+    e=0
+    bad=$(printf '%s\n' "$runs" | grep -E '^completed (failure|timed_out|action_required|startup_failure) ')
+    [ -n "$bad" ] && { echo "FAIL $sha"; echo "$bad"; exit 1; }
+    case "$st" in failure | error) echo "FAIL $sha commit status: $st"; exit 1 ;; esac
+    if [ "$st" != pending ] && { [ -z "$runs" ] ||
+      ! printf '%s\n' "$runs" | grep -Eqv '^completed (success|skipped|neutral|cancelled) '; }; then
+      { [ "$st" = success ] || printf '%s\n' "$runs" | grep -q '^completed success '; } &&
+        { echo "PASS $sha"; exit 0; }
+      [ "$n" -ge 4 ] && { echo "NO-RUN $sha"; exit 12; }
+    fi
+  elif [ -n "$head" ] && { [ "$seen" = 1 ] || [ "$n" -ge 4 ]; }; then
+    echo "HEAD-MOVED expected=$sha actual=$head"; exit 11
+  fi
+  n=$((n + 1)); sleep 30
+done
+```
+
+The loop gives GitHub about 2 minutes to show the new head. It waits on queued, running and `stale` runs, and ignores cancelled runs, because concurrency groups cancel superseded runs. It also reads commit statuses, which some aggregate gates use. It exits 12 when no run succeeded, for example when every run was skipped or none started, because draft PRs skip CI. For one known run, `gh run watch <run-id> --repo owner/repo --exit-status` exits non-zero when the run fails.
 
 ## API
 

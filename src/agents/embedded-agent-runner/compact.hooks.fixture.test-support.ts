@@ -9,7 +9,10 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { resetCompactHooksHarnessMocks } from "./compact.hooks.harness.js";
+import {
+  acquireAgentRunPreparedModelRuntimeMock,
+  resetCompactHooksHarnessMocks,
+} from "./compact.hooks.harness.js";
 
 export function useCompactHooksSessionFixture(sessionKey: string) {
   let state: OpenClawTestState;
@@ -57,12 +60,24 @@ export function useCompactHooksSessionFixture(sessionKey: string) {
   };
 }
 
+export async function acquiredPreparedModelRuntime() {
+  const pendingLease = acquireAgentRunPreparedModelRuntimeMock.mock.results[0]?.value;
+  if (!pendingLease) {
+    throw new Error("expected prepared model runtime acquisition");
+  }
+  return (await pendingLease).snapshot;
+}
+
 export function expectedNativeCompactionOptions(
   nativeCompactionRequest: "after_context_engine" | "required_preflight",
 ) {
   return {
     nativeCompactionRequest,
     preparedModelRuntime: expect.any(Object),
-    sourceAuthority: { assertActive: expect.any(Function), operatorAuthority: undefined },
+    sourceAuthority: {
+      assertActive: expect.any(Function),
+      prepareDispatch: expect.any(Function),
+      operatorAuthority: undefined,
+    },
   };
 }

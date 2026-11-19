@@ -2,7 +2,8 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "./user-profiles.js";
+import { setUserProfileRole } from "./user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "./user-profiles.js";
 
 export function profileState(options: OpenClawStateDatabaseOptions) {
   const db = openOpenClawStateDatabase(options).db;

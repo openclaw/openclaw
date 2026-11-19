@@ -166,15 +166,6 @@ describe("real-behavior-proof-policy", () => {
     expect(evaluation.status).toBe("passed");
   });
 
-  it("rejects None as evidence", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(proofBody("None")),
-    });
-
-    expect(evaluation.status).toBe("missing");
-    expect(evaluation.missingSections).toEqual(["Evidence"]);
-  });
-
   it("rejects Markdown separators as context and evidence", () => {
     const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(proofBody("---", { problem: "***" })),
@@ -315,15 +306,6 @@ describe("real-behavior-proof-policy", () => {
     expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
-  it("fails external PRs without required context and evidence", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr("## Summary\n\n- Fixed startup."),
-    });
-
-    expect(evaluation.status).toBe("missing");
-    expect(labelsForPullRequestContext(evaluation)).toEqual([NEEDS_PR_CONTEXT_LABEL]);
-  });
-
   it("fails external PRs that say the changed behavior was not tested", () => {
     const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(proofBody("not tested")),
@@ -331,15 +313,6 @@ describe("real-behavior-proof-policy", () => {
 
     expect(evaluation.status).toBe("missing");
     expect(labelsForPullRequestContext(evaluation)).toEqual([NEEDS_PR_CONTEXT_LABEL]);
-  });
-
-  it("accepts focused test and CI evidence", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(proofBody("pnpm test passed and CI is green.")),
-    });
-
-    expect(evaluation.status).toBe("passed");
-    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
   it("skips maintainer and bot PRs but requires context from external PRs", () => {

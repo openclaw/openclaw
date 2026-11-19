@@ -3,17 +3,21 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../cli/json-output-mode.js";
+import { withProgress } from "../cli/progress.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { defaultRuntime } from "../runtime.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import type { LoggingOperations } from "./sqlite-worker-logging.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tty = createCliTtyMock([process.stderr]);
 afterEach(() => {
+  tty.restore();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
-it("keeps worker diagnostics off JSON stdout through backend close", async () => {
+it("persists worker diagnostics through backend close without contaminating JSON stdout", async () => {
   const root = tempDirs.make("openclaw-worker-logging-");
   const databasePath = path.join(root, "fixture.sqlite");
   await fs.writeFile(databasePath, "");
@@ -40,7 +44,12 @@ it("keeps worker diagnostics off JSON stdout through backend close", async () =>
       if (!store) {
         throw new Error("Expected fixture worker to open");
       }
-      const result = await store.execute({ type: "echo", input: "ready" });
+      tty.set(true);
+      const result = await withProgress(
+        { label: "Setting up workspace", stream: process.stderr, fallback: "line" },
+        () => store.execute({ type: "echo", input: "ready" }),
+      );
+      tty.restore();
       defaultRuntime.writeJson(result);
       await store.close();
     });
@@ -51,4 +60,16 @@ it("keeps worker diagnostics off JSON stdout through backend close", async () =>
   for (const phase of ["open", "execute", "close"]) {
     expect(stderr.join("")).toContain(`worker fixture ${phase}`);
   }
+  const diagnostic = stderr.findIndex((chunk) => chunk.includes("worker fixture execute"));
+  expect(stderr[diagnostic - 1]).toBe("\r\x1b[2K");
+  const records = (await fs.readFile(path.join(root, "worker.log"), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line): { message: string } => JSON.parse(line));
+  expect(records.map((record) => record.message)).toEqual([
+    "worker fixture open",
+    "worker fixture execute",
+    ...Array.from({ length: 128 }, (_, index) => `worker teardown diagnostic ${index}`),
+    "worker fixture close",
+  ]);
 });

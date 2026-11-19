@@ -42,7 +42,7 @@ export function createRehearsalPathInspector(
     allowCodeLink = false,
   ): Stats | undefined {
     if (path.normalize(filename) !== filename) {
-      refuseRehearsal(`migration data is not a canonical path: ${filename}`);
+      refuseRehearsal(`migration data path is not fully resolved: ${filename}`);
     }
     if (!path.isAbsolute(filename) || !isWithinRehearsal(stateDir, filename)) {
       refuseRehearsal(`migration data escapes the copied state: ${filename}`);

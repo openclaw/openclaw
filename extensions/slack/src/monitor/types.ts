@@ -1,7 +1,5 @@
 import type { SlackCommandMiddlewareArgs } from "@slack/bolt";
 import type {
-  AppContextChangedEvent,
-  AppHomeOpenedEvent,
   ChannelIDChangedEvent,
   ChannelRenameEvent,
   MemberJoinedChannelEvent,
@@ -17,9 +15,9 @@ import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract
 import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginCommandReplyOptions } from "openclaw/plugin-sdk/plugin-command-runtime";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { SlackAppContext } from "../agent-context.js";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackEventScope } from "./event-scope.js";
 
@@ -48,6 +46,7 @@ export type SlackCommandInvocation = {
 };
 
 export type MonitorSlackOpts = {
+  scheduler: PluginServiceSchedulerV1;
   botToken?: string;
   appToken?: string;
   accountId?: string;
@@ -60,8 +59,6 @@ export type MonitorSlackOpts = {
   slashCommand?: SlackSlashCommandConfig;
   /** Callback to update app-level channel account activity (e.g. lastEventAt). */
   setStatus?: (next: Record<string, unknown>) => void;
-  /** Callback to read the current channel account status snapshot. */
-  getStatus?: () => Record<string, unknown>;
 };
 
 type LooseSlackEvent<Event extends { type: string }> = Event extends unknown
@@ -76,13 +73,6 @@ export type SlackChannelRenamedEvent = Omit<LooseSlackEvent<ChannelRenameEvent>,
   channel?: Partial<ChannelRenameEvent["channel"]>;
 };
 export type SlackChannelIdChangedEvent = LooseSlackEvent<ChannelIDChangedEvent>;
-export type SlackAppHomeOpenedEvent = Omit<LooseSlackEvent<AppHomeOpenedEvent>, "context"> & {
-  context?: SlackAppContext;
-};
-export type SlackAppContextChangedEvent = Omit<
-  LooseSlackEvent<AppContextChangedEvent>,
-  "context"
-> & { context?: SlackAppContext };
 export type SlackPinEvent = LooseSlackEvent<PinAddedEvent | PinRemovedEvent>;
 
 type SlackMessageSubtypeMessage = Pick<

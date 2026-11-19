@@ -1,10 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { convertPcmToMulaw8k } from "openclaw/plugin-sdk/realtime-voice";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { VoiceCallTtsConfig } from "./config.js";
-import { convertPcmToMulaw8k } from "./telephony-audio.js";
-
-// Telephony TTS adapter that applies voice-call overrides and emits 8kHz mulaw audio.
 
 /** Core runtime TTS API used by the telephony adapter. */
 export type TelephonyTtsRuntime = Pick<
@@ -13,52 +11,9 @@ export type TelephonyTtsRuntime = Pick<
 >;
 
 /** Provider facade used by Twilio/webhook code for telephony synthesis. */
-export type TelephonyTtsProvider = {
-  synthesisTimeoutMs: number;
-  synthesizeForTelephony: (text: string) => Promise<Buffer>;
-};
+export type TelephonyTtsProvider = Awaited<ReturnType<typeof createTelephonyTtsProvider>>;
 
-/** Default timeout for one telephony synthesis request. */
 export const TELEPHONY_DEFAULT_TTS_TIMEOUT_MS = 8000;
-
-class UnsupportedTelephonyTtsOutputFormatError extends Error {
-  constructor(
-    readonly outputFormat: string,
-    readonly provider: string,
-  ) {
-    super(`Unsupported telephony TTS output format "${outputFormat}" from provider "${provider}"`);
-    this.name = "UnsupportedTelephonyTtsOutputFormatError";
-  }
-}
-
-function convertTelephonyTtsOutput(result: {
-  audioBuffer: Buffer;
-  outputFormat?: string;
-  provider?: string;
-  sampleRate: number;
-}): Buffer {
-  const format = result.outputFormat?.trim().toLowerCase();
-  // Bundled provider contracts: Azure/Gradium emit raw-8khz-8bit-mono-mulaw/ulaw_8000;
-  // ElevenLabs/OpenAI emit pcm_22050/pcm. An absent format is the shipped PCM default.
-  const isRawMulaw = format === "raw-8khz-8bit-mono-mulaw" || format === "ulaw_8000";
-  if (isRawMulaw && result.sampleRate === 8_000) {
-    return result.audioBuffer;
-  }
-  const isPcm =
-    !format ||
-    format === "pcm" ||
-    /^pcm[_-]\d+$/.test(format) ||
-    (format.includes("raw") &&
-      (format.includes("16bit") || format.includes("16-bit")) &&
-      format.includes("pcm"));
-  if (isPcm) {
-    return convertPcmToMulaw8k(result.audioBuffer, result.sampleRate);
-  }
-  throw new UnsupportedTelephonyTtsOutputFormatError(
-    result.outputFormat ?? "absent",
-    result.provider ?? "unknown",
-  );
-}
 
 /** Create a TTS provider that honors voice-call overrides and converts PCM to mulaw. */
 export async function createTelephonyTtsProvider(params: {
@@ -68,7 +23,7 @@ export async function createTelephonyTtsProvider(params: {
   logger?: {
     warn?: (message: string) => void;
   };
-}): Promise<TelephonyTtsProvider> {
+}) {
   const { coreConfig, ttsOverride, runtime, logger } = params;
   const preparedConfig = await runtime.prepareTtsRequest({
     cfg: coreConfig,
@@ -116,12 +71,31 @@ export async function createTelephonyTtsProvider(params: {
         );
       }
 
-      return convertTelephonyTtsOutput({
-        audioBuffer: result.audioBuffer,
-        outputFormat: result.outputFormat,
-        provider: result.provider,
-        sampleRate: result.sampleRate,
-      });
+      const format = result.outputFormat?.trim().toLowerCase();
+      // Bundled provider contracts: Azure/Gradium emit raw-8khz-8bit-mono-mulaw/ulaw_8000;
+      // ElevenLabs/OpenAI emit pcm_22050/pcm. An absent format is the shipped PCM default.
+      const isRawMulaw = format === "raw-8khz-8bit-mono-mulaw" || format === "ulaw_8000";
+      if (isRawMulaw && result.sampleRate === 8_000) {
+        return result.audioBuffer;
+      }
+      const isPcm =
+        !format ||
+        format === "pcm" ||
+        /^pcm[_-]\d+$/.test(format) ||
+        (format.includes("raw") &&
+          (format.includes("16bit") || format.includes("16-bit")) &&
+          format.includes("pcm"));
+      if (isPcm) {
+        return convertPcmToMulaw8k(result.audioBuffer, result.sampleRate);
+      }
+      const outputFormat = result.outputFormat ?? "absent";
+      const provider = result.provider ?? "unknown";
+      throw Object.assign(
+        new Error(
+          `Unsupported telephony TTS output format "${outputFormat}" from provider "${provider}"`,
+        ),
+        { outputFormat, provider, name: "UnsupportedTelephonyTtsOutputFormatError" },
+      );
     },
   };
 }

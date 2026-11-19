@@ -1,6 +1,3 @@
-/**
- * Public SDK type surface for document extractor plugins.
- */
 export type {
   DocumentExtractedImage,
   DocumentExtractionMetadata,

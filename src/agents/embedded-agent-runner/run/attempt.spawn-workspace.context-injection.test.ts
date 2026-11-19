@@ -5,73 +5,10 @@ import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { limitHistoryTurns } from "../history.js";
-import { resolveAttemptBootstrapContext } from "./attempt-context-engine-helpers.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
 
 describe("embedded attempt context injection", () => {
-  it.each([
-    {
-      name: "explicit never",
-      mode: "never",
-      bootstrap: "full",
-      runKind: "default",
-      continuation: false,
-      resolve: false,
-      completedCalls: 0,
-    },
-    {
-      name: "pending bootstrap overrides stale completion",
-      mode: "continuation-skip",
-      bootstrap: "full",
-      runKind: "default",
-      continuation: false,
-      resolve: true,
-      completedCalls: 0,
-    },
-    {
-      name: "heartbeat always filters bootstrap",
-      mode: "continuation-skip",
-      bootstrap: "none",
-      runKind: "heartbeat",
-      continuation: false,
-      resolve: true,
-      completedCalls: 0,
-    },
-    {
-      name: "limited bootstrap permits continuation skip",
-      mode: "continuation-skip",
-      bootstrap: "limited",
-      runKind: "default",
-      continuation: true,
-      resolve: false,
-      completedCalls: 1,
-    },
-  ] as const)("$name", async (testCase) => {
-    const files =
-      testCase.bootstrap === "full"
-        ? {
-            bootstrapFiles: [{ name: "BOOTSTRAP.md" }],
-            contextFiles: [{ path: "BOOTSTRAP.md" }],
-          }
-        : { bootstrapFiles: [], contextFiles: [] };
-    const hasCompletedBootstrapTurn = vi.fn(async () => true);
-    const resolveBootstrapContextForRun = vi.fn(async () => files);
-    const result = await resolveAttemptBootstrapContext({
-      contextInjectionMode: testCase.mode,
-      bootstrapMode: testCase.bootstrap,
-      bootstrapContextRunKind: testCase.runKind,
-      bootstrapContextMode: testCase.runKind === "heartbeat" ? "lightweight" : "full",
-      hasCompletedBootstrapTurn,
-      resolveBootstrapContextForRun,
-    });
-    expect(result).toEqual({
-      ...(testCase.resolve ? files : { bootstrapFiles: [], contextFiles: [] }),
-      isContinuationTurn: testCase.continuation,
-      shouldRecordCompletedBootstrapTurn: testCase.bootstrap === "full" && testCase.resolve,
-    });
-    expect(hasCompletedBootstrapTurn).toHaveBeenCalledTimes(testCase.completedCalls);
-    expect(resolveBootstrapContextForRun).toHaveBeenCalledTimes(Number(testCase.resolve));
-  });
-
   it("filters no-op heartbeat pairs before history limiting and context-engine assembly", async () => {
     const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
       messages,
@@ -110,16 +47,33 @@ describe("embedded attempt context injection", () => {
       modelId: "gpt-test",
     });
 
-    const assembleInput = assemble.mock.calls.at(0)?.[0] as
-      | { messages?: AgentMessage[] }
-      | undefined;
-    const projectedMessages = assembleInput?.messages?.map((message) => ({
-      role: message.role,
-      content: (message as { content?: unknown }).content,
-    }));
-    expect(projectedMessages).toEqual([
+    expect(assemble.mock.calls[0]?.[0].messages).toMatchObject([
       { role: "user", content: "real question" },
       { role: "assistant", content: "real answer" },
     ]);
+  });
+
+  it("records cache continuity without compaction", async () => {
+    const sessionManager = { appendCustomEntryAsync: vi.fn(async () => undefined) };
+    using _ = vi.spyOn(Date, "now").mockReturnValueOnce(123);
+    await appendAttemptCacheTtlIfNeeded({
+      sessionManager,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+      timedOutDuringCompaction: false,
+      compactionOccurredThisAttempt: false,
+      config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+      modelApi: "anthropic-messages",
+      isCacheTtlEligibleProvider: () => true,
+    });
+    expect(sessionManager.appendCustomEntryAsync).toHaveBeenCalledWith("openclaw.cache-ttl", {
+      timestamp: 123,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+      prunedToolResults: [],
+      ambiguousToolResultBaseKeys: [],
+      frozenToolResults: [],
+    });
   });
 });

@@ -1,7 +1,9 @@
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { formatErrorMessageWithCode } from "./errors.js";
 import {
+  emitSnapshotCleanupFailure,
   releaseSnapshotTempDirectory,
   removeTempDirectory,
   retainSnapshotWork,
@@ -20,10 +22,17 @@ export function withUpdateStateInspectionWork<T>(
   return retainSnapshotWork(work, () => stop());
 }
 
-export function finishStateInspection<T>(
+export async function withStateInspectionCleanup<T>(
   stagingRoot: string,
-  outcome: { value: T } | { cause: unknown },
-): T {
+  inspect: () => Promise<T>,
+  options: { cleanupFailure?: "warn" } = {},
+): Promise<T> {
+  let outcome: { value: T } | { cause: unknown };
+  try {
+    outcome = { value: await inspect() };
+  } catch (cause) {
+    outcome = { cause };
+  }
   if ("cause" in outcome && hasCommandProcessCleanupError(outcome.cause)) {
     // Command settlement failed. Keep the bytes for the existing snapshot
     // reclaimer instead of registering another exit/signal deletion attempt.
@@ -33,7 +42,16 @@ export function finishStateInspection<T>(
       { cause: outcome.cause },
     );
   }
-  if (!removeTempDirectory(stagingRoot)) {
+  const removed = removeTempDirectory(stagingRoot, (error) => {
+    if (options.cleanupFailure === "warn") {
+      emitSnapshotCleanupFailure({
+        cleanupRoot: stagingRoot,
+        operation: "rm",
+        code: extractErrorCode(error),
+      });
+    }
+  });
+  if (!removed && options.cleanupFailure !== "warn") {
     throw new Error(`State schema inspection snapshot cleanup failed: ${stagingRoot}`, {
       cause: "cause" in outcome ? outcome.cause : undefined,
     });

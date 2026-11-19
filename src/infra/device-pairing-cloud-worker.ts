@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { ensureWorkerEnvironmentNodeEnrollmentSchema } from "../state/openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
@@ -8,9 +7,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 export function hasCloudWorkerSetupDeviceBinding(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   setupId: string;
   deviceId: string;
 }): boolean {
@@ -27,7 +27,7 @@ export function hasCloudWorkerSetupDeviceBinding(params: {
 
 /** Bind one environment-owned setup completion inside the pairing transaction. */
 export function bindCloudWorkerSetupCompletion(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   completion: { setupId: string; deviceId: string; completedAtMs: number };
   credentialDigest: string;
 }): CloudWorkerSetupCompletionPublication {

@@ -4,13 +4,7 @@ import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { NostrProfile } from "./config-schema.js";
 import { profileToContent } from "./nostr-profile-core.js";
 
-export interface ProfilePublishResult {
-  eventId: string;
-  successes: string[];
-  failures: Array<{ relay: string; error: string }>;
-  /** Unix timestamp when the event was created. */
-  createdAt: number;
-}
+export type ProfilePublishResult = Awaited<ReturnType<typeof publishProfile>>;
 
 const RELAY_PUBLISH_TIMEOUT_MS = 5000;
 
@@ -21,7 +15,7 @@ export async function publishProfile(
   relays: string[],
   profile: NostrProfile,
   lastPublishedAt?: number,
-): Promise<ProfilePublishResult> {
+) {
   const content = JSON.stringify(profileToContent(profile));
   // Replaceable events must advance even if the previous publication was ahead of our clock.
   const now = Math.floor(Date.now() / 1000);
@@ -58,6 +52,7 @@ export async function publishProfile(
     eventId: event.id,
     successes,
     failures,
+    /** Unix timestamp when the event was created. */
     createdAt: event.created_at,
   };
 }

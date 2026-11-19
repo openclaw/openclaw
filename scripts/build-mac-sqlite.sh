@@ -5,6 +5,10 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MANIFEST="$ROOT_DIR/scripts/lib/sqlite-macos.json"
 ARCH="${1:-}"
 DESTINATION="${2:-}"
+DEPLOYMENT_TARGET="${OPENCLAW_MACOS_DEPLOYMENT_TARGET:-15.0}"
+[[ "$DEPLOYMENT_TARGET" =~ ^[0-9]+\.[0-9]+$ ]] || {
+  echo "ERROR: Invalid SQLite macOS deployment target" >&2; exit 2;
+}
 if [[ "$#" != 2 || ( "$ARCH" != arm64 && "$ARCH" != x86_64 && "$ARCH" != universal ) || -z "$DESTINATION" || "$DESTINATION" == -* ]]; then
   echo "Usage: scripts/build-mac-sqlite.sh <arm64|x86_64|universal> <runtime-directory>" >&2
   exit 2
@@ -46,7 +50,7 @@ if [[ "$ARCH" == universal ]]; then
 fi
 # Match Homebrew's library features, including its session and URI support.
 # JSON is built in on this SQLite line; OMIT_LOAD_EXTENSION must remain unset.
-xcrun clang -O2 -dynamiclib -fPIC -mmacosx-version-min=15.0 \
+xcrun clang -O2 -dynamiclib -fPIC "-mmacosx-version-min=$DEPLOYMENT_TARGET" \
   "${ARCH_FLAGS[@]}" -install_name @loader_path/libsqlite3.dylib \
   -DSQLITE_THREADSAFE=1 \
   -DSQLITE_ENABLE_API_ARMOR=1 \

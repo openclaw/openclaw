@@ -4,44 +4,27 @@ import {
   describe1AfterEach1,
   describe1BeforeEach0,
   getAgentTestMocks,
-  invokeAgent,
   makeContext,
   prime,
+  requireValue,
 } from "./agent.test-harness.js";
-// Provider/session fixtures are isolated; RPC admission, authority, and plugin effects are real.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { prepareAgentCommandExecutionIdentity } from "../../agents/agent-command-execution-identity.js";
+import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import type { AgentCommandGatewayIngressOpts } from "../../agents/command/types.js";
-import {
-  bindRequesterOwnerIdentity,
-  createCronCreatorAuthorityCapability,
-  runWithCronCreatorAuthorityCapability,
-} from "../../agents/cron-creator-authority-context.js";
+import * as cronAuthority from "../../agents/cron-creator-authority-context.js";
+import * as completionDelivery from "../../agents/subagents/announce/subagent-announce-completion-delivery.js";
 import { SessionFollowupCompletion } from "../../agents/subagents/completion/session-followup-completion.js";
-import {
-  captureRequesterFollowupAuthority,
-  revokeRequesterCronAuthority,
-} from "../../agents/subagents/requester-cron-authority.js";
-import {
-  createAdmittedGatewayToolCallerIdentity,
-  captureGatewayToolCallerAssertion,
-  withGatewayToolCallerIdentity,
-} from "../../agents/tools/gateway-caller-context.js";
-import type { AgentToolGatewayRequestCaller } from "../../agents/tools/in-process-gateway.js";
+import * as requester from "../../agents/subagents/requester-cron-authority.js";
+import * as caller from "../../agents/tools/gateway-caller-context.js";
 import { startSessionsSendReplyFlow } from "../../agents/tools/sessions-send-reply-flow.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  clearAgentRunContext,
-  getAgentRunContext,
-  registerAgentRunContext,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
+import * as runs from "../../infra/agent-run-registry.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -50,14 +33,17 @@ import {
 } from "../../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createPluginToolFactoryContext } from "../../plugins/tool-factory-context.js";
 import { bindPluginToolCallbacks } from "../../plugins/tool-factory-runtime.js";
+// Provider/session fixtures are isolated; RPC admission, authority, and plugin effects are real.
+import { requestRpcSourceCancellation } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { createContext as createInProcessContext } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
-import { agentHandlers } from "./agent.js";
-import type { RespondFn } from "./types.js";
 
 let metadataOwner: GatewayPluginMetadataOwner | undefined;
 beforeAll(() => {
@@ -75,328 +61,329 @@ afterAll(async () => {
 const SESSION = "agent:main:main";
 const SESSION_ID = "existing-session-id";
 const CHILD = "agent:main:subagent:owner-proof";
+const parent = { agentId: "main", sessionKey: SESSION, sessionId: SESSION_ID };
 const mocks = getAgentTestMocks();
 
-describe("Gateway followup owner final effect", () => {
-  const dirs = useAutoCleanupTempDirTracker(afterEach);
-  beforeEach(async () => {
-    await describe1BeforeEach0();
-    const registry = await vi.importActual<typeof import("../../infra/agent-run-registry.js")>(
-      "../../infra/agent-run-registry.js",
-    );
-    mocks.lifecycleGeneration = registry.getAgentRunLifecycleGeneration();
-    vi.mocked(getAgentRunContext).mockImplementation(registry.getAgentRunContext);
-    mocks.clearAgentRunContext.mockImplementation(registry.clearAgentRunContext);
-    // The shared handler fixture aliases register and claim. Delegate each real signature.
-    mocks.registerAgentRunContext.mockImplementation((runId, context, options) =>
-      typeof options === "object"
-        ? registry.claimAgentRunContext(runId, context, options)
-        : registry.registerAgentRunContext(runId, context, options),
-    );
-  });
-  afterEach(async () => {
-    revokeRequesterCronAuthority(SESSION);
-    await describe1AfterEach1();
-  });
-
-  it.each(["observer error", "observer error before dispatch", "cancel before dispatch"] as const)(
-    "checks %s after RPC admission and before a versioned plugin writes",
-    async (outcome) => {
-      const root = dirs.make("openclaw-followup-owner-effect-");
-      const output = path.join(root, "owner-effect.txt");
-      const config = { commands: { ownerAllowFrom: ["discord:owner-1"] } };
-      prime(SESSION_ID, config);
-      mocks.loadConfigReturn = config;
-      const isOwner = () =>
-        isConfiguredCommandOwner(mocks.loadConfigReturn, {
-          channel: "discord",
-          senderId: "owner-1",
-        });
-      const originalRunId = "original-owner-proof";
-      const { operationalRunInstance } = createTestAdmittedRunContext(originalRunId);
-      const delegated = claimAgentRunDelegatedAuthority(operationalRunInstance);
-      registerAgentRunContext(originalRunId, {
-        agentId: "main",
-        sessionKey: SESSION,
-        sessionId: SESSION_ID,
-      });
-      let authorityReleased = false;
-      const authorityRetired = createDeferredCore();
-      let requesterAuthority: ReturnType<typeof captureRequesterFollowupAuthority>;
-      try {
-        const original = createCronCreatorAuthorityCapability(
-          originalRunId,
-          { kind: "unknown" },
-          { source: "channel-owner", isCurrent: isOwner },
-          () => true,
-          undefined,
-          { senderId: "owner-1", channel: "discord", isCurrent: isOwner },
-        )!;
-        await withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey: SESSION,
-            operationalRunInstance,
-            approvalAuthority: delegated,
-          },
-          () =>
-            runWithCronCreatorAuthorityCapability(original, async () => {
-              requesterAuthority = captureRequesterFollowupAuthority({
-                requesterTurnRunId: originalRunId,
-                requesterAgentId: "main",
-                requesterSessionKey: SESSION,
-                requesterSessionId: SESSION_ID,
-                sourceSessionKey: CHILD,
-                isCurrent: () => !authorityReleased,
-                release: () => {
-                  authorityReleased = true;
-                  authorityRetired.resolve();
-                },
-              });
-            }),
-        );
-      } finally {
-        releaseAgentRunDelegatedAuthority(delegated);
-        clearAgentRunContext(originalRunId);
-      }
-      expect(requesterAuthority).toBeDefined();
-      const closed = createDeferredCore();
-      const parentSettled = createDeferredCore();
-      const entered = createDeferredCore();
-      const releaseEffect = createDeferredCore();
-      let pluginError: unknown;
-      let gatewayError: unknown;
-      let effectStarted = false;
-      const completion = SessionFollowupCompletion.bind({
-        runId: "owner-proof-child",
-        requesterSessionKey: SESSION,
-        requesterSessionId: SESSION_ID,
-        requesterAgentId: "main",
-        targetSessionKey: CHILD,
-        targetAgentId: "main",
-        requesterAuthority,
-        custody: {
-          signal: new AbortController().signal,
-          assertCurrent() {},
-          run: (work) => work(),
-          release: () => {
-            requesterAuthority?.release();
-            closed.resolve();
-          },
-        },
-      });
-      completion.markAccepted("owner-proof-child");
-      const context = makeContext();
-      mocks.agentCommand.mockImplementation(async (opts: AgentCommandGatewayIngressOpts) => {
-        const runId = opts.runId!;
-        const admission = prepareAgentCommandExecutionIdentity({
-          opts,
-          prepared: {
-            cfg: config,
-            runId,
-            sessionAgentId: "main",
-            sessionId: SESSION_ID,
-            sessionKey: SESSION,
-          },
-          ingress: { kind: "gateway-client", boundary: "agent", state: "present" },
-          lifecycleGeneration: opts.lifecycleGeneration!,
-        });
-        try {
-          const admitted = await admission.admit("embedded");
-          // The provider fixture replaces command execution, including its session-preparation publication.
-          registerAgentRunContext(runId, {
-            agentId: "main",
-            sessionKey: SESSION,
-            sessionId: SESSION_ID,
-          });
-          const identity = createAdmittedGatewayToolCallerIdentity({
-            admittedRunContext: admitted,
-            agentId: "main",
-            sessionKey: SESSION,
-          });
-          const execute = () =>
-            withGatewayToolCallerIdentity(identity, async () => {
-              const ownerContinuation = bindRequesterOwnerIdentity({
-                runId,
-                sessionKey: SESSION,
-                sessionId: SESSION_ID,
-                agentId: "main",
-              });
-              const builder = createPluginRegistry({
-                logger: { info() {}, warn() {}, error() {}, debug() {} },
-                runtime: createPluginRuntimeMock(),
-                activateGlobalSideEffects: false,
-              });
-              const record = createPluginRecord({
-                id: "owner-probe",
-                contracts: { tools: ["owner_probe"] },
-              });
-              builder.registry.plugins.push(record);
-              builder.createApi(record, { config, registrationMode: "full" }).registerTool(
-                {
-                  contextVersion: 2,
-                  create: (ctx) => ({
-                    name: "owner_probe",
-                    label: "Owner probe",
-                    description: "Isolated owner effect",
-                    parameters: { type: "object", properties: {} },
-                    async execute() {
-                      if (!ctx.senderIsOwner) {
-                        throw new Error("owner_authority_required");
-                      }
-                      effectStarted = true;
-                      entered.resolve();
-                      await releaseEffect.promise;
-                      ctx.assertInvocationCurrent();
-                      writeFileSync(output, "authorized owner effect");
-                      return { content: [], details: {} };
-                    },
-                  }),
-                },
-                { name: "owner_probe" },
-              );
-              const entry = builder.registry.tools[0]!;
-              const ctx = createPluginToolFactoryContext({
-                entry,
-                registry: builder.registry,
-                context: { senderIsOwner: false, sessionKey: SESSION, sessionId: SESSION_ID },
-                ownerContinuation,
-                assertInvocationCurrent: captureGatewayToolCallerAssertion(),
-              });
-              const raw = entry.factory(ctx);
-              if (!raw || Array.isArray(raw)) {
-                throw new Error("expected one owner probe");
-              }
-              await bindPluginToolCallbacks(
-                entry,
-                builder.registry,
-                raw,
-                ctx.assertInvocationCurrent,
-              ).execute("owner-proof", {});
-            });
-          await execute();
-        } catch (error) {
-          pluginError = error;
-        } finally {
-          await admission.finish();
-          entered.resolve();
-        }
-        return { payloads: [{ text: "owner proof settled" }], meta: { durationMs: 1 } };
-      });
-      const delayedDispatch =
-        outcome === "observer error before dispatch" || outcome === "cancel before dispatch";
-      if (delayedDispatch) {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      }
-      const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
-      const gatewayCall: AgentToolGatewayRequestCaller = async <T>(
-        request: Parameters<AgentToolGatewayRequestCaller>[0],
-      ) => {
-        request.assertDispatchCurrent?.();
-        const rpcParams = request.params;
-        if (!isRecord(rpcParams)) {
-          throw new Error("Expected Gateway RPC parameters");
-        }
-        if (request.method === "agent") {
-          const respond = vi.fn<RespondFn>((ok, payload) => {
-            if (!ok || (isRecord(payload) && payload.status !== "accepted")) {
-              parentSettled.resolve();
-            }
-          });
-          await invokeAgent(rpcParams, {
-            client,
-            context,
-            respond,
-            flushDispatch: !delayedDispatch,
-          });
-          const [ok, payload, error] = respond.mock.calls[0] ?? [];
-          if (!ok) {
-            gatewayError = error;
-            throw new Error(JSON.stringify(error));
-          }
-          return payload as T;
-        }
-        if (request.method !== "agent.wait") {
-          throw new Error("unexpected Gateway method");
-        }
-        if (outcome === "observer error" || delayedDispatch) {
-          throw new Error("gateway closed (1006): simulated transport loss");
-        }
-        const reply = createDeferredCore<T>();
-        await agentHandlers["agent.wait"]!({
-          params: rpcParams,
-          req: { type: "req", id: "owner-proof-wait", method: "agent.wait" },
-          context,
-          client,
-          isWebchatConnect: () => false,
-          respond: (ok, payload, error) => {
-            if (ok) {
-              reply.resolve(payload as T);
-            } else {
-              reply.reject(new Error(JSON.stringify(error)));
-            }
-          },
-        });
-        return await reply.promise;
-      };
-      try {
-        startSessionsSendReplyFlow({
-          completion,
-          callGateway: gatewayCall,
-          runId: "owner-proof-child",
-          skip: false,
-          reply: { status: "ok", replyText: "ready" },
-          notifyRequesterOnWaitFailure: true,
-          targetSessionKey: CHILD,
-          targetAgentId: "main",
-          displayKey: CHILD,
-          requesterSessionKey: SESSION,
-          requesterAgentId: "main",
-          message: "continue authorized task",
-          announceTimeoutMs: 1000,
-          maxPingPongTurns: 0,
-          replyMode: "one-way",
-        });
-        if (delayedDispatch) {
-          await closed.promise;
-          expect(authorityReleased).toBe(false);
-          expect(effectStarted).toBe(false);
-          if (outcome === "cancel before dispatch") {
-            for (const entry of context.chatAbortControllers.values()) {
-              entry.controller.abort();
-            }
-          }
-          await vi.runOnlyPendingTimersAsync();
-        }
-        if (outcome !== "cancel before dispatch") {
-          await Promise.race([entered.promise, parentSettled.promise]);
-        }
-        expect(
-          effectStarted,
-          JSON.stringify({
-            pluginError: String(pluginError),
-            gatewayError,
-            commands: mocks.agentCommand.mock.calls.length,
-          }),
-        ).toBe(outcome !== "cancel before dispatch");
-        expect(existsSync(output)).toBe(false);
-        if (outcome === "observer error") {
-          await closed.promise;
-        }
-      } finally {
-        releaseEffect.resolve();
-        await closed.promise;
-        await parentSettled.promise;
-        await authorityRetired.promise;
-      }
-      expect(authorityReleased).toBe(true);
-      if (outcome === "cancel before dispatch") {
-        expect(mocks.agentCommand).not.toHaveBeenCalled();
-        expect(existsSync(output)).toBe(false);
-      } else {
-        expect(pluginError).toBeUndefined();
-        expect(readFileSync(output, "utf8")).toBe("authorized owner effect");
-      }
-    },
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(async () => {
+  await describe1BeforeEach0();
+  const registry = await vi.importActual<typeof import("../../infra/agent-run-registry.js")>(
+    "../../infra/agent-run-registry.js",
+  );
+  mocks.lifecycleGeneration = registry.getAgentRunLifecycleGeneration();
+  vi.mocked(runs.getAgentRunContext).mockImplementation(registry.getAgentRunContext);
+  mocks.clearAgentRunContext.mockImplementation(registry.clearAgentRunContext);
+  // The shared handler fixture aliases register and claim. Delegate each real signature.
+  mocks.registerAgentRunContext.mockImplementation((runId, context, options) =>
+    typeof options === "object"
+      ? registry.claimAgentRunContext(runId, context, options)
+      : registry.registerAgentRunContext(runId, context, options),
   );
 });
+afterEach(async () => {
+  requester.revokeRequesterCronAuthority(SESSION);
+  await describe1AfterEach1();
+});
+
+it.for(["observer error", "observer error before dispatch", "cancel before dispatch"] as const)(
+  "checks %s after RPC admission and before a versioned plugin writes",
+  async (outcome, { signal }) => {
+    const root = dirs.make("openclaw-followup-owner-effect-");
+    const output = path.join(root, "owner-effect.txt");
+    const config = { commands: { ownerAllowFrom: ["discord:owner-1"] } };
+    prime(SESSION_ID, config);
+    mocks.loadConfigReturn = config;
+    const isOwner = () =>
+      isConfiguredCommandOwner(mocks.loadConfigReturn, {
+        channel: "discord",
+        senderId: "owner-1",
+      });
+    const originalRunId = "original-owner-proof";
+    const { operationalRunInstance } = createTestAdmittedRunContext(originalRunId);
+    const delegated = runs.claimAgentRunDelegatedAuthority(operationalRunInstance);
+    runs.registerAgentRunContext(originalRunId, { ...parent });
+    let authorityReleased = false;
+    const authorityRetired = createDeferredCore();
+    let requesterAuthority: ReturnType<typeof requester.captureRequesterFollowupAuthority>;
+    try {
+      const original = cronAuthority.createCronCreatorAuthorityCapability(
+        originalRunId,
+        { kind: "unknown" },
+        { source: "channel-owner", isCurrent: isOwner },
+        () => true,
+        undefined,
+        { senderId: "owner-1", channel: "discord", isCurrent: isOwner },
+      )!;
+      await caller.withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: SESSION,
+          operationalRunInstance,
+          approvalAuthority: delegated,
+        },
+        () =>
+          cronAuthority.runWithCronCreatorAuthorityCapability(original, async () => {
+            requesterAuthority = requester.captureRequesterFollowupAuthority({
+              requesterTurnRunId: originalRunId,
+              requesterAgentId: "main",
+              requesterSessionKey: SESSION,
+              requesterSessionId: SESSION_ID,
+              sourceSessionKey: CHILD,
+              isCurrent: () => !authorityReleased,
+              release: () => {
+                authorityReleased = true;
+                authorityRetired.resolve();
+              },
+            });
+          }),
+      );
+    } finally {
+      runs.releaseAgentRunDelegatedAuthority(delegated);
+      runs.clearAgentRunContext(originalRunId);
+    }
+    expect(requesterAuthority).toBeDefined();
+    const closed = createDeferredCore();
+    const accepted = createDeferredCore();
+    const entered = createDeferredCore();
+    const releaseEffect = createDeferredCore();
+    let pluginError: unknown;
+    let effectStarted = false;
+    let continuation: Promise<unknown> | undefined;
+    const context = Object.assign(createInProcessContext(), makeContext());
+    const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
+    const parentRunId = "announce:sessions-send:owner-proof-child:completion";
+    const dispatch = completionDelivery.runAnnounceAgentCall;
+    const observeAdmission = vi
+      .spyOn(completionDelivery, "runAnnounceAgentCall")
+      .mockImplementation((params) =>
+        dispatch({
+          ...params,
+          onAccepted: (receipt) => {
+            params.onAccepted?.(receipt);
+            accepted.resolve();
+          },
+        }),
+      );
+    const stageInput = requireValue(
+      mocks.stageSessionPendingInput.getMockImplementation(),
+      "session input fixture",
+    );
+    mocks.stageSessionPendingInput.mockImplementation(async (scope, options) => {
+      const input = await stageInput(scope, options);
+      return input
+        ? {
+            ...input,
+            completeAsync: async (terminal: AgentRunTerminalOutcome) => {
+              options.assertCompletionCurrent?.();
+              return terminal;
+            },
+          }
+        : undefined;
+    });
+    const completion = SessionFollowupCompletion.bind({
+      runId: "owner-proof-child",
+      requesterSessionKey: SESSION,
+      requesterSessionId: SESSION_ID,
+      requesterAgentId: "main",
+      targetSessionKey: CHILD,
+      targetAgentId: "main",
+      requesterAuthority,
+      custody: {
+        signal: new AbortController().signal,
+        assertCurrent() {},
+        run: (work) => {
+          const result = withPluginRuntimeGatewayRequestScope(
+            {
+              context,
+              client,
+              resolveGatewayContext: () => context,
+              isWebchatConnect: () => false,
+            },
+            work,
+          );
+          continuation = Promise.resolve(result);
+          return result;
+        },
+        release: () => {
+          requesterAuthority?.release();
+          closed.resolve();
+        },
+      },
+    });
+    completion.markAccepted("owner-proof-child");
+    mocks.agentCommand.mockImplementation(async (opts: AgentCommandGatewayIngressOpts) => {
+      const runId = opts.runId!;
+      await opts.userTurnTranscriptRecorder?.persistApproved();
+      const admission = prepareAgentCommandExecutionIdentity({
+        opts,
+        prepared: {
+          cfg: config,
+          runId,
+          sessionAgentId: "main",
+          sessionId: SESSION_ID,
+          sessionKey: SESSION,
+        },
+        ingress: { kind: "gateway-client", boundary: "agent", state: "present" },
+        lifecycleGeneration: opts.lifecycleGeneration!,
+      });
+      try {
+        const admitted = await admission.admit("embedded");
+        // The provider fixture replaces command execution, including its session-preparation publication.
+        runs.registerAgentRunContext(runId, { ...parent });
+        const identity = caller.createAdmittedGatewayToolCallerIdentity({
+          admittedRunContext: admitted,
+          agentId: "main",
+          sessionKey: SESSION,
+        });
+        await caller.withGatewayToolCallerIdentity(identity, async () => {
+          const ownerContinuation = cronAuthority.bindRequesterOwnerIdentity({ runId, ...parent });
+          const builder = createPluginRegistry({
+            logger: { info() {}, warn() {}, error() {}, debug() {} },
+            runtime: createPluginRuntimeMock(),
+            activateGlobalSideEffects: false,
+          });
+          const record = createPluginRecord({
+            id: "owner-probe",
+            contracts: { tools: ["owner_probe"] },
+          });
+          builder.registry.plugins.push(record);
+          builder.createApi(record, { config, registrationMode: "full" }).registerTool(
+            {
+              contextVersion: 2,
+              create: (ctx) => ({
+                name: "owner_probe",
+                label: "Owner probe",
+                description: "Isolated owner effect",
+                parameters: { type: "object", properties: {} },
+                async execute() {
+                  if (!ctx.senderIsOwner) {
+                    throw new Error("owner_authority_required");
+                  }
+                  effectStarted = true;
+                  entered.resolve();
+                  await releaseEffect.promise;
+                  ctx.assertInvocationCurrent();
+                  writeFileSync(output, "authorized owner effect");
+                  return { content: [], details: {} };
+                },
+              }),
+            },
+            { name: "owner_probe" },
+          );
+          const entry = builder.registry.tools[0]!;
+          const ctx = createPluginToolFactoryContext({
+            entry,
+            registry: builder.registry,
+            context: { senderIsOwner: false, sessionKey: SESSION, sessionId: SESSION_ID },
+            ownerContinuation,
+            assertInvocationCurrent: caller.captureGatewayToolCallerAssertion(),
+          });
+          const raw = entry.factory(ctx);
+          if (!raw || Array.isArray(raw)) {
+            throw new Error("expected one owner probe");
+          }
+          await bindPluginToolCallbacks(
+            entry,
+            builder.registry,
+            raw,
+            ctx.assertInvocationCurrent,
+          ).execute("owner-proof", {});
+        });
+      } catch (error) {
+        pluginError = error;
+      } finally {
+        await admission.finish();
+        entered.resolve();
+      }
+      return {
+        payloads: [{ text: "settled" }],
+        meta: { terminalReply: { disposition: "visible", text: "settled" } },
+      };
+    });
+    const delayedDispatch =
+      outcome === "observer error before dispatch" || outcome === "cancel before dispatch";
+    if (delayedDispatch) {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    }
+    try {
+      await startSessionsSendReplyFlow({
+        completion,
+        runId: "owner-proof-child",
+        skip: false,
+        reply: {
+          status: "ok",
+          replyText: "ready",
+          terminalReply: { disposition: "visible", text: "ready" },
+        },
+        notifyRequesterOnWaitFailure: true,
+        targetSessionKey: CHILD,
+        targetAgentId: "main",
+        displayKey: CHILD,
+        requesterSessionKey: SESSION,
+        requesterAgentId: "main",
+        replyTimeoutMs: 1000,
+        replyMode: "one-way",
+      });
+      if (!continuation) {
+        throw new Error("Expected retained native completion work");
+      }
+      const settled = continuation.catch(() => undefined);
+      const waitForGate = (gate: PromiseLike<void>, message: string) =>
+        withinTest(awaitGateBeforeSettlement(gate, settled, message), signal);
+      await waitForGate(accepted.promise, "Parent ended before native private admission");
+      if (delayedDispatch) {
+        expect(authorityReleased).toBe(false);
+        expect(effectStarted).toBe(false);
+        if (outcome === "cancel before dispatch") {
+          const parentSource = requireValue(rpcSourceTesting.get(parentRunId), "parent RPC source");
+          expect(requestRpcSourceCancellation(parentSource)).toBe(true);
+        } else {
+          completion.close(new Error("simulated observer loss before execution"));
+          expect(authorityReleased).toBe(false);
+        }
+        // Cross the native accepted-ack yield without advancing run deadlines.
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      if (outcome !== "cancel before dispatch") {
+        await waitForGate(entered.promise, "Parent ended before plugin entry");
+      }
+      expect(effectStarted, String(pluginError)).toBe(outcome !== "cancel before dispatch");
+      expect(existsSync(output)).toBe(false);
+      if (outcome === "observer error") {
+        completion.close(new Error("simulated observer loss during execution"));
+        expect(authorityReleased).toBe(false);
+      }
+    } finally {
+      try {
+        releaseEffect.resolve();
+        if (vi.isFakeTimers()) {
+          await vi.advanceTimersByTimeAsync(10);
+        }
+        if (continuation) {
+          await withinTest(
+            continuation.catch(() => undefined),
+            signal,
+          );
+        }
+        await withinTest(closed.promise, signal);
+        await withinTest(authorityRetired.promise, signal);
+      } finally {
+        observeAdmission.mockRestore();
+        vi.useRealTimers();
+      }
+    }
+    expect(authorityReleased).toBe(true);
+    if (outcome === "cancel before dispatch") {
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+      expect(existsSync(output)).toBe(false);
+    } else {
+      expect(mocks.agentCommand).toHaveBeenCalledOnce();
+      expect(pluginError).toBeUndefined();
+      expect(readFileSync(output, "utf8")).toBe("authorized owner effect");
+      expect(context.dedupe.get(`agent:${parentRunId}`)?.payload).toMatchObject({
+        status: "ok",
+        inputProcessingCompleted: true,
+      });
+    }
+  },
+);

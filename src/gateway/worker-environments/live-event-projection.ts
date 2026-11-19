@@ -1,31 +1,28 @@
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { isDefinitiveRunLifecycle } from "../../agents/agent-run-terminal-outcome.js";
-import {
-  capLiveExecResult,
-  sanitizeToolArgs,
-  sanitizeToolResult,
-} from "../../agents/embedded-agent-tool-results.js";
+import { capLiveExecResult, sanitizeToolResult } from "../../agents/embedded-agent-tool-results.js";
 import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import type { WorkerTurnTranscriptSource } from "./placement-turn-claim-events.js";
+
+const log = createSubsystemLogger("gateway/worker-trajectory");
 
 export type WorkerLiveTrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 
 export function prepareWorkerLiveEventData(
   event: WorkerLiveEventParams["event"],
 ): Record<string, unknown> {
-  const payload = structuredClone(event.payload) as Record<string, unknown>;
   if (event.kind !== "tool") {
-    return payload;
+    return structuredClone(event.payload);
   }
   const toolName = normalizeToolPolicyName(event.payload.name);
-  payload.name = toolName;
-  if (event.payload.phase === "start") {
-    payload.args = sanitizeToolArgs(event.payload.args);
-  } else if (event.payload.phase === "update") {
+  const payload: Record<string, unknown> = { ...event.payload, name: toolName };
+  if (event.payload.phase === "update") {
     const partialResult = sanitizeToolResult(event.payload.partialResult);
     payload.partialResult = toolName === "exec" ? capLiveExecResult(partialResult) : partialResult;
-  } else {
+  } else if (event.payload.phase === "result") {
     const result = sanitizeToolResult(event.payload.result);
     payload.result = toolName === "exec" ? capLiveExecResult(result) : result;
   }
@@ -45,18 +42,24 @@ export function createWorkerLiveTrajectoryRecorder(params: {
 }): WorkerLiveTrajectoryRecorder {
   const target = params.source.sessionTarget;
   return createTrajectoryRuntimeRecorder({
+    // Capture policy stays current; storage routing belongs to the admitted turn.
+    env: { ...target.env, OPENCLAW_TRAJECTORY: process.env.OPENCLAW_TRAJECTORY },
     runId: params.runId,
     sessionId: target.sessionId,
     sessionKey: target.sessionKey,
     sessionTarget: target,
     assertCommitAllowed: params.source.receiptAuthority,
+  }).catch((error: unknown) => {
+    log.warn(`Trajectory preparation failed for run ${params.runId}: ${formatErrorMessage(error)}`);
+    return null;
   });
 }
 
-export function recordWorkerLiveTrajectoryEvent(
-  recorder: WorkerLiveTrajectoryRecorder,
+export async function recordWorkerLiveTrajectoryEvent(
+  preparingRecorder: WorkerLiveTrajectoryRecorder,
   event: WorkerLiveEventParams["event"],
-): Promise<void> | undefined {
+): Promise<void> {
+  const recorder = await preparingRecorder;
   if (!recorder) {
     return undefined;
   }

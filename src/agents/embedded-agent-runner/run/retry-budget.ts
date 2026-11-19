@@ -19,17 +19,10 @@ export function beginRunAttempt(budget: RunRetryBudget): void {
   budget.attemptsCounted += 1;
 }
 
-export function resolveRunRetryKind(params: {
-  preflightRecovery: { route: string; truncatedCount?: number };
-  retryingFromTranscript: boolean;
-  toolMetas: Array<{ isError?: boolean; meta?: string; toolName: string }>;
-}): RunRetryKind {
-  return params.retryingFromTranscript &&
-    params.preflightRecovery.route === "truncate_tool_results_only" &&
-    params.preflightRecovery.truncatedCount === 0 &&
-    params.toolMetas.some((tool) => tool.isError !== true)
-    ? "progress_continuation"
-    : "recovery";
+export function recordRunModelProgress(budget: RunRetryBudget): void {
+  // Retain the current attempt's failed tail, not failures before a completed response.
+  // Partial output and tool-only continuations do not replenish this guard.
+  budget.attemptsCounted = 1;
 }
 
 export function recordRunRetry(budget: RunRetryBudget, kind: RunRetryKind): void {

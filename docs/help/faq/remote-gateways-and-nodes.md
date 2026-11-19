@@ -23,7 +23,7 @@ read_when:
 
     1. Run the Gateway on the always-on host (VPS/home server).
     2. Put the Gateway host and your computer on the same tailnet.
-    3. Ensure the Gateway WS is reachable (tailnet bind or SSH tunnel).
+    3. Check that the Gateway WS is reachable (tailnet bind or SSH tunnel).
     4. Open the macOS app locally and connect in **Remote over SSH** mode (or direct tailnet) so it registers as a node.
     5. Approve the node:
        ```bash

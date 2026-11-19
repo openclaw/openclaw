@@ -1,5 +1,3 @@
-// Interpreter inline-eval detection recognizes flags and positional program
-// forms that execute command text without reading a script file.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
 
@@ -16,7 +14,6 @@ type PrefixFlagSpec = {
 };
 
 type AbbreviatedFlagSpec = {
-  label: string;
   full: string;
   min: string;
 };
@@ -24,8 +21,7 @@ type AbbreviatedFlagSpec = {
 type InterpreterFlagSpec = {
   names: readonly string[];
   exactFlags: ReadonlySet<string>;
-  rawExactFlags?: ReadonlyMap<string, string>;
-  rawPrefixFlags?: readonly PrefixFlagSpec[];
+  rawExactFlags?: ReadonlySet<string>;
   abbreviatedFlags?: readonly AbbreviatedFlagSpec[];
   joinedExactFlags?: ReadonlySet<string>;
   joinedFlagDenyExact?: ReadonlySet<string>;
@@ -38,9 +34,9 @@ type InterpreterFlagSpec = {
 type ShortClusterFlagSpec = {
   label: string;
   flag: string;
-  prefixChars: ReadonlySet<string>;
+  prefixChars: string;
   allowNumericRecordSeparator?: boolean;
-  numericValuePrefixChars?: ReadonlySet<string>;
+  numericValuePrefixChars?: string;
 };
 
 type PositionalInterpreterSpec = {
@@ -48,8 +44,6 @@ type PositionalInterpreterSpec = {
   fileFlags?: ReadonlySet<string>;
   fileFlagPrefixes?: readonly string[];
   exactValueFlags?: ReadonlySet<string>;
-  exactOptionalValueFlags?: ReadonlySet<string>;
-  prefixValueFlags?: readonly string[];
   flag: "<command>" | "<program>";
 };
 
@@ -63,23 +57,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
       {
         label: "-c",
         flag: "c",
-        prefixChars: new Set([
-          "B",
-          "E",
-          "I",
-          "O",
-          "P",
-          "R",
-          "S",
-          "b",
-          "d",
-          "i",
-          "q",
-          "s",
-          "u",
-          "v",
-          "x",
-        ]),
+        prefixChars: "BEIOPRSbdiqsuvx",
       },
     ],
   },
@@ -92,8 +70,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     exactFlags: new Set(["-e", "--source"]),
     // gawk before 4.0 accepted "--s" for "--source"; modern releases reject it
     // as ambiguous with "--sandbox", so the older executable case sets the floor.
-    abbreviatedFlags: [{ label: "--source", full: "--source", min: "--s" }],
-    prefixFlags: [{ label: "--source", prefix: "--source=" }],
+    abbreviatedFlags: [{ full: "--source", min: "--s" }],
   },
   {
     names: ["ruby"],
@@ -102,9 +79,9 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
       {
         label: "-e",
         flag: "e",
-        prefixChars: new Set(["S", "U", "W", "a", "c", "d", "l", "n", "p", "s", "v", "w"]),
+        prefixChars: "SUWacdlnpsvw",
         allowNumericRecordSeparator: true,
-        numericValuePrefixChars: new Set(["W"]),
+        numericValuePrefixChars: "W",
       },
     ],
   },
@@ -114,43 +91,21 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     shortClusterFlags: ["e", "E"].map((flag) => ({
       label: "-e",
       flag,
-      prefixChars: new Set([
-        "S",
-        "T",
-        "W",
-        "X",
-        "U",
-        "V",
-        "a",
-        "c",
-        "d",
-        "f",
-        "l",
-        "n",
-        "p",
-        "s",
-        "t",
-        "u",
-        "w",
-      ]),
+      prefixChars: "STWXUVacdflnpstuw",
       allowNumericRecordSeparator: true,
-      numericValuePrefixChars: new Set(["l"]),
+      numericValuePrefixChars: "l",
     })),
   },
   {
     names: ["php"],
     exactFlags: new Set(["-r"]),
-    rawExactFlags: new Map([
-      ["-B", "-B"],
-      ["-E", "-E"],
-      ["-R", "-R"],
-    ]),
+    rawExactFlags: new Set(["-B", "-E", "-R"]),
   },
   { names: ["r", "rscript"], exactFlags: new Set(["-e"]) },
   {
     names: ["julia"],
     exactFlags: new Set(["-e", "--eval", "--print"]),
-    rawExactFlags: new Map([["-E", "-E"]]),
+    rawExactFlags: new Set(["-E"]),
   },
   {
     names: ["elixir", "iex"],
@@ -167,7 +122,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
       {
         label: "-e",
         flag: "e",
-        prefixChars: new Set(["n", "p"]),
+        prefixChars: "np",
       },
     ],
   },
@@ -199,7 +154,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
       {
         label: "-e",
         flag: "e",
-        prefixChars: new Set(["n", "p"]),
+        prefixChars: "np",
       },
     ],
   },
@@ -223,17 +178,15 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
       "--early-init-eval-command",
     ]),
     abbreviatedFlags: [
-      { label: "-eval-command", full: "-eval-command", min: "-ev" },
-      { label: "--eval-command", full: "--eval-command", min: "--ev" },
-      { label: "-init-eval-command", full: "-init-eval-command", min: "-init-e" },
-      { label: "--init-eval-command", full: "--init-eval-command", min: "--init-e" },
+      { full: "-eval-command", min: "-ev" },
+      { full: "--eval-command", min: "--ev" },
+      { full: "-init-eval-command", min: "-init-e" },
+      { full: "--init-eval-command", min: "--init-e" },
       {
-        label: "-early-init-eval-command",
         full: "-early-init-eval-command",
         min: "-early-init-e",
       },
       {
-        label: "--early-init-eval-command",
         full: "--early-init-eval-command",
         min: "--early-init-e",
       },
@@ -258,23 +211,16 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   {
     names: ["make", "gmake"],
     exactFlags: new Set(["-f", "--file", "--makefile", "--eval"]),
-    rawExactFlags: new Map([["-E", "-E"]]),
-    rawPrefixFlags: [{ label: "-E", prefix: "-E" }],
+    rawExactFlags: new Set(["-E"]),
     // GNU make keeps "--e" ambiguous with "--environment-overrides";
     // "--ev" is the shortest unique spelling of "--eval".
-    abbreviatedFlags: [{ label: "--eval", full: "--eval", min: "--ev" }],
-    prefixFlags: [
-      { label: "-f", prefix: "-f" },
-      { label: "--file", prefix: "--file=" },
-      { label: "--makefile", prefix: "--makefile=" },
-      { label: "--eval", prefix: "--eval=" },
-    ],
+    abbreviatedFlags: [{ full: "--eval", min: "--ev" }],
+    prefixFlags: [{ label: "-f", prefix: "-f" }],
   },
   {
     names: ["sed", "gsed"],
     exactFlags: new Set(),
-    rawExactFlags: new Map([["-e", "-e"]]),
-    rawPrefixFlags: [{ label: "-e", prefix: "-e" }],
+    rawExactFlags: new Set(["-e"]),
   },
 ];
 
@@ -296,7 +242,6 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
       "--load",
       "-W",
     ]),
-    prefixValueFlags: ["-F", "--field-separator=", "-v", "--assign=", "--include=", "--load="],
     flag: "<program>",
   },
   {
@@ -317,27 +262,6 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
       "-s",
       "--max-chars",
     ]),
-    exactOptionalValueFlags: new Set(["--eof", "--replace"]),
-    prefixValueFlags: [
-      "-a",
-      "--arg-file=",
-      "-d",
-      "--delimiter=",
-      "-E",
-      "--eof=",
-      "-I",
-      "--replace=",
-      "-i",
-      "-L",
-      "--max-lines=",
-      "-l",
-      "-n",
-      "--max-args=",
-      "-P",
-      "--max-procs=",
-      "-s",
-      "--max-chars=",
-    ],
     flag: "<command>",
   },
   {
@@ -345,8 +269,6 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
     fileFlags: new Set(["-f", "--file"]),
     fileFlagPrefixes: ["-f", "--file="],
     exactValueFlags: new Set(["-f", "--file", "-l", "--line-length"]),
-    exactOptionalValueFlags: new Set(["-i", "--in-place"]),
-    prefixValueFlags: ["-f", "--file=", "--in-place=", "--line-length="],
     flag: "<program>",
   },
 ];
@@ -357,42 +279,11 @@ const INTERPRETER_ALLOWLIST_NAMES = new Set(
   ),
 );
 
-function stripInterpreterVersionSuffix(value: string): string {
-  const stripped = value.replace(VERSION_SUFFIX_PATTERN, "");
-  return stripped.length > 0 ? stripped : value;
-}
-
 function interpreterNameVariants(value: string): readonly string[] {
-  const stripped = stripInterpreterVersionSuffix(value);
+  const stripped = value.replace(VERSION_SUFFIX_PATTERN, "");
   // Do not synthesize one-letter interpreter names: commands like r2 can use
   // their own eval flags and must not be mistaken for R inline execution.
   return stripped === value || stripped.length < 2 ? [value] : [value, stripped];
-}
-
-function specNamesInclude(names: readonly string[], normalizedExecutable: string): boolean {
-  return interpreterNameVariants(normalizedExecutable).some((candidate) =>
-    names.includes(candidate),
-  );
-}
-
-function findInterpreterSpec(executable: string): InterpreterFlagSpec | null {
-  const normalized = normalizeExecutableToken(executable);
-  for (const spec of FLAG_INTERPRETER_INLINE_EVAL_SPECS) {
-    if (specNamesInclude(spec.names, normalized)) {
-      return spec;
-    }
-  }
-  return null;
-}
-
-function findPositionalInterpreterSpec(executable: string): PositionalInterpreterSpec | null {
-  const normalized = normalizeExecutableToken(executable);
-  for (const spec of POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS) {
-    if (specNamesInclude(spec.names, normalized)) {
-      return spec;
-    }
-  }
-  return null;
 }
 
 function createInlineEvalHit(
@@ -416,7 +307,7 @@ function matchAbbreviatedFlag(spec: InterpreterFlagSpec, lower: string): string 
       flag.full.startsWith(optionName) &&
       flag.min.startsWith(optionName.slice(0, flag.min.length))
     ) {
-      return flag.label;
+      return flag.full;
     }
   }
   return null;
@@ -441,18 +332,17 @@ function matchJoinedExactFlag(
       }
     }
   }
-  for (const flag of spec.joinedExactFlags ?? spec.exactFlags) {
-    if (/^-[A-Za-z]$/.test(flag) && token.startsWith(flag) && token.length > flag.length) {
-      return normalizeLowercaseStringOrEmpty(flag);
-    }
-  }
-  return null;
+  return matchJoinedShortFlag(spec.joinedExactFlags ?? spec.exactFlags, token);
 }
 
-function matchJoinedRawExactFlag(spec: InterpreterFlagSpec, token: string): string | null {
-  for (const [flag, label] of spec.rawExactFlags ?? []) {
+function matchJoinedShortFlag(
+  flags: Iterable<string>,
+  token: string,
+  preserveCase = false,
+): string | null {
+  for (const flag of flags) {
     if (/^-[A-Za-z]$/.test(flag) && token.startsWith(flag) && token.length > flag.length) {
-      return label;
+      return preserveCase ? flag : normalizeLowercaseStringOrEmpty(flag);
     }
   }
   return null;
@@ -478,21 +368,16 @@ function matchShortClusterFlag(spec: InterpreterFlagSpec, token: string): string
 function isShortClusterPrefixAllowed(clusterFlag: ShortClusterFlagSpec, prefix: string): boolean {
   for (let index = 0; index < prefix.length; index += 1) {
     const char = prefix[index] ?? "";
-    if (clusterFlag.prefixChars.has(char)) {
-      if (clusterFlag.numericValuePrefixChars?.has(char) === true) {
-        while (/^[0-9]$/.test(prefix[index + 1] ?? "")) {
-          index += 1;
-        }
+    if (clusterFlag.prefixChars.includes(char)) {
+      if (clusterFlag.numericValuePrefixChars?.includes(char) !== true) {
+        continue;
       }
-      continue;
+    } else if (!(clusterFlag.allowNumericRecordSeparator === true && char === "0")) {
+      return false;
     }
-    if (clusterFlag.allowNumericRecordSeparator === true && char === "0") {
-      while (/^[0-9]$/.test(prefix[index + 1] ?? "")) {
-        index += 1;
-      }
-      continue;
+    while (/^[0-9]$/.test(prefix[index + 1] ?? "")) {
+      index += 1;
     }
-    return false;
   }
   return true;
 }
@@ -507,7 +392,10 @@ export function detectInterpreterInlineEvalArgv(
   if (!executable) {
     return null;
   }
-  const spec = findInterpreterSpec(executable);
+  const names = interpreterNameVariants(normalizeExecutableToken(executable));
+  const spec = FLAG_INTERPRETER_INLINE_EVAL_SPECS.find((entry) =>
+    names.some((name) => entry.names.includes(name)),
+  );
   if (spec) {
     for (let idx = 1; idx < argv.length; idx += 1) {
       const token = argv[idx]?.trim();
@@ -520,12 +408,9 @@ export function detectInterpreterInlineEvalArgv(
         }
         break;
       }
-      const rawFlag =
-        spec.rawExactFlags?.get(token) ||
-        matchJoinedRawExactFlag(spec, token) ||
-        spec.rawPrefixFlags?.find(
-          ({ prefix }) => token.startsWith(prefix) && token.length > prefix.length,
-        )?.label;
+      const rawFlag = spec.rawExactFlags?.has(token)
+        ? token
+        : matchJoinedShortFlag(spec.rawExactFlags ?? [], token, true);
       if (rawFlag) {
         return createInlineEvalHit(executable, argv, rawFlag);
       }
@@ -544,7 +429,9 @@ export function detectInterpreterInlineEvalArgv(
     }
   }
 
-  const positionalSpec = findPositionalInterpreterSpec(executable);
+  const positionalSpec = POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS.find((entry) =>
+    names.some((name) => entry.names.includes(name)),
+  );
   if (!positionalSpec) {
     return null;
   }
@@ -574,16 +461,6 @@ export function detectInterpreterInlineEvalArgv(
     }
     if (positionalSpec.exactValueFlags?.has(token)) {
       idx += 1;
-      continue;
-    }
-    if (positionalSpec.exactOptionalValueFlags?.has(token)) {
-      continue;
-    }
-    if (
-      positionalSpec.prefixValueFlags?.some(
-        (prefix) => token.startsWith(prefix) && token.length > prefix.length,
-      )
-    ) {
       continue;
     }
     if (token.startsWith("-")) {

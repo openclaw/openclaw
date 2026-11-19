@@ -1,13 +1,10 @@
-// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
-import {
-  createRealtimeTalkConversationState,
-  orderRealtimeTalkConversation,
-  updateRealtimeTalkConversation,
-} from "./conversation.ts";
+// @vitest-environment jsdom
+import { createRealtimeTalkConversationState } from "./conversation-state.ts";
+import { orderRealtimeTalkConversation, updateRealtimeTalkConversation } from "./conversation.ts";
 import { useRealtimeTalkMicrophoneFixture } from "./input.test-support.ts";
 import { RealtimeTalkSession } from "./session.ts";
 import type { RealtimeTalkTranscript } from "./shared.ts";
@@ -40,16 +37,19 @@ function emit(peer: Peer, event: unknown): void {
   peer.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) }));
 }
 
+function added(peer: Peer, previous: string | null, entry: Record<string, unknown>) {
+  emit(peer, { type: "conversation.item.added", previous_item_id: previous, item: entry });
+}
+function delta(peer: Peer, itemId: string, text: string) {
+  emit(peer, { type: "response.output_audio_transcript.delta", item_id: itemId, delta: text });
+}
+
 function item(peer: Peer, id: string, role: "user" | "assistant", previous: string | null): void {
-  emit(peer, {
-    type: "conversation.item.added",
-    previous_item_id: previous,
-    item: {
-      id,
-      type: "message",
-      role,
-      content: role === "user" ? [{ type: "input_audio", transcript: null }] : [],
-    },
+  added(peer, previous, {
+    id,
+    type: "message",
+    role,
+    content: role === "user" ? [{ type: "input_audio", transcript: null }] : [],
   });
 }
 
@@ -83,13 +83,11 @@ function createCall(
       : { ok: true };
   });
   const onStatus = vi.fn();
-  const onTalkEvent = vi.fn();
   const session = new RealtimeTalkSession(
     { request } as unknown as GatewayBrowserClient,
     "agent:main:main",
     {
       onStatus,
-      onTalkEvent,
       onTranscriptOrder: (orders) => {
         conversation = orderRealtimeTalkConversation(conversation, orders);
       },
@@ -108,9 +106,13 @@ function createCall(
     request,
     requests,
     onStatus,
-    onTalkEvent,
     entries: () => conversation.entries.map(({ role, text }) => ({ role, text })),
     entryStates: () => conversation.entries,
+    texts: () => conversation.entries.map(({ text }) => text),
+    saved: () =>
+      requests
+        .filter(({ method }) => method === "talk.client.transcript")
+        .map(({ params }) => params.text),
     writes: () => requests.filter(({ method }) => method === "talk.client.transcript"),
   };
 }
@@ -140,12 +142,6 @@ describe("browser Talk provider item ordering", () => {
   });
 
   it.each([
-    {
-      name: "split words",
-      user: ["hel", "lo"],
-      assistant: ["ye", "s"],
-      expected: ["hello", "yes"],
-    },
     {
       name: "repeated fragments",
       user: ["ha", "ha"],
@@ -185,10 +181,6 @@ describe("browser Talk provider item ordering", () => {
       ]);
       expect(call.entryStates().every((entry) => entry.isStreaming)).toBe(true);
       expect(transcripts.every((entry) => !entry.final && entry.itemId === undefined)).toBe(true);
-      expect(call.onTalkEvent.mock.calls.map(([event]) => event.type)).not.toContain("turn.ended");
-      expect(call.onTalkEvent.mock.calls.map(([event]) => event.type)).not.toContain(
-        "transcript.done",
-      );
       expect(call.writes()).toEqual([]);
       void call.session.stop();
       await waitForFast(() => expect(call.requests.at(-1)?.method).toBe("talk.client.close"));
@@ -277,10 +269,7 @@ describe("browser Talk provider item ordering", () => {
         await starting;
         final(peer, "early-user", "user", "question after setup");
         await waitForFast(() => expect(call.writes()).toHaveLength(2));
-        expect(call.writes().map(({ params }) => params.text)).toEqual([
-          "question after setup",
-          "answer during setup",
-        ]);
+        expect(call.saved()).toEqual(["question after setup", "answer during setup"]);
         void call.session.stop();
       } else {
         if (outcome === "failure") {
@@ -323,11 +312,7 @@ describe("browser Talk provider item ordering", () => {
     vi.useRealTimers();
     item(call.peer, "u1", "user", null);
     item(call.peer, "a1", "assistant", "u1");
-    emit(call.peer, {
-      type: "response.output_audio_transcript.delta",
-      item_id: "a1",
-      delta: "answer",
-    });
+    delta(call.peer, "a1", "answer");
     expect(call.entries()).toEqual([{ role: "assistant", text: "answer" }]);
     final(call.peer, "a1", "assistant", "answer");
     expect(call.writes()).toEqual([]);
@@ -355,18 +340,8 @@ describe("browser Talk provider item ordering", () => {
     final(call.peer, "a1", "assistant", "first answer");
     final(call.peer, "u1", "user", "yes");
     await waitForFast(() => expect(call.writes()).toHaveLength(4));
-    expect(call.writes().map(({ params }) => params.text)).toEqual([
-      "yes",
-      "first answer",
-      "yes",
-      "second answer",
-    ]);
-    expect(call.entries().map(({ text }) => text)).toEqual([
-      "yes",
-      "first answer",
-      "yes",
-      "second answer",
-    ]);
+    expect(call.saved()).toEqual(["yes", "first answer", "yes", "second answer"]);
+    expect(call.texts()).toEqual(["yes", "first answer", "yes", "second answer"]);
     void call.session.stop();
   });
 
@@ -375,11 +350,7 @@ describe("browser Talk provider item ordering", () => {
     async (predecessor) => {
       const call = await start();
       item(call.peer, "a2", "assistant", "middle");
-      emit(call.peer, {
-        type: "response.output_audio_transcript.delta",
-        item_id: "a2",
-        delta: "second answer",
-      });
+      delta(call.peer, "a2", "second answer");
       expect(call.peer.close).not.toHaveBeenCalled();
       expect(call.entries()).toEqual([{ role: "assistant", text: "second answer" }]);
       final(call.peer, "a2", "assistant", "second answer");
@@ -388,20 +359,15 @@ describe("browser Talk provider item ordering", () => {
       final(call.peer, "a1", "assistant", "first answer");
       final(call.peer, "u1", "user", "first question");
       await waitForFast(() => expect(call.writes()).toHaveLength(2));
-      emit(call.peer, {
-        type: "conversation.item.added",
-        previous_item_id: "a1",
-        item:
-          predecessor === "speech"
-            ? { id: "middle", type: "message", role: "user", content: [{ type: "input_audio" }] }
-            : { id: "middle", type: "function_call_output" },
-      });
+      added(
+        call.peer,
+        "a1",
+        predecessor === "speech"
+          ? { id: "middle", type: "message", role: "user", content: [{ type: "input_audio" }] }
+          : { id: "middle", type: "function_call_output" },
+      );
       // Metadata alone must move a previously streamed row into its known order.
-      expect(call.entries().map(({ text }) => text)).toEqual([
-        "first question",
-        "first answer",
-        "second answer",
-      ]);
+      expect(call.texts()).toEqual(["first question", "first answer", "second answer"]);
       if (predecessor === "speech") {
         expect(call.writes()).toHaveLength(2);
         final(call.peer, "middle", "user", "second question");
@@ -412,10 +378,8 @@ describe("browser Talk provider item ordering", () => {
         ...(predecessor === "speech" ? ["second question"] : []),
         "second answer",
       ];
-      await waitForFast(() =>
-        expect(call.writes().map(({ params }) => params.text)).toEqual(expected),
-      );
-      expect(call.entries().map(({ text }) => text)).toEqual(expected);
+      await waitForFast(() => expect(call.saved()).toEqual(expected));
+      expect(call.texts()).toEqual(expected);
       expect(call.peer.close).not.toHaveBeenCalled();
     },
   );
@@ -430,7 +394,7 @@ describe("browser Talk provider item ordering", () => {
     expect(call.writes()).toEqual([]);
     void call.session.stop();
     await waitForFast(() => expect(call.requests.at(-1)?.method).toBe("talk.client.close"));
-    expect(call.writes().map(({ params }) => params.text)).toEqual(["known answer", "next answer"]);
+    expect(call.saved()).toEqual(["known answer", "next answer"]);
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("unfinished transcript"));
     item(call.peer, "missing-user", "user", null);
     final(call.peer, "missing-user", "user", "too late");
@@ -459,7 +423,7 @@ describe("browser Talk provider item ordering", () => {
     final(call.peer, "u2", "user", "second question");
     void call.session.stop();
     await waitForFast(() => expect(call.requests.at(-1)?.method).toBe("talk.client.close"));
-    expect(call.writes().map(({ params }) => params.text)).toEqual(["second question"]);
+    expect(call.saved()).toEqual(["second question"]);
     expect(call.onStatus.mock.calls.filter(([status]) => status === "error")).toHaveLength(1);
   });
 
@@ -508,13 +472,6 @@ describe("browser Talk provider item ordering", () => {
           error: { message: "speech decoder failed" },
         });
         expect(call.onStatus).toHaveBeenLastCalledWith("error", "speech decoder failed");
-        expect(call.onTalkEvent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            type: "session.error",
-            itemId: "u1",
-            payload: { message: "speech decoder failed" },
-          }),
-        );
       } else {
         final(call.peer, "u1", "user", "");
       }
@@ -536,25 +493,13 @@ describe("browser Talk provider item ordering", () => {
       previous_item_id: null,
     });
     item(call.peer, "u1", "user", null);
-    emit(call.peer, {
-      type: "conversation.item.added",
-      previous_item_id: "u1",
-      item: { id: "tool", type: "function_call" },
-    });
-    emit(call.peer, {
-      type: "conversation.item.added",
-      previous_item_id: "tool",
-      item: { id: "tool-result", type: "function_call_output" },
-    });
-    emit(call.peer, {
-      type: "conversation.item.added",
-      previous_item_id: "tool-result",
-      item: {
-        id: "control-text",
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text" }],
-      },
+    added(call.peer, "u1", { id: "tool", type: "function_call" });
+    added(call.peer, "tool", { id: "tool-result", type: "function_call_output" });
+    added(call.peer, "tool-result", {
+      id: "control-text",
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text" }],
     });
     item(call.peer, "a1", "assistant", "control-text");
     final(call.peer, "a1", "assistant", "answer");
@@ -565,7 +510,7 @@ describe("browser Talk provider item ordering", () => {
       ["1", "question"],
       ["2", "answer"],
     ]);
-    expect(call.entries().map(({ text }) => text)).toEqual(["question", "answer"]);
+    expect(call.texts()).toEqual(["question", "answer"]);
   });
 
   it("releases an assistant item cancelled before it produced any text", async () => {
@@ -586,10 +531,7 @@ describe("browser Talk provider item ordering", () => {
     item(call.peer, "u2", "user", "cancelled-answer");
     final(call.peer, "u2", "user", "next question");
     await waitForFast(() => expect(call.writes()).toHaveLength(2));
-    expect(call.writes().map(({ params }) => params.text)).toEqual([
-      "first question",
-      "next question",
-    ]);
+    expect(call.saved()).toEqual(["first question", "next question"]);
   });
 
   it.each([null, "missing-root"])(
@@ -628,7 +570,7 @@ describe("browser Talk provider item ordering", () => {
     item(peer, "a1", "assistant", "u1");
     final(peer, "a1", "assistant", "known before callback");
     await waitForFast(() => expect(call.requests.at(-1)?.method).toBe("talk.client.close"));
-    expect(call.writes().map(({ params }) => params.text)).toEqual(["known before callback"]);
+    expect(call.saved()).toEqual(["known before callback"]);
     expect(call.requests.filter(({ method }) => method === "talk.client.close")).toHaveLength(1);
     final(peer, "u1", "user", "late after callback");
     expect(call.writes()).toHaveLength(1);

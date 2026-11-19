@@ -14,13 +14,12 @@ import type {
 } from "./attempt-types.js";
 import { createPromptError } from "./prompt-error.js";
 import { resolveCopilotProvider } from "./provider-bridge.js";
-export type { CopilotSessionConfig } from "./attempt-types.js";
 export { resolvePoolAcquire };
 export async function runCopilotAttempt(
   params: CopilotAttemptParams,
   deps: CopilotAttemptDeps,
 ): Promise<AgentHarnessAttemptResult> {
-  const now = deps.now ?? Date.now;
+  const now = Date.now;
   const attemptStartedAt = now();
   const prepared = prepareCopilotAttemptContext(params, deps);
   const { settledToolFinalization, input, messages, modelRef, hookContext } = prepared;
@@ -35,7 +34,6 @@ export async function runCopilotAttempt(
         externalAbort: true,
         messagesSnapshot: messages,
         promptError: undefined,
-        sdkSessionId: undefined,
       }),
     );
   }
@@ -50,7 +48,6 @@ export async function runCopilotAttempt(
       createResult(input, {
         messagesSnapshot: messages,
         promptError: createPromptError("model_not_supported", toCopilotError(error).message, error),
-        sdkSessionId: undefined,
       }),
     );
   }
@@ -65,7 +62,6 @@ export async function runCopilotAttempt(
           "settled_finalization_session_unavailable",
           "[copilot-attempt] settled tool finalization requires the existing Copilot SDK session",
         ),
-        sdkSessionId: undefined,
       }),
     );
   }

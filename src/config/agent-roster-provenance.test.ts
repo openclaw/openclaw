@@ -3,6 +3,7 @@ import {
   configIncludeOwnsAgentRoster,
   hasResolvedRosterBeforeMigrations,
 } from "./agent-roster-provenance.js";
+import { createSnapshot } from "./mutate.test-support.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
 
 vi.unmock("../agents/agent-scope-config.js");
@@ -13,29 +14,19 @@ function snapshot(params: {
   agentRosterIncludeOwned?: boolean;
 }): ConfigFileSnapshot {
   return {
-    path: "/tmp/openclaw.json",
+    ...createSnapshot({ raw: "{}", sourceConfig: params.sourceConfigBeforeMigrations }),
     includedPaths: [],
-    exists: true,
-    raw: "{}",
     parsed: params.parsed,
     agentRosterIncludeOwned: params.agentRosterIncludeOwned === true,
     sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations,
-    sourceConfig: params.sourceConfigBeforeMigrations,
-    resolved: params.sourceConfigBeforeMigrations,
-    runtimeConfig: params.sourceConfigBeforeMigrations,
-    config: params.sourceConfigBeforeMigrations,
-    valid: true,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  } as ConfigFileSnapshot;
+  };
 }
 
 describe("agent roster include provenance", () => {
   it("recognizes an include at the entries boundary", () => {
     const value = snapshot({
       parsed: { agents: { entries: { $include: "./agents.json" } } },
-      sourceConfigBeforeMigrations: { agents: { entries: { ops: { default: true } } } },
+      sourceConfigBeforeMigrations: { agents: { entries: { ops: {} } } },
     });
 
     expect(configIncludeOwnsAgentRoster(value)).toBe(true);

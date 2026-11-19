@@ -1,4 +1,5 @@
 import type { SqliteWalHealth } from "../../infra/sqlite-wal-checkpoint.js";
+import type { SessionEntry } from "./types.js";
 
 export type SessionDiskBudgetSweepResult = {
   totalBytesBefore: number;
@@ -20,4 +21,17 @@ export type SessionUnreferencedArtifactSweepResult = {
   removedFiles: number;
   freedBytes: number;
   olderThanMs: number;
+};
+
+export type ArchivedSessionEvictionQuery = {
+  liveSessionKeys: readonly string[];
+  after?: { archivedAt: number; sessionKey: string };
+  limit?: number;
+  preserveRecentMs?: number | null;
+};
+
+export type ArchivedSessionEvictionBatch = {
+  candidates: Array<{ archivedAt: number; entry: SessionEntry; sessionKey: string }>;
+  cursor?: { archivedAt: number; sessionKey: string };
+  exhausted: boolean;
 };

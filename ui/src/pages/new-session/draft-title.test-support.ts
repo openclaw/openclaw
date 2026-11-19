@@ -1,8 +1,7 @@
 import { onTestFinished } from "vitest";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import { NewSessionTitleController } from "./draft-title.ts";
+import { createNewSessionTitle } from "./draft-title.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 const DEFAULT_PREPARED_TITLE = "Repair naming";
 
@@ -35,17 +34,19 @@ export function createDraftTitleFixture(
     modelCatalog: (params) => requestOther("models.list", params),
     takePreparedTitle: () => titles.takePreparedTitle(),
   });
-  const titles = new NewSessionTitleController(new TestReactiveControllerHost(), () => ({
+  const titles = createNewSessionTitle(() => ({
     context: fixture.context,
     data,
     place: fixture.place,
     submission: fixture.flow,
     dictating: false,
   }));
-  titles.hostConnected();
+  const disposeTitles = () => titles.dispose();
+  const synchronizeTitles = () => titles.synchronize();
+  synchronizeTitles();
   onTestFinished(() => {
-    titles.hostDisconnected();
+    disposeTitles();
     fixture.flow.disconnect();
   });
-  return { ...fixture, titles };
+  return { ...fixture, titles, synchronizeTitles, disposeTitles };
 }

@@ -3,7 +3,7 @@ import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 
-const loadModule = () => import("./systems-page.ts");
+const loadModule = () => import("./systems-route-view.tsx");
 
 export const page = definePage({
   ...routePageSpec("systems"),
@@ -12,5 +12,6 @@ export const page = definePage({
   // Inventory is refreshed by the mounted controller, not by a second route loader.
   staleTime: Infinity,
   loader: async (context: ApplicationContext) => (await loadModule()).load(context),
-  component: loadModule,
+  component: () =>
+    loadModule().then(({ renderSolid, renderSidebar }) => ({ renderSolid, renderSidebar })),
 });

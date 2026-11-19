@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { compileFunction } from "node:vm";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { REMOTE_WORKSPACE_ACCEPTED_RSYNC_RECEIVER_JS } from "../gateway/worker-environments/workspace-accepted-remote-script.js";
 import { REMOTE_WORKSPACE_RSYNC_RECEIVER_JS } from "../gateway/worker-environments/workspace-mutation-remote-script.js";
 
@@ -19,9 +20,8 @@ const contextBytes = Buffer.from(encodedContext!, "base64url");
 const context: unknown = JSON.parse(contextBytes.toString("utf8"));
 if (
   contextBytes.toString("base64url") !== encodedContext ||
-  !Array.isArray(context) ||
-  context.length !== 3 ||
-  !context.every((value) => typeof value === "string")
+  !isStringArray(context) ||
+  context.length !== 3
 ) {
   throw new Error("invalid worker workspace rsync receiver context");
 }

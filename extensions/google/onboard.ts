@@ -5,7 +5,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 
-export const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
+export const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-4-argon";
 const RETIRED_GOOGLE_GEMINI_MODEL_REFS = new Set([
   "gemini-3-pro",
   "gemini-3-pro-preview",
@@ -13,10 +13,7 @@ const RETIRED_GOOGLE_GEMINI_MODEL_REFS = new Set([
   "google/gemini-3-pro-preview",
 ]);
 
-function isRetiredGeminiModelRef(value: unknown): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
+function isRetiredGeminiModelRef(value: string): boolean {
   const modelRef = value.trim();
   if (RETIRED_GOOGLE_GEMINI_MODEL_REFS.has(modelRef)) {
     return true;
@@ -31,11 +28,7 @@ function hasRetiredGeminiDefaultModelRefs(cfg: OpenClawConfig): boolean {
   }
 
   const models = defaults?.models;
-  if (
-    models &&
-    typeof models === "object" &&
-    Object.keys(models).some((modelRef) => isRetiredGeminiModelRef(modelRef))
-  ) {
+  if (models && Object.keys(models).some((modelRef) => isRetiredGeminiModelRef(modelRef))) {
     return true;
   }
 
@@ -44,9 +37,7 @@ function hasRetiredGeminiDefaultModelRefs(cfg: OpenClawConfig): boolean {
     return false;
   }
   return Object.values(providerConfigs).some((providerConfig) =>
-    Array.isArray(providerConfig.models)
-      ? providerConfig.models.some((providerModel) => isRetiredGeminiModelRef(providerModel.id))
-      : false,
+    providerConfig.models?.some((providerModel) => isRetiredGeminiModelRef(providerModel.id)),
   );
 }
 

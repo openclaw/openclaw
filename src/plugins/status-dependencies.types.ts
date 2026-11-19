@@ -1,7 +1,6 @@
 /** Dependency name-to-version map from a plugin package manifest. */
 export type PluginDependencySpecMap = Record<string, string>;
 
-/** Installation status for one plugin dependency. */
 export type PluginDependencyEntry = {
   name: string;
   spec: string;
@@ -10,7 +9,6 @@ export type PluginDependencyEntry = {
   resolvedPath?: string;
 };
 
-/** Aggregate installation status for required and optional plugin dependencies. */
 export type PluginDependencyStatus = {
   hasDependencies: boolean;
   installed: boolean;

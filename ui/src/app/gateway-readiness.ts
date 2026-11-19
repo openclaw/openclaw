@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./context.ts";
 
 export function readSuspensionPhase(
@@ -32,26 +33,21 @@ export function waitForGatewayClient(
     return Promise.resolve(current);
   }
   return new Promise((resolve, reject) => {
-    let unsubscribe: () => void = () => undefined;
-    let settled = false; // A synchronous replay must not retain its abort listener.
     const cleanup = () => {
       unsubscribe();
-      signal.removeEventListener("abort", onAbort);
+      stopAbort();
     };
     const onAbort = () => {
       cleanup();
       reject(abortError(signal));
     };
-    signal.addEventListener("abort", onAbort, { once: true });
-    unsubscribe = gateway.subscribe((snapshot) => {
+    // The Gateway owner registers listeners without synchronous replay.
+    const unsubscribe = gateway.subscribe((snapshot) => {
       if (snapshot.phase === "connected" && snapshot.client) {
-        settled = true;
         cleanup();
         resolve(snapshot.client);
       }
     });
-    if (settled || signal.aborted) {
-      unsubscribe();
-    }
+    const stopAbort = listen(signal, "abort", onAbort, { once: true });
   });
 }

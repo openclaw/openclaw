@@ -12,6 +12,15 @@ title: "Query modes, prompts, and models"
 sees. Pick the smallest mode that still answers follow-ups well; grow
 `timeoutMs` as context size grows, from `message` to `recent` to `full`.
 
+All modes share a 4,000-character budget (UTF-16 code units) for the assembled conversation
+context. The current message takes priority: when it fits, it is kept intact,
+and the remaining space holds the newest eligible history. Older history is
+omitted first, with an explicit marker when only part of the history fits.
+If the current message alone exceeds the
+budget, its beginning and end are kept with a middle-omission marker. This only
+limits the recall sub-agent; the answering model still receives the original
+request.
+
 <Tabs>
   <Tab title="message">
     Only the latest user message is sent.
@@ -45,7 +54,7 @@ sees. Pick the smallest mode that still answers follow-ups well; grow
   </Tab>
 
   <Tab title="full">
-    The full conversation is sent to the blocking sub-agent.
+    All available conversation history is eligible within the shared budget.
 
     ```text
     Full conversation context:
@@ -55,9 +64,9 @@ sees. Pick the smallest mode that still answers follow-ups well; grow
     ...
     ```
 
-    Use when recall quality matters more than latency, or important setup is
-    far back in the thread. Start around `15000` ms or higher depending on
-    thread size.
+    Use when recall needs more history than the recent-mode turn limits.
+    The newest history that fits is retained. Start around `15000` ms or higher
+    depending on context size.
 
   </Tab>
 </Tabs>

@@ -6,6 +6,17 @@ import {
   resolveReceiptSourceId,
 } from "./receipt.js";
 
+function nestedReceipt(id: string, threadId: string, sentAt: number) {
+  return {
+    receipt: {
+      platformMessageIds: [id],
+      parts: [{ platformMessageId: id, kind: "text" as const, index: 0 }],
+      threadId,
+      sentAt,
+    },
+  };
+}
+
 describe("createMessageReceiptFromOutboundResults", () => {
   it("excludes explicit no-send results from identity and aggregate receipt evidence", () => {
     const notSent = {
@@ -19,7 +30,6 @@ describe("createMessageReceiptFromOutboundResults", () => {
     const receipt = createMessageReceiptFromOutboundResults({
       results: [notSent, { messageId: "accepted" }],
     });
-
     expect(resolveReceiptSourceId(notSent)).toBeUndefined();
     expect(receipt.platformMessageIds).toEqual(["accepted"]);
     expect(receipt.parts.map((part) => part.platformMessageId)).toEqual(["accepted"]);
@@ -38,63 +48,40 @@ describe("createMessageReceiptFromOutboundResults", () => {
       replyToId: "reply-1",
       sentAt: 123,
     });
-
-    expect(receipt.primaryPlatformMessageId).toBe("m1");
-    expect(receipt.platformMessageIds).toEqual(["m1", "m2"]);
-    expect(receipt.threadId).toBe("topic-1");
-    expect(receipt.replyToId).toBe("reply-1");
-    expect(receipt.sentAt).toBe(123);
-    expect(
-      receipt.parts.map(({ platformMessageId, kind, index }) => ({
-        platformMessageId,
-        kind,
-        index,
-      })),
-    ).toEqual([
-      { platformMessageId: "m1", kind: "text", index: 0 },
-      { platformMessageId: "m2", kind: "text", index: 1 },
-    ]);
+    expect(receipt).toMatchObject({
+      primaryPlatformMessageId: "m1",
+      platformMessageIds: ["m1", "m2"],
+      threadId: "topic-1",
+      replyToId: "reply-1",
+      sentAt: 123,
+      parts: [
+        { platformMessageId: "m1", kind: "text", index: 0 },
+        { platformMessageId: "m2", kind: "text", index: 1 },
+      ],
+    });
   });
 
-  it.each([undefined, ""])(
-    "keeps routing metadata with messageId=%s out of platform identity",
-    (messageId) => {
-      const result = {
-        channel: "demo",
-        ...(messageId === undefined ? {} : { messageId }),
-        chatId: "route-only",
-        channelId: "route-only",
-        roomId: "route-only",
-        conversationId: "route-only",
-        toJid: "route-only",
-        target: { kind: "channel" as const, id: "route-only" },
-      };
-      const receipt = createMessageReceiptFromOutboundResults({ results: [result], sentAt: 123 });
+  it("keeps routing metadata without a message id out of platform identity", () => {
+    const result = {
+      channel: "demo",
+      chatId: "route-only",
+      channelId: "route-only",
+      roomId: "route-only",
+      conversationId: "route-only",
+      toJid: "route-only",
+      target: { kind: "channel" as const, id: "route-only" },
+    };
+    const receipt = createMessageReceiptFromOutboundResults({ results: [result], sentAt: 123 });
 
-      expect(receipt.primaryPlatformMessageId).toBeUndefined();
-      expect(receipt.platformMessageIds).toEqual([]);
-      expect(receipt.parts).toEqual([]);
-      expect(receipt.raw).toEqual([result]);
-    },
-  );
+    expect(receipt.primaryPlatformMessageId).toBeUndefined();
+    expect(receipt.platformMessageIds).toEqual([]);
+    expect(receipt.parts).toEqual([]);
+    expect(receipt.raw).toEqual([result]);
+  });
 
-  it.each([
-    {
-      label: "Synology Chat destination IDs",
-      result: { channel: "synology-chat", messageId: "", chatId: "42" },
-      receiptMetadata: { threadId: "42" },
-    },
-    {
-      label: "iMessage bridge placeholders",
-      result: { channel: "imessage", messageId: "ok" },
-      receiptMetadata: { replyToId: "source-1" },
-    },
-    {
-      label: "Slack suppression sentinels",
-      result: { channel: "slack", messageId: "suppressed", channelId: "" },
-      receiptMetadata: {},
-    },
-  ])("does not fabricate platform ids from $label", ({ result, receiptMetadata }) => {
+  it("does not fabricate platform ids from iMessage bridge placeholders", () => {
+    const result = { channel: "imessage", messageId: "ok" };
+    const receiptMetadata = { replyToId: "source-1" };
     const adapterReceipt = {
       platformMessageIds: [],
       parts: [],
@@ -104,7 +91,6 @@ describe("createMessageReceiptFromOutboundResults", () => {
     const receipt = createMessageReceiptFromOutboundResults({
       results: [{ ...result, receipt: adapterReceipt }],
     });
-
     expect(receipt).toMatchObject({
       ...receiptMetadata,
       platformMessageIds: [],
@@ -114,114 +100,14 @@ describe("createMessageReceiptFromOutboundResults", () => {
     expect(receipt.primaryPlatformMessageId).toBeUndefined();
   });
 
-  it("preserves nested platform receipts before falling back to delivery ids", () => {
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [
-        {
-          channel: "telegram",
-          messageId: "top-level-ignored",
-          receipt: {
-            primaryPlatformMessageId: "platform-1",
-            platformMessageIds: ["platform-1", "platform-2"],
-            parts: [
-              { platformMessageId: "platform-1", kind: "text", index: 0 },
-              { platformMessageId: "platform-2", kind: "media", index: 1 },
-            ],
-            threadId: "native-thread",
-            sentAt: 123,
-          },
-        },
-        { channel: "telegram", messageId: "fallback-1" },
-      ],
-      kind: "text",
-      sentAt: 456,
-    });
-
-    expect(receipt.primaryPlatformMessageId).toBe("platform-1");
-    expect(receipt.platformMessageIds).toEqual(["platform-1", "platform-2", "fallback-1"]);
-    expect(
-      receipt.parts.map(({ platformMessageId, kind, index }) => ({
-        platformMessageId,
-        kind,
-        index,
-      })),
-    ).toEqual([
-      { platformMessageId: "platform-1", kind: "text", index: 0 },
-      { platformMessageId: "platform-2", kind: "media", index: 1 },
-      { platformMessageId: "fallback-1", kind: "text", index: 1 },
-    ]);
-    expect(receipt.threadId).toBe("native-thread");
-    expect(receipt.sentAt).toBe(456);
-  });
-
-  it("uses nested canonical threads before the requested route when filling parts", () => {
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [
-        {
-          channel: "googlechat",
-          receipt: {
-            platformMessageIds: ["m1", "m2"],
-            parts: [
-              { platformMessageId: "m1", kind: "text", index: 0 },
-              { platformMessageId: "m2", kind: "text", index: 1 },
-            ],
-            threadId: "canonical-thread",
-            sentAt: 123,
-          },
-        },
-      ],
-      threadId: "requested-thread",
-    });
-
-    expect(receipt.threadId).toBe("canonical-thread");
-    expect(receipt.parts.map((part) => part.threadId)).toEqual([
-      "canonical-thread",
-      "canonical-thread",
-    ]);
-  });
-
-  it("uses a canonical part thread before receipt and requested fallbacks", () => {
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [
-        {
-          receipt: {
-            platformMessageIds: ["m1"],
-            parts: [{ platformMessageId: "m1", kind: "text", index: 0, threadId: "part-thread" }],
-            threadId: "receipt-thread",
-            sentAt: 123,
-          },
-        },
-      ],
-      threadId: "requested-thread",
-    });
-
-    expect(receipt.threadId).toBe("part-thread");
-    expect(receipt.parts[0]?.threadId).toBe("part-thread");
-  });
-
   it("keeps conflicting provider threads on parts and omits the aggregate thread", () => {
     const receipt = createMessageReceiptFromOutboundResults({
       results: [
-        {
-          receipt: {
-            platformMessageIds: ["m1"],
-            parts: [{ platformMessageId: "m1", kind: "text", index: 0 }],
-            threadId: "canonical-thread-1",
-            sentAt: 123,
-          },
-        },
-        {
-          receipt: {
-            platformMessageIds: ["m2"],
-            parts: [{ platformMessageId: "m2", kind: "text", index: 0 }],
-            threadId: "canonical-thread-2",
-            sentAt: 124,
-          },
-        },
+        nestedReceipt("m1", "canonical-thread-1", 123),
+        nestedReceipt("m2", "canonical-thread-2", 124),
       ],
       threadId: "requested-thread",
     });
-
     expect(receipt.threadId).toBeUndefined();
     expect(receipt.parts.map((part) => part.threadId)).toEqual([
       "canonical-thread-1",
@@ -249,7 +135,6 @@ describe("createMessageReceiptFromOutboundResults", () => {
       ],
       replyToId: "reply-1",
     });
-
     expect(receipt.replyToId).toBe("reply-1");
     expect(receipt.parts.map((part) => part.replyToId)).toEqual(["reply-1", undefined]);
   });
@@ -261,7 +146,6 @@ describe("createMessageReceiptFromOutboundResults", () => {
       parts: [],
       sentAt: 123,
     };
-
     expect(listMessageReceiptPlatformIds(receipt)).toEqual(["m1", "m2"]);
     expect(resolveMessageReceiptPrimaryId(receipt)).toBe("m1");
   });

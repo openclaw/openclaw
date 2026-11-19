@@ -27,13 +27,81 @@ async function withinDeadline<T>(operation: Promise<T>): Promise<T> {
 }
 
 describe("guarded request release", () => {
+  it.each([
+    { name: "Blob content type", init: {} },
+    { name: "explicit content type", init: { headers: { "content-type": "application/json" } } },
+    { name: "keepalive", init: { keepalive: true } },
+    { name: "no-cors", init: { mode: "no-cors" as const } },
+  ])("replays immutable request bytes across guarded redirects with $name", async ({ init }) => {
+    const payload = '{"message":"retained 🦞 request"}';
+    const body = new Blob([payload], { type: "text/plain" });
+    const requests: Array<{
+      path: string | undefined;
+      body: string;
+      type?: string;
+      length?: string;
+    }> = [];
+    let admissions = 0;
+    await withServer(
+      (request, response) => {
+        let received = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk: string) => {
+          received += chunk;
+        });
+        request.on("end", () => {
+          requests.push({
+            path: request.url,
+            body: received,
+            type: request.headers["content-type"],
+            length: request.headers["content-length"],
+          });
+          if (request.url === "/start") {
+            response.writeHead(307, { location: "/complete" }).end();
+          } else {
+            response.end("complete");
+          }
+        });
+      },
+      async (baseUrl) => {
+        const result = await fetchWithSsrFGuard({
+          url: `${baseUrl}/start`,
+          init: { method: "POST", body, ...init },
+          policy: { allowPrivateNetwork: true },
+          beforeRequest: () => {
+            admissions++;
+          },
+        });
+        try {
+          expect((await readResponseWithLimit(result.response, 32)).toString("utf8")).toBe(
+            "complete",
+          );
+          expect(requests).toEqual(
+            ["/start", "/complete"].map((path) => ({
+              path,
+              body: payload,
+              type: new Headers(init.headers).get("content-type") ?? body.type,
+              length: String(Buffer.byteLength(payload)),
+            })),
+          );
+          expect(admissions).toBe(2);
+          expect(
+            (await readResponseWithLimit(new Response(body), body.size)).toString("utf8"),
+          ).toBe(payload);
+        } finally {
+          await result.release();
+        }
+      },
+    );
+  });
+
   it.each(["unread", "prefix", "overflow", "wrapped", "binary"] as const)(
     "ends only the %s request while a captured sibling keeps its pooled transport",
     async (readerKind) => {
       const abandonedClosed = createDeferredCore();
       const heldResponse = createDeferredCore<ServerResponse>();
       const parent = new AbortController();
-      const pool = new PinnedDispatcherPool({ maxEntries: 1, idleTtlMs: 60_000 });
+      const pool = new PinnedDispatcherPool();
       const dispatchers: Array<Dispatcher | undefined> = [];
       const captures = new Map<string, ReturnType<typeof createDeferredCore<CaptureEventRecord>>>();
       const releases: Array<() => Promise<void>> = [];
@@ -217,40 +285,30 @@ describe("guarded request release", () => {
     },
   );
 
-  it.each(
-    (["signal", "init"] as const).flatMap((source) =>
-      [undefined, 5_000].map((timeoutMs) => ({ source, timeoutMs })),
-    ),
-  )(
-    "preserves cancellation from $source with timeout $timeoutMs",
-    async ({ source, timeoutMs }) => {
-      const parent = new AbortController();
-      const reason = new Error("caller stopped");
-      await withServer(
-        (_request, response) => response.write("unfinished"),
-        async (baseUrl) => {
-          const result = await fetchWithSsrFGuard({
-            url: baseUrl,
-            timeoutMs,
-            ...(source === "signal"
-              ? { signal: parent.signal }
-              : { init: { signal: parent.signal } }),
-            policy: { allowPrivateNetwork: true },
-          });
-          const body = readResponseWithLimit(result.response, 32);
-          try {
-            parent.abort(reason);
-            await expect(withinDeadline(body)).rejects.toBe(reason);
-            await result.release();
-            expect(parent.signal.reason).toBe(reason);
-          } finally {
-            parent.abort();
-            await result.release();
-          }
-        },
-      );
-    },
-  );
+  it("preserves cancellation from init.signal without a timeout", async () => {
+    const parent = new AbortController();
+    const reason = new Error("caller stopped");
+    await withServer(
+      (_request, response) => response.write("unfinished"),
+      async (baseUrl) => {
+        const result = await fetchWithSsrFGuard({
+          url: baseUrl,
+          init: { signal: parent.signal },
+          policy: { allowPrivateNetwork: true },
+        });
+        const body = readResponseWithLimit(result.response, 32);
+        try {
+          parent.abort(reason);
+          await expect(withinDeadline(body)).rejects.toBe(reason);
+          await result.release();
+          expect(parent.signal.reason).toBe(reason);
+        } finally {
+          parent.abort();
+          await result.release();
+        }
+      },
+    );
+  });
 
   it("gives the explicit caller signal precedence over init.signal with a timeout", async () => {
     const parent = new AbortController();

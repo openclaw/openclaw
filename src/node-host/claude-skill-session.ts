@@ -3,14 +3,9 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import {
-  CallToolRequestSchema,
-  CallToolResultSchema,
-  ListToolsRequestSchema,
-  type CallToolResult,
-} from "@modelcontextprotocol/sdk/types.js";
+import { CallToolResultSchema } from "@modelcontextprotocol/core";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { Server, type CallToolResult } from "@modelcontextprotocol/server";
 import { Value } from "typebox/value";
 import { readJsonBodyWithLimit } from "../infra/http-body.js";
 import {
@@ -140,7 +135,7 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
             { name: "openclaw-node-skills", version: "1" },
             { capabilities: { tools: {} } },
           );
-          const transport = new StreamableHTTPServerTransport({
+          const transport = new NodeStreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
             enableJsonResponse: true,
           });
@@ -149,22 +144,22 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
             mcpServers.delete(mcp);
             void mcp.close().catch(revoke);
           });
-          mcp.setRequestHandler(ListToolsRequestSchema, async () => {
+          mcp.setRequestHandler("tools/list", async () => {
             assertCurrent();
             return {
               tools: [
                 {
-                  name: "skill_workshop",
+                  name: "skill_library",
                   description: workshop.description,
                   inputSchema: { ...workshop.inputSchema, type: "object" as const },
                 },
               ],
             };
           });
-          mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
+          mcp.setRequestHandler("tools/call", async (request) => {
             assertCurrent();
-            if (request.params.name !== "skill_workshop" || pending.size >= 8) {
-              throw new Error("Only this turn's Skill Workshop is available.");
+            if (request.params.name !== "skill_library" || pending.size >= 8) {
+              throw new Error("Only this turn's Skill Library is available.");
             }
             const id = randomUUID();
             const call = createDeferredCore<CallToolResult>();
@@ -229,7 +224,7 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
       assertCurrent();
       // Only this host-controlled tool may skip Claude's prompt. Native tools
       // retain the node's existing execution and permission policy.
-      argv.push("--mcp-config", configPath, "--allowedTools", "mcp__openclaw__skill_workshop");
+      argv.push("--mcp-config", configPath, "--allowedTools", "mcp__openclaw__skill_library");
     }
     return {
       argv,

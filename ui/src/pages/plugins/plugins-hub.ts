@@ -1,28 +1,30 @@
-import { renderHubTabs, type HubTabOption } from "../../components/hub-tabs.ts";
-import { t } from "../../i18n/index.ts";
-import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 
-registerPluginManagementEnglish();
-
-export type PluginsHubTab = "plugins" | "skills" | "skill-workshop";
+export type PluginsHubTab = "plugins" | "skills" | "skill-workshop" | "templates";
 
 export const PLUGINS_HUB_PANEL_ID = "plugins-hub-panel";
 
-export function renderPluginsHubTabs(props: {
-  active: PluginsHubTab;
-  onSelect: (tab: PluginsHubTab) => void;
-}) {
-  return renderHubTabs({
-    id: "plugins",
-    active: props.active,
-    tabs: [
-      { value: "plugins", label: t("tabs.plugins") },
-      { value: "skills", label: t("tabs.skills") },
-      { value: "skill-workshop", label: t("tabs.skillWorkshop") },
-    ] satisfies readonly HubTabOption<PluginsHubTab>[],
-    ariaLabel: t("pluginsPage.hubTablistLabel"),
-    panelId: PLUGINS_HUB_PANEL_ID,
-    className: "plugins-tabs",
-    onSelect: props.onSelect,
-  });
+/**
+ * The Customize sidebar lists these pages; the native apps have no sidebar, so
+ * there the pages keep their header tabs.
+ */
+export function pluginsHubTabsShown(): boolean {
+  return isNativeEmbedHost();
 }
+
+/** A Customize page's content, labelled by its tab while the tabs show. */
+export function pluginsHubPanel(tab: PluginsHubTab) {
+  return pluginsHubTabsShown()
+    ? {
+        id: PLUGINS_HUB_PANEL_ID,
+        role: "tabpanel" as const,
+        "aria-labelledby": `plugins-tab-${tab}`,
+      }
+    : { id: PLUGINS_HUB_PANEL_ID };
+}
+
+export const PLUGINS_HUB_DOCS_URLS: Partial<Record<PluginsHubTab, string>> = {
+  plugins: "https://docs.openclaw.ai/plugins/manage-plugins",
+  skills: "https://docs.openclaw.ai/tools/skills",
+  "skill-workshop": "https://docs.openclaw.ai/tools/skill-workshop",
+};

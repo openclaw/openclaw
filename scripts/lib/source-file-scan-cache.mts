@@ -50,16 +50,9 @@ async function walkFiles(params: SourceScanParams, rootDir: string): Promise<str
   return out;
 }
 
-function normalizeConcurrency(value = DEFAULT_SOURCE_FILE_READ_CONCURRENCY) {
-  if (!Number.isInteger(value) || value < 1) {
-    return DEFAULT_SOURCE_FILE_READ_CONCURRENCY;
-  }
-  return value;
-}
-
-function normalizeMaxFileBytes(value = DEFAULT_SOURCE_FILE_MAX_BYTES) {
-  if (!Number.isInteger(value) || value < 1) {
-    return DEFAULT_SOURCE_FILE_MAX_BYTES;
+function normalizePositiveInteger(value: number | undefined, fallback: number) {
+  if (value === undefined || !Number.isInteger(value) || value < 1) {
+    return fallback;
   }
   return value;
 }
@@ -73,9 +66,43 @@ function assertSourceFileWithinLimit(relativeFile: string, bytes: number, maxFil
   );
 }
 
-/**
- * Collects sorted source files and cached contents for configured scan roots.
- */
+/** Maps sorted source files without retaining their contents in the scan cache. */
+export async function mapSourceFileContents<T>(
+  params: SourceScanParams,
+  map: (file: SourceFileContent) => T,
+) {
+  const files = (
+    await Promise.all(
+      params.scanRoots.map(async (root) => walkFiles(params, path.join(params.repoRoot, root))),
+    )
+  )
+    .flat()
+    .map((filePath) => ({ filePath, relativeFile: normalizeRepoPath(params.repoRoot, filePath) }))
+    .toSorted((left, right) => left.relativeFile.localeCompare(right.relativeFile));
+
+  const readFile = params.readFile ?? fs.readFile;
+  const statFile = params.statFile ?? fs.stat;
+  const maxFileBytes = normalizePositiveInteger(params.maxFileBytes, DEFAULT_SOURCE_FILE_MAX_BYTES);
+  return await pMap(
+    files,
+    async ({ filePath, relativeFile }) => {
+      const stat = await statFile(filePath);
+      assertSourceFileWithinLimit(relativeFile, stat.size, maxFileBytes);
+      const content = await readFile(filePath, "utf8");
+      assertSourceFileWithinLimit(relativeFile, Buffer.byteLength(content, "utf8"), maxFileBytes);
+      return map({ filePath, relativeFile, content });
+    },
+    {
+      concurrency: normalizePositiveInteger(
+        params.maxConcurrentReads,
+        DEFAULT_SOURCE_FILE_READ_CONCURRENCY,
+      ),
+      stopOnError: true,
+    },
+  );
+}
+
+/** Collects sorted source files and cached contents for configured scan roots. */
 export async function collectSourceFileContents(params: SourceScanParams) {
   const useCache = !params.readFile;
   const cacheKey = JSON.stringify({
@@ -85,7 +112,7 @@ export async function collectSourceFileContents(params: SourceScanParams) {
     ignoredDirNames: [...params.ignoredDirNames].toSorted((left, right) =>
       left.localeCompare(right),
     ),
-    maxFileBytes: normalizeMaxFileBytes(params.maxFileBytes),
+    maxFileBytes: normalizePositiveInteger(params.maxFileBytes, DEFAULT_SOURCE_FILE_MAX_BYTES),
   });
   if (useCache) {
     const cached = scanCache.get(cacheKey);
@@ -94,34 +121,7 @@ export async function collectSourceFileContents(params: SourceScanParams) {
     }
   }
 
-  const promise = (async () => {
-    const files = (
-      await Promise.all(
-        params.scanRoots.map(async (root) => walkFiles(params, path.join(params.repoRoot, root))),
-      )
-    )
-      .flat()
-      .map((filePath) => ({ filePath, relativeFile: normalizeRepoPath(params.repoRoot, filePath) }))
-      .toSorted((left, right) => left.relativeFile.localeCompare(right.relativeFile));
-
-    const readFile = params.readFile ?? fs.readFile;
-    const statFile = params.statFile ?? fs.stat;
-    const maxFileBytes = normalizeMaxFileBytes(params.maxFileBytes);
-    return await pMap(
-      files,
-      async ({ filePath, relativeFile }) => {
-        const stat = await statFile(filePath);
-        assertSourceFileWithinLimit(relativeFile, stat.size, maxFileBytes);
-        const content = await readFile(filePath, "utf8");
-        assertSourceFileWithinLimit(relativeFile, Buffer.byteLength(content, "utf8"), maxFileBytes);
-        return { filePath, relativeFile, content };
-      },
-      {
-        concurrency: normalizeConcurrency(params.maxConcurrentReads),
-        stopOnError: true,
-      },
-    );
-  })();
+  const promise = mapSourceFileContents(params, (file) => file);
 
   if (useCache) {
     scanCache.set(cacheKey, promise);

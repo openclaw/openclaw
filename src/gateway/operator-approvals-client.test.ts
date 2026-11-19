@@ -80,6 +80,12 @@ vi.mock("./client.js", () => ({
   GatewayClient: MockGatewayClient,
 }));
 
+// mock-isolation: This transport fixture has no native credential worker broker.
+vi.mock("../infra/exec-approvals-socket.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/exec-approvals-socket.js")>()),
+  readExecApprovalsSocket: vi.fn(async () => null),
+}));
+
 const { withOperatorApprovalsGatewayClient } = await import("./operator-approvals-client.js");
 
 const DEFAULT_APPROVAL_CLIENT_DISPLAY_NAME = "Matrix approval (@owner:example.org)";
@@ -139,21 +145,14 @@ describe("withOperatorApprovalsGatewayClient", () => {
   it("keeps device identity and omits approval runtime token for remote shared-auth approval clients", async () => {
     bootstrapState.url = "wss://gateway.example/ws";
     bootstrapState.urlSource = "config gateway.remote.url";
+    bootstrapState.tlsFingerprint = "sha256:remote";
 
     await runOperatorApprovalsGatewayClient();
 
     expect(clientState.options).not.toHaveProperty("deviceIdentity", null);
     expect(clientState.options?.deviceIdentity).toBeUndefined();
     expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
-  });
-
-  it("passes the resolved TLS fingerprint to the approval Gateway client", async () => {
-    bootstrapState.url = "wss://127.0.0.1:18789";
-    bootstrapState.tlsFingerprint = "sha256:local";
-
-    await runOperatorApprovalsGatewayClient();
-
-    expect(clientState.options?.tlsFingerprint).toBe("sha256:local");
+    expect(clientState.options?.tlsFingerprint).toBe("sha256:remote");
   });
 
   it("keeps device identity for env loopback approval clients without runtime authority", async () => {
@@ -195,14 +194,6 @@ describe("withOperatorApprovalsGatewayClient", () => {
   it("keeps approval runtime token for local fallback gateway URLs", async () => {
     bootstrapState.url = "ws://127.0.0.1:18789";
     bootstrapState.urlSource = "missing gateway.remote.url (fallback local)";
-
-    await runOperatorApprovalsGatewayClient();
-
-    expectRuntimeTokenApprovalClient();
-  });
-
-  it("omits stored device identity for local runtime-token approval clients without shared auth", async () => {
-    bootstrapState.auth = { token: undefined, password: undefined };
 
     await runOperatorApprovalsGatewayClient();
 

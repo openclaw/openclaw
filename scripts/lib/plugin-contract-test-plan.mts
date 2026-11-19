@@ -1,4 +1,5 @@
 // Builds balanced Vitest shard plans for plugin contract tests.
+import { isDatabaseWorkerCoreTestFile } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import { listTrackedTestFiles } from "./list-test-files.mts";
 import { assignWeightedTestFiles } from "./weighted-test-shards.mts";
 
@@ -38,7 +39,9 @@ export function createPluginContractTestShards() {
 
   assignWeightedTestFiles(
     groups,
-    listTrackedTestFiles("src/plugins/contracts"),
+    listTrackedTestFiles("src/plugins/contracts").filter(
+      (file) => !isDatabaseWorkerCoreTestFile(file),
+    ),
     resolveContractFileWeight,
   );
 

@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/security-runtime";
 import type { WorkboardStore } from "./store.js";
 import {
-  assertCanonicalWorkboardRootAccess,
   canonicalizeWorkboardWorkspaceAccess,
   intersectWorkboardWorkspaceAccess,
   type WorkboardTargetWorkspaceRuntime,
@@ -138,60 +137,4 @@ export async function resolveDispatchWorkspaceAccess(params: {
     ...(targetWorkspace ? { targetWorkspace } : {}),
     persistWorkspaceAccess: !persistedAccess,
   };
-}
-
-export async function assertRestrictedWorkboardTarget(params: {
-  root: string;
-  agentId?: string;
-  sessionKey: string;
-  modelProvider?: string;
-  modelId?: string;
-  resolveAgentWorkspaceRuntime?: ResolveAgentWorkspaceRuntime;
-  worktrees?: Pick<
-    PluginRuntime["worktrees"],
-    "resolveCheckoutRoot" | "hasSelfContainedCheckoutMetadata"
-  >;
-}): Promise<void> {
-  const resolved: WorkboardTargetWorkspaceRuntime = params.resolveAgentWorkspaceRuntime
-    ? await params.resolveAgentWorkspaceRuntime(
-        params.agentId,
-        params.sessionKey,
-        params.root,
-        params.modelProvider,
-        params.modelId,
-      )
-    : {
-        sandboxed: false,
-        workspaceAccess: { unrestricted: true } as const,
-      };
-  const targetRuntime = {
-    ...resolved,
-    workspaceAccess: await canonicalizeWorkboardWorkspaceAccess(resolved.workspaceAccess),
-  };
-  if (!targetRuntime.sandboxed) {
-    throw new Error("target agent is not sandboxed for this restricted Workboard card.");
-  }
-  if (targetRuntime.confinementError) {
-    throw new Error(targetRuntime.confinementError);
-  }
-  if (targetRuntime.workspaceAccess.unrestricted || !targetRuntime.workspaceAccess.writable) {
-    throw new Error("target agent does not have writable workspace-only access.");
-  }
-  await assertCanonicalWorkboardRootAccess(params.root, targetRuntime.workspaceAccess);
-  if (!params.worktrees) {
-    throw new Error("workspace checkout inspection is unavailable for restricted dispatch.");
-  }
-  const checkoutRoot = await params.worktrees.resolveCheckoutRoot({ path: params.root });
-  if (!checkoutRoot) {
-    return;
-  }
-  if ((await canonicalPathFromExistingAncestor(checkoutRoot)) !== params.root) {
-    throw new Error("workspace root is nested inside a broader Git checkout.");
-  }
-  if (
-    !params.worktrees.hasSelfContainedCheckoutMetadata ||
-    !(await params.worktrees.hasSelfContainedCheckoutMetadata({ path: params.root }))
-  ) {
-    throw new Error("restricted workspace Git metadata must be contained inside its root.");
-  }
 }

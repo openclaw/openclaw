@@ -1,5 +1,8 @@
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
-import { resolveModelRuntimeRoute } from "../../shared/model-runtime-route.js";
+import {
+  CLAUDE_CLI_SETUP_GUIDANCE,
+  resolveModelRuntimeRoute,
+} from "../../shared/model-runtime-route.js";
 import { formatProviderLoginCommand } from "../../shared/provider-login-command.js";
 
 const CUSTOM_MODEL_SETUP_GUIDANCE =
@@ -66,9 +69,12 @@ export function buildModelsMenu(data: {
         switch (state.unavailableReason) {
           case "missing-auth":
             label = "Sign-in needed";
-            recovery = loginSupported
-              ? `Connect with ${loginCommand}.`
-              : CUSTOM_MODEL_SETUP_GUIDANCE;
+            recovery =
+              route === "claudeCli"
+                ? CLAUDE_CLI_SETUP_GUIDANCE
+                : loginSupported
+                  ? `Connect with ${loginCommand}.`
+                  : CUSTOM_MODEL_SETUP_GUIDANCE;
             break;
           case "auth-failed":
             label = "Sign-in failed";

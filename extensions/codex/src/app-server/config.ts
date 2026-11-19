@@ -1,4 +1,3 @@
-// Shared entrypoint for Codex runtime configuration.
 export { resolveCodexAppServerUserHomeDir } from "./auth-start-options.js";
 export {
   CODEX_PLUGINS_MARKETPLACE_NAME,

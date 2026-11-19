@@ -1,4 +1,5 @@
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { SessionCanonicalKeyMigrationRequiredError } from "./session-canonical-key-error.js";
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import {
@@ -18,13 +19,7 @@ export type CanonicalSessionValidationRow = {
   retained_window_id: string | null;
 };
 
-export class SessionCanonicalKeyMigrationRequiredError extends Error {
-  readonly code = "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED";
-  constructor(detail: string) {
-    super(`${detail}; stop the Gateway and run openclaw doctor --fix`);
-    this.name = "SessionCanonicalKeyMigrationRequiredError";
-  }
-}
+export { SessionCanonicalKeyMigrationRequiredError } from "./session-canonical-key-error.js";
 
 export function canonicalSessionKeyMigrationRequiredError(
   detail: string,
@@ -32,23 +27,55 @@ export function canonicalSessionKeyMigrationRequiredError(
   return new SessionCanonicalKeyMigrationRequiredError(detail);
 }
 
-/** One validator serves full Doctor scans, pending rows, and final writer certification. */
-export function validateCanonicalSessionRow(
-  row: CanonicalSessionValidationRow,
-  mode: "admission" | "read" = "admission",
-): SessionEntry | undefined {
+function isCanonicalSessionKey(sessionKey: string): boolean {
+  const trimmed = sessionKey.trim();
+  if (!trimmed || sessionKey !== trimmed) {
+    return false;
+  }
+  if (normalizeStoreSessionKey(sessionKey) !== sessionKey) {
+    return false;
+  }
+  const parsed = parseAgentSessionKey(trimmed);
+  return (
+    trimmed === "global" ||
+    trimmed === "unknown" ||
+    (parsed !== null && trimmed.startsWith(`agent:${parsed.agentId}:`))
+  );
+}
+
+export function assertCanonicalSessionKeyWrite(sessionKey: string, expectedAgentId?: string): void {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (
+    !isCanonicalSessionKey(sessionKey) ||
+    (expectedAgentId && parsed && parsed.agentId !== normalizeAgentId(expectedAgentId))
+  ) {
+    throw canonicalSessionKeyMigrationRequiredError(
+      `refusing non-canonical session key write ${sessionKey}`,
+    );
+  }
+}
+
+export function assertCanonicalSessionEntryLineageWrite(entry: SessionEntry): void {
+  const sessionKeys = [
+    entry.parentSessionKey,
+    entry.spawnedBy,
+    entry.forkSource?.sessionKey,
+  ].filter((sessionKey): sessionKey is string => sessionKey !== undefined);
+  for (const sessionKey of sessionKeys) {
+    assertCanonicalSessionKeyWrite(sessionKey);
+  }
+}
+
+/** One validator serves full Doctor scans, pending rows, and canonical writer inputs. */
+export function validateCanonicalSessionRow(row: CanonicalSessionValidationRow): void {
   const record =
-    row.entry_valid === 1 || (mode === "read" && row.entry_valid === 0)
+    row.entry_valid === 1
       ? parseSqliteSessionEntryRecord({
           entry_json: row.entry_json,
           current_session_id: row.current_session_id,
         })
       : null;
-  return validateCanonicalSessionRowEntry(
-    row,
-    record ? projectCanonicalSessionEntryShape(record) : null,
-    mode,
-  );
+  validateCanonicalSessionRowEntry(row, record ? projectCanonicalSessionEntryShape(record) : null);
 }
 
 /** Exact readers validate the entry decoded from the same selected row. */
@@ -64,7 +91,7 @@ export function validateCanonicalSessionRowEntry(
   ) {
     return undefined;
   }
-  // Raw writes clear writer proof; selected reads still validate their current source bytes.
+  // Uncertified imported rows still validate their selected source bytes on reads.
   if (!entry || (row.entry_valid !== 1 && (mode !== "read" || row.entry_valid !== 0))) {
     throw canonicalSessionKeyMigrationRequiredError(
       `invalid persisted session row requires repair for ${row.session_key}`,

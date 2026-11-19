@@ -21,6 +21,7 @@ extension RootTabs {
         case chat
         case overview
         case activity
+        case systems
         case agents
         case workboard
         case skillWorkshop
@@ -45,6 +46,7 @@ extension RootTabs {
             case .chat: String(localized: "Chat")
             case .overview: String(localized: "Overview")
             case .activity: String(localized: "Activity")
+            case .systems: String(localized: "Systems")
             case .agents: String(localized: "Agents")
             case .workboard: String(localized: "Workboard")
             case .skillWorkshop: String(localized: "Skill Workshop")
@@ -74,6 +76,7 @@ extension RootTabs {
             case .chat: "bubble.left"
             case .overview: "chart.bar"
             case .activity: "waveform.path.ecg"
+            case .systems: "server.rack"
             case .agents: "person.2"
             case .workboard: "folder"
             case .skillWorkshop: "hammer"
@@ -94,6 +97,7 @@ extension RootTabs {
         var screen: SidebarScreen {
             switch self {
             case .activity: .dashboard(DashboardRouteMap.activityPagePath)
+            case .systems: .dashboard(DashboardRouteMap.systemsPagePath)
             case .workboard: .dashboard(DashboardRouteMap.workboardPagePath)
             case .skillWorkshop: .dashboard(DashboardRouteMap.skillWorkshopPagePath)
             case .instances: .dashboard(DashboardRouteMap.devicesSettingsPath)
@@ -143,20 +147,18 @@ extension RootTabs {
         session.boardFace == "dashboard" ? .dashboard : .chat
     }
 
-    static func sidebarLayoutContainerSize(contentSize: CGSize, windowSize: CGSize?) -> CGSize {
-        windowSize ?? contentSize
-    }
-
-    /// A content budget, not an OS-defined breakpoint. Keep phones and accessibility
-    /// text in one column even when their window is wider than the tablet threshold.
+    /// The sidebar needs regular space in both axes and enough usable detail width.
+    /// Keyboard avoidance changes height, not this width budget or the size classes.
     static func sidebarLayoutMode(
         containerSize: CGSize,
-        isPad: Bool,
+        horizontalSizeClass: UserInterfaceSizeClass?,
+        verticalSizeClass: UserInterfaceSizeClass?,
         usesAccessibilityText: Bool = false) -> SidebarLayoutMode
     {
-        !isPad || usesAccessibilityText || containerSize.width < self.sidebarPersistentWidthThreshold
-            ? .drawer
-            : .split
+        horizontalSizeClass == .regular && verticalSizeClass == .regular &&
+            !usesAccessibilityText && containerSize.width >= self.sidebarPersistentWidthThreshold
+            ? .split
+            : .drawer
     }
 
     static func sidebarVisibility(layoutMode: SidebarLayoutMode, splitPreference: Bool?) -> Bool {
@@ -194,26 +196,10 @@ extension RootTabs {
         navigationPath.last ?? baseRoute
     }
 
-    static func shouldShowSidebarRevealInDestinationHeader(
-        isSidebarVisible: Bool,
-        layoutMode: SidebarLayoutMode) -> Bool
-    {
-        switch layoutMode {
-        case .split:
-            true
-        case .drawer:
-            !isSidebarVisible
-        }
-    }
-
     static func requestedInitialSidebarVisibility(arguments: [String]) -> Bool? {
-        guard let flagIndex = arguments.firstIndex(of: "--openclaw-sidebar-visibility") else {
-            return nil
-        }
-        let valueIndex = arguments.index(after: flagIndex)
-        guard arguments.indices.contains(valueIndex) else { return nil }
-
-        switch arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        guard let value = arguments.drop(while: { $0 != "--openclaw-sidebar-visibility" }).dropFirst().first
+        else { return nil }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "visible", "show", "shown", "open", "true", "1":
             return true
         case "hidden", "hide", "closed", "false", "0":
@@ -274,6 +260,7 @@ extension RootTabs {
         .cron,
         .sessions,
         .activity,
+        .systems,
         .skillWorkshop,
         .agents,
         .instances,

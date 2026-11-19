@@ -4,6 +4,8 @@ import { readSessionWorkspaceRecoveryRequiredError } from "../error-details.js";
 import {
   ErrorCodes,
   CronJobNotFoundErrorDetailsSchema,
+  ClawHubRiskAcknowledgementRequiredErrorDetailsSchema,
+  TemplateReviewRequiredErrorDetailsSchema,
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
   GitHubPublicationSelectionRejectedErrorDetailsSchema,
@@ -13,18 +15,59 @@ import {
   OutboundDeliveryQueuedErrorDetailsSchema,
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
-  SkillProposalRevisionChangedErrorDetailsSchema,
   missingScopeErrorShape,
-  readSkillProposalRevisionChangedError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
   readCronJobNotFoundError,
+  readClawHubRiskAcknowledgementRequiredError,
+  readTemplateReviewRequiredError,
   readGitHubPublicationSelectionRejectedError,
   UnknownAgentIdErrorDetailsSchema,
 } from "./error-codes.js";
 import { ErrorShapeSchema } from "./frames.js";
 
 describe("gateway error details", () => {
+  it("reads only structured ClawHub release consent warnings", () => {
+    const details = {
+      code: GatewayErrorDetailCodes.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED,
+      warning: "Security analysis is pending for this release.",
+    };
+    const error = { code: ErrorCodes.INVALID_REQUEST, message: "Consent required", details };
+
+    expect(Value.Check(ClawHubRiskAcknowledgementRequiredErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(readClawHubRiskAcknowledgementRequiredError(error)).toEqual(details);
+    expect(
+      readClawHubRiskAcknowledgementRequiredError({ ...error, code: ErrorCodes.UNAVAILABLE }),
+    ).toBeNull();
+    expect(
+      readClawHubRiskAcknowledgementRequiredError({
+        ...error,
+        details: { ...details, warning: "" },
+      }),
+    ).toBeNull();
+    expect(readClawHubRiskAcknowledgementRequiredError(new Error("Consent required"))).toBeNull();
+  });
+
+  it("distinguishes plugin and skill review requests from ordinary errors", () => {
+    for (const kind of ["plugin", "skill"] as const) {
+      const details = { code: GatewayErrorDetailCodes.TEMPLATE_REVIEW_REQUIRED, kind };
+      const error = { code: ErrorCodes.INVALID_REQUEST, message: "Review required", details };
+      expect(Value.Check(TemplateReviewRequiredErrorDetailsSchema, details)).toBe(true);
+      expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+      expect(readTemplateReviewRequiredError(error)).toEqual(details);
+      expect(
+        readTemplateReviewRequiredError({ ...error, code: ErrorCodes.UNAVAILABLE }),
+      ).toBeNull();
+    }
+    expect(
+      readTemplateReviewRequiredError({
+        code: ErrorCodes.INVALID_REQUEST,
+        details: { code: GatewayErrorDetailCodes.TEMPLATE_REVIEW_REQUIRED, kind: "unknown" },
+      }),
+    ).toBeNull();
+  });
+
   it("validates and reads exact pending workspace recovery routes", () => {
     const details = {
       code: GatewayErrorDetailCodes.SESSION_WORKSPACE_RECOVERY_REQUIRED,
@@ -130,22 +173,6 @@ describe("gateway error details", () => {
     expect(Value.Check(UnknownAgentIdErrorDetailsSchema, { ...details, agentId: "" })).toBe(false);
   });
 
-  it.each(["WIZARD_NOT_FOUND", "SETUP_ADMISSION_BUSY"])("validates closed %s details", (code) => {
-    const details = { code };
-    expect(Value.Check(ErrorShapeSchema, { code: "UNAVAILABLE", message: "busy", details })).toBe(
-      true,
-    );
-    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
-    expect(Value.Check(GatewayErrorDetailsSchema, { ...details, sessionId: "stale" })).toBe(false);
-    expect(
-      Value.Check(ErrorShapeSchema, {
-        code: "UNAVAILABLE",
-        message: "other failure",
-        details: { code: "future_detail", context: 1 },
-      }),
-    ).toBe(true);
-  });
-
   it("validates typed project clone failures", () => {
     const details = {
       code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,
@@ -156,23 +183,6 @@ describe("gateway error details", () => {
     expect(Value.Check(ProjectCloneErrorDetailsSchema, { ...details, cause: "unknown" })).toBe(
       false,
     );
-  });
-
-  it("validates and reads changed skill proposal revisions", () => {
-    const details = {
-      code: GatewayErrorDetailCodes.SKILL_PROPOSAL_REVISION_CHANGED,
-      expectedRevisionHash: "A".repeat(64),
-      currentRevisionHash: "b".repeat(64),
-    };
-
-    expect(Value.Check(SkillProposalRevisionChangedErrorDetailsSchema, details)).toBe(true);
-    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
-    expect(readSkillProposalRevisionChangedError({ details })).toEqual(details);
-    expect(
-      readSkillProposalRevisionChangedError({
-        details: { ...details, currentRevisionHash: "not-a-sha256" },
-      }),
-    ).toBeNull();
   });
 
   it("builds a distinct forbidden missing-scope response", () => {

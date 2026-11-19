@@ -33,9 +33,13 @@ What OpenClaw can send to Telegram beyond text, and how inbound media reaches th
 
     The caption goes on the first photo. Text that exceeds the caption limit follows the album as a separate message. Photos sent as documents, other media types, and messages with inline buttons keep separate sends so their existing controls and delivery behavior are preserved.
 
+    Media captions use Telegram HTML rather than rich message blocks. Rich lists become separate marker lines (including nested lists and checkboxes), and asides become blockquotes. HTML checkbox input types are case-insensitive. Caption edits use the same rendering; a plain-text retry keeps the visible text without counting formatting markers against the caption limit. Code examples keep their literal tags.
+
     ### Audio messages
 
     Telegram distinguishes voice notes from audio files. Default: audio-file behavior; tag `[[audio_as_voice]]` in the agent reply to force a voice-note send. Inbound voice-note transcripts are framed as machine-generated, untrusted text in agent context, but mention detection still uses the raw transcript so mention-gated voice messages keep working.
+
+    When `ffprobe` is installed, OpenClaw includes the duration for OGG/Opus, MP3, and M4A uploads so Telegram can display it correctly. If duration probing fails, the upload still proceeds without duration metadata.
 
 ```json5
 {
@@ -126,3 +130,7 @@ What OpenClaw can send to Telegram beyond text, and how inbound media reaches th
 
   </Accordion>
 </AccordionGroup>
+
+## Inbound attachments that fail to download
+
+A message's attachments (all photos of an album, all items of a forwarded burst) share two minutes for Telegram's `getFile` lookups and downloads, and replied-to media gets two more. If an attachment fails or runs out of time, OpenClaw still delivers the message: the agent sees the text with `[media unavailable: download failed]`, and the chat gets "⚠️ Failed to download media. Please try again." Messages sent after it in the same chat or topic are not held behind the failed attachment. In an album, the other photos still arrive. A message interrupted by a Gateway shutdown is replayed after restart instead.

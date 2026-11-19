@@ -1,15 +1,15 @@
-/** Doctor checks and repairs for workspace memory files and legacy workspace hints. */
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findGitRoot } from "../infra/git-root.js";
+import { statIfExists as statPathIfExists } from "../infra/path-existence.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   LEGACY_ROOT_MEMORY_FILENAME,
@@ -48,7 +48,6 @@ export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
 }
 
-/** Returns true when the workspace appears to lack canonical memory guidance. */
 export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<boolean> {
   const entries = await listWorkspaceEntries(workspaceDir);
   if (entries.has(CANONICAL_ROOT_MEMORY_FILENAME)) {
@@ -85,34 +84,9 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
   return true;
 }
 
-type RootMemoryFilesDetection = {
-  workspaceDir: string;
-  canonicalPath: string;
-  legacyPath: string;
-  canonicalExists: boolean;
-  legacyExists: boolean;
-  canonicalBytes?: number;
-  legacyBytes?: number;
-};
-
-type RootMemoryStatResult = {
-  exists: boolean;
-  bytes?: number;
-};
-
-async function statIfExists(filePath: string): Promise<RootMemoryStatResult> {
-  try {
-    const stat = await fs.promises.stat(filePath);
-    if (!stat.isFile()) {
-      return { exists: false };
-    }
-    return { exists: true, bytes: stat.size };
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-      return { exists: false };
-    }
-    throw err;
-  }
+async function statIfExists(filePath: string) {
+  const stat = await statPathIfExists(filePath);
+  return stat?.isFile() ? { exists: true, bytes: stat.size } : { exists: false };
 }
 
 async function listWorkspaceEntries(workspaceDir: string): Promise<Set<string>> {
@@ -126,20 +100,16 @@ async function listWorkspaceEntries(workspaceDir: string): Promise<Set<string>> 
   }
 }
 
-/** Detects canonical and legacy root memory files in a workspace. */
-async function detectRootMemoryFiles(workspaceDir: string): Promise<RootMemoryFilesDetection> {
+async function detectRootMemoryFiles(workspaceDir: string) {
   const resolvedWorkspace = path.resolve(workspaceDir);
   const canonicalPath = resolveCanonicalRootMemoryPath(resolvedWorkspace);
   const legacyPath = resolveLegacyRootMemoryPath(resolvedWorkspace);
   const entries = await listWorkspaceEntries(resolvedWorkspace);
-  const [canonical, legacy] = await Promise.all([
-    entries.has(CANONICAL_ROOT_MEMORY_FILENAME)
-      ? statIfExists(canonicalPath)
-      : Promise.resolve<RootMemoryStatResult>({ exists: false }),
-    entries.has(LEGACY_ROOT_MEMORY_FILENAME)
-      ? statIfExists(legacyPath)
-      : Promise.resolve<RootMemoryStatResult>({ exists: false }),
-  ]);
+  const inspect = (filePath: string): ReturnType<typeof statIfExists> =>
+    entries.has(path.basename(filePath))
+      ? statIfExists(filePath)
+      : Promise.resolve({ exists: false });
+  const [canonical, legacy] = await Promise.all([inspect(canonicalPath), inspect(legacyPath)]);
   return {
     workspaceDir: resolvedWorkspace,
     canonicalPath,
@@ -155,33 +125,14 @@ function formatBytes(bytes?: number): string {
   return typeof bytes === "number" ? `${bytes} bytes` : "size unknown";
 }
 
-/** Formats the warning for split canonical/legacy root memory files. */
-function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection): string | null {
-  if (detection.canonicalExists && detection.legacyExists) {
-    return [
-      "Split root durable memory files detected:",
-      `- canonical: ${shortenHomePath(detection.canonicalPath)} (${formatBytes(detection.canonicalBytes)})`,
-      `- legacy: ${shortenHomePath(detection.legacyPath)} (${formatBytes(detection.legacyBytes)})`,
-      `OpenClaw uses ${CANONICAL_ROOT_MEMORY_FILENAME} as the canonical durable memory file.`,
-      `Dreaming writes durable promotions to ${CANONICAL_ROOT_MEMORY_FILENAME}, so older facts in ${LEGACY_ROOT_MEMORY_FILENAME} can be shadowed.`,
-      `Run "openclaw doctor --fix" to merge the legacy file into ${CANONICAL_ROOT_MEMORY_FILENAME} with a backup.`,
-    ].join("\n");
-  }
-  return null;
-}
-
 type RootMemoryMigrationResult = {
   changed: boolean;
   canonicalPath: string;
   legacyPath: string;
   mergedLegacy: boolean;
   archivedLegacyPath?: string;
-  /** True when the repair was skipped because a file exceeded the safe read limit. */
-  readLimitExceeded?: boolean;
-  /** True when the repair was skipped because a file could not be read. */
-  readError?: boolean;
-  /** True when the legacy file could not be archived atomically. */
-  archiveError?: boolean;
+  canonicalBackupPath?: string;
+  skipReason?: string;
 };
 
 async function moveLegacyRootMemoryFileToArchive(params: {
@@ -190,11 +141,10 @@ async function moveLegacyRootMemoryFileToArchive(params: {
 }): Promise<string> {
   const repairDir = resolveRootMemoryRepairDir(params.workspaceDir);
   await fs.promises.mkdir(repairDir, { recursive: true });
-  const archiveDir = path.join(
-    repairDir,
-    new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-"),
+  // A later repair must never reuse a directory containing earlier recovery copies.
+  const archiveDir = await fs.promises.mkdtemp(
+    path.join(repairDir, `${new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-")}-`),
   );
-  await fs.promises.mkdir(archiveDir, { recursive: true });
   const archivePath = path.join(archiveDir, LEGACY_ROOT_MEMORY_FILENAME);
   // Source and repair archive live under one workspace. If a mounted file makes
   // this cross-device, fail before mutation instead of copying an unbounded file.
@@ -233,30 +183,31 @@ async function migrateLegacyRootMemoryFile(
     return unchanged;
   }
   const skippedForReadFailure = (err: unknown): RootMemoryMigrationResult => {
-    const isTooLarge =
-      typeof err === "object" &&
-      err !== null &&
-      "message" in err &&
-      typeof (err as Error).message === "string" &&
-      (err as Error).message.startsWith("File exceeds");
+    const message = err instanceof Error ? err.message : "";
     return {
       ...unchanged,
-      readLimitExceeded: isTooLarge,
-      readError: !isTooLarge,
+      skipReason: message.startsWith("File exceeds")
+        ? "a file exceeded the safe read limit"
+        : message.startsWith("File is not valid UTF-8:")
+          ? message
+          : "a file could not be read",
     };
   };
+  const readMemoryFile = async (filePath: string) => {
+    const { buffer } = await readRegularFile({ filePath, maxBytes: ROOT_MEMORY_FILE_MAX_BYTES });
+    if (!isUtf8(buffer)) {
+      throw new Error(
+        `File is not valid UTF-8: ${filePath}; preserve its bytes and convert a copy to UTF-8 before retrying`,
+      );
+    }
+    return buffer.toString("utf-8");
+  };
   try {
-    // Reject oversized, unreadable, symlinked, or non-regular inputs before the
+    // Reject unsafe inputs, including invalid UTF-8, before the
     // archive rename. The archived snapshot is read again after the atomic move.
     await Promise.all([
-      readRegularFile({
-        filePath: detection.canonicalPath,
-        maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
-      }),
-      readRegularFile({
-        filePath: detection.legacyPath,
-        maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
-      }),
+      readMemoryFile(detection.canonicalPath),
+      readMemoryFile(detection.legacyPath),
     ]);
   } catch (err) {
     return skippedForReadFailure(err);
@@ -268,20 +219,14 @@ async function migrateLegacyRootMemoryFile(
       legacyPath: detection.legacyPath,
     });
   } catch {
-    return { ...unchanged, archiveError: true };
+    return { ...unchanged, skipReason: "legacy memory could not be archived atomically" };
   }
   let canonicalText: string;
   let legacyText: string;
   try {
     [canonicalText, legacyText] = await Promise.all([
-      readRegularFile({
-        filePath: detection.canonicalPath,
-        maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
-      }).then(({ buffer }) => buffer.toString("utf-8")),
-      readRegularFile({
-        filePath: archivedLegacyPath,
-        maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
-      }).then(({ buffer }) => buffer.toString("utf-8")),
+      readMemoryFile(detection.canonicalPath),
+      readMemoryFile(archivedLegacyPath),
     ]);
   } catch (err) {
     const skipped = skippedForReadFailure(err);
@@ -295,19 +240,39 @@ async function migrateLegacyRootMemoryFile(
       archivedLegacyPath,
     };
   }
+  let canonicalBackupPath: string | undefined;
   if (canonicalText !== legacyText) {
     const merged = `${canonicalText.trimEnd()}\n${buildMergedLegacyRootMemorySection({
       legacyText,
       archivedLegacyPath: shortenHomePath(archivedLegacyPath),
     })}`;
-    await fs.promises.writeFile(detection.canonicalPath, merged, "utf-8");
+    // Preserve the canonical bytes independently before publishing the merge.
+    // Keep the atomic writer's unlink/copy fallback disabled to avoid torn writes.
+    canonicalBackupPath = path.join(
+      path.dirname(archivedLegacyPath),
+      `${CANONICAL_ROOT_MEMORY_FILENAME}.pre-merge`,
+    );
+    await fs.promises.copyFile(detection.canonicalPath, canonicalBackupPath);
+    // Workspace aliases are supported, but the atomic writer needs a real parent
+    // and continues to reject a symlink at the final MEMORY.md path.
+    const publicationDir = await fs.promises.realpath(detection.workspaceDir);
+    await replaceFileAtomic({
+      filePath: path.join(publicationDir, CANONICAL_ROOT_MEMORY_FILENAME),
+      content: merged,
+      dirMode: (await fs.promises.stat(publicationDir)).mode & 0o7777,
+      preserveExistingMode: true,
+      tempPrefix: CANONICAL_ROOT_MEMORY_FILENAME,
+      syncTempFile: true,
+      syncParentDir: true,
+      throwOnCleanupError: true,
+    });
   }
   return {
+    ...unchanged,
     changed: true,
-    canonicalPath: detection.canonicalPath,
-    legacyPath: detection.legacyPath,
     mergedLegacy: canonicalText !== legacyText,
     archivedLegacyPath,
+    ...(canonicalBackupPath ? { canonicalBackupPath } : {}),
   };
 }
 
@@ -317,28 +282,25 @@ type WorkspaceMemoryDoctorScope = {
   labelAgent: boolean;
 };
 
-/** Emits workspace root-memory health warnings. */
-export async function noteWorkspaceMemoryHealth(
-  cfg: OpenClawConfig,
-  scope?: WorkspaceMemoryDoctorScope,
-): Promise<void> {
+export async function noteWorkspaceMemoryHealth(scope: WorkspaceMemoryDoctorScope): Promise<void> {
   try {
-    const agentId = scope?.agentId ?? tryResolveDefaultAgentId(cfg);
-    if (!agentId) {
-      throw new Error("Cannot inspect workspace memory until the agent roster has one default");
-    }
-    const workspaceDir = scope?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
-    const rootMemoryWarning = formatRootMemoryFilesWarning(
-      await detectRootMemoryFiles(workspaceDir),
-    );
-    if (rootMemoryWarning) {
+    const detection = await detectRootMemoryFiles(scope.workspaceDir);
+    if (detection.canonicalExists && detection.legacyExists) {
+      const rootMemoryWarning = [
+        "Split root durable memory files detected:",
+        `- current: ${shortenHomePath(detection.canonicalPath)} (${formatBytes(detection.canonicalBytes)})`,
+        `- legacy: ${shortenHomePath(detection.legacyPath)} (${formatBytes(detection.legacyBytes)})`,
+        `OpenClaw uses ${CANONICAL_ROOT_MEMORY_FILENAME} as the current durable memory file.`,
+        `Dreaming writes durable promotions to ${CANONICAL_ROOT_MEMORY_FILENAME}, so older facts in ${LEGACY_ROOT_MEMORY_FILENAME} can be shadowed.`,
+        `Run "openclaw doctor --fix" to merge the legacy file into ${CANONICAL_ROOT_MEMORY_FILENAME} with a backup.`,
+      ].join("\n");
       note(
-        `${scope?.labelAgent ? `Agent "${agentId}":\n` : ""}${rootMemoryWarning}`,
+        `${scope.labelAgent ? `Agent "${scope.agentId}":\n` : ""}${rootMemoryWarning}`,
         "Workspace memory",
       );
     }
   } catch (err) {
-    const prefix = scope?.labelAgent ? `Agent "${scope.agentId}": ` : "";
+    const prefix = scope.labelAgent ? `Agent "${scope.agentId}": ` : "";
     note(
       `${prefix}Workspace memory audit could not be completed: ${formatErrorMessage(err)}`,
       "Doctor",
@@ -348,38 +310,29 @@ export async function noteWorkspaceMemoryHealth(
 
 /** Prompts to merge legacy root memory into canonical memory when both files exist. */
 export async function maybeRepairWorkspaceMemoryHealth(params: {
-  cfg: OpenClawConfig;
   prompter: DoctorPrompter;
-  scope?: WorkspaceMemoryDoctorScope;
+  scope: WorkspaceMemoryDoctorScope;
 }): Promise<void> {
   try {
-    const agentId = params.scope?.agentId ?? tryResolveDefaultAgentId(params.cfg);
-    if (!agentId) {
-      throw new Error("Cannot repair workspace memory until the agent roster has one default");
-    }
-    const configuredWorkspaceDir =
-      params.scope?.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
-    const prefix = params.scope?.labelAgent ? `Agent "${agentId}": ` : "";
-    const rootMemoryFiles = await detectRootMemoryFiles(configuredWorkspaceDir);
+    const prefix = params.scope.labelAgent ? `Agent "${params.scope.agentId}": ` : "";
+    const rootMemoryFiles = await detectRootMemoryFiles(params.scope.workspaceDir);
     if (!rootMemoryFiles.canonicalExists || !rootMemoryFiles.legacyExists) {
       return;
     }
     const approvedLegacyMigration = await params.prompter.confirmRuntimeRepair({
-      message: `${prefix}Merge legacy root ${LEGACY_ROOT_MEMORY_FILENAME} into canonical ${CANONICAL_ROOT_MEMORY_FILENAME} and remove the shadowed file?`,
+      message: `${prefix}Merge legacy root ${LEGACY_ROOT_MEMORY_FILENAME} into the current ${CANONICAL_ROOT_MEMORY_FILENAME} and remove the shadowed file?`,
       initialValue: true,
     });
     if (!approvedLegacyMigration) {
       return;
     }
-    const migration = await migrateLegacyRootMemoryFile(configuredWorkspaceDir);
-    if (migration.readLimitExceeded || migration.readError) {
-      const reason = migration.readLimitExceeded
-        ? "a file exceeded the safe read limit"
-        : "a file could not be read";
+    const migration = await migrateLegacyRootMemoryFile(params.scope.workspaceDir);
+    const reason = migration.skipReason;
+    if (reason) {
       note(
         [
           `${prefix}Workspace memory root repair skipped (${reason}):`,
-          `- canonical: ${migration.canonicalPath}`,
+          `- current: ${migration.canonicalPath}`,
           `- legacy: ${migration.legacyPath}`,
           migration.archivedLegacyPath
             ? `- preserved archive: ${migration.archivedLegacyPath}`
@@ -391,30 +344,20 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       );
       return;
     }
-    if (migration.archiveError) {
-      note(
-        [
-          `${prefix}Workspace memory root repair skipped (legacy memory could not be archived atomically):`,
-          `- canonical: ${migration.canonicalPath}`,
-          `- legacy: ${migration.legacyPath}`,
-        ].join("\n"),
-        "Doctor changes",
-      );
-      return;
-    }
     if (!migration.changed) {
       return;
     }
     const lines = [
       `${prefix}Workspace memory root merged:`,
-      `- canonical: ${migration.canonicalPath}`,
+      `- current: ${migration.canonicalPath}`,
       migration.archivedLegacyPath ? `- backup: ${migration.archivedLegacyPath}` : null,
+      migration.canonicalBackupPath ? `- pre-merge backup: ${migration.canonicalBackupPath}` : null,
       migration.mergedLegacy ? `- merged legacy content from: ${migration.legacyPath}` : null,
       `- removed legacy file: ${migration.legacyPath}`,
     ].filter(Boolean);
     note(lines.join("\n"), "Doctor changes");
   } catch (err) {
-    const prefix = params.scope?.labelAgent ? `Agent "${params.scope.agentId}": ` : "";
+    const prefix = params.scope.labelAgent ? `Agent "${params.scope.agentId}": ` : "";
     note(
       `${prefix}Workspace memory repair could not be completed: ${formatErrorMessage(err)}`,
       "Doctor",

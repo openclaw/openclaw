@@ -1,31 +1,26 @@
 import { compareChatQueueOrder, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
-import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
-import type { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
+import {
+  type StoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+} from "../../lib/chat/outbox-store-scope.ts";
+import type { ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
-import { scopedAgentIdForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
+import type { SessionScopeHost } from "../../lib/sessions/index.ts";
+import { scopedAgentIdForSession } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import type { StoredChatQueueReplacement } from "./composer-persistence-state.ts";
-import {
-  listStoredChatOutboxes,
-  storedChatOutboxScopeKey,
-  type ChatComposerScope,
-  type StoredChatOutbox,
-} from "./composer-persistence.ts";
 
-type ChatQueueStoreHost = {
+type ChatQueueSessionHost = {
   chatQueue: ChatQueueItem[];
   chatAttachments?: ChatAttachment[];
   chatRunId?: string | null;
   chatSending?: boolean;
   chatSendingScopeKey?: string | null;
-  requestUpdate?: () => void;
-};
-type ChatQueueSessionHost = ChatQueueStoreHost & ChatComposerScope & { sessionKey: string };
+} & ChatComposerScope & { sessionKey: string };
 export type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;
 
 export function isSteerableQueuedMessage(item: ChatQueueItem): boolean {
@@ -89,28 +84,6 @@ export function enqueueChatMessage(
   return keepVolatileQueuedMessage(host, host.sessionKey, item, item.agentId);
 }
 
-export function enqueuePendingRunMessage(
-  host: ChatQueueScopedSessionHost,
-  text: string,
-  pendingRunId: string,
-  sender?: SenderIdentity,
-) {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return;
-  }
-  // Local commands join an existing run without a wire chat.send, so this
-  // pending row intentionally has no fake send identity.
-  const item: ChatQueueItem = {
-    id: generateUUID(),
-    text: trimmed,
-    createdAt: Date.now(),
-    pendingRunId,
-    ...(sender ? { sender } : {}),
-  };
-  keepVolatileQueuedMessage(host, host.sessionKey, item);
-}
-
 export function readChatQueueForScope(
   host: ChatQueueScopedSessionHost,
   sessionKey: string,
@@ -133,51 +106,6 @@ export function updateQueuedMessage(
   update: (item: ChatQueueItem) => ChatQueueItem,
 ): ChatQueueItem | null {
   return chatOutboxOwner(host).update(host, [{ id, update }])?.[0] ?? null;
-}
-
-/** Positive custody settles uncertainty, not consumption or retry-payload ownership. */
-export function confirmQueuedMessageCustody(
-  host: ChatQueueScopedSessionHost,
-  expected: ChatQueueItem,
-  sessionId: string | undefined,
-): boolean {
-  if (!sessionId || (expected.sessionId && expected.sessionId !== sessionId)) {
-    return false;
-  }
-  const current = readQueuedMessageById(host, expected.id);
-  if (
-    !current ||
-    (current.sessionId && current.sessionId !== sessionId) ||
-    !sameQueuedDeliveryVersion(current, expected)
-  ) {
-    return false;
-  }
-  if (current.sessionId && current.sendState !== "unconfirmed") {
-    return true;
-  }
-  return (
-    updateQueuedMessage(host, expected.id, (item) => ({
-      ...item,
-      sessionId,
-      ...(item.sendState === "unconfirmed"
-        ? { sendState: "waiting-idle" as const, sendError: undefined }
-        : {}),
-    })) !== null
-  );
-}
-
-/**
- * `replaces` admits the item as the stored replacement for another row, which
- * retires the source in the same write. A rejected write changes nothing, so an
- * edited message can never lose both its original and its replacement.
- */
-export function admitQueuedMessageForSession(
-  host: ChatQueueScopedSessionHost,
-  captured: ReturnType<typeof captureChatOutboxAdmission>,
-  item: ChatQueueItem,
-  replaces?: StoredChatQueueReplacement,
-): boolean {
-  return chatOutboxOwner(host).admit(host, captured, item, replaces) === "admitted";
 }
 
 export function excludeComposerAttachments(
@@ -213,7 +141,7 @@ export function removeDeliveredQueuedChatSendForRun(
   if (!match) {
     return null;
   }
-  const removed = chatOutboxOwner(host).remove(host, match.item.id);
+  const removed = chatOutboxOwner(host).remove(host, match.id);
   if (!removed) {
     return null;
   }
@@ -225,7 +153,7 @@ export function readDeliveredQueuedChatSendForRun(
   host: ChatQueueScopedSessionHost,
   runId: string | undefined,
   scope: StoredChatOutboxScope,
-): { item: ChatQueueItem; outbox: StoredChatOutbox } | null {
+): ChatQueueItem | null {
   if (!runId) {
     return null;
   }
@@ -233,8 +161,7 @@ export function readDeliveredQueuedChatSendForRun(
   const outbox = listStoredChatOutboxes(host).find(
     (candidate) => storedChatOutboxScopeKey(candidate) === scopeKey,
   );
-  const item = outbox?.queue.find((candidate) => candidate.sendRunId === runId);
-  return item && outbox ? { item, outbox } : null;
+  return outbox?.queue.find((candidate) => candidate.sendRunId === runId) ?? null;
 }
 
 export function clearPendingQueueItemsForRun(

@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { buildLocalUserMessage } from "../../pages/chat/user-message-content.ts";
 import { resolveCurrentUserIdentity } from "./current-user-identity.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
@@ -8,7 +9,7 @@ describe("resolveCurrentUserIdentity", () => {
   it.each([true, false])(
     "keeps proven sender provenance and portrait through local sends (pending=%s)",
     (pending) => {
-      const identity = { type: "profile", id: "person" };
+      const identity = { type: "profile", id: "person" } satisfies AuthenticatedUser["identity"];
       const user = {
         id: "person",
         name: "Person",
@@ -18,7 +19,7 @@ describe("resolveCurrentUserIdentity", () => {
       for (const sender of [
         resolveCurrentUserIdentity(null, null, user),
         resolveCurrentUserIdentity(
-          { snapshot: { presence: [{ instanceId: "self", user }] } },
+          { snapshot: { presence: [{ instanceId: "self", user, ts: 0 }] } },
           "self",
         ),
       ]) {
@@ -46,9 +47,10 @@ describe("resolveCurrentUserIdentity", () => {
     const hello = {
       snapshot: {
         presence: [
-          { instanceId: "other-browser", user: { id: "other@example.com" } },
+          { instanceId: "other-browser", user: { id: "other@example.com" }, ts: 0 },
           {
             instanceId: "this-browser",
+            ts: 0,
             user: {
               id: "alice@example.com",
               name: "Alice Example",

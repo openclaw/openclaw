@@ -10,6 +10,7 @@ const pinSnapshotMock = vi.hoisted(() =>
 vi.mock("../daemon/runtime-pin-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/runtime-pin-state.js")>()),
   readDaemonRuntimePin: pinSnapshotMock,
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T) => read(),
 }));
 
 export { pinSnapshotMock };
@@ -25,6 +26,7 @@ export function makeDoctorPrompts() {
     confirmAggressiveAutoFix: vi.fn().mockResolvedValue(true),
     confirmRuntimeRepair: vi.fn().mockResolvedValue(true),
     select: vi.fn().mockResolvedValue("node"),
+    selectRuntimeRepair: vi.fn(async (_params, fallback) => fallback),
     shouldRepair: false,
     shouldForce: false,
     repairMode: {

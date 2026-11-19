@@ -1,4 +1,3 @@
-// Hosted plugin surface URL resolver for gateway-advertised plugin node endpoints.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isLoopbackHost } from "./net.js";
 
@@ -32,15 +31,13 @@ const parseHostHeader = (value: HostSource): ParsedHostHeader => {
   if (!value) {
     return { host: "" };
   }
-  try {
-    const parsed = new URL(`http://${value.trim()}`);
-    return {
-      host: parsed.hostname,
-      port: parseStrictPositiveInteger(parsed.port),
-    };
-  } catch {
-    return { host: "" };
-  }
+  const parsed = URL.parse(`http://${value.trim()}`);
+  return parsed
+    ? {
+        host: parsed.hostname,
+        port: parseStrictPositiveInteger(parsed.port),
+      }
+    : { host: "" };
 };
 
 const parseForwardedProto = (value: HostSource | HostSource[]) => {

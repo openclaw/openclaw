@@ -5,9 +5,6 @@ import {
   normalizeTogetherModelId,
 } from "./provider-model-id-normalize.js";
 
-// Provider model-id normalization policies from manifests plus built-in provider rules.
-
-/** Manifest-defined normalization rules for one provider. */
 export type ManifestModelIdNormalizationProvider = {
   aliases?: Record<string, string>;
   stripPrefixes?: string[];
@@ -18,7 +15,6 @@ export type ManifestModelIdNormalizationProvider = {
   }[];
 };
 
-/** Manifest fragment that can define provider model-id normalization policies. */
 export type ManifestModelIdNormalizationRecord = {
   modelIdNormalization?: {
     providers?: Record<string, ManifestModelIdNormalizationProvider>;
@@ -29,7 +25,6 @@ let currentManifestModelIdNormalizationPolicies:
   | ReadonlyMap<string, ManifestModelIdNormalizationProvider>
   | undefined;
 
-/** Collect provider model-id normalization policies from plugin manifests. */
 export function collectManifestModelIdNormalizationPolicies(
   plugins: readonly ManifestModelIdNormalizationRecord[],
 ): Map<string, ManifestModelIdNormalizationProvider> {
@@ -54,7 +49,11 @@ function formatPrefixedModelId(prefix: string, modelId: string): string {
   return `${prefix.replace(/\/+$/u, "")}/${modelId.replace(/^\/+/u, "")}`;
 }
 
-/** Strip a duplicated self-provider prefix from a model id. */
+function resolveModelAlias(aliases: Record<string, string> | undefined, model: string): string {
+  const key = normalizeLowercaseStringOrEmpty(model);
+  return aliases && Object.hasOwn(aliases, key) ? (aliases[key] ?? model) : model;
+}
+
 export function stripSelfProviderModelPrefix(provider: string, model: string): string {
   const prefix = `${normalizeLowercaseStringOrEmpty(provider)}/`;
   const trimmed = model.trim();
@@ -63,7 +62,6 @@ export function stripSelfProviderModelPrefix(provider: string, model: string): s
     : model;
 }
 
-/** Apply manifest normalization policies for one provider/model id. */
 export function normalizeProviderModelIdWithPolicies(params: {
   provider: string;
   policies: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
@@ -89,7 +87,7 @@ export function normalizeProviderModelIdWithPolicies(params: {
     }
   }
 
-  modelId = policy.aliases?.[normalizeLowercaseStringOrEmpty(modelId)] ?? modelId;
+  modelId = resolveModelAlias(policy.aliases, modelId);
 
   if (!modelId.includes("/")) {
     for (const rule of policy.prefixWhenBareAfterAliasStartsWith ?? []) {
@@ -105,7 +103,6 @@ export function normalizeProviderModelIdWithPolicies(params: {
   return modelId;
 }
 
-/** Apply built-in provider-specific model id normalization rules. */
 export function normalizeBuiltInProviderModelId(provider: string, model: string): string {
   const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
   if (
@@ -126,7 +123,9 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "fable-5": "claude-fable-5",
       "fable-5.1": "claude-fable-5-1",
       "fable-5-1": "claude-fable-5-1",
-      haiku: "claude-haiku-4-5",
+      haiku: "claude-haiku-5-5",
+      "haiku-5.5": "claude-haiku-5-5",
+      "haiku-5-5": "claude-haiku-5-5",
       "opus-5.5": "claude-opus-5-5",
       "opus-5-5": "claude-opus-5-5",
       "opus-5": "claude-opus-5",
@@ -142,7 +141,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "sonnet-4.6": "claude-sonnet-4-6",
     };
     const providerModel = stripSelfProviderModelPrefix(normalizedProvider, model);
-    return anthropicAliases[normalizeLowercaseStringOrEmpty(providerModel)] ?? providerModel;
+    return resolveModelAlias(anthropicAliases, providerModel);
   }
   if (normalizedProvider === "vercel-ai-gateway") {
     const vercelAliases: Record<string, string> = {
@@ -151,7 +150,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       sonnet: "claude-sonnet-4-6",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
-    const aliased = vercelAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
+    const aliased = resolveModelAlias(vercelAliases, model);
     return normalizeLowercaseStringOrEmpty(aliased).startsWith("claude-")
       ? `anthropic/${aliased}`
       : aliased;
@@ -170,7 +169,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "grok-4-fast-reasoning": "grok-4-fast",
       "grok-4-1-fast-reasoning": "grok-4-1-fast",
     };
-    return xaiAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
+    return resolveModelAlias(xaiAliases, model);
   }
   if (normalizedProvider === "together") {
     return normalizeTogetherModelId(model);
@@ -178,7 +177,6 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
   return model;
 }
 
-/** Apply manifest policies and built-in normalization to a static provider/model id. */
 export function normalizeStaticProviderModelIdWithPolicies(
   provider: string,
   model: string,

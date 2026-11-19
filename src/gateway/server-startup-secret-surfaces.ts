@@ -1,12 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isTruthyEnvValue } from "../infra/env.js";
+import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
 
 export function resolveGatewayStartupSourceConfig(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): OpenClawConfig {
-  const skipChannels =
-    isTruthyEnvValue(env.OPENCLAW_SKIP_CHANNELS) || isTruthyEnvValue(env.OPENCLAW_SKIP_PROVIDERS);
+  const skipChannels = isChannelStartupSuppressedByEnvironment(env);
   if (!skipChannels || !config.channels) {
     return config;
   }

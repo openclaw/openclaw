@@ -1,42 +1,65 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { describe, expect, it } from "vitest";
-import { renderAssistantAttachments } from "./chat-message-attachments.ts";
+import { createComponent } from "solid-js";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
 
-describe("incoming voice-note presentation", () => {
-  it.each([true, false])("keeps incoming audio inline only for voice notes (%s)", (isVoiceNote) => {
-    const container = document.createElement("div");
-    render(
-      renderAssistantAttachments(
-        [
+describe("incoming audio presentation", () => {
+  it.each([true, false, undefined])(
+    "keeps incoming audio inline regardless of voice-note metadata (%s)",
+    (isVoiceNote) => {
+      const container = document.createElement("div");
+      const view = mountSolid(
+        () =>
+          createComponent(AssistantAttachments, {
+            attachments: [
+              {
+                type: "attachment",
+                attachment: {
+                  kind: "audio",
+                  label: "voice.wav",
+                  mimeType: "audio/wav",
+                  url: "https://example.com/voice.wav",
+                  isVoiceNote,
+                  durationMs: 8000,
+                  sizeBytes: 256044,
+                },
+              },
+            ],
+            options: {},
+            inlinePlayback: false,
+          }),
+        { container },
+      );
+      onTestFinished(view.unmount);
+      const player = container.querySelector("openclaw-chat-audio-player");
+      expect(player).toMatchObject({
+        voiceNote: isVoiceNote === true,
+        serverDurationMs: 8000,
+        sizeBytes: 256044,
+      });
+      expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
+    },
+  );
+
+  it.each(["document", "video"] as const)("keeps incoming %s attachments as cards", (kind) => {
+    const view = mountSolid(() =>
+      createComponent(AssistantAttachments, {
+        attachments: [
           {
             type: "attachment",
-            attachment: {
-              kind: "audio",
-              label: "voice.wav",
-              mimeType: "audio/wav",
-              url: "https://example.com/voice.wav",
-              isVoiceNote,
-              durationMs: 8000,
-              sizeBytes: 256044,
-            },
+            attachment: { kind, label: "attachment", url: "https://example.com/file" },
           },
         ],
-        {},
-        undefined,
-        undefined,
-        false,
-      ),
-      container,
+        options: {},
+        inlinePlayback: false,
+      }),
     );
-    const player = container.querySelector("openclaw-chat-audio-player");
-    if (isVoiceNote) {
-      expect(player).toMatchObject({ voiceNote: true, serverDurationMs: 8000, sizeBytes: 256044 });
-      expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
-    } else {
-      expect(player).toBeNull();
-      expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
-    }
+    onTestFinished(view.unmount);
+    expect(view.container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
+    expect(
+      view.container.querySelector("openclaw-chat-audio-player, openclaw-chat-video-player"),
+    ).toBeNull();
   });
 });

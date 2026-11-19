@@ -26,71 +26,6 @@ type TwitchUser = {
   display_name: string;
 };
 
-type TwitchUsersResponse = {
-  data: TwitchUser[];
-};
-
-function normalizeUsername(input: string): string {
-  const trimmed = input.trim();
-  if (trimmed.startsWith("@")) {
-    return normalizeLowercaseStringOrEmpty(trimmed.slice(1));
-  }
-  return normalizeLowercaseStringOrEmpty(trimmed);
-}
-
-function createHelixUserResolver(clientId: string, accessToken: string) {
-  let tokenValidated = false;
-
-  return async (query: { id: string } | { login: string }): Promise<TwitchUser | null> => {
-    const controller = new AbortController();
-    // ApiClient retries AbortError past the deadline. This sequential startup
-    // resolver uses Twurple's public one-shot call so cancellation stays bounded.
-    const fetchOptions = { signal: controller.signal } as TwitchApiCallFetchOptions;
-    const request = (async () => {
-      if (!tokenValidated) {
-        let tokenInfo: TwitchTokenInfo;
-        try {
-          tokenInfo = await callTwitchApi<TwitchTokenInfo>(
-            { type: "auth", url: "validate" },
-            clientId,
-            accessToken,
-            undefined,
-            fetchOptions,
-          );
-        } catch (error) {
-          if (error instanceof HttpStatusCodeError && error.statusCode === 401) {
-            throw new Error("Invalid token supplied", { cause: error });
-          }
-          throw error;
-        }
-        if (!tokenInfo.user_id) {
-          throw new Error("Trying to use an app access token as a user access token");
-        }
-        tokenValidated = true;
-      }
-
-      const response = await callTwitchApi<TwitchUsersResponse>(
-        { type: "helix", url: "users", query },
-        clientId,
-        accessToken,
-        undefined,
-        fetchOptions,
-      );
-      return response.data[0] ?? null;
-    })();
-
-    try {
-      return await withTimeout(
-        request,
-        TWITCH_HELIX_USER_LOOKUP_TIMEOUT_MS,
-        "Twitch Helix user lookup",
-      );
-    } finally {
-      controller.abort();
-    }
-  };
-}
-
 export async function resolveTwitchTargets(
   inputs: string[],
   account: TwitchAccountConfig,
@@ -108,12 +43,67 @@ export async function resolveTwitchTargets(
 
   const normalizedToken = normalizeToken(account.accessToken);
 
-  const resolveHelixUser = createHelixUserResolver(account.clientId, normalizedToken);
+  const clientId = account.clientId;
+  let tokenValidated = false;
+
+  async function resolveHelixUser(
+    query: { id: string } | { login: string },
+  ): Promise<TwitchUser | null> {
+    const controller = new AbortController();
+    // ApiClient retries AbortError past the deadline. This sequential startup
+    // resolver uses Twurple's public one-shot call so cancellation stays bounded.
+    const fetchOptions = { signal: controller.signal } as TwitchApiCallFetchOptions;
+    const request = (async () => {
+      if (!tokenValidated) {
+        let tokenInfo: TwitchTokenInfo;
+        try {
+          tokenInfo = await callTwitchApi<TwitchTokenInfo>(
+            { type: "auth", url: "validate" },
+            clientId,
+            normalizedToken,
+            undefined,
+            fetchOptions,
+          );
+        } catch (error) {
+          if (error instanceof HttpStatusCodeError && error.statusCode === 401) {
+            throw new Error("Invalid token supplied", { cause: error });
+          }
+          throw error;
+        }
+        if (!tokenInfo.user_id) {
+          throw new Error("Trying to use an app access token as a user access token");
+        }
+        tokenValidated = true;
+      }
+
+      const response = await callTwitchApi<{ data: TwitchUser[] }>(
+        { type: "helix", url: "users", query },
+        clientId,
+        normalizedToken,
+        undefined,
+        fetchOptions,
+      );
+      return response.data[0] ?? null;
+    })();
+
+    try {
+      return await withTimeout(
+        request,
+        TWITCH_HELIX_USER_LOOKUP_TIMEOUT_MS,
+        "Twitch Helix user lookup",
+      );
+    } finally {
+      controller.abort();
+    }
+  }
 
   const results: ChannelResolveResult[] = [];
 
   for (const input of inputs) {
-    const normalized = normalizeUsername(input);
+    const trimmed = input.trim();
+    const normalized = normalizeLowercaseStringOrEmpty(
+      trimmed.startsWith("@") ? trimmed.slice(1) : trimmed,
+    );
 
     if (!normalized) {
       results.push({

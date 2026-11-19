@@ -1,3 +1,59 @@
+import path from "node:path";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+
+export function createClaudeCliGatewayEnv() {
+  return {
+    PATH: undefined,
+    OPENCLAW_PATH_BOOTSTRAPPED: "1",
+    CLAUDE_CONFIG_DIR: undefined,
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_OAUTH_TOKEN: undefined,
+    CLAUDE_CODE_OAUTH_TOKEN: undefined,
+    CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: undefined,
+    CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: undefined,
+    OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "dist/extensions"),
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    OPENCLAW_SKIP_CHANNELS: "1",
+    OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+    OPENCLAW_SKIP_CRON: "1",
+    OPENCLAW_SKIP_CANVAS_HOST: "1",
+    OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+    OPENCLAW_SKIP_PROVIDERS: "1",
+    OPENCLAW_GATEWAY_TOKEN: undefined,
+    OPENCLAW_GATEWAY_PASSWORD: undefined,
+  };
+}
+
+export function createClaudeCliGatewayConfig(
+  workspaceDir: string,
+  modelRef: string,
+  token: string,
+) {
+  return {
+    agents: {
+      defaults: {
+        workspace: workspaceDir,
+        skipBootstrap: true,
+        utilityModel: "",
+        model: { primary: modelRef },
+        models: { [modelRef]: { agentRuntime: { id: "claude-cli" } } },
+      },
+    },
+    plugins: {
+      enabled: true,
+      allow: ["anthropic"],
+      entries: {
+        anthropic: { enabled: true, config: { sessionCatalog: { enabled: false } } },
+      },
+      slots: { memory: "none" },
+    },
+    tools: { profile: "minimal" },
+    gateway: { auth: { mode: "token", token } },
+  } satisfies OpenClawConfig;
+}
+
 // Synthetic Claude executable for the Gateway account-continuity scenarios.
 export const createClaudeAuthFixture = (workspaceDir: string, projectDir: string) => String.raw`
 const assert = require("node:assert/strict");
@@ -13,10 +69,18 @@ if (process.argv.includes("--version")) {
   process.exit(0);
 }
 if (process.argv.includes("auth")) {
+  appendFileSync(join(nativeRoot, "auth-status.log"), "probe\n");
   send({ loggedIn: nativeLogin });
   process.exit(0);
 }
 const descriptor = process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR;
+// Exclude native discovery; every saved-credential launch still counts.
+if (descriptor !== undefined || process.argv.includes("--session-id") || process.argv.includes("--resume")) {
+  appendFileSync(join(nativeRoot, "execution-launches.log"), descriptor === undefined ? "native\n" : "saved\n");
+}
+let credential = nativeLogin
+  ? JSON.parse(readFileSync(join(nativeRoot, ".credentials.json"), "utf8")).claudeAiOauth?.accessToken
+  : undefined;
 let reply = "No managed credential supplied.";
 if (nativeLogin) {
   reply = "Native account reply.";
@@ -24,6 +88,7 @@ if (nativeLogin) {
 if (descriptor !== undefined) {
   assert.equal(descriptor, "3");
   const token = readFileSync(3, "utf8");
+  credential = token;
   assert.ok(["synthetic-pasted-anthropic-token", "synthetic-replacement-anthropic-token"].includes(token));
   reply = token === "synthetic-replacement-anthropic-token"
     ? "Replacement account reply." : "Saved account reply.";
@@ -32,13 +97,21 @@ for (const name of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE
   assert.equal(process.env[name], undefined);
 }
 let currentHistory;
-createInterface({ input: process.stdin }).on("line", (line) => {
+createInterface({ input: process.stdin }).on("line", async (line) => {
   const message = JSON.parse(line);
   if (message.type === "control_request" && message.request.subtype === "initialize") {
     send({ type: "control_response", response: {
       subtype: "success", request_id: message.request_id, response: { commands: [], models: [] },
     } });
   } else if (message.type === "user") {
+    const providerFile = join(nativeRoot, "provider-url.txt");
+    if (existsSync(providerFile)) {
+      const response = await fetch(readFileSync(providerFile, "utf8"), {
+        method: "POST", headers: { authorization: "Bearer " + credential }, body: "fixture inference",
+      });
+      assert.equal(response.status, 200);
+      await response.text();
+    }
     assert.equal(realpathSync.native(process.cwd()).normalize("NFC"), ${JSON.stringify(workspaceDir)});
     const resumeIndex = process.argv.indexOf("--resume");
     const sessionId = process.argv[(resumeIndex >= 0 ? resumeIndex : process.argv.indexOf("--session-id")) + 1];

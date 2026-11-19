@@ -5,8 +5,20 @@ import type {
   BoardWidgetPutResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
+import type { BoardSnapshotWithHtmlViewMetadata, BoardWidgetDocument } from "./board-store.js";
 
 export type BoardWriteOutcome<T> = { value: T; changes: SessionRowChange[] };
+
+export type BoardReadOperations = {
+  "boards.readSnapshot": {
+    input: { sessionKey: string };
+    output: BoardSnapshotWithHtmlViewMetadata | undefined;
+  };
+  "boards.readWidgetDocument": {
+    input: { sessionKey: string; name: string; contentKind?: "mcp-app" };
+    output: BoardWidgetDocument | undefined;
+  };
+};
 
 export type BoardWriteOperations = {
   "boards.applyOps": {

@@ -1,9 +1,9 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
-import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
-import { FeishuChatSchema } from "./chat-schema.js";
 import { resolveFeishuChatType } from "./chat-type.js";
 import { createFeishuClient } from "./client.js";
 import { formatFeishuApiError } from "./comment-shared.js";
@@ -17,6 +17,9 @@ import {
 import { resolveFeishuToolAccount } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as json } from "./tool-result.js";
+
+const CHAT_ACTION_VALUES = ["members", "info", "member_info"] as const;
+const MEMBER_ID_TYPE_VALUES = ["open_id", "user_id", "union_id"] as const;
 
 export function buildFeishuDirectChatMembers(
   authorization: Extract<FeishuChatMemberReadAuthorization, { kind: "direct" }>,
@@ -56,38 +59,6 @@ export async function getChatInfo(client: Lark.Client, chatId: string) {
     moderation_permission: chat?.moderation_permission,
     avatar: chat?.avatar,
   };
-}
-
-async function getAuthorizedFeishuChatInfo(params: {
-  client: Lark.Client;
-  cfg: NonNullable<OpenClawPluginApi["config"]>;
-  account: ReturnType<typeof resolveFeishuToolAccount>;
-  chatId: string;
-  ctx: OpenClawPluginToolContext;
-}) {
-  const preliminary = resolveFeishuChatReadPreliminaryAuthorization({
-    cfg: params.cfg,
-    account: params.account,
-    chatId: params.chatId,
-    ctx: params.ctx,
-  });
-  if (preliminary.decision === "deny") {
-    assertFeishuChatReadAllowed({
-      cfg: params.cfg,
-      account: params.account,
-      chatId: preliminary.chatId,
-      ctx: params.ctx,
-    });
-  }
-  return readFeishuChatInfoWithAuthorization(
-    {
-      cfg: params.cfg,
-      account: params.account,
-      ctx: params.ctx,
-      preliminary,
-    },
-    (chatId) => getChatInfo(params.client, chatId),
-  );
 }
 
 export async function getChatMembers(
@@ -201,7 +172,25 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
     name: "feishu_chat",
     label: "Feishu Chat",
     description: "Feishu chat operations. Actions: members, info, member_info",
-    parameters: FeishuChatSchema,
+    parameters: Type.Object({
+      action: Type.Enum(CHAT_ACTION_VALUES, {
+        type: "string",
+        description: "Action to run: members | info | member_info",
+      }),
+      chat_id: Type.Optional(Type.String({ description: "Chat ID (from URL or event payload)" })),
+      member_id: Type.Optional(Type.String({ description: "Member ID for member_info lookups" })),
+      page_size: optionalPositiveIntegerSchema({
+        maximum: 100,
+        description: "Page size (1-100, default 50)",
+      }),
+      page_token: Type.Optional(Type.String({ description: "Pagination token" })),
+      member_id_type: Type.Optional(
+        Type.Enum(MEMBER_ID_TYPE_VALUES, {
+          type: "string",
+          description: "Member ID type (default: open_id)",
+        }),
+      ),
+    }),
     createExecute(ctx, cfg) {
       return async (p) => {
         const account = resolveFeishuToolAccount({
@@ -224,22 +213,25 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
         if (!p.chat_id) {
           return json({ error: `chat_id is required for action ${p.action}` });
         }
-        const chat = await getAuthorizedFeishuChatInfo({
-          client,
-          cfg,
-          account,
+        const readContext = { cfg, account, ctx };
+        const preliminary = resolveFeishuChatReadPreliminaryAuthorization({
+          ...readContext,
           chatId: p.chat_id,
-          ctx,
         });
+        if (preliminary.decision === "deny") {
+          assertFeishuChatReadAllowed({ ...readContext, chatId: preliminary.chatId });
+        }
+        const chat = await readFeishuChatInfoWithAuthorization(
+          { ...readContext, preliminary },
+          (chatId) => getChatInfo(client, chatId),
+        );
         if (p.action === "info") {
           return json(chat);
         }
         const authorization = authorizeFeishuChatMemberRead({
-          cfg,
-          account,
+          ...readContext,
           chatId: p.chat_id,
           chatType: resolveFeishuChatType(chat),
-          ctx,
           memberId: p.action === "member_info" ? p.member_id : undefined,
           memberIdType: p.member_id_type,
         });

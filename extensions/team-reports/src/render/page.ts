@@ -11,7 +11,6 @@ export type PageContext = {
   nonce: string;
   absoluteUrl: string;
   displayTimezone: string;
-  nowMs?: number;
 };
 type Window = Pick<PeriodDescriptor, "period" | "key" | "sinceMs" | "untilMs">;
 type Snapshot = Window & { generatedAtMs: number; status: ReportDocument["status"] };
@@ -68,15 +67,15 @@ export function formatWindow(entry: Pick<Window, "sinceMs" | "untilMs">): string
   }
   return `${formatUtcDay(start)}-${formatUtcDay(end)}`;
 }
-export function isOpen(ctx: PageContext, entry: Pick<Window, "sinceMs" | "untilMs">): boolean {
-  const now = ctx.nowMs ?? Date.now();
+export function isOpen(entry: Pick<Window, "sinceMs" | "untilMs">): boolean {
+  const now = Date.now();
   return now >= entry.sinceMs && now < entry.untilMs;
 }
 export function openPeriodStatus(ctx: PageContext, entry: Snapshot): string {
-  if (!isOpen(ctx, entry)) {
+  if (!isOpen(entry)) {
     return "";
   }
-  const minutes = Math.max(1, Math.ceil((entry.untilMs - (ctx.nowMs ?? Date.now())) / 60000));
+  const minutes = Math.max(1, Math.ceil((entry.untilMs - Date.now()) / 60000));
   const remaining = minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`;
   const until = new Date(entry.untilMs).toISOString();
   const asOf = new Date(entry.generatedAtMs).toISOString();
@@ -172,5 +171,5 @@ export function shell(
         `<a class="oc-segmented-item${label === active ? " is-active" : ""}" href="${escapeHtml(url ?? "")}"${label === active ? ' aria-current="page"' : ""}>${label}</a>`,
     )
     .join("");
-  return `<!doctype html><html lang="en" data-report-base-path="${escapeHtml(ctx.basePath)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)} · Team Reports</title><script nonce="${escapeHtml(ctx.nonce)}">${REPORT_SCRIPT}</script><style nonce="${escapeHtml(ctx.nonce)}">${REPORT_STYLES}</style></head><body class="oc-app-surface" data-report-page="${page}"><nav class="site-nav" aria-label="Report navigation"><div class="site-nav-inner"><a class="site-brand" href="${escapeHtml(ctx.basePath)}/"><span class="brand-mark" aria-hidden="true"><img src="${escapeHtml(ctx.basePath)}/assets/icon.png" width="26" height="26" alt=""></span><span>Reports</span></a><div class="site-links oc-segmented">${links}<button class="theme-toggle oc-action oc-action-ghost oc-action-icon" type="button" data-theme-toggle aria-label="Toggle theme" title="Toggle theme"><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2m-17-7 2 2m12 12 2 2M5 19l2-2M17 7l2-2"/></svg><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.7 6.7 0 0 0 9.8 9.8Z"/></svg></button><a class="theme-toggle oc-action oc-action-ghost oc-action-icon" href="${escapeHtml(ctx.absoluteUrl)}" target="_blank" rel="noopener" data-report-open-window aria-label="Open in a new window" title="Open in a new window"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7M21 3 10 14M10 3H3v18h18v-7"/></svg></a></div></div></nav><main class="shell">${body}</main><footer>Report windows use UTC. Generation times are shown in ${escapeHtml(ctx.displayTimezone)}. Links may not open inside the Control UI frame.</footer></body></html>`;
+  return `<!doctype html><html lang="en" data-report-base-path="${escapeHtml(ctx.basePath)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)} · Team Reports</title><script nonce="${escapeHtml(ctx.nonce)}">${REPORT_SCRIPT}</script><style nonce="${escapeHtml(ctx.nonce)}">${REPORT_STYLES}</style></head><body class="oc-app-surface" data-report-page="${page}"><nav class="site-nav" aria-label="Report navigation"><div class="site-nav-inner"><a class="site-brand" href="${escapeHtml(ctx.basePath)}/"><span class="brand-mark" aria-hidden="true"><img src="${escapeHtml(ctx.basePath)}/assets/icon.png" width="26" height="26" alt=""></span><span>Reports</span></a><div class="site-links oc-segmented">${links}<button class="theme-toggle oc-action oc-action-ghost oc-action-icon" type="button" data-theme-toggle aria-label="Toggle theme" title="Toggle theme"><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2m-17-7 2 2m12 12 2 2M5 19l2-2M17 7l2-2"/></svg><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.7 6.7 0 0 0 9.8 9.8Z"/></svg></button><a class="theme-toggle oc-action oc-action-ghost oc-action-icon" href="${escapeHtml(ctx.absoluteUrl)}" target="_blank" rel="noopener" data-report-open-window aria-label="Open in a new window" title="Open in a new window"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7M21 3 10 14M10 3H3v18h18v-7"/></svg></a></div></div></nav><main class="shell">${body}</main><footer>Report windows use UTC. Generation times are shown in ${escapeHtml(ctx.displayTimezone)}. Links may not open inside this frame.</footer></body></html>`;
 }

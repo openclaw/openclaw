@@ -34,7 +34,6 @@ final class GatewayTLSStoreFixture: @unchecked Sendable {
     static func withStorage(_ operation: @Sendable () async throws -> Void) async throws {
         // Claims are process-global, so teardown must finish before another fixture starts.
         try await GatewayTLSStoreFixtureLock.shared.withLock {
-            // The real profile boundary disables legacy UserDefaults reads and removal too.
             // Never restore the default namespace or proceed after an earlier live store access.
             try #require(GatewayTLSStore.configureKeychainServiceSuffix(".tests"))
             let fixture = GatewayTLSStoreFixture()

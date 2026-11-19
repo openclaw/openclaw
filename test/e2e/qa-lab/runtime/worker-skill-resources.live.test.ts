@@ -105,7 +105,7 @@ describe.skipIf(!LIVE || process.platform !== "linux")("live worker skill resour
           try {
             await Promise.all(
               [nodeHome, nodeState, nodeTmp, path.join(skillDir, "scripts")].map((dir) =>
-                fs.mkdir(dir, { recursive: true }),
+                fs.mkdir(dir, { recursive: true, mode: 0o700 }),
               ),
             );
             for (const file of files) {
@@ -327,7 +327,17 @@ describe.skipIf(!LIVE || process.platform !== "linux")("live worker skill resour
                 await fs.writeFile(path.join(remote, "cleanup-release"), "release\n");
                 const failed = await wait(runId);
                 expect(failed).toMatchObject({ status: "error" });
-                expect(failed.error).toMatch(/cleanup/iu);
+                await expect(operator.request("sessions.describe", { key })).resolves.toMatchObject(
+                  {
+                    session: {
+                      key,
+                      status: "failed",
+                      lastRunId: runId,
+                      lastRunError:
+                        "Skill resource cleanup failed. Retry this turn after reconnecting the execution environment.",
+                    },
+                  },
+                );
                 expect(await fs.readFile(path.join(abandoned, ".gitignore"), "utf8")).toBe("*\n");
                 expect(await fs.readFile(path.join(abandoned, "0/payload.txt"))).toEqual(payload);
               },

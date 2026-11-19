@@ -13,16 +13,10 @@ export function createGatewayCanvasSurfaceLease(
   let canvasSurfaceLeaseClient: GatewayBrowserClient | null = null;
   let canvasSurfaceLeaseGeneration = 0;
   let canRefresh = false;
-  const loadCanvasSurfaceLease = (): Promise<CanvasSurfaceLease> => {
-    if (canvasSurfaceLease) {
-      return Promise.resolve(canvasSurfaceLease);
-    }
-    if (canvasSurfaceLeaseLoad) {
-      return canvasSurfaceLeaseLoad;
-    }
-    const load = import("./canvas-surface-lease.runtime.ts").then(
-      ({ createCanvasSurfaceLease }) => {
-        const lease = createCanvasSurfaceLease({
+  const loadCanvasSurfaceLease = (): Promise<CanvasSurfaceLease> =>
+    (canvasSurfaceLeaseLoad ??= import("./canvas-surface-lease.runtime.ts")
+      .then(({ createCanvasSurfaceLease }) => {
+        canvasSurfaceLease = createCanvasSurfaceLease({
           request: (method, params) => {
             const requestClient = canvasSurfaceLeaseClient;
             if (!requestClient || currentClient() !== requestClient) {
@@ -39,18 +33,12 @@ export function createGatewayCanvasSurfaceLease(
             onChange(canvasPluginSurfaceUrl);
           },
         });
-        canvasSurfaceLease = lease;
-        return lease;
-      },
-    );
-    canvasSurfaceLeaseLoad = load;
-    void load.catch(() => {
-      if (canvasSurfaceLeaseLoad === load) {
+        return canvasSurfaceLease;
+      })
+      .catch((error: unknown) => {
         canvasSurfaceLeaseLoad = null;
-      }
-    });
-    return load;
-  };
+        throw error;
+      }));
   const beginCanvasSurfaceLease = (
     nextClient: GatewayBrowserClient,
     auth: GatewayHelloOk["auth"],

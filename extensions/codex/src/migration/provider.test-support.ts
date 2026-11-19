@@ -6,6 +6,10 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
   type TempWorkspace,
@@ -16,6 +20,7 @@ import type { CodexAppServerCloseResult } from "../app-server/transport.js";
 
 const closeCredentialReader = vi.hoisted(() => vi.fn<() => Promise<CodexAppServerCloseResult>>());
 const nativeCredentialReaderStart = vi.hoisted(() => vi.fn());
+const credentialReaderRequest = vi.hoisted(() => vi.fn<(method: string) => void | Promise<void>>());
 const appServerRequest = vi.hoisted(() => vi.fn());
 const sourceAppServerClientScope = vi.hoisted(() => vi.fn());
 const credentialStorage = vi.hoisted(() => ({
@@ -23,6 +28,7 @@ const credentialStorage = vi.hoisted(() => ({
   requiredMode: undefined as string | undefined,
   accountType: "apiKey",
   accountReadFails: false,
+  revision: 0,
 }));
 
 vi.mock("../app-server/managed-binary.js", async (importOriginal) => ({
@@ -31,7 +37,8 @@ vi.mock("../app-server/managed-binary.js", async (importOriginal) => ({
   resolveManagedCodexNativeCommand: () => "/fixture/codex",
 }));
 
-vi.mock("../app-server/client.js", () => ({
+vi.mock("../app-server/client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../app-server/client.js")>()),
   CodexAppServerClient: {
     async start(options: { env: { CODEX_HOME: string } }) {
       // Native startup loads the selected credential store before accepting requests.
@@ -39,11 +46,12 @@ vi.mock("../app-server/client.js", () => ({
       return {
         initialize: async () => undefined,
         getRuntimeIdentity: () => ({ codexHome: options.env.CODEX_HOME }),
-        getModelCatalogRevision: () => 0,
+        getModelCatalogRevision: () => credentialStorage.revision,
         getCloseError: () => undefined,
         close: () => undefined,
         closeAndWait: closeCredentialReader,
         async request(method: string) {
+          await credentialReaderRequest(method);
           if (method === "account/read") {
             if (credentialStorage.accountReadFails) {
               throw new Error("Account lookup unavailable");
@@ -252,6 +260,7 @@ beforeEach(() => {
   credentialStorage.requiredMode = undefined;
   credentialStorage.accountType = "apiKey";
   credentialStorage.accountReadFails = false;
+  credentialStorage.revision = 0;
   appServerRequest.mockRejectedValue(new Error("codex app-server unavailable"));
   sourceAppServerClientScope.mockImplementation(
     async (
@@ -269,9 +278,14 @@ afterEach(async () => {
   clearRuntimeAuthProfileStoreSnapshots();
   closeCredentialReader.mockReset();
   nativeCredentialReaderStart.mockReset();
+  credentialReaderRequest.mockReset();
   appServerRequest.mockReset();
   sourceAppServerClientScope.mockReset();
   defaultCodexAppInventoryCache.clear();
+  for (const workspace of tempWorkspaces) {
+    await closeOpenClawAgentDatabasesAsync(workspace.dir);
+  }
+  await closeOpenClawStateDatabaseAsync();
   await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
 });
 
@@ -289,6 +303,7 @@ export {
   createFailingConfigRuntime,
   closeCredentialReader,
   nativeCredentialReaderStart,
+  credentialReaderRequest,
   appServerRequest,
   sourceAppServerClientScope,
   credentialStorage,

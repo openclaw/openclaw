@@ -1,5 +1,3 @@
-import { compileFunction } from "node:vm";
-
 /** Reserved runtime projection, not project-owned .openclaw content. */
 export const MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS = [".openclaw", "sandbox-skills"] as const;
 export const MATERIALIZED_SANDBOX_SKILLS_WORKSPACE =
@@ -13,7 +11,3 @@ function isManagedSandboxSkillsPath(relativePath) {
     relativePath.startsWith(MATERIALIZED_SANDBOX_SKILLS_WORKSPACE + "/")
   );
 }`;
-
-export const isManagedSandboxSkillsPath: (relativePath: string) => boolean = compileFunction(
-  `${MANAGED_SANDBOX_SKILLS_PATH_JS}\nreturn isManagedSandboxSkillsPath;`,
-)();

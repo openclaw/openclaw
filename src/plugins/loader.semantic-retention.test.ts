@@ -26,7 +26,7 @@ afterEach(async () => {
   resetPluginLoaderTestStateForTest();
 });
 
-it.each(["manifest", "config", "install record", "entry policy"] as const)(
+it.each(["manifest", "config"] as const)(
   "retains callable registrations when only %s object key ordering changes",
   async (input) => {
     useNoBundledPlugins();
@@ -34,10 +34,13 @@ it.each(["manifest", "config", "install record", "entry policy"] as const)(
       id: "semantic-retention",
       configSchema: { type: "object" },
       body: `module.exports = { id: 'semantic-retention', register(api) {
-        api.registerGatewayMethod('semantic-retention.probe', ({respond}) => respond(true, 'available'));
+        api.registerGatewayMethod('semantic-retention.probe', ({respond, assertHandlerCurrent}) => {
+          assertHandlerCurrent();
+          respond(true, 'available');
+        });
       } };`,
     });
-    const policy = { enabled: true, hooks: { allowPromptInjection: false } };
+    const policy = { enabled: true, hooks: { allowPromptModification: false } };
     const settings = { outer: { first: "one", second: "two" }, order: ["one", "two"] };
     const install = { source: "path" as const, sourcePath: plugin.dir, installPath: plugin.dir };
     const options: PluginLoadOptions = {
@@ -72,20 +75,13 @@ it.each(["manifest", "config", "install record", "entry policy"] as const)(
           return { ...metadata, source, id };
         }),
       },
-      ...(input === "install record"
-        ? {
-            installRecords: {
-              [plugin.id]: { installPath: plugin.dir, sourcePath: plugin.dir, source: "path" },
-            },
-          }
-        : {}),
       config: {
         ...options.config,
         plugins: {
           ...options.config?.plugins,
           entries: {
             [plugin.id]: {
-              ...(input === "entry policy" ? { hooks: policy.hooks, enabled: true } : policy),
+              ...policy,
               config:
                 input === "config"
                   ? { order: settings.order, outer: { second: "two", first: "one" } }

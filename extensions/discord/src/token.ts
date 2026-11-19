@@ -19,28 +19,20 @@ export type DiscordTokenResolution = BaseTokenResolution & {
   tokenStatus: DiscordCredentialStatus;
 };
 
-type DiscordTokenValueResolution =
-  | { status: "available"; value: string }
-  | { status: "configured_unavailable" }
-  | { status: "missing" };
-
 function stripDiscordBotPrefix(token: string): string {
   return token.replace(/^Bot\s+/i, "");
 }
 
 export function normalizeDiscordToken(raw: unknown, path: string): string | undefined {
   const trimmed = normalizeResolvedSecretInputString({ value: raw, path });
-  if (!trimmed) {
-    return undefined;
-  }
-  return stripDiscordBotPrefix(trimmed);
+  return trimmed ? stripDiscordBotPrefix(trimmed) : undefined;
 }
 
 function resolveDiscordTokenValue(params: {
   cfg: OpenClawConfig;
   value: unknown;
   path: string;
-}): DiscordTokenValueResolution {
+}): DiscordTokenResolution | undefined {
   const resolved = resolveSecretInputString({
     value: params.value,
     path: params.path,
@@ -48,15 +40,13 @@ function resolveDiscordTokenValue(params: {
     mode: "inspect",
   });
   if (resolved.status === "available") {
-    return {
-      status: "available",
-      value: stripDiscordBotPrefix(resolved.value),
-    };
+    const token = stripDiscordBotPrefix(resolved.value);
+    return token ? { token, source: "config", tokenStatus: "available" } : undefined;
   }
   if (resolved.status === "configured_unavailable") {
-    return { status: "configured_unavailable" };
+    return { token: "", source: "config", tokenStatus: "configured_unavailable" };
   }
-  return { status: "missing" };
+  return undefined;
 }
 
 export function resolveDiscordToken(
@@ -75,11 +65,8 @@ export function resolveDiscordToken(
     value: (accountCfg as { token?: unknown } | undefined)?.token,
     path: `channels.discord.accounts.${accountId}.token`,
   });
-  if (accountToken.status === "available" && accountToken.value) {
-    return { token: accountToken.value, source: "config", tokenStatus: "available" };
-  }
-  if (accountToken.status === "configured_unavailable") {
-    return { token: "", source: "config", tokenStatus: "configured_unavailable" };
+  if (accountToken) {
+    return accountToken;
   }
   if (hasAccountToken) {
     return { token: "", source: "none", tokenStatus: "missing" };
@@ -90,11 +77,8 @@ export function resolveDiscordToken(
     value: discordCfg?.token,
     path: "channels.discord.token",
   });
-  if (configToken.status === "available" && configToken.value) {
-    return { token: configToken.value, source: "config", tokenStatus: "available" };
-  }
-  if (configToken.status === "configured_unavailable") {
-    return { token: "", source: "config", tokenStatus: "configured_unavailable" };
+  if (configToken) {
+    return configToken;
   }
 
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;

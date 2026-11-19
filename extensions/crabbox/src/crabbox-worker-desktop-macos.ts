@@ -1,14 +1,11 @@
 import type { WorkerDesktopEndpoint } from "openclaw/plugin-sdk/plugin-entry";
+import { shellEscapeBackslash as quote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { assertCrabboxLeaseId } from "./crabbox-worker-profile.js";
 
 export const CRABBOX_MACOS_APP_PATH = "/Applications/OpenClawCloudWorker.app";
 const CRABBOX_MACOS_HOST_VERSION = 1;
 const MACOS_DESKTOP_ROOT = "/var/db/crabbox/openclaw-workers";
 const MACOS_CDP_PORT = 9222;
-
-function quote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
 
 export function crabboxMacosDesktopDirectory(leaseId: string): string {
   assertCrabboxLeaseId(leaseId);

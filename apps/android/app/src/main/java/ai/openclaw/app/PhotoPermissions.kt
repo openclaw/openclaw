@@ -2,9 +2,7 @@ package ai.openclaw.app
 
 import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.os.Build
-import androidx.core.content.ContextCompat
 
 internal fun photoReadPermissionsForRequest(): List<String> =
   when {
@@ -24,7 +22,4 @@ internal fun photoReadPermissionsForRequest(): List<String> =
     }
   }
 
-internal fun hasPhotoReadPermission(context: Context): Boolean =
-  photoReadPermissionsForRequest().any { permission ->
-    ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-  }
+internal fun hasPhotoReadPermission(context: Context): Boolean = photoReadPermissionsForRequest().any(context::hasPermission)

@@ -1,4 +1,8 @@
-import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import type {
+  OpenClawPluginNodeHostCommandContext,
+  OpenClawPluginNodeWorkspaceLease,
+} from "../plugins/types.node-host.js";
 
 /** Retain invocation-bound workspace capabilities until command handling settles. */
 export async function withNodeHostPluginInvocation<T>(
@@ -26,6 +30,25 @@ export async function withNodeHostPluginInvocation<T>(
       throw new Error("node placement workspace invocation authority is closed");
     }
   };
+  const bindWorkspace = (workspace: OpenClawPluginNodeWorkspaceLease, key: string) => {
+    const environment = workspace.processEnvironment;
+    return environment
+      ? {
+          ...workspace,
+          processEnvironment: {
+            prepare: (env: NodeJS.ProcessEnv) => {
+              assertCurrent(key);
+              return environment.prepare(env);
+            },
+            assertCurrent: () => {
+              assertCurrent(key);
+              environment.assertCurrent();
+            },
+            redactOutput: environment.redactOutput,
+          },
+        }
+      : workspace;
+  };
   const invokeContext =
     context && (sessionKey || signal || acquireManagedWorkspace || acquireManagedWorkspaceAsync)
       ? {
@@ -42,7 +65,7 @@ export async function withNodeHostPluginInvocation<T>(
                   const workspace = await acquireManagedWorkspaceAsync(captured);
                   try {
                     assertCurrent(captured.sessionKey);
-                    return workspace;
+                    return bindWorkspace(workspace, captured.sessionKey);
                   } catch (error) {
                     workspace.release();
                     throw error;
@@ -55,8 +78,13 @@ export async function withNodeHostPluginInvocation<T>(
                 acquireManagedWorkspace: (
                   request: Parameters<typeof acquireManagedWorkspace>[0],
                 ) => {
+                  warnPluginSdkDeprecation({
+                    family: "node-host-sync-workspace",
+                    method: "OpenClawPluginNodeHostCommandContext.acquireManagedWorkspace",
+                    replacement: "await context.acquireManagedWorkspaceAsync()",
+                  });
                   assertCurrent(request.sessionKey);
-                  return acquireManagedWorkspace(request);
+                  return bindWorkspace(acquireManagedWorkspace(request), request.sessionKey);
                 },
               }
             : {}),

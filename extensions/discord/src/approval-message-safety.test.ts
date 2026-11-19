@@ -7,9 +7,7 @@ describe("Discord approval message safety", () => {
     const value = `${"x".repeat(196)}\u{1F4F1}\`suffix`;
     const formatted = formatDiscordApprovalDisplayValue(value);
 
-    expect(formatted.length).toBeLessThanOrEqual(200);
-    expect(formatted.endsWith("...")).toBe(true);
-    expect(formatted.endsWith("\\")).toBe(false);
+    expect(formatted).toBe(`${"x".repeat(196)}...`);
     expect(formatDiscordApprovalDisplayValue("id`value")).toBe("id\\`value");
   });
 

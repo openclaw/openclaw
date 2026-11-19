@@ -1,11 +1,4 @@
-function parsePositiveTimeoutSetting(value: string): number | undefined {
-  const trimmed = value.trim();
-  if (!/^\+?\d+$/u.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = Number(trimmed);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
-}
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 
 function isTestRuntimeEnv(env: NodeJS.ProcessEnv): boolean {
   return (
@@ -21,7 +14,7 @@ function isTestRuntimeEnv(env: NodeJS.ProcessEnv): boolean {
 /** Maximum delay Node timers can represent without overflow warnings. */
 export const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
 /** Default server-side window for gateway preauth handshakes. */
-export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 15_000;
+export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 30_000;
 
 /** Starts the browser-safe deadline that covers Gateway connect preparation and hello. */
 export function startGatewayConnectTimeout(onTimeout: () => void): ReturnType<typeof setTimeout> {
@@ -100,18 +93,12 @@ export function getConnectChallengeTimeoutMsFromEnv(
 ): number | undefined {
   const raw = env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS;
   if (raw) {
-    const parsed = parsePositiveTimeoutSetting(raw);
+    const parsed = parseStrictPositiveInteger(raw);
     if (parsed !== undefined) {
       return resolveSafeTimeoutDelayMs(parsed);
     }
   }
   return undefined;
-}
-
-function normalizePositiveTimeoutMs(timeoutMs: unknown): number | undefined {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? resolveSafeTimeoutDelayMs(timeoutMs)
-    : undefined;
 }
 
 /** Resolves the client watchdog timeout using explicit, env, then preauth defaults. */
@@ -149,14 +136,14 @@ export function resolvePreauthHandshakeTimeoutMs(params?: {
     env.OPENCLAW_HANDSHAKE_TIMEOUT_MS ||
     (isTestRuntimeEnv(env) ? env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS : undefined);
   if (configuredTimeout) {
-    const parsed = parsePositiveTimeoutSetting(configuredTimeout);
+    const parsed = parseStrictPositiveInteger(configuredTimeout);
     if (parsed !== undefined) {
       return resolveSafeTimeoutDelayMs(parsed);
     }
   }
-  const configured = normalizePositiveTimeoutMs(params?.configuredTimeoutMs);
-  if (configured !== undefined) {
-    return configured;
+  const configured = params?.configuredTimeoutMs;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return resolveSafeTimeoutDelayMs(configured);
   }
   return DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
 }

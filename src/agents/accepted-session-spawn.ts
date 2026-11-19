@@ -9,9 +9,12 @@ export type AcceptedSessionSpawn = {
   runId: string;
   childSessionKey: string;
   sessionUrl?: string;
+  publicRead?: boolean;
   label?: string;
   /** True only when this child owns a terminal completion for its requester. */
   expectsCompletionMessage?: boolean;
+  /** Host-recorded: the requester collects this child itself (sessions_spawn collect=true). */
+  collector?: true;
 };
 
 // Accounting follows the exact admission through provider fallback and plugin
@@ -31,11 +34,27 @@ export function mergeAcceptedSessionSpawnsForRun(
     acceptedSpawnsByRun.set(instance, receipts);
   }
   for (const spawn of accepted) {
-    // Acceptance is immutable for this run; later harness projections cannot
-    // erase the producer's completion obligation.
+    // The producer owns acceptance and completion retirement; a later harness
+    // projection cannot erase acceptance or revive a cancelled obligation.
     receipts?.set(spawn.runId, receipts.get(spawn.runId) ?? spawn);
   }
   return receipts ? [...receipts.values()] : [];
+}
+
+/** A confirmed cancellation preserves acceptance but ends its owed completion. */
+export function retireAcceptedSessionSpawnCompletionForRun(
+  instance: OperationalRunInstanceRef,
+  spawn: Pick<AcceptedSessionSpawn, "runId" | "childSessionKey">,
+): void {
+  const receipts = acceptedSpawnsByRun.get(instance);
+  const accepted = receipts?.get(spawn.runId);
+  if (
+    receipts &&
+    accepted?.childSessionKey === spawn.childSessionKey &&
+    accepted.expectsCompletionMessage === true
+  ) {
+    receipts.set(spawn.runId, { ...accepted, expectsCompletionMessage: false });
+  }
 }
 
 /** Normalize a tool result that accepted a child session spawn. */
@@ -57,6 +76,7 @@ export function normalizeAcceptedSessionSpawnResult(result: unknown): AcceptedSe
     childSessionKey,
     ...(url?.protocol === "http:" || url?.protocol === "https:" ? { sessionUrl } : {}),
     ...(label ? { label } : {}),
+    ...(details.publicRead === true ? { publicRead: true } : {}),
     expectsCompletionMessage: details.expectsCompletionMessage === true,
   };
 }
@@ -73,4 +93,13 @@ export function hasCompletionMessageSessionSpawn(
   acceptedSessionSpawns?: readonly AcceptedSessionSpawn[],
 ): boolean {
   return acceptedSessionSpawns?.some((spawn) => spawn.expectsCompletionMessage === true) === true;
+}
+
+/** Return true when an accepted child owes the requester a completion or awaits its collection. */
+export function hasOwedSessionSpawn(acceptedSessionSpawns?: readonly AcceptedSessionSpawn[]) {
+  return (
+    acceptedSessionSpawns?.some(
+      (spawn) => spawn.expectsCompletionMessage === true || spawn.collector === true,
+    ) === true
+  );
 }

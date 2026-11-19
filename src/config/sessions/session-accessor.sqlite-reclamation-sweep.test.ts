@@ -43,8 +43,8 @@ test.each([false, true])(
         const workers: Worker[] = [];
         const spawn = archiveWorker.createSqliteTranscriptArchiveWorker;
         vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation(
-          (data) => {
-            const worker = spawn(data);
+          (data, nativeLocations) => {
+            const worker = spawn(data, nativeLocations);
             workers.push(worker);
             return worker;
           },

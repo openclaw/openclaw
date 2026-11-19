@@ -1,6 +1,6 @@
-// Resolves Homebrew Node binary paths to stable symlink targets.
-import { pathExists } from "@openclaw/fs-safe/advanced";
+import { existsSync } from "node:fs";
 import { stableHomebrewNodePathCandidates } from "@openclaw/normalization-core/stable-node-path";
+import { pathExists } from "./fs-safe.js";
 
 /**
  * Homebrew Cellar paths (e.g. /opt/homebrew/Cellar/node/25.7.0/bin/node)
@@ -16,4 +16,12 @@ export async function resolveStableNodePath(nodePath: string): Promise<string> {
     }
   }
   return nodePath;
+}
+
+// Keep the running Node version until Homebrew removes its Cellar keg.
+export function resolveLaunchableNodePath(nodePath = process.execPath): string {
+  if (existsSync(nodePath)) {
+    return nodePath;
+  }
+  return stableHomebrewNodePathCandidates(nodePath).find(existsSync) ?? nodePath;
 }

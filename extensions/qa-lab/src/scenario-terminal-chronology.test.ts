@@ -21,7 +21,7 @@ function chronologyActions() {
 }
 
 function replay(fault?: string) {
-  const wire = "tool_call";
+  const wire = "dispatch_action";
   const calls = ["first", "second"].map((id, index) => ({
     plannedToolName: "sessions_spawn",
     plannedWireToolName: wire,

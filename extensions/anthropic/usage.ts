@@ -6,6 +6,7 @@ import type {
 import {
   addProviderUsageModel,
   asProviderUsageObject,
+  buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
   buildProviderUsageHistorySnapshot,
   cleanProviderUsageCredential,
@@ -13,19 +14,24 @@ import {
   decodeProviderUsageAdminToken,
   encodeProviderUsageAdminToken,
   fetchProviderUsagePages,
-  fetchClaudeUsage,
   parseProviderUsageNonNegativeInteger,
   parseProviderUsageNumber,
   resolveProviderUsageDailyPeriod,
   resolveProviderUsageDisplayName,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
+import {
+  fetchClaudeUsage,
+  fetchClaudeWebUsage,
+  resolveClaudeWebSessionKey,
+} from "./claude-usage.js";
 import { CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 
 const ANTHROPIC_COST_URL = "https://api.anthropic.com/v1/organizations/cost_report";
 const ANTHROPIC_MESSAGES_USAGE_URL =
   "https://api.anthropic.com/v1/organizations/usage_report/messages";
 const ANTHROPIC_ADMIN_TOKEN_PREFIX = "openclaw:anthropic-admin:v1:";
+const CLAUDE_WEB_SESSION_TOKEN_PREFIX = "openclaw:anthropic-web-session:v1:";
 const ANTHROPIC_USAGE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 const ANTHROPIC_USAGE_HISTORY_DAYS = 30;
 
@@ -49,70 +55,112 @@ function utcDay(value: string): string | undefined {
   return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : undefined;
 }
 
-async function fetchPages(params: {
-  baseUrl: string;
-  groupBy: "description" | "model";
-  apiKey: string;
-  startingAt: string;
-  endingAt: string;
-  periodDays: number;
-  timeoutMs: number;
-  fetchFn: typeof fetch;
-}): Promise<{ ok: true; data: unknown[] } | { ok: false; status?: number }> {
-  return await fetchProviderUsagePages({
-    responseLabel: "Anthropic usage",
-    responseMaxBytes: ANTHROPIC_USAGE_RESPONSE_MAX_BYTES,
-    timeoutMs: params.timeoutMs,
-    fetchFn: params.fetchFn,
-    buildRequest: (page) => {
-      const url = new URL(params.baseUrl);
-      url.searchParams.set("starting_at", params.startingAt);
-      url.searchParams.set("ending_at", params.endingAt);
-      url.searchParams.set("bucket_width", "1d");
-      url.searchParams.set("limit", String(params.periodDays));
-      url.searchParams.set("group_by[]", params.groupBy);
-      if (page) {
-        url.searchParams.set("page", page);
-      }
-      return {
-        url,
-        headers: {
-          Accept: "application/json",
-          "anthropic-version": "2023-06-01",
-          "x-api-key": params.apiKey,
-        },
-      };
-    },
+export async function fetchAnthropicUsage(
+  ctx: ProviderFetchUsageSnapshotContext,
+): Promise<ProviderUsageSnapshot> {
+  const adminKey = decodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, ctx.token);
+  if (!adminKey) {
+    const webSessionKey = decodeProviderUsageAdminToken(CLAUDE_WEB_SESSION_TOKEN_PREFIX, ctx.token);
+    const snapshot = webSessionKey
+      ? ((await fetchClaudeWebUsage(webSessionKey, ctx.timeoutMs, ctx.fetchFn)) ??
+        buildUsageErrorSnapshot(
+          "anthropic",
+          "Claude web usage unavailable. Renew the claude.ai session in CLAUDE_AI_SESSION_KEY, CLAUDE_WEB_SESSION_KEY or CLAUDE_WEB_COOKIE, then retry.",
+        ))
+      : await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
+    if (snapshot.error) {
+      return snapshot;
+    }
+    // Identity comes from the selected credential, so ambient config cannot mislabel an account.
+    const accountEmail = ctx.email;
+    // Plan labels stay window-gated: a windowless response has no plan quota to
+    // label, while the account identity is still worth surfacing.
+    const plan =
+      snapshot.plan ?? (snapshot.windows.length > 0 ? resolveClaudePlanLabel(ctx) : undefined);
+    return {
+      ...snapshot,
+      ...(plan ? { plan } : {}),
+      ...(accountEmail ? { accountEmail } : {}),
+    };
+  }
+  const period = resolveProviderUsageDailyPeriod({
+    now: Date.now(),
+    defaultPeriodDays: ANTHROPIC_USAGE_HISTORY_DAYS,
   });
-}
-
-function aggregateHistory(params: {
-  costs: unknown[];
-  messages: unknown[];
-  periodDays: number;
-}): ProviderUsageSnapshot {
+  const periodStartingAt = new Date(period.startMs).toISOString();
+  const periodEndingAt = new Date(period.endMs).toISOString();
+  const fetchPages = (baseUrl: string, groupBy: "description" | "model") =>
+    fetchProviderUsagePages({
+      responseLabel: "Anthropic usage",
+      responseMaxBytes: ANTHROPIC_USAGE_RESPONSE_MAX_BYTES,
+      timeoutMs: ctx.timeoutMs,
+      fetchFn: ctx.fetchFn,
+      buildRequest: (page) => {
+        const url = new URL(baseUrl);
+        url.searchParams.set("starting_at", periodStartingAt);
+        url.searchParams.set("ending_at", periodEndingAt);
+        url.searchParams.set("bucket_width", "1d");
+        url.searchParams.set("limit", String(period.periodDays));
+        url.searchParams.set("group_by[]", groupBy);
+        if (page) {
+          url.searchParams.set("page", page);
+        }
+        return {
+          url,
+          headers: {
+            Accept: "application/json",
+            "anthropic-version": "2023-06-01",
+            "x-api-key": adminKey,
+          },
+        };
+      },
+    });
+  const [costs, messages] = await Promise.all([
+    fetchPages(ANTHROPIC_COST_URL, "description"),
+    fetchPages(ANTHROPIC_MESSAGES_USAGE_URL, "model"),
+  ]);
+  if (!costs.ok || !messages.ok) {
+    const failedStatus = !costs.ok ? costs.status : !messages.ok ? messages.status : undefined;
+    if (failedStatus === 401 || failedStatus === 403) {
+      return {
+        provider: "anthropic",
+        displayName: "Anthropic",
+        windows: [],
+        error: "Admin API key required",
+      };
+    }
+    return failedStatus
+      ? buildUsageHttpErrorSnapshot({ provider: "anthropic", status: failedStatus })
+      : {
+          provider: "anthropic",
+          displayName: "Anthropic",
+          windows: [],
+          error: "Usage unavailable",
+        };
+  }
   const daily = new Map<string, ReturnType<typeof createProviderUsageDailyAccumulator>>();
-  const getDaily = (startingAt: string) => {
+  const getDailyBucket = (rawBucket: unknown) => {
+    const bucket = asProviderUsageObject(rawBucket);
+    const startingAt = typeof bucket?.starting_at === "string" ? bucket.starting_at : undefined;
+    if (!startingAt || !Array.isArray(bucket?.results)) {
+      return undefined;
+    }
     const date = utcDay(startingAt);
     if (!date) {
       return undefined;
     }
     const current = daily.get(date) ?? createProviderUsageDailyAccumulator(date);
     daily.set(date, current);
-    return current;
+    return { accumulator: current, results: bucket.results };
   };
 
-  for (const rawBucket of params.costs) {
-    const bucket = asProviderUsageObject(rawBucket);
-    const startingAt = typeof bucket?.starting_at === "string" ? bucket.starting_at : undefined;
-    if (!startingAt || !Array.isArray(bucket?.results)) {
+  for (const rawBucket of costs.data) {
+    const bucket = getDailyBucket(rawBucket);
+    if (!bucket) {
       continue;
     }
-    const accumulator = getDaily(startingAt);
-    if (!accumulator) {
-      continue;
-    }
-    for (const rawResult of bucket.results) {
+    const { accumulator, results } = bucket;
+    for (const rawResult of results) {
       const result = asProviderUsageObject(rawResult);
       const amount = (parseProviderUsageNumber(result?.amount) ?? 0) / 100;
       const category = resolveProviderUsageDisplayName(
@@ -124,17 +172,13 @@ function aggregateHistory(params: {
     }
   }
 
-  for (const rawBucket of params.messages) {
-    const bucket = asProviderUsageObject(rawBucket);
-    const startingAt = typeof bucket?.starting_at === "string" ? bucket.starting_at : undefined;
-    if (!startingAt || !Array.isArray(bucket?.results)) {
+  for (const rawBucket of messages.data) {
+    const bucket = getDailyBucket(rawBucket);
+    if (!bucket) {
       continue;
     }
-    const accumulator = getDaily(startingAt);
-    if (!accumulator) {
-      continue;
-    }
-    for (const rawResult of bucket.results) {
+    const { accumulator, results } = bucket;
+    for (const rawResult of results) {
       const result = asProviderUsageObject(rawResult);
       if (!result) {
         continue;
@@ -170,60 +214,10 @@ function aggregateHistory(params: {
     provider: "anthropic",
     displayName: "Anthropic",
     plan: "Admin API",
-    periodDays: params.periodDays,
+    periodDays: period.periodDays,
     unit: "USD",
     daily: daily.values(),
     formatSummary: ({ totalTokens }) => `${totalTokens.toLocaleString("en-US")} tokens`,
-  });
-}
-
-async function fetchAnthropicAdminUsage(params: {
-  apiKey: string;
-  timeoutMs: number;
-  fetchFn: typeof fetch;
-  now?: number;
-  periodDays?: number;
-}): Promise<ProviderUsageSnapshot> {
-  const period = resolveProviderUsageDailyPeriod({
-    now: params.now ?? Date.now(),
-    periodDays: params.periodDays,
-    defaultPeriodDays: ANTHROPIC_USAGE_HISTORY_DAYS,
-  });
-  const common = {
-    apiKey: params.apiKey,
-    startingAt: new Date(period.startMs).toISOString(),
-    endingAt: new Date(period.endMs).toISOString(),
-    periodDays: period.periodDays,
-    timeoutMs: params.timeoutMs,
-    fetchFn: params.fetchFn,
-  };
-  const [costs, messages] = await Promise.all([
-    fetchPages({ ...common, baseUrl: ANTHROPIC_COST_URL, groupBy: "description" }),
-    fetchPages({ ...common, baseUrl: ANTHROPIC_MESSAGES_USAGE_URL, groupBy: "model" }),
-  ]);
-  if (!costs.ok || !messages.ok) {
-    const failedStatus = !costs.ok ? costs.status : !messages.ok ? messages.status : undefined;
-    if (failedStatus === 401 || failedStatus === 403) {
-      return {
-        provider: "anthropic",
-        displayName: "Anthropic",
-        windows: [],
-        error: "Admin API key required",
-      };
-    }
-    return failedStatus
-      ? buildUsageHttpErrorSnapshot({ provider: "anthropic", status: failedStatus })
-      : {
-          provider: "anthropic",
-          displayName: "Anthropic",
-          windows: [],
-          error: "Usage unavailable",
-        };
-  }
-  return aggregateHistory({
-    costs: costs.data,
-    messages: messages.data,
-    periodDays: period.periodDays,
   });
 }
 
@@ -248,15 +242,24 @@ export async function resolveAnthropicUsageAuth(
   const oauthToken = await ctx.resolveOAuthToken({
     excludeProfileIds: [CLAUDE_CLI_PROFILE_ID],
   });
+  // Stored setup-token profiles resolve here too, but setup tokens lack the user:profile
+  // scope the OAuth usage endpoint requires. Use a configured claude.ai session instead.
+  if (oauthToken && (await isStoredSetupToken(ctx.agentDir, oauthToken.authProfileId))) {
+    const sessionKey = resolveClaudeWebSessionKey(ctx.env);
+    return sessionKey
+      ? {
+          ...oauthToken,
+          token: encodeProviderUsageAdminToken(CLAUDE_WEB_SESSION_TOKEN_PREFIX, sessionKey),
+        }
+      : { handled: true };
+  }
   if (oauthToken) {
     return oauthToken;
   }
 
-  const apiKey = ctx.resolveApiKeyFromConfigAndStore();
-  const adminKey = normalizeAdminKey(apiKey);
-  if (adminKey) {
-    return { token: encodeAdminToken(adminKey) };
-  }
+  // Configured bearers carry no credential type, and the setup-token shape check
+  // also matches scoped OAuth access tokens, so they keep the OAuth usage path.
+  const apiKey = storedCandidates[0];
   if (apiKey) {
     const { validateAnthropicSetupToken } = await import("openclaw/plugin-sdk/provider-auth");
     if (validateAnthropicSetupToken(apiKey) === undefined) {
@@ -269,6 +272,18 @@ export async function resolveAnthropicUsageAuth(
   return { handled: true };
 }
 
+async function isStoredSetupToken(
+  agentDir: string | undefined,
+  profileId: string | undefined,
+): Promise<boolean> {
+  if (!profileId) {
+    return false;
+  }
+  const { findPersistedAuthProfileCredentialAsync } =
+    await import("openclaw/plugin-sdk/agent-runtime");
+  return (await findPersistedAuthProfileCredentialAsync({ agentDir, profileId }))?.type === "token";
+}
+
 /** Formats keychain plan metadata like ("max", "default_max_20x") as "Max (20x)". */
 function resolveClaudePlanLabel(ctx: ProviderFetchUsageSnapshotContext): string | undefined {
   const base = ctx.subscriptionType?.trim();
@@ -278,32 +293,4 @@ function resolveClaudePlanLabel(ctx: ProviderFetchUsageSnapshotContext): string 
   const label = base.charAt(0).toUpperCase() + base.slice(1);
   const tier = ctx.rateLimitTier?.trim().match(/_(\d+x)$/i)?.[1];
   return tier ? `${label} (${tier})` : label;
-}
-
-export async function fetchAnthropicUsage(
-  ctx: ProviderFetchUsageSnapshotContext,
-): Promise<ProviderUsageSnapshot> {
-  const adminKey = decodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, ctx.token);
-  if (adminKey) {
-    return await fetchAnthropicAdminUsage({
-      apiKey: adminKey,
-      timeoutMs: ctx.timeoutMs,
-      fetchFn: ctx.fetchFn,
-    });
-  }
-  const snapshot = await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
-  if (snapshot.error) {
-    return snapshot;
-  }
-  // Identity comes from the selected credential, so ambient config cannot mislabel an account.
-  const accountEmail = ctx.email;
-  // Plan labels stay window-gated: a windowless response has no plan quota to
-  // label, while the account identity is still worth surfacing.
-  const plan =
-    snapshot.plan ?? (snapshot.windows.length > 0 ? resolveClaudePlanLabel(ctx) : undefined);
-  return {
-    ...snapshot,
-    ...(plan ? { plan } : {}),
-    ...(accountEmail ? { accountEmail } : {}),
-  };
 }

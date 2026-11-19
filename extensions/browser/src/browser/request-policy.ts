@@ -1,6 +1,3 @@
-/**
- * Request policy helpers for profile-aware Browser control server routes.
- */
 import {
   asNullableRecord,
   normalizeOptionalString,
@@ -33,7 +30,6 @@ export function normalizeBrowserRequestPath(value: string): string {
   return withLeadingSlash.replace(/\/+$/, "");
 }
 
-/** Returns true when a control request mutates persistent browser profile state. */
 export function isPersistentBrowserProfileMutation(method: string, path: string): boolean {
   const normalizedPath = normalizeBrowserRequestPath(path);
   if (
@@ -64,7 +60,6 @@ export function isBrowserHostLocalRoute(method: string, path: string): boolean {
   );
 }
 
-/** Resolves the requested profile from query, body, or route defaults. */
 export function resolveRequestedBrowserProfile(
   params: BrowserRequestProfileParams,
 ): string | undefined {

@@ -30,6 +30,7 @@ it.each([false, true])(
     assertDatabasePath(databasePath);
     const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const admitted = createDeferredCore();
     const finish = createDeferredCore();
     let fence: UpdateRecoveryFence | undefined;

@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isSecretRef,
   LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX,
-  resolveSecretInputRef,
+  parseSecretRef,
 } from "../../config/types.secrets.js";
 import { canResolveEnvSecretRefInReadOnlyPath } from "../../plugin-sdk/secret-ref-readonly.internal.js";
 import {
@@ -19,9 +19,25 @@ import {
 } from "../model-auth-markers.js";
 import { hasUsableOAuthCredential, resolveTokenExpiryState } from "./credential-state.js";
 import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
-import type { AuthProfileCredential } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
 type ReadOnlyCredentialAvailability = boolean | undefined;
+
+/** Store revisions do not advance when a token or failure window expires. */
+export function resolveAuthStoreReadOnlyValidUntil(store: AuthProfileStore, now: number): number {
+  return Math.min(
+    ...[
+      ...Object.values(store.profiles).map((profile) =>
+        profile.type === "token" ? profile.expires : undefined,
+      ),
+      ...Object.values(store.usageStats ?? {}).flatMap((stats) => [
+        stats.blockedUntil,
+        stats.cooldownUntil,
+        stats.disabledUntil,
+      ]),
+    ].filter((deadline): deadline is number => deadline !== undefined && deadline > now),
+  );
+}
 
 export function hasMalformedSecretInputSyntax(value: unknown): boolean {
   if (typeof value !== "string") {
@@ -75,18 +91,12 @@ function resolveSecretInputReadOnlyAvailability(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): ReadOnlyCredentialAvailability {
-  const { ref } = resolveSecretInputRef({
-    value,
-    refValue,
-    defaults: cfg.secrets?.defaults,
-  });
+  const ref =
+    parseSecretRef(refValue, cfg.secrets?.defaults) ?? parseSecretRef(value, cfg.secrets?.defaults);
   if (ref) {
     return resolveSecretRefReadOnlyAvailability(ref, cfg, env);
   }
-  if (!hasSecret(value)) {
-    return false;
-  }
-  if (hasMalformedSecretInputSyntax(value)) {
+  if (!hasSecret(value) || hasMalformedSecretInputSyntax(value)) {
     return false;
   }
   return isKnownEnvApiKeyMarker(value)

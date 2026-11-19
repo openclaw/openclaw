@@ -2,9 +2,11 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
 import {
+  buildOutboundMediaLoadOptions,
   canonicalizeBase64,
   estimateBase64DecodedBytes,
   extensionForMime,
+  type OutboundMediaAccess,
 } from "openclaw/plugin-sdk/media-runtime";
 import { getFeishuRuntime } from "./runtime.js";
 
@@ -14,9 +16,28 @@ type DocxUploadInput = {
   image?: string;
   maxBytes: number;
   localRoots?: readonly string[];
+  mediaAccess?: OutboundMediaAccess;
   fileName?: string;
   remoteReadTimeoutMs?: number;
 };
+
+export function resolveDocToolLocalRoots(ctx: {
+  workspaceDir?: string;
+  fsPolicy?: { workspaceOnly: boolean };
+}): string[] | undefined {
+  if (ctx.fsPolicy?.workspaceOnly !== true) {
+    return undefined;
+  }
+  const workspaceDir = ctx.workspaceDir?.trim();
+  // Fail closed: workspace-only with no resolved workspace must not fall back
+  // to default managed roots.
+  if (!workspaceDir) {
+    return [];
+  }
+  // Workspace paths are expected to be absolute; resolve() normalizes any
+  // accidental relative input before passing roots to loadWebMedia.
+  return [resolve(workspaceDir)];
+}
 
 function decodeBase64Image(params: {
   payload: string;
@@ -91,25 +112,6 @@ function resolveImageLocalPath(image: string): string | undefined {
   return undefined;
 }
 
-async function resolveRemoteUpload(input: DocxUploadInput & { url: string }) {
-  const fetched = await getFeishuRuntime().channel.media.readRemoteMediaBuffer({
-    url: input.url,
-    maxBytes: input.maxBytes,
-    ...(input.remoteReadTimeoutMs !== undefined
-      ? {
-          responseHeaderTimeoutMs: input.remoteReadTimeoutMs,
-          readIdleTimeoutMs: input.remoteReadTimeoutMs,
-        }
-      : {}),
-  });
-  const urlPath = new URL(input.url).pathname;
-  const urlFileName = urlPath.split("/").pop() || "upload.bin";
-  return {
-    buffer: fetched.buffer,
-    fileName: input.fileName ?? fetched.fileName ?? urlFileName,
-  };
-}
-
 export async function resolveDocxUploadInput(
   input: DocxUploadInput,
 ): Promise<{ buffer: Buffer; fileName: string }> {
@@ -127,15 +129,26 @@ export async function resolveDocxUploadInput(
   }
 
   if (input.url) {
-    return await resolveRemoteUpload({ ...input, url: input.url });
+    const fetched = await getFeishuRuntime().channel.media.readRemoteMediaBuffer({
+      url: input.url,
+      maxBytes: input.maxBytes,
+      ssrfPolicy: buildOutboundMediaLoadOptions({ mediaAccess: input.mediaAccess }).ssrfPolicy,
+      ...(input.remoteReadTimeoutMs !== undefined
+        ? {
+            responseHeaderTimeoutMs: input.remoteReadTimeoutMs,
+            readIdleTimeoutMs: input.remoteReadTimeoutMs,
+          }
+        : {}),
+    });
+    const urlPath = new URL(input.url).pathname;
+    const urlFileName = urlPath.split("/").pop() || "upload.bin";
+    return {
+      buffer: fetched.buffer,
+      fileName: input.fileName ?? fetched.fileName ?? urlFileName,
+    };
   }
   if (input.filePath) {
-    return await resolveLocalUpload(
-      input.filePath,
-      input.maxBytes,
-      input.localRoots,
-      input.fileName,
-    );
+    return resolveLocalUpload(input.filePath, input.maxBytes, input.localRoots, input.fileName);
   }
 
   const image = input.image;
@@ -147,7 +160,7 @@ export async function resolveDocxUploadInput(
   }
   const localPath = resolveImageLocalPath(image);
   if (localPath) {
-    return await resolveLocalUpload(localPath, input.maxBytes, input.localRoots, input.fileName);
+    return resolveLocalUpload(localPath, input.maxBytes, input.localRoots, input.fileName);
   }
 
   const buffer = decodeBase64Image({

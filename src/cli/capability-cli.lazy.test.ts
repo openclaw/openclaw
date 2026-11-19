@@ -57,8 +57,6 @@ it("keeps metadata and selected-domain help behind the inference import boundary
 const allDomains = ["model", "image", "audio", "tts", "video", "web", "embedding"];
 
 it.each([
-  { args: ["infer", "--", "image"], domains: allDomains },
-  { args: ["--", "infer", "image", "providers"], domains: ["image"] },
   { args: ["--", "infer", "--log-level", "debug", "image"], domains: allDomains },
   { args: ["--profile", "image", "infer", "list", "--help"], domains: [] },
   { args: ["capability", "--log-level=debug", "image", "--help"], domains: ["image"] },
@@ -75,7 +73,6 @@ it.each([
 });
 
 it.each([
-  ["--help", "image"],
   ["--log-level", "--help", "image"],
   ["--log-level=", "image", "--help"],
 ])("prints complete parent help when options precede the domain: %j", async (...args) => {

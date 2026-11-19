@@ -30,10 +30,11 @@ export async function appendMemoryHostEvent(
   });
 }
 
-/** Read recent memory host event records, including opt-in diagnostic variants. */
+/** Read recent records, applying any type filter before the storage limit. */
 export async function readMemoryHostEventRecords(params: {
   workspaceDir: string;
   limit?: number;
+  type?: MemoryHostEventRecord["type"];
   env?: NodeJS.ProcessEnv;
 }): Promise<MemoryHostEventRecord[]> {
   const events = (await listStoredMemoryHostEvents(params)).map((entry) => entry.value.event);

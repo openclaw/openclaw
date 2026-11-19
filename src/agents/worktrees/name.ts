@@ -1,4 +1,17 @@
 const WORKTREE_NAME_MAX_LENGTH = 64;
+export const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+export function validateName(name: string): string {
+  if (!WORKTREE_NAME_PATTERN.test(name)) {
+    throw new Error("worktree name must match [a-z0-9][a-z0-9-]{0,63}");
+  }
+  return name;
+}
+
+export function appendNameOrdinal(name: string, ordinal: number): string {
+  const suffix = `-${ordinal}`;
+  return `${name.slice(0, WORKTREE_NAME_MAX_LENGTH - suffix.length).replace(/-+$/g, "")}${suffix}`;
+}
 
 /** Converts a short human-readable title into a valid managed-worktree name. */
 export function slugifyWorktreeTitle(title: string): string | undefined {

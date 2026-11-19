@@ -1,7 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { bindBeforeToolCallMetadata } from "../agents/before-tool-call-metadata.js";
+import { setMcpCodeModeGuestResult } from "../agents/mcp-content.js";
+import { markToolExecutionRefused } from "../agents/tool-effect-receipt.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { WorkerConnection } from "./worker-connection.js";
 
 export function createWorkerGatewayToolProxies(
@@ -30,32 +33,56 @@ export function createWorkerGatewayToolProxies(
             )
           : undefined;
         const invocation = { generation: surface.generation, toolCallId };
+        let cancelRequested = false;
         const cancel = () => {
+          if (cancelRequested) {
+            return;
+          }
+          cancelRequested = true;
           void client.cancelGatewayTool(invocation).catch(() => {});
         };
         signal?.addEventListener("abort", cancel, { once: true });
         try {
-          const response = await client.invokeGatewayTool(
-            { ...invocation, toolId: entry.id, arguments: args },
-            {
-              replay: entry.replay,
-              timeoutMs,
-              signal,
-              onUpdate: onUpdate
-                ? (result) => onUpdate({ ...result, details: result.details })
-                : undefined,
-            },
-          );
+          const response = await client
+            .invokeGatewayTool(
+              { ...invocation, toolId: entry.id, arguments: args },
+              {
+                replay: entry.replay,
+                timeoutMs,
+                signal,
+                onUpdate: onUpdate
+                  ? (result) => onUpdate({ ...result, details: result.details })
+                  : undefined,
+              },
+            )
+            .catch((error: unknown) => {
+              // A lost response abandons this observer, not the Gateway's live call.
+              cancel();
+              throw error;
+            });
           signal?.throwIfAborted();
           if (!response.ok) {
             throw new Error(response.error.message);
           }
-          return { ...response.payload, details: response.payload.details };
+          const { mcpGuestResult, mcpBlockedReason, ...payload } = response.payload;
+          const result = { ...payload, details: payload.details };
+          if (!entry.plugin?.mcp) {
+            return result;
+          }
+          if (mcpBlockedReason !== undefined) {
+            return markToolExecutionRefused(result, { kind: "blocked", reason: mcpBlockedReason });
+          }
+          return mcpGuestResult !== undefined
+            ? setMcpCodeModeGuestResult(result, mcpGuestResult)
+            : result;
         } finally {
           signal?.removeEventListener("abort", cancel);
         }
       },
     };
+    if (entry.plugin) {
+      setPluginToolMeta(tool, entry.plugin);
+    }
     // The retained Gateway implementation owns before/after hooks for this call.
     bindBeforeToolCallMetadata(tool, {
       sourceTool: { ...tool },

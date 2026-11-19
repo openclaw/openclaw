@@ -1,4 +1,3 @@
-// Lane Runner script supports OpenClaw repository automation.
 import { warn } from "./host-command.ts";
 
 export type SmokeLane = "fresh" | "upgrade";

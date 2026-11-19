@@ -21,19 +21,27 @@ export async function resolveDiscordTarget(
   }
 
   const likelyUsername = !/^(user:|channel:|discord:|@|<@!?)|[\d]+$/.test(trimmed);
-  const shouldLookup = isExplicitUserLookup(trimmed, parseOptions) || likelyUsername;
+  const shouldLookup =
+    /^<@!?(\d+)>$/.test(trimmed) ||
+    /^(user:|discord:)/.test(trimmed) ||
+    trimmed.startsWith("@") ||
+    (/^\d+$/.test(trimmed) && parseOptions.defaultKind === "user") ||
+    likelyUsername;
 
   if (
     /^\d+$/.test(trimmed) &&
     parseOptions.defaultKind !== "user" &&
-    isConfiguredAllowedDiscordDmUser(trimmed, options)
+    allowFromContainsDiscordUserId(resolveDiscordAccountAllowFrom(options) ?? [], trimmed)
   ) {
     return buildMessagingTarget("user", trimmed, trimmed);
   }
 
-  // Parse directly if it's already a known format. Use a safe parse so ambiguous
-  // numeric targets don't throw when we still want to attempt username lookup.
-  const directParse = safeParseDiscordTarget(trimmed, parseOptions);
+  let directParse: MessagingTarget | undefined;
+  try {
+    directParse = parseDiscordTarget(trimmed, parseOptions);
+  } catch {
+    // Ambiguous numeric targets can still resolve through the directory.
+  }
   if (directParse && directParse.kind !== "channel" && !likelyUsername) {
     return directParse;
   }
@@ -52,10 +60,7 @@ export async function resolveDiscordTarget(
     const match = directoryEntries[0];
     if (match && match.kind === "user") {
       const userId = match.id.replace(/^user:/, "");
-      const resolvedAccountId = resolveDiscordAccount({
-        cfg: options.cfg,
-        accountId: options.accountId,
-      }).accountId;
+      const resolvedAccountId = resolveDiscordAccount(options).accountId;
       rememberDiscordDirectoryUser({
         accountId: resolvedAccountId,
         userId,
@@ -80,33 +85,4 @@ export async function parseAndResolveDiscordTarget(
     throw new Error("Recipient is required for Discord sends");
   }
   return resolved;
-}
-
-function safeParseDiscordTarget(
-  input: string,
-  options: DiscordTargetParseOptions,
-): MessagingTarget | undefined {
-  try {
-    return parseDiscordTarget(input, options);
-  } catch {
-    return undefined;
-  }
-}
-
-function isConfiguredAllowedDiscordDmUser(input: string, options: DirectoryConfigParams): boolean {
-  const allowFrom =
-    resolveDiscordAccountAllowFrom({
-      cfg: options.cfg,
-      accountId: options.accountId,
-    }) ?? [];
-  return allowFromContainsDiscordUserId(allowFrom, input);
-}
-
-function isExplicitUserLookup(input: string, options: DiscordTargetParseOptions): boolean {
-  return (
-    /^<@!?(\d+)>$/.test(input) ||
-    /^(user:|discord:)/.test(input) ||
-    input.startsWith("@") ||
-    (/^\d+$/.test(input) && options.defaultKind === "user")
-  );
 }

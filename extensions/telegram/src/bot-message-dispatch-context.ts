@@ -1,6 +1,5 @@
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -18,6 +17,7 @@ import {
   selectTelegramGroupPromptContext,
   telegramPromptContextHistory,
 } from "./group-history-window.js";
+import { buildTelegramConversationId } from "./topic-conversation.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
@@ -59,27 +59,6 @@ function resolveDispatchTelegramThreadSpec(params: {
     : { ...params.threadSpec, id: recoveredThreadId };
 }
 
-function normalizeDispatchTelegramThreadPayload(params: {
-  context: TelegramMessageContext;
-  threadSpec: TelegramThreadSpec;
-}): TelegramMessageContext {
-  if (params.threadSpec.scope !== "forum" || params.threadSpec.id == null) {
-    return params.context;
-  }
-  const messageThreadId = parseStrictPositiveInteger(params.context.ctxPayload.MessageThreadId);
-  const transportThreadId = parseStrictPositiveInteger(params.context.ctxPayload.TransportThreadId);
-  if (messageThreadId === params.threadSpec.id && transportThreadId === params.threadSpec.id) {
-    return params.context;
-  }
-  // This payload owns private host admission state outside its enumerable fields.
-  // Normalize routing in place so a plugin-visible copier is never needed.
-  Object.assign(params.context.ctxPayload, {
-    MessageThreadId: params.threadSpec.id,
-    TransportThreadId: params.threadSpec.id,
-  });
-  return params.context;
-}
-
 function buildRecoveredTelegramChatActionSender(params: {
   context: TelegramMessageContext;
   threadId?: number;
@@ -110,13 +89,25 @@ function buildRecoveredTelegramChatActionSender(params: {
 export async function resolveDispatchTelegramContext(params: {
   context: TelegramMessageContext;
 }): Promise<TelegramMessageContext> {
-  const threadSpec = resolveDispatchTelegramThreadSpec({
-    chatId: params.context.chatId,
-    ctxPayload: params.context.ctxPayload,
-    threadSpec: params.context.threadSpec,
-  });
+  const threadSpec = resolveDispatchTelegramThreadSpec(params.context);
   if (threadSpec === params.context.threadSpec || threadSpec.scope !== "forum") {
-    return normalizeDispatchTelegramThreadPayload({ context: params.context, threadSpec });
+    if (threadSpec.scope !== "forum" || threadSpec.id == null) {
+      return params.context;
+    }
+    const messageThreadId = parseStrictPositiveInteger(params.context.ctxPayload.MessageThreadId);
+    const transportThreadId = parseStrictPositiveInteger(
+      params.context.ctxPayload.TransportThreadId,
+    );
+    if (messageThreadId === threadSpec.id && transportThreadId === threadSpec.id) {
+      return params.context;
+    }
+    // This payload owns private host admission state outside its enumerable fields.
+    // Normalize routing in place so a plugin-visible copier is never needed.
+    Object.assign(params.context.ctxPayload, {
+      MessageThreadId: threadSpec.id,
+      TransportThreadId: threadSpec.id,
+    });
+    return params.context;
   }
   const recoveredRoutingTarget = buildTelegramInboundOriginTarget(
     params.context.chatId,
@@ -129,7 +120,7 @@ export async function resolveDispatchTelegramContext(params: {
     params.context.turn.record.updateLastRoute && threadSpec.id != null
       ? {
           ...params.context.turn.record.updateLastRoute,
-          to: `telegram:${params.context.chatId}:topic:${threadSpec.id}`,
+          to: `telegram:${buildTelegramConversationId({ chatId: params.context.chatId, thread: threadSpec })}`,
           threadId: String(threadSpec.id),
         }
       : params.context.turn.record.updateLastRoute;
@@ -159,7 +150,6 @@ export async function resolveDispatchTelegramContext(params: {
       }),
       telegramCfg,
       opts: { botInfo: params.context.primaryCtx.me },
-      telegramDeps: { resolveStorePath },
     });
     const ambientWatermark = params.context.ctxPayload.AmbientTranscriptPreviousMessageId
       ? {

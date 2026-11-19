@@ -1,16 +1,18 @@
 package ai.openclaw.app.voice
 
 import ai.openclaw.app.node.parseJsonParamsObject
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
 
-/**
- * Optional first-line JSON overrides for one Talk request.
- */
+@Serializable
 data class TalkDirective(
   val voiceId: String? = null,
   val modelId: String? = null,
+  val outputFormat: String? = null,
   val speed: Double? = null,
   val rateWpm: Int? = null,
   val stability: Double? = null,
@@ -20,9 +22,8 @@ data class TalkDirective(
   val seed: Long? = null,
   val normalize: String? = null,
   val language: String? = null,
-  val outputFormat: String? = null,
   val latencyTier: Int? = null,
-  val once: Boolean? = null,
+  @Transient val once: Boolean? = null,
 )
 
 /**
@@ -67,17 +68,17 @@ object TalkDirectiveParser {
       TalkDirective(
         voiceId = readAlias("voice", "voice_id", "voiceId") { it.asStringOrNull() },
         modelId = readAlias("model", "model_id", "modelId") { it.asStringOrNull() },
-        speed = readAlias("speed") { it.asDoubleOrNull() },
-        rateWpm = readAlias("rate", "wpm") { it.asIntOrNull() },
-        stability = readAlias("stability") { it.asDoubleOrNull() },
-        similarity = readAlias("similarity", "similarity_boost", "similarityBoost") { it.asDoubleOrNull() },
-        style = readAlias("style") { it.asDoubleOrNull() },
+        speed = readAlias("speed") { (it as? JsonPrimitive)?.doubleOrNull },
+        rateWpm = readAlias("rate", "wpm") { (it as? JsonPrimitive)?.content?.toIntOrNull() },
+        stability = readAlias("stability") { (it as? JsonPrimitive)?.doubleOrNull },
+        similarity = readAlias("similarity", "similarity_boost", "similarityBoost") { (it as? JsonPrimitive)?.doubleOrNull },
+        style = readAlias("style") { (it as? JsonPrimitive)?.doubleOrNull },
         speakerBoost = speakerBoost ?: noSpeakerBoost?.not(),
-        seed = readAlias("seed") { it.asLongOrNull() },
+        seed = readAlias("seed") { (it as? JsonPrimitive)?.content?.toLongOrNull() },
         normalize = readAlias("normalize", "apply_text_normalization") { it.asStringOrNull() },
         language = readAlias("lang", "language_code", "language") { it.asStringOrNull() },
         outputFormat = readAlias("output_format", "format") { it.asStringOrNull() },
-        latencyTier = readAlias("latency", "latency_tier", "latencyTier") { it.asIntOrNull() },
+        latencyTier = readAlias("latency", "latency_tier", "latencyTier") { (it as? JsonPrimitive)?.content?.toIntOrNull() },
         once = readAlias("once") { it.asBooleanOrNull() },
       )
 
@@ -86,10 +87,8 @@ object TalkDirectiveParser {
     val unknownKeys = obj.keys.filter { !knownKeys.contains(it.lowercase()) }.sorted()
 
     lines.removeAt(firstNonEmpty)
-    if (firstNonEmpty < lines.size) {
-      if (lines[firstNonEmpty].trim().isEmpty()) {
-        lines.removeAt(firstNonEmpty)
-      }
+    if (firstNonEmpty < lines.size && lines[firstNonEmpty].trim().isEmpty()) {
+      lines.removeAt(firstNonEmpty)
     }
 
     return TalkDirectiveParseResult(directive, lines.joinToString("\n"), unknownKeys)
@@ -104,21 +103,6 @@ private fun JsonElement?.asStringOrNull(): String? =
     ?.content
     ?.trim()
     ?.takeIf { it.isNotEmpty() }
-
-private fun JsonElement?.asDoubleOrNull(): Double? {
-  val primitive = this as? JsonPrimitive ?: return null
-  return primitive.content.toDoubleOrNull()
-}
-
-private fun JsonElement?.asIntOrNull(): Int? {
-  val primitive = this as? JsonPrimitive ?: return null
-  return primitive.content.toIntOrNull()
-}
-
-private fun JsonElement?.asLongOrNull(): Long? {
-  val primitive = this as? JsonPrimitive ?: return null
-  return primitive.content.toLongOrNull()
-}
 
 private fun JsonElement?.asBooleanOrNull(): Boolean? {
   val primitive = this as? JsonPrimitive ?: return null

@@ -21,14 +21,19 @@ it("keeps an expired session unchanged for heartbeat and resets on the next user
   const storePath = path.join(stateDir, "sessions.json");
   const sessionKey = "agent:main:main:user123";
   const staleTime = Date.now() - 25 * 60 * 60 * 1000;
+  const snooze = { snoozedUntil: Date.now() + 3_600_000, snoozedAt: staleTime };
+  const communication = { send: "never", receive: "ask" } as const;
   await replaceSessionEntry(
     { storePath, sessionKey },
     {
       sessionId: "daily-session-id",
+      sidebarRoot: true,
       updatedAt: Date.now(),
       systemSent: true,
       sessionStartedAt: staleTime,
       lastInteractionAt: staleTime,
+      ...snooze,
+      communication,
     },
   );
   const cfg = {
@@ -53,14 +58,25 @@ it("keeps an expired session unchanged for heartbeat and resets on the next user
     isNewSession: false,
     resetTriggered: false,
     sessionId: "daily-session-id",
-    sessionEntry: { sessionId: "daily-session-id", lastInteractionAt: staleTime },
+    sessionEntry: { sessionId: "daily-session-id", lastInteractionAt: staleTime, ...snooze },
   });
   expect(loadSessionEntry({ storePath, sessionKey })?.lastInteractionAt).toBe(staleTime);
+  expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(snooze);
 
   const user = await initSessionState({
     cfg,
     commandAuthorized: true,
     ctx: finalizeInboundContext({ ...ctx, Body: "real user message" }),
   });
-  expect(user).toMatchObject({ isNewSession: true, sessionId: "daily-session-id" });
+  expect(user).toMatchObject({
+    isNewSession: true,
+    sessionId: "daily-session-id",
+    sessionEntry: { sidebarRoot: true, snoozedUntil: undefined, snoozedAt: undefined },
+  });
+  const persisted = loadSessionEntry({ storePath, sessionKey });
+  expect(persisted?.sidebarRoot).toBe(true);
+  expect(persisted?.snoozedUntil).toBeUndefined();
+  expect(persisted?.snoozedAt).toBeUndefined();
+  expect(user.sessionEntry.communication).toEqual(communication);
+  expect(loadSessionEntry({ storePath, sessionKey })?.communication).toEqual(communication);
 });

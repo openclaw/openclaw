@@ -33,10 +33,8 @@ export function normalizeViewerBaseUrl(
   raw: string,
   fieldName: ViewerBaseUrlFieldName = "baseUrl",
 ): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
+  const parsed = URL.parse(raw);
+  if (!parsed) {
     throw new Error(`Invalid ${fieldName}: ${raw}`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
@@ -48,8 +46,7 @@ export function normalizeViewerBaseUrl(
   parsed.search = "";
   parsed.hash = "";
   parsed.pathname = parsed.pathname.replace(/\/+$/, "");
-  const withoutTrailingSlash = parsed.toString().replace(/\/+$/, "");
-  return withoutTrailingSlash;
+  return parsed.toString().replace(/\/+$/, "");
 }
 
 function resolveGatewayBaseUrl(config: OpenClawConfig): string {

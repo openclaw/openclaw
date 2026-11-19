@@ -45,9 +45,9 @@ describe("progress draft lines", () => {
     if (!line) {
       throw new Error("expected preamble progress line");
     }
-    const lines: Array<string | typeof line> = ["🛠️ Exec", line];
+    const lines: Array<string | typeof line> = ["Exec", line];
 
-    expect(removeChannelProgressDraftLine(lines, "preamble-1")).toEqual(["🛠️ Exec"]);
+    expect(removeChannelProgressDraftLine(lines, "preamble-1")).toEqual(["Exec"]);
     expect(removeChannelProgressDraftLine(lines, "missing")).toBe(lines);
     expect(removeChannelProgressDraftLine(lines, " ")).toBe(lines);
   });

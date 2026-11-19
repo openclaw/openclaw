@@ -1,4 +1,3 @@
-// Resolves cleanup inputs from current OpenClaw config and state paths.
 import {
   readConfigFileSnapshot,
   readSourceConfigBestEffort,

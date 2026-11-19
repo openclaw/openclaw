@@ -2,7 +2,6 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 // Hidden machine-facing gateway restart-handoff commands for external supervisors.
 import type { Command } from "commander";
 import {
-  createGatewayRestartHandoffCapabilities,
   GATEWAY_RESTART_HANDOFF_PROTOCOL,
   GATEWAY_RESTART_HANDOFF_PROTOCOL_VERSION,
 } from "../../infra/restart-handoff-contract.js";
@@ -33,7 +32,9 @@ export function addGatewayRestartHandoffCommands(gateway: Command): void {
     .action(() => {
       defaultRuntime.writeJson({
         ok: true,
-        ...createGatewayRestartHandoffCapabilities(),
+        protocol: GATEWAY_RESTART_HANDOFF_PROTOCOL,
+        protocolVersion: GATEWAY_RESTART_HANDOFF_PROTOCOL_VERSION,
+        operations: ["consume"] as const,
       });
     });
 
@@ -51,7 +52,7 @@ export function addGatewayRestartHandoffCommands(gateway: Command): void {
         command.args.length === 0 && expectedPidValues.length === 1
           ? parseStrictPositiveInteger(expectedPidValues[0])
           : undefined;
-      if (expectedPid === undefined || !Number.isSafeInteger(expectedPid)) {
+      if (expectedPid === undefined) {
         writeRestartHandoffError("invalid-expected-pid");
         defaultRuntime.exit(2);
         return;

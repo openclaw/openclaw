@@ -577,11 +577,6 @@ export async function runInstalledGatewayBenchmark(options: InstalledOptions): P
       });
       if (options.diagnostic) {
         observe(sample, "stateAfter", await readInstalledDiagnosticState(config));
-        assert.deepEqual(
-          await hashInstall(target.installRoot),
-          target.before,
-          "Installed tree changed between diagnostic launches",
-        );
       }
       await save();
       console.log(

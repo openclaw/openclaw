@@ -1,20 +1,47 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { buildQaScenarioPlanMarkdown, readQaAgentIdentityMarkdown } from "./qa-agent-bootstrap.js";
 import {
   readQaBootstrapScenarioCatalog,
   readQaScenarioPackYamlSource,
+  type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
+
+function buildQaScenarioPlanMarkdown(scenarios: readonly QaSeedScenarioWithSource[]): string {
+  const lines = ["# QA Scenario Plan", ""];
+  for (const scenario of scenarios) {
+    lines.push(`## ${scenario.title}`);
+    lines.push("");
+    lines.push(`- id: ${scenario.id}`);
+    lines.push(`- surface: ${scenario.surface}`);
+    lines.push(`- objective: ${scenario.objective}`);
+    if (scenario.execution.summary) {
+      lines.push(`- execution: ${scenario.execution.summary}`);
+    }
+    lines.push("- success criteria:");
+    for (const criterion of scenario.successCriteria) {
+      lines.push(`  - ${criterion}`);
+    }
+    for (const [label, refs] of [
+      ["docs", scenario.docsRefs],
+      ["code", scenario.codeRefs],
+    ] as const) {
+      if (refs?.length) {
+        lines.push(`- ${label}:`, ...refs.map((ref) => `  - ${ref}`));
+      }
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
 
 export async function seedQaAgentWorkspace(params: { workspaceDir: string; repoRoot?: string }) {
   const catalog = readQaBootstrapScenarioCatalog();
   await fs.mkdir(params.workspaceDir, { recursive: true });
 
-  const kickoffTask = catalog.kickoffTask || "QA mission unavailable.";
   const files = new Map<string, string>([
-    ["IDENTITY.md", readQaAgentIdentityMarkdown()],
-    ["QA_KICKOFF_TASK.md", kickoffTask],
-    ["QA_SCENARIO_PLAN.md", buildQaScenarioPlanMarkdown()],
+    ["IDENTITY.md", catalog.agentIdentityMarkdown],
+    ["QA_KICKOFF_TASK.md", catalog.kickoffTask],
+    ["QA_SCENARIO_PLAN.md", buildQaScenarioPlanMarkdown(catalog.scenarios)],
     ["QA_SCENARIOS.yaml", readQaScenarioPackYamlSource()],
   ]);
 

@@ -58,10 +58,7 @@ export function createGatewayLiveTextDelivery(params: {
   const publications = new WeakMap<AbortSignal, Map<string, LiveTextPublication>>();
   const deliveryFor = (client: GatewayWsClient) => {
     let state = deliveries.get(client);
-    if (!state || state.socket !== client.socket) {
-      if (state) {
-        retireDelivery(state);
-      }
+    if (!state) {
       state = {
         socket: client.socket,
         retired: false,
@@ -102,7 +99,7 @@ export function createGatewayLiveTextDelivery(params: {
   };
   const groupFor = (state: ClientDelivery, signal: AbortSignal) => {
     if (!state.close) {
-      state.close = () => retireDelivery(state);
+      state.close = retireDelivery.bind(undefined, state);
       state.socket.once("close", state.close);
     }
     let group = state.groups.get(signal);

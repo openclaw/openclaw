@@ -26,8 +26,8 @@ describe("release media memory scenario", () => {
 
     expect(script).toContain('media_root="$(mktemp -d /tmp/openclaw-release-media-memory.XXXXXX)"');
     expect(script).toContain('rm -rf "$media_root"');
-    expect(script).toContain('MOCK_REQUEST_LOG="$media_root/openai-requests.jsonl"');
-    expect(script).toContain('PLUGINS_JSON="$media_root/plugins.json"');
+    expect(script).toContain('MOCK_REQUEST_LOG "$media_root/openai-requests.jsonl"');
+    expect(script).toContain('PLUGINS_JSON "$media_root/plugins.json"');
     expect(script).toContain('--file "$media_root/input.png"');
     expect(script).toContain('--output "$media_root/generated.png"');
     expect(script).not.toContain("/tmp/openclaw-release-media-memory-plugins.json");

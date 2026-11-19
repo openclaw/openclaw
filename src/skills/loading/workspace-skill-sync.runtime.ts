@@ -1,19 +1,25 @@
 // Sandbox workspace skill synchronization is deferred behind the sandbox runtime boundary.
-import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
-import { canonicalizePath } from "../../agents/utils/paths.js";
+import type { SandboxStateOwnerPath } from "../../agents/sandbox/state-owner-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { tryReadJson, writeJson } from "../../infra/json-files.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { retainMutationAuthority } from "../../infra/mutation-authority.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import { loadSkillLibrarySelection, readSelectedSkillLibraryFiles } from "../library/selection.js";
+import {
+  prepareSkillLibrarySelection,
+  readSelectedSkillLibraryFiles,
+} from "../library/selection.js";
 import { getSkillsSnapshotVersion, getSkillsResourceVersion } from "../runtime/refresh-state.js";
+import { syncSkillsFilesystem } from "../runtime/refresh.js";
+import { resolveSkillSnapshotExecutionFileHost } from "../runtime/skill-snapshot-provenance.js";
 import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
 import type {
   SkillEligibilityContext,
@@ -22,42 +28,24 @@ import type {
   SkillUsagePath,
 } from "../types.js";
 import { resolveSkillKey } from "./frontmatter.js";
-import { shouldSyncSkillPath } from "./skill-paths.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { prepareWorkspaceSkills } from "./workspace-skill-loader.js";
 
-const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
 const skillsSyncQueue = new KeyedAsyncQueue();
 
-function resolveUniqueSyncedSkillDirName(base: string, used: Set<string>): string {
-  if (!used.has(base)) {
-    used.add(base);
-    return base;
-  }
-  for (let index = 2; ; index += 1) {
-    const candidate = `${base}-${index}`;
-    if (!used.has(candidate)) {
-      used.add(candidate);
-      return candidate;
-    }
-  }
-}
-
-const SYNCED_SKILLS_MANIFEST_NAME = ".openclaw-sync.json";
-
 type SyncedSkillsManifest = {
-  entryKeys: string[];
+  destinations: Record<string, unknown>;
   skillRootsFingerprint: string;
   skillsVersion: number;
+  sourceVersion: number;
 };
 
 const syncedSkillsUsageCache = new Map<
   string,
   {
-    destinations: Map<string, string>;
+    manifest: SyncedSkillsManifest;
     manifestKey: string;
-    sourceVersion: number;
     skillUsagePaths: SkillUsagePath[];
   }
 >();
@@ -71,62 +59,31 @@ function parseSyncedSkillsManifest(value: unknown): SyncedSkillsManifest | null 
     !isRecord(value) ||
     typeof value.skillsVersion !== "number" ||
     !Number.isFinite(value.skillsVersion) ||
+    typeof value.sourceVersion !== "number" ||
+    !Number.isFinite(value.sourceVersion) ||
     typeof value.skillRootsFingerprint !== "string" ||
-    !Array.isArray(value.entryKeys) ||
-    !value.entryKeys.every((entry) => typeof entry === "string")
+    !isRecord(value.destinations)
   ) {
     return null;
   }
   return {
-    entryKeys: value.entryKeys,
+    destinations: value.destinations,
     skillRootsFingerprint: value.skillRootsFingerprint,
     skillsVersion: value.skillsVersion,
+    sourceVersion: value.sourceVersion,
   };
 }
 
-function resolveSyncedSkillsManifestKey(manifest: SyncedSkillsManifest): string {
+function resolveSyncedSkillsManifestKey(
+  manifest: Omit<SyncedSkillsManifest, "destinations">,
+  entryKeys: string[],
+): string {
   return JSON.stringify([
     manifest.skillsVersion,
     manifest.skillRootsFingerprint,
-    manifest.entryKeys,
+    entryKeys,
+    manifest.sourceVersion,
   ]);
-}
-
-function resolveSyncedSkillDestinationPath(params: {
-  targetSkillsDir: string;
-  entry: SkillEntry;
-  usedDirNames: Set<string>;
-}): string | null {
-  const sourceDirName = (
-    params.entry.syncDirName ?? path.basename(params.entry.skill.baseDir)
-  ).trim();
-  if (!sourceDirName || sourceDirName === "." || sourceDirName === "..") {
-    return null;
-  }
-  const uniqueDirName = resolveUniqueSyncedSkillDirName(sourceDirName, params.usedDirNames);
-  return resolveSandboxPath({
-    filePath: uniqueDirName,
-    cwd: params.targetSkillsDir,
-    root: params.targetSkillsDir,
-  }).resolved;
-}
-
-async function ensureSyncedSkillsDirectory(targetSkillsDir: string): Promise<void> {
-  let stats: fs.Stats;
-  try {
-    stats = await fsp.lstat(targetSkillsDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-    await fsp.mkdir(targetSkillsDir, { recursive: true });
-    return;
-  }
-
-  if (!stats.isDirectory() || stats.isSymbolicLink()) {
-    await fsp.rm(targetSkillsDir, { recursive: true, force: true });
-    await fsp.mkdir(targetSkillsDir, { recursive: true });
-  }
 }
 
 export async function syncWorkspaceSkills(params: {
@@ -140,23 +97,31 @@ export async function syncWorkspaceSkills(params: {
   bundledSkillsDir?: string;
   pluginSkillsDir?: string;
   skillsSnapshot?: SkillSnapshot;
+  readOnlyTarget?: boolean;
+  assertCurrent?: () => void;
+  stateOwnerPath?: SandboxStateOwnerPath;
 }): Promise<SkillUsagePath[]> {
+  const assertCurrent = params.assertCurrent
+    ? retainMutationAuthority(params.assertCurrent)
+    : undefined;
+  assertCurrent?.();
   const sourceDir = resolveUserPath(params.sourceWorkspaceDir);
   const targetDir = resolveUserPath(params.targetWorkspaceDir);
   if (sourceDir === targetDir) {
     return [];
   }
 
-  return await skillsSyncQueue.enqueue(`syncSkills:${targetDir}`, async () => {
+  using phases = observeDiagnosticsTimelinePhases(
+    "attempt.setup.sandbox.layout.skills_sync.queue_wait",
+  );
+  const synced = await skillsSyncQueue.enqueue(`syncSkills:${targetDir}`, async () => {
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.identity");
+    assertCurrent?.();
     const targetSkillsDir = path.join(targetDir, "skills");
-    const manifestPath = path.join(targetSkillsDir, SYNCED_SKILLS_MANIFEST_NAME);
     const skillsSnapshot = params.skillsSnapshot;
     const skillRoots = skillsSnapshot?.skillRoots;
+    const executionWorkspaceFileHost = resolveSkillSnapshotExecutionFileHost(skillsSnapshot);
     const sourceWorkspace = skillRoots?.agentWorkspaceDir ?? sourceDir;
-    const sourceScope = {
-      executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
-      agentId: params.agentId,
-    };
     // Names and versions do not identify a source tree. Both reuse paths must
     // bind its full discovery context, or shared sandboxes retain another owner's bytes.
     const skillRootsFingerprint = sha256Hex(
@@ -169,32 +134,49 @@ export async function syncWorkspaceSkills(params: {
         params.pluginSkillsDir,
         skillRoots?.agentWorkspaceDir,
         skillRoots?.executionWorkspaceDir,
+        executionWorkspaceFileHost,
         skillsSnapshot?.librarySelections,
       ]),
     );
-    await ensureSyncedSkillsDirectory(targetSkillsDir);
-    const manifest = parseSyncedSkillsManifest(await tryReadJson<unknown>(manifestPath));
-    let sourceVersion = getSkillsResourceVersion(sourceWorkspace, sourceScope);
-    let skillsVersion = getSkillsSnapshotVersion(skillRoots?.agentWorkspaceDir ?? sourceDir);
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.directory");
+    const filesystem = (operation: Parameters<typeof syncSkillsFilesystem>[0]) =>
+      syncSkillsFilesystem(
+        operation,
+        assertCurrent,
+        (phase) => phases.mark(`attempt.setup.sandbox.layout.skills_sync.${phase}`),
+        params.stateOwnerPath,
+      );
+    const prepared = await filesystem({ operation: "prepare", directory: targetSkillsDir });
+    if (!prepared) {
+      throw new Error("Skills filesystem preparation returned no target");
+    }
+    const target = prepared.target;
+    const manifest = parseSyncedSkillsManifest(prepared.manifest);
+    assertCurrent?.();
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.reuse");
     const expectedManifestKey =
-      skillsSnapshot?.version === skillsVersion
-        ? resolveSyncedSkillsManifestKey({
-            entryKeys: skillsSnapshot.skills
+      skillsSnapshot?.version === getSkillsSnapshotVersion(sourceWorkspace)
+        ? resolveSyncedSkillsManifestKey(
+            {
+              skillRootsFingerprint,
+              skillsVersion: skillsSnapshot.version,
+              sourceVersion: getSkillsResourceVersion(sourceWorkspace),
+            },
+            skillsSnapshot.skills
               .map((skill) => resolveSyncedSkillIdentity(skill.skillKey ?? skill.name, skill.name))
               .toSorted(),
-            skillRootsFingerprint,
-            skillsVersion,
-          })
+          )
         : undefined;
     const cachedUsage = syncedSkillsUsageCache.get(targetSkillsDir);
-    const manifestKey = manifest ? resolveSyncedSkillsManifestKey(manifest) : undefined;
+    const manifestKey = manifest
+      ? resolveSyncedSkillsManifestKey(manifest, Object.keys(manifest.destinations).toSorted())
+      : undefined;
     if (
       expectedManifestKey &&
       manifestKey === expectedManifestKey &&
-      cachedUsage?.manifestKey === manifestKey &&
-      cachedUsage.sourceVersion === sourceVersion
+      cachedUsage?.manifestKey === manifestKey
     ) {
-      return cachedUsage.skillUsagePaths.map((entry) => ({ ...entry }));
+      return cachedUsage.skillUsagePaths;
     }
 
     const loadOptions = {
@@ -208,122 +190,155 @@ export async function syncWorkspaceSkills(params: {
       ...(skillsSnapshot?.skillFilter ? { skillFilter: skillsSnapshot.skillFilter } : {}),
       ...(skillsSnapshot?.skillOverrides ? { skillOverrides: skillsSnapshot.skillOverrides } : {}),
     };
-    let entries: SkillEntry[];
-    for (;;) {
-      sourceVersion = getSkillsResourceVersion(sourceWorkspace, sourceScope);
-      skillsVersion = getSkillsSnapshotVersion(skillRoots?.agentWorkspaceDir ?? sourceDir);
-      entries = await prepareWorkspaceSkills(skillRoots?.agentWorkspaceDir ?? sourceDir, {
-        ...loadOptions,
-        executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
-      });
-      if (
-        getSkillsSnapshotVersion(sourceWorkspace) === skillsVersion &&
-        getSkillsResourceVersion(sourceWorkspace, sourceScope) === sourceVersion
-      ) {
-        break;
-      }
-    }
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.discovery");
+    const entries = await prepareWorkspaceSkills(sourceWorkspace, {
+      ...loadOptions,
+      executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
+      executionWorkspaceFileHost,
+    });
+    assertCurrent?.();
+    const sourceVersion = getSkillsResourceVersion(sourceWorkspace);
+    const skillsVersion = getSkillsSnapshotVersion(sourceWorkspace);
     if (skillsSnapshot?.librarySelections?.length) {
       const selectedNames = new Set(skillsSnapshot.skills.map((skill) => skill.name));
-      entries.push(
-        ...loadSkillLibrarySelection(skillsSnapshot.librarySelections).filter((entry) =>
-          selectedNames.has(entry.skill.name),
-        ),
+      phases.mark("attempt.setup.sandbox.layout.skills_sync.library_selection");
+      const selectedEntries = await prepareSkillLibrarySelection(
+        skillsSnapshot.librarySelections,
+        {},
+        assertCurrent ?? (() => {}),
       );
+      assertCurrent?.();
+      entries.push(...selectedEntries.filter((entry) => selectedNames.has(entry.skill.name)));
     }
 
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.plan");
     const usedDirNames = new Set<string>();
-    const plans: Array<{ destinationPath?: string; entry: SkillEntry; identity: string }> = [];
+    const plans: Array<{
+      destinationPath?: string;
+      entry: SkillEntry;
+      identity: string;
+      pin?: NonNullable<SkillSnapshot["librarySelections"]>[number];
+    }> = [];
     for (const entry of entries) {
-      const identity = resolveSyncedSkillIdentity(
-        resolveSkillKey(entry.skill, entry),
-        entry.skill.name,
+      const identity = resolveSyncedSkillIdentity(resolveSkillKey(entry), entry.skill.name);
+      const pin = skillsSnapshot?.librarySelections?.find(
+        (selection) => selection.name === entry.skill.name,
       );
       if (entry.skill.filePath.startsWith("node://")) {
-        plans.push({ entry, identity });
+        plans.push({ entry, identity, pin });
         continue;
       }
-      let destinationPath: string | null;
+      let destinationPath: string;
       try {
-        destinationPath = resolveSyncedSkillDestinationPath({
-          targetSkillsDir,
-          entry,
-          usedDirNames,
-        });
+        const base = (entry.syncDirName ?? path.basename(entry.skill.baseDir)).trim();
+        if (!base || base === "." || base === "..") {
+          throw new Error("invalid source directory name");
+        }
+        let name = base;
+        for (let index = 2; usedDirNames.has(name); index += 1) {
+          name = `${base}-${index}`;
+        }
+        usedDirNames.add(name);
+        destinationPath = resolveSandboxPath({
+          filePath: name,
+          cwd: targetSkillsDir,
+          root: targetSkillsDir,
+        }).resolved;
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
         skillsLogger.warn(`Failed to resolve safe destination for ${entry.skill.name}: ${message}`);
         continue;
       }
-      if (!destinationPath) {
-        skillsLogger.warn(
-          `Failed to resolve safe destination for ${entry.skill.name}: invalid source directory name`,
-        );
-        continue;
-      }
-      plans.push({ destinationPath, entry, identity });
+      plans.push({ destinationPath, entry, identity, pin });
     }
 
-    await fsp.rm(manifestPath, { force: true });
-    const previousUsage =
-      cachedUsage &&
-      manifest?.skillsVersion === skillsVersion &&
-      manifest.skillRootsFingerprint === skillRootsFingerprint &&
-      cachedUsage.manifestKey === manifestKey &&
-      cachedUsage.sourceVersion === sourceVersion
-        ? cachedUsage
-        : undefined;
+    assertCurrent?.();
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.manifest_remove");
+    await filesystem({ operation: "remove-manifest", target });
+    assertCurrent?.();
+    // Remote mirrors may return guest-written manifests; only protected mounts can reuse them.
+    const previousManifest =
+      cachedUsage && cachedUsage.manifestKey === manifestKey
+        ? cachedUsage.manifest
+        : params.readOnlyTarget
+          ? manifest
+          : undefined;
     syncedSkillsUsageCache.delete(targetSkillsDir);
     const preservedDestinations = new Set(
       plans.flatMap((plan) => {
         const destination = plan.destinationPath ? path.basename(plan.destinationPath) : null;
-        return previousUsage?.destinations.get(plan.identity) === destination
-          ? destination
-            ? [destination]
-            : []
+        return destination &&
+          previousManifest?.skillRootsFingerprint === skillRootsFingerprint &&
+          previousManifest.destinations[plan.identity] === destination &&
+          previousManifest.skillsVersion === skillsVersion &&
+          previousManifest.sourceVersion === sourceVersion
+          ? [destination]
           : [];
       }),
     );
-    for (const child of await fsp.readdir(targetSkillsDir)) {
-      if (!preservedDestinations.has(child)) {
-        await fsp.rm(path.join(targetSkillsDir, child), { recursive: true, force: true });
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.target_scan");
+    const children = new Set(await fsp.readdir(targetSkillsDir));
+    assertCurrent?.();
+    // A restart loses usage records, not copied bytes. Reconcile existing trees
+    // against current content before reuse, independently of the process version.
+    const incrementalDestinations = new Set(
+      plans.flatMap((plan) => {
+        const destination = plan.destinationPath ? path.basename(plan.destinationPath) : null;
+        return destination && children.has(destination) && !plan.pin ? [destination] : [];
+      }),
+    );
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.remove_stale");
+    for (const child of children) {
+      if (
+        child !== ".gitignore" &&
+        !preservedDestinations.has(child) &&
+        !incrementalDestinations.has(child)
+      ) {
+        await filesystem({ operation: "remove", target, relativePath: child });
       }
     }
 
     const skillUsagePaths: SkillUsagePath[] = [];
     let copyFailed = false;
     for (const plan of plans) {
-      const { destinationPath, entry } = plan;
+      const { destinationPath, entry, pin } = plan;
       if (!destinationPath) {
         continue;
       }
       if (!preservedDestinations.has(path.basename(destinationPath))) {
         try {
-          const pin = skillsSnapshot?.librarySelections?.find(
-            (selection) => selection.name === entry.skill.name,
-          );
           if (pin) {
-            const files = await readSelectedSkillLibraryFiles(pin);
-            for (const file of files) {
-              const target = path.join(destinationPath, file.path);
-              await fsp.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-              await fsp.writeFile(
-                target,
-                Buffer.from(file.content, file.encoding === "base64" ? "base64" : "utf8"),
-                { mode: file.executable ? 0o500 : 0o400, flag: "wx" },
-              );
-            }
+            phases.mark("attempt.setup.sandbox.layout.skills_sync.library_read");
+            const libraryFiles = await readSelectedSkillLibraryFiles(pin);
+            assertCurrent?.();
+            await filesystem({
+              operation: "library",
+              target,
+              destination: destinationPath,
+              files: libraryFiles,
+            });
           } else {
             const syncSourceDir = entry.syncSourceDir ?? entry.skill.baseDir;
-            await fsp.cp(syncSourceDir, destinationPath, {
-              recursive: true,
-              force: true,
-              filter: shouldSyncSkillPath,
+            phases.mark("attempt.setup.sandbox.layout.skills_sync.copy_tree");
+            await filesystem({
+              operation: "copy",
+              target,
+              source: syncSourceDir,
+              destination: destinationPath,
+              reconcile: incrementalDestinations.has(path.basename(destinationPath)),
             });
           }
         } catch (error) {
+          assertCurrent?.();
           if (entry.skill.source === "openclaw-library") {
             throw error;
+          }
+          if (incrementalDestinations.has(path.basename(destinationPath))) {
+            await filesystem({
+              operation: "remove",
+              target,
+              relativePath: path.basename(destinationPath),
+            });
           }
           copyFailed = true;
           const message = error instanceof Error ? error.message : JSON.stringify(error);
@@ -331,37 +346,46 @@ export async function syncWorkspaceSkills(params: {
           continue;
         }
       }
+      assertCurrent?.();
       skillUsagePaths.push({
         readPath: path.join(
           destinationPath,
           path.relative(entry.skill.baseDir, entry.skill.filePath),
         ),
-        skillFile: canonicalizePath(entry.skill.filePath),
+        sourceFilePath: entry.skill.filePath,
+        skillFile: await fsp.realpath(entry.skill.filePath).catch(() => entry.skill.filePath),
         skillName: entry.skill.name,
         skillSource: resolveSkillTelemetrySource(entry.skill),
       });
     }
     if (!copyFailed) {
       const nextManifest: SyncedSkillsManifest = {
-        entryKeys: plans.map((plan) => plan.identity).toSorted(),
+        destinations: Object.fromEntries(
+          plans.map((plan) => [
+            plan.identity,
+            plan.destinationPath ? path.basename(plan.destinationPath) : null,
+          ]),
+        ),
         skillRootsFingerprint,
         skillsVersion,
-      };
-      await writeJson(manifestPath, nextManifest, { trailingNewline: true });
-      syncedSkillsUsageCache.set(targetSkillsDir, {
-        destinations: new Map(
-          plans.flatMap((plan) =>
-            plan.destinationPath
-              ? [[plan.identity, path.basename(plan.destinationPath)] as const]
-              : [],
-          ),
-        ),
-        manifestKey: resolveSyncedSkillsManifestKey(nextManifest),
         sourceVersion,
+      };
+      assertCurrent?.();
+      phases.mark("attempt.setup.sandbox.layout.skills_sync.manifest_write");
+      await filesystem({ operation: "manifest", target, manifest: nextManifest });
+      assertCurrent?.();
+      syncedSkillsUsageCache.set(targetSkillsDir, {
+        manifest: nextManifest,
+        manifestKey: resolveSyncedSkillsManifestKey(
+          nextManifest,
+          plans.map((plan) => plan.identity).toSorted(),
+        ),
         skillUsagePaths,
       });
       pruneMapToMaxSize(syncedSkillsUsageCache, 100);
     }
     return skillUsagePaths;
   });
+  assertCurrent?.();
+  return synced;
 }

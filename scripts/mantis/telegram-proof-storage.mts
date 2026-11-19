@@ -17,6 +17,14 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 export const proofStorageBytes = 32 * 1024 ** 3;
+export const proofImageInspectionSchema = z
+  .array(
+    z.object({
+      Id: z.string().regex(/^(?:sha256:)?[a-f0-9]{64}$/),
+      Config: z.object({ Labels: z.record(z.string(), z.string()) }),
+    }),
+  )
+  .length(1);
 const containerConfiguration =
   '[containers]\nlog_driver = "k8s-file"\nlog_size_max = 1048576\n' +
   '[network]\ndefault_rootless_network_cmd = "slirp4netns"\n';

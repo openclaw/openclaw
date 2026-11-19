@@ -3,10 +3,6 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 
 const CUSTODIAN_SESSION_STORAGE_KEY = "openclaw.custodian.session.v1";
 
-function isStoredCustodianSessionId(value: string | null): value is string {
-  return value !== null && value.length <= 512 && value.trim().length > 0;
-}
-
 export function createCustodianSessionId(): string {
   return `control-ui-onboarding-${generateUUID()}`;
 }
@@ -19,22 +15,18 @@ export function persistCustodianSessionId(sessionId: string): void {
   }
 }
 
-/**
- * Restore the persisted companion session id, or mint and persist a fresh one.
- * `restored` marks a rejoin candidate: the id may address a live Gateway
- * session whose queue can hold an in-flight turn from a previous page.
- */
-export function loadCustodianSessionId(): { sessionId: string; restored: boolean } {
+/** Restore the persisted companion session id, or mint and persist a fresh one. */
+export function loadCustodianSessionId(): string {
   let stored: string | null = null;
   try {
     stored = getSafeLocalStorage()?.getItem(CUSTODIAN_SESSION_STORAGE_KEY) ?? null;
   } catch {
     // Fall through to a process-local id when storage is unavailable.
   }
-  if (isStoredCustodianSessionId(stored)) {
-    return { sessionId: stored, restored: true };
+  if (stored !== null && stored.length <= 512 && stored.trim().length > 0) {
+    return stored;
   }
   const sessionId = createCustodianSessionId();
   persistCustodianSessionId(sessionId);
-  return { sessionId, restored: false };
+  return sessionId;
 }

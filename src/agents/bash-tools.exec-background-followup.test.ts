@@ -1,32 +1,188 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  loadSessionEntry,
+  readSessionTranscriptMessageEvents,
+  replaceSessionEntry,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { removeCronRunContinuationSessionIfIdle } from "../cron/run-continuation-cleanup.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
+import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
+import type { OpenClawPluginDefinition } from "../plugins/plugin-definition.types.js";
+import type { OpenClawPluginToolFactory } from "../plugins/tool-types.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  readAdmittedRunOperatorAuthority,
+} from "./admitted-run-context.js";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import {
+  awaitExecsForYield,
+  listYieldAwaitableExecs,
+  openExecYieldResume,
+} from "./bash-tools.exec-notify.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import {
+  admitModelTurn,
+  completionConfig,
+  expectCompleted,
+  fullGatewayExec,
+  nodeCommand,
+  runningSession,
+} from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
+import { runEmbeddedAgent } from "./embedded-agent.js";
+import {
+  preparePluginToolExecutionCapabilities,
+  type PluginToolExecutionCapabilities,
+} from "./plugin-tool-execution.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
-afterEach(resetProcessRegistryForTests);
+// mock-isolation: Keep model inference outside the real process and session-event ownership fixture.
+vi.mock("./embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
+const model = vi.mocked(runEmbeddedAgent);
+await Promise.all([
+  import("../auto-reply/dispatch.js"),
+  import("../auto-reply/reply/get-reply-from-config.runtime.js").then((runtime) =>
+    runtime.prewarmConfigDrivenReplyRuntime(),
+  ),
+]);
 
-function nodeCommand(source: string): string {
-  const quote = (value: string) =>
-    `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
-  const command = `${quote(process.execPath)} -e ${quote(source)}`;
-  return process.platform === "win32" ? `& ${command}` : command;
+let reviewFactory: OpenClawPluginToolFactory<2>;
+let state: OpenClawTestState;
+let config: OpenClawConfig;
+const receipts: sessionEvents.SessionEventReceipt[] = [];
+const cronInvocation = () => new Map([["nightly", { nextCheckEnabled: false }]]);
+const enqueue = sessionEvents.enqueueSessionEventForHost;
+
+beforeAll(async () => {
+  const { default: autoreview } = await loadBundledPluginFacade<{
+    default: OpenClawPluginDefinition;
+  }>({ pluginId: "autoreview", artifactBasename: "index.js" });
+  autoreview.register!(
+    createTestPluginApi({
+      registerTool(tool) {
+        if (typeof tool === "object" && "contextVersion" in tool) {
+          reviewFactory = tool;
+        }
+      },
+    }),
+  );
+  state = await createOpenClawTestState({
+    label: "exec-followup",
+    env: { OPENCLAW_TEST_FAST: "0" },
+  });
+  config = completionConfig(state.workspaceDir);
+  const models = expectDefined(config.agents?.defaults?.models, "completion fixture models");
+  models["mock-openai/admin-only"] = { agentRuntime: { id: "openclaw" } };
+  await state.writeConfig(config);
+  openOpenClawStateDatabase();
+});
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot(config);
+  model.mockReset().mockImplementation(async (params: RunEmbeddedAgentParams) => {
+    await admitModelTurn(params);
+    return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+  });
+  vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+    const receipt = enqueue(text, options);
+    receipts.push(receipt);
+    return receipt;
+  });
+});
+
+afterEach(async () => {
+  for (const receipt of receipts) {
+    receipt.cancel();
+  }
+  await Promise.all(receipts.map((receipt) => receipt.settled));
+  receipts.length = 0;
+  vi.restoreAllMocks();
+  resetProcessRegistryForTests();
+  resetSystemEventsForTest();
+});
+
+afterAll(() => state?.cleanup());
+
+async function seedOrigin(sessionKey: string, spawnedBy?: string) {
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey },
+    {
+      sessionId: sessionKey.replaceAll(":", "-"),
+      lifecycleRevision: "original",
+      updatedAt: Date.now(),
+      sessionStartedAt: Date.now(),
+      permissionMode: "full",
+      ...(spawnedBy ? { spawnedBy, spawnDepth: 1 } : {}),
+    },
+  );
+}
+
+async function completion(signal: AbortSignal) {
+  const receipt = expectDefined(receipts.at(-1), "ordinary completion receipt");
+  expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
+  const outcome = await withinTest(receipt.settled, signal);
+  expect(outcome, outcome.error).toMatchObject({
+    status: "completed",
+    executionStarted: true,
+  });
+}
+
+function backgroundExec(sessionKey: string, overrides: ExecToolDefaults = {}) {
+  const tool = createExecTool({
+    config,
+    ...fullGatewayExec,
+    sessionKey,
+    scopeKey: sessionKey,
+    notifyOnExit: true,
+    allowBackground: true,
+    ...overrides,
+  });
+  return (callId: string, script: string) =>
+    tool.execute(callId, {
+      command: nodeCommand(script),
+      background: true,
+    });
 }
 
 test.each([
   { label: "explicit background", args: { background: true } },
   { label: "elapsed yield window", args: { yieldMs: 10 } },
+  { label: "disabled timeout", args: { background: true, timeoutSeconds: 0 } },
 ])("provides a usable structured follow-up route after $label", async ({ label, args }) => {
-  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "exec-followup-")));
+  const directory = await fs.realpath(
+    await fs.mkdtemp(path.join(state.workspaceDir, "exec-followup-")),
+  );
   const releasePath = path.join(directory, "release");
   const scopeKey = `agent:main:followup-${label}`;
   const exec = createExecTool({
-    host: "gateway",
-    security: "full",
-    ask: "off",
+    config,
+    ...fullGatewayExec,
     allowBackground: true,
     notifyOnExit: false,
     timeoutSec: 5,
@@ -35,17 +191,34 @@ test.each([
   const processTool = createProcessTool({ scopeKey });
   // A parent-owned file releases the child only after the background result is observed.
   const command = nodeCommand(
-    `const fs = require("node:fs"); const timer = setInterval(() => {
-      if (fs.existsSync(${JSON.stringify(releasePath)})) {
-        clearInterval(timer); process.stdout.write("FOLLOWUP_COMPLETE");
-      }
-    }, 10);`,
+    `const fs = require("node:fs"); const release = ${JSON.stringify(releasePath)};
+     const finish = () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("FOLLOWUP_COMPLETE"); } };
+     const watcher = fs.watch(${JSON.stringify(directory)}, finish); finish();`,
   );
   try {
+    const requestedAt = Date.now();
     const started = await exec.execute("followup-start", { command, ...args });
     expect(started.details.status).toBe("running");
     if (started.details.status !== "running") {
       throw new Error("Expected a background process handle");
+    }
+    const deadlineAtMs = started.details.deadlineAtMs;
+    if (args.timeoutSeconds === 0) {
+      expect(deadlineAtMs).toBeUndefined();
+      expect(started.content).not.toContainEqual({
+        type: "text",
+        text: expect.stringContaining("times out in"),
+      });
+    } else {
+      if (deadlineAtMs === undefined) {
+        throw new Error("Expected the actual process timeout deadline");
+      }
+      expect(deadlineAtMs).toBeGreaterThanOrEqual(requestedAt + 4_999);
+      expect(deadlineAtMs).toBeLessThanOrEqual(Date.now() + 5_001);
+      expect(started.content).toContainEqual({
+        type: "text",
+        text: expect.stringMatching(/\), times out in [1-5]s\. /),
+      });
     }
     expect(started.details).toMatchObject({ followUp: expect.stringContaining("Use process") });
     const followUp = started.details.followUp;
@@ -78,9 +251,7 @@ test.each([
 
 test("does not advertise detached continuation when process is unavailable", async () => {
   const exec = createExecTool({
-    host: "gateway",
-    security: "full",
-    ask: "off",
+    ...fullGatewayExec,
     processToolAvailabilityRef: { value: false },
     notifyOnExit: false,
   });
@@ -91,3 +262,727 @@ test("does not advertise detached continuation when process is unavailable", asy
   expect(result.details).toMatchObject({ status: "completed", aggregated: "FOREGROUND_COMPLETE" });
   expect(result.details).not.toHaveProperty("followUp");
 });
+
+test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended during admission"])(
+  "keeps exec completion bound to its origin: %s",
+  async (scenario, { signal }) => {
+    const cron = scenario !== "ordinary";
+    const sessionKey = cron
+      ? `agent:main:cron:nightly:run:${scenario.replaceAll(" ", "-")}`
+      : "agent:main:main";
+    const sessionId = sessionKey.replaceAll(":", "-");
+    const exact = { agentId: "main", sessionKey };
+    const base = { agentId: "main", sessionKey: "agent:main:cron:nightly" };
+    const removed = createDeferredCore();
+    let unsubscribe = () => {};
+    if (scenario === "queued cron") {
+      // Cron persists the base before the exact run claims the shared transcript window.
+      await replaceSessionEntry(base, { sessionId, updatedAt: Date.now() });
+      unsubscribe = sessionChanges.subscribeFacts((change) => {
+        if (
+          "sessionKey" in change &&
+          change.sessionKey === sessionKey &&
+          change.facts?.kind === "removed"
+        ) {
+          removed.resolve();
+        }
+      });
+    }
+    await seedOrigin(sessionKey);
+    const claim = claimAgentRunContext(
+      "cron-run-followup",
+      {
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        ...(cron ? { cronRunsByJobId: cronInvocation() } : {}),
+      },
+      { trackOwner: true },
+    );
+    const release = () => releaseAgentRunContext("cron-run-followup", claim);
+    vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+      expect(options.sessionKey).toBe(sessionKey);
+      if (scenario === "ended cron") {
+        release();
+      }
+      const receipt = enqueue(text, options);
+      receipts.push(receipt);
+      if (scenario === "cron ended during admission") {
+        release();
+      }
+      return receipt;
+    });
+    const exec = backgroundExec(sessionKey, { agentId: "main" });
+    try {
+      const start = async () => {
+        const started = await exec("cron-followup", 'process.stdout.write("CRON_EXEC_DONE")');
+        const { sessionId: processSessionId, followUp } = runningSession(started.details);
+        await withinTest(waitForExecScope(sessionKey), signal);
+        if (cron) {
+          // Without sessions_yield on this run, its exit cannot resume it.
+          expect(followUp).toContain("collect it before ending the turn");
+          expect(followUp).not.toContain("end this turn now");
+        }
+        if (scenario === "queued cron") {
+          const receipt = expectDefined(receipts[0], "queued cron completion receipt");
+          expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
+          expect(model).not.toHaveBeenCalled();
+          expect(
+            readSessionTranscriptMessageEvents({ agentId: "main", sessionKey, sessionId }),
+          ).toEqual([]);
+          // Successful cron teardown seals the alias after persisting its stable base.
+          await upsertSessionEntryCore(exact, {
+            cronRunContinuation: {
+              lifecycleRevision: "original",
+              phase: "ready",
+              basePersisted: true,
+            },
+          });
+          await removeCronRunContinuationSessionIfIdle(sessionKey);
+          expect(loadSessionEntry(exact)?.sessionId).toBe(sessionId);
+          release();
+        }
+        return processSessionId;
+      };
+      // Cron preparation and embedded execution share this controller admission.
+      const processSessionId =
+        scenario === "queued cron"
+          ? await withSessionTurn(
+              {
+                sessionKey,
+                sessionId,
+                agentId: "main",
+                storePath: resolveSessionStorePathCore(config.session?.store, { agentId: "main" }),
+              },
+              start,
+            )
+          : await start();
+      if (scenario.includes("ended")) {
+        if (scenario === "cron ended during admission") {
+          expect(receipts).toHaveLength(1);
+          const receipt = expectDefined(receipts[0], "cron completion receipt");
+          expect(await withinTest(receipt.settled, signal)).toMatchObject({
+            status: "failed",
+            executionStarted: false,
+            error: expect.stringContaining("cron run has ended"),
+          });
+        } else {
+          expect(receipts).toHaveLength(0);
+        }
+        expect(model).not.toHaveBeenCalled();
+      } else {
+        await completion(signal);
+        expect(receipts).toHaveLength(1);
+        expect(model).toHaveBeenCalledOnce();
+        const [params] = expectDefined(model.mock.calls[0], "completion turn");
+        expect(params.sessionKey).toBe(sessionKey);
+        if (scenario === "queued cron") {
+          await withinTest(removed.promise, signal);
+          expect(loadSessionEntry(exact)).toBeUndefined();
+          expect(loadSessionEntry(base)?.sessionId).toBe(sessionId);
+          expect(readSessionTranscriptMessageEvents({ ...base, sessionId })).toMatchObject([
+            { event: { type: "message", message: { role: "user" } } },
+          ]);
+          expect(params.prompt).toContain("CRON_EXEC_DONE");
+        }
+      }
+      const result = await createProcessTool({ scopeKey: sessionKey }).execute("collect", {
+        action: "log",
+        sessionId: processSessionId,
+      });
+      expect(result.content).toContainEqual({
+        type: "text",
+        text: "CRON_EXEC_DONE\n\nProcess exited with code 0.",
+      });
+    } finally {
+      unsubscribe();
+      release();
+    }
+  },
+);
+
+test("admits every completion that arrives while its cron run is live", async ({ signal }) => {
+  const sessionKey = "agent:main:cron:nightly:run:two-live";
+  const sessionId = sessionKey.replaceAll(":", "-");
+  await seedOrigin(sessionKey);
+  const claim = claimAgentRunContext(
+    "cron-run-two-live",
+    { sessionKey, sessionId, agentId: "main", cronRunsByJobId: cronInvocation() },
+    { trackOwner: true },
+  );
+  vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+    const receipt = enqueue(text, options);
+    receipts.push(receipt);
+    return receipt;
+  });
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  try {
+    await exec("cron-two-a", 'process.stdout.write("A")');
+    await exec("cron-two-b", 'process.stdout.write("B")');
+    await withinTest(
+      vi.waitFor(() => expect(receipts).toHaveLength(2)),
+      signal,
+    );
+    // Both were admitted while the run was live, so ending it refuses neither.
+    for (const receipt of receipts) {
+      expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
+    }
+  } finally {
+    releaseAgentRunContext("cron-run-two-live", claim);
+  }
+});
+
+test.for([
+  { label: "starting run", runId: "origin-run", expected: { runId: "origin-run" } },
+  { label: "no run", runId: undefined, expected: {} },
+])(
+  "names the $label in the completion wake provenance",
+  async ({ runId, expected }, { signal }) => {
+    const sessionKey = `agent:main:dashboard:wake-provenance-${runId ?? "none"}`;
+    await seedOrigin(sessionKey);
+    const started = await backgroundExec(sessionKey, { agentId: "main", runId })(
+      "wake-provenance",
+      'process.stdout.write("WAKE_PROVENANCE_DONE")',
+    );
+    runningSession(started.details);
+    await withinTest(waitForExecScope(sessionKey), signal);
+    await completion(signal);
+    const [params] = expectDefined(model.mock.calls[0], "completion turn");
+    expect(params.prompt).toContain("WAKE_PROVENANCE_DONE");
+    // The wake stays a non-owner internal turn; only the origin fact is added.
+    expect(params.senderIsOwner).not.toBe(true);
+    expect(params.inputProvenance).toStrictEqual({
+      kind: "internal_system",
+      sourceTool: "exec",
+      ...expected,
+    });
+  },
+);
+
+test.for([
+  { label: "share the next turn", runIds: ["run-0", "run-0", "run-0"], turns: [[1], [2, 3]] },
+  {
+    label: "keep separate launch runs apart",
+    runIds: ["run-0", "run-0", "run-1"],
+    turns: [[1], [2], [3]],
+  },
+  // About 2,040 chars per result: three later results fit the shared turn, the fourth waits.
+  {
+    label: "stay within the size bound",
+    runIds: Array(5).fill("run-0"),
+    pad: 1_990,
+    sizes: [1, 3, 1],
+  },
+])("completions pending behind a completion turn $label", async (testCase, { signal }) => {
+  const { runIds } = testCase;
+  const sessionKey = `agent:main:dashboard:batched-${runIds.join("-")}`;
+  await seedOrigin(sessionKey);
+  const gate = createDeferredCore();
+  const firstTurn = createDeferredCore();
+  const calls: RunEmbeddedAgentParams[] = [];
+  model.mockImplementation(async (params: RunEmbeddedAgentParams) => {
+    await admitModelTurn(params);
+    calls.push(params);
+    if (calls.length === 1) {
+      firstTurn.resolve();
+      await gate.promise;
+    }
+    return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+  });
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(state.workspaceDir, "batch-")));
+  const release = (job: number) => path.join(directory, job === 1 ? "first" : "later");
+  // Every command captures its destination before any exit changes the session.
+  for (const [index, runId] of runIds.entries()) {
+    const job = index + 1;
+    const script = `const t = setInterval(() => { if (require("node:fs").existsSync(${JSON.stringify(release(job))})) { clearInterval(t); process.stdout.write("BATCH_${job}" + "x".repeat(${testCase.pad ?? 0})); } }, 20);`;
+    runningSession(
+      (await backgroundExec(sessionKey, { agentId: "main", runId })(`batch-${job}`, script))
+        .details,
+    );
+  }
+  await fs.writeFile(release(1), "");
+  await withinTest(firstTurn.promise, signal);
+  await fs.writeFile(release(2), "");
+  await withinTest(waitForExecScope(sessionKey), signal);
+  // Exit notification follows process settlement; wait until every later exit is queued.
+  await vi.waitFor(
+    () => expect(peekSystemEventEntries(sessionKey)).toHaveLength(runIds.length - 1),
+    { timeout: 30_000 },
+  );
+  // The later exits wait for the running completion turn instead of queueing their own.
+  expect(receipts).toHaveLength(1);
+  gate.resolve();
+  const turnCount = (testCase.sizes ?? testCase.turns ?? []).length;
+  await vi.waitFor(() => expect(receipts).toHaveLength(turnCount), { timeout: 30_000 });
+  await completion(signal);
+  // Each turn names the run that launched its commands; later exits may finish in any order.
+  const observed = calls.map((params) => ({
+    jobs: (params.prompt.match(/BATCH_\d/g) ?? [])
+      .map((job) => Number(job.slice(6)))
+      .toSorted((a, b) => a - b),
+    runId: params.inputProvenance?.runId,
+  }));
+  expect(observed[0]?.jobs).toEqual([1]);
+  if (testCase.sizes) {
+    expect(observed.map((turn) => turn.jobs.length)).toEqual(testCase.sizes);
+    expect(observed.flatMap((turn) => turn.jobs).toSorted((a, b) => a - b)).toEqual([
+      1, 2, 3, 4, 5,
+    ]);
+    return;
+  }
+  expect(observed.toSorted((a, b) => (a.jobs[0] ?? 0) - (b.jobs[0] ?? 0))).toEqual(
+    testCase.turns.map((jobs) => ({ jobs, runId: runIds[(jobs[0] ?? 1) - 1] })),
+  );
+});
+
+test("starts and notifies when identity enrichment fails, then resolves child identity again", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:notification-possible";
+  await seedOrigin(sessionKey);
+  vi.spyOn(sessionReads, "readSessionEntriesFromStoreInWorker").mockRejectedValueOnce(
+    new Error("session worker unavailable"),
+  );
+  const exec = backgroundExec(sessionKey);
+  const processTool = createProcessTool({ scopeKey: sessionKey });
+  for (const recovered of [false, true]) {
+    if (recovered) {
+      await seedOrigin(sessionKey, "agent:main:main");
+    }
+    const started = await exec(
+      "notification-possible",
+      'process.stdout.write("EXEC_STARTED"); process.exitCode = 1',
+    );
+    const { sessionId } = runningSession(started.details);
+    await withinTest(waitForExecScope(sessionKey), signal);
+    if (!recovered) {
+      await completion(signal);
+    }
+    expect(receipts).toHaveLength(1);
+    expect(model).toHaveBeenCalledOnce();
+    const result = await processTool.execute("collect", {
+      action: "poll",
+      sessionId,
+    });
+    expectCompleted(result.details, "EXEC_STARTED", 1);
+  }
+});
+
+function waitForRelease(release: string) {
+  return `const fs = require("node:fs"); const release = ${JSON.stringify(release)}; const done = () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("WAITER_DONE"); } }; const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, done); done();`;
+}
+
+test("tells a woken conversation to end its wait and names its other running commands", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:waiters";
+  await seedOrigin(sessionKey);
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  const release = path.join(state.workspaceDir, "release-waiters");
+  try {
+    const first = runningSession((await exec("first-waiter", waitForRelease(release))).details);
+    // Every exit wakes by default, so the waiter need not print its result.
+    expect(first.followUp).toContain(
+      "Its exit wakes this conversation with the result, silent success included. If only waiting remains, end this turn now; do not poll it or start another command for the same result.",
+    );
+    expect(first.followUp).toContain("run one command that loops until it holds");
+    // A waiter on its own push must not read a moving head as settled.
+    expect(first.followUp).toContain(
+      "pin the expected state: for example, wait for the exact commit you pushed and exit non-zero if it moved.",
+    );
+    expect(first.followUp).not.toContain("Also running");
+    // A second waiter in the same turn sees the first; the turn-start snapshot cannot.
+    const second = runningSession((await exec("second-waiter", waitForRelease(release))).details);
+    expect(second.followUp).toContain(`Also running in this conversation: ${first.sessionId} (`);
+    const idle = await createProcessTool({ scopeKey: sessionKey }).execute("idle-poll", {
+      action: "poll",
+      sessionId: first.sessionId,
+    });
+    expect(idle.content).toContainEqual({
+      type: "text",
+      text: expect.stringContaining("end this turn instead of polling."),
+    });
+  } finally {
+    await fs.writeFile(release, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
+  }
+});
+
+test("wakes a dashboard conversation on silent success, with exit, duration, a bounded tail and the output file", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:silent-waiter";
+  await seedOrigin(sessionKey);
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
+  const wake = async (script: string) => {
+    await exec("silent-waiter", script);
+    await withinTest(waitForExecScope(sessionKey), signal);
+    await completion(signal);
+    return String(wakes.mock.calls.at(-1)?.[0]);
+  };
+  expect(await wake("void 0")).toMatch(
+    /^Exec completed \([^,]+, code 0, [^)]+\) with no output\.$/,
+  );
+  const short = await wake('process.stdout.write("x".repeat(3000) + "TAIL_END")');
+  const [, shortPath] = expectDefined(
+    /^Exec completed \([^,]+, code 0, [^)]+\), last 2000 of 3008 output chars:\nx{1992}TAIL_END\nFull output: (\S+) \(3008 bytes\)$/.exec(
+      short,
+    ),
+    "wake with output file",
+  );
+  expect(await fs.readFile(expectDefined(shortPath, "path"), "utf8")).toBe(
+    `${"x".repeat(3000)}TAIL_END`,
+  );
+  // The in-memory window keeps 200k chars; the file keeps every byte in order.
+  const long = await wake('process.stdout.write("FIRST\\n" + "y".repeat(500000) + "LAST")');
+  const [, longPath] = expectDefined(
+    /\nFull output: (\S+) \(500010 bytes\)$/.exec(long),
+    "long wake with output file",
+  );
+  expect(long).not.toContain("process log");
+  expect(await fs.readFile(expectDefined(longPath, "path"), "utf8")).toBe(
+    `FIRST\n${"y".repeat(500000)}LAST`,
+  );
+});
+
+test("wakes the same conversation after its session id rotates while the command runs", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:rotated-waiter";
+  await seedOrigin(sessionKey);
+  const release = path.join(state.workspaceDir, "release-rotated-waiter");
+  const started = runningSession(
+    (
+      await backgroundExec(sessionKey, { agentId: "main" })(
+        "rotated-waiter",
+        waitForRelease(release),
+      )
+    ).details,
+  );
+  // Compaction installs a new physical session id and keeps the lifecycle revision.
+  const rotated = await upsertSessionEntryCore(
+    { agentId: "main", sessionKey },
+    { sessionId: "rotated-session" },
+  );
+  expect(rotated).toMatchObject({ sessionId: "rotated-session", lifecycleRevision: "original" });
+  await fs.writeFile(release, "release");
+  await withinTest(waitForExecScope(sessionKey), signal);
+  await completion(signal);
+  const [prompt] = expectDefined(model.mock.calls.at(-1), "rotated wake turn");
+  expect(prompt.sessionId).toBe("rotated-session");
+  expect(prompt.prompt).toContain(`Exec completed (${started.sessionId.slice(0, 8)}`);
+});
+
+test("wakes a reset conversation by its key", async ({ signal }) => {
+  const sessionKey = "agent:main:dashboard:reset-waiter";
+  await seedOrigin(sessionKey);
+  const release = path.join(state.workspaceDir, "release-reset-waiter");
+  runningSession(
+    (await backgroundExec(sessionKey, { agentId: "main" })("reset-waiter", waitForRelease(release)))
+      .details,
+  );
+  // A reset keeps the transcript id and starts a new lifecycle; the wake follows the key.
+  await upsertSessionEntryCore({ agentId: "main", sessionKey }, { lifecycleRevision: "reset" });
+  const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
+  const calls = wakes.mock.calls.length;
+  await fs.writeFile(release, "release");
+  await withinTest(waitForExecScope(sessionKey), signal);
+  await vi.waitFor(() => expect(wakes.mock.calls.length).toBe(calls + 1));
+});
+
+test("does not promise a hidden subagent without sessions_yield an exit wake", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:hidden-waiter";
+  await seedOrigin(sessionKey, "agent:main:main");
+  const release = path.join(state.workspaceDir, "release-hidden-waiter");
+  try {
+    const started = runningSession(
+      (await backgroundExec(sessionKey, { agentId: "main" })("hidden", waitForRelease(release)))
+        .details,
+    );
+    expect(started.followUp).toContain("poll with a timeout");
+    expect(started.followUp).not.toContain("wakes this conversation");
+    const idle = await createProcessTool({ scopeKey: sessionKey }).execute("idle-poll", {
+      action: "poll",
+      sessionId: started.sessionId,
+    });
+    expect(idle.details).toMatchObject({
+      followUp: expect.stringContaining("poll with a timeout"),
+    });
+  } finally {
+    await fs.writeFile(release, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
+  }
+});
+
+test("resumes a hidden subagent on exit only after sessions_yield awaits the command", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:hidden-waiter";
+  await seedOrigin(sessionKey, "agent:main:main");
+  const exec = backgroundExec(sessionKey, {
+    agentId: "main",
+    runId: "hidden-run",
+    sessionsYieldAvailabilityRef: { value: true },
+  });
+  const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
+  for (const yielded of [false, true]) {
+    const release = path.join(state.workspaceDir, `release-hidden-${yielded}`);
+    const started = runningSession(
+      (await exec(`hidden-${yielded}`, waitForRelease(release))).details,
+    );
+    expect(started.followUp).toContain("If only waiting remains, call sessions_yield now");
+    expect(started.followUp).not.toContain("wakes this conversation");
+    if (yielded) {
+      // Another agent on the same raw session key is a different chat.
+      expect(listYieldAwaitableExecs({ agentId: "research", sessionKey })).toEqual([]);
+      const awaited = listYieldAwaitableExecs({ agentId: "main", sessionKey });
+      expect(awaited.map((session) => session.id)).toEqual([started.sessionId]);
+      awaitExecsForYield(awaited);
+    }
+    await fs.writeFile(release, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
+    // A run that ended without yielding gets a passive notice; a yielded run gets a wake turn.
+    expect(
+      wakes.mock.calls.filter(([, options]) => options.sessionKey === sessionKey),
+    ).toHaveLength(yielded ? 1 : 0);
+  }
+  expect(wakes.mock.calls.at(-1)?.[1]).toMatchObject({ source: "exec", sourceRunId: "hidden-run" });
+  expect(wakes.mock.calls.at(-1)?.[0]).toMatch(/^Exec completed \([^)]*\):\nWAITER_DONE$/);
+});
+
+test("resumes a yielded cron run in place with the exit instead of a session event", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:cron:nightly:run:yielded";
+  await seedOrigin(sessionKey);
+  const exec = backgroundExec(sessionKey, {
+    agentId: "main",
+    runId: "cron-yield-run",
+    sessionsYieldAvailabilityRef: { value: true },
+  });
+  using resume = openExecYieldResume({ agentId: "main", sessionKey });
+  const release = path.join(state.workspaceDir, "release-cron-yield");
+  try {
+    const started = runningSession((await exec("cron-yield", waitForRelease(release))).details);
+    expect(started.followUp).toContain("If only waiting remains, call sessions_yield now");
+    awaitExecsForYield(listYieldAwaitableExecs({ agentId: "main", sessionKey }));
+    await fs.writeFile(release, "release");
+    expect(await withinTest(resume.next(signal), signal)).toMatch(
+      /^Exec completed \([^)]*\):\nWAITER_DONE$/,
+    );
+    // Nothing awaited remains, so the run finishes with its resumed turn.
+    expect(await resume.next(signal)).toBeUndefined();
+    expect(vi.mocked(sessionEvents.enqueueSessionEventForHost)).not.toHaveBeenCalled();
+  } finally {
+    await fs.writeFile(release, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
+  }
+});
+
+test("reports manual collection after destination capture fails, then recovers on the same tool", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:exec-capture-failure";
+  await seedOrigin(sessionKey);
+  // Force a cold destination read so the transport fault cannot be bypassed by writer receipts.
+  sessionChanges.invalidate({
+    agentId: "main",
+    sessionKey,
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    factsInvalidated: true,
+  });
+  let faults = 0;
+  const capture = sessionEvents.captureSessionEventTargetForHost;
+  vi.spyOn(sessionEvents, "captureSessionEventTargetForHost").mockImplementation(
+    async (...args) => {
+      if (args[0] === "main" && args[1] === sessionKey && faults === 0) {
+        faults++;
+        throw new Error("session event destination unavailable");
+      }
+      return capture(...args);
+    },
+  );
+  const exec = backgroundExec(sessionKey, { agentId: "main", notifyOnExitEmptySuccess: true });
+  const processTool = createProcessTool({ scopeKey: sessionKey });
+  for (const recovered of [false, true]) {
+    const release = path.join(state.workspaceDir, `release-${recovered}`);
+    const child = `const fs = require("node:fs"); const release = ${JSON.stringify(release)}; const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("EXEC_COLLECTED"); } }); if (fs.existsSync(release)) { watcher.close(); process.stdout.write("EXEC_COLLECTED"); }`;
+    try {
+      const started = await exec("capture-failure", child);
+      expect(faults).toBe(1);
+      const handle = runningSession(started.details);
+      const followUp = expectDefined(handle.followUp, "background continuation guidance");
+      expect(followUp).toContain(
+        recovered ? "Its exit wakes this conversation with the result" : "poll with a timeout",
+      );
+      if (!recovered) {
+        expect(followUp).not.toContain("wakes this conversation");
+      }
+      expect(started.content).toContainEqual({
+        type: "text",
+        text: expect.stringContaining(followUp),
+      });
+      for (const action of ["list", "poll", "log"] as const) {
+        const running = await processTool.execute("inspect", {
+          action,
+          sessionId: handle.sessionId,
+        });
+        if (!recovered) {
+          const expected = {
+            sessionId: handle.sessionId,
+            followUp: expect.stringContaining("before ending the turn"),
+          };
+          expect(running.details).toMatchObject(
+            action === "list" ? { sessions: [expected] } : expected,
+          );
+        }
+      }
+      await fs.writeFile(release, "release");
+      await withinTest(waitForExecScope(sessionKey), signal);
+      if (recovered) {
+        await completion(signal);
+      }
+      expect(receipts).toHaveLength(recovered ? 1 : 0);
+      expect(model).toHaveBeenCalledTimes(recovered ? 1 : 0);
+      const collected = await processTool.execute("collect", {
+        action: "poll",
+        sessionId: handle.sessionId,
+      });
+      expectCompleted(collected.details, "EXEC_COLLECTED");
+    } finally {
+      await fs.writeFile(release, "release");
+      await withinTest(waitForExecScope(sessionKey), signal);
+    }
+  }
+});
+
+test.for(["completed", "revoked", "missing"] as const)(
+  "keeps the original guest review authority through exec completion: %s",
+  async (scenario, { signal }) => {
+    const sessionKey = `agent:main:guest-review-${scenario}`;
+    await seedOrigin(sessionKey);
+    const revoked = new AbortController();
+    let references = 1;
+    const authority = createAdmittedRunOperatorAuthority({
+      profileId: "original-guest",
+      scopes: ["operator.write"],
+      signal: revoked.signal,
+      assertCurrent() {
+        if (!references) {
+          throw new Error("original source released");
+        }
+      },
+      retain() {
+        references++;
+        return () => {
+          references--;
+        };
+      },
+      modelPolicy: {
+        models: [{ provider: "mock-openai", model: "gpt-5.6-luna" }],
+        allows: (ref) => ref.provider === "mock-openai" && ref.model === "gpt-5.6-luna",
+      },
+    });
+    const admin = createAdmittedRunOperatorAuthority({
+      profileId: "another-admin",
+      scopes: ["operator.admin"],
+      assertCurrent() {},
+    });
+    const enqueueFromAdmin = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey, operatorAuthority: admin },
+      () =>
+        AsyncLocalStorage.bind((...args: Parameters<typeof enqueue>) => {
+          const receipt = enqueue(...args);
+          receipts.push(receipt);
+          return receipt;
+        }),
+    );
+    vi.mocked(sessionEvents.enqueueSessionEventForHost).mockImplementation(enqueueFromAdmin);
+    const constructReview = (capabilities: PluginToolExecutionCapabilities) =>
+      reviewFactory.create({
+        ...capabilities,
+        // External sandbox and installed-skill facts stay fixed while the admitted source changes.
+        sandbox: {
+          workspaceDir: "/workspace",
+          installedSkillRoots: { autoreview: "/protected/autoreview" },
+          run: vi.fn(),
+        },
+        assertInvocationCurrent() {},
+      });
+    const original = scenario === "missing" ? undefined : authority;
+    const reached = createDeferredCore<PluginToolExecutionCapabilities>();
+    const proceed = createDeferredCore();
+    model.mockImplementation(async (params) => {
+      const admitted = await expectDefined(params.preparedRunAdmission, "event admission").admit(
+        "gateway",
+        params.runId,
+      );
+      await params.userTurnTranscriptRecorder?.persistApproved();
+      params.onExecutionPhase?.({ phase: "model_call_started" });
+      await params.onExecutionStarted?.();
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+      const current = readAdmittedRunOperatorAuthority(admitted);
+      reached.resolve(
+        preparePluginToolExecutionCapabilities({
+          authority: current,
+          config: params.config,
+          agentId: "main",
+        })(() => {}),
+      );
+      await proceed.promise;
+      expect(current?.profileId).toBe(original?.profileId);
+      expect(params.senderIsOwner).not.toBe(true);
+      return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+    });
+    try {
+      const started = await withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey, operatorAuthority: original },
+        () =>
+          backgroundExec(sessionKey, { agentId: "main" })(
+            "guest-command",
+            'process.stdout.write("GUEST_COMMAND_DONE")',
+          ),
+      );
+      runningSession(started.details);
+      references--;
+      await withinTest(waitForExecScope(sessionKey), signal);
+      const continued = await withinTest(reached.promise, signal);
+      expect(Boolean(constructReview(continued)), "background completion keeps AutoReview").toBe(
+        scenario !== "missing",
+      );
+      if (scenario !== "missing") {
+        const execute = expectDefined(continued.modelExecution, "guest reviewer capability");
+        const action = vi.fn(async ({ model: selectedModel }: { model: string }) => selectedModel);
+        await expect(execute.run({ model: null, explicit: false }, action)).resolves.toBe(
+          "mock-openai/gpt-5.6-luna",
+        );
+        await expect(
+          execute.run({ model: "mock-openai/admin-only", explicit: true }, action),
+        ).rejects.toThrow();
+        expect(action).toHaveBeenCalledOnce();
+        if (scenario === "revoked") {
+          revoked.abort(new Error("original guest revoked"));
+          await expect(execute.run({ model: null, explicit: false }, action)).rejects.toThrow(
+            "original guest revoked",
+          );
+          expect(action).toHaveBeenCalledOnce();
+        }
+      }
+      proceed.resolve();
+      if (scenario === "revoked") {
+        expect(
+          await withinTest(expectDefined(receipts.at(-1), "revoked event").settled, signal),
+        ).toMatchObject({ status: "cancelled" });
+      } else {
+        await completion(signal);
+      }
+      expect(references).toBe(0);
+    } finally {
+      proceed.resolve();
+      await withinTest(waitForExecScope(sessionKey), signal);
+    }
+  },
+);

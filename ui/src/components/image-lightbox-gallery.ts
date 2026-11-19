@@ -1,4 +1,8 @@
+import { createSignal, onCleanup } from "solid-js";
 import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
+
+// Cached items hold their decoded image; browsers may drop an unreferenced one and refetch it.
+const decodedImages = new WeakMap<ImageLightboxItem, HTMLImageElement>();
 
 async function decodeImage(item: ImageLightboxItem | null): Promise<ImageLightboxItem | null> {
   if (!item || item.kind === "video") {
@@ -9,6 +13,7 @@ async function decodeImage(item: ImageLightboxItem | null): Promise<ImageLightbo
   image.src = item.src;
   try {
     await image.decode();
+    decodedImages.set(item, image);
     return item;
   } catch {
     item.release?.();
@@ -16,197 +21,202 @@ async function decodeImage(item: ImageLightboxItem | null): Promise<ImageLightbo
   }
 }
 
+function initialSelection(current?: ImageLightboxItem, gallery?: ImageLightboxGallery) {
+  return {
+    index: gallery?.index ?? 0,
+    count: gallery?.items.length ?? 0,
+    current,
+    busy: false,
+    failed: false,
+    upgrading: false,
+    upgradeFailed: false,
+    videoStatus: "preparing",
+    videoRetryable: true,
+  };
+}
+
 /** The modal owns selected media and image resource leases until eviction or close. */
-export class ImageLightboxGalleryController {
-  index = 0;
-  current: ImageLightboxItem | undefined;
-  busy = false;
-  failed = false;
-  videoStatus: "preparing" | "ready" | "unavailable" = "preparing";
-  videoRetryable = true;
-  private video?: HTMLVideoElement;
-  private disconnectVideo?: () => void;
-  private gallery: ImageLightboxGallery | undefined;
-  private generation = 0;
-  private readonly images = new Map<number, Promise<ImageLightboxItem | null>>();
+export function createImageLightboxGallery() {
+  let selection = initialSelection();
+  const [state, setState] = createSignal(selection);
+  let video: HTMLVideoElement | undefined;
+  let disconnectVideo: (() => void) | undefined;
+  let gallery: ImageLightboxGallery | undefined;
+  let images = new Map<number, Promise<ImageLightboxItem | null>>();
+  // Admission and resource callbacks read this same receipt before Solid commits its display.
+  const publish = (patch: Partial<typeof selection>) => {
+    selection = { ...selection, ...patch };
+    setState(selection);
+  };
 
-  constructor(private readonly notify: () => void) {}
-
-  get count() {
-    return this.gallery?.items.length ?? 0;
-  }
-
-  reset(gallery: ImageLightboxGallery | undefined, initial: ImageLightboxItem) {
-    this.dispose();
-    this.gallery = gallery;
-    this.index = gallery?.index ?? 0;
-    this.current = initial;
+  function reset(nextGallery: ImageLightboxGallery | undefined, initial: ImageLightboxItem) {
+    dispose();
+    gallery = nextGallery;
+    selection = initialSelection(initial, gallery);
     // The opener retains and releases the initial image independently of the modal.
     const preview = { ...initial, release: undefined };
-    if (initial.loadFullResolution) {
-      this.upgrade(this.index, preview, initial.loadFullResolution);
+    if (initial.loadDisplayImage) {
+      void prepare(selection.index, initial.loadDisplayImage, preview);
     } else {
-      this.images.set(this.index, Promise.resolve(preview));
+      images.set(selection.index, Promise.resolve(preview));
+      publish({});
     }
-    this.preloadNeighbors();
+    evictDistantImages();
   }
 
-  private upgrade(
+  function prepare(
     index: number,
-    preview: ImageLightboxItem,
-    load: () => Promise<ImageLightboxItem | null>,
+    loader: () => Promise<ImageLightboxItem | null>,
+    preview?: ImageLightboxItem,
   ) {
-    const generation = this.generation;
-    const pending = Promise.resolve()
-      .then(() => (generation === this.generation ? load() : null))
+    if (preview) {
+      publish({ upgrading: true, upgradeFailed: false });
+    }
+    const pending: Promise<ImageLightboxItem | null> = Promise.resolve()
+      .then(() => (images.get(index) === pending ? loader() : null))
       .then(decodeImage)
       .catch(() => null)
       .then((item) => {
-        if (
-          item &&
-          generation === this.generation &&
-          this.images.get(index) === pending &&
-          this.index === index
-        ) {
-          this.current = item;
-          this.notify();
+        if (preview && images.get(index) === pending && selection.index === index) {
+          publish({ upgrading: false, upgradeFailed: !item, ...(item ? { current: item } : {}) });
         }
-        return item ?? preview;
+        if (!item && !preview && images.get(index) === pending) {
+          images.delete(index);
+        }
+        return item ?? preview ?? null;
       });
-    this.images.set(index, pending);
+    images.set(index, pending);
+    return pending;
   }
 
-  dispose() {
-    this.stopPlayer();
-    this.generation += 1;
-    for (const image of this.images.values()) {
+  function dispose() {
+    stopPlayer();
+    for (const image of images.values()) {
       void image.then((item) => item?.release?.());
     }
-    this.images.clear();
-    this.gallery = undefined;
-    this.current = undefined;
-    this.busy = false;
-    this.failed = false;
+    images = new Map();
+    gallery = undefined;
   }
 
-  canMove(delta: number) {
-    const next = this.index + delta;
-    return this.count > 1 && next >= 0 && next < this.count;
+  function canMove(delta: number) {
+    const next = selection.index + delta;
+    return selection.count > 1 && next >= 0 && next < selection.count;
   }
 
-  async move(delta: number): Promise<boolean> {
-    if (this.busy || !this.canMove(delta)) {
+  async function move(delta: number): Promise<boolean> {
+    if (selection.busy || !canMove(delta)) {
       return false;
     }
-    const generation = this.generation;
-    const next = this.index + delta;
-    this.busy = true;
-    this.failed = false;
-    this.notify();
-    const item = await this.load(next, true);
-    if (generation !== this.generation) {
+    const activeImages = images;
+    const next = selection.index + delta;
+    publish({ busy: true, failed: false });
+    const item = await load(next, true);
+    if (activeImages !== images) {
       return false;
     }
-    this.busy = false;
-    this.failed = !item;
     if (item) {
-      this.stopPlayer();
-      this.index = next;
-      this.current = item;
-      this.preloadNeighbors();
+      stopPlayer();
+      publish({
+        index: next,
+        current: item,
+        busy: false,
+        failed: false,
+        upgrading: false,
+        upgradeFailed: false,
+      });
+      evictDistantImages();
+    } else {
+      publish({ busy: false, failed: true });
     }
-    this.notify();
     return item !== null;
   }
 
-  connectPlayer(video?: HTMLVideoElement, retryFailed = false) {
-    const item = this.current;
-    if (!video || item?.kind !== "video" || this.video === video) {
+  function connectPlayer(nextVideo?: HTMLVideoElement, retryFailed = false) {
+    const item = selection.current;
+    if (!nextVideo || item?.kind !== "video" || video === nextVideo) {
       return;
     }
-    this.stopPlayer();
-    this.video = video;
-    this.videoStatus = "preparing";
+    stopPlayer();
+    video = nextVideo;
+    publish({ videoStatus: "preparing" });
     if (item.connectVideo) {
-      this.disconnectVideo = item.connectVideo(
-        video,
+      disconnectVideo = item.connectVideo(
+        nextVideo,
         (status, retryable = true) => {
-          if (this.video !== video || this.current !== item) {
-            return;
+          if (video === nextVideo && selection.current === item) {
+            publish({
+              videoStatus: status === "ready" && nextVideo.readyState < 2 ? "preparing" : status,
+              videoRetryable: retryable,
+            });
           }
-          this.videoStatus = status === "ready" && video.readyState < 2 ? "preparing" : status;
-          this.videoRetryable = retryable;
-          this.notify();
         },
         retryFailed,
       );
     } else {
-      video.src = item.src;
+      nextVideo.src = item.src;
     }
   }
 
-  updateVideoStatus(status: "ready" | "unavailable") {
-    this.videoStatus = status;
-    this.notify();
+  function updateVideoStatus(videoStatus: "ready" | "unavailable") {
+    publish({ videoStatus });
   }
 
-  stopPlayer() {
-    this.disconnectVideo?.();
-    this.disconnectVideo = undefined;
-    if (this.video?.hasAttribute("src")) {
-      this.video.pause();
-      this.video.removeAttribute("src");
-      this.video.load();
+  function stopPlayer() {
+    disconnectVideo?.();
+    disconnectVideo = undefined;
+    if (video?.hasAttribute("src")) {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
     }
-    this.video = undefined;
+    video = undefined;
   }
 
-  retryVideo() {
-    const video = this.video;
-    this.stopPlayer();
-    this.connectPlayer(video, true);
+  function retryVideo() {
+    const previous = video;
+    stopPlayer();
+    connectPlayer(previous, true);
   }
 
-  private load(index: number, retryFailed = false): Promise<ImageLightboxItem | null> {
-    const cached = this.images.get(index);
+  function load(index: number, retryFailed = false): Promise<ImageLightboxItem | null> {
+    const cached = images.get(index);
     if (cached) {
       return cached;
     }
-    const load = this.gallery?.items[index];
-    if (!load) {
-      return Promise.resolve(null);
-    }
-    const generation = this.generation;
-    const pending = Promise.resolve()
-      .then(() => (generation === this.generation ? load(retryFailed) : null))
-      .then(decodeImage)
-      .catch(() => null);
-    this.images.set(index, pending);
-    void pending.then((item) => {
-      if (!item && this.images.get(index) === pending) {
-        this.images.delete(index);
-      }
-    });
-    return pending;
+    const loader = gallery?.items[index];
+    return loader ? prepare(index, () => loader(retryFailed)) : Promise.resolve(null);
   }
 
-  private preloadNeighbors() {
-    for (const [index, image] of this.images) {
-      if (Math.abs(index - this.index) > 1) {
-        this.images.delete(index);
+  function retryDisplayImage() {
+    const current = selection.current;
+    if (current?.loadDisplayImage && !selection.upgrading) {
+      void prepare(selection.index, current.loadDisplayImage, current);
+    }
+  }
+
+  function evictDistantImages() {
+    for (const [index, image] of images) {
+      if (Math.abs(index - selection.index) > 1) {
+        images.delete(index);
         void image.then((item) => item?.release?.());
       }
     }
-    // Do not prepare hidden players or capture neighbor tickets speculatively.
-    if (this.current?.kind === "video") {
-      return;
-    }
-    for (const index of [this.index - 1, this.index + 1]) {
-      if (index >= 0 && index < this.count) {
-        void this.load(index);
-      }
-    }
+    // Only selected media starts network/decode work; visited neighbors stay warm.
   }
+
+  onCleanup(dispose);
+  return {
+    state,
+    peek: () => selection,
+    reset,
+    canMove,
+    move,
+    connectPlayer,
+    updateVideoStatus,
+    stopPlayer,
+    retryVideo,
+    retryDisplayImage,
+  };
 }
 
 /** Native control internals retarget to video; leave their bottom strip and fullscreen alone. */
@@ -237,13 +247,20 @@ export function exitLightboxVideoFullscreen(video: HTMLVideoElement | undefined,
   return true;
 }
 
-export function trapLightboxTabFocus(event: KeyboardEvent, focusables: NodeListOf<HTMLElement>) {
+export function trapLightboxTabFocus(event: KeyboardEvent, focusables: Iterable<HTMLElement>) {
   if (event.key !== "Tab") {
     return;
   }
-  const actions = [...focusables].filter(
-    (action) => !(action instanceof HTMLButtonElement && action.disabled),
-  );
+  const actions = [...focusables]
+    .filter(
+      (action) =>
+        action.isConnected &&
+        action.tabIndex >= 0 &&
+        !(action instanceof HTMLButtonElement && action.disabled),
+    )
+    .toSorted((left, right) =>
+      left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+    );
   const first = actions[0];
   const last = actions.at(-1);
   if (!first || !last) {

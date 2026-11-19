@@ -39,12 +39,12 @@ Interactive OpenClaw opens the same TUI shell as `openclaw tui`, with an OpenCla
 
 - config validity and the default agent
 - the verified model OpenClaw is using
-- Gateway reachability from the first startup probe
+- Gateway reachability from the first startup check
 - the next recommended debug action
 
 It does not dump secrets or load plugin CLI commands just to start.
 
-Use `status` for the detailed inventory: config path, docs/source paths, local CLI probes, key/token presence, agents, model, and Gateway details.
+Use `status` for the detailed inventory: config path, docs/source paths, local CLI checks, key/token presence, agents, model, and Gateway details.
 
 OpenClaw uses the same reference discovery as regular agents: in a Git checkout it points at local `docs/` and the source tree; in an npm install it uses bundled docs and links to [https://github.com/openclaw/openclaw](https://github.com/openclaw/openclaw), with guidance to check source when docs are not enough.
 
@@ -92,7 +92,7 @@ open search wizard
 import memory
 plugins list
 plugins search slack
-plugin install clawhub:openclaw-codex-app-server
+plugin install openclaw-codex-app-server
 talk to work agent
 talk to agent for ~/path/to/work
 audit
@@ -119,9 +119,18 @@ In direct OpenClaw chat, persistent operations require conversational approval (
 
 Changes delegated by a regular agent, including requests from messaging channels,
 follow the requesting run's effective [session permission policy](/gateway/permission-modes).
-Full Access applies the exact proposed operation automatically, including when
-Full Access comes from the configured default rather than an explicit session
-mode. Restricted runs from messaging channels ask for approval in the chat that
+Inferred and explicit Full Access apply permitted proposals automatically by
+default. Inference accounts for effective tool access and policy; settings for a
+disabled `exec` tool cannot grant authority. Configure
+[`tools.openclaw.autoApproveChanges`](/gateway/config-tools/built-in-tools#tools.openclaw)
+globally or per agent: `false` requires human approval even in Full Access;
+`true` grants standing delegated administration. That grant, or an explicit Full
+Access selection, can authorize changes that enable host code execution even when
+direct execution or editing tools are denied. Broadening the grant requires
+direct operator administration or exact human approval.
+
+Restricted defaults without independent authority require human approval. Runs
+from messaging channels ask for approval in the chat that
 made the request: channels with native approval cards show **Allow once** and
 **Deny** buttons, and other messaging chats receive the change summary with a
 `/approve <id> allow-once|deny` reply. Webchat and terminal runs decide in the
@@ -130,8 +139,8 @@ Replying "yes" in the delegated chat cannot authorize a change; the button or
 `/approve` command does.
 Channels with their own approver settings decide who may approve; elsewhere only
 a current owner (`commands.ownerAllowFrom`) can approve an OpenClaw change.
-Independent filesystem and sandbox boundaries,
-tool policy, and the operation restrictions below still apply. The host also checks
+Independent filesystem and sandbox boundaries, inherited authority,
+access to the `openclaw` tool, and the operation restrictions below still apply. The host also checks
 that the requesting run and verified inference route remain valid. Interactive
 setup and agent handoffs still require a direct operator session; delegated chat
 cannot start a wizard, even when a model proposes it.
@@ -139,8 +148,15 @@ cannot start a wizard, even when a model proposes it.
 While a human reviews the proposal, the requesting tool stays open. **Allow once**
 applies the exact proposal and returns its application outcome; **Deny** or expiry
 returns a non-applied outcome instead of leaving the agent reporting a pending
-change. Stopping the requesting run cancels its approval. A late approval cannot
-restart a closed run: request the change again from an active run if still needed.
+change. Approval requests expire after 10 minutes without a decision. An expired
+request cannot be approved: if the change is still needed, submit a fresh request
+and approve it through one of the controls above. Retrying the request alone does
+not grant approval.
+
+Stopping the requesting run cancels its approval. A late approval cannot restart
+a closed run. If an approved change fails to complete, check the current settings
+and OpenClaw status before retrying; approval alone does not confirm that the
+change was applied.
 
 Configured agents can ask OpenClaw to create another agent through their
 `openclaw` tool. The request enters the same typed create-agent operation and
@@ -185,11 +201,23 @@ only once nothing uses it. For environment storage, use
 `config set-ref <path> env <ENV_VAR>`.
 `set default model <provider/model>` still live-tests the route before saving it.
 
-Plugin installation keeps its source restrictions. Plugin uninstall refuses a
+Plugin installation accepts ClawHub, npm, bundled/official, and remote `git:`
+sources. A regular agent can complete the request from Telegram or another
+messaging channel without enabling `/plugins` or opening a terminal. Non-ClawHub
+sources require explicit source acknowledgement in the requesting chat. If the
+plugin needs capability consent, OpenClaw presents the declared capabilities
+as a separate exact approval before installing and applying the runtime. Source
+approval does not accept capabilities. Approving capabilities grants conversation
+access only when the plugin declares `contracts.conversationAccess`; otherwise it
+remains a separate `plugins.entries.<id>.hooks.allowConversationAccess` config
+change. Local files and marketplace sources are not accepted by
+`plugin_install`; task-authored archives use `plugin_activate_artifact`.
+
+Plugin uninstall refuses a
 plugin that backs the active inference route; exit OpenClaw and run
 `openclaw plugins uninstall <id>` from a terminal.
 
-Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a closed deterministic list. When the configured route supports a separate completion call, other replies can be classified from only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Unclassified or ambiguous replies keep the proposal pending and the conversation asks again.
+Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a fixed list. When the configured route supports a separate completion call, other replies can be classified from only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Unclassified or ambiguous replies keep the proposal pending and the conversation asks again.
 
 ### Change history
 
@@ -311,14 +339,15 @@ through the `openclaw` tool.
 
 When a mutation is pending, only unambiguous approval or decline phrases from a
 closed list are resolved without inference. Ambiguous consent goes to a
-separate configured completion call and otherwise fails closed. Structured
+separate configured completion call; if that call cannot resolve it, the
+mutation remains unapproved. Structured
 wizard fields and exact host navigation are UI controls, not natural-language
 operation parsing. One secret-hygiene exception is especially important: an
 exact `config set` on a sensitive path (tokens, keys, passwords) never reaches
 a model. The host creates a redacted proposal, and the value is masked in the
 AI-visible history. Prefer `config set-ref <path> env <ENV_VAR>` for secrets.
 
-Message-channel rescue mode never uses the model-assisted planner. Remote rescue stays deterministic so a broken or compromised normal agent path cannot be used as a config editor.
+Message-channel rescue mode never uses the model-assisted planner. Remote rescue uses fixed rules so a broken or compromised normal agent path cannot be used as a config editor.
 
 ### CLI harness trust model
 
@@ -336,7 +365,7 @@ the same restriction:
   applied with `--strict-mcp-config`, so no other MCP servers are loaded.
 - Backends that declare no native tools receive the same dedicated OpenClaw
   MCP server.
-- Always-on or unknown native-tool backends fail closed before inference; they
+- Always-on or unknown native-tool backends are rejected before inference; they
   cannot host an OpenClaw session.
 
 Only OpenClaw sessions get the openclaw MCP server; normal agent runs
@@ -372,7 +401,7 @@ switch to main agent
 
 Message rescue mode is the message-channel entrypoint for OpenClaw: use it when your normal agent is dead but a trusted channel (for example WhatsApp) still receives commands.
 
-This is a deterministic emergency command handler, not the conversational
+This is an emergency command handler based on fixed rules, not the conversational
 OpenClaw agent. It does not bootstrap a fresh setup or relax the inference
 gate for OpenClaw chat.
 
@@ -443,7 +472,7 @@ pnpm test:docker:system-agent-first-run
 ```
 
 That packaged-CLI lane starts with an empty state dir and proves OpenClaw
-fails closed without inference. It then tests and activates fake Claude through
+refuses to run setup without inference. It then tests and activates fake Claude through
 the packaged activation module. Only afterward does a fuzzy request reach the
 planner and resolve to typed setup, followed by one-shot commands that create an
 additional agent, configure Discord through a plugin enablement plus token

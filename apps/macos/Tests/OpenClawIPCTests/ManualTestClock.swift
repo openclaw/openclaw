@@ -15,7 +15,7 @@ final class ManualTestClock: Clock, Sendable {
         var now = ContinuousClock.now
         var registrations: UInt64 = 0
         var sleeps: [UUID: Sleep] = [:]
-        var admissions: [(deadline: Instant, after: UInt64, gate: AsyncTestGate)] = []
+        var admissions: [(deadline: Instant?, after: UInt64, gate: AsyncTestGate)] = []
     }
 
     private let state = Mutex(State())
@@ -43,8 +43,8 @@ final class ManualTestClock: Clock, Sendable {
                     let registration = state.registrations
                     state.sleeps[id] = Sleep(
                         deadline: deadline, registration: registration, continuation: continuation)
-                    let admitted = { (admission: (deadline: Instant, after: UInt64, gate: AsyncTestGate)) in
-                        admission.deadline == deadline && admission.after < registration
+                    let admitted = { (admission: (deadline: Instant?, after: UInt64, gate: AsyncTestGate)) in
+                        (admission.deadline == nil || admission.deadline == deadline) && admission.after < registration
                     }
                     let gates = state.admissions.filter(admitted).map(\.gate)
                     state.admissions.removeAll(where: admitted)
@@ -59,10 +59,12 @@ final class ManualTestClock: Clock, Sendable {
         }
     }
 
-    func waitForSleep(until deadline: Instant, after registration: UInt64 = 0) async {
+    func waitForSleep(until deadline: Instant? = nil, after registration: UInt64 = 0) async {
         let gate = AsyncTestGate()
         let admitted = self.state.withLock { state in
-            if state.sleeps.values.contains(where: { $0.deadline == deadline && $0.registration > registration }) {
+            if state.sleeps.values.contains(where: {
+                (deadline == nil || $0.deadline == deadline) && $0.registration > registration
+            }) {
                 return true
             }
             state.admissions.append((deadline, registration, gate))

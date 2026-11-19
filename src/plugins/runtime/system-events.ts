@@ -1,5 +1,5 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { getRuntimeConfig } from "../../config/io.js";
+import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import * as events from "../../infra/system-events.js";
@@ -15,7 +15,7 @@ function resolveSystemEventSessionKey(sessionKey: string, agentId?: string): str
   if (parseAgentSessionKey(sessionKey)) {
     return resolveSystemEventQueueKey(sessionKey, normalizedAgentId);
   }
-  const cfg = getRuntimeConfig();
+  const cfg = readRuntimeConfig();
   const owner = resolveSessionAgentId({ config: cfg, sessionKey, agentId: normalizedAgentId });
   return resolveSystemEventQueueKey(
     canonicalizeMainSessionAlias({ cfg, agentId: owner, sessionKey }),
@@ -32,10 +32,10 @@ export const enqueueSystemEventFromSdk = (
     sessionKey: resolveSystemEventSessionKey(options.sessionKey, agentId),
   });
 
-export const enqueueSystemEventEntryFromSdk: typeof events.enqueueSystemEventEntry = (
-  text,
-  options,
-) =>
+export const enqueueSystemEventEntryFromSdk = (
+  text: string,
+  options: Parameters<typeof events.enqueueSystemEventEntry>[1],
+): ReturnType<typeof events.enqueueSystemEventEntry> =>
   events.enqueueSystemEventEntry(text, {
     ...options,
     sessionKey: resolveSystemEventSessionKey(options.sessionKey),
@@ -57,8 +57,8 @@ export function enqueueRoutedSystemEvent(
 }
 
 export const consumeSelectedSystemEventEntriesFromSdk: typeof events.consumeSelectedSystemEventEntries =
-  (key, entries) =>
-    events.consumeSelectedSystemEventEntries(resolveSystemEventSessionKey(key), entries);
+  (key, entries, options) =>
+    events.consumeSelectedSystemEventEntries(resolveSystemEventSessionKey(key), entries, options);
 export const drainSystemEventEntriesFromSdk: typeof events.drainSystemEventEntries = (key) =>
   events.drainSystemEventEntries(resolveSystemEventSessionKey(key));
 export const drainSystemEventsFromSdk: typeof events.drainSystemEvents = (key) =>

@@ -1,10 +1,20 @@
-// Shared record helpers for legacy config migration modules.
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import { isRecord } from "../../../utils.js";
 type JsonRecord = Record<string, unknown>;
 
 export type { JsonRecord };
 export { isRecord };
+
+export function someAgentEntry(
+  value: unknown,
+  predicate: (agent: Record<string, unknown>) => boolean,
+): boolean {
+  let matched = false;
+  visitAgentEntries({ agents: value }, (agent) => {
+    matched ||= predicate(agent);
+  });
+  return matched;
+}
 
 /** Visit mutable agent entries before or after read-time roster normalization. */
 export function visitAgentEntries(
@@ -101,4 +111,23 @@ export function visitChannelEntries(
       visitor(account, `channels.${channelId}.accounts.${accountId}`);
     }
   }
+}
+
+export function moveLegacyConfigKey(
+  owner: JsonRecord | null | undefined,
+  legacyKey: string,
+  canonicalKey: string,
+  path: string,
+  changes: string[],
+): void {
+  if (!owner || !Object.hasOwn(owner, legacyKey)) {
+    return;
+  }
+  if (owner[canonicalKey] === undefined) {
+    owner[canonicalKey] = owner[legacyKey];
+    changes.push(`Moved ${path}.${legacyKey} → ${path}.${canonicalKey}.`);
+  } else {
+    changes.push(`Removed ${path}.${legacyKey} (${path}.${canonicalKey} already set).`);
+  }
+  delete owner[legacyKey];
 }

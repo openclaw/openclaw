@@ -1,8 +1,6 @@
-// Compaction notifier hook sends notifications when session compaction occurs.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { HookHandler } from "../../hooks.js";
 
-/** Session compaction hook that emits short user-visible progress messages. */
 const handler: HookHandler = async (event) => {
   try {
     const context = event.context;
@@ -18,6 +16,11 @@ const handler: HookHandler = async (event) => {
     }
 
     if (event.type === "session" && event.action === "compact:after") {
+      // A successful rewrite can also leave the message count unchanged.
+      if (context.compactionOutcome === "skipped") {
+        event.messages.push("✅ Nothing to compact. Continuing from where I left off.");
+        return;
+      }
       const tokensBefore = asFiniteNumber(context.tokensBefore);
       const tokensAfter = asFiniteNumber(context.tokensAfter);
       const tokenDelta =

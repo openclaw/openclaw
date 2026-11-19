@@ -8,11 +8,8 @@ import { applyNvidiaConfig, applyNvidiaProviderConfig } from "./onboard.js";
 const SELECTABLE_MODEL_IDS = [
   "nvidia/nemotron-3-ultra-550b-a55b",
   "nvidia/nemotron-3.5-lightning-30b-a3b",
-  "nvidia/nemotron-3-super-120b-a12b",
-  "z-ai/glm-5.2",
+  "nvidia/nemotron-3.5-super-vl-120b-a12b",
   "moonshotai/kimi-k2.6",
-  "minimaxai/minimax-m3",
-  "deepseek-ai/deepseek-v4-pro",
 ];
 
 describe("nvidia onboard", () => {
@@ -49,7 +46,7 @@ describe("nvidia onboard", () => {
     ]);
   });
 
-  it("preserves an existing deprecated exact-reference model", () => {
+  it("preserves an explicitly configured retired model", () => {
     const provider = expectProviderOnboardMergedLegacyConfig({
       applyProviderConfig: applyNvidiaProviderConfig,
       providerId: "nvidia",

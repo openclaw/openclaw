@@ -1,6 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { sql } from "kysely";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import {
   getUserTurnTranscriptAdmissionOwner,
   readPendingUserTurnTranscriptAdmission,
@@ -9,19 +6,31 @@ import type {
   UserTurnTranscriptAdmissionReceipt,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
-import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import { AsyncContext } from "../../shared/async-context.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
-import { transcriptEventNavigationSql } from "./transcript-payload.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 
-const transcriptReadFenceStorage = new AsyncLocalStorage<UserTurnTranscriptAdmissionReceipt>();
+export { SessionTranscriptReadFenceError };
+
+const transcriptReadFenceStorage = new AsyncContext<UserTurnTranscriptAdmissionReceipt>(
+  Symbol("sessionTranscriptReadFence"),
+);
+
+function isSameTranscriptStore(left: string, right: string): boolean {
+  return left === right || isSameOpenClawAgentDatabasePath(left, right);
+}
 
 type QuestionAnswerScope = {
   recorder: UserTurnTranscriptRecorder | undefined;
   assertActive: () => void;
   inputs: Map<string, UserTurnTranscriptAdmissionReceipt>;
 };
-const questionAnswerStorage = new AsyncLocalStorage<QuestionAnswerScope>();
+const questionAnswerStorage = new AsyncContext<QuestionAnswerScope>(
+  Symbol("sessionTranscriptQuestionAnswers"),
+);
 
 /** Answer custody outlives question registration, but never the creator's admitted run. */
 export function withSessionTranscriptQuestionAnswers<T>(
@@ -43,7 +52,7 @@ export function withSessionTranscriptQuestionAnswers<T>(
         input.agentId === original.agentId &&
         input.sessionId === original.sessionId &&
         input.sessionKey === original.sessionKey &&
-        input.storePath === original.storePath &&
+        isSameTranscriptStore(input.storePath, original.storePath) &&
         input.generation === original.generation
       ) {
         scope.inputs.set(input.entryId, input);
@@ -52,37 +61,41 @@ export function withSessionTranscriptQuestionAnswers<T>(
   );
 }
 
-export function resolveSessionTranscriptQuestionAnswer(
+export function captureSessionTranscriptQuestionAnswers(
   database: Pick<OpenClawAgentDatabase, "path">,
   sessionId: string,
-  entryId: string,
   admittedUserId?: string,
-): UserTurnTranscriptAdmissionReceipt | undefined {
+) {
   const scope = questionAnswerStorage.getStore();
-  const input = scope?.inputs.get(entryId);
-  if (!scope || !input || input.storePath !== database.path || input.sessionId !== sessionId) {
+  const answers = [...(scope?.inputs.values() ?? [])].filter(
+    (input) =>
+      isSameTranscriptStore(input.storePath, database.path) && input.sessionId === sessionId,
+  );
+  if (!scope || answers.length === 0) {
     return undefined;
   }
-  scope.assertActive();
-  const creator = scope.recorder && getUserTurnTranscriptAdmissionOwner(scope.recorder);
-  const original = creator?.receipt();
-  return original &&
-    !creator?.blocked() &&
-    original.agentId === input.agentId &&
-    original.sessionId === input.sessionId &&
-    original.sessionKey === input.sessionKey &&
-    original.storePath === input.storePath &&
-    original.generation === input.generation &&
-    (admittedUserId === undefined || original.entryId === admittedUserId)
-    ? input
-    : undefined;
-}
-
-export class SessionTranscriptReadFenceError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionTranscriptReadFenceError";
-  }
+  const assertCurrent = () => {
+    scope.assertActive();
+    const creator = scope.recorder && getUserTurnTranscriptAdmissionOwner(scope.recorder);
+    const original = creator?.receipt();
+    if (
+      !original ||
+      creator?.blocked() ||
+      !answers.every(
+        (input) =>
+          original.agentId === input.agentId &&
+          original.sessionId === input.sessionId &&
+          original.sessionKey === input.sessionKey &&
+          isSameTranscriptStore(original.storePath, input.storePath) &&
+          original.generation === input.generation &&
+          (admittedUserId === undefined || original.entryId === admittedUserId),
+      )
+    ) {
+      throw new SqliteTranscriptMutationConflictError(sessionId);
+    }
+  };
+  assertCurrent();
+  return { answers, assertCurrent };
 }
 
 type SessionTranscriptReadFence = Readonly<{
@@ -96,6 +109,10 @@ export function runWithSessionTranscriptReadFence<T>(
   run: () => T,
 ): T {
   return receipt ? transcriptReadFenceStorage.run(receipt, run) : run();
+}
+
+export function withoutSessionTranscriptReadFence<T>(run: () => T): T {
+  return transcriptReadFenceStorage.exit(run);
 }
 
 export function withSessionContextAdmission<T>(
@@ -127,7 +144,7 @@ export function resolveSessionTranscriptReadFence(session: {
 }
 
 export function resolveSqliteSessionTranscriptReadFence(params: {
-  database: Pick<OpenClawAgentDatabase, "db" | "path">;
+  database: Pick<OpenClawAgentDatabase, "path">;
   agentId: string;
   sessionId: string;
   sessionKey?: string;
@@ -141,7 +158,7 @@ export function resolveSqliteSessionTranscriptReadFence(params: {
       `Current-turn transcript admission is not a user message: ${receipt.entryId}`,
     );
   }
-  if (params.database.path !== receipt.storePath) {
+  if (!isSameTranscriptStore(params.database.path, receipt.storePath)) {
     throw new SessionTranscriptReadFenceError(
       "Current-turn transcript admission belongs to a different transcript store",
     );
@@ -151,73 +168,11 @@ export function resolveSqliteSessionTranscriptReadFence(params: {
       "Current-turn transcript admission belongs to a different session key",
     );
   }
-  const db = getNodeSqliteKysely<
-    Pick<
-      DB,
-      | "transcript_event_identities"
-      | "session_transcript_active_events"
-      | "transcript_events"
-      | "transcript_rewrite_watermarks"
-    >
-  >(params.database.db);
-  const boundary = executeSqliteQueryTakeFirstSync(
-    params.database.db,
-    db
-      .selectFrom("transcript_event_identities as identity")
-      .innerJoin("session_transcript_active_events as active", (join) =>
-        join
-          .onRef("active.session_id", "=", "identity.session_id")
-          .onRef("active.event_seq", "=", "identity.seq"),
-      )
-      .innerJoin("transcript_events as event", (join) =>
-        join
-          .onRef("event.session_id", "=", "identity.session_id")
-          .onRef("event.seq", "=", "identity.seq"),
-      )
-      .innerJoin("transcript_rewrite_watermarks as rewrite", (join) =>
-        join.onRef("rewrite.session_id", "=", "identity.session_id"),
-      )
-      .select([
-        "identity.seq",
-        "identity.parent_id",
-        "active.message_position",
-        "rewrite.generation",
-        /* kysely-allow-raw: validate the admission role without acquiring its private payload. */
-        sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.type')`.as(
-          "event_type",
-        ),
-        /* kysely-allow-raw: admission validation needs the exact role, not the message body. */
-        sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.role')`.as(
-          "message_role",
-        ),
-      ])
-      .where("identity.session_id", "=", params.sessionId)
-      .where("identity.event_id", "=", receipt.entryId)
-      .limit(1),
-  );
-  if (boundary?.message_position === null || boundary?.message_position === undefined) {
-    throw new SessionTranscriptReadFenceError(
-      `Current-turn transcript admission is no longer a visible message: ${receipt.entryId}`,
-    );
-  }
-  if (
-    boundary.generation !== receipt.generation ||
-    boundary.seq !== receipt.rawSeq ||
-    boundary.parent_id !== receipt.effectiveParentId ||
-    boundary.message_position !== receipt.activeMessagePosition
-  ) {
-    throw new SessionTranscriptReadFenceError(
-      `Current-turn transcript admission identity changed: ${receipt.entryId}`,
-    );
-  }
-  if (boundary.event_type !== "message" || boundary.message_role !== "user") {
-    throw new SessionTranscriptReadFenceError(
-      `Current-turn transcript admission is not a user message: ${receipt.entryId}`,
-    );
-  }
+  // The admission owner publishes these committed bounds. Context consumers
+  // validate their accepted snapshot; external SQLite writers are unsupported.
   return {
     admission: receipt,
-    beforeActiveMessagePosition: boundary.message_position,
-    beforeRawSeq: boundary.seq,
+    beforeActiveMessagePosition: receipt.activeMessagePosition,
+    beforeRawSeq: receipt.rawSeq,
   };
 }

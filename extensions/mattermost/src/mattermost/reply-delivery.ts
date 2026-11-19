@@ -1,11 +1,10 @@
 import {
-  createAcceptedChannelDeliveryResult,
-  createChannelPartialDeliveryError,
-  isChannelPartialDeliveryError,
-} from "openclaw/plugin-sdk/channel-inbound";
-import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
+  createChannelDeliveryAccumulator,
+  type MessageReceipt,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import {
   deliverTextOrMediaReply,
   isReasoningReplyPayload,
@@ -13,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { requiresMattermostMediaUpload, resolveMattermostPresentation } from "../normalize.js";
-import type { MattermostSendResult, sendMessageMattermost } from "./send.js";
+import type { sendMessageMattermost } from "./send.js";
 
 type MarkdownTableMode = Parameters<PluginRuntime["channel"]["text"]["convertMarkdownTables"]>[1];
 
@@ -63,27 +62,29 @@ export async function deliverMattermostReplyPayload(params: {
     text: params.core.channel.text.convertMarkdownTables(presentation.text, params.tableMode),
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
+  const mediaAccess = resolveOutboundMediaAccessForConfig(params.cfg);
   const chunkMode = params.core.channel.text.resolveChunkMode(
     params.cfg,
     "mattermost",
     params.accountId,
   );
-  const results: MattermostSendResult[] = [];
-  const acceptedContents: string[] = [];
+  const accepted = createChannelDeliveryAccumulator({
+    kind: reply.mediaUrls.length > 0 ? "media" : "text",
+    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+  });
   const sendAccepted = async (text: string, mediaUrl?: string) => {
     const result = await params.sendMessage(`channel:${params.channelId}`, text, {
       cfg: params.cfg,
       accountId: params.accountId,
-      ...(mediaUrl ? { mediaUrl, mediaLocalRoots } : {}),
+      ...(mediaUrl ? { mediaUrl, mediaLocalRoots, mediaAccess } : {}),
       // Local media must upload successfully instead of silently posting only its caption.
       ...(requiresMattermostMediaUpload(mediaUrl) ? { requireMediaUpload: true } : {}),
-      ...(results.length === 0 && reply.mediaUrls.length < 2 && presentation.buttons.length
+      ...(accepted.size === 0 && reply.mediaUrls.length < 2 && presentation.buttons.length
         ? { buttons: presentation.buttons }
         : {}),
       replyToId: params.replyToId,
     });
-    results.push(result);
-    acceptedContents.push(result.content);
+    accepted.add({ receipt: result.receipt }, result.content);
   };
   let outcome: Exclude<MattermostReplyDeliveryOutcome, "reasoning_skipped">;
   try {
@@ -96,36 +97,10 @@ export async function deliverMattermostReplyPayload(params: {
       sendMedia: ({ mediaUrl, caption }) => sendAccepted(caption ?? "", mediaUrl),
     });
   } catch (error: unknown) {
-    const failedPartial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
-    if (results.length === 0 && failedPartial?.visibleReplySent !== true) {
-      throw error;
-    }
-    throw createChannelPartialDeliveryError(
-      error,
-      createAcceptedChannelDeliveryResult({
-        results: results.map((result) => ({ receipt: result.receipt })),
-        deliveryResults: failedPartial ? [failedPartial] : [],
-        kind: reply.mediaUrls.length > 0 ? "media" : "text",
-        ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-        content: joinMattermostVisibleContent([...acceptedContents, failedPartial?.content]),
-      }),
-    );
-  }
-
-  if (outcome === "empty") {
-    return {
-      outcome,
-      visibleReplySent: false,
-      suppression: { reason: "no_visible_result" },
-    };
+    throw accepted.partialError(error);
   }
   return {
     outcome,
-    ...createAcceptedChannelDeliveryResult({
-      results: results.map((result) => ({ receipt: result.receipt })),
-      kind: outcome,
-      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-      content: joinMattermostVisibleContent(acceptedContents),
-    }),
+    ...accepted.result(),
   };
 }

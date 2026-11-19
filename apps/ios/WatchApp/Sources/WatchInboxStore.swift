@@ -301,13 +301,7 @@ import WatchKit
     }
 
     func beginExecApprovalReviewLoading() {
-        guard self.execApprovals.isEmpty else {
-            self.markExecApprovalReviewLoaded()
-            return
-        }
-        self.isExecApprovalReviewLoading = true
-        self.execApprovalReviewStatusText = String(localized: "Loading approval from iPhone…")
-        self.execApprovalReviewStatusAt = Date()
+        self.showExecApprovalReviewStatus(String(localized: "Loading approval from iPhone…"), isLoading: true)
     }
 
     func markExecApprovalReviewLoaded() {
@@ -317,12 +311,16 @@ import WatchKit
     }
 
     func markExecApprovalReviewUnavailable(_ message: String) {
+        self.showExecApprovalReviewStatus(message, isLoading: false)
+    }
+
+    private func showExecApprovalReviewStatus(_ message: @autoclosure () -> String, isLoading: Bool) {
         guard self.execApprovals.isEmpty else {
             self.markExecApprovalReviewLoaded()
             return
         }
-        self.isExecApprovalReviewLoading = false
-        self.execApprovalReviewStatusText = message
+        self.isExecApprovalReviewLoading = isLoading
+        self.execApprovalReviewStatusText = message()
         self.execApprovalReviewStatusAt = Date()
     }
 
@@ -816,26 +814,18 @@ extension WatchInboxStore {
             execApprovals[index].pendingDecision == decision
         else { return }
 
-        switch result.delivery {
-        case .delivered:
-            self.execApprovals[index].isResolving = true
-            self.execApprovals[index].status = WatchExecApprovalStatus(
-                code: .sent,
-                decision: decision)
-        case .queued:
-            self.execApprovals[index].isResolving = true
-            self.execApprovals[index].status = WatchExecApprovalStatus(
-                code: .queued,
-                decision: decision)
-        case .notSent:
+        if result.delivery == .notSent {
             // Only a definitive pre-dispatch failure unlocks locally. Uncertain sends stay
             // frozen until a canonical retry reset or terminal event arrives.
-            self.execApprovals[index].isResolving = false
             self.execApprovals[index].activeResolutionAttemptID = nil
-            self.execApprovals[index].status = WatchExecApprovalStatus(
-                code: .retry,
-                decision: decision)
         }
+        self.execApprovals[index].isResolving = result.delivery != .notSent
+        let code: WatchExecApprovalStatusCode = switch result.delivery {
+        case .delivered: .sent
+        case .queued: .queued
+        case .notSent: .retry
+        }
+        self.execApprovals[index].status = WatchExecApprovalStatus(code: code, decision: decision)
         self.execApprovals[index].pendingDecision = result.delivery == .notSent ? nil : decision
         self.execApprovals[index].statusAt = Date()
         self.persistState()
@@ -886,21 +876,17 @@ extension WatchInboxStore {
     {
         // Preserve in-flight state across ordinary snapshot/prompt refreshes so duplicate
         // submissions stay disabled. Only the iPhone readback for the same attempt may clear it.
-        let isResolving = resetResolvingState ? false : (existingRecord?.isResolving ?? false)
-        let pendingDecision = resetResolvingState ? nil : existingRecord?.pendingDecision
-        let activeResolutionAttemptID = resetResolvingState ? nil : existingRecord?.activeResolutionAttemptID
-        let status = resetResolvingState ? nil : existingRecord?.status
-        let statusAt = resetResolvingState ? nil : existingRecord?.statusAt
+        let pendingRecord = resetResolvingState ? nil : existingRecord
         return WatchExecApprovalRecord(
             approval: approval,
             transport: transport,
             sourceSentAtMs: sourceSentAtMs ?? existingRecord?.sourceSentAtMs,
             updatedAt: Date(),
-            isResolving: isResolving,
-            pendingDecision: pendingDecision,
-            activeResolutionAttemptID: activeResolutionAttemptID,
-            status: status,
-            statusAt: statusAt)
+            isResolving: pendingRecord?.isResolving ?? false,
+            pendingDecision: pendingRecord?.pendingDecision,
+            activeResolutionAttemptID: pendingRecord?.activeResolutionAttemptID,
+            status: pendingRecord?.status,
+            statusAt: pendingRecord?.statusAt)
     }
 
     private static func snapshotCanReplace(

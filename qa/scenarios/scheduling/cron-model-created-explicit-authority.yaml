@@ -23,10 +23,10 @@ scenario:
               allow:
                 - read
                 - automations
-  objective: Verify a sender-restricted live model persists exact creator-scoped authority for new cron jobs without widening requested tools.
+  objective: Verify a sender-restricted live model persists wildcard inheritance for omitted or wildcard policies and creator-scoped finite caps without widening requested tools.
   successCriteria:
     - The model creates omitted, wildcard, overbroad, and empty policy jobs through the automations tool.
-    - Omitted and wildcard policies become the concrete creator surface with the default marker.
+    - Omitted and wildcard policies persist exactly ["*"] so runs inherit the owner session policy.
     - The overbroad policy is intersected with the creator surface and the empty policy remains empty.
     - Every stored policy survives a Gateway restart unchanged.
   docsRefs:
@@ -243,7 +243,7 @@ flow:
             - ref: config.sessionKey
             - lambda:
                 params: [history]
-                expr: "(() => { const calls = projectQaToolMessages(history.messages ?? []).flatMap((message) => message.role === 'assistant' && Array.isArray(message.content) ? message.content : []).filter((item) => item.type === 'toolCall' && item.name === 'automations'); return calls.length >= 4 ? calls : undefined; })()"
+                expr: "(() => { const calls = projectQaToolMessages(history.messages ?? []).flatMap((message) => message.role === 'assistant' && Array.isArray(message.content) ? message.content : []).filter((item) => item.type === 'toolCall' && item.name === 'automations' && item.isError !== true); return calls.length >= 4 ? calls : undefined; })()"
             - expr: liveTurnTimeoutMs(env, 240000)
             - 250
         - assert:
@@ -278,23 +278,20 @@ flow:
             expr: "omittedJob.payload.message === 'omitted authority' && wildcardJob.payload.message === 'wildcard authority' && overbroadJob.payload.message === 'overbroad authority' && emptyJob.payload.message === 'empty authority'"
             message:
               expr: "`authority matrix changed payloads: ${JSON.stringify(jobs.map((job) => job.payload))}`"
-        - set: expectedCreatorTools
-          value:
-            expr: "['automations', 'read'].sort()"
         - assert:
-            expr: "JSON.stringify([...(omittedJob.payload.toolsAllow ?? [])].sort()) === JSON.stringify(expectedCreatorTools) && omittedJob.payload.toolsAllowIsDefault === true"
+            expr: "JSON.stringify(omittedJob.payload.toolsAllow) === JSON.stringify(['*'])"
             message:
-              expr: "`omitted policy did not capture creator authority: ${JSON.stringify(omittedJob?.payload)}`"
+              expr: "`omitted policy did not persist the wildcard cap: ${JSON.stringify(omittedJob?.payload)}`"
         - assert:
-            expr: "JSON.stringify([...(wildcardJob.payload.toolsAllow ?? [])].sort()) === JSON.stringify(expectedCreatorTools) && wildcardJob.payload.toolsAllowIsDefault === true"
+            expr: "JSON.stringify(wildcardJob.payload.toolsAllow) === JSON.stringify(['*'])"
             message:
-              expr: "`wildcard policy did not capture creator authority: ${JSON.stringify(wildcardJob?.payload)}`"
+              expr: "`wildcard policy did not persist the wildcard cap: ${JSON.stringify(wildcardJob?.payload)}`"
         - assert:
-            expr: "JSON.stringify(overbroadJob.payload.toolsAllow) === JSON.stringify(['read']) && overbroadJob.payload.toolsAllowIsDefault !== true"
+            expr: "(() => { const stored = overbroadJob.payload.toolsAllow; const expected = ['read', 'skills_read']; return Array.isArray(stored) && stored.length === expected.length && expected.every((tool) => stored.includes(tool)); })()"
             message:
               expr: "`overbroad policy was not intersected: ${JSON.stringify(overbroadJob?.payload)}`"
         - assert:
-            expr: "Array.isArray(emptyJob.payload.toolsAllow) && emptyJob.payload.toolsAllow.length === 0 && emptyJob.payload.toolsAllowIsDefault !== true"
+            expr: "Array.isArray(emptyJob.payload.toolsAllow) && emptyJob.payload.toolsAllow.length === 0"
             message:
               expr: "`empty policy changed: ${JSON.stringify(emptyJob?.payload)}`"
       detailsExpr: "`runtime=${env.primaryModel}; calls=${cronToolCalls.length}; omitted=${JSON.stringify(omittedJob.payload.toolsAllow)}; wildcard=${JSON.stringify(wildcardJob.payload.toolsAllow)}; overbroad=${JSON.stringify(overbroadJob.payload.toolsAllow)}; empty=${JSON.stringify(emptyJob.payload.toolsAllow)}`"
@@ -328,7 +325,7 @@ flow:
             message:
               expr: "`authority jobs missing after restart: ${JSON.stringify(restartedPage.jobs.map((job) => job.name))}`"
         - assert:
-            expr: "restartedJobs.every((job) => { const before = jobs.find((candidate) => candidate.id === job.id); return before && JSON.stringify([...(job.payload.toolsAllow ?? [])].sort()) === JSON.stringify([...(before.payload.toolsAllow ?? [])].sort()) && job.payload.toolsAllowIsDefault === before.payload.toolsAllowIsDefault; })"
+            expr: "restartedJobs.every((job) => { const before = jobs.find((candidate) => candidate.id === job.id); return before && JSON.stringify(job.payload.toolsAllow) === JSON.stringify(before.payload.toolsAllow); })"
             message:
               expr: "`authority changed across restart: before=${JSON.stringify(jobs.map((job) => job.payload))} after=${JSON.stringify(restartedJobs.map((job) => job.payload))}`"
         - call: env.gateway.call

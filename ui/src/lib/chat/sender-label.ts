@@ -1,6 +1,11 @@
+import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as normalizeLabelPart } from "@openclaw/normalization-core/string-coerce";
 import type { SessionParticipantIdentity } from "../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { readTranscriptSenderIdentity } from "../../../../src/chat/sender-identity.js";
+
+// Keep legacy labels readable without treating their UUID suffix as profile evidence.
+const OPAQUE_ID_LABEL_SUFFIX_RE =
+  /\s+\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/iu;
 
 export type SenderIdentity = {
   identity?: SessionParticipantIdentity;
@@ -51,12 +56,40 @@ export function normalizeSenderIdentity(
   };
 }
 
+export function resolveMessageSender(
+  metadata: Record<string, unknown> | undefined,
+): SenderIdentity | null {
+  const identity = readTranscriptSenderIdentity(metadata?.senderIdentity);
+  return normalizeSenderIdentity({
+    identity,
+    id: metadata?.senderId,
+    name: metadata?.senderName,
+    username: metadata?.senderUsername,
+    profileAvatarUrl: identity?.type === "profile" ? metadata?.senderProfileAvatarUrl : undefined,
+  });
+}
+
+export function resolveMessageSenderLabel(
+  message: unknown,
+  sender?: SenderIdentity | null,
+): string | null {
+  const m = asOptionalRecord(message);
+  const rawLabel = readStringField(m, "senderLabel")?.trim() ?? "";
+  if (rawLabel) {
+    return rawLabel.replace(OPAQUE_ID_LABEL_SUFFIX_RE, "").trim();
+  }
+  // Full normalization already prepared the sender; null is a known absence.
+  return formatSenderLabel(
+    sender === undefined ? resolveMessageSender(asOptionalRecord(m?.["__openclaw"])) : sender,
+  );
+}
+
 export function senderIdentityKey(sender: SenderIdentity | null | undefined): string | null {
   if (!sender) {
     return null;
   }
   if (sender.identity) {
-    return JSON.stringify(sender.identity, Object.keys(sender.identity).toSorted());
+    return sessionParticipantIdentityKey(sender.identity);
   }
   return [
     sender.id ?? "",
@@ -68,31 +101,7 @@ export function senderIdentityKey(sender: SenderIdentity | null | undefined): st
 
 /** Keys a participant identity by its fields, so key order never splits one person. */
 export function sessionParticipantIdentityKey(identity: SessionParticipantIdentity): string {
-  switch (identity.type) {
-    case "profile":
-    case "agent":
-      return JSON.stringify([identity.type, identity.id]);
-    case "remote":
-      return JSON.stringify([
-        identity.type,
-        identity.pluginId,
-        identity.domain,
-        identity.idKind,
-        identity.id,
-      ]);
-    case "observation":
-      return JSON.stringify([
-        identity.type,
-        identity.pluginId,
-        identity.accountId,
-        identity.senderKind,
-        identity.id,
-      ]);
-    case "legacy":
-      return JSON.stringify([identity.type, identity.actorType, identity.source, identity.id]);
-    default:
-      return identity satisfies never;
-  }
+  return JSON.stringify(identity, Object.keys(identity).toSorted());
 }
 
 /**

@@ -46,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -385,6 +386,20 @@ class FoldAwareDialogTest {
     assertTrue(composeRule.onNodeWithText("Prompt line 0").getUnclippedBoundsInRoot().top < firstLine.top)
     assertTrue(callbacks.isEmpty())
     assertEquals(0, underlyingClicks)
+
+    val dialogNode = composeRule.onNode(isDialog())
+    dialogNode.performTouchInput {
+      down(0, Offset(750f, 100f))
+      down(1, Offset(850f, 100f))
+      up(1)
+      up(0)
+    }
+    dialogNode.performTouchInput { down(Offset(750f, 100f)) }
+    val previousBounds = prompt("Modal prompt").getUnclippedBoundsInRoot()
+    emit(emptyList())
+    assertFalse(previousBounds == prompt("Modal prompt").getUnclippedBoundsInRoot())
+    dialogNode.performTouchInput { up() }
+    assertTrue("Multiple pointers and moving prompt bounds are not outside taps", callbacks.isEmpty())
 
     gesture(dialog, 750f to 100f)
     assertEquals(listOf("dismiss"), callbacks)

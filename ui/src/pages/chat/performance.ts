@@ -1,111 +1,43 @@
-import type { EventLogEntry } from "../../api/event-log.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 
-type ChatPerformanceHost = {
-  eventLogBuffer?: unknown[];
-  renderLifecycle?: RenderLifecycle;
-};
-
-const EVENT_LOG_LIMIT = 250;
-
-export function controlUiNowMs(): number {
-  return typeof performance !== "undefined" && typeof performance.now === "function"
-    ? performance.now()
-    : Date.now();
-}
-
-export function roundedControlUiDurationMs(durationMs: number): number {
-  return Math.max(0, Math.round(durationMs));
-}
-
-function runAfterPaint(callback: () => void, complete: () => void): () => void {
-  let active = true;
-  let frame: number | null = null;
-  const run = () => {
-    if (!active) {
-      return;
-    }
-    active = false;
-    try {
-      callback();
-    } finally {
-      complete();
-    }
-  };
-  if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
-    queueMicrotask(run);
-  } else {
-    frame = window.requestAnimationFrame(() => {
+export function scheduleControlUiAfterPaint(
+  host: { renderLifecycle: Pick<RenderLifecycle, "afterCommit"> },
+  callback: () => void,
+): void {
+  host.renderLifecycle.afterCommit((complete) => {
+    let active = true;
+    let frame: number | null = null;
+    const run = () => {
+      if (!active) {
+        return;
+      }
+      active = false;
+      try {
+        callback();
+      } finally {
+        complete();
+      }
+    };
+    // Paint timing requires the supported browser primitives, not a microtask approximation.
+    frame = requestAnimationFrame(() => {
       frame = null;
       if (!active) {
         return;
       }
-      frame = window.requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
         frame = null;
         run();
       });
     });
-  }
-  return () => {
-    if (!active) {
-      return;
-    }
-    active = false;
-    if (frame !== null) {
-      window.cancelAnimationFrame(frame);
-      frame = null;
-    }
-  };
-}
-
-function keepLatestBufferedEventsForType(
-  entries: unknown[],
-  event: string,
-  maxExistingForType: number,
-): unknown[] {
-  let keptForType = 0;
-  return entries.filter((entry) => {
-    if (!entry || typeof entry !== "object" || !("event" in entry) || entry.event !== event) {
-      return true;
-    }
-    keptForType += 1;
-    return keptForType <= maxExistingForType;
+    return () => {
+      if (!active) {
+        return;
+      }
+      active = false;
+      if (frame !== null) {
+        cancelAnimationFrame(frame);
+        frame = null;
+      }
+    };
   });
-}
-
-export function recordControlUiPerformanceEvent(
-  host: ChatPerformanceHost,
-  event: string,
-  payload: Record<string, unknown>,
-  opts?: { warn?: boolean; console?: boolean; maxBufferedEventsForType?: number },
-): void {
-  const entry: EventLogEntry = { ts: Date.now(), event, payload };
-  if (Array.isArray(host.eventLogBuffer)) {
-    const existingBuffer =
-      typeof opts?.maxBufferedEventsForType === "number"
-        ? keepLatestBufferedEventsForType(
-            host.eventLogBuffer,
-            event,
-            Math.max(0, opts.maxBufferedEventsForType - 1),
-          )
-        : host.eventLogBuffer;
-    host.eventLogBuffer = [entry, ...existingBuffer].slice(0, EVENT_LOG_LIMIT);
-  }
-  if (opts?.console === false) {
-    return;
-  }
-  const logger = opts?.warn === true ? console.warn : console.debug;
-  logger(`[openclaw] ${event}`, payload);
-}
-
-export function scheduleControlUiAfterPaint(
-  host: Pick<ChatPerformanceHost, "renderLifecycle">,
-  callback: () => void,
-): void {
-  if (host.renderLifecycle) {
-    host.renderLifecycle.afterCommit((complete) => runAfterPaint(callback, complete));
-    return;
-  }
-  // Renderer-free unit hosts have no DOM commit to await.
-  runAfterPaint(callback, () => undefined);
 }

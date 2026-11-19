@@ -1,5 +1,6 @@
 // Status JSON cold-import tests guard the default route from optional memory runtime imports.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 describe("status.scan.fast-json cold imports", () => {
   afterEach(() => {

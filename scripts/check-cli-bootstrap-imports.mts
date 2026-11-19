@@ -5,7 +5,12 @@ import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
 import type { Node as AcornNode } from "acorn";
-import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../src/shared/worker-bundle-hash.js";
+import {
+  WORKER_BUNDLE_ARTIFACT_PATHS,
+  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_ENTRY_PATH,
+} from "../src/shared/worker-bundle-hash.js";
+import { checkWorkerModuleBudget } from "./check-worker-module-budget.mjs";
 import { reportLimitViolations, type LimitViolation } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { readGatewayRunChunks } from "./lib/gateway-run-chunk-metadata.mts";
@@ -23,6 +28,11 @@ const NATIVE_HOOK_RELAY_FORBIDDEN_STATIC_MARKERS = [
 ];
 // fs-safe must retain its package scope for optional native-platform loading.
 const NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_IMPORTS = ["kysely", "@openclaw/fs-safe"];
+// These import-safe subpaths retain proc-safe's package-scoped, lazy native loader.
+const NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_SUBPATHS = new Set([
+  "@openclaw/proc-safe/errors",
+  "@openclaw/proc-safe/identity",
+]);
 const WORKER_DEPLOY_ENTRYPOINTS = WORKER_BUNDLE_ARTIFACT_PATHS.map(
   (entry) => `dist/worker/${entry}`,
 );
@@ -91,7 +101,7 @@ function resolveRelativeImport(importer: string, specifier: string, fsImpl: type
 /**
  * Lists static import/export specifiers from a JavaScript source string.
  */
-export function listStaticImportSpecifiers(source: string) {
+function listStaticImportSpecifiers(source: string) {
   return [...source.matchAll(STATIC_IMPORT_RE)].map((match) => match.groups?.specifier ?? "");
 }
 
@@ -151,6 +161,14 @@ function listRuntimeImportSpecifiers(source: string): string[] {
         continue;
       }
       const node = value as AcornNode & Record<string, unknown>;
+      // These leaves cannot contain imports; avoid allocating property lists for them.
+      if (
+        node.type === "Identifier" ||
+        node.type === "Literal" ||
+        node.type === "TemplateElement"
+      ) {
+        continue;
+      }
       if (
         node.type === "ImportDeclaration" ||
         node.type === "ExportNamedDeclaration" ||
@@ -274,7 +292,7 @@ export function collectNativeHookRelayBundleErrors(params: CliBootstrapCheckPara
     (filePath, specifier) =>
       NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_IMPORTS.some(
         (dependency) => specifier === dependency || specifier.startsWith(`${dependency}/`),
-      )
+      ) || NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_SUBPATHS.has(specifier)
         ? ""
         : `Native hook relay static graph imports unexpected package "${specifier}" from ${
             path.relative(rootDir, filePath) || filePath
@@ -465,27 +483,15 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
   );
   const errors: string[] = [];
   const sources: Array<{ relativeEntrypoint: string; source: string }> = [];
-  for (const entrypoint of entrypoints) {
-    const relativeEntrypoint = path.relative(rootDir, entrypoint) || entrypoint;
-    try {
-      const stats = fsImpl.lstatSync(entrypoint);
-      if (stats.isSymbolicLink() || !stats.isFile()) {
-        return [`Worker deploy artifact ${relativeEntrypoint} must be a regular file.`];
-      }
-      sources.push({
-        relativeEntrypoint,
-        source: fsImpl.readFileSync(entrypoint, "utf8"),
-      });
-    } catch {
-      return [`Worker deploy artifact ${relativeEntrypoint} is missing. Run pnpm build first.`];
-    }
-  }
   try {
     for (const entry of fsImpl.readdirSync(artifactDir, { withFileTypes: true })) {
       if (artifactNames.has(entry.name)) {
         continue;
       }
-      if (entry.name === "package.json") {
+      if (WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(entry.name)) {
+        artifactNames.add(entry.name);
+        entrypoints.push(path.join(artifactDir, entry.name));
+      } else if (entry.name === "package.json") {
         errors.push(
           "Worker deploy artifact must not contain a dependency manifest or lifecycle scripts.",
         );
@@ -508,10 +514,33 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
       `Worker deploy artifact directory ${path.relative(rootDir, artifactDir)} is unreadable.`,
     );
   }
+  for (const entrypoint of entrypoints) {
+    const relativeEntrypoint = path.relative(rootDir, entrypoint) || entrypoint;
+    try {
+      const stats = fsImpl.lstatSync(entrypoint);
+      if (stats.isSymbolicLink() || !stats.isFile()) {
+        return [`Worker deploy artifact ${relativeEntrypoint} must be a regular file.`];
+      }
+      if (entrypoint.endsWith(".mjs")) {
+        sources.push({
+          relativeEntrypoint,
+          source: fsImpl.readFileSync(entrypoint, "utf8"),
+        });
+      }
+    } catch {
+      return [`Worker deploy artifact ${relativeEntrypoint} is missing. Run pnpm build first.`];
+    }
+  }
   for (const { relativeEntrypoint, source } of sources) {
     try {
       for (const specifier of listRuntimeImportSpecifiers(source)) {
-        if (isBuiltinSpecifier(specifier)) {
+        if (
+          isBuiltinSpecifier(specifier) ||
+          specifier === "bun:ffi" ||
+          (specifier.startsWith("./") &&
+            specifier.endsWith(".mjs") &&
+            artifactNames.has(specifier.slice(2)))
+        ) {
           continue;
         }
         errors.push(
@@ -537,7 +566,13 @@ export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams
     ...collectCliBootstrapExternalImportErrors(params),
     ...collectGatewayRunChunkBudgetErrors(params),
     ...collectNativeHookRelayBundleErrors(params),
-    ...collectWorkerDeployArtifactErrors(params),
+    // A runtime-only build may skip the sealed bundle; an emitted one is always checked.
+    ...(process.env.OPENCLAW_BUILD_WORKER_DEPLOY_BUNDLE === "0" &&
+    !fs.existsSync(
+      path.resolve(params.rootDir ?? process.cwd(), "dist/worker", WORKER_BUNDLE_ENTRY_PATH),
+    )
+      ? []
+      : collectWorkerDeployArtifactErrors(params)),
   ];
   const errors = findings.filter((finding) => typeof finding === "string");
   const limitsFailed = reportLimitViolations(
@@ -557,8 +592,10 @@ export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     checkCliBootstrapExternalImports({ requireNativeHookRelay: true });
+    await checkWorkerModuleBudget(process.cwd());
     console.log("CLI bootstrap import guard passed.");
-  } catch {
+  } catch (error) {
+    console.error(error);
     process.exit(1);
   }
 }

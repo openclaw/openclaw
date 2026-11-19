@@ -3,12 +3,9 @@ import {
   normalizeOptionalString as normalizeText,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeFeishuTarget, stripFeishuProviderPrefix } from "./targets.js";
+import type { FeishuConfig } from "./types.js";
 
-export type FeishuGroupSessionScope =
-  | "group"
-  | "group_sender"
-  | "group_topic"
-  | "group_topic_sender";
+export type FeishuGroupSessionScope = NonNullable<FeishuConfig["groupSessionScope"]>;
 
 const SCOPED_CONVERSATION_PATTERNS = [
   ["group_topic_sender", /^(?<chatId>.+):topic:(?<topicId>[^:]+):sender:(?<senderOpenId>[^:]+)$/i],
@@ -45,22 +42,14 @@ export function buildFeishuConversationId(params: {
   const senderOpenId = normalizeText(params.senderOpenId);
   const topicId = normalizeText(params.topicId);
 
-  switch (params.scope) {
-    case "group_sender":
-      return senderOpenId ? `${chatId}:sender:${senderOpenId}` : chatId;
-    case "group_topic":
-      return topicId ? `${chatId}:topic:${topicId}` : chatId;
-    case "group_topic_sender":
-      if (topicId && senderOpenId) {
-        return `${chatId}:topic:${topicId}:sender:${senderOpenId}`;
-      }
-      if (topicId) {
-        return `${chatId}:topic:${topicId}`;
-      }
-      return senderOpenId ? `${chatId}:sender:${senderOpenId}` : chatId;
-    default:
-      return chatId;
+  let conversationId = chatId;
+  if (topicId && (params.scope === "group_topic" || params.scope === "group_topic_sender")) {
+    conversationId += `:topic:${topicId}`;
   }
+  if (senderOpenId && (params.scope === "group_sender" || params.scope === "group_topic_sender")) {
+    conversationId += `:sender:${senderOpenId}`;
+  }
+  return conversationId;
 }
 
 export function parseFeishuTargetId(raw: unknown): string | undefined {
@@ -77,10 +66,7 @@ export function parseFeishuDirectConversationId(raw: unknown): string | undefine
     return undefined;
   }
   const withoutProvider = stripFeishuProviderPrefix(target);
-  if (!withoutProvider) {
-    return undefined;
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(withoutProvider);
+  const lowered = withoutProvider.toLowerCase();
   for (const prefix of ["user:", "dm:", "open_id:"]) {
     if (lowered.startsWith(prefix)) {
       return normalizeText(withoutProvider.slice(prefix.length));

@@ -43,7 +43,11 @@ export function recordTurnCompaction(
     hasSameCompactionWriter(target, fact.target),
   );
   const previous = compaction.durable[index];
-  if (!previous && fact.count === 0) {
+  if (
+    !previous &&
+    fact.count === 0 &&
+    (compaction.durable.length > 0 || !fact.currentContextSnapshot)
+  ) {
     return;
   }
   if (previous) {
@@ -54,5 +58,7 @@ export function recordTurnCompaction(
     ...fact,
     count: (previous?.count ?? 0) + fact.count,
     currentContextSnapshot: fact.currentContextSnapshot ?? previous?.currentContextSnapshot,
+    // A later native-only fact from the same writer cannot erase an earlier host rewrite.
+    hostCompactionCommitted: fact.hostCompactionCommitted || previous?.hostCompactionCommitted,
   });
 }

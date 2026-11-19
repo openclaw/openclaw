@@ -21,7 +21,6 @@ type AnthropicVertexAdcCredentials = NonNullable<GoogleAuthOptions["credentials"
   quota_project_id?: unknown;
 };
 
-/** Resolve the configured Vertex region, defaulting to global. */
 export function resolveAnthropicVertexRegion(env: NodeJS.ProcessEnv = process.env): string {
   const region =
     normalizeOptionalSecretInput(env.GOOGLE_CLOUD_LOCATION) ||
@@ -32,7 +31,6 @@ export function resolveAnthropicVertexRegion(env: NodeJS.ProcessEnv = process.en
     : ANTHROPIC_VERTEX_DEFAULT_REGION;
 }
 
-/** Resolve the Vertex project id from explicit env or ADC files. */
 export function resolveAnthropicVertexProjectId(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
@@ -121,17 +119,14 @@ function resolveAnthropicVertexProjectIdFromAdc(
   }
 }
 
-/** Return whether ADC credentials or metadata-server auth are available. */
 export function hasAnthropicVertexCredentials(env: NodeJS.ProcessEnv = process.env): boolean {
   return hasAnthropicVertexMetadataServerAdc(env) || canReadAnthropicVertexAdc(env);
 }
 
-/** Return whether Anthropic Vertex has usable auth for implicit registration. */
 export function hasAnthropicVertexAvailableAuth(env: NodeJS.ProcessEnv = process.env): boolean {
   return hasAnthropicVertexCredentials(env);
 }
 
-/** Resolve the synthetic config API key marker for Anthropic Vertex auth. */
 export function resolveAnthropicVertexConfigApiKey(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {

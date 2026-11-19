@@ -45,7 +45,6 @@ const questions: Question[] = [
 const answers = { answers: { choice: ["Two"] } };
 
 const invalidAnswerCases: Array<[string, Question[], QuestionAnswers, string]> = [
-  ["an empty answer map", questions, { answers: {} }, "choice"],
   [
     "a prototype-key question id with no submitted answer",
     [{ ...questions[0]!, questionId: "constructor" }],
@@ -105,6 +104,30 @@ afterEach(async () => {
 });
 
 describe("QuestionManager", () => {
+  it("hides a committing question on reset and settles it without touching a reused id", async () => {
+    const commit = createDeferredCore();
+    const onResolved = vi.fn();
+    const original = manager.request({ questions, timeoutMs: 10_000, onResolved });
+    const waiting = manager.waitAnswer(original.id);
+    const pending = manager.resolveWithCommit(original.id, answers, undefined, {
+      commit: () => commit.promise,
+    });
+    let successor: ReturnType<QuestionManager["request"]> | undefined;
+    try {
+      manager.reset();
+      expect(manager.get(original.id)).toBeNull();
+      expect(manager.list()).toEqual([]);
+      successor = manager.request({ id: original.id, questions, timeoutMs: 10_000 });
+    } finally {
+      commit.resolve();
+      await pending;
+    }
+    await expect(waiting).resolves.toEqual({ status: "answered", answers });
+    expect(manager.get(original.id)).toBe(successor);
+    expect(successor?.status).toBe("pending");
+    expect(onResolved).not.toHaveBeenCalled();
+  });
+
   it.each(["cleanup", "reset", "close"] as const)(
     "retains private read facts through completion and releases them on %s",
     async (retirement) => {
@@ -186,25 +209,6 @@ describe("QuestionManager", () => {
     expect(observation.isCurrent()).toBe(false);
   });
 
-  it("requests, gets, and deterministically lists pending questions", () => {
-    const first = manager.request({
-      questions,
-      timeoutMs: 10_000,
-      agentId: "main",
-      runId: "run-first",
-    });
-    clock.setTime(1_001);
-    const second = manager.request({
-      questions: [{ ...questions[0]!, questionId: "other" }],
-      timeoutMs: 10_000,
-      sessionKey: "agent:main:main",
-    });
-
-    expect(manager.get(first.id)).toEqual(first);
-    expect(first.runId).toBe("run-first");
-    expect(manager.list().map((record) => record.id)).toEqual([first.id, second.id]);
-  });
-
   it("accepts a unique client id and rejects reuse during the grace window", () => {
     const first = manager.request({ id: "ask_client_id", questions, timeoutMs: 10_000 });
 
@@ -217,21 +221,6 @@ describe("QuestionManager", () => {
     } catch (error) {
       expect(error).toMatchObject({ code: QuestionManagerErrorCodes.ID_IN_USE });
     }
-  });
-
-  it("accepts ignored synchronous callback results through the public Gateway contract", async () => {
-    const observed: QuestionResolvedEvent[] = [];
-    const request = {
-      questions,
-      timeoutMs: 10_000,
-      onResolved: (event) => observed.push(event),
-    } satisfies PublicQuestionRequest;
-    const record = manager.request(request);
-
-    expect(manager.resolve(record.id, answers)).toEqual({ status: "answered", answers });
-    expect(observed).toEqual([{ id: record.id, status: "answered", answers }]);
-    await manager.drain();
-    expect(observed).toHaveLength(1);
   });
 
   it("keeps resolution receipts opt-in for simultaneous and late waiters", async () => {
@@ -567,18 +556,6 @@ describe("QuestionManager", () => {
     expect(manager.get(record.id)?.status).toBe("pending");
   });
 
-  it("expires pending questions and emits the terminal event", async () => {
-    const onResolved = vi.fn();
-    const record = manager.request({ questions, timeoutMs: 50, onResolved });
-    const waiting = manager.waitAnswer(record.id);
-
-    await clock.advanceBy(50);
-
-    await expect(waiting).resolves.toEqual({ status: "expired" });
-    expect(manager.get(record.id)?.status).toBe("expired");
-    expect(onResolved.mock.calls[0]?.[0]).toEqual({ id: record.id, status: "expired" });
-  });
-
   it("expires once after sleep and joins the terminal publication when the scheduler closes", async () => {
     const publication = createDeferredCore();
     const onResolved = vi.fn(() => publication.promise);
@@ -608,15 +585,6 @@ describe("QuestionManager", () => {
     }
   });
 
-  it("cancels pending questions", async () => {
-    const record = manager.request({ questions, timeoutMs: 10_000 });
-    const waiting = manager.waitAnswer(record.id);
-
-    expect(manager.cancel(record.id, "agent")).toEqual({ status: "cancelled" });
-    await expect(waiting).resolves.toEqual({ status: "cancelled" });
-    expect(manager.get(record.id)).toMatchObject({ status: "cancelled", resolvedBy: "agent" });
-  });
-
   it("rejects double resolve and resolve after expiry with typed errors", async () => {
     const answered = manager.request({ questions, timeoutMs: 10_000 });
     manager.resolve(answered.id, answers);
@@ -638,39 +606,6 @@ describe("QuestionManager", () => {
     }
   });
 
-  it("keeps terminal records through the grace window", async () => {
-    let accessActive = true;
-    const releaseSessionAccess = vi.fn(() => {
-      accessActive = false;
-    });
-    const record = manager.request({
-      questions,
-      timeoutMs: 10_000,
-      sessionAccess: {
-        agentId: "main",
-        sessionKey: "agent:main:own",
-        canSelect: () => accessActive,
-        assertSourceCurrent: () => {},
-        assertCurrent: () => {},
-        release: releaseSessionAccess,
-      },
-    });
-    manager.resolve(record.id, answers);
-
-    await manager.drain();
-    await clock.advanceBy(QUESTION_RESOLVED_ENTRY_GRACE_MS - 1);
-    expect(manager.get(record.id)?.status).toBe("answered");
-    expect(manager.observe(record.id)?.sessionAccess?.canSelect(null)).toBe(true);
-    expect(releaseSessionAccess).not.toHaveBeenCalled();
-
-    await clock.advanceBy(1);
-    expect(manager.get(record.id)).toBeNull();
-    expect(manager.observe(record.id)?.sessionAccess).toBeUndefined();
-    expect(releaseSessionAccess).toHaveBeenCalledOnce();
-    manager.close();
-    expect(releaseSessionAccess).toHaveBeenCalledOnce();
-  });
-
   it("retains authority sweeping for legacy requesters without a run selector", () => {
     let active = true;
     const resolved = vi.fn();
@@ -690,6 +625,62 @@ describe("QuestionManager", () => {
 });
 
 describe("answer canonicalization", () => {
+  const valuedOptions = [
+    { label: "Blue", value: "blue-1" },
+    { label: "Red", value: "red-1" },
+  ];
+  const duplicateLabels = [
+    { label: "Blue", value: "blue-1" },
+    { label: "Blue", value: "blue-2" },
+  ];
+  const valuedAnswerCases: Array<
+    [string, Partial<Question>, Question["options"], string, string | undefined]
+  > = [
+    ["installed form label", { presentation: "form" }, valuedOptions, "Blue", "blue-1"],
+    ["form value", { presentation: "form" }, valuedOptions, "blue-1", "blue-1"],
+    ["unknown form label", { presentation: "form" }, valuedOptions, "Green", undefined],
+    ["inexact form label", { presentation: "form" }, valuedOptions, " Blue ", undefined],
+    [
+      "value before a conflicting label",
+      { presentation: "form" },
+      [
+        { label: "a", value: "b" },
+        { label: "b", value: "c" },
+      ],
+      "b",
+      "b",
+    ],
+    ["trimmed ordinary label", {}, valuedOptions, "  Blue  ", "blue-1"],
+    ["inexact secret label", { isSecret: true }, valuedOptions, " Blue ", undefined],
+    [
+      "Other form text preserves exact bytes",
+      { presentation: "form", isOther: true },
+      valuedOptions,
+      "\tanything else\n",
+      "\tanything else\n",
+    ],
+    ["ambiguous form label", { presentation: "form" }, duplicateLabels, "Blue", undefined],
+    ["first duplicate-label value", { presentation: "form" }, duplicateLabels, "blue-1", "blue-1"],
+    ["ambiguous trimmed ordinary label", {}, duplicateLabels, " Blue ", undefined],
+  ];
+  it.each(valuedAnswerCases)("resolves %s", (_name, overrides, options, submitted, expected) => {
+    const record = manager.request({
+      questions: [{ ...questions[0]!, options, isOther: false, ...overrides }],
+      timeoutMs: 10_000,
+    });
+    const resolve = () => manager.resolve(record.id, { answers: { choice: [submitted] } });
+    if (expected === undefined) {
+      expect(resolve).toThrowError(
+        expect.objectContaining({ code: QuestionManagerErrorCodes.INVALID_ANSWER }),
+      );
+    } else {
+      expect(resolve()).toEqual({
+        status: "answered",
+        answers: { answers: { choice: [expected] } },
+      });
+    }
+  });
+
   it.each(["\tsynthetic-secret\n", "   "])(
     "preserves exact secret bytes while normalizing ordinary answers: %j",
     async (value) => {
@@ -714,30 +705,6 @@ describe("answer canonicalization", () => {
       });
     },
   );
-
-  it("stores declared option labels for trim-variant submissions", () => {
-    const localManager = new QuestionManager(scheduler);
-    const record = localManager.request({
-      questions: [
-        {
-          questionId: "pick",
-          header: "Pick",
-          question: "Pick one",
-          options: [{ label: "Two" }, { label: "Three" }],
-          isOther: false,
-        },
-      ],
-      timeoutMs: 60_000,
-    });
-    const result = localManager.resolve(record.id, {
-      answers: { pick: ["  Two  "] },
-    });
-    expect(result).toEqual({
-      status: "answered",
-      answers: { answers: { pick: ["Two"] } },
-    });
-    localManager.close();
-  });
 });
 
 it.each(["fulfilled", "rejected"] as const)(

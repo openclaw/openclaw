@@ -41,14 +41,18 @@ const { createDeferred, routeState } = await vi.hoisted(async () => {
     },
   };
 });
-vi.mock("openclaw/plugin-sdk/webhook-targets", () => ({
+vi.mock("openclaw/plugin-sdk/webhook-targets", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/webhook-targets")>()),
   registerPluginHttpRoute: (route: Parameters<typeof registerPluginHttpRoute>[0]) => {
     if (routeState.fail) {
       throw new Error("route conflict");
     }
     routeState.routes.push(route);
     routeState.ready.resolve();
-    return routeState.unregister;
+    return () => {
+      routeState.routes = routeState.routes.filter((entry) => entry !== route);
+      routeState.unregister();
+    };
   },
 }));
 
@@ -202,15 +206,4 @@ export function resetMSTeamsMonitorMocks() {
   ssoTokenStore.remove.mockClear();
 }
 
-export {
-  routeState,
-  createMSTeamsActivityHandler,
-  isSigninInvokeAuthorized,
-  isCardActionInvokeAuthorized,
-  runMSTeamsFileConsentInvokeHandler,
-  processSdkActivity,
-  nativeSdkState,
-  loadMSTeamsSdkWithAuth,
-  ssoTokenStore,
-  resolveAllowlistMocks,
-};
+export { routeState, loadMSTeamsSdkWithAuth };

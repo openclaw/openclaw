@@ -100,9 +100,9 @@ export class AcpTranslatorDisconnects {
   private async expirePendingPrompt(
     pending: AcpPendingPrompt,
     disconnectContext: AcpDisconnectContext,
-  ): Promise<false> {
+  ): Promise<void> {
     if (pending.disconnectContext !== disconnectContext) {
-      return false;
+      return;
     }
     if (
       !pending.sendAccepted ||
@@ -116,7 +116,6 @@ export class AcpTranslatorDisconnects {
     } else {
       pending.disconnectContext = undefined;
     }
-    return false;
   }
 
   private async reconcilePendingPrompts(
@@ -136,67 +135,52 @@ export class AcpTranslatorDisconnects {
       if (this.pendingPrompts.get(sessionId) !== pending) {
         continue;
       }
-      if (pending.disconnectContext?.generation !== observedDisconnectGeneration) {
+      const disconnectContext = pending.disconnectContext;
+      if (disconnectContext?.generation !== observedDisconnectGeneration) {
         continue;
       }
-      const shouldKeepPending = await this.reconcilePendingPrompt(
-        sessionId,
-        pending,
-        deadlineExpired,
-      );
-      if (shouldKeepPending) {
+      let result: AcpAgentWaitResult | undefined;
+      try {
+        result = await this.gateway.request(
+          "agent.wait",
+          {
+            runId: pending.idempotencyKey,
+            timeoutMs: 0,
+          },
+          { timeoutMs: null },
+        );
+      } catch (err) {
+        this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
+        if (deadlineExpired) {
+          await this.expirePendingPrompt(pending, disconnectContext);
+          continue;
+        }
         keepDisconnectTimer = true;
+        continue;
       }
+
+      const currentPending = this.getPendingPrompt(sessionId, pending.idempotencyKey);
+      if (!currentPending) {
+        continue;
+      }
+      const hasVisibleReply = result?.terminalReply?.disposition === "visible";
+      if (
+        result?.status === "ok" ||
+        result?.status === "error" ||
+        (result?.status === "timeout" && hasVisibleReply)
+      ) {
+        await this.settleRecoveredPrompt(sessionId, currentPending, result);
+        continue;
+      }
+      if (deadlineExpired) {
+        await this.expirePendingPrompt(currentPending, disconnectContext);
+        continue;
+      }
+      keepDisconnectTimer = true;
     }
 
     if (!keepDisconnectTimer && this.disconnectGeneration === observedDisconnectGeneration) {
       this.clearDisconnectTimer();
     }
-  }
-
-  private async reconcilePendingPrompt(
-    sessionId: string,
-    pending: AcpPendingPrompt,
-    deadlineExpired: boolean,
-  ): Promise<boolean> {
-    const disconnectContext = pending.disconnectContext;
-    if (!disconnectContext) {
-      return false;
-    }
-    let result: AcpAgentWaitResult | undefined;
-    try {
-      result = await this.gateway.request(
-        "agent.wait",
-        {
-          runId: pending.idempotencyKey,
-          timeoutMs: 0,
-        },
-        { timeoutMs: null },
-      );
-    } catch (err) {
-      this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
-      if (deadlineExpired) {
-        return await this.expirePendingPrompt(pending, disconnectContext);
-      }
-      return true;
-    }
-
-    const currentPending = this.getPendingPrompt(sessionId, pending.idempotencyKey);
-    if (!currentPending) {
-      return false;
-    }
-    const hasVisibleReply = result?.terminalReply?.disposition === "visible";
-    if (
-      result?.status === "ok" ||
-      result?.status === "error" ||
-      (result?.status === "timeout" && hasVisibleReply)
-    ) {
-      await this.settleRecoveredPrompt(sessionId, currentPending, result);
-      return false;
-    }
-    if (deadlineExpired) {
-      return await this.expirePendingPrompt(currentPending, disconnectContext);
-    }
-    return true;
   }
 }

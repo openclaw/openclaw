@@ -28,7 +28,6 @@ export function shouldRejectHardlinkedPluginFiles(params: {
   origin: PluginOrigin;
   rootDir: string;
   env?: NodeJS.ProcessEnv;
-  realpathCache?: Map<string, string>;
 }): boolean {
   if (params.origin === "bundled") {
     return false;

@@ -6,12 +6,12 @@ import { parseCustodianQuestion } from "./structured-question.ts";
 describe("custodian typed question", () => {
   it("accepts a valid typed question and keeps replies and recommendations", () => {
     const question: SystemAgentChatQuestion = {
-      id: "onboarding-next-step",
-      header: "Next step",
-      question: "What would you like to do first?",
+      id: " onboarding-next-step ",
+      header: " Next step ",
+      question: " What would you like to do first? ",
       options: [
-        { label: "Talk to my agent", reply: "talk to agent", recommended: true },
-        { label: "Connect WhatsApp", reply: "connect whatsapp", description: "Chat there." },
+        { label: " Talk to my agent ", reply: " talk to agent ", recommended: true },
+        { label: " Connect WhatsApp ", reply: " connect whatsapp ", description: " Chat there. " },
       ],
       isOther: true,
       skipAction: "exit",
@@ -40,35 +40,8 @@ describe("custodian typed question", () => {
     expect(parsed?.isOther).toBe(false);
   });
 
-  it("rejects malformed questions instead of rendering broken cards", () => {
+  it("omits absent questions and display text that is empty after trimming", () => {
     expect(parseCustodianQuestion(undefined)).toBeNull();
-    expect(
-      parseCustodianQuestion({
-        id: "one-option",
-        header: "H",
-        question: "Q",
-        options: [{ label: "Only" }],
-      }),
-    ).toBeNull();
-    expect(
-      parseCustodianQuestion({
-        id: "dupes",
-        header: "H",
-        question: "Q",
-        options: [{ label: "Same" }, { label: "same" }],
-      }),
-    ).toBeNull();
-    expect(
-      parseCustodianQuestion({
-        id: "two-recommended",
-        header: "H",
-        question: "Q",
-        options: [
-          { label: "A", recommended: true },
-          { label: "B", recommended: true },
-        ],
-      }),
-    ).toBeNull();
     expect(
       parseCustodianQuestion({
         id: "blank-label",

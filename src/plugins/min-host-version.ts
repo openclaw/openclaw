@@ -9,29 +9,11 @@ const SEMVER_LABEL_RE = String.raw`\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Z
 const MIN_HOST_VERSION_RE = new RegExp(`^>=(${SEMVER_LABEL_RE})$`);
 const LEGACY_MIN_HOST_VERSION_RE = new RegExp(`^(${SEMVER_LABEL_RE})$`);
 
-/** Parsed plugin minimum host version requirement. */
-type MinHostVersionRequirement = {
-  raw: string;
-  minimumLabel: string;
-};
-
-/** Result of checking a plugin minHostVersion against the current host. */
-type MinHostVersionCheckResult =
-  | { ok: true; requirement: MinHostVersionRequirement | null }
-  | { ok: false; kind: "invalid"; error: string }
-  | { ok: false; kind: "unknown_host_version"; requirement: MinHostVersionRequirement }
-  | {
-      ok: false;
-      kind: "incompatible";
-      requirement: MinHostVersionRequirement;
-      currentVersion: string;
-    };
-
 /** Parses a plugin minHostVersion manifest field. */
 export function parseMinHostVersionRequirement(
   raw: unknown,
   options: { allowLegacyBareSemver?: boolean } = {},
-): MinHostVersionRequirement | null {
+) {
   const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
@@ -57,32 +39,32 @@ export function checkMinHostVersion(params: {
   currentVersion: string | undefined;
   minHostVersion: unknown;
   allowLegacyBareSemver?: boolean;
-}): MinHostVersionCheckResult {
+}) {
   if (params.minHostVersion === undefined) {
-    return { ok: true, requirement: null };
+    return { ok: true as const, requirement: null };
   }
   const requirement = parseMinHostVersionRequirement(params.minHostVersion, {
     allowLegacyBareSemver: params.allowLegacyBareSemver,
   });
   if (!requirement) {
-    return { ok: false, kind: "invalid", error: MIN_HOST_VERSION_FORMAT };
+    return { ok: false as const, kind: "invalid" as const, error: MIN_HOST_VERSION_FORMAT };
   }
   const currentVersion = normalizeOptionalString(params.currentVersion) || "unknown";
   const comparison = compareOpenClawVersions(currentVersion, requirement.minimumLabel);
   if (comparison === null) {
     return {
-      ok: false,
-      kind: "unknown_host_version",
+      ok: false as const,
+      kind: "unknown_host_version" as const,
       requirement,
     };
   }
   if (comparison < 0) {
     return {
-      ok: false,
-      kind: "incompatible",
+      ok: false as const,
+      kind: "incompatible" as const,
       requirement,
       currentVersion,
     };
   }
-  return { ok: true, requirement };
+  return { ok: true as const, requirement };
 }

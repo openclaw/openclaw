@@ -8,3 +8,8 @@ export const PRECOMPUTED_SUBCOMMAND_HELP_NAMES = [
 ] as const;
 
 export type PrecomputedSubcommandHelpName = (typeof PRECOMPUTED_SUBCOMMAND_HELP_NAMES)[number];
+export type PrecomputedCommandHelpName =
+  | "browser"
+  | "secrets"
+  | "nodes"
+  | PrecomputedSubcommandHelpName;

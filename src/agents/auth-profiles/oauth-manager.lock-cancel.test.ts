@@ -4,6 +4,7 @@ import { drainFileLockStateForTest } from "../../infra/file-lock.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createOAuthManager } from "./oauth-manager.js";
+import { mockOAuthProviderOperations } from "./oauth-native-provider.test-support.js";
 import * as profileLocks from "./oauth-profile-lock.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./store-runtime.js";
 import type { OAuthCredential } from "./types.js";
@@ -32,12 +33,10 @@ it("cancels credential observation while the profile lock remains held", async (
       await state.writeAuthProfiles({ version: 1, profiles: { [profileId]: credential } });
       const agentDir = state.agentDir();
       const refreshCredential = vi.fn(async () => refreshed);
-      const manager = createOAuthManager({
-        buildApiKey: async (_provider, value) => value.access,
-        canRefreshCredential: async () => true,
+      mockOAuthProviderOperations({
         refreshCredential,
-        readBootstrapCredential: () => null,
       });
+      const manager = createOAuthManager();
       const held = createDeferredCore();
       const release = createDeferredCore();
       const entering = createDeferredCore();

@@ -20,7 +20,6 @@ export type CodexSandboxExecMessageTransport = {
 /** Notification delivery and lifetime owned by one execution session. */
 export type CodexSandboxExecSessionNotifications = {
   send: (method: string, params: JsonObject) => void;
-  isOpen: () => boolean;
   signal: AbortSignal;
 };
 
@@ -48,7 +47,7 @@ export type ResolvedFsSandboxEntry =
   | {
       kind: "glob";
       pattern: string;
-      matcher: RegExp;
+      matcher: (target: string) => boolean;
       literalPrefix: string;
       access: FsAccessMode;
     };
@@ -77,6 +76,7 @@ export type ManagedProcess = {
   terminationRequested: boolean;
   child: SandboxChild | null;
   startPromise?: Promise<void>;
+  inputTail?: Promise<void>;
   evictionTimer?: ReturnType<typeof setTimeout>;
   waiters: Array<() => void>;
   emitNotification: (method: string, params: JsonObject) => void;
@@ -101,7 +101,10 @@ type OpenClawExecServerLease = {
 
 /** Locally interpreted exec-server protocol backed by an OpenClaw sandbox. */
 export type OpenClawExecServer = OpenClawExecServerLease & {
-  processAuthorities?: Map<string, CodexNativeProcessClient>;
+  processAuthorities?: Map<
+    string,
+    { authority: CodexNativeProcessClient; unsubscribe: () => void }
+  >;
   backend: NonNullable<SandboxContext["backend"]>;
   fsBridge: NonNullable<SandboxContext["fsBridge"]>;
   readonly networkIsolated: boolean;

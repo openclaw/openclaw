@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   hasLlamaServerAuthorizationHeader,
-  resolveLlamaServerProviderHeaders,
   shouldUseLlamaServerSyntheticAuth,
-} from "./auth.js";
+} from "./auth-policy.js";
+import { resolveLlamaServerProviderHeaders } from "./auth.js";
 
 describe("llama-server auth", () => {
   it("rejects an array authorization header container", () => {

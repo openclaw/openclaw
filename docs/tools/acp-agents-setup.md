@@ -38,7 +38,7 @@ Built-in acpx harness aliases (from the pinned `acpx` dependency):
 | `droid`      | [Factory Droid](https://www.factory.ai)                                                                |
 | `fast-agent` | [fast-agent](https://fast-agent.ai)                                                                    |
 | `gemini`     | [Gemini CLI](https://github.com/google-gemini/gemini-cli)                                              |
-| `grok-build` | Grok Build (`grok agent stdio`)                                                                        |
+| `grok-build` | [Grok Build](https://docs.x.ai/build/overview) (`grok agent stdio`)                                    |
 | `iflow`      | [iFlow CLI](https://github.com/iflow-ai/iflow-cli)                                                     |
 | `kilocode`   | [Kilocode](https://kilocode.ai)                                                                        |
 | `kimi`       | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli)                                                     |
@@ -57,6 +57,7 @@ Built-in acpx harness aliases (from the pinned `acpx` dependency):
 `factory-droid` and `factorydroid` also resolve to the built-in `droid` adapter.
 
 When OpenClaw uses the acpx backend, prefer these values for `agentId` unless your acpx config defines custom agent aliases.
+`grok-build` is an ACPX agent target, not the xAI model id `xai/grok-build-0.1`. Use `agentId: "grok-build"` to launch the Grok Build CLI through ACP; use `xai/grok-build-0.1` only when selecting that model on OpenClaw's xAI provider route.
 If your local Cursor install still exposes ACP as `agent acp`, override the `cursor` agent command in your acpx config instead of changing the built-in default.
 
 Direct acpx CLI usage can also target arbitrary adapters via `--agent <command>`, but that raw escape hatch is an acpx CLI feature (not the normal OpenClaw `agentId` path).
@@ -108,6 +109,50 @@ and [Copilot billing guide](https://docs.github.com/en/copilot/concepts/billing-
 for account and plan requirements. Native chat permission and sandbox boundaries
 below still apply.
 
+## Grok Build in native chat
+
+Install [Grok Build](https://docs.x.ai/build/overview) on the Gateway host and run
+`grok login` under the Gateway's OS account. The native picker launches
+`grok agent stdio`, the vendor's [ACP command](https://docs.x.ai/build/cli/headless-scripting#acp).
+Grok owns authentication, model access, and billing; OpenClaw does not forward an
+OpenClaw xAI provider credential to it.
+
+Refresh the model catalog, then choose an `acp-grok-build/<advertised-model-id>`
+entry. OpenClaw preserves the model IDs advertised by the installed CLI. The
+`grok-build` agent target is not a model ID, and the native picker does not use
+the OpenClaw xAI API provider's model list.
+
+Grok's [model-switch implementation](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/handlers/model_switch.rs)
+can reject a switch to an incompatible agent type after a turn has run. Start a
+new chat for that selection; OpenClaw does not discard the existing conversation
+to retry it. Native chat permission and sandbox boundaries below still apply.
+
+To prevent new native Grok turns and catalog discovery, set
+`plugins.entries.acpx.config.nativeAgents.grok-build` to `false`. Classic
+`/acp spawn grok-build` sessions and `acp.allowedAgents` remain separate.
+
+## Qoder CLI in native chat
+
+Install Qoder CLI and sign in under the OS account that runs the Gateway, then
+refresh the model catalog and choose an `acp-qoder/<model-id>` entry. Qoder CLI
+1.1.81 exposes its account model catalog and model selection over ACP. OpenClaw
+uses each advertised ID unchanged, including any slashes;
+it does not supply a static model list or an OpenClaw API credential.
+
+The pinned acpx launcher is `qodercli --acp`. Make `qodercli` available on `PATH`
+for the OS account that runs the Gateway. Configure custom providers and billing
+choices in Qoder itself. Qoder CLI is separate from QoderWork.
+
+Set `plugins.entries.acpx.config.nativeAgents.qoder` to `false` to disable new
+native Qoder turns and catalog discovery. Classic `/acp spawn qoder` sessions
+and `acp.allowedAgents` keep their existing behavior. Installation detection does
+not prove sign-in, model entitlement, or successful execution.
+
+See Qoder's [ACP guide](https://docs.qoder.com/cli/acp) and
+[custom model guide](https://docs.qoder.com/cli/custom-models).
+The native permission and sandbox boundaries below still apply, including
+Qoder's subagents, scheduled tasks, and media tools.
+
 Installed native agents keep their own sign-in. During discovery, `/models` can
 report **Checking native agent** without requiring an OpenClaw API key. If
 availability is unconfirmed, check the native app on the Gateway host and run
@@ -117,24 +162,31 @@ availability is unconfirmed, check the native app on the Gateway host and run
 
 ## Permissions for native chat runtimes
 
-When a native runtime cannot enforce the chat's optional OpenClaw tool, sandbox,
-or workspace restrictions, the Control UI offers **Continue for this chat** to
-an administrator. The same confirmation applies when selecting the runtime or
-sending a message with an existing selection.
+Enable an installed agent from **Models → Installed agents**. For a runtime that
+uses its own native permissions, OpenClaw asks **Use {runtime}’s native permissions?**
+before enabling it. Accepting remembers consent for the selected OpenClaw agent
+in the same config update as enablement. New chats using that runtime then start
+with **Full access** and optional sandboxing off, without repeating the prompt.
+Enabling a native app does not sign you in to that app.
 
-Confirming selects **Full access**, turns off optional sandboxing for that chat,
-and records consent for the exact native runtime. The native agent then uses its
-own permissions on the Gateway host. OpenClaw does not claim to enforce its
-optional tool restrictions inside that agent. Other chats and global settings
-stay unchanged, and tools hosted by OpenClaw retain their existing policy.
+The native agent uses its own permissions on the Gateway host. OpenClaw does not
+claim to enforce its optional tool restrictions inside that agent. Other agents
+and their chats stay unchanged, and tools hosted by OpenClaw retain their policy.
+Remove the runtime ID from `agents.entries.<agentId>.nativeRuntimeConsent` to
+revoke remembered consent. Disabling and re-enabling the app does not erase it.
+
+For a runtime configured manually without remembered consent, the Control UI
+still offers **Continue for this session** to an administrator when selecting the
+runtime or sending a message with that selection. This fallback changes only
+that chat's permissions.
 
 Declining leaves permissions unchanged and keeps the message unsent. A first send
 can create an empty chat so confirmation is bound to that chat, but no message is
 saved or run before you confirm. Confirmation saves the permissions and retries
 that message once, including a chat's first message, without pinning its default model.
-Selection-only confirmation does not send the draft. Consent is not inherited by
-another chat and is cleared when the session resets or the selected runtime changes.
-Older hosts that do not recognize consent retain their previous restriction checks.
+Selection-only confirmation does not send the draft. This per-chat consent is
+not inherited by another chat and is cleared when the session resets or the
+selected runtime changes.
 
 Required sandboxes, required workspace boundaries, and incompatible remote
 execution placement cannot be waived by this confirmation. A restricted user
@@ -159,12 +211,14 @@ Core ACP baseline:
       "cursor",
       "droid",
       "gemini",
+      "grok-build",
       "iflow",
       "kilocode",
       "kimi",
       "kiro",
       "openclaw",
       "opencode",
+      "pool",
       "qwen",
     ],
     stream: {
@@ -204,7 +258,7 @@ ACPX isolates bare session names by OpenClaw owner. If a session reports
 `openclaw doctor --fix`, then restart. Doctor uses the same service workspace
 as the Gateway; ACPX's default state directory is `<service workspace>/state`.
 
-The repair requires one current, unambiguous canonical owner claim with matching
+The repair requires one current, unambiguous stored owner claim with matching
 backend identifiers. It preserves the raw history, event-log references, upstream
 session IDs, timestamps, options, and usage. Persistent record names move to an
 owner-qualified resource; existing oneshot physical IDs and histories remain intact.
@@ -214,7 +268,7 @@ session does not bypass this repair.
 
 This is an offline, crash-recoverable migration with atomic destination-file
 publication. Files and SQLite are not one atomic transaction. Interrupted repairs
-can be rerun: Doctor checks the existing destination and canonical claim before
+can be rerun: Doctor checks the existing destination and stored owner claim before
 finishing the metadata update and archiving the old persistent record.
 
 ## Plugin setup for acpx backend
@@ -255,17 +309,28 @@ Then verify backend health:
 /acp doctor
 ```
 
-### acpx runtime startup probe
+<a id="acpx-runtime-startup-probe" />
+
+### acpx runtime startup check
 
 The `acpx` plugin embeds the ACP runtime directly (no separate `acpx` binary or
 version to configure). By default it registers the embedded backend during
-Gateway startup and waits for one health probe before the gateway `ready`
-signal. That probe also supplies failure diagnostics and is bounded by
+Gateway startup and waits for one health check before the gateway `ready`
+signal. That check also supplies failure diagnostics and is bounded by
 `plugins.entries.acpx.config.timeoutSeconds`; an unhealthy result does not
-launch a second probe. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
+launch a second check. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
 `OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1` only for scripts or environments that
-intentionally keep the startup probe disabled. Run `/acp doctor` for an explicit
-on-demand probe.
+intentionally keep the startup check disabled.
+
+Health checks run from the plugin-owned `<state>/acpx` directory, which the
+service creates before probing. They do not require the default agent workspace
+to exist. Sessions still launch in their requested `cwd`, falling back to the
+configured plugin or service workspace when no session directory is supplied.
+
+A failed check makes the backend unavailable for ACP spawns across the Gateway.
+After correcting the cause, run `/acp doctor` to check again; a successful check
+restores availability without restarting. Spawn attempts do not automatically
+retry the health check.
 
 Override an individual ACP agent command with structured arguments when a path
 or flag value should remain one argv token:
@@ -376,12 +441,14 @@ is `agents.defaults.subagents.runTimeoutSeconds`. With the default hybrid reload
 mode, changing `timeoutSeconds` automatically reloads the plugin. See
 [Config hot reload](/gateway/configuration/hot-reload).
 
-### Health probe agent configuration
+<a id="health-probe-agent-configuration" />
 
-When `/acp doctor` or the startup probe checks the backend, the bundled `acpx`
-plugin probes one harness agent. If `acp.allowedAgents` is set, it defaults to
+### Health check agent configuration
+
+When `/acp doctor` or the startup check verifies the backend, the bundled `acpx`
+plugin checks one harness agent. If `acp.allowedAgents` is set, it defaults to
 the first allowed agent; otherwise it defaults to `codex`. If your deployment
-needs a different ACP agent for health checks, set the probe agent explicitly:
+needs a different ACP agent for health checks, set the check agent explicitly:
 
 ```bash
 openclaw config set plugins.entries.acpx.config.probeAgent claude
@@ -389,6 +456,60 @@ openclaw config set plugins.entries.acpx.config.probeAgent claude
 
 With the default hybrid reload mode, this change automatically reloads the plugin.
 Run `/acp doctor` to check the updated backend.
+
+<a id="agent-process-environment" />
+
+### Agent process environment
+
+By default, ACP agents, their command probes, and the terminals they open
+inherit the whole Gateway environment, including the Gateway's own credentials.
+Two optional plugin settings narrow what they inherit. Both are unset by
+default, which keeps that behavior unchanged.
+
+- `agentProcessEnvAllow`: when set, children inherit only process essentials
+  (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LANGUAGE`, `TZ`,
+  `TMPDIR`, `TMP`, `TEMP`, every `LC_*` and `XDG_*`, plus the Windows system
+  and profile variables on Windows) and the listed names. An empty list keeps
+  essentials only.
+- `agentProcessEnvBlock`: names children do not inherit.
+
+They apply in this order: the allowlist first, then the blocklist removes names
+from the result, then explicit grants apply last and always win. Explicit grants
+are `ACPX_AUTH_*` variables, credentials the runtime injects for an agent, and
+variables OpenClaw sets itself (such as the default `TOKIO_WORKER_THREADS`
+cap). Names are case-sensitive except on Windows, and must not contain `=` or
+whitespace.
+
+Example that keeps OpenClaw's own credentials away from ACP agents while they
+still inherit everything else:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "acpx": {
+        "config": {
+          "agentProcessEnvBlock": [
+            "OPENCLAW_GATEWAY_TOKEN",
+            "OPENCLAW_HOOK_TOKEN",
+            "OP_CONNECT_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY"
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+Block a provider key only when the ACP agent does not need it: an agent that
+authenticates with that key can no longer start. MCP servers the agent launches,
+including the OpenClaw tool bridges, normally inherit the agent's environment
+too. With an allowlist, also list what they need, such as `OPENCLAW_STATE_DIR`
+or `OPENCLAW_CONFIG_PATH` when the Gateway uses them, and any variable your
+config references. New settings apply to agents started after the plugin
+reloads.
 
 ## Permission configuration
 
@@ -438,7 +559,7 @@ See [Config hot reload](/gateway/configuration/hot-reload) for other reload mode
 <Warning>
 OpenClaw defaults to `permissionMode=approve-reads` and `nonInteractivePermissions=fail`. In non-interactive ACP sessions, any write or exec that triggers a permission prompt can fail with `PermissionPromptUnavailableError: Permission prompt unavailable in non-interactive mode`.
 
-If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions degrade gracefully instead of crashing.
+If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions deny restricted actions instead of crashing.
 </Warning>
 
 ## Related

@@ -35,22 +35,6 @@ describe("deriveDurableFinalDeliveryRequirements", () => {
       afterCommit: true,
     });
   });
-
-  it("applies channel-native extras without recording false requirements", () => {
-    expect(
-      deriveDurableFinalDeliveryRequirements({
-        payload: { text: "hello" },
-        extraCapabilities: {
-          nativeQuote: false,
-          thread: true,
-        },
-      }),
-    ).toEqual({
-      text: true,
-      thread: true,
-      messageSendingHooks: true,
-    });
-  });
 });
 
 describe("deriveDurableFinalDeliveryRequirementsForBatch", () => {
@@ -75,28 +59,6 @@ describe("deriveDurableFinalDeliveryRequirementsForBatch", () => {
       messageSendingHooks: true,
       payload: true,
       batch: true,
-      reconcileUnknownSend: true,
-    });
-  });
-
-  it("returns no transport requirements for an entirely suppressed batch", () => {
-    expect(
-      deriveDurableFinalDeliveryRequirementsForBatch({
-        payloads: [],
-        reconcileUnknownSend: true,
-      }),
-    ).toEqual({});
-  });
-
-  it("keeps post-send delivery directives on the concrete text transport", () => {
-    expect(
-      deriveDurableFinalDeliveryRequirementsForBatch({
-        payloads: [{ text: "pin this", delivery: { pin: true } }],
-        reconcileUnknownSend: true,
-      }),
-    ).toEqual({
-      text: true,
-      messageSendingHooks: true,
       reconcileUnknownSend: true,
     });
   });

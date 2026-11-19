@@ -24,7 +24,7 @@ export type { DiscordSenderIdentity } from "./sender-identity.js";
 
 type BuildChannelInboundContext =
   typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
-export type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
+type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 
 export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
 
@@ -46,11 +46,13 @@ type DiscordMessagePreflightSharedFields = {
   ackReactionScope: "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
   groupPolicy: "open" | "disabled" | "allowlist";
   turnAdoptionLifecycle?: DiscordIngressLifecycle;
+  data: DiscordMessageEvent;
+  client: Client;
+  threadBindings: DiscordThreadBindingLookup;
+  discordRestFetch?: typeof fetch;
 };
 
 export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields & {
-  data: DiscordMessageEvent;
-  client: Client;
   message: DiscordMessageEvent["message"];
   messageChannelId: string;
   author: User;
@@ -77,13 +79,11 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   // Keep one required receipt-time snapshot: queued processing must never
   // fall back to Discord's expiring attachment URLs.
   preparedMedia: DiscordMediaInfo[];
-  wasMentioned: boolean;
   conversationAvatar?: string;
 
   route: ReturnType<typeof resolveAgentRoute>;
   threadBinding?: SessionBindingRecord;
   boundSessionKey?: string;
-  boundAgentId?: string;
 
   guildInfo: DiscordGuildEntryResolved | null;
   guildSlug: string;
@@ -108,9 +108,6 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   groupThread?: GroupThreadMentionFacts;
   inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
-
-  threadBindings: DiscordThreadBindingLookup;
-  discordRestFetch?: typeof fetch;
 };
 
 export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields & {
@@ -120,10 +117,6 @@ export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields 
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
-  threadBindings: DiscordThreadBindingLookup;
-  discordRestFetch?: typeof fetch;
   avatarResolver?: DiscordAvatarResolver;
   precedingMessages?: readonly DiscordMessageEvent["message"][];
-  data: DiscordMessageEvent;
-  client: Client;
 };

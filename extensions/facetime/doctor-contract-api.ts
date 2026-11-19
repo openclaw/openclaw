@@ -1,7 +1,7 @@
 // FaceTime doctor contract repairs retired prototype config before strict validation.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CONFIG_PATH = ["plugins", "entries", "facetime", "config"] as const;
 const RETIRED_CONFIG_KEYS = ["helperHost", "helperPort"] as const;
@@ -27,15 +27,6 @@ export const legacyConfigRules: LegacyConfigRule[] = [
       'plugins.entries.facetime.config.realtime.brain is retired; FaceTime always consults the configured agent. Run "openclaw doctor --fix".',
   },
 ];
-
-function normalizeLegacyOwnerHandles(value: unknown): string[] | null {
-  if (!Array.isArray(value)) {
-    return null;
-  }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
-}
 
 /** Moves or removes retired prototype keys so runtime sees only the canonical config shape. */
 export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
@@ -69,7 +60,9 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     if (Object.hasOwn(nextPluginConfig, "ownerHandles")) {
       changes.push(`Removed ${sourcePath}; ${targetPath} is authoritative.`);
     } else {
-      const handles = normalizeLegacyOwnerHandles(nextPluginConfig.whitelistHandles);
+      const handles = Array.isArray(nextPluginConfig.whitelistHandles)
+        ? normalizeTrimmedStringList(nextPluginConfig.whitelistHandles)
+        : null;
       if (handles) {
         nextPluginConfig.ownerHandles = handles;
         changes.push(`Moved ${sourcePath} to ${targetPath}.`);

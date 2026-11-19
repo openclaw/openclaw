@@ -44,7 +44,10 @@ extension DashboardWindowOwnershipTests {
         defer { server.stop() }
         let autosaveName = "OpenClawDashboardWindow-Test-\(UUID().uuidString)"
         defer { NSWindow.removeFrame(usingName: autosaveName) }
-        let auth = DashboardWindowAuth(gatewayUrl: server.websocketURL().absoluteString, token: nil, password: nil)
+        let auth = DashboardWindowAuth.nativeDevice(
+            gatewayUrl: server.websocketURL().absoluteString,
+            token: nil,
+            password: nil)
         let sessionStore = transition == "revoke-session" ? DashboardBrowserSessionStore(dataStore: .nonPersistent()) :
             nil
         let controller = DashboardWindowController(
@@ -75,7 +78,7 @@ extension DashboardWindowOwnershipTests {
         recordDeviceReply('status', {type: 'status'});
         null;
         """)
-        try await DashboardTestWait.state("device settings consent sheet") { window.attachedSheet != nil }
+        try await TestWait.state("device settings consent sheet") { window.attachedSheet != nil }
 
         var replacement: DashboardWindowController?
         defer { replacement?.closeDashboard() }
@@ -85,6 +88,17 @@ extension DashboardWindowOwnershipTests {
         defer {
             other?.closeDashboard()
             NSWindow.removeFrame(usingName: otherAutosaveName)
+        }
+        let retirement = DashboardRetirementNavigation()
+        if transition == "close" || transition == "replacement" {
+            controller.webView.navigationDelegate = retirement
+        }
+        defer {
+            if transition == "close" || transition == "replacement" {
+                controller.webView.navigationDelegate = nil
+                controller.webView.loadHTMLString("", baseURL: nil)
+            }
+            withExtendedLifetime(retirement) {}
         }
         switch transition {
         case "revoke-session":
@@ -128,7 +142,7 @@ extension DashboardWindowOwnershipTests {
         let retired = ["replacement", "committed", "close"].contains(transition)
         let allowed = transition == "provisional" || transition == "normalize-profile"
         if retired {
-            try await DashboardTestWait.state("retired device settings consent") { window.attachedSheet == nil }
+            try await TestWait.state("retired device settings consent") { window.attachedSheet == nil }
         } else {
             #expect(window.attachedSheet != nil)
         }
@@ -169,7 +183,7 @@ extension DashboardWindowOwnershipTests {
             if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .cancel) }
             fresh.cancel()
         }
-        try await DashboardTestWait.state("fresh device settings consent sheet") { window.attachedSheet != nil }
+        try await TestWait.state("fresh device settings consent sheet") { window.attachedSheet != nil }
         let freshSheet = try #require(window.attachedSheet)
         window.endSheet(freshSheet, returnCode: .alertFirstButtonReturn)
         #expect(await fresh.value == false)
@@ -183,7 +197,7 @@ extension DashboardWindowOwnershipTests {
 
     private static func waitForDeviceReplies(_ webView: WKWebView) async throws -> [[String: Any]] {
         var replies: [[String: Any]] = []
-        try await DashboardTestWait.state("device settings replies") {
+        try await TestWait.state("device settings replies") {
             replies = try #require(try await webView.evaluateJavaScript("window.deviceReplies") as? [[String: Any]])
             return replies.count == 2
         }

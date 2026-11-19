@@ -1,3 +1,7 @@
 {
-  "extends": "../tsconfig.package-boundary.base.json"
+  "extends": "../tsconfig.package-boundary.base.json",
+  "compilerOptions": {
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web"
+  }
 }

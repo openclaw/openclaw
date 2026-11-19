@@ -69,3 +69,30 @@ export function createSseByteGuard(
     cancelled: () => cancelledFlag,
   };
 }
+
+/** Lazily bound an SDK response while preserving upstream cancellation. */
+export function boundResponseBody(
+  response: Response,
+  options: ReadSseStreamWithLimitOptions,
+): Response {
+  if (!response.body || typeof response.body.getReader !== "function") {
+    return response;
+  }
+  const guard = createSseByteGuard(response.body.getReader(), options);
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const { done, value } = await guard.read();
+        if (done) {
+          controller.close();
+        } else {
+          controller.enqueue(value);
+        }
+      },
+      async cancel(reason) {
+        await guard.cancel(reason);
+      },
+    }),
+    response,
+  );
+}

@@ -2,44 +2,59 @@ import AppKit
 import Testing
 @testable import OpenClaw
 
-@Suite(.serialized) struct VoicePushToTalkHotkeyTests {
-    actor Counter {
-        private(set) var began = 0
-        private(set) var ended = 0
-
-        func incBegin() {
-            self.began += 1
-        }
-
-        func incEnd() {
-            self.ended += 1
-        }
-
-        func snapshot() -> (began: Int, ended: Int) {
-            (self.began, self.ended)
+@Suite(.serialized)
+@MainActor
+struct VoicePushToTalkHotkeyTests {
+    @Test func `either Option release order ends the right hold`() {
+        let releaseOrders: [[UInt]] = [
+            [0x80020, 0],
+            [0x80040, 0],
+        ]
+        for releases in releaseOrders {
+            var began = 0
+            var ended = 0
+            let hotkey = VoicePushToTalkHotkey(
+                beginAction: { began += 1 },
+                endAction: { cancelled in
+                    if !cancelled { ended += 1 }
+                })
+            hotkey.setEnabled(true)
+            hotkey._testUpdateModifierState(modifierFlags: .init(rawValue: 0x80020))
+            #expect(began == 0)
+            for flags in [UInt(0x80040), 0x80040, 0x80060] {
+                hotkey._testUpdateModifierState(modifierFlags: .init(rawValue: flags))
+            }
+            #expect(began == 1)
+            for flags in releases {
+                hotkey._testUpdateModifierState(modifierFlags: .init(rawValue: flags))
+            }
+            #expect(ended == 1)
+            hotkey._testUpdateModifierState(modifierFlags: .init(rawValue: 0x80040))
+            hotkey._testUpdateModifierState(modifierFlags: [])
+            #expect(began == 2)
+            #expect(ended == 2)
         }
     }
 
-    @Test func `begin end fires once per hold`() async {
-        let counter = Counter()
+    @Test func `Talk suppression survives preference changes until shutdown completes`() {
+        var began = 0
+        var cancelled = 0
         let hotkey = VoicePushToTalkHotkey(
-            beginAction: { await counter.incBegin() },
-            endAction: { await counter.incEnd() })
-
-        await MainActor.run {
-            hotkey._testUpdateModifierState(keyCode: 61, modifierFlags: [.option])
-            hotkey._testUpdateModifierState(keyCode: 61, modifierFlags: [.option])
-            hotkey._testUpdateModifierState(keyCode: 61, modifierFlags: [])
-        }
-
-        for _ in 0..<50 {
-            let snap = await counter.snapshot()
-            if snap.began == 1, snap.ended == 1 { break }
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
-
-        let snap = await counter.snapshot()
-        #expect(snap.began == 1)
-        #expect(snap.ended == 1)
+            beginAction: { began += 1 },
+            endAction: { forced in
+                if forced { cancelled += 1 }
+            })
+        hotkey.setEnabled(true)
+        hotkey._testUpdateModifierState(modifierFlags: .init(rawValue: 0x80040))
+        hotkey.setTalkSuppressed(true)
+        #expect(cancelled == 1)
+        hotkey.setEnabled(false)
+        hotkey.setEnabled(true)
+        hotkey._testUpdateModifierState(modifierFlags: .init(rawValue: 0x80040))
+        #expect(began == 1)
+        hotkey.setTalkSuppressed(false)
+        hotkey._testUpdateModifierState(modifierFlags: .init(rawValue: 0x80040))
+        #expect(began == 2)
+        hotkey.setEnabled(false)
     }
 }

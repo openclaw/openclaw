@@ -141,61 +141,37 @@ start_kitchen_sink_clawhub_fixture_server() {
   return 1
 }
 
-scan_logs_for_unexpected_errors() {
-  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs scan-logs
-}
-
-configure_kitchen_sink_runtime() {
-  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs configure-runtime
-}
-
-remove_kitchen_sink_channel_config() {
-  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs remove-channel-config
-}
-
-assert_kitchen_sink_installed() {
-  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs assert-installed
-}
-
-assert_kitchen_sink_removed() {
-  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs assert-removed
-}
-
-assert_kitchen_sink_cutover_preinstalled() {
-  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs assert-cutover-preinstalled
-}
-
 run_success_scenario() {
   echo "Testing ${KITCHEN_SINK_LABEL} install from ${KITCHEN_SINK_SPEC}..."
   local install_args=("$KITCHEN_SINK_SPEC")
   if [ -n "${KITCHEN_SINK_PREINSTALL_SPEC:-}" ]; then
     run_kitchen_sink_fixture_logged "kitchen-sink-preinstall-${KITCHEN_SINK_LABEL}" plugins install "$KITCHEN_SINK_PREINSTALL_SPEC" --force
-    assert_kitchen_sink_cutover_preinstalled
+    node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs assert-cutover-preinstalled
     install_args+=("--force")
   fi
   run_kitchen_sink_fixture_logged "kitchen-sink-install-${KITCHEN_SINK_LABEL}" plugins install "${install_args[@]}" --force
-  configure_kitchen_sink_runtime
+  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs configure-runtime
   run_kitchen_sink_openclaw_logged "kitchen-sink-enable-${KITCHEN_SINK_LABEL}" plugins enable "$KITCHEN_SINK_ID"
   run_kitchen_sink_openclaw_capture "${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-plugins.json" plugins list --json
   run_kitchen_sink_openclaw_capture "${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect.json" plugins inspect "$KITCHEN_SINK_ID" --runtime --json
   run_kitchen_sink_openclaw_capture "${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect-all.json" plugins inspect --all --runtime --json
-  assert_kitchen_sink_installed
+  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs assert-installed
   if [ "$KITCHEN_SINK_SOURCE" = "clawhub" ]; then
     run_kitchen_sink_openclaw_logged "kitchen-sink-uninstall-${KITCHEN_SINK_LABEL}" plugins uninstall "$KITCHEN_SINK_SPEC" --force
   else
     run_kitchen_sink_openclaw_logged "kitchen-sink-uninstall-${KITCHEN_SINK_LABEL}" plugins uninstall "$KITCHEN_SINK_ID" --force
   fi
-  remove_kitchen_sink_channel_config
+  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs remove-channel-config
   run_kitchen_sink_openclaw_capture "${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-uninstalled.json" plugins list --json
-  assert_kitchen_sink_removed
+  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs assert-removed
 }
 
 run_failure_scenario() {
   echo "Testing expected ${KITCHEN_SINK_LABEL} install failure from ${KITCHEN_SINK_SPEC}..."
   run_expect_failure "install-${KITCHEN_SINK_LABEL}" openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" plugins install "$KITCHEN_SINK_SPEC" --force
-  remove_kitchen_sink_channel_config
+  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs remove-channel-config
   run_kitchen_sink_openclaw_capture "${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-uninstalled.json" plugins list --json
-  assert_kitchen_sink_removed
+  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs assert-removed
 }
 
 run_kitchen_sink_sweep_main() {
@@ -246,7 +222,7 @@ run_kitchen_sink_sweep_main() {
     exit 1
   fi
 
-  scan_logs_for_unexpected_errors
+  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs scan-logs
   echo "kitchen-sink plugin Docker E2E passed (${scenario_count} scenario(s))"
 }
 

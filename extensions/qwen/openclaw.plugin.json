@@ -133,6 +133,7 @@
     ],
     "providers": {
       "qwen": {
+        "baseUrl": "https://coding-intl.dashscope.aliyuncs.com/v1",
         "api": "openai-completions",
         "models": [
           {
@@ -364,17 +365,6 @@
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": 1000000,
             "maxTokens": 65536
-          },
-          {
-            "id": "qwen3-coder-next",
-            "name": "qwen3-coder-next",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 262144,
-            "maxTokens": 65536,
-            "status": "deprecated",
-            "replacedBy": "qwen3.7-plus"
           },
           {
             "id": "kimi-k2.5",

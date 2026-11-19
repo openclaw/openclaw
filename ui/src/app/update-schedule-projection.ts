@@ -1,13 +1,8 @@
+import type { GatewayUpdateAvailableEventPayload } from "../../../src/gateway/events.js";
 import type { GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatCountdown } from "../lib/format.ts";
-import {
-  readUpdateAvailable,
-  readUpdateAvailableValue,
-  readUpdateSchedule,
-  readUpdateScheduleValue,
-} from "./update-schedule-dto.ts";
 
 type UpdateScheduleProjection = {
   updateAvailable: UpdateAvailable | null;
@@ -45,23 +40,32 @@ export function projectConnectedUpdateSnapshot(
   hello: GatewayHelloOk | null,
 ): UpdateScheduleProjection {
   return {
-    updateAvailable: readUpdateAvailable(hello),
-    ...projectUpdateSchedule(current, readUpdateSchedule(hello)),
+    updateAvailable: hello?.snapshot?.updateAvailable ?? null,
+    ...projectUpdateSchedule(current, hello?.snapshot?.updateSchedule ?? null),
   };
 }
 
 export function projectUpdateAvailableEvent(
   current: UpdateScheduleProjection,
-  payload: { updateAvailable?: unknown; schedule?: unknown } | undefined,
+  payload: GatewayUpdateAvailableEventPayload | undefined,
 ): Partial<UpdateScheduleProjection> {
   const updateSchedule =
-    payload && Object.hasOwn(payload, "schedule")
-      ? readUpdateScheduleValue(payload.schedule)
-      : undefined;
+    payload && Object.hasOwn(payload, "schedule") ? (payload.schedule ?? null) : undefined;
   return {
-    updateAvailable: readUpdateAvailableValue(payload?.updateAvailable),
+    updateAvailable: payload?.updateAvailable ?? null,
     ...(updateSchedule !== undefined ? projectUpdateSchedule(current, updateSchedule) : {}),
   };
+}
+
+/**
+ * Every campaign toward a newer release or revision publishes its target. The Gateway announces
+ * one without a target only to restart on its running version and finish plugin updates that an
+ * earlier update left owed.
+ */
+export function isFinishingUpdateCampaign(
+  schedule: UpdateScheduleState | null | undefined,
+): boolean {
+  return Boolean(schedule?.campaign && !schedule.target);
 }
 
 export function formatUpdateCampaignLabel(
@@ -72,20 +76,22 @@ export function formatUpdateCampaignLabel(
   if (!campaign) {
     return null;
   }
+  // The lazy update views that call this register the finishing copy.
+  const copy = isFinishingUpdateCampaign(schedule) ? "updates.finishing" : "updates.campaign";
   if (campaign.state === "applying") {
-    return t("updates.campaign.applying");
+    return t(`${copy}.applying`);
   }
   if (campaign.holdUntilMs !== undefined && campaign.holdUntilMs > nowMs) {
-    return t("updates.campaign.held", {
+    return t(`${copy}.held`, {
       time: formatCountdown(campaign.holdUntilMs, nowMs),
     });
   }
   if (campaign.state === "waiting-for-idle") {
-    return t("updates.campaign.waitingForIdle", {
+    return t(`${copy}.waitingForIdle`, {
       time: formatCountdown(campaign.forceAtMs, nowMs),
     });
   }
-  return t("updates.campaign.countdown", {
+  return t(`${copy}.countdown`, {
     time: formatCountdown(campaign.applyAtMs ?? campaign.forceAtMs, nowMs),
   });
 }

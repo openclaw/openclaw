@@ -5,7 +5,6 @@
 import type { ViteUserConfig } from "vitest/config";
 import { controlUiLocaleModulesPlugin } from "../../ui/config/control-ui-locales.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
-import { jsdomOptimizedDeps } from "./vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "./vitest.ui-isolated-paths.mjs";
 
 // Explicit nameable return type: inference reaches vite-internal names (TS4058/TS4082).
@@ -13,7 +12,6 @@ export function createUiIsolatedVitestConfig(
   env?: Record<string, string | undefined>,
 ): ViteUserConfig {
   const config = createScopedVitestConfig(uiIsolatedTestFiles, {
-    deps: jsdomOptimizedDeps,
     environment: "jsdom",
     env,
     intersectIncludeFile: true,
@@ -21,10 +19,13 @@ export function createUiIsolatedVitestConfig(
     includeOpenClawRuntimeSetup: false,
     isolate: true,
     name: "ui-isolated",
-    setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
+    setupFiles: ["ui/src/test-helpers/dom.setup.ts"],
     useNonIsolatedRunner: false,
   });
-  return { ...config, plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin()] };
+  return {
+    ...config,
+    plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin()],
+  };
 }
 
 export default createUiIsolatedVitestConfig();

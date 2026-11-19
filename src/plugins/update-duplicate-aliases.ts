@@ -90,7 +90,7 @@ export async function reconcileDuplicateNpmPluginAliases(params: {
       params.outcomes.push({
         pluginId: aliasPluginId,
         status: "skipped",
-        message: `Kept duplicate "${aliasPluginId}" install record because "${canonicalPluginId}" did not complete a runnable canonical update.`,
+        message: `Kept duplicate "${aliasPluginId}" install record because "${canonicalPluginId}" did not produce a runnable installation of the current plugin.`,
       });
       continue;
     }
@@ -102,7 +102,7 @@ export async function reconcileDuplicateNpmPluginAliases(params: {
     params.outcomes.push({
       pluginId: aliasPluginId,
       status: "skipped",
-      message: `${params.dryRun ? "Would remove" : "Removed"} duplicate "${aliasPluginId}" install record; "${canonicalPluginId}" is the canonical plugin id.`,
+      message: `${params.dryRun ? "Would remove" : "Removed"} duplicate "${aliasPluginId}" install record; "${canonicalPluginId}" is the current plugin ID.`,
     });
   }
   return { config, changed };

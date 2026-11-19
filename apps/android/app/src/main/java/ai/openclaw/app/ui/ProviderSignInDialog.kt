@@ -24,6 +24,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -70,14 +71,9 @@ internal fun ProviderSignInDialog(
   DisposableEffect(controller) { onDispose { controller.close() } }
   val step = state.wizard?.get("step")?.jsonObject
   val done =
-    state.wizard
-      ?.get("status")
-      ?.jsonPrimitive
-      ?.content == "done" &&
-      state.wizard
-        ?.get("done")
-        ?.jsonPrimitive
-        ?.booleanOrNull == true
+    state.wizard?.let { wizard ->
+      wizard["status"]?.jsonPrimitive?.content == "done" && wizard["done"]?.jsonPrimitive?.booleanOrNull == true
+    } == true
 
   AppAlertDialog(
     onDismissRequest = onDismiss,
@@ -176,15 +172,26 @@ private fun ProviderSignInAnswer(
   var selected by remember(id) { mutableStateOf((step["initialValue"] as? JsonArray)?.toSet().orEmpty()) }
   when (step.getValue("type").jsonPrimitive.content) {
     "text" -> {
-      OutlinedTextField(
-        value = text,
-        onValueChange = { text = it },
-        enabled = enabled,
-        modifier = Modifier.fillMaxWidth(),
-        label = { Text(step["placeholder"]?.jsonPrimitive?.content ?: nativeString("Your answer")) },
-        keyboardOptions = if (step["sensitive"]?.jsonPrimitive?.booleanOrNull == true) KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false) else KeyboardOptions.Default,
-        visualTransformation = if (step["sensitive"]?.jsonPrimitive?.booleanOrNull == true) PasswordVisualTransformation() else VisualTransformation.None,
-      )
+      val sensitive = step["sensitive"]?.jsonPrimitive?.booleanOrNull == true
+      // The String editor retains its initial password semantics, just like ClawTextField.
+      // Recreate only the editor when sensitivity changes; the step still owns its answer.
+      key(sensitive) {
+        OutlinedTextField(
+          value = text,
+          onValueChange = { text = it },
+          enabled = enabled,
+          modifier = Modifier.fillMaxWidth(),
+          label = { Text(step["placeholder"]?.jsonPrimitive?.content ?: nativeString("Your answer")) },
+          keyboardOptions =
+            if (sensitive) {
+              KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false)
+            } else {
+              KeyboardOptions.Default
+            },
+          visualTransformation =
+            if (sensitive) PasswordVisualTransformation() else VisualTransformation.None,
+        )
+      }
       TextButton(enabled = enabled, onClick = { onAnswer(JsonPrimitive(text)) }) { Text(nativeString("Continue")) }
     }
 
@@ -201,9 +208,7 @@ private fun ProviderSignInAnswer(
             Text(choice.getValue("label").jsonPrimitive.content)
           }
         } else {
-          TextButton(enabled = enabled, onClick = {
-            onAnswer(value)
-          }) {
+          TextButton(enabled = enabled, onClick = { onAnswer(value) }) {
             Column(Modifier.padding(vertical = 4.dp)) {
               Text(choice.getValue("label").jsonPrimitive.content)
               choice["hint"]?.jsonPrimitive?.content?.let { Text(it, style = ClawTheme.type.caption) }

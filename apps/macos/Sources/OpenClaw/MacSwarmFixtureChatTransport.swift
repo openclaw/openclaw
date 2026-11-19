@@ -65,9 +65,9 @@ struct MacSwarmFixtureChatTransport: OpenClawChatTransport {
                 groupID: nil)])
     }
 
-    func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
+    func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult {
         let groupID = "swarm:\(parentKey):research"
-        return [
+        return OpenClawChatChildSessionsResult(rows: [
             self.session(
                 key: "polling",
                 label: "National polling",
@@ -94,7 +94,7 @@ struct MacSwarmFixtureChatTransport: OpenClawChatTransport {
                 status: "failed",
                 groupID: groupID,
                 parentKey: parentKey),
-        ]
+        ], isComplete: true)
     }
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
@@ -119,19 +119,7 @@ struct MacSwarmFixtureChatTransport: OpenClawChatTransport {
             key: key,
             kind: "direct",
             displayName: label,
-            surface: nil,
-            subject: nil,
-            room: nil,
-            space: nil,
             updatedAt: 1,
-            sessionId: nil,
-            systemSent: nil,
-            abortedLastRun: nil,
-            thinkingLevel: nil,
-            verboseLevel: nil,
-            inputTokens: nil,
-            outputTokens: nil,
-            totalTokens: nil,
             modelProvider: "openai",
             model: "gpt-6-astra",
             contextTokens: 400_000,

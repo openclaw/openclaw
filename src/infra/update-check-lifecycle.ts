@@ -1,29 +1,48 @@
+import type {
+  UpdateAvailable,
+  UpdateScheduleState,
+} from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import type { GatewayScheduler, GatewayScheduledJob } from "./gateway-scheduler.js";
+import type { GatewayScheduler } from "./gateway-scheduler.js";
 import type { UpdateCampaignController } from "./update-campaign.js";
-import type { resolveStartupInstallStatus } from "./update-install-status.js";
+import type { StartupInstallStatus } from "./update-install-status.types.js";
 
-export type UpdateCheckLifecycle = {
+type UpdateCheckNotifications = {
+  onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
+  onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
+};
+
+export type UpdateCheckLifecycle = UpdateCheckNotifications & {
   scheduler: GatewayScheduler;
   signal: AbortSignal;
   campaign?: UpdateCampaignController;
+  installStatus?: StartupInstallStatus;
+  /** Background owner policy admits the first campaign from an interactive result. */
+  announceDevGitUpdate?: (
+    target: Extract<NonNullable<UpdateScheduleState["target"]>, { kind: "git" }>,
+    installStatus: StartupInstallStatus,
+  ) => Promise<void>;
   isCurrent: () => boolean;
   refreshes: WeakMap<OpenClawConfig, Promise<void>>;
   run: <T>(work: (signal: AbortSignal) => Promise<T>) => Promise<T>;
-  initialize: () => ReturnType<typeof resolveStartupInstallStatus>;
+  initialize: () => Promise<StartupInstallStatus>;
   schedule: (id: string, work: () => Promise<number>) => void;
   stop: () => Promise<void>;
 };
 let updateCheckLifecycle: UpdateCheckLifecycle | undefined;
 
-export function createGatewayUpdateLifecycle(scheduler: GatewayScheduler): UpdateCheckLifecycle {
+export function createGatewayUpdateLifecycle(
+  scheduler: GatewayScheduler,
+  notifications: UpdateCheckNotifications = {},
+): UpdateCheckLifecycle {
   const predecessor = updateCheckLifecycle?.stop();
   const scope = new AsyncWorkScope();
-  const { signal } = scope;
-  const jobs = new Map<string, GatewayScheduledJob>();
-  let initialization: ReturnType<typeof resolveStartupInstallStatus> | undefined;
+  const scheduled = scheduler.scope();
+  const { signal } = scheduled;
+  let initialization: Promise<StartupInstallStatus> | undefined;
   let stopping: Promise<void> | undefined;
+  const schedules = new Map<string, object>();
 
   const run = <T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> =>
     scope.track(async () => {
@@ -33,42 +52,56 @@ export function createGatewayUpdateLifecycle(scheduler: GatewayScheduler): Updat
     });
   const initialize = async () => {
     signal.throwIfAborted();
+    if (lifecycle.installStatus && !lifecycle.installStatus.status.error) {
+      return lifecycle.installStatus;
+    }
     if (!initialization) {
       const task = run(async () => {
         const { resolveStartupInstallStatus } = await import("./update-install-status.js");
         signal.throwIfAborted();
-        return resolveStartupInstallStatus(false, signal);
+        const result = await resolveStartupInstallStatus(false, signal);
+        signal.throwIfAborted();
+        // A fresh interactive probe may have already adopted the installation.
+        if (!lifecycle.installStatus || lifecycle.installStatus.status.error) {
+          lifecycle.installStatus = result;
+        }
+        return lifecycle.installStatus;
       });
       initialization = task;
-      void task.catch(() => {
+      const clearInitialization = () => {
         if (initialization === task) {
           initialization = undefined;
         }
-      });
+      };
+      void task.then(clearInitialization, clearInitialization);
     }
     return initialization;
   };
   const schedule = (id: string, work: () => Promise<number>) => {
+    const current = {};
+    schedules.set(id, current);
     const arm = (delayMs: number) => {
-      if (signal.aborted) {
+      if (signal.aborted || schedules.get(id) !== current) {
         return;
       }
-      jobs.set(
+      scheduled.schedule({
         id,
-        scheduler.schedule({
-          id,
-          delayMs,
-          run: () =>
-            run(work)
-              .then((nextDelayMs) => arm(Math.max(1, nextDelayMs)))
-              .catch(() => undefined),
-        }),
-      );
+        delayMs,
+        run: () =>
+          run(work)
+            .then((nextDelayMs) => arm(Math.max(1, nextDelayMs)))
+            .catch((error: unknown) => {
+              if (!signal.aborted) {
+                throw error;
+              }
+            }),
+      });
     };
     arm(0);
   };
   const lifecycle: UpdateCheckLifecycle = {
     scheduler,
+    ...notifications,
     signal,
     isCurrent: () => updateCheckLifecycle === lifecycle,
     refreshes: new WeakMap(),
@@ -77,14 +110,13 @@ export function createGatewayUpdateLifecycle(scheduler: GatewayScheduler): Updat
     schedule,
     stop: () => {
       scope.beginClose();
-      for (const job of jobs.values()) {
-        job.cancel();
-      }
-      jobs.clear();
+      scheduled.beginClose();
       lifecycle.campaign?.clear();
       // Replacement owns the predecessor's drain too. Aborting alone does not
       // join a Git transport or maintenance process that is still shutting down.
-      return (stopping ??= Promise.allSettled([predecessor, scope.drain()]).then(() => undefined));
+      return (stopping ??= Promise.allSettled([predecessor, scope.drain(), scheduled.stop()]).then(
+        () => undefined,
+      ));
     },
   };
   updateCheckLifecycle = lifecycle;

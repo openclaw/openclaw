@@ -2,6 +2,7 @@ import type {
   UpdateAvailable,
   UpdateScheduleState,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { UpdateCampaignController } from "./update-campaign.js";
 
 export type { UpdateAvailable } from "../../packages/gateway-protocol/src/index.js";
 
@@ -14,6 +15,16 @@ export function getUpdateAvailable(): UpdateAvailable | null {
 
 export function getUpdateSchedule(): UpdateScheduleState | null {
   return updateScheduleCache;
+}
+
+export function withoutUpdateCampaign(schedule: UpdateScheduleState): UpdateScheduleState {
+  const { campaign: _campaign, ...rest } = schedule;
+  return rest;
+}
+
+function withoutUpdateTarget(schedule: UpdateScheduleState): UpdateScheduleState {
+  const { target: _target, campaign: _campaign, ...rest } = schedule;
+  return rest;
 }
 
 function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {
@@ -58,7 +69,25 @@ export function setUpdateAvailableCache(params: {
   params.onUpdateAvailableChange?.(params.next);
 }
 
-export function resetUpdateStatusState(): void {
-  updateAvailableCache = null;
-  updateScheduleCache = null;
+export function retireUpdateTarget(
+  schedule: UpdateScheduleState,
+  campaign: UpdateCampaignController | undefined,
+  callbacks: {
+    onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
+    onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
+  },
+): void {
+  // Retire first so clear() cannot republish its old target; always cancel on publication failure.
+  try {
+    setUpdateAvailableCache({
+      next: null,
+      onUpdateAvailableChange: callbacks.onUpdateAvailableChange,
+    });
+    setUpdateScheduleCache({
+      next: withoutUpdateTarget(schedule),
+      onUpdateScheduleChange: callbacks.onUpdateScheduleChange,
+    });
+  } finally {
+    campaign?.clear();
+  }
 }

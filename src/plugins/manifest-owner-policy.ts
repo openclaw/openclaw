@@ -42,7 +42,6 @@ export function hasExplicitManifestOwnerTrust(params: {
 export function passesManifestOwnerBasePolicy(params: {
   plugin: Pick<PluginManifestRecord, "id">;
   normalizedConfig: NormalizedPluginsConfig;
-  allowExplicitlyDisabled?: boolean;
   allowRestrictiveAllowlistBypass?: boolean;
 }): boolean {
   return resolveManifestOwnerBasePolicyBlock(params) === null;
@@ -52,7 +51,6 @@ export function passesManifestOwnerBasePolicy(params: {
 export function resolveManifestOwnerBasePolicyBlock(params: {
   plugin: Pick<PluginManifestRecord, "id">;
   normalizedConfig: NormalizedPluginsConfig;
-  allowExplicitlyDisabled?: boolean;
   allowRestrictiveAllowlistBypass?: boolean;
 }): ManifestOwnerBasePolicyBlockReason | null {
   if (!params.normalizedConfig.enabled) {
@@ -62,10 +60,7 @@ export function resolveManifestOwnerBasePolicyBlock(params: {
   if (params.normalizedConfig.deny.includes(policyId)) {
     return "blocked-by-denylist";
   }
-  if (
-    params.normalizedConfig.entries[policyId]?.enabled === false &&
-    params.allowExplicitlyDisabled !== true
-  ) {
+  if (params.normalizedConfig.entries[policyId]?.enabled === false) {
     return "plugin-disabled";
   }
   if (

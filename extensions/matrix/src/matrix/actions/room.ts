@@ -1,14 +1,12 @@
 import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveMatrixRoomId } from "../send.js";
-import { withResolvedActionClient, withResolvedRoomAction } from "./client.js";
+import { withResolvedRoomAction } from "./client.js";
 import { EventType, type MatrixActionClientOpts } from "./types.js";
 
 export async function getMatrixMemberInfo(
   userId: string,
   opts: MatrixActionClientOpts & { roomId: string },
 ) {
-  return await withResolvedActionClient(opts, async (client) => {
-    const roomId = await resolveMatrixRoomId(client, opts.roomId);
+  return await withResolvedRoomAction(opts.roomId, opts, async (client, roomId) => {
     const members = await client.getJoinedRoomMembers(roomId);
     if (!members.includes(userId)) {
       throw new Error(`User ${userId} is not a member of room ${roomId}`);

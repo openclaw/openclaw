@@ -442,8 +442,10 @@ class PermissionRequesterTest {
 
   @Test
   fun requestCodeAllocatorWrapsWithinLegacyRangeAndSkipsLiveCodes() {
-    val allocator =
-      PermissionRequestCodeAllocator(PermissionRequestCodeAllocator.LAST_PERMISSION_REQUEST_CODE)
+    val allocator = PermissionRequestCodeAllocator()
+    repeat(PermissionRequestCodeAllocator.LAST_PERMISSION_REQUEST_CODE - PermissionRequestCodeAllocator.FIRST_PERMISSION_REQUEST_CODE) {
+      allocator.allocate { false }
+    }
 
     assertEquals(PermissionRequestCodeAllocator.LAST_PERMISSION_REQUEST_CODE, allocator.allocate { false })
     assertEquals(

@@ -15,7 +15,7 @@ Adds Xiaomi, Xiaomi Token Plan model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/xiaomi-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/xiaomi-provider`
+- Install route: npm or ClawHub: `@openclaw/xiaomi-provider`
 
 ## Surface
 

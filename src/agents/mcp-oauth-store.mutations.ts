@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasMcpOAuthAuthorization } from "./mcp-oauth-authorization-facts.js";
 import type { McpOAuthMutation, McpOAuthStore } from "./mcp-oauth-store.types.js";
 
 export const MCP_OAUTH_DEFAULT_REDIRECT_URL = "http://127.0.0.1:8989/oauth/callback";
@@ -40,6 +42,9 @@ function applyMcpOAuthAuthorizationChallenge(
       ...(params.requiresAuthorization ? { requiresAuthorization: true } : {}),
     },
   };
+  if (params.requiresAuthorization) {
+    delete next.authorizationId;
+  }
   if (
     current.credentialState === undefined &&
     current.tokens === undefined &&
@@ -68,19 +73,33 @@ export function applyMcpOAuthMutation(
   mutation: McpOAuthMutation,
 ): { store: McpOAuthStore; applied: boolean } {
   switch (mutation.kind) {
+    case "beginRefresh":
+      if (store.refreshClaim || store.tokens?.refresh_token !== mutation.refreshToken) {
+        throw new Error("MCP OAuth refresh ownership changed; sign in again.");
+      }
+      return { store: { ...store, refreshClaim: mutation.claim }, applied: true };
+    case "restoreRefresh": {
+      if (store.refreshClaim !== mutation.claim) {
+        return { store, applied: false };
+      }
+      const next = { ...store };
+      delete next.refreshClaim;
+      return { store: next, applied: true };
+    }
+    case "ensureAuthorization":
+      return !store.authorizationId && hasMcpOAuthAuthorization(store)
+        ? { store: { ...store, authorizationId: randomUUID() }, applied: true }
+        : { store, applied: false };
     case "clientInformation":
-      return {
-        store: {
-          ...beginMcpOAuthAuthorization(store),
-          clientInformation: mutation.clientInformation,
-        },
-        applied: true,
-      };
-    case "discoveryState":
-      return {
-        store: { ...beginMcpOAuthAuthorization(store), discoveryState: mutation.discoveryState },
-        applied: true,
-      };
+    case "discoveryState": {
+      const next = beginMcpOAuthAuthorization(store);
+      if (mutation.kind === "clientInformation") {
+        next.clientInformation = mutation.clientInformation;
+      } else {
+        next.discoveryState = mutation.discoveryState;
+      }
+      return { store: next, applied: true };
+    }
     case "authorizationRedirect":
       return {
         store: {
@@ -109,8 +128,18 @@ export function applyMcpOAuthMutation(
       return { store: next, applied: true };
     }
     case "tokens": {
+      if (mutation.refreshClaim !== undefined && store.refreshClaim !== mutation.refreshClaim) {
+        throw new Error("MCP OAuth refresh ownership changed; sign in again.");
+      }
       const tokens = mutation.tokens;
       const next: McpOAuthStore = { ...store, tokens };
+      next.authorizationId =
+        !mutation.replaceAuthorization && hasMcpOAuthAuthorization(store) && store.authorizationId
+          ? store.authorizationId
+          : randomUUID();
+      if (mutation.refreshClaim !== undefined || mutation.replaceAuthorization) {
+        delete next.refreshClaim;
+      }
       delete next.credentialState;
       delete next.pendingAuthorizationChallenge;
       const issuedBy = store.discoveryState?.authorizationServerUrl;
@@ -135,6 +164,8 @@ export function applyMcpOAuthMutation(
       }
       if ((scope === "all" || scope === "tokens") && !suppressStoredTokens) {
         delete next.tokens;
+        delete next.refreshClaim;
+        delete next.authorizationId;
         delete next.tokenExpiresAt;
         delete next.tokensAuthorizationServerUrl;
         next.credentialState = "cleared";

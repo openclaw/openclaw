@@ -317,12 +317,8 @@ function buildQaEvidenceSummaryFields(params: QaEvidenceSummaryInput<QaEvidenceS
 function buildQaEvidenceSummary(
   params: QaEvidenceSummaryInput<QaEvidenceSummaryV2Entry>,
 ): QaEvidenceSummaryV2Json {
-  const profileOptions = readQaScorecardProfileOptions(params.profile);
   return qaEvidenceSummarySchema.parse({
-    ...buildQaEvidenceSummaryFields({
-      ...params,
-      evidenceMode: params.evidenceMode ?? profileOptions.evidenceMode,
-    }),
+    ...buildQaEvidenceSummaryFields(params),
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   });
 }
@@ -381,9 +377,9 @@ export function projectQaEvidenceScenarioOutcomes(
   const occurrences = new Map(summary.occurrences.map((occurrence) => [occurrence.id, occurrence]));
   const containment = resolveQaEvidenceContainment(summary.occurrences, summary.entries);
   const effective = new Set(
-    getEffectiveQaEvidenceEntries(summary).map((entry) =>
-      "binding" in entry ? entry.binding.occurrenceId : null,
-    ),
+    summary.entries
+      .filter((entry) => entry.effective && containment.isActive(entry.binding.occurrenceId))
+      .map((entry) => entry.binding.occurrenceId),
   );
   const outcomes: QaEvidenceScenarioOutcome[] = [];
   for (const occurrence of summary.occurrences) {

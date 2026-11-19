@@ -60,6 +60,11 @@ export async function createRemovalRecoveryInventory(params: {
   const materializedSymlinks =
     [...entries.values()].some((entry) => entry.mode === "120000") &&
     !(await readRetainedGitBoolean("core.symlinks", process.platform !== "win32"));
+  const blobOid = (bytes: Buffer) =>
+    createHash(snapshot.length === 64 ? "sha256" : "sha1")
+      .update(`blob ${bytes.length}\0`)
+      .update(bytes)
+      .digest("hex");
   // Each four-byte $Id$ can expand to OID length + 8 bytes; encoding
   // conversion can then use four bytes per character. Include BOM slack.
   const checkoutBytes = (entry: Entry) => entry.size * (snapshot.length + 8) + 65536;
@@ -105,11 +110,7 @@ export async function createRemovalRecoveryInventory(params: {
         const content = info.isSymbolicLink()
           ? fsSync.readlinkSync(target, { encoding: "buffer" })
           : fsSync.readFileSync(target);
-        const oid = createHash(snapshot.length === 64 ? "sha256" : "sha1")
-          .update(`blob ${content.length}\0`)
-          .update(content)
-          .digest("hex");
-        if (oid !== expected.oid) {
+        if (blobOid(content) !== expected.oid) {
           if (conversionCandidates && expected.mode !== "120000") {
             conversionCandidates.push(key);
           } else {
@@ -156,10 +157,7 @@ export async function createRemovalRecoveryInventory(params: {
             if (result.code !== 0 || result.termination !== "exit" || result.outputLimitStream) {
               throw preserved("Captured checkout representation is unavailable");
             }
-            entry.oid = createHash(snapshot.length === 64 ? "sha256" : "sha1")
-              .update(`blob ${result.stdout.length}\0`)
-              .update(result.stdout)
-              .digest("hex");
+            entry.oid = blobOid(result.stdout);
           }
         },
       );

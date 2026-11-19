@@ -9,7 +9,6 @@ import {
   activateMemoryWikiCompiledCacheOwner,
   invalidateMemoryWikiCompiledCache,
   isMemoryWikiCompiledCacheOwnerActive,
-  reconcileMemoryWikiCompiledCacheOwner,
 } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
@@ -18,6 +17,7 @@ import {
   loadMemoryWikiValidatedVaultIdentity,
 } from "./log.js";
 import { WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
+import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
 
 const WIKI_VAULT_DIRECTORIES = [
@@ -32,13 +32,6 @@ const WIKI_VAULT_DIRECTORIES = [
 ] as const;
 
 const WIKI_VAULT_SCAFFOLD = ["AGENTS.md", "WIKI.md", "index.md", ".openclaw-wiki/log.jsonl"];
-
-type InitializeMemoryWikiVaultResult = {
-  rootDir: string;
-  created: boolean;
-  createdDirectories: string[];
-  createdFiles: string[];
-};
 
 function buildIndexMarkdown(): string {
   return withTrailingNewline(
@@ -107,17 +100,14 @@ async function writeFileIfMissing(
 export async function initializeMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
   options?: { nowMs?: number; signal?: AbortSignal },
-): Promise<InitializeMemoryWikiVaultResult> {
+) {
   options?.signal?.throwIfAborted();
   const rootDir = config.vault.path;
   const createdDirectories: string[] = [];
   const createdFiles: string[] = [];
-  const rootCreated = !(await pathExists(rootDir));
-
-  if (rootCreated) {
+  if (await fs.mkdir(rootDir, { recursive: true })) {
     createdDirectories.push(rootDir);
   }
-  await fs.mkdir(rootDir, { recursive: true });
   const hadVaultScaffold = (
     await Promise.all(
       WIKI_VAULT_SCAFFOLD.map((relativePath) => pathExists(path.join(rootDir, relativePath))),
@@ -130,10 +120,9 @@ export async function initializeMemoryWikiVault(
 
   for (const relativeDir of WIKI_VAULT_DIRECTORIES) {
     const fullPath = path.join(rootDir, relativeDir);
-    if (!(await pathExists(fullPath))) {
+    if (await fs.mkdir(fullPath, { recursive: true })) {
       createdDirectories.push(fullPath);
     }
-    await fs.mkdir(fullPath, { recursive: true });
   }
 
   await writeFileIfMissing(rootDir, "AGENTS.md", buildAgentsMarkdown(), createdFiles);
@@ -159,7 +148,7 @@ export async function initializeMemoryWikiVault(
   }
   const vaultGeneration = await ensureMemoryWikiVaultGeneration(rootDir);
   options?.signal?.throwIfAborted();
-  // Ordinary requests reuse the reconciled owner. Cold activation and explicit
+  // Ordinary requests reuse the active owner. Cold activation and explicit
   // lifecycle refresh validate source hashes; scaffold/generation replacement retires it.
   if (!isMemoryWikiCompiledCacheOwnerActive(config, vaultGeneration)) {
     await activateExistingMemoryWikiVault(config, options?.signal);
@@ -178,23 +167,19 @@ export async function activateExistingMemoryWikiVault(
   signal?: AbortSignal,
 ): Promise<void> {
   signal?.throwIfAborted();
-  const rootDir = config.vault.path;
-  const identity = await loadMemoryWikiValidatedVaultIdentity(rootDir);
-  if (!identity.vaultGeneration) {
-    throw new Error(`Memory Wiki vault generation is missing: ${rootDir}`);
-  }
-  signal?.throwIfAborted();
-  const needsReconcile = activateMemoryWikiCompiledCacheOwner(
-    config,
-    identity.vaultGeneration,
-    identity.compiledCachePublicationId,
-  );
-  // Repeated request setup must retain the loaded publication. Reconciliation
-  // runs again only when its path, generation, or publication identity changes.
-  if (needsReconcile) {
-    await reconcileMemoryWikiCompiledCacheOwner(config, () =>
-      loadMemoryWikiValidatedVaultIdentity(rootDir),
+  await withMemoryWikiVaultMutation(config.vault.path, async () => {
+    signal?.throwIfAborted();
+    const rootDir = config.vault.path;
+    const identity = await loadMemoryWikiValidatedVaultIdentity(rootDir);
+    if (!identity.vaultGeneration) {
+      throw new Error(`Memory Wiki vault generation is missing: ${rootDir}`);
+    }
+    signal?.throwIfAborted();
+    activateMemoryWikiCompiledCacheOwner(
+      config,
+      identity.vaultGeneration,
+      identity.compiledCachePublicationId,
     );
-  }
-  signal?.throwIfAborted();
+    signal?.throwIfAborted();
+  });
 }

@@ -14,6 +14,7 @@ import {
   resolveMatrixStoragePaths,
   writeStorageMeta,
 } from "./storage.js";
+import type { MatrixStoragePaths } from "./types.js";
 
 const loadMatrixCreateClientRuntimeDeps = createLazyRuntimeModule(() =>
   Promise.all([import("../sdk.js"), import("./logging.js"), import("./file-sync-store.js")]).then(
@@ -25,7 +26,7 @@ const loadMatrixCreateClientRuntimeDeps = createLazyRuntimeModule(() =>
   ),
 );
 
-export async function createMatrixClient(params: {
+type MatrixClientCreationParams = {
   homeserver: string;
   userId?: string;
   accessToken: string;
@@ -40,10 +41,17 @@ export async function createMatrixClient(params: {
   allowPrivateNetwork?: boolean;
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
-}): Promise<MatrixClient> {
-  const { MatrixClient, SqliteBackedMatrixSyncStore, ensureMatrixSdkLoggingConfigured } =
-    await loadMatrixCreateClientRuntimeDeps();
-  ensureMatrixSdkLoggingConfigured();
+};
+
+export type PreparedMatrixClientStorage = {
+  homeserver: string;
+  matrixClientUserId: string | undefined;
+  storagePaths: MatrixStoragePaths | null;
+};
+
+export async function prepareMatrixClientStorage(
+  params: MatrixClientCreationParams,
+): Promise<PreparedMatrixClientStorage> {
   const homeserver = await resolveValidatedMatrixHomeserverUrl(params.homeserver, {
     dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork,
   });
@@ -60,6 +68,20 @@ export async function createMatrixClient(params: {
         env: process.env,
       })
     : null;
+
+  return { homeserver, matrixClientUserId, storagePaths };
+}
+
+export async function createMatrixClient(
+  params: MatrixClientCreationParams,
+  preparedStorage?: PreparedMatrixClientStorage,
+): Promise<MatrixClient> {
+  const { homeserver, matrixClientUserId, storagePaths } =
+    preparedStorage ?? (await prepareMatrixClientStorage(params));
+  const userId = matrixClientUserId ?? "unknown";
+  const { MatrixClient, SqliteBackedMatrixSyncStore, ensureMatrixSdkLoggingConfigured } =
+    await loadMatrixCreateClientRuntimeDeps();
+  ensureMatrixSdkLoggingConfigured();
 
   if (storagePaths) {
     await maybeMigrateLegacyStorage({ storagePaths });

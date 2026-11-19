@@ -4,32 +4,27 @@ import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choi
 import { buildProviderPluginMethodChoice } from "../plugins/provider-plugin-choice.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
-export const loadResolvedModelPickerRuntime = createLazyRuntimeNamedExport(
-  () => import("../commands/model-picker.runtime.js"),
-  "modelPickerRuntime",
-);
+export async function loadResolvedModelPickerRuntime() {
+  return (await import("../commands/model-picker.runtime.js")).modelPickerRuntime;
+}
 
 export async function resolveProviderPluginSetupOptions(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<WizardSelectOption[]> {
   const runtime = await loadResolvedModelPickerRuntime();
   return runtime
-    .resolveProviderModelPickerContributions({
+    .resolveProviderModelPickerEntries({
       config: params.cfg,
       workspaceDir: params.workspaceDir,
-      env: params.env,
     })
-    .map(({ option }) =>
-      Object.assign(
-        { value: option.value, label: option.label },
-        option.hint ? { hint: option.hint } : {},
-      ),
+    .map(({ value, label, hint }) => Object.assign({ value, label }, hint ? { hint } : undefined))
+    .toSorted(
+      (left, right) =>
+        left.label.localeCompare(right.label) || left.value.localeCompare(right.value),
     );
 }
 
@@ -39,7 +34,6 @@ export async function maybeHandleProviderPluginSelection(params: {
   prompter: WizardPrompter;
   agentDir?: string;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   runtime?: RuntimeEnv;
 }): Promise<{ model?: string; config?: OpenClawConfig } | null> {
   let pluginResolution: string | null = null;
@@ -51,7 +45,6 @@ export async function maybeHandleProviderPluginSelection(params: {
     pluginProviders = resolvePluginProviders({
       config: params.cfg,
       workspaceDir: params.workspaceDir,
-      env: params.env,
       mode: "setup",
     });
     pluginResolution = pluginProviders.some(
@@ -80,7 +73,6 @@ export async function maybeHandleProviderPluginSelection(params: {
     pluginProviders = resolvePluginProviders({
       config: params.cfg,
       workspaceDir: params.workspaceDir,
-      env: params.env,
       mode: "setup",
     });
   }
@@ -94,7 +86,6 @@ export async function maybeHandleProviderPluginSelection(params: {
             {
               config: params.cfg,
               workspaceDir: params.workspaceDir,
-              env: params.env,
               pluginId: provider.pluginId,
               includeUntrustedWorkspacePlugins: false,
             },
@@ -103,7 +94,6 @@ export async function maybeHandleProviderPluginSelection(params: {
     manifestChoice: resolveManifestProviderAuthChoice(pluginResolution, {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
-      env: params.env,
       includeUntrustedWorkspacePlugins: false,
     }),
   });
@@ -136,7 +126,6 @@ export async function maybeHandleProviderPluginSelection(params: {
       prompter: params.prompter,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
-      env: params.env,
     });
   }
   return { model: applied.defaultModel, config: applied.config };

@@ -3,6 +3,7 @@ import { createServer, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
@@ -65,12 +66,17 @@ async function runCustomSetup(scenario: Scenario) {
 
   const server = createServer((request, response) => {
     void (async () => {
+      const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+      if (request.method === "GET" && pathname === "/v1/models") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ data: [] }));
+        return;
+      }
       let raw = "";
       for await (const chunk of request) {
         raw += String(chunk);
       }
       const body = JSON.parse(raw) as { stream?: boolean; model?: string };
-      const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
       expect(pathname).toBe(
         {
           openai: "/v1/chat/completions",
@@ -105,10 +111,7 @@ async function runCustomSetup(scenario: Scenario) {
       response.destroy(error instanceof Error ? error : undefined);
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const origin = await httpFixtures.listenLoopback(server);
   cleanupTasks.push(async () => {
     env.restore();
     server.closeAllConnections();
@@ -117,11 +120,7 @@ async function runCustomSetup(scenario: Scenario) {
     });
     await fs.rm(root, { recursive: true, force: true });
   });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("custom provider fixture did not bind");
-  }
-  const baseUrl = `http://127.0.0.1:${address.port}${scenario.protocol === "anthropic" ? "" : "/v1"}`;
+  const baseUrl = `${origin}${scenario.protocol === "anthropic" ? "" : "/v1"}`;
   const textAnswers = [
     baseUrl,
     scenario.authless ? "" : scenario.secretRef ? "CUSTOM_SETUP_FIXTURE_KEY" : credential,
@@ -167,7 +166,11 @@ async function runCustomSetup(scenario: Scenario) {
     },
   };
   const configModule = await import("../config/config.js");
-  configModule.clearConfigCache();
+  configModule.clearRuntimeConfigSnapshot();
+  cleanupTasks.push(async () => {
+    configModule.clearRuntimeConfigSnapshot();
+  });
+  await configModule.captureRuntimeConfigAsyncReader()();
   const { activateSetupInference } = await import("../system-agent/setup-inference.js");
   const { runManualStage } = await import("./onboard-guided-manual.js");
   const activationResults: unknown[] = [];
@@ -279,11 +282,12 @@ async function runCustomSetup(scenario: Scenario) {
       ? await resultPromise.catch((error: unknown) => error)
       : await resultPromise;
   expect(serverErrors).toEqual([]);
-  const authProfiles = Object.values(
+  const authProfiles = Object.entries(
     loadAuthProfileStoreWithoutExternalProfiles(resolveAgentDir(initialConfig, "main")).profiles,
-  ).filter((profile) => profile.provider === "fixture-custom");
+  ).filter(([, profile]) => profile.provider === "fixture-custom");
   return {
-    authProfiles,
+    authProfiles: authProfiles.map(([, profile]) => profile),
+    authProfileIds: authProfiles.map(([profileId]) => profileId),
     result,
     credential,
     cancelled: result instanceof WizardCancelledError,
@@ -334,7 +338,9 @@ describe("guided custom provider activation", () => {
         expect.arrayContaining(["Inference verified: fixture-custom/fixture-model"]),
       );
       expect(setup.requests).toEqual([expect.objectContaining({ stream: true, authorized: true })]);
-      expect(setup.config.models?.providers?.["fixture-custom"]?.apiKey).toBeUndefined();
+      expect(setup.config.models?.providers?.["fixture-custom"]?.apiKey).toBe(
+        setup.authProfileIds[0],
+      );
       expect(JSON.stringify(setup.config)).not.toContain(setup.credential);
       expect(setup.authProfiles).toHaveLength(scenario.authless ? 0 : 1);
       if (!scenario.authless) {

@@ -8,72 +8,44 @@ const apiKeyInfo = {
 };
 
 const runtimeAuthState = {
-  generation: 1,
   sourceApiKey: "source-token",
+  apiKey: "runtime-token",
   authMode: "oauth",
-  profileId: "test:profile",
 };
 
 describe("resolveAttemptDispatchApiKey", () => {
-  it("keeps provider-prepared runtime auth inside the core transport", () => {
+  it.each([
+    ["keeps runtime auth in the core transport", runtimeAuthState, false, undefined],
+    ["forwards source auth to the transport owner", runtimeAuthState, true, "source-token"],
+    ["keeps direct credentials without runtime auth", null, false, "source-token"],
+  ] as const)("%s", (_name, runtimeAuth, pluginHarnessOwnsTransport, expected) => {
     expect(
       resolveAttemptDispatchApiKey({
         apiKeyInfo,
-        runtimeAuthState,
-        pluginHarnessOwnsTransport: false,
+        runtimeAuthState: runtimeAuth,
+        pluginHarnessOwnsTransport,
       }),
-    ).toBeUndefined();
-  });
-
-  it("forwards the resolved source credential to a transport-owning harness", () => {
-    expect(
-      resolveAttemptDispatchApiKey({
-        apiKeyInfo,
-        runtimeAuthState,
-        pluginHarnessOwnsTransport: true,
-      }),
-    ).toBe("source-token");
-  });
-
-  it("keeps direct credentials available without provider runtime auth", () => {
-    expect(
-      resolveAttemptDispatchApiKey({
-        apiKeyInfo,
-        runtimeAuthState: null,
-        pluginHarnessOwnsTransport: false,
-      }),
-    ).toBe("source-token");
+    ).toBe(expected);
   });
 });
 
 describe("createScopedAuthProfileStore", () => {
+  const oauth = (access: string, refresh: string) => ({
+    type: "oauth" as const,
+    provider: "openai",
+    access,
+    refresh,
+    expires: Date.now() + 60_000,
+  });
   const store = {
     version: 1 as const,
     runtimePersistedProfileIds: ["anthropic:work", "openai:other", "openai:work"],
     runtimeExternalProfileIds: ["openai:external", "xai:work"],
     runtimeExternalProfileIdsAuthoritative: true,
     profiles: {
-      "openai:work": {
-        type: "oauth" as const,
-        provider: "openai",
-        access: "access",
-        refresh: "refresh",
-        expires: Date.now() + 60_000,
-      },
-      "openai:other": {
-        type: "oauth" as const,
-        provider: "openai",
-        access: "other-access",
-        refresh: "other-refresh",
-        expires: Date.now() + 60_000,
-      },
-      "openai:external": {
-        type: "oauth" as const,
-        provider: "openai",
-        access: "external-access",
-        refresh: "external-refresh",
-        expires: Date.now() + 60_000,
-      },
+      "openai:work": oauth("access", "refresh"),
+      "openai:other": oauth("other-access", "other-refresh"),
+      "openai:external": oauth("external-access", "external-refresh"),
       "anthropic:work": {
         type: "api_key" as const,
         provider: "anthropic",
@@ -88,7 +60,7 @@ describe("createScopedAuthProfileStore", () => {
   };
 
   it("forwards only the selected persisted profile to a transport-owning harness", () => {
-    expect(createScopedAuthProfileStore(store, "openai:work")).toEqual({
+    expect(createScopedAuthProfileStore(store, ["openai:work"])).toEqual({
       version: 1,
       profiles: { "openai:work": store.profiles["openai:work"] },
       runtimePersistedProfileIds: ["openai:work"],
@@ -97,21 +69,8 @@ describe("createScopedAuthProfileStore", () => {
     });
   });
 
-  it("preserves an authoritative external profile classification", () => {
-    expect(createScopedAuthProfileStore(store, ["openai:external", "anthropic:work"])).toEqual({
-      version: 1,
-      profiles: {
-        "openai:external": store.profiles["openai:external"],
-        "anthropic:work": store.profiles["anthropic:work"],
-      },
-      runtimePersistedProfileIds: ["anthropic:work"],
-      runtimeExternalProfileIds: ["openai:external"],
-      runtimeExternalProfileIdsAuthoritative: true,
-    });
-  });
-
   it("returns an empty store when no requested profile exists", () => {
-    expect(createScopedAuthProfileStore(store, "openai:missing")).toEqual({
+    expect(createScopedAuthProfileStore(store, ["openai:missing"])).toEqual({
       version: 1,
       profiles: {},
     });

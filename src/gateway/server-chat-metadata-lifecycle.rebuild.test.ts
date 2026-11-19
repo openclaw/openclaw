@@ -1,0 +1,126 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  cleanupPreparedModelRuntimeHarness,
+  getPreparedModelRuntimeMocks,
+  resetPreparedModelRuntimeHarness,
+} from "../agents/prepared-model-runtime.test-harness.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { createMetadataConfig, model } from "./server-chat-metadata-lifecycle.auth.test-support.js";
+import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
+import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+
+const mocks = getPreparedModelRuntimeMocks();
+const config = createMetadataConfig();
+config.plugins = { allow: [] };
+const providerOwners = mocks.pluginMetadataSnapshot.owners.providers;
+const signedIn = {
+  version: 1,
+  profiles: { "openai:default": { type: "api_key", provider: "openai", key: "sk-test" } },
+} as const;
+let state: OpenClawTestState;
+let sidecars = createGatewaySidecarStopOwner();
+
+beforeEach(async () => {
+  vi.stubEnv("OPENAI_API_KEY", "");
+  state = await createOpenClawTestState({ label: "metadata-rebuild" });
+  await resetPreparedModelRuntimeHarness(state);
+  mocks.configuredAgentIds = ["main"];
+  mocks.pluginMetadataSnapshot.owners.providers = new Map([["openai", ["openai"]]]);
+  mocks.authStorage.getAll.mockReturnValue({ openai: { type: "api_key", key: "sk-test" } });
+  mocks.preparedAuthStore = structuredClone(signedIn);
+  mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
+    entries: [model],
+    routeVariants: [model],
+  });
+  sidecars = createGatewaySidecarStopOwner();
+});
+
+afterEach(async ({ task }) => {
+  await sidecars.stop();
+  mocks.pluginMetadataSnapshot.owners.providers = providerOwners;
+  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
+  vi.unstubAllEnvs();
+});
+
+const publishOwner = () =>
+  refreshPreparedModelRuntimeSnapshots(config, {
+    gatewayLifecycle: true,
+    catalogMode: "live",
+    allowGatewaySubagentBinding: true,
+  });
+
+it("retains unchanged providers during discovery and immediately applies auth and config removals", async () => {
+  let activeConfig = config;
+  await publishOwner();
+  const lifecycle = await createGatewayChatMetadataLifecycle({
+    getConfig: () => activeConfig,
+    log: { warn: vi.fn() } as never,
+  });
+  await lifecycle.attachContext(
+    {
+      broadcast: vi.fn(),
+      getRuntimeConfig: () => activeConfig,
+      logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    } as unknown as GatewayRequestContext,
+    sidecars.publish,
+  );
+  const read = async () => {
+    // The replacement below never settles; a read that waits on it fails this budget.
+    let timer: NodeJS.Timeout | undefined;
+    const budget = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("models.list waited for the rebuild")), 1_000);
+    });
+    try {
+      const result = await Promise.race([
+        lifecycle.readModelsList({
+          agentId: "main",
+          params: { view: "configured" },
+          includeManualSelection: false,
+        }),
+        budget,
+      ]);
+      return result?.models.map(({ provider, id }) => `${provider}/${id}`);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  expect(await read()).toContain("openai/gpt-5.4");
+  const discovery = createDeferredCore<{ entries: (typeof model)[]; routeVariants: [] }>();
+  mocks.buildPreparedModelCatalogSnapshot.mockImplementationOnce(() => discovery.promise);
+  const rebuild = publishOwner().catch((error: unknown) => error);
+  try {
+    expect(await read()).toContain("openai/gpt-5.4");
+    activeConfig = { ...config, plugins: { allow: ["other-plugin"] } };
+    expect(await read()).not.toContain("openai/gpt-5.4");
+    activeConfig = config;
+    expect(await read()).toContain("openai/gpt-5.4");
+    activeConfig = { ...config, plugins: {} };
+    expect(await read()).toContain("openai/gpt-5.4");
+    activeConfig = config;
+    mocks.preparedAuthStore = { version: 1, profiles: {} };
+    expect(await read()).not.toContain("openai/gpt-5.4");
+    mocks.preparedAuthStore = structuredClone(signedIn);
+    expect(await read()).toContain("openai/gpt-5.4");
+    activeConfig = {
+      ...config,
+      agents: {
+        ...config.agents,
+        defaults: { ...config.agents?.defaults, modelPolicy: { allow: [] } },
+      },
+    };
+    expect(await read()).not.toContain("openai/gpt-5.4");
+    activeConfig = { ...config, env: { vars: { OPENAI_API_KEY: "" } } };
+    expect(await read()).not.toContain("openai/gpt-5.4");
+  } finally {
+    discovery.resolve({ entries: [model], routeVariants: [] });
+    await rebuild;
+  }
+});

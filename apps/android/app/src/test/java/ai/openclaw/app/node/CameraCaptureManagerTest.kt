@@ -360,7 +360,7 @@ class CameraCaptureManagerTest {
               enabled
             },
           ).also { it.attachLifecycleOwner(owner) }
-        val captureHandler = CameraHandler(app, camera, { error("silent capture") }, ::invokeErrorFromThrowable)
+        val captureHandler = CameraHandler(app, camera, { error("silent capture") })
         val hold = PixelHold()
         HeldPixelBitmap.hold = hold
         val snap = async { captureHandler.handleSnap(SMALL_SNAP) }
@@ -498,7 +498,7 @@ class CameraCaptureManagerTest {
   private fun handler(owner: Owner = Owner()): CameraHandler {
     val app = RuntimeEnvironment.getApplication()
     val camera = CameraCaptureManager(app).also { it.attachLifecycleOwner(owner) }
-    return CameraHandler(app, camera, { error("silent capture must not acquire the microphone") }, ::invokeErrorFromThrowable)
+    return CameraHandler(app, camera, { error("silent capture must not acquire the microphone") })
   }
 
   companion object {

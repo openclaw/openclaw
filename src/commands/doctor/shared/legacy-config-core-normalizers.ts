@@ -1,4 +1,5 @@
 // Core legacy config normalizers for shipped keys retired outside the rule table.
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -6,9 +7,17 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
+import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
+import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
 import { resolveDiscoveredChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-discovery.js";
 import { resolveSingleAccountPromotion } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
+import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
+import {
+  cloneConfigWithResolutionFacts,
+  copyConfigResolutionFactsThroughRewrite,
+} from "../../../config/resolution-facts.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../../../infra/google-api-base-url.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
@@ -22,229 +31,70 @@ import {
   rewriteModelRefs,
 } from "./legacy-config-migrations.runtime.models.refs.js";
 import { isRecord } from "./legacy-config-record-shared.js";
+import { normalizeLegacyMistralModelCost } from "./legacy-mistral-model-cost.js";
+import { normalizeKnownModelRef } from "./legacy-model-ref-normalization.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
-import {
-  modelEntryWithRuntimePolicy,
-  selectedCanonicalModelRefsForRuntimePolicy,
-} from "./legacy-runtime-model-policy.js";
-import {
-  migrateLegacyRuntimeModelRef,
-  resolveLegacyCliRuntimeAlias,
-} from "./legacy-runtime-model-providers.js";
+import { modelEntryWithRuntimePolicy } from "./legacy-runtime-model-policy.js";
+import { migrateLegacyRuntimeModelRef } from "./legacy-runtime-model-providers.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
-const INHERITED_ACCOUNT_POLICY_KEYS = ["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"];
 const log = createSubsystemLogger("doctor");
 
-/** Migrate legacy browser/Chrome relay config to current browser profile settings. */
-export function normalizeLegacyBrowserConfig(
-  cfg: OpenClawConfig,
-  changes: string[],
-): OpenClawConfig {
-  const rawBrowser = cfg.browser;
-  if (!isRecord(rawBrowser)) {
-    return cfg;
-  }
-
-  const browser = structuredClone(rawBrowser);
-  let browserChanged = false;
-
-  if ("relayBindHost" in browser) {
-    delete browser.relayBindHost;
-    browserChanged = true;
-    changes.push(
-      "Removed browser.relayBindHost (legacy Chrome extension relay setting; the extension relay binds loopback on the profile cdpPort).",
-    );
-  }
-
-  // driver "extension" is a live driver again (Chrome extension relay v2). Old
-  // relay-era profiles could carry a cdpUrl pointing at the retired gateway
-  // relay endpoint; the new driver owns its endpoint, so drop the stale URL
-  // instead of failing schema validation.
-  const rawProfiles = browser.profiles;
-  if (isRecord(rawProfiles)) {
-    const profiles = { ...rawProfiles };
-    let profilesChanged = false;
-    for (const [profileName, rawProfile] of Object.entries(rawProfiles)) {
-      if (!isRecord(rawProfile)) {
-        continue;
-      }
-      const rawDriver = normalizeOptionalString(rawProfile.driver) ?? "";
-      if (rawDriver !== "extension" || !normalizeOptionalString(rawProfile.cdpUrl)) {
-        continue;
-      }
-      const nextProfile = { ...rawProfile };
-      delete nextProfile.cdpUrl;
-      profiles[profileName] = nextProfile;
-      profilesChanged = true;
-      changes.push(
-        `Removed browser.profiles.${profileName}.cdpUrl (extension driver profiles own their relay endpoint).`,
-      );
-    }
-    if (profilesChanged) {
-      browser.profiles = profiles;
-      browserChanged = true;
-    }
-  }
-
-  const rawSsrFPolicy = browser.ssrfPolicy;
-  if (isRecord(rawSsrFPolicy) && "allowPrivateNetwork" in rawSsrFPolicy) {
-    const legacyAllowPrivateNetwork = rawSsrFPolicy.allowPrivateNetwork;
-    const currentDangerousAllowPrivateNetwork = rawSsrFPolicy.dangerouslyAllowPrivateNetwork;
-
-    let resolvedDangerousAllowPrivateNetwork: unknown = currentDangerousAllowPrivateNetwork;
-    if (
-      typeof legacyAllowPrivateNetwork === "boolean" ||
-      typeof currentDangerousAllowPrivateNetwork === "boolean"
-    ) {
-      resolvedDangerousAllowPrivateNetwork =
-        legacyAllowPrivateNetwork === true || currentDangerousAllowPrivateNetwork === true;
-    } else if (currentDangerousAllowPrivateNetwork === undefined) {
-      resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
-    }
-
-    const nextSsrFPolicy: Record<string, unknown> = { ...rawSsrFPolicy };
-    delete nextSsrFPolicy.allowPrivateNetwork;
-    if (resolvedDangerousAllowPrivateNetwork !== undefined) {
-      nextSsrFPolicy.dangerouslyAllowPrivateNetwork = resolvedDangerousAllowPrivateNetwork;
-    }
-    browser.ssrfPolicy = nextSsrFPolicy;
-    browserChanged = true;
-    changes.push(
-      `Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (${String(resolvedDangerousAllowPrivateNetwork)}).`,
-    );
-  }
-
-  if (!browserChanged) {
-    return cfg;
-  }
-
-  return {
-    ...cfg,
-    browser: browser as OpenClawConfig["browser"],
-  };
-}
-
-/** Move single-account channel fields into accounts.default when account maps exist. */
+/** Seed an empty account map without changing an existing account set or route. */
 export function seedMissingDefaultAccountsFromSingleAccountBase(
   cfg: OpenClawConfig,
   changes: string[],
 ): OpenClawConfig {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  if (!channels) {
-    return cfg;
-  }
-
-  let channelsChanged = false;
-  const nextChannels = { ...channels };
-  for (const [channelId, rawChannel] of Object.entries(channels)) {
-    if (!isRecord(rawChannel)) {
+  const next = cloneConfigWithResolutionFacts(cfg);
+  const before = changes.length;
+  for (const [channelId, channel] of Object.entries(next.channels ?? {})) {
+    if (!isRecord(channel) || !isRecord(channel.accounts) || Object.keys(channel.accounts).length) {
       continue;
     }
-    const rawAccounts = rawChannel.accounts;
-    if (!isRecord(rawAccounts)) {
-      continue;
-    }
-    const accountKeys = Object.keys(rawAccounts);
-    if (accountKeys.length === 0) {
-      continue;
-    }
-    const hasDefault = accountKeys.some(
-      (key) => normalizeOptionalLowercaseString(key) === DEFAULT_ACCOUNT_ID,
-    );
-    if (hasDefault) {
-      continue;
-    }
+    // Shared root policy is not evidence of another identity. Adding a default
+    // beside named accounts changes unqualified routing even if policy is copied.
     const promotion = resolveSingleAccountPromotion({
       channelKey: channelId,
-      channel: rawChannel,
+      channel,
       resolveBundledSurface: (key) => resolveDiscoveredChannelSetupPromotionSurface(key, cfg),
     });
     if (promotion.kind === "preserve-root") {
       continue;
     }
-    // Defer only undeclared keys outside generic + legacy coverage. A partial
-    // accounts.default would make later runs skip and permanently strand them at root.
+    // A partial default account would strand uncovered keys at root on later runs.
     if (promotion.shouldDeferPromotion) {
       log.debug(
         `Deferring channels.${channelId} single-account promotion until its plugin declares uncovered root keys.`,
       );
       continue;
     }
-    const keysToMove = promotion.keysToMove;
-    if (keysToMove.length === 0) {
+    if (promotion.keysToMove.length === 0) {
       continue;
     }
-
     const defaultAccount: Record<string, unknown> = {};
-    for (const key of keysToMove) {
-      const value = rawChannel[key];
-      defaultAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
+    for (const key of promotion.keysToMove) {
+      defaultAccount[key] = channel[key];
+      delete channel[key];
     }
-    const nextChannel: Record<string, unknown> = {
-      ...rawChannel,
-    };
-    for (const key of keysToMove) {
-      delete nextChannel[key];
-    }
-    const inheritedPolicyKeys = INHERITED_ACCOUNT_POLICY_KEYS.filter((key) =>
-      keysToMove.includes(key),
-    );
-    const nextAccounts: Record<string, unknown> = {
-      ...rawAccounts,
-      [DEFAULT_ACCOUNT_ID]: defaultAccount,
-    };
-    if (inheritedPolicyKeys.length > 0) {
-      for (const [accountId, rawAccount] of Object.entries(rawAccounts)) {
-        if (!isRecord(rawAccount)) {
-          continue;
-        }
-        const nextAccount = { ...rawAccount };
-        let accountChanged = false;
-        for (const key of inheritedPolicyKeys) {
-          if (Object.hasOwn(nextAccount, key)) {
-            continue;
-          }
-          const value = rawChannel[key];
-          nextAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
-          accountChanged = true;
-        }
-        if (accountChanged) {
-          nextAccounts[accountId] = nextAccount;
-        }
-      }
-    }
-    nextChannel.accounts = nextAccounts;
-
-    nextChannels[channelId] = nextChannel;
-    channelsChanged = true;
+    channel.accounts = { [DEFAULT_ACCOUNT_ID]: defaultAccount };
     changes.push(
       `Moved channels.${channelId} single-account top-level values into channels.${channelId}.accounts.default.`,
     );
   }
-
-  if (!channelsChanged) {
-    return cfg;
+  if (changes.length > before && Array.isArray(next.channels)) {
+    next.channels = Object.fromEntries(Object.entries(next.channels));
   }
-
-  return {
-    ...cfg,
-    channels: nextChannels as OpenClawConfig["channels"],
-  };
+  copyConfigResolutionFactsThroughRewrite(cfg, next);
+  return inheritLegacyDefaultAgentId(cfg, next);
 }
 
-type ModelProviderEntry = Partial<
-  NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]
->;
-type ModelsConfigPatch = Partial<NonNullable<OpenClawConfig["models"]>>;
-type ModelDefinitionEntry = NonNullable<ModelProviderEntry["models"]>[number];
-type SelectedRuntimeRef = {
-  ref: string;
-  runtime: string;
-};
+type SelectedRuntimeRef = { ref: string; runtime: string };
+type ModelDefinitionEntry = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]["models"]
+>[number];
 
-const LEGACY_CODEX_CLI_RUNTIME_ID = "codex-cli";
-const CODEX_APP_SERVER_RUNTIME_ID = "codex";
+type LegacyRuntimeRefMigration = NonNullable<ReturnType<typeof migrateLegacyRuntimeModelRef>>;
+type LegacyRuntimeRefMigrator = (modelRef: string) => LegacyRuntimeRefMigration | null;
 
 function migrateUnblockedLegacyRuntimeModelRef(
   modelRef: string,
@@ -255,941 +105,605 @@ function migrateUnblockedLegacyRuntimeModelRef(
     : migrateLegacyRuntimeModelRef(modelRef);
 }
 
-function mergeModelEntry(legacyEntry: unknown, currentEntry: unknown): unknown {
-  if (!isRecord(legacyEntry) || !isRecord(currentEntry)) {
-    return currentEntry ?? legacyEntry;
+function* agentScopes(
+  agents: unknown,
+): Generator<[path: string, agent: Record<string, unknown>, agentId?: string]> {
+  if (!isRecord(agents)) {
+    return;
   }
-  return mergeModelRefMapEntries(currentEntry, legacyEntry, "models").value;
-}
-
-function normalizeLegacyCodexCliAgentRuntimePolicy(raw: unknown): {
-  value?: unknown;
-  changed: boolean;
-} {
-  if (!isRecord(raw)) {
-    return { value: raw, changed: false };
+  if (isRecord(agents.defaults)) {
+    yield ["agents.defaults", agents.defaults];
   }
-  if (normalizeOptionalLowercaseString(raw.id) !== LEGACY_CODEX_CLI_RUNTIME_ID) {
-    return { value: raw, changed: false };
-  }
-  return {
-    value: { ...raw, id: CODEX_APP_SERVER_RUNTIME_ID },
-    changed: true,
-  };
-}
-
-function normalizeLegacyRuntimeAgentModelConfig(
-  raw: unknown,
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
-): {
-  value?: unknown;
-  changed: boolean;
-  selectedRuntime?: string;
-  selectedRefs: SelectedRuntimeRef[];
-} {
-  if (typeof raw === "string") {
-    const migrated = migrateUnblockedLegacyRuntimeModelRef(raw, blockedModelIdentities);
-    return migrated
-      ? {
-          value: migrated.ref,
-          changed: true,
-          selectedRuntime: migrated.runtime,
-          selectedRefs: [
-            {
-              ref: migrated.ref,
-              runtime: migrated.runtime,
-            },
-          ],
-        }
-      : { value: raw, changed: false, selectedRefs: [] };
-  }
-  if (!isRecord(raw)) {
-    return { value: raw, changed: false, selectedRefs: [] };
-  }
-
-  const migratedPrimary =
-    typeof raw.primary === "string"
-      ? migrateUnblockedLegacyRuntimeModelRef(raw.primary, blockedModelIdentities)
-      : null;
-  let changed = false;
-  const next: Record<string, unknown> = { ...raw };
-  const selectedRefs: SelectedRuntimeRef[] = [];
-  let selectedRuntime = migratedPrimary?.runtime;
-  if (migratedPrimary) {
-    next.primary = migratedPrimary.ref;
-    selectedRefs.push({
-      ref: migratedPrimary.ref,
-      runtime: migratedPrimary.runtime,
-    });
-    changed = true;
-  }
-  if (Array.isArray(raw.fallbacks)) {
-    next.fallbacks = raw.fallbacks.map((fallback) => {
-      if (typeof fallback !== "string") {
-        return fallback;
-      }
-      const migratedFallback = migrateUnblockedLegacyRuntimeModelRef(
-        fallback,
-        blockedModelIdentities,
-      );
-      if (migratedFallback) {
-        selectedRuntime ??= migratedFallback.runtime;
-        selectedRefs.push({
-          ref: migratedFallback.ref,
-          runtime: migratedFallback.runtime,
-        });
-        changed = true;
-        return migratedFallback.ref;
-      }
-      return fallback;
-    });
-  }
-  if (!changed) {
-    return { value: raw, changed: false, selectedRefs: [] };
-  }
-  return {
-    value: next,
-    changed: true,
-    selectedRuntime,
-    selectedRefs,
-  };
-}
-
-function normalizeLegacyRuntimeAllowlistModels(
-  rawModels: unknown,
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
-): {
-  value?: unknown;
-  changed: boolean;
-} {
-  if (!isRecord(rawModels)) {
-    return { value: rawModels, changed: false };
-  }
-
-  let changed = false;
-  const next: Record<string, unknown> = {};
-  const legacyEntries: Array<{
-    migratedKey: string;
-    entry: unknown;
-    runtime: string;
-  }> = [];
-  for (const [rawKey, entry] of Object.entries(rawModels)) {
-    const migrated = migrateUnblockedLegacyRuntimeModelRef(rawKey, blockedModelIdentities);
-    if (migrated) {
-      changed = true;
-      legacyEntries.push({
-        migratedKey: migrated.ref,
-        entry,
-        runtime: migrated.runtime,
-      });
-      continue;
+  for (const [key, entry] of Array.isArray(agents.list) ? agents.list.entries() : []) {
+    if (isRecord(entry)) {
+      const id = normalizeOptionalString(entry.id);
+      yield [id ? `agents.list.${sanitizeForLog(id)}` : `agents.list[${key}]`, entry, id];
     }
-    next[rawKey] = mergeModelEntry(entry, next[rawKey]);
   }
-  for (const { migratedKey, entry, runtime } of legacyEntries) {
-    next[migratedKey] = modelEntryWithRuntimePolicy(
-      mergeModelEntry(entry, next[migratedKey]),
-      runtime,
-    ).entry;
+  for (const [id, entry] of Object.entries(isRecord(agents.entries) ? agents.entries : {})) {
+    if (isRecord(entry)) {
+      yield [`agents.entries.${sanitizeForLog(id)}`, entry, id];
+    }
   }
-  return { value: next, changed };
 }
 
-function normalizeLegacyRuntimeModelPolicy(
-  rawPolicy: unknown,
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
-): {
-  value?: unknown;
-  runtimes: ReadonlySet<string>;
-  selectedRefs: readonly SelectedRuntimeRef[];
-} {
-  if (!isRecord(rawPolicy) || !Array.isArray(rawPolicy.allow)) {
-    return { value: rawPolicy, runtimes: new Set(), selectedRefs: [] };
+function* runtimePins(
+  cfg: OpenClawConfig,
+): Generator<{ path: string; provider: string | undefined; runtime: unknown }> {
+  for (const [path, agent] of agentScopes(cfg.agents)) {
+    for (const [ref, entry] of Object.entries(isRecord(agent.models) ? agent.models : {})) {
+      yield {
+        path: `${path}.models.${sanitizeForLog(ref)}`,
+        provider: parseModelCatalogRef(ref.trim())?.provider,
+        runtime:
+          isRecord(entry) && isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined,
+      };
+    }
   }
+  for (const [providerId, provider] of modelProviders(cfg)) {
+    const path = `models.providers.${sanitizeForLog(providerId)}`;
+    const id = normalizeProviderId(providerId);
+    yield {
+      path,
+      provider: id,
+      runtime: isRecord(provider.agentRuntime) ? provider.agentRuntime.id : undefined,
+    };
+    for (const [index, model] of providerModels(provider)) {
+      yield {
+        path: `${path}.models[${index}]`,
+        provider: id,
+        runtime: isRecord(model.agentRuntime) ? model.agentRuntime.id : undefined,
+      };
+    }
+  }
+}
 
-  const runtimes = new Set<string>();
-  const selectedRefs: SelectedRuntimeRef[] = [];
-  const allow = rawPolicy.allow.map((entry) => {
-    if (typeof entry !== "string") {
-      return entry;
+/**
+ * Legacy CLI refs still select their CLI runtime as written. Migration moves them onto the
+ * canonical provider with an exact runtime pin, which outranks provider-wide, wildcard, and bare
+ * model pins. When config already routes that provider's models (or bare model keys) to another
+ * runtime, the operator runs both routes side by side and the rewrite could silently move one
+ * onto the other, changing billing. A scope that runs the same model both directly and through
+ * the legacy CLI ref keeps both routes too (see routeGroups). Retain the authored refs and say why.
+ */
+function retainConflictingLegacyCliProviders(
+  cfg: OpenClawConfig,
+  blockedModelIdentities: ReadonlySet<LegacyCodexModelIdentity> | undefined,
+  warnings: string[],
+): ReadonlySet<string> {
+  const migrate = (ref: string) =>
+    migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
+  const legacy = new Map<string, { ref: string; migrated: LegacyRuntimeRefMigration }>();
+  rewriteModelRefs(cfg, "config", [], (ref) => {
+    const migrated = migrate(ref);
+    if (migrated?.cli && !legacy.has(migrated.legacyProvider)) {
+      legacy.set(migrated.legacyProvider, { ref, migrated });
     }
-    const migrated = migrateUnblockedLegacyRuntimeModelRef(entry, blockedModelIdentities);
-    if (!migrated) {
-      return entry;
-    }
-    runtimes.add(migrated.runtime);
-    selectedRefs.push({
-      ref: migrated.ref,
-      runtime: migrated.runtime,
-    });
-    return migrated.ref;
+    return null;
   });
+  const retained = new Set<string>();
+  for (const { ref, migrated } of legacy.values()) {
+    for (const pin of runtimePins(cfg)) {
+      const runtime = normalizeOptionalLowercaseString(pin.runtime);
+      if (
+        runtime &&
+        runtime !== "auto" &&
+        runtime !== migrated.runtime &&
+        (pin.provider === undefined || pin.provider === migrated.provider)
+      ) {
+        retained.add(migrated.legacyProvider);
+        warnings.push(
+          `Kept legacy ${migrated.legacyProvider}/* model refs: ${pin.path} routes models to the ${sanitizeForLog(runtime)} runtime, and rewriting ${sanitizeForLog(ref)} to ${sanitizeForLog(migrated.ref)} could switch a route between ${sanitizeForLog(runtime)} and ${migrated.runtime}. Both routes keep working as configured.`,
+        );
+        break;
+      }
+    }
+  }
+  for (const { path, agentId, groups } of routeGroups(cfg.agents, migrate)) {
+    for (const refs of groups) {
+      for (const ref of refs) {
+        const migrated = migrate(ref);
+        if (!migrated?.cli || retained.has(migrated.legacyProvider)) {
+          continue;
+        }
+        const canonicalRuntime = normalizeOptionalLowercaseString(
+          resolveModelRuntimePolicy({
+            config: cfg,
+            provider: migrated.provider,
+            modelId: migrated.model,
+            agentId,
+          }).policy?.id,
+        );
+        if (
+          canonicalRuntime === migrated.runtime ||
+          !refs.some((other) => !migrate(other) && canonicalModelRef(other) === migrated.ref)
+        ) {
+          continue;
+        }
+        retained.add(migrated.legacyProvider);
+        warnings.push(
+          `Kept legacy ${migrated.legacyProvider}/* model refs: ${path} selects ${sanitizeForLog(migrated.ref)} both directly and through ${migrated.runtime}; rewriting would move both routes onto ${migrated.runtime}. Both routes keep working as configured.`,
+        );
+      }
+    }
+  }
+  return retained;
+}
 
+function canonicalModelRef(ref: string): string {
+  const { model } = splitTrailingAuthProfile(ref.trim());
+  return normalizeKnownModelRef(model) ?? model;
+}
+
+function stringRefs(values: unknown[]): string[] {
+  return values.filter((ref): ref is string => typeof ref === "string");
+}
+
+function selectionRefs(owner: unknown): string[] {
+  const model = isRecord(owner) ? owner.model : undefined;
+  return stringRefs(
+    isRecord(model)
+      ? [model.primary, ...(Array.isArray(model.fallbacks) ? model.fallbacks : [])]
+      : [model],
+  );
+}
+
+const SELECTION_OWNERS = ["", "heartbeat", "subagents"] as const;
+
+/**
+ * Refs whose runtime one migration pin decides. Migration pins a CLI ref's runtime on the
+ * canonical ref in its scope's model map. That pin reaches every selection the scope runs,
+ * including selections inherited from defaults, and a defaults pin reaches every agent. An
+ * allowlist naming both spellings also requests both routes, as does a model map whose
+ * canonical key the scope selects or allows; canonical map keys alone are metadata, and
+ * legacy entries alone are a sign-in seed, so both still migrate.
+ */
+function* routeGroups(
+  agents: unknown,
+  migrate: LegacyRuntimeRefMigrator,
+): Generator<{ path: string; agentId?: string; groups: string[][] }> {
+  const defaults = isRecord(agents) && isRecord(agents.defaults) ? agents.defaults : undefined;
+  const selections = (agent: Record<string, unknown> | undefined) =>
+    SELECTION_OWNERS.map((key) => selectionRefs(key ? agent?.[key] : agent));
+  const inherited = selections(defaults);
+  const inheritedLegacy = inherited.flat().filter((ref) => migrate(ref));
+  for (const [path, agent, agentId] of agentScopes(agents)) {
+    const isDefaults = agent === defaults;
+    const effective = selections(agent).flatMap((refs, index) =>
+      refs.length || isDefaults ? refs : inherited[index]!,
+    );
+    const rawAllow = isRecord(agent.modelPolicy) ? agent.modelPolicy.allow : undefined;
+    const allow = stringRefs(Array.isArray(rawAllow) ? rawAllow : []);
+    const direct = new Set([...effective, ...allow].map(canonicalModelRef));
+    yield {
+      path,
+      agentId,
+      groups: [
+        isDefaults ? effective : [...effective, ...inheritedLegacy],
+        Object.keys(isRecord(agent.models) ? agent.models : {}).filter(
+          (ref) => migrate(ref) || direct.has(canonicalModelRef(ref)),
+        ),
+        allow,
+      ],
+    };
+  }
+}
+
+function mergeModelEntry(legacyEntry: unknown, currentEntry: unknown): unknown {
+  return isRecord(legacyEntry) && isRecord(currentEntry)
+    ? mergeModelRefMapEntries(currentEntry, legacyEntry, "models").value
+    : (currentEntry ?? legacyEntry);
+}
+
+function migrateCodexCliRuntimePolicy(raw: unknown): boolean {
+  if (!isRecord(raw) || normalizeOptionalLowercaseString(raw.id) !== "codex-cli") {
+    return false;
+  }
+  raw.id = "codex";
+  return true;
+}
+
+function createRuntimeModelRefRewriter(migrate: LegacyRuntimeRefMigrator) {
+  const selected: SelectedRuntimeRef[] = [];
   return {
-    value: runtimes.size > 0 ? { ...rawPolicy, allow } : rawPolicy,
-    runtimes,
-    selectedRefs,
+    selected,
+    rewrite: (ref: unknown) => {
+      const migrated = typeof ref === "string" ? migrate(ref) : null;
+      if (migrated) {
+        selected.push({ ref: migrated.ref, runtime: migrated.runtime });
+      }
+      return migrated?.ref ?? ref;
+    },
   };
+}
+
+function migrateRuntimeSelection(
+  owner: Record<string, unknown>,
+  migrate: LegacyRuntimeRefMigrator,
+): SelectedRuntimeRef[] {
+  const { rewrite, selected } = createRuntimeModelRefRewriter(migrate);
+  const model = owner.model;
+  if (typeof model === "string") {
+    owner.model = rewrite(model);
+  } else if (isRecord(model)) {
+    if (typeof model.primary === "string") {
+      model.primary = rewrite(model.primary);
+    }
+    if (Array.isArray(model.fallbacks)) {
+      model.fallbacks = model.fallbacks.map(rewrite);
+    }
+  }
+  return selected;
 }
 
 function ensureSelectedModelRuntimePolicies(
-  rawModels: unknown,
-  selectedRefs: readonly SelectedRuntimeRef[],
-): { value?: unknown; changed: boolean } {
-  if (selectedRefs.length === 0) {
-    return { value: rawModels, changed: false };
+  agent: Record<string, unknown>,
+  selected: readonly SelectedRuntimeRef[],
+): boolean {
+  if (selected.length === 0) {
+    return false;
   }
-  const next: Record<string, unknown> = isRecord(rawModels) ? { ...rawModels } : {};
+  const models = isRecord(agent.models) ? agent.models : {};
   let changed = false;
-  for (const { ref, runtime } of selectedRefs) {
-    const current = next[ref];
-    const updated = modelEntryWithRuntimePolicy(current, runtime);
-    if (!updated.changed) {
-      continue;
+  for (const { ref, runtime } of selected) {
+    const updated = modelEntryWithRuntimePolicy(models[ref], runtime);
+    if (updated.changed) {
+      models[ref] = updated.entry;
+      changed = true;
     }
-    next[ref] = updated.entry;
-    changed = true;
   }
-  return { value: next, changed };
+  if (changed) {
+    agent.models = models;
+  }
+  return changed;
 }
 
-function normalizeLegacyCodexCliRuntimePinsInModels(
-  rawModels: unknown,
+function migrateRuntimeAgent(
+  agent: Record<string, unknown>,
   path: string,
   changes: string[],
-): { value?: unknown; changed: boolean } {
-  if (!isRecord(rawModels)) {
-    return { value: rawModels, changed: false };
-  }
-  let changed = false;
-  const next: Record<string, unknown> = { ...rawModels };
-  for (const [modelRef, rawEntry] of Object.entries(rawModels)) {
-    if (!isRecord(rawEntry)) {
-      continue;
-    }
-    const runtime = normalizeLegacyCodexCliAgentRuntimePolicy(rawEntry.agentRuntime);
-    if (!runtime.changed) {
-      continue;
-    }
-    next[modelRef] = { ...rawEntry, agentRuntime: runtime.value };
-    changed = true;
+  migrate: LegacyRuntimeRefMigrator,
+): void {
+  const selected = migrateRuntimeSelection(agent, migrate);
+  if (selected.length) {
     changes.push(
-      `Moved ${path}.${sanitizeForLog(modelRef)} agentRuntime.id from codex-cli to codex.`,
+      `Moved ${path}.model legacy runtime primary refs to provider references and selected ${selected[0]!.runtime} runtime.`,
     );
   }
-  return { value: next, changed };
-}
-
-function normalizeLegacyRuntimeAgentContainer(
-  raw: Record<string, unknown>,
-  path: string,
-  changes: string[],
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
-): { value: Record<string, unknown>; changed: boolean } {
-  let changed = false;
-  const next: Record<string, unknown> = { ...raw };
-  const legacyWholeAgentRuntime = resolveLegacyCliRuntimeAlias(
-    isRecord(raw.agentRuntime) ? raw.agentRuntime.id : undefined,
-  );
-
-  const model = normalizeLegacyRuntimeAgentModelConfig(raw.model, blockedModelIdentities);
-  if (model.changed) {
-    next.model = model.value;
-    changed = true;
-    const runtimeSuffix = model.selectedRuntime
-      ? ` and selected ${model.selectedRuntime} runtime`
-      : "";
-    changes.push(
-      `Moved ${path}.model legacy runtime primary refs to canonical provider refs${runtimeSuffix}.`,
-    );
+  const policy = isRecord(agent.modelPolicy) ? agent.modelPolicy : undefined;
+  const { rewrite, selected: policyRefs } = createRuntimeModelRefRewriter(migrate);
+  const allow = Array.isArray(policy?.allow) ? policy.allow.map(rewrite) : undefined;
+  if (isRecord(agent.models)) {
+    const models: Record<string, unknown> = {};
+    const legacy: Array<SelectedRuntimeRef & { entry: unknown }> = [];
+    for (const [ref, entry] of Object.entries(agent.models)) {
+      const migrated = migrate(ref);
+      if (migrated) {
+        legacy.push({ ref: migrated.ref, runtime: migrated.runtime, entry });
+      } else {
+        models[ref] = mergeModelEntry(entry, models[ref]);
+      }
+    }
+    // Canonical values win regardless of where aliases appeared in the source map.
+    for (const { ref, runtime, entry } of legacy) {
+      models[ref] = modelEntryWithRuntimePolicy(mergeModelEntry(entry, models[ref]), runtime).entry;
+    }
+    if (legacy.length) {
+      agent.models = models;
+      changes.push(`Moved ${path}.models legacy runtime keys to provider keys.`);
+    }
   }
-
-  const modelPolicy = normalizeLegacyRuntimeModelPolicy(raw.modelPolicy, blockedModelIdentities);
-  const models = normalizeLegacyRuntimeAllowlistModels(raw.models, blockedModelIdentities);
-  if (models.changed) {
-    next.models = models.value;
-    changed = true;
-    changes.push(`Moved ${path}.models legacy runtime keys to canonical provider keys.`);
-  }
-
-  const policyRuntimes = ensureSelectedModelRuntimePolicies(next.models, modelPolicy.selectedRefs);
-  if (policyRuntimes.changed) {
-    next.models = policyRuntimes.value;
-    changed = true;
+  if (ensureSelectedModelRuntimePolicies(agent, policyRefs)) {
     changes.push(`Preserved runtime policy for ${path}.modelPolicy.allow entries.`);
   }
-
-  if (model.selectedRuntime) {
-    const modelRuntimes = ensureSelectedModelRuntimePolicies(next.models, model.selectedRefs);
-    if (modelRuntimes.changed) {
-      next.models = modelRuntimes.value;
-      changed = true;
-      changes.push(`Selected ${model.selectedRuntime} runtime for ${path}.models entries.`);
-    }
+  if (ensureSelectedModelRuntimePolicies(agent, selected)) {
+    changes.push(`Selected ${selected[0]!.runtime} runtime for ${path}.models entries.`);
   }
-
   for (const key of ["heartbeat", "subagents"]) {
-    const execution = raw[key];
+    const execution = agent[key];
     if (!isRecord(execution)) {
       continue;
     }
-    const selection = normalizeLegacyRuntimeAgentModelConfig(
-      execution.model,
-      blockedModelIdentities,
-    );
-    if (!selection.changed) {
-      continue;
+    const refs = migrateRuntimeSelection(execution, migrate);
+    if (refs.length) {
+      ensureSelectedModelRuntimePolicies(agent, refs);
+      changes.push(`Moved ${path}.${key}.model to provider references with model runtime policy.`);
     }
-    next[key] = { ...execution, model: selection.value };
-    const runtimes = ensureSelectedModelRuntimePolicies(next.models, selection.selectedRefs);
-    if (runtimes.changed) {
-      next.models = runtimes.value;
-    }
-    changed = true;
-    changes.push(`Moved ${path}.${key}.model to canonical refs with model runtime policy.`);
   }
-
-  if (legacyWholeAgentRuntime) {
-    const selectedRefs: SelectedRuntimeRef[] = selectedCanonicalModelRefsForRuntimePolicy(
-      next.model ?? raw.model,
-      legacyWholeAgentRuntime.provider,
-    ).map((ref) => ({
-      ref,
-      runtime: legacyWholeAgentRuntime.runtime,
-    }));
-    const modelRuntimes = ensureSelectedModelRuntimePolicies(next.models, selectedRefs);
-    if (modelRuntimes.changed) {
-      next.models = modelRuntimes.value;
-      changed = true;
+  if (policy && policyRefs.length) {
+    policy.allow = allow;
+    changes.push(`Moved ${path}.modelPolicy.allow legacy runtime refs to provider references.`);
+  }
+  for (const [ref, entry] of Object.entries(isRecord(agent.models) ? agent.models : {})) {
+    if (isRecord(entry) && migrateCodexCliRuntimePolicy(entry.agentRuntime)) {
       changes.push(
-        `Moved ${path}.agentRuntime.id ${legacyWholeAgentRuntime.runtime} to matching ${legacyWholeAgentRuntime.provider} model runtime policy.`,
+        `Moved ${path}.models.${sanitizeForLog(ref)} agentRuntime.id from codex-cli to codex.`,
       );
     }
   }
-
-  if (model.selectedRuntime && isRecord(raw.agentRuntime)) {
-    delete next.agentRuntime;
-    changed = true;
-    changes.push(`Removed ${path}.agentRuntime; runtime is now model scoped.`);
-  }
-
-  if (modelPolicy.runtimes.size > 0) {
-    next.modelPolicy = modelPolicy.value;
-    changed = true;
-    changes.push(`Moved ${path}.modelPolicy.allow legacy runtime refs to canonical provider refs.`);
-  }
-
-  const codexCliRuntimePins = normalizeLegacyCodexCliRuntimePinsInModels(
-    next.models,
-    `${path}.models`,
-    changes,
-  );
-  if (codexCliRuntimePins.changed) {
-    next.models = codexCliRuntimePins.value;
-    changed = true;
-  }
-
-  return { value: next, changed };
 }
 
-function normalizeLegacyCodexCliProviderRuntimePins(
-  cfg: OpenClawConfig,
+/** Move legacy runtime-tagged refs on a private copy, preserving the caller's source. */
+export function normalizeLegacyRuntimeModelRefs(
+  cfg: OpenClawConfigWithLegacyRoster,
   changes: string[],
-): OpenClawConfig {
-  if (!isRecord(cfg.models)) {
-    return cfg;
-  }
-  return normalizeModelProviders(cfg, (rawProvider, providerId) => {
-    let providerChanged = false;
-    const nextProvider: Record<string, unknown> = { ...rawProvider };
-    const providerRuntime = normalizeLegacyCodexCliAgentRuntimePolicy(rawProvider.agentRuntime);
-    if (providerRuntime.changed) {
-      nextProvider.agentRuntime = providerRuntime.value;
-      providerChanged = true;
+  warnings: string[],
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+): OpenClawConfigWithLegacyRoster {
+  const next = cloneConfigWithResolutionFacts(cfg);
+  for (const [providerId, provider] of modelProviders(next)) {
+    if (migrateCodexCliRuntimePolicy(provider.agentRuntime)) {
       changes.push(
         `Moved models.providers.${sanitizeForLog(providerId)} agentRuntime.id from codex-cli to codex.`,
       );
     }
-
-    if (Array.isArray(rawProvider.models)) {
-      const nextProviderModels = rawProvider.models.map((entry, index) => {
-        if (!isRecord(entry)) {
-          return entry;
-        }
-        const runtime = normalizeLegacyCodexCliAgentRuntimePolicy(entry.agentRuntime);
-        if (!runtime.changed) {
-          return entry;
-        }
-        providerChanged = true;
-        const modelId = normalizeOptionalString(entry.id) ?? `[${index}]`;
+    for (const [index, model] of providerModels(provider)) {
+      if (migrateCodexCliRuntimePolicy(model.agentRuntime)) {
+        const modelId = normalizeOptionalString(model.id) ?? `[${index}]`;
         changes.push(
           `Moved models.providers.${sanitizeForLog(providerId)}.models.${sanitizeForLog(modelId)} agentRuntime.id from codex-cli to codex.`,
         );
-        return Object.assign({}, entry, { agentRuntime: runtime.value });
-      });
-      if (providerChanged) {
-        nextProvider.models = nextProviderModels;
       }
     }
-
-    return providerChanged ? nextProvider : rawProvider;
-  });
+  }
+  const retained = retainConflictingLegacyCliProviders(next, blockedModelIdentities, warnings);
+  const migrate: LegacyRuntimeRefMigrator = (ref) => {
+    const migrated = migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
+    return migrated && !retained.has(migrated.legacyProvider) ? migrated : null;
+  };
+  for (const [path, agent] of agentScopes(next.agents)) {
+    migrateRuntimeAgent(agent, path, changes, migrate);
+  }
+  const rewritten = rewriteModelRefs(next, "config", changes, (ref) => {
+    const migrated = migrate(ref);
+    return migrated &&
+      ["codex-cli", "claude-cli", "google-gemini-cli"].includes(migrated.legacyProvider)
+      ? migrated.ref
+      : null;
+  }).value as OpenClawConfigWithLegacyRoster; // SAFETY: The ref rewriter preserves config containers and value types.
+  copyConfigResolutionFactsThroughRewrite(cfg, rewritten);
+  return inheritLegacyDefaultAgentId(cfg, rewritten);
 }
 
-/** Move legacy runtime-tagged model/provider refs onto current agentRuntime policy fields. */
-export function normalizeLegacyRuntimeModelRefs(
-  cfg: OpenClawConfig,
-  changes: string[],
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
-): OpenClawConfig {
-  const cfgWithProviders = normalizeLegacyCodexCliProviderRuntimePins(cfg, changes);
-  const rewriteRemainingSlots = (config: OpenClawConfig): OpenClawConfig =>
-    rewriteModelRefs(config, "config", changes, (modelRef) => {
-      const migrated = migrateUnblockedLegacyRuntimeModelRef(modelRef, blockedModelIdentities);
-      return migrated &&
-        (migrated.legacyProvider === "codex-cli" ||
-          migrated.legacyProvider === "claude-cli" ||
-          migrated.legacyProvider === "google-gemini-cli")
-        ? migrated.ref
-        : null;
-    }).value as OpenClawConfig; // SAFETY: Rewriting model-ref strings and map keys preserves the config's value and container types.
-  const rawAgents = cfgWithProviders.agents;
-  if (!isRecord(rawAgents)) {
-    return rewriteRemainingSlots(cfgWithProviders);
+function* modelProviders(cfg: OpenClawConfig): Generator<[string, Record<string, unknown>]> {
+  const providers = cfg.models?.providers;
+  if (!isRecord(providers)) {
+    return;
   }
-
-  let changed = false;
-  const nextAgents: Record<string, unknown> = { ...rawAgents };
-  if (isRecord(rawAgents.defaults)) {
-    const defaults = normalizeLegacyRuntimeAgentContainer(
-      rawAgents.defaults,
-      "agents.defaults",
-      changes,
-      blockedModelIdentities,
-    );
-    if (defaults.changed) {
-      nextAgents.defaults = defaults.value;
-      changed = true;
+  for (const [id, provider] of Object.entries(providers)) {
+    if (isRecord(provider)) {
+      yield [id, provider];
     }
   }
-
-  if (Array.isArray(rawAgents.list)) {
-    const nextList = rawAgents.list.map((entry, index) => {
-      if (!isRecord(entry)) {
-        return entry;
-      }
-      const agentId = normalizeOptionalString(entry.id);
-      const path = agentId ? `agents.list.${sanitizeForLog(agentId)}` : `agents.list[${index}]`;
-      const agent = normalizeLegacyRuntimeAgentContainer(
-        entry,
-        path,
-        changes,
-        blockedModelIdentities,
-      );
-      if (agent.changed) {
-        changed = true;
-        return agent.value;
-      }
-      return entry;
-    });
-    if (changed) {
-      nextAgents.list = nextList;
-    }
-  }
-
-  if (isRecord(rawAgents.entries)) {
-    let nextEntries: Record<string, unknown> | undefined;
-    for (const [agentId, entry] of Object.entries(rawAgents.entries)) {
-      if (!isRecord(entry)) {
-        continue;
-      }
-      const agent = normalizeLegacyRuntimeAgentContainer(
-        entry,
-        `agents.entries.${sanitizeForLog(agentId)}`,
-        changes,
-        blockedModelIdentities,
-      );
-      if (agent.changed) {
-        (nextEntries ??= { ...rawAgents.entries })[agentId] = agent.value;
-      }
-    }
-    if (nextEntries) {
-      nextAgents.entries = nextEntries;
-      changed = true;
-    }
-  }
-
-  const nextCfg = changed
-    ? {
-        ...cfgWithProviders,
-        agents: nextAgents as OpenClawConfig["agents"],
-      }
-    : cfgWithProviders;
-  return rewriteRemainingSlots(nextCfg);
 }
 
-/** Add missing metadata source markers to legacy OpenAI Codex model catalog entries. */
+function* providerModels(
+  provider: Record<string, unknown>,
+): Generator<[number, Record<string, unknown>]> {
+  if (Array.isArray(provider.models)) {
+    for (const [index, model] of provider.models.entries()) {
+      if (isRecord(model)) {
+        yield [index, model];
+      }
+    }
+  }
+}
+
+/** Mutate the Doctor-owned private candidate; plugin hooks retain their own rollback copies. */
 export function normalizeLegacyOpenAICodexModelsAddMetadata(
   cfg: OpenClawConfig,
   changes: string[],
-): OpenClawConfig {
-  if (!isRecord(cfg.models)) {
-    return cfg;
-  }
-  return normalizeModelProviders(cfg, (rawProvider, providerId) => {
-    if (normalizeProviderId(providerId) !== "openai-codex" || !Array.isArray(rawProvider.models)) {
-      return rawProvider;
+): void {
+  for (const [providerId, provider] of modelProviders(cfg)) {
+    if (normalizeProviderId(providerId) !== "openai-codex") {
+      continue;
     }
-    let changed = false;
-    const models = Array.from(rawProvider.models, (model) => {
+    for (const [, model] of providerModels(provider)) {
       if (
-        !isRecord(model) ||
-        "metadataSource" in model ||
-        !isLegacyModelsAddCodexMetadataModel({
+        !("metadataSource" in model) &&
+        isLegacyModelsAddCodexMetadataModel({
           provider: providerId,
           model: model as Partial<ModelDefinitionEntry>,
         })
       ) {
-        return model;
+        model.metadataSource = "models-add";
+        changes.push(
+          `Marked models.providers.${sanitizeForLog(providerId)}.models.${sanitizeForLog(normalizeOptionalString(model.id) ?? "unknown")} as /models add metadata so official OpenAI Codex metadata can override it.`,
+        );
       }
-      changed = true;
-      const safeProviderId = sanitizeForLog(providerId);
-      const safeModelId = sanitizeForLog(normalizeOptionalString(model.id) ?? "unknown");
-      changes.push(
-        `Marked models.providers.${safeProviderId}.models.${safeModelId} as /models add metadata so official OpenAI Codex metadata can override it.`,
-      );
-      return Object.assign({}, model, { metadataSource: "models-add" });
-    });
-    return changed ? { ...rawProvider, models } : rawProvider;
-  });
-}
-
-function normalizeModelProviders(
-  cfg: OpenClawConfig,
-  normalize: (provider: Record<string, unknown>, providerId: string) => Record<string, unknown>,
-): OpenClawConfig {
-  const providers = cfg.models?.providers;
-  if (!isRecord(providers)) {
-    return cfg;
-  }
-  let nextProviders: Record<string, unknown> | undefined;
-  for (const [providerId, provider] of Object.entries(providers)) {
-    if (!isRecord(provider)) {
-      continue;
-    }
-    const next = normalize(provider, providerId);
-    if (next !== provider) {
-      (nextProviders ??= { ...providers })[providerId] = next;
     }
   }
-  return nextProviders
-    ? {
-        ...cfg,
-        models: {
-          ...cfg.models,
-          providers: nextProviders as NonNullable<OpenClawConfig["models"]>["providers"],
-        },
-      }
-    : cfg;
 }
 
-/** Rename legacy OpenAI API identifiers to the current completion/chat API ids. */
 export function normalizeLegacyOpenAIModelProviderApi(
   cfg: OpenClawConfig,
   changes: string[],
-): OpenClawConfig {
-  if (!isRecord(cfg.models)) {
-    return cfg;
+): void {
+  const migrateApi = (owner: Record<string, unknown>, path: string) => {
+    if (owner.api === "openai") {
+      owner.api = "openai-completions";
+      changes.push(`Moved ${path}.api "openai" → "openai-completions".`);
+    }
+  };
+  for (const [providerId, provider] of modelProviders(cfg)) {
+    const path = `models.providers.${sanitizeForLog(providerId)}`;
+    migrateApi(provider, path);
+    for (const [index, model] of providerModels(provider)) {
+      migrateApi(model, `${path}.models[${index}]`);
+    }
   }
-  return normalizeModelProviders(cfg, (rawProvider, providerId) => {
-    let providerChanged = false;
-    const nextProvider: Record<string, unknown> = { ...rawProvider };
-    if (nextProvider.api === "openai") {
-      nextProvider.api = "openai-completions";
-      providerChanged = true;
-      changes.push(
-        `Moved models.providers.${sanitizeForLog(providerId)}.api "openai" → "openai-completions".`,
-      );
-    }
-
-    const rawProviderModels = rawProvider.models;
-    if (Array.isArray(rawProviderModels)) {
-      let modelsChanged = false;
-      const nextModels: unknown[] = [];
-      rawProviderModels.forEach((model, index) => {
-        if (!isRecord(model) || model.api !== "openai") {
-          nextModels.push(model);
-          return;
-        }
-        modelsChanged = true;
-        changes.push(
-          `Moved models.providers.${sanitizeForLog(providerId)}.models[${index}].api "openai" → "openai-completions".`,
-        );
-        nextModels.push({
-          ...model,
-          api: "openai-completions",
-        });
-      });
-      if (modelsChanged) {
-        nextProvider.models = nextModels;
-        providerChanged = true;
-      }
-    }
-
-    return providerChanged ? nextProvider : rawProvider;
-  });
 }
 
-/** Remove retired bundled nano-banana skill config after migrating image generation models. */
-export function normalizeLegacyNanoBananaSkill(
-  cfg: OpenClawConfig,
-  changes: string[],
-): OpenClawConfig {
-  const NANO_BANANA_SKILL_KEY = "nano-banana-pro";
-  const NANO_BANANA_MODEL = "google/gemini-3-pro-image-preview";
-  const rawSkills = cfg.skills;
-  if (!isRecord(rawSkills)) {
-    return cfg;
+/** Remove retired bundled skill config after migrating its image model and credentials. */
+export function normalizeLegacyNanoBananaSkill(cfg: OpenClawConfig, changes: string[]): void {
+  const key = "nano-banana-pro";
+  const model = "google/gemini-3-pro-image-preview";
+  const skills = cfg.skills;
+  if (!isRecord(skills)) {
+    return;
   }
-
-  let next = cfg;
-  let skillsChanged = false;
-  const skills = structuredClone(rawSkills);
-
   if (Array.isArray(skills.allowBundled)) {
-    const allowBundled = skills.allowBundled.filter(
-      (value) => typeof value !== "string" || value.trim() !== NANO_BANANA_SKILL_KEY,
+    const filtered = skills.allowBundled.filter(
+      (value) => typeof value !== "string" || value.trim() !== key,
     );
-    if (allowBundled.length !== skills.allowBundled.length) {
-      if (allowBundled.length === 0) {
-        delete skills.allowBundled;
-        changes.push(`Removed skills.allowBundled entry for ${NANO_BANANA_SKILL_KEY}.`);
-      } else {
-        skills.allowBundled = allowBundled;
-        changes.push(`Removed ${NANO_BANANA_SKILL_KEY} from skills.allowBundled.`);
-      }
-      skillsChanged = true;
+    if (filtered.length !== skills.allowBundled.length) {
+      skills.allowBundled = filtered;
+      changes.push(`Removed ${key} from skills.allowBundled.`);
     }
   }
-
-  const rawEntries = skills.entries;
-  if (!isRecord(rawEntries) || !isRecord(rawEntries[NANO_BANANA_SKILL_KEY])) {
-    if (!skillsChanged) {
-      return cfg;
-    }
-    return {
-      ...cfg,
-      skills,
-    };
+  const entries = skills.entries;
+  if (!isRecord(entries) || !isRecord(entries[key])) {
+    return;
   }
-  const rawLegacyEntry = rawEntries[NANO_BANANA_SKILL_KEY];
-
-  const existingImageGenerationModel = next.agents?.defaults?.mediaModels?.image;
-  if (existingImageGenerationModel === undefined) {
-    next = {
-      ...next,
-      agents: {
-        ...next.agents,
-        defaults: {
-          ...next.agents?.defaults,
-          mediaModels: {
-            ...next.agents?.defaults?.mediaModels,
-            image: { primary: NANO_BANANA_MODEL },
-          },
-        },
+  const legacy = entries[key];
+  if (cfg.agents?.defaults?.mediaModels?.image === undefined) {
+    cfg.agents = {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        mediaModels: { ...cfg.agents?.defaults?.mediaModels, image: { primary: model } },
       },
     };
     changes.push(
-      `Moved skills.entries.${NANO_BANANA_SKILL_KEY} → agents.defaults.mediaModels.image.primary (${NANO_BANANA_MODEL}).`,
+      `Moved skills.entries.${key} → agents.defaults.mediaModels.image.primary (${model}).`,
     );
   }
-
-  const legacyEnv = isRecord(rawLegacyEntry.env) ? rawLegacyEntry.env : undefined;
-  const legacyEnvApiKey = normalizeOptionalString(legacyEnv?.GEMINI_API_KEY) ?? "";
-  const legacyApiKey =
-    legacyEnvApiKey ||
-    (typeof rawLegacyEntry.apiKey === "string"
-      ? normalizeOptionalString(rawLegacyEntry.apiKey)
-      : rawLegacyEntry.apiKey && isRecord(rawLegacyEntry.apiKey)
-        ? structuredClone(rawLegacyEntry.apiKey)
+  const legacyEnvKey =
+    normalizeOptionalString(isRecord(legacy.env) ? legacy.env.GEMINI_API_KEY : undefined) ?? "";
+  const apiKey =
+    legacyEnvKey ||
+    (typeof legacy.apiKey === "string"
+      ? normalizeOptionalString(legacy.apiKey)
+      : isRecord(legacy.apiKey)
+        ? legacy.apiKey
         : undefined);
-
-  const rawModels = (
-    isRecord(next.models) ? structuredClone(next.models) : {}
-  ) as ModelsConfigPatch;
-  const rawProviders = (isRecord(rawModels.providers) ? { ...rawModels.providers } : {}) as Record<
-    string,
-    ModelProviderEntry
-  >;
-  const rawGoogle = (
-    isRecord(rawProviders.google) ? { ...rawProviders.google } : {}
-  ) as ModelProviderEntry;
-  const hasGoogleApiKey = rawGoogle.apiKey !== undefined;
-  if (!hasGoogleApiKey && legacyApiKey) {
-    rawGoogle.apiKey = legacyApiKey;
-    if (!rawGoogle.baseUrl) {
-      rawGoogle.baseUrl = DEFAULT_GOOGLE_API_BASE_URL;
+  const models: NonNullable<OpenClawConfig["models"]> = isRecord(cfg.models) ? cfg.models : {};
+  const providers: NonNullable<typeof models.providers> = isRecord(models.providers)
+    ? models.providers
+    : {};
+  const google = isRecord(providers.google)
+    ? providers.google
+    : { baseUrl: DEFAULT_GOOGLE_API_BASE_URL, models: [] };
+  if (google.apiKey === undefined && apiKey) {
+    google.apiKey = apiKey;
+    google.baseUrl ||= DEFAULT_GOOGLE_API_BASE_URL;
+    if (!Array.isArray(google.models)) {
+      google.models = [];
     }
-    if (!Array.isArray(rawGoogle.models)) {
-      rawGoogle.models = [];
-    }
-    rawProviders.google = rawGoogle;
-    rawModels.providers = rawProviders as NonNullable<OpenClawConfig["models"]>["providers"];
-    next = {
-      ...next,
-      models: rawModels as OpenClawConfig["models"],
-    };
+    providers.google = google;
+    models.providers = providers;
+    cfg.models = models;
     changes.push(
-      `Moved skills.entries.${NANO_BANANA_SKILL_KEY}.${legacyEnvApiKey ? "env.GEMINI_API_KEY" : "apiKey"} → models.providers.google.apiKey.`,
+      `Moved skills.entries.${key}.${legacyEnvKey ? "env.GEMINI_API_KEY" : "apiKey"} → models.providers.google.apiKey.`,
     );
   }
-
-  const entries = { ...rawEntries };
-  delete entries[NANO_BANANA_SKILL_KEY];
+  delete entries[key];
   if (Object.keys(entries).length === 0) {
     delete skills.entries;
-  } else {
-    skills.entries = entries;
   }
-  changes.push(`Removed legacy skills.entries.${NANO_BANANA_SKILL_KEY}.`);
-
+  changes.push(`Removed legacy skills.entries.${key}.`);
   if (Object.keys(skills).length === 0) {
-    const { skills: _ignored, ...rest } = next;
-    return rest;
+    delete cfg.skills;
   }
-
-  return {
-    ...next,
-    skills,
-  };
 }
 
 function normalizeConfiguredPositiveInteger(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.floor(value);
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
-function resolveConfiguredOllamaModelNumCtxBudget(params: {
-  model: Record<string, unknown>;
-  provider: Record<string, unknown>;
-  providerNumCtxApplies: boolean;
-}): number | undefined {
-  // Current caps already drive native requests; an explicit pin would override later cap changes.
-  if (normalizeConfiguredPositiveInteger(params.model.contextTokens) !== undefined) {
-    return undefined;
-  }
-  const modelContextWindow = normalizeConfiguredPositiveInteger(params.model.contextWindow);
-  const providerContextWindow = normalizeConfiguredPositiveInteger(params.provider.contextWindow);
-  if (modelContextWindow !== undefined || providerContextWindow !== undefined) {
-    return modelContextWindow ?? (params.providerNumCtxApplies ? undefined : providerContextWindow);
-  }
-  return (
-    normalizeConfiguredPositiveInteger(params.model.maxTokens) ??
-    (params.providerNumCtxApplies
-      ? undefined
-      : normalizeConfiguredPositiveInteger(params.provider.maxTokens))
-  );
-}
-
-function resolveConfiguredOllamaProviderNumCtxBudget(
-  provider: Record<string, unknown>,
-): number | undefined {
-  return (
-    normalizeConfiguredPositiveInteger(provider.contextWindow) ??
-    normalizeConfiguredPositiveInteger(provider.maxTokens)
-  );
-}
-
-function isNativeOllamaProviderConfig(provider: Record<string, unknown>): boolean {
-  return normalizeOptionalLowercaseString(provider.api) === "ollama";
-}
-
-function isNativeOllamaModelConfig(
-  provider: Record<string, unknown>,
+function resolveConfiguredOllamaModelNumCtxBudget(
   model: Record<string, unknown>,
-): boolean {
-  const api =
-    normalizeOptionalLowercaseString(model.api) || normalizeOptionalLowercaseString(provider.api);
-  return api === "ollama";
-}
-
-function hasConfiguredOllamaProviderNumCtx(provider: Record<string, unknown>): boolean {
-  const rawParams = provider.params;
-  return isRecord(rawParams) && Object.hasOwn(rawParams, "num_ctx");
-}
-
-function applyLegacyOllamaProviderNumCtxParams(params: {
-  providerId: string;
-  provider: Record<string, unknown>;
-  changes: string[];
-}): { provider: Record<string, unknown>; changed: boolean } {
-  if (!isNativeOllamaProviderConfig(params.provider)) {
-    return { provider: params.provider, changed: false };
+  provider: Record<string, unknown>,
+  providerNumCtxApplies: boolean,
+): number | undefined {
+  // Explicit runtime caps must continue following cap changes rather than acquiring a pin.
+  if (normalizeConfiguredPositiveInteger(model.contextTokens) !== undefined) {
+    return undefined;
   }
-
-  const rawParams = params.provider.params;
-  if (rawParams !== undefined && !isRecord(rawParams)) {
-    return { provider: params.provider, changed: false };
+  const contextWindow = normalizeConfiguredPositiveInteger(model.contextWindow);
+  const providerWindow = normalizeConfiguredPositiveInteger(provider.contextWindow);
+  if (contextWindow !== undefined || providerWindow !== undefined) {
+    return contextWindow ?? (providerNumCtxApplies ? undefined : providerWindow);
   }
-  if (rawParams && Object.hasOwn(rawParams, "num_ctx")) {
-    return { provider: params.provider, changed: false };
-  }
-
-  const numCtx = resolveConfiguredOllamaProviderNumCtxBudget(params.provider);
-  if (numCtx === undefined) {
-    return { provider: params.provider, changed: false };
-  }
-
-  params.changes.push(
-    `Set models.providers.${sanitizeForLog(params.providerId)}.params.num_ctx to ${numCtx} for native Ollama compatibility.`,
+  return (
+    normalizeConfiguredPositiveInteger(model.maxTokens) ??
+    (providerNumCtxApplies ? undefined : normalizeConfiguredPositiveInteger(provider.maxTokens))
   );
-  return {
-    provider: {
-      ...params.provider,
-      params: rawParams ? { ...rawParams, num_ctx: numCtx } : { num_ctx: numCtx },
-    },
-    changed: true,
-  };
 }
 
-/** Seed native Ollama num_ctx params from legacy context-token budgets. */
 export function normalizeLegacyOllamaNativeNumCtxParams(
   cfg: OpenClawConfig,
   changes: string[],
-): OpenClawConfig {
-  return normalizeModelProviders(cfg, (rawProvider, providerId) => {
-    const rawModels = rawProvider.models;
-    if (!Array.isArray(rawModels)) {
-      return rawProvider;
+): void {
+  for (const [providerId, provider] of modelProviders(cfg)) {
+    if (!Array.isArray(provider.models)) {
+      continue;
     }
-    // A new provider-wide pin would also override current caps, including API-overridden rows.
-    // Migrate uncapped native siblings individually while keeping authored provider pins intact.
-    const hasRuntimeCaps = rawModels.some(
-      (model) =>
-        isRecord(model) && normalizeConfiguredPositiveInteger(model.contextTokens) !== undefined,
-    );
-    const providerParams = hasRuntimeCaps
-      ? { provider: rawProvider, changed: false }
-      : applyLegacyOllamaProviderNumCtxParams({ providerId, provider: rawProvider, changes });
+    const models = [...providerModels(provider)];
+    const nativeProvider = normalizeOptionalLowercaseString(provider.api) === "ollama";
+    const providerParams = provider.params;
+    // Scan all siblings before choosing a provider pin: it also affects API-overridden rows.
+    if (
+      nativeProvider &&
+      (providerParams === undefined || isRecord(providerParams)) &&
+      !Object.hasOwn(providerParams ?? {}, "num_ctx") &&
+      !models.some(
+        ([, entry]) => normalizeConfiguredPositiveInteger(entry.contextTokens) !== undefined,
+      )
+    ) {
+      const numCtx =
+        normalizeConfiguredPositiveInteger(provider.contextWindow) ??
+        normalizeConfiguredPositiveInteger(provider.maxTokens);
+      if (numCtx !== undefined) {
+        provider.params = { ...providerParams, num_ctx: numCtx };
+        changes.push(
+          `Set models.providers.${sanitizeForLog(providerId)}.params.num_ctx to ${numCtx} for native Ollama compatibility.`,
+        );
+      }
+    }
     const providerNumCtxApplies =
-      isNativeOllamaProviderConfig(providerParams.provider) &&
-      hasConfiguredOllamaProviderNumCtx(providerParams.provider);
-    if (rawModels.length === 0) {
-      return providerParams.provider;
-    }
-
-    let modelsChanged = false;
-    const nextModels = rawModels.map((model, index) => {
-      if (!isRecord(model)) {
-        return model;
+      nativeProvider && isRecord(provider.params) && Object.hasOwn(provider.params, "num_ctx");
+    for (const [index, model] of models) {
+      const api =
+        normalizeOptionalLowercaseString(model.api) ||
+        normalizeOptionalLowercaseString(provider.api);
+      const params = model.params;
+      if (
+        api !== "ollama" ||
+        (params !== undefined && !isRecord(params)) ||
+        Object.hasOwn(params ?? {}, "num_ctx")
+      ) {
+        continue;
       }
-      if (!isNativeOllamaModelConfig(providerParams.provider, model)) {
-        return model;
-      }
-
-      const rawParams = model.params;
-      if (rawParams !== undefined && !isRecord(rawParams)) {
-        return model;
-      }
-      if (rawParams && Object.hasOwn(rawParams, "num_ctx")) {
-        return model;
-      }
-
-      const numCtx = resolveConfiguredOllamaModelNumCtxBudget({
+      const numCtx = resolveConfiguredOllamaModelNumCtxBudget(
         model,
-        provider: providerParams.provider,
+        provider,
         providerNumCtxApplies,
-      });
-      if (numCtx === undefined) {
-        return model;
-      }
-
-      modelsChanged = true;
-      changes.push(
-        `Set models.providers.${sanitizeForLog(providerId)}.models[${index}].params.num_ctx to ${numCtx} for native Ollama compatibility.`,
       );
-      return Object.assign({}, model, {
-        params: rawParams ? { ...rawParams, num_ctx: numCtx } : { num_ctx: numCtx },
-      });
-    });
-
-    return modelsChanged || providerParams.changed
-      ? { ...providerParams.provider, models: nextModels }
-      : rawProvider;
-  });
-}
-
-const MISTRAL_MODEL_CACHE_READ_COST_BY_ID: Record<string, number> = {
-  "codestral-latest": 0.03,
-  "devstral-medium-latest": 0.04,
-  "magistral-small": 0.05,
-  "mistral-large-latest": 0.05,
-  "mistral-medium-2508": 0.04,
-  "mistral-medium-3-5": 0.15,
-  "mistral-small-latest": 0.01,
-  "pixtral-large-latest": 0.2,
-};
-
-function normalizeLegacyMistralModelCost<T extends Record<string, unknown>>(params: {
-  providerId: string;
-  model: T;
-  modelId: string;
-  index: number;
-  changes: string[];
-}): { model: T; changed: boolean } {
-  const cost = params.model.cost;
-  if (!isRecord(cost) || cost.cacheRead !== 0) {
-    return { model: params.model, changed: false };
-  }
-
-  const normalizedCacheRead = MISTRAL_MODEL_CACHE_READ_COST_BY_ID[params.modelId.toLowerCase()];
-  if (normalizedCacheRead === undefined) {
-    return { model: params.model, changed: false };
-  }
-
-  params.changes.push(
-    `Normalized models.providers.${sanitizeForLog(params.providerId)}.models[${params.index}].cost.cacheRead (0 → ${normalizedCacheRead}) for Mistral prompt-cache billing.`,
-  );
-  return {
-    model: {
-      ...params.model,
-      cost: { ...cost, cacheRead: normalizedCacheRead },
-    },
-    changed: true,
-  };
-}
-
-/** Normalize stale Mistral model defaults such as prompt-cache read cost. */
-export function normalizeLegacyMistralModelDefaults(
-  cfg: OpenClawConfig,
-  changes: string[],
-): OpenClawConfig {
-  return normalizeModelProviders(cfg, (rawProvider, providerId) => {
-    if (normalizeProviderId(providerId) !== "mistral") {
-      return rawProvider;
-    }
-    const rawModels = rawProvider.models;
-    if (!Array.isArray(rawModels)) {
-      return rawProvider;
-    }
-
-    let modelsChanged = false;
-    const nextModels = rawModels.map((model, index) => {
-      if (!isRecord(model)) {
-        return model;
+      if (numCtx !== undefined) {
+        model.params = { ...params, num_ctx: numCtx };
+        changes.push(
+          `Set models.providers.${sanitizeForLog(providerId)}.models[${index}].params.num_ctx to ${numCtx} for native Ollama compatibility.`,
+        );
       }
+    }
+  }
+}
+
+export function normalizeLegacyMistralModelDefaults(cfg: OpenClawConfig, changes: string[]): void {
+  for (const [providerId, provider] of modelProviders(cfg)) {
+    if (normalizeProviderId(providerId) !== "mistral") {
+      continue;
+    }
+    for (const [index, model] of providerModels(provider)) {
       const modelId = normalizeOptionalString(model.id) ?? "";
       if (!modelId) {
-        return model;
+        continue;
       }
-
-      let nextModel = model;
-      let modelChanged = false;
       const contextWindow = asFiniteNumber(model.contextWindow) ?? null;
       const maxTokens = asFiniteNumber(model.maxTokens) ?? null;
-
       if (contextWindow !== null && maxTokens !== null) {
         const normalizedMaxTokens = resolveNormalizedProviderModelMaxTokens({
           providerId,
@@ -1198,33 +712,16 @@ export function normalizeLegacyMistralModelDefaults(
           rawMaxTokens: maxTokens,
         });
         if (normalizedMaxTokens !== maxTokens) {
-          nextModel = Object.assign({}, nextModel, { maxTokens: normalizedMaxTokens });
-          modelChanged = true;
+          model.maxTokens = normalizedMaxTokens;
           changes.push(
             `Normalized models.providers.${providerId}.models[${index}].maxTokens (${maxTokens} → ${normalizedMaxTokens}) to avoid Mistral context-window rejects.`,
           );
         }
       }
-
-      const costNormalization = normalizeLegacyMistralModelCost({
-        providerId,
-        model: nextModel,
-        modelId,
-        index,
-        changes,
-      });
-      if (costNormalization.changed) {
-        nextModel = costNormalization.model;
-        modelChanged = true;
-      }
-
-      if (modelChanged) {
-        modelsChanged = true;
-      }
-      return modelChanged ? nextModel : model;
-    });
-
-    return modelsChanged ? { ...rawProvider, models: nextModels } : rawProvider;
-  });
+      Object.assign(
+        model,
+        normalizeLegacyMistralModelCost({ providerId, model, modelId, index, changes }),
+      );
+    }
+  }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

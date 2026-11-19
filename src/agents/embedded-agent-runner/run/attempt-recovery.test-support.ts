@@ -2,6 +2,7 @@ import { vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
+import type { ReplyDeliveryObserver } from "../../reply-completion.js";
 import {
   buildEmbeddedRunnerAssistant,
   createMockUsage,
@@ -9,15 +10,64 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
 import { recoverEmbeddedRunAttempt } from "./attempt-recovery.js";
+import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
+import { normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
+import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
+export const outputLimitDetails = {
+  eventType: "response.incomplete",
+  stopReason: "length",
+  incompleteReason: "max_output_tokens",
+};
+
+export const outputLimitScenario = {
+  errorCode: "incomplete_tool_call",
+  errorMessage: "Responses stream completed with an incomplete terminal tool call",
+  diagnostics: [
+    {
+      type: "openai_responses_terminal",
+      timestamp: 1,
+      details: outputLimitDetails,
+    },
+  ],
+  usage: createMockUsage(440_445, 128_000),
+} satisfies TransportDropScenario;
+
+export const emptyLengthScenario = {
+  assistant: buildEmbeddedRunnerAssistant({
+    stopReason: "length",
+    content: [],
+    usage: createMockUsage(1000, 4096),
+  }),
+} satisfies TransportDropScenario;
+
+export const outputLimitScenarios = [
+  outputLimitScenario,
+  emptyLengthScenario,
+  { ...emptyLengthScenario, trigger: "cron" as const, toolResultText: "NO_REPLY" },
+];
+
 export type TransportDropScenario = {
+  continueFromCurrentTranscript?: Awaited<
+    ReturnType<typeof createEmbeddedRunSessionPromptState>
+  >["continueFromCurrentTranscript"];
   config?: OpenClawConfig;
   assistant?: AssistantMessage;
   providerOwner?: PreparedProviderFailoverOwner;
   assistantTexts?: string[];
+  precedingMessages?: EmbeddedRunAttemptWithReceiptEvidence["messagesSnapshot"];
+  answerSegments?: EmbeddedRunAttemptWithReceiptEvidence["answerSegments"];
+  toolMediaUrls?: string[];
+  sourceReplyDelivered?: EmbeddedRunAttemptWithReceiptEvidence["sourceReplyDelivered"];
+  trigger?: "cron";
+  modelRun?: boolean;
+  promptMode?: "none";
+  toolResultText?: string;
+  preToolText?: string;
+  resolveReplyDelivery?: ReplyDeliveryObserver;
   errorMessage?: string;
   errorBody?: string;
   errorCode?: string;
@@ -82,10 +132,18 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       content: scenario.content ?? [{ type: "thinking", thinking: "checking the results" }],
       usage: scenario.usage ?? createMockUsage(0, 0),
     });
-  const provider = erroredAssistant.provider;
-  const modelId = erroredAssistant.model;
+  const { provider, model: modelId } = erroredAssistant;
   const messagesSnapshot = [
+    ...(scenario.precedingMessages ?? []),
     { role: "user", content: "why is it unauthorized?" },
+    ...(scenario.preToolText
+      ? [
+          buildEmbeddedRunnerAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: scenario.preToolText }],
+          }),
+        ]
+      : []),
     ...(toolCalls.length > 0 ? [toolAssistant] : []),
     ...toolCalls
       .filter((id) => !scenario.missingToolResult || id !== "call_2")
@@ -94,25 +152,28 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         toolCallId: id,
         toolName: "exec",
         isError: id === scenario.failedToolCallId,
+        content: scenario.toolResultText
+          ? [{ type: "text", text: scenario.toolResultText }]
+          : undefined,
       })),
     erroredAssistant,
   ] as never;
-  const attempt = makeEmbeddedRunnerAttempt({
-    assistantTexts: scenario.assistantTexts ?? [],
+  const rawAttempt: EmbeddedRunAttemptWithReceiptEvidence = makeEmbeddedRunnerAttempt({
+    assistantTexts: scenario.assistantTexts ?? (scenario.preToolText ? [scenario.preToolText] : []),
+    toolMediaUrls: scenario.toolMediaUrls,
+    sourceReplyDelivered: scenario.sourceReplyDelivered,
     messagesSnapshot,
     toolMetas: toolCalls.map((toolCallId) => ({
       toolCallId,
       toolName: "exec",
       replaySafe: false,
-      ...(scenario.asyncStarted ? { asyncStarted: true } : {}),
-      ...(scenario.terminate ? { terminate: true } : {}),
-      ...(scenario.codeModeSuspended ? { codeModeSuspended: true } : {}),
+      asyncStarted: scenario.asyncStarted || undefined,
+      terminate: scenario.terminate || undefined,
+      codeModeSuspended: scenario.codeModeSuspended || undefined,
     })) as never,
     lastAssistant: erroredAssistant,
     currentAttemptAssistant: erroredAssistant,
-    ...(scenario.completedAssistant
-      ? { currentAttemptCompletedAssistant: scenario.completedAssistant }
-      : {}),
+    currentAttemptCompletedAssistant: scenario.completedAssistant,
     lastToolError: scenario.lastToolError,
     didSendDeterministicApprovalPrompt: scenario.didSendDeterministicApprovalPrompt,
     itemLifecycle: {
@@ -122,42 +183,50 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     },
     ...(scenario.terminal ? { terminal: scenario.terminal } : {}),
     ...(scenario.yieldDetected ? { yieldDetected: true } : {}),
-    ...(scenario.providerRetryMaxDelayMs !== undefined
-      ? { providerRetryMaxDelayMs: scenario.providerRetryMaxDelayMs }
-      : {}),
+    providerRetryMaxDelayMs: scenario.providerRetryMaxDelayMs,
     ...(scenario.replaySafe
       ? { currentAttemptReplayMetadata: { replaySafe: true, hadPotentialSideEffects: false } }
       : {}),
   });
+  rawAttempt.answerSegments = scenario.answerSegments;
+  const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
   const terminalState = resolveEmbeddedRunAttemptTerminalState({
     attempt,
     assistant: erroredAssistant,
   });
   const markOwnedTranscriptRetry = vi.fn();
-  const continueFromCurrentTranscript = vi.fn();
+  const continueFromCurrentTranscript = vi.fn(scenario.continueFromCurrentTranscript);
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
-    runParams: {
-      runId: "run:transport-drop",
-      config: scenario.config,
-      retryConnectionErrors: scenario.retryConnectionErrors,
-    } as Parameters<typeof createEmbeddedRunFailoverRetryController>[0]["runParams"],
-    provider,
-    modelId,
-    globalLane: "test",
-    agentDir: "/tmp/provider-recovery-test",
-    fallbackConfigured: scenario.fallbackConfigured ?? false,
-    profileFailureStore: { version: 1, profiles: {} },
-    getLastProfileId: () => undefined,
+    runInput: {
+      runParams: {
+        runId: "run:transport-drop",
+        config: scenario.config,
+        retryConnectionErrors: scenario.retryConnectionErrors,
+      } as Parameters<typeof createEmbeddedRunFailoverRetryController>[0]["runInput"]["runParams"],
+      globalLane: "test",
+      agentDir: "/tmp/provider-recovery-test",
+      fallbackConfigured: scenario.fallbackConfigured ?? false,
+      startedAtMs: Date.now(),
+    },
+    preparedRuntime: {
+      provider,
+      modelId,
+      profileFailureStore: { version: 1, profiles: {} },
+      snapshot: () => ({
+        lastProfileId: undefined,
+        pluginHarnessOwnsTransport: scenario.pluginHarnessOwnsTransport ?? false,
+        agentHarness: { id: "embedded" },
+      }),
+      getApiKeyInfo: () => null,
+      advanceAttemptAuthProfile: vi.fn(async () => false),
+    },
     getSessionId: () => "session:transport-drop",
-    harnessOwnsTransport: () => scenario.pluginHarnessOwnsTransport ?? false,
-    getRuntimeAuthOwnerId: () => "embedded",
-    getApiKeyInfo: () => null,
-    advanceAuthProfile: vi.fn(async () => false),
   });
   if (scenario.retryAvailable === false) {
     failoverRetryController.observeAttempt({ providerRetryMaxRetries: 0 });
   }
+  vi.spyOn(failoverRetryController, "advanceAuthProfile");
   vi.spyOn(failoverRetryController, "maybeMarkAuthProfileFailure");
   const onAgentEvent = vi.fn();
   const recover = () =>
@@ -166,7 +235,13 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         runParams: {
           config: scenario.config ?? {},
           agentId: "main",
+          trigger: scenario.trigger,
+          modelRun: scenario.modelRun,
+          promptMode: scenario.promptMode,
+          resolveReplyDelivery: scenario.resolveReplyDelivery,
           sessionId: "session:transport-drop",
+          // This fixture owns no durable session, including under a frozen retry clock.
+          sessionPersistence: "detached",
           runId: "run:transport-drop",
           onAgentEvent,
         },
@@ -183,6 +258,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         genericCompactionRecoveryAllowed: scenario.compactionEnabled ?? false,
         attemptedThinking: new Set(["off"]),
         maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
+        refreshTransportForConnectionError: vi.fn(async () => {}),
         snapshot: () => ({
           thinkLevel: "off",
           agentHarness: { id: "openclaw" },

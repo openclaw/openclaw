@@ -1,6 +1,9 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
 import { indexFirstByKey } from "../../../src/shared/dedupe-by-key.ts";
+import {
+  normalizeSessionSearchLiteral,
+  normalizeSessionSearchText,
+} from "../../../src/shared/session-search-text.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { clampText } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
@@ -8,37 +11,8 @@ import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 
 export const SESSION_ACTION_PREFIX = "session:";
 export const SESSION_SEARCH_LIMIT = 10;
+export { SESSION_SEARCH_SCOPE } from "../lib/sessions/session-requests.ts";
 const SESSION_SEARCH_SNIPPET_MAX_CHARS = 160;
-
-function sessionMetadataMatchRank(
-  row: GatewaySessionRow,
-  normalizedSearch: string,
-  label: string,
-): number {
-  const fields = [
-    label,
-    row.key,
-    row.label,
-    row.subject,
-    row.category,
-    row.kind,
-    row.model,
-    row.modelProvider,
-    row.owner?.actor.label,
-    row.owner?.actor.id,
-    row.createdActor?.label,
-    row.createdActor?.id,
-  ]
-    .map((value) => normalizeLowercaseStringOrEmpty(value))
-    .filter(Boolean);
-  if (fields.some((field) => field === normalizedSearch)) {
-    return 3;
-  }
-  if (fields.some((field) => field.startsWith(normalizedSearch))) {
-    return 2;
-  }
-  return fields.some((field) => field.includes(normalizedSearch)) ? 1 : 0;
-}
 
 export function buildCommandPaletteSessionItems(params: {
   visibleRows: readonly GatewaySessionRow[];
@@ -47,7 +21,8 @@ export function buildCommandPaletteSessionItems(params: {
   search: string;
 }): CommandPaletteItem[] {
   const { visibleRows, visibleKeys, transcriptResult } = params;
-  const normalizedSearch = normalizeLowercaseStringOrEmpty(params.search);
+  const normalizedSearch = normalizeSessionSearchLiteral(params.search);
+  const titleSearch = normalizeSessionSearchText(params.search);
   const transcriptHitByKey = indexFirstByKey(
     transcriptResult?.results ?? [],
     (hit) => hit.sessionKey,
@@ -61,7 +36,39 @@ export function buildCommandPaletteSessionItems(params: {
   return [...rowsByKey.values()]
     .map((row) => {
       const label = resolveSessionDisplayName(row.key, row);
-      const rawMetadataRank = sessionMetadataMatchRank(row, normalizedSearch, label);
+      const titles = [label, row.label, row.subject, row.category];
+      const fields = [
+        ...titles,
+        row.key,
+        row.kind,
+        row.model,
+        row.modelProvider,
+        row.owner?.actor.label,
+        row.owner?.actor.id,
+        row.createdActor?.label,
+        row.createdActor?.id,
+      ]
+        .map(normalizeSessionSearchLiteral)
+        .filter(Boolean);
+      const titleFields = titleSearch ? titles.map(normalizeSessionSearchText) : [];
+      let rawMetadataRank: number;
+      if (
+        fields.some((field) => field === normalizedSearch) ||
+        titleFields.some((field) => field === titleSearch)
+      ) {
+        rawMetadataRank = 3;
+      } else if (
+        fields.some((field) => field.startsWith(normalizedSearch)) ||
+        titleFields.some((field) => field.startsWith(titleSearch))
+      ) {
+        rawMetadataRank = 2;
+      } else {
+        rawMetadataRank =
+          fields.some((field) => field.includes(normalizedSearch)) ||
+          titleFields.some((field) => field.includes(titleSearch))
+            ? 1
+            : 0;
+      }
       return {
         row,
         label,

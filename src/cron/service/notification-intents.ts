@@ -1,10 +1,24 @@
 /** Cloneable facts needed to deliver one committed cron notification. */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { normalizeOptionalAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveCronDeliverySessionKey } from "../session-target.js";
 import type { CronJob, CronMessageChannel } from "../types.js";
+
+export type CronNotificationRouting = { defaultAgentId?: string };
+
+export function captureCronNotificationRouting(
+  rawDefaultAgentId: string | undefined,
+  configuredDefaultAgentId: string | undefined,
+): CronNotificationRouting {
+  const defaultAgentId =
+    normalizeOptionalAgentId(rawDefaultAgentId) ??
+    normalizeOptionalAgentId(configuredDefaultAgentId);
+  return defaultAgentId === undefined ? {} : { defaultAgentId };
+}
 
 export type CronNotificationJob = Pick<
   CronJob,
-  "id" | "name" | "agentId" | "sessionTarget" | "sessionKey" | "wakeMode"
+  "id" | "name" | "agentId" | "sessionTarget" | "sessionKey" | "wakeMode" | "owner"
 > & {
   state: Pick<
     CronJob["state"],
@@ -19,6 +33,7 @@ export function cronNotificationJob(job: CronJob): CronNotificationJob {
     agentId: job.agentId,
     sessionTarget: job.sessionTarget,
     sessionKey: job.sessionKey,
+    owner: job.owner ? { ...job.owner } : undefined,
     wakeMode: job.wakeMode,
     state: {
       lastRunAtMs: job.state.lastRunAtMs,
@@ -26,6 +41,24 @@ export function cronNotificationJob(job: CronJob): CronNotificationJob {
       lastFailureNotificationId: job.state.lastFailureNotificationId,
     },
   };
+}
+
+export function resolveCronNotificationQueueOwner(
+  job: CronNotificationJob,
+  kind: CronNotificationIntent["kind"],
+) {
+  const owner = kind === "auto-disabled" ? job.owner : undefined;
+  const ownerSessionKey = owner?.sessionKey?.trim() || undefined;
+  const sessionKey =
+    kind === "failure-alert"
+      ? resolveCronDeliverySessionKey(job)
+      : (ownerSessionKey ?? job.sessionKey);
+  const agentId =
+    normalizeOptionalAgentId(owner?.agentId) ??
+    normalizeOptionalAgentId(parseAgentSessionKey(ownerSessionKey)?.agentId) ??
+    normalizeOptionalAgentId(job.agentId) ??
+    normalizeOptionalAgentId(parseAgentSessionKey(sessionKey)?.agentId);
+  return { agentId, sessionKey };
 }
 
 type CronFailureAlertRoute = {
@@ -43,12 +76,21 @@ export type ResolvedFailureAlert = CronFailureAlertRoute & {
   includeSkipped: boolean;
 };
 
-export type CronNotificationIntent =
+type CronFailureAlertNotification = {
+  kind: "failure-alert";
+  job: CronNotificationJob;
+  payload: ReplyPayload;
+  runAtMs?: number;
+  route: CronFailureAlertRoute;
+};
+
+export type CronNotificationIntent = { routing?: CronNotificationRouting } & (
   | { kind: "auto-disabled"; job: CronNotificationJob; text: string }
   | {
-      kind: "failure-alert";
+      kind: "failure-repair";
       job: CronNotificationJob;
-      payload: ReplyPayload;
-      runAtMs?: number;
-      route: CronFailureAlertRoute;
-    };
+      text: string;
+      fallback: CronFailureAlertNotification;
+    }
+  | CronFailureAlertNotification
+);

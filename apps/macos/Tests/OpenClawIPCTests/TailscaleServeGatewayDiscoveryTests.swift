@@ -99,7 +99,7 @@ struct TailscaleServeGatewayDiscoveryTests {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct GatewayDiscoveryProbeTests {
     @Test func `challenge discovery never sends or retains credentials across peer probes`() async throws {
@@ -121,7 +121,7 @@ struct GatewayDiscoveryProbeTests {
 
         for _ in 0..<2 {
             #expect(await GatewayDiscoveryProbe.shared.hasGatewayChallenge(url: server.websocketURL(), timeout: 2))
-            try await Self.waitForDisconnect(server)
+            try await server.waitUntilIdle("discovery to close its candidate socket")
         }
 
         #expect(requests.count == 2)
@@ -183,7 +183,7 @@ struct GatewayDiscoveryProbeTests {
         }
 
         #expect(await !GatewayDiscoveryProbe.shared.hasGatewayChallenge(url: server.websocketURL(), timeout: 2))
-        try await Self.waitForDisconnect(server)
+        try await server.waitUntilIdle("discovery to close its candidate socket")
         #expect(requests.count == 1)
         #expect(requests.allSatisfy { !$0.lowercased().contains("authorization:") })
         #expect(redirectedRequests == 0)
@@ -200,7 +200,7 @@ struct GatewayDiscoveryProbeTests {
         defer { server.stop() }
 
         #expect(await !GatewayDiscoveryProbe.shared.hasGatewayChallenge(url: server.websocketURL(), timeout: 2))
-        try await Self.waitForDisconnect(server)
+        try await server.waitUntilIdle("discovery to close its candidate socket")
         #expect(requests == 0)
     }
 
@@ -257,13 +257,5 @@ struct GatewayDiscoveryProbeTests {
             index = end
         }
         return opcodes
-    }
-
-    private static func waitForDisconnect(_ server: DashboardHTTPFixture) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
-        while server.activeConnectionCount > 0, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        try #require(server.activeConnectionCount == 0, "Discovery left its candidate socket open")
     }
 }

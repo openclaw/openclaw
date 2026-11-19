@@ -2,10 +2,6 @@
   background: transparent;
 }
 
-* {
-  box-sizing: border-box;
-}
-
 html,
 body {
   width: 100%;
@@ -19,17 +15,8 @@ body {
   padding: 6px 8px;
 }
 
-[hidden] {
-  display: none !important;
-}
-
-button,
 textarea {
   font: inherit;
-}
-
-button {
-  cursor: default;
 }
 
 button:focus-visible {
@@ -40,16 +27,6 @@ button:focus-visible {
 ::selection {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--accent) 24%, var(--card));
-}
-
-svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .composer {

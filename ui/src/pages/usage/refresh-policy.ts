@@ -1,11 +1,7 @@
-import {
-  IncompleteUsageRetry,
-  isUsageIncomplete,
-  type UsageRetryState,
-} from "../../lib/incomplete-usage-retry.ts";
 import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
 
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
+const INCOMPLETE_USAGE_RETRY_LIMIT = 3;
 
 type UsageRefreshReason = "focus" | "manual" | "poll" | "publication" | "reconnect";
 
@@ -18,37 +14,36 @@ type UsageRefreshPolicyOptions = {
 /** Owns Usage's page-specific TTL, interruption, and refresh coalescing policy. */
 export class UsageRefreshPolicy {
   private lastLoadedAtMs: number | null = null;
-  private pendingAutomaticRefresh = false;
+  // A deferred refresh keeps its reason: a provider-only retry must not replay as a full reload.
+  private pendingAutomaticRefresh: UsageRefreshReason | null = null;
   private publicationPending = false;
   private reloadPending = false;
-  private readonly incompleteUsageRetry = new IncompleteUsageRetry({
-    retry: () => this.requestAndWait("poll"),
-    // Let the Gateway's 30s aggregate cache expire without increasing request volume.
-    retryMs: (attempt) => 5_000 * 2 ** (attempt - 1),
-    onExhausted: () => this.options.onIncompleteUsageExhausted?.(),
-  });
+  private retryTimer: number | null = null;
+  private retryAttempts = 0;
+  private exhaustionReported = false;
+  private connection: unknown;
 
   constructor(private readonly options: UsageRefreshPolicyOptions) {}
 
   get incompleteUsageExhausted(): boolean {
-    return this.incompleteUsageRetry.exhausted;
+    return this.exhaustionReported;
   }
 
   setLastLoadedAtMs(
     value: number | null,
     params?: { incomplete?: boolean; connection?: unknown },
-  ): UsageRetryState {
-    return this.applyLoadState(value, params?.incomplete === true, params?.connection);
+  ): void {
+    this.applyLoadState(value, params?.incomplete === true, params?.connection);
   }
 
   markProviderUsage(
     result: ProviderUsageRequestResult | null,
     value: number | null,
     connection: unknown,
-  ): UsageRetryState {
+  ): void {
     const incomplete =
-      result?.ok === false || (result?.ok === true && isUsageIncomplete(result.value));
-    return this.applyLoadState(value, incomplete, connection);
+      result?.ok === false || (result?.ok === true && result.value.refreshing === true);
+    this.applyLoadState(value, incomplete, connection);
   }
 
   resetPayload(): void {
@@ -58,18 +53,53 @@ export class UsageRefreshPolicy {
   }
 
   dispose(): void {
-    this.incompleteUsageRetry.dispose();
+    this.resetRetryCycle();
   }
 
   private applyLoadState(
     loadedAtMs: number | null,
     incomplete: boolean,
     connection?: unknown,
-  ): UsageRetryState {
-    const state = this.incompleteUsageRetry.observe(incomplete, connection);
+  ): void {
+    if (connection !== this.connection) {
+      this.connection = connection;
+      this.resetRetryCycle();
+    }
+    if (!incomplete) {
+      this.resetRetryCycle();
+    } else if (this.retryTimer === null) {
+      this.armRetry();
+    }
     // Incomplete usage must not start the TTL or focus/reconnect can skip recovery.
-    this.lastLoadedAtMs = state === "complete" ? loadedAtMs : null;
-    return state;
+    this.lastLoadedAtMs = incomplete ? null : loadedAtMs;
+  }
+
+  private armRetry(): void {
+    if (this.retryAttempts >= INCOMPLETE_USAGE_RETRY_LIMIT) {
+      if (!this.exhaustionReported) {
+        this.exhaustionReported = true;
+        this.options.onIncompleteUsageExhausted?.();
+      }
+      return;
+    }
+    this.retryAttempts += 1;
+    // Let the Gateway's 30s aggregate cache expire without increasing request volume.
+    this.retryTimer = window.setTimeout(
+      () => {
+        this.retryTimer = null;
+        void this.requestAndWait("poll").catch(() => undefined);
+      },
+      5_000 * 2 ** (this.retryAttempts - 1),
+    );
+  }
+
+  private resetRetryCycle(): void {
+    this.retryAttempts = 0;
+    this.exhaustionReported = false;
+    if (this.retryTimer !== null) {
+      window.clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
   }
 
   interrupt(): void {
@@ -84,8 +114,8 @@ export class UsageRefreshPolicy {
     this.reloadPending = false;
   }
 
-  request(reason: UsageRefreshReason): void {
-    void this.requestAndWait(reason);
+  request(reason: UsageRefreshReason): Promise<void> {
+    return this.requestAndWait(reason);
   }
 
   private async requestAndWait(reason: UsageRefreshReason): Promise<void> {
@@ -94,10 +124,14 @@ export class UsageRefreshPolicy {
       this.reloadPending = true;
     }
     if (this.options.isLoading() && reason !== "manual") {
-      this.pendingAutomaticRefresh = true;
+      // Any broader reason outranks a deferred provider-only retry.
+      this.pendingAutomaticRefresh =
+        this.pendingAutomaticRefresh && this.pendingAutomaticRefresh !== "poll"
+          ? this.pendingAutomaticRefresh
+          : reason;
       return;
     }
-    this.pendingAutomaticRefresh = false;
+    this.pendingAutomaticRefresh = null;
     if (
       reason !== "manual" &&
       (document.visibilityState !== "visible" ||
@@ -109,17 +143,18 @@ export class UsageRefreshPolicy {
       return;
     }
     if (reason === "manual" || (reason !== "poll" && !this.publicationPending)) {
-      this.incompleteUsageRetry.startCycle();
+      this.resetRetryCycle();
     }
     this.publicationPending = false;
     await this.options.reload(reason);
   }
 
   flushPending(): void {
-    if (!this.pendingAutomaticRefresh) {
+    const pending = this.pendingAutomaticRefresh;
+    if (!pending) {
       return;
     }
-    this.pendingAutomaticRefresh = false;
-    this.request("focus");
+    this.pendingAutomaticRefresh = null;
+    void this.request(pending === "poll" ? "poll" : "focus");
   }
 }

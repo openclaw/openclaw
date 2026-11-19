@@ -1,29 +1,40 @@
-import { describe, expect, test, vi } from "vitest";
-import { createAutoRecallHook } from "./auto-recall.js";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import memoryPlugin from "./index.js";
 import { MemoryDB } from "./lancedb-store.js";
+
+const embed = vi.hoisted(() => vi.fn(async () => [0.1, 0.2, 0.3]));
+vi.mock("./embeddings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./embeddings.js")>()),
+  createEmbeddings: () => ({ embed, start() {} }),
+}));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  embed.mockClear();
+});
 
 describe("automatic memory recall privacy", () => {
   test.each([
     { sessionKey: "agent:main:dashboard:incognito-recall", expectedCalls: 0 },
     { sessionKey: "agent:main:dashboard:ordinary-recall", expectedCalls: 1 },
   ])("limits embedding and search for $sessionKey", async ({ sessionKey, expectedCalls }) => {
-    const db = new MemoryDB("unused-auto-recall-test-db", 3);
-    const search = vi.spyOn(db, "search").mockResolvedValue([]);
-    const embed = vi.fn(async () => [0.1, 0.2, 0.3]);
-    const hook = createAutoRecallHook({
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-      db,
-      embeddings: { embed },
-      resolveCurrentConfig: () => ({
-        embedding: { provider: "openai", model: "synthetic-test-embedding" },
-        autoRecall: true,
-        captureMaxChars: 500,
-        recallMaxChars: 1000,
-      }),
-      resolveEnabledAgentId: (agentId) => agentId,
-      readCooldown: () => undefined,
-      recordCooldown: vi.fn(),
-    });
+    const search = vi.spyOn(MemoryDB.prototype, "search").mockResolvedValue([]);
+    const pluginConfig = {
+      embedding: { provider: "openai", model: "synthetic-test-embedding", dimensions: 3 },
+      autoRecall: true,
+      autoCapture: false,
+      captureMaxChars: 500,
+      recallMaxChars: 1000,
+    };
+    const config = { plugins: { entries: { "memory-lancedb": { config: pluginConfig } } } };
+    const on = vi.fn();
+    const runtime = createPluginRuntimeMock();
+    runtime.config.current = () => config;
+    memoryPlugin.register(createTestPluginApi({ pluginConfig, config, runtime, on }));
+    const hook = on.mock.calls.find(([name]) => name === "before_prompt_build")?.[1];
+    expect(hook).toBeTypeOf("function");
 
     await expect(
       hook(
@@ -32,7 +43,8 @@ describe("automatic memory recall privacy", () => {
           agentId: "main",
           sessionKey,
           toolAuthority: {
-            allows: (toolName) => toolName === "memory_recall",
+            fingerprint: "synthetic-memory-authority",
+            allows: (toolName: string) => toolName === "memory_recall",
             assertActive: () => undefined,
           },
         },

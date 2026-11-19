@@ -1,10 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { recoverTerminalReply, type RecoveryRequest } from "./run-recovery-text.js";
 
 const scope = { sessionKey: "agent:main:recovery", agentId: "main", sessionId: "session" };
 const result = {
-  runId: "run",
-  status: "ok",
   terminalReply: { disposition: "visible", text: "A bounded summary…" },
   terminalReceipt: {
     runId: "run",
@@ -13,6 +11,12 @@ const result = {
   },
 };
 const metadata = { id: "answer", idempotencyKey: "answer-occurrence" };
+const assistant = (content: unknown, identity: Record<string, unknown> = metadata) => ({
+  role: "assistant",
+  content,
+  __openclaw: identity,
+});
+const unrelated = assistant("another run", { runId: "other" });
 const recover = (request: RecoveryRequest, terminal: unknown = result) =>
   recoverTerminalReply({
     runId: "run",
@@ -22,169 +26,96 @@ const recover = (request: RecoveryRequest, terminal: unknown = result) =>
     signal: new AbortController().signal,
   });
 
-describe("shared terminal transcript recovery", () => {
-  it("reads the receipt's full occurrence across history pages instead of the capped summary", async () => {
-    const outputText = "complete answer ".repeat(2_000).trim();
-    const request = vi.fn<RecoveryRequest>(async (method, params) => {
-      if (method === "chat.message.get") {
-        expect(params).toEqual({
-          sessionKey: scope.sessionKey,
-          agentId: scope.agentId,
-          messageId: "answer",
-        });
-        return {
-          ok: true,
-          message: { role: "assistant", content: outputText, __openclaw: metadata },
-        };
-      }
-      expect(method).toBe("chat.history");
-      return {
-        sessionId: "session",
-        messages:
-          params.offset === 200
-            ? [
-                {
-                  role: "assistant",
-                  content: "placeholder",
-                  __openclaw: { ...metadata, truncated: true },
-                },
-              ]
-            : [{ role: "assistant", content: "another run", __openclaw: { runId: "other" } }],
-        hasMore: params.offset === undefined,
-        nextOffset: 200,
-      };
-    });
-    await expect(recover(request)).resolves.toEqual({ outputText });
-    expect(request).toHaveBeenCalledTimes(3);
-  });
-
-  it.each([
-    ["First item", "Second item", "First item\n\nSecond item"],
-    ["First item\n", "\nSecond item", "First item\n\nSecond item"],
-    [" First item\n\n", "\nSecond item ", " First item\n\n\nSecond item "],
-  ])(
-    "recovers every run item across pages with live display boundaries",
-    async (first, second, outputText) => {
-      const request = vi.fn<RecoveryRequest>(async (_method, params) => ({
-        sessionId: "session",
-        messages:
-          params.offset === undefined
-            ? [{ role: "assistant", content: second, __openclaw: { ...metadata, runId: "run" } }]
-            : [
-                { role: "assistant", content: "other", __openclaw: { runId: "other" } },
-                { role: "assistant", content: first, __openclaw: { id: "first", runId: "run" } },
-              ],
-        hasMore: params.offset === undefined,
-        nextOffset: 200,
-      }));
-      await expect(recover(request)).resolves.toEqual({ outputText });
-    },
-  );
-
-  it("preserves the assistant text-block separator and display text types", async () => {
-    await expect(
-      recover(async () => ({
-        sessionId: "session",
-        messages: [
-          {
-            role: "assistant",
-            __openclaw: metadata,
-            content: [
-              { type: "text", text: "First" },
-              { type: "text", text: "  " },
-              { type: "thinking", thinking: "hidden" },
-              { type: "output_text", text: "Second" },
-              { type: "input_text", text: "Third" },
-              { type: "text", text: "\n" },
-            ],
-          },
-        ],
-      })),
-    ).resolves.toEqual({ outputText: "First\n  \nSecond\nThird\n\n" });
-  });
-
-  it("ignores commentary projections that share the final occurrence's identity", async () => {
-    await expect(
-      recover(async () => ({
-        sessionId: "session",
-        messages: [
-          {
-            role: "assistant",
-            content: "Thinking aloud",
-            __openclaw: metadata,
-            openclawStreamFallback: { source: "segment", itemId: "commentary" },
-          },
-          { role: "assistant", content: "Answer", __openclaw: metadata },
-        ],
-      })),
-    ).resolves.toEqual({ outputText: "Answer" });
-  });
-
-  it("does not label a partial history scan as the complete reply", async () => {
-    const request = vi.fn<RecoveryRequest>(async (_method, params) => ({
-      sessionId: "session",
-      messages: [{ role: "assistant", content: "tail", __openclaw: metadata }],
-      hasMore: true,
-      nextOffset: Number(params.offset ?? 0) + 200,
-    }));
-    await expect(recover(request)).resolves.toEqual({ unavailable: "history-limit-reached" });
-    expect(request).toHaveBeenCalledTimes(10);
-  });
-
-  it.each([
-    { sessionId: "replacement", messages: [], reason: "session-changed" },
-    {
-      sessionId: "session",
-      messages: [{ role: "assistant", content: "unrelated", __openclaw: { runId: "other" } }],
-      reason: "reply-not-found",
-    },
-  ])(
-    "reports $reason without promoting a summary or unrelated text",
-    async ({ sessionId, messages, reason }) => {
-      await expect(recover(async () => ({ sessionId, messages }))).resolves.toEqual({
-        unavailable: reason,
+it.each(["answer", "other"])("requires the matching full occurrence (%s)", async (id) => {
+  const outputText = "complete answer ".repeat(2_000).trim();
+  const request = vi.fn<RecoveryRequest>(async (method, params) => {
+    if (method === "chat.message.get") {
+      expect(params).toEqual({
+        sessionKey: scope.sessionKey,
+        agentId: scope.agentId,
+        messageId: "answer",
       });
-    },
-  );
-
-  it("rejects a full reader that returns a different assistant occurrence", async () => {
-    await expect(
-      recover(async (method) =>
-        method === "chat.history"
-          ? {
-              sessionId: "session",
-              messages: [
-                {
-                  role: "assistant",
-                  content: "placeholder",
-                  __openclaw: { ...metadata, truncated: true },
-                },
-              ],
-            }
-          : {
-              ok: true,
-              message: {
-                role: "assistant",
-                content: "wrong occurrence",
-                __openclaw: { ...metadata, id: "other" },
-              },
-            },
-      ),
-    ).resolves.toEqual({ unavailable: "full-message-unavailable" });
-  });
-
-  it("uses exact run metadata when no receipt is available and respects silent outcomes", async () => {
-    const request = vi.fn<RecoveryRequest>(async () => ({
+      return { ok: true, message: assistant(outputText, { ...metadata, id }) };
+    }
+    expect(method).toBe("chat.history");
+    return {
       sessionId: "session",
-      messages: [
-        { role: "assistant", content: "expected", __openclaw: { runId: "run" } },
-        { role: "assistant", content: "unrelated", __openclaw: { runId: "other" } },
-      ],
-    }));
-    await expect(recover(request, { status: "ok" })).resolves.toEqual({ outputText: "expected" });
-    await expect(recover(request, { terminalReply: { disposition: "silent" } })).resolves.toEqual({
-      outputText: "",
-    });
-    expect(request).toHaveBeenCalledOnce();
+      messages:
+        params.offset === 200
+          ? [assistant("placeholder", { ...metadata, truncated: true })]
+          : [unrelated],
+      hasMore: params.offset === undefined,
+      nextOffset: 200,
+    };
   });
+  await expect(recover(request)).resolves.toEqual(
+    id === "answer" ? { outputText } : { unavailable: "full-message-unavailable" },
+  );
+  expect(request).toHaveBeenCalledTimes(3);
+});
+
+it.each([
+  ["First item", "Second item", "First item\n\nSecond item"],
+  ["First item\n", "\nSecond item", "First item\n\nSecond item"],
+  [" First item\n\n", "\nSecond item ", " First item\n\n\nSecond item "],
+])("joins paged items at live display boundaries", async (first, second, outputText) => {
+  const request = vi.fn<RecoveryRequest>(async (_method, params) => ({
+    sessionId: "session",
+    messages:
+      params.offset === undefined
+        ? [assistant(second, { ...metadata, runId: "run" })]
+        : [unrelated, assistant(first, { id: "first", runId: "run" })],
+    hasMore: params.offset === undefined,
+    nextOffset: 200,
+  }));
+  await expect(recover(request)).resolves.toEqual({ outputText });
+});
+
+it.each<[string, unknown[], string, unknown?, number?]>([
+  [
+    "text block types and separators",
+    [
+      assistant([
+        { type: "text", text: "First" },
+        { type: "text", text: "  " },
+        { type: "thinking", thinking: "hidden" },
+        { type: "output_text", text: "Second" },
+        { type: "input_text", text: "Third" },
+        { type: "text", text: "\n" },
+      ]),
+    ],
+    "First\n  \nSecond\nThird\n\n",
+  ],
+  [
+    "commentary excluded from the final occurrence",
+    [
+      {
+        ...assistant("Thinking aloud"),
+        openclawStreamFallback: { source: "segment", itemId: "commentary" },
+      },
+      assistant("Answer"),
+    ],
+    "Answer",
+  ],
+  ["without receipt", [assistant("expected", { runId: "run" }), unrelated], "expected", {}],
+  ["silent outcome", [], "", { terminalReply: { disposition: "silent" } }, 0],
+])("preserves %s", async (_name, messages, outputText, terminal = result, reads = 1) => {
+  const request = vi.fn<RecoveryRequest>(async () => ({ sessionId: "session", messages }));
+  await expect(recover(request, terminal)).resolves.toEqual({ outputText });
+  expect(request).toHaveBeenCalledTimes(reads);
+});
+
+it.each([
+  ["session-changed", "replacement", [], false, 1],
+  ["reply-not-found", "session", [unrelated], false, 1],
+  ["history-limit-reached", "session", [assistant("tail")], true, 10],
+] as const)("reports %s", async (reason, sessionId, messages, hasMore, reads) => {
+  const request = vi.fn<RecoveryRequest>(async (_method, params) => ({
+    sessionId,
+    messages,
+    hasMore,
+    nextOffset: Number(params.offset ?? 0) + 200,
+  }));
+  await expect(recover(request)).resolves.toEqual({ unavailable: reason });
+  expect(request).toHaveBeenCalledTimes(reads);
 });

@@ -3,10 +3,7 @@ import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
 export class SessionGoalTransitionError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionGoalTransitionError";
-  }
+  override name = "SessionGoalTransitionError";
 }
 
 function normalizeTokenCount(value: number | undefined): number | undefined {
@@ -76,7 +73,9 @@ export function buildCreatedSessionGoal(
   if (!objective.trim()) {
     throw new SessionGoalTransitionError("objective required");
   }
-  if (entry.goal) {
+  // A completed objective no longer blocks the next explicitly requested goal.
+  // Unfinished goals retain their status, budget, and operator-owned controls.
+  if (entry.goal && entry.goal.status !== "complete") {
     throw new SessionGoalTransitionError("goal already exists");
   }
   const tokenBudget = normalizeTokenBudget(options.tokenBudget);
@@ -108,7 +107,11 @@ export function buildUpdatedSessionGoalStatus(
   if (!accounted) {
     throw new SessionGoalTransitionError("goal not found");
   }
-  if (accounted.status === "complete" && accounted.status !== options.status) {
+  if (
+    accounted.status === "complete" &&
+    options.status !== "complete" &&
+    options.status !== "active"
+  ) {
     throw new SessionGoalTransitionError(`goal is already ${accounted.status}`);
   }
   const resetsBudgetWindow =
@@ -127,6 +130,10 @@ export function buildUpdatedSessionGoalStatus(
     ...(options.status === "blocked" ? { blockedAt: now } : {}),
     ...(options.status === "complete" ? { completedAt: accounted.completedAt ?? now } : {}),
   };
+  if (accounted.status === "complete" && options.status === "active") {
+    // Completion belongs to the finished pursuit; a later completion needs its own timestamp.
+    delete next.completedAt;
+  }
   if (resetsBudgetWindow) {
     next.tokenStart = freshTokenStart ?? 0;
     next.tokenStartFresh = freshTokenStart !== undefined;

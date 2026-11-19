@@ -1,16 +1,14 @@
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { isAbortError } from "../infra/abort-signal.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import type { SqliteWalHealth } from "../infra/sqlite-wal-checkpoint.js";
 import {
   registerSqliteWalWorkerMaintenance,
   type SqliteWalPeriodicRequest,
   type SqliteWalPeriodicResult,
 } from "../infra/sqlite-wal-write-admission.js";
-import {
-  assertExistingDatabaseIdentity,
-  type DatabasePathIdentity,
-} from "../infra/sqlite-worker-identity.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   getOpenClawDatabaseMaintenanceResourceScope,
@@ -25,10 +23,43 @@ import { captureOpenClawStateWorkerContextWithAdmission } from "./openclaw-state
 
 /** Bind periodic maintenance and its observations to the cache's exact native owner. */
 export function createStateDatabaseWalOwner(
-  { cachedDatabases, asyncResources }: StateDatabaseLifecycle,
+  {
+    cachedDatabases,
+    retainedDatabaseHandles,
+    databaseIdentities,
+    asyncResources,
+  }: StateDatabaseLifecycle,
   retainForIdle: (database: OpenClawStateDatabase) => () => void,
+  requireIdentity: (database: OpenClawStateDatabase) => DatabasePathIdentity,
 ) {
   return {
+    ownRetirement(this: void, database: OpenClawStateDatabase, close: () => Promise<void>) {
+      const identity = requireIdentity(database);
+      const resource = {
+        admission: { identity },
+        close,
+      };
+      const unregister = asyncResources.register(resource);
+      getOpenClawDatabaseMaintenanceResourceScope(database.db)?.own(
+        resource,
+        "shared-references",
+        () => resource.close(),
+      );
+      return unregister;
+    },
+    async stop(this: void, pathname?: string, identity?: DatabasePathIdentity): Promise<void> {
+      const databases = new Set([...retainedDatabaseHandles.values(), ...cachedDatabases.values()]);
+      await Promise.all(
+        [...databases]
+          .filter(
+            (database) =>
+              pathname === undefined ||
+              database.path === pathname ||
+              (identity !== undefined && databaseIdentities.get(database.db)?.key === identity.key),
+          )
+          .flatMap(({ walMaintenance }) => (walMaintenance ? [walMaintenance.stop()] : [])),
+      );
+    },
     register(
       this: void,
       database: OpenClawStateDatabase,
@@ -36,12 +67,13 @@ export function createStateDatabaseWalOwner(
       admission: OpenClawStateDatabaseReadAdmission,
       env: NodeJS.ProcessEnv,
     ): void {
-      if (!isMainThread) {
+      if (!isMainThread || isPostgresSqlConnection(database.db)) {
         return;
       }
       const capturedContext = captureOpenClawStateWorkerContextWithAdmission(
         { path: database.path, env },
         () => admission,
+        asyncResources.knownIdentity,
       );
       const controller = new AbortController();
       let pending: Promise<SqliteWalPeriodicResult | undefined> | undefined;
@@ -57,13 +89,11 @@ export function createStateDatabaseWalOwner(
         );
       };
       const resource = {
-        async close(selected?: DatabasePathIdentity) {
-          if (selected && selected.key !== identity.key) {
-            return;
-          }
+        admission: { identity },
+        async close() {
           void cancel();
           // The broker retains native cleanup; this owner joins accepted work before retirement.
-          await pending?.catch(() => {});
+          await database.walMaintenance.stop();
           unregister();
         },
       };
@@ -84,7 +114,6 @@ export function createStateDatabaseWalOwner(
               "Shared-state WAL maintenance owner changed",
             );
           }
-          assertExistingDatabaseIdentity(database.path, identity.key, identity.birthtime);
         };
         let releaseIdle: (() => void) | undefined;
         let operationStarted = false;
@@ -94,7 +123,7 @@ export function createStateDatabaseWalOwner(
           const { runOpenClawStateWorkerOperation } =
             await import("./openclaw-state-worker-store.js");
           assertCurrent();
-          const result = await runOpenClawStateWorkerOperation(
+          return await runOpenClawStateWorkerOperation(
             context,
             (worker) =>
               worker.execute(
@@ -106,6 +135,11 @@ export function createStateDatabaseWalOwner(
               assertCurrent,
               createAdmission: () => ({
                 nativeLocations: [database.path, identity.canonicalPath],
+                databaseIdentity: {
+                  databasePath: database.path,
+                  key: identity.key,
+                  birthtime: identity.birthtime,
+                },
                 admission: createSqliteWorkerOperationAdmission((_request, grant) => {
                   assertCurrent();
                   if (!grant()) {
@@ -118,8 +152,6 @@ export function createStateDatabaseWalOwner(
               }),
             },
           );
-          assertCurrent();
-          return result;
         } catch (error) {
           if (
             !operationStarted &&

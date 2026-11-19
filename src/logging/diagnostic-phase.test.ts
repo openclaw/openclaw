@@ -9,25 +9,20 @@ import {
 } from "./diagnostic-phase.js";
 
 describe("getRecentDiagnosticPhases", () => {
-  it("returns an empty list for zero, negative, and non-finite limits", async () => {
+  it("returns the six most recent completed phases", async () => {
     resetDiagnosticPhasesForTest();
-    await withDiagnosticPhase("phase-a", () => undefined);
-    await withDiagnosticPhase("phase-b", () => undefined);
+    for (const name of ["a", "b", "c", "d", "e", "f", "g"]) {
+      await withDiagnosticPhase(name, () => undefined);
+    }
 
-    expect(getRecentDiagnosticPhases(0)).toEqual([]);
-    expect(getRecentDiagnosticPhases(-1)).toEqual([]);
-    expect(getRecentDiagnosticPhases(Number.NaN)).toEqual([]);
-    expect(getRecentDiagnosticPhases(Number.POSITIVE_INFINITY)).toEqual([]);
-  });
-
-  it("returns the most recent phases for positive limits", async () => {
-    resetDiagnosticPhasesForTest();
-    await withDiagnosticPhase("phase-a", () => undefined);
-    await withDiagnosticPhase("phase-b", () => undefined);
-
-    const recent = getRecentDiagnosticPhases(1);
-    expect(recent).toHaveLength(1);
-    expect(recent[0]?.name).toBe("phase-b");
+    expect(getRecentDiagnosticPhases(0).map((phase) => phase.name)).toEqual([
+      "b",
+      "c",
+      "d",
+      "e",
+      "f",
+      "g",
+    ]);
   });
 
   it("filters completed phases by attribution time without discarding retained history", async () => {
@@ -36,8 +31,8 @@ describe("getRecentDiagnosticPhases", () => {
     try {
       await withDiagnosticPhase("phase-a", () => undefined);
 
-      expect(getRecentDiagnosticPhases(1, { completedAfter: 1_001 })).toEqual([]);
-      expect(getRecentDiagnosticPhases(1)).toEqual([
+      expect(getRecentDiagnosticPhases(1_001)).toEqual([]);
+      expect(getRecentDiagnosticPhases(1_000)).toEqual([
         expect.objectContaining({ name: "phase-a", endedAt: 1_000 }),
       ]);
     } finally {
@@ -51,7 +46,7 @@ describe("getRecentDiagnosticPhases", () => {
     const phase = withDiagnosticPhase("legitimate.long-running-work", () => deferred.promise);
 
     try {
-      expect(getRecentDiagnosticPhases(1, { completedAfter: Date.now() })).toEqual([]);
+      expect(getRecentDiagnosticPhases(Date.now())).toEqual([]);
       expect(getCurrentDiagnosticPhase()).toBe("legitimate.long-running-work");
     } finally {
       deferred.resolve();

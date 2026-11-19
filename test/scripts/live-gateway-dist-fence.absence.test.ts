@@ -29,7 +29,9 @@ it.each([
     const label = "org.example.fence-sibling";
     const plist = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
     vi.spyOn(inventory, "listManagedOpenClawGatewayServices").mockResolvedValue({
-      services: [{ platform: "darwin", scope: "user", label, detail: `plist: ${plist}` }],
+      services: [
+        { platform: "darwin", scope: "user", label, detail: `plist: ${plist}`, sourcePath: plist },
+      ],
       errors: [],
     });
     const native = vi.spyOn(launchdExec, "execLaunchctl").mockImplementation(async (args) => {

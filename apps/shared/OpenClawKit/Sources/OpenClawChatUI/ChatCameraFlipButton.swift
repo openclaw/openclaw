@@ -57,25 +57,56 @@ struct ChatTalkButton: View {
     let style: Style
 
     var body: some View {
-        switch self.style {
-        case .full:
-            self.button { self.fullLabel }
-        case let .compact(controlHeight, iconControlSize):
-            self.button { self.compactLabel(controlHeight: controlHeight, iconControlSize: iconControlSize) }
+        Button {
+            self.control.toggle(self.sessionKey)
+        } label: {
+            switch self.style {
+            case .full:
+                self.fullLabel
+            case let .compact(controlHeight, iconControlSize):
+                self.compactLabel(controlHeight: controlHeight, iconControlSize: iconControlSize)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(!self.control.isGatewayConnected && !self.control.isEnabled)
+        .accessibilityLabel(self.control.isEnabled ? "Stop realtime chat" : "Start realtime chat")
+        .accessibilityValue(self.accessibilityValue)
+        .accessibilityIdentifier("chat-realtime-control")
+        .help(self.helpText)
+        .contextMenu {
+            if let selectInputDevice = self.control.selectInputDevice {
+                Button {
+                    selectInputDevice(nil)
+                } label: {
+                    self.menuLabel(
+                        String(localized: "System Default"),
+                        selected: self.control.selectedInputDeviceID == nil)
+                }
+                if !self.control.inputDevices.isEmpty {
+                    Divider()
+                    ForEach(self.control.inputDevices) { device in
+                        Button {
+                            selectInputDevice(device.id)
+                        } label: {
+                            self.menuLabel(
+                                device.name,
+                                selected: self.control.selectedInputDeviceID == device.id)
+                        }
+                    }
+                }
+            }
         }
     }
 
-    private func button(@ViewBuilder label: () -> some View) -> some View {
-        Button {
-            self.control.toggle(self.sessionKey)
-        } label: { label() }
-            .buttonStyle(.plain)
-            .disabled(!self.control.isGatewayConnected && !self.control.isEnabled)
-            .accessibilityLabel(self.control.isEnabled ? "Stop realtime chat" : "Start realtime chat")
-            .accessibilityValue(self.accessibilityValue)
-            .accessibilityIdentifier("chat-realtime-control")
-            .help(self.helpText)
-            .chatTalkInputDeviceMenu(self.control)
+    @ViewBuilder
+    private func menuLabel(_ text: String, selected: Bool) -> some View {
+        if selected {
+            Label(text, systemImage: "checkmark")
+                .font(OpenClawChatTypography.body)
+        } else {
+            Text(text)
+                .font(OpenClawChatTypography.body)
+        }
     }
 
     private var fullLabel: some View {
@@ -101,7 +132,7 @@ struct ChatTalkButton: View {
 
     private func compactLabel(controlHeight: CGFloat, iconControlSize: CGFloat) -> some View {
         ChatTalkButtonGlyph(control: self.control)
-            .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
+            .font(.system(size: OpenClawChatTypography.scaled(14), weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: iconControlSize, height: iconControlSize)
             // Prominent filled circle so the mic reads as the primary action,

@@ -1,12 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
@@ -20,11 +20,11 @@ type CronRunReceiptStateWriter = Pick<
 >;
 const RETIREMENTS_TABLE = "cron_run_trigger_state_retirements";
 
-function query(database: DatabaseSync) {
+function query(database: EngineConnection) {
   return getNodeSqliteKysely<CronRunTriggerStateDatabase>(database);
 }
 
-function stateWriterQuery(database: DatabaseSync, handle: CronRunReceiptStateWriter) {
+function stateWriterQuery(database: EngineConnection, handle: CronRunReceiptStateWriter) {
   return query(database)
     .selectFrom("cron_run_receipts")
     .where("cron_run_receipts.receipt_id", "=", handle.receiptId)
@@ -33,25 +33,21 @@ function stateWriterQuery(database: DatabaseSync, handle: CronRunReceiptStateWri
     .where("cron_run_receipts.started_at_ms", "=", handle.startedAtMs);
 }
 
-function ensureRetirementsTable(database: DatabaseSync): void {
+function ensureRetirementsTable(database: EngineConnection): void {
   if (tableExists(database, RETIREMENTS_TABLE)) {
     return;
   }
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    `CREATE TABLE IF NOT EXISTS ${RETIREMENTS_TABLE} (`,
-  );
-  const endMarker = "\n) STRICT;";
-  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start);
-  if (start < 0 || end < start) {
-    throw new Error("OpenClaw cron run trigger-state retirement schema is missing.");
-  }
   // sqlite-allow-raw -- Canonical first-use DDL rolls back with the owning edit.
-  database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length));
+  database.exec(
+    getOpenClawStateFeatureSchemaSql(RETIREMENTS_TABLE, {
+      errorMessage: "OpenClaw cron run trigger-state retirement schema is missing.",
+    }),
+  );
 }
 
 /** Retires the exact pending state writer in the acknowledged edit's transaction. */
 export function retireCronRunTriggerStateInDatabase(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   handle: CronRunReceiptStateWriter;
 }): void {
   const { database, handle } = params;
@@ -85,7 +81,7 @@ export function retireCronRunTriggerStateInDatabase(params: {
 
 /** Reads retirement after write admission without changing execution authority. */
 export function isCronRunTriggerStateRetiredInDatabase(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   handle: CronRunReceiptStateWriter;
 }): boolean {
   const { database, handle } = params;

@@ -34,20 +34,12 @@ import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
 } from "../shared-interactive.js";
-import { parseDiscordTarget, resolveDiscordChannelId } from "../targets.js";
+import { parseDiscordTarget, resolveDiscordChannelId } from "../target-parsing.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
 import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
 
 const providerId = "discord";
-
-function withCurrentSourceReplyRoute<T>(result: AgentToolResult<T>): AgentToolResult<T> {
-  const details = asOptionalRecord(result.details) ?? {};
-  return {
-    ...result,
-    details: { ...details, sourceReplyRoute: "current-source" } as T,
-  };
-}
 
 function readCurrentDiscordTarget(
   toolContext: Pick<ChannelMessageActionContext, "toolContext">["toolContext"],
@@ -79,6 +71,7 @@ type DiscordMessageActionContext = Pick<
   | "reply"
   | "progressSnapshot"
   | "assertDirectAdapterHandoff"
+  | "abortSignal"
 >;
 
 export async function handleDiscordMessageAction(
@@ -122,21 +115,12 @@ async function dispatchDiscordMessageAction(
     mediaReadFile: ctx.mediaReadFile,
     ...(ctx.reply ? { reply: ctx.reply } : {}),
     ...(ctx.progressSnapshot ? { progressSnapshot: ctx.progressSnapshot } : {}),
+    ...(ctx.abortSignal ? { callerSignal: ctx.abortSignal } : {}),
     ...readPolicyOptions,
   } as const;
-  const runAction = ({
-    action: runtimeAction,
-    ...payload
-  }: {
-    action: string;
-    [key: string]: unknown;
-  }) =>
-    handleDiscordAction(
-      { action: runtimeAction, accountId: accountId ?? undefined, ...payload },
-      cfg,
-      actionOptions,
-    );
-  const notifyVisibleOutbound = (
+  const runAction = (payload: { action: string; [key: string]: unknown }) =>
+    handleDiscordAction({ accountId, ...payload }, cfg, actionOptions);
+  const completeOutbound = (
     result: AgentToolResult<unknown>,
     to: string,
     fallbackSessionKey?: string,
@@ -145,24 +129,15 @@ async function dispatchDiscordMessageAction(
     // Resolved failures are not delivery receipts; clearing room history would
     // otherwise permanently discard context without any visible reply.
     if (details?.ok !== true) {
-      return;
+      return result;
     }
     discordInboundEventDelivery.notify({
-      sessionKey: ctx.sessionKey ?? fallbackSessionKey ?? undefined,
+      sessionKey: ctx.sessionKey ?? fallbackSessionKey,
       to,
       accountId,
       inboundEventKind: ctx.inboundEventKind,
     });
-  };
-  const withAdoptedThreadReplyRoute = (
-    result: AgentToolResult<unknown>,
-    to: string,
-    fallbackSessionKey?: string,
-  ) => {
-    const details = asOptionalRecord(result.details);
-    // Only a positive runtime receipt may suppress the source fallback. A
-    // resolved failure must leave the turn eligible for visible error delivery.
-    if (details?.ok !== true) {
+    if (action !== "send" && action !== "upload-file" && action !== "thread-reply") {
       return result;
     }
     let target;
@@ -181,7 +156,7 @@ async function dispatchDiscordMessageAction(
         threadId: target.id,
       })
     ) {
-      return withCurrentSourceReplyRoute(result);
+      return { ...result, details: { ...details, sourceReplyRoute: "current-source" } };
     }
     return result;
   };
@@ -279,17 +254,16 @@ async function dispatchDiscordMessageAction(
       to,
       content: deliveryContent,
       ...(threadName ? { threadName } : {}),
-      mediaUrl: mediaUrl ?? undefined,
-      filename: filename ?? undefined,
-      replyTo: replyTo ?? undefined,
+      mediaUrl,
+      filename,
+      replyTo,
       ...(action === "send" ? { components, embeds, asVoice } : {}),
       silent,
       ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
-      __sessionKey: sessionKey ?? undefined,
-      __agentId: agentId ?? undefined,
+      __sessionKey: sessionKey,
+      __agentId: agentId,
     });
-    notifyVisibleOutbound(result, to, sessionKey);
-    return withAdoptedThreadReplyRoute(result, to, sessionKey);
+    return completeOutbound(result, to, sessionKey);
   }
 
   if (action === "react") {
@@ -361,6 +335,7 @@ async function dispatchDiscordMessageAction(
       action: action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
       channelId: resolveChannelId(),
       messageId,
+      ...(action === "list-pins" ? { limit: readPositiveIntegerParam(params, "limit") } : {}),
     });
   }
 
@@ -384,7 +359,7 @@ async function dispatchDiscordMessageAction(
       messageId,
       content,
       autoArchiveMinutes,
-      appliedTags: appliedTags ?? undefined,
+      appliedTags,
     });
     const details =
       result.details && typeof result.details === "object" && !Array.isArray(result.details)
@@ -400,8 +375,7 @@ async function dispatchDiscordMessageAction(
         threadId,
       });
     }
-    notifyVisibleOutbound(result, resolveChannelId());
-    return result;
+    return completeOutbound(result, resolveChannelId());
   }
 
   if (action === "sticker") {
@@ -418,8 +392,7 @@ async function dispatchDiscordMessageAction(
       content: readStringParam(params, "message", { trim: false }),
       ...(readBooleanParam(params, "silent") === true ? { silent: true } : {}),
     });
-    notifyVisibleOutbound(result, to);
-    return result;
+    return completeOutbound(result, to);
   }
 
   if (action === "set-presence") {
@@ -442,8 +415,7 @@ async function dispatchDiscordMessageAction(
   if (adminResult !== undefined) {
     if (action === "thread-reply") {
       const threadId = readStringParam(params, "threadId") ?? readTarget();
-      notifyVisibleOutbound(adminResult, threadId);
-      return withAdoptedThreadReplyRoute(adminResult, threadId);
+      return completeOutbound(adminResult, threadId);
     }
     return adminResult;
   }

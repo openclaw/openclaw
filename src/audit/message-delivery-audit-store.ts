@@ -1,14 +1,15 @@
-/** Read-only owner-native outbound message lifecycle queries for run inspection. */
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+/** Read-only owner-native outbound message lifecycle queries for run inspection. */
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { AUDIT_EVENT_RETENTION_MS, rowToAuditEvent } from "./audit-event-store.js";
+import { rowToAuditEvent } from "./audit-event-row.js";
+import { AUDIT_EVENT_RETENTION_MS } from "./audit-event-store.js";
 import type { OutboundMessageAuditEventRecord } from "./audit-event-types.js";
 import {
   countOutboundMessageProgressForRunInDatabase,
@@ -22,7 +23,7 @@ type MessageDeliveryAuditDatabase = Pick<
   "audit_events" | "outbound_message_execution_bindings"
 >;
 
-function deliveryAuditDb(db: DatabaseSync) {
+function deliveryAuditDb(db: EngineConnection) {
   return getNodeSqliteKysely<MessageDeliveryAuditDatabase>(db);
 }
 
@@ -40,7 +41,7 @@ type MessageExecutionSelector = {
 };
 
 function terminalBindingEventIds(
-  db: DatabaseSync,
+  db: EngineConnection,
   runId: string,
   binding: { contextId: string; executionId: string },
 ) {
@@ -82,7 +83,7 @@ function compositeMessageRowId(event: OutboundMessageAuditEventRecord): number {
 }
 
 function readTerminalEventsForRun(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     runId: string;
     contextId?: string;
@@ -152,7 +153,7 @@ function streamAfterCursor(
 
 function fillMessageStream(
   stream: MessageStream,
-  db: DatabaseSync,
+  db: EngineConnection,
   params: MessageExecutionSelector & {
     now: number;
   },
@@ -186,7 +187,7 @@ function fillMessageStream(
 
 function takeNextMessageEvent(
   streams: MessageStream[],
-  db: DatabaseSync,
+  db: EngineConnection,
   params: MessageExecutionSelector & {
     now: number;
   },
@@ -206,7 +207,7 @@ function takeNextMessageEvent(
 }
 
 function hasTerminalCursor(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     runId: string;
     contextId?: string;
@@ -236,7 +237,7 @@ function hasTerminalCursor(
 
 /** Count retained owner-native outbound lifecycle records for one run. */
 export function countOutboundMessageAuditEventsForRunInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     runId: string;
     contextId?: string;
@@ -268,7 +269,7 @@ export function countOutboundMessageAuditEventsForRunInDatabase(
 
 /** Page retained owner-native outbound lifecycle records in decision order. */
 export function pageOutboundMessageAuditEventsForRunInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     runId: string;
     contextId?: string;

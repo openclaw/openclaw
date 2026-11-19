@@ -30,6 +30,11 @@ describe("formatTextCell raw output bound", () => {
   it.each([
     ["zero-width overflow", "\u200b".repeat(32), "\u200b".repeat(14) + "… "],
     ["exact zero-width raw boundary", "\u200b".repeat(14), "\u200b".repeat(14) + "  "],
+    [
+      "astral character at the raw boundary",
+      "\u200b".repeat(14) + "😀",
+      "\u200b".repeat(14) + "… ",
+    ],
     ["one oversized combining cluster", "e" + "\u0301".repeat(16), "… "],
     ["one oversized ZWJ cluster", "👩" + "\u200d👩".repeat(8), "… "],
     ["prefix before an oversized cluster", "Ae" + "\u0301".repeat(16), "A…"],

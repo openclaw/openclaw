@@ -1,4 +1,4 @@
-// Memory Core provider module implements model/runtime integration.
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type {
   OpenClawConfig,
   ResolvedMemorySearchConfig,
@@ -6,19 +6,8 @@ import type {
 import {
   resolveEmbeddingProviderFallbackModel,
   resolveEmbeddingProviderFallbackRemote,
-  type EmbeddingProvider,
   type EmbeddingProviderResult,
-  type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-
-type MemoryResolvedProviderState = {
-  provider: EmbeddingProvider | null;
-  fallbackFrom?: string;
-  fallbackReason?: string;
-  providerUnavailableReason?: string;
-  providerRuntime?: EmbeddingProviderRuntime;
-  lifecycle: MemoryProviderLifecycleState;
-};
 
 export type MemoryProviderLifecycleState =
   | {
@@ -47,7 +36,9 @@ export type MemoryProviderLifecycleState =
       attemptedProviderId?: string;
     };
 
-function resolveProviderLifecycle(result: EmbeddingProviderResult): MemoryProviderLifecycleState {
+export function resolveMemoryProviderLifecycle(
+  result: EmbeddingProviderResult,
+): MemoryProviderLifecycleState {
   if (result.provider && result.fallbackFrom) {
     return {
       mode: "fallback-active",
@@ -67,7 +58,7 @@ function resolveProviderLifecycle(result: EmbeddingProviderResult): MemoryProvid
 }
 
 export function resolveFallbackCurrentProviderId(params: {
-  provider: EmbeddingProvider | null;
+  provider: MemoryEmbeddingProvider | null;
   lifecycle: MemoryProviderLifecycleState;
 }): string | null {
   if (params.provider) {
@@ -95,19 +86,6 @@ export function resolveMemoryPrimaryProviderRequest(params: {
   };
 }
 
-export function resolveMemoryProviderState(
-  result: EmbeddingProviderResult,
-): MemoryResolvedProviderState {
-  return {
-    provider: result.provider,
-    fallbackFrom: result.fallbackFrom,
-    fallbackReason: result.fallbackReason,
-    providerUnavailableReason: result.providerUnavailableReason,
-    providerRuntime: result.runtime,
-    lifecycle: resolveProviderLifecycle(result),
-  };
-}
-
 export function resolveMemoryFallbackProviderRequest(params: {
   cfg: OpenClawConfig;
   settings: ResolvedMemorySearchConfig;
@@ -123,14 +101,10 @@ export function resolveMemoryFallbackProviderRequest(params: {
     return null;
   }
   return {
+    ...resolveMemoryPrimaryProviderRequest({ settings: params.settings }),
     provider: fallback,
     model: resolveEmbeddingProviderFallbackModel(fallback, params.settings.model, params.cfg),
     remote: resolveEmbeddingProviderFallbackRemote(params.settings.remote),
-    inputType: params.settings.inputType,
-    queryInputType: params.settings.queryInputType,
-    documentInputType: params.settings.documentInputType,
-    outputDimensionality: params.settings.outputDimensionality,
     fallback: "none" as const,
-    local: params.settings.local,
   };
 }

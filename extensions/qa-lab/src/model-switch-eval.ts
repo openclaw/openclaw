@@ -3,7 +3,10 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 export function hasModelSwitchContinuitySignal(text: string) {
   const lower = normalizeLowercaseStringOrEmpty(text);
   const mentionsHandoff =
-    lower.includes("handoff") || lower.includes("model switch") || lower.includes("switched");
+    lower.includes("handoff") ||
+    lower.includes("handed off the model") ||
+    lower.includes("model switch") ||
+    lower.includes("switched");
   const mentionsKickoffTask =
     lower.includes("qa_kickoff_task") ||
     lower.includes("qa/scenarios/index.yaml") ||

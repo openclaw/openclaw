@@ -10,11 +10,8 @@ export function readMcpConnectAction(result: unknown): McpConnectAction | undefi
   const serverName = typeof connect?.serverName === "string" ? connect.serverName.trim() : "";
   const authorizationUrl =
     typeof connect?.authorizationUrl === "string" ? connect.authorizationUrl.trim() : "";
-  if (!serverName || !URL.canParse(authorizationUrl)) {
-    return undefined;
-  }
-  const protocol = new URL(authorizationUrl).protocol;
-  if (protocol !== "http:" && protocol !== "https:") {
+  const parsed = URL.parse(authorizationUrl);
+  if (!serverName || (parsed?.protocol !== "http:" && parsed?.protocol !== "https:")) {
     return undefined;
   }
   return { serverName, authorizationUrl };

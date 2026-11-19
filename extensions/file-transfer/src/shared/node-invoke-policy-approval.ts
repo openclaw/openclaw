@@ -19,21 +19,14 @@ export function commandKind(command: FileTransferNodeInvokeCommand): FilePolicyK
 }
 
 export function promptVerb(command: FileTransferNodeInvokeCommand): string {
-  switch (command) {
-    case "dir.fetch":
-      return "Fetch directory";
-    case "dir.list":
-      return "List directory";
-    case "file.create":
-      return "Create file";
-    case "file.write":
-      return "Write file";
-    case "file.fetch":
-      return "Read file";
-    case "file.stat":
-      return "Read file metadata";
-  }
-  return command;
+  return {
+    "dir.fetch": "Fetch directory",
+    "dir.list": "List directory",
+    "file.create": "Create file",
+    "file.write": "Write file",
+    "file.fetch": "Read file",
+    "file.stat": "Read file metadata",
+  }[command];
 }
 
 export async function requestApproval(input: {
@@ -77,19 +70,16 @@ export async function requestApproval(input: {
     };
   }
 
-  const shouldAsk =
-    (decision.ok && decision.reason === "ask-always") || (!decision.ok && decision.askable);
-  if (!shouldAsk) {
+  if (!decision.ok && !decision.askable) {
     await audit({
-      decision:
-        !decision.ok && decision.code === "NO_POLICY" ? "denied:no_policy" : "denied:policy",
-      errorCode: decision.ok ? undefined : decision.code,
+      decision: decision.code === "NO_POLICY" ? "denied:no_policy" : "denied:policy",
+      errorCode: decision.code,
       reason: decision.reason,
     });
     return {
       ok: false,
-      code: decision.ok ? "POLICY_DENIED" : decision.code,
-      message: `${input.op} ${decision.ok ? "POLICY_DENIED" : decision.code}: ${decision.reason}`,
+      code: decision.code,
+      message: `${input.op} ${decision.code}: ${decision.reason}`,
     };
   }
 
@@ -152,6 +142,6 @@ export async function requestApproval(input: {
     persist: approvalDecision === "allow-always",
     followSymlinks: decision.followSymlinks ?? false,
     maxBytes: decision.maxBytes,
-    pendingReapprovalSelector: decision.pendingReapprovalSelector,
+    pendingReapprovalSelector: decision.ok ? undefined : decision.pendingReapprovalSelector,
   };
 }

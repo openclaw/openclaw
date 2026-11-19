@@ -4,6 +4,7 @@ import {
   pollRelease,
   probeCapabilities,
   ReleaseRefusal,
+  requireReleaseValue as required,
   shellCommand,
   type ReleaseContext,
   type ReleasePhase,
@@ -14,16 +15,10 @@ import {
   parseJson,
   readReleaseRun,
 } from "./release-stable-workflows.mts";
+import { isStableReleaseVersionAtLeast } from "./release-version.mjs";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
-
-function required(value: string | undefined, name: string): string {
-  if (!value) {
-    throw new Error(`Missing ${name}; complete the preceding release phase.`);
-  }
-  return value;
-}
 
 async function ensureCapabilities(ctx: ReleaseContext): Promise<void> {
   await probeCapabilities(ctx, required(ctx.state.validate.toolingSha, "tooling SHA"));
@@ -207,68 +202,35 @@ function workflowCommand(repo: string, workflow: string, inputs: string[]): stri
 
 export async function macos(ctx: ReleaseContext): Promise<void> {
   const { state } = ctx;
-  ctx.log("macos", "checking update compatibility before completing the macOS lanes");
-  await fetchReleaseMain(ctx);
-  const inventory = await ctx.run(
-    "git",
-    ["show", "origin/main:scripts/lib/update-compat-inventory.json"],
-    {
-      allowFailure: true,
-      dryRunStdout: JSON.stringify({ releases: [{ version: state.release }] }),
-    },
-  );
-  if (inventory.exitCode !== 0 || !inventory.stdout.includes(JSON.stringify(state.release))) {
-    const integrity = await ctx.run("npm", ["view", `openclaw@${state.release}`, "dist.integrity"]);
-    throw new ReleaseRefusal(
-      `Update compatibility inventory on main is missing ${state.release}.`,
-      [
-        shellCommand("pnpm", [
-          "update:compat:gen",
-          "--release",
-          `<unpacked-dir>=${integrity.stdout.trim()}`,
-        ]),
-        shellCommand("git", ["add", "scripts/lib/update-compat-inventory.json"]),
-        shellCommand("git", [
-          "commit",
-          "-m",
-          `fix(release): record the ${state.release} npm release in the update compatibility inventory`,
-        ]),
-        `# Open and land the update compatibility inventory PR on main.`,
-        ctx.resume("macos"),
-      ],
-    );
-  }
+  ctx.log("macos", "waiting for macOS validation and publication lanes");
   state.macos.validateRunId ??= state.publish.macosValidateRunId;
   state.macos.preflightRunId ??= state.publish.macosPreflightRunId;
   const validateId = required(state.macos.validateRunId, "macOS validate run");
   const preflightId = required(state.macos.preflightRunId, "macOS preflight run");
   ctx.save();
-  const validation = await waitForRun(ctx, state.releasesRepo, validateId, "macos", 3 * HOUR, true);
-  if (validation.conclusion !== "success") {
-    throw new ReleaseRefusal(
-      `macOS validate run ${validateId} concluded ${String(validation.conclusion)}.`,
-      [
-        workflowCommand(state.releasesRepo, "openclaw-macos-validate.yml", [`tag=${state.tag}`]),
-        "# Resolve the new validate run ID and supply it on resume.",
-        ctx.resume("macos", ["--macos-validate-run-id", "<new-run-id>"]),
-      ],
-    );
-  }
-  const preflight = await waitForRun(ctx, state.releasesRepo, preflightId, "macos", 3 * HOUR, true);
-  if (preflight.conclusion !== "success") {
-    throw new ReleaseRefusal(
-      `macOS preflight run ${preflightId} concluded ${String(preflight.conclusion)}.`,
-      [
-        workflowCommand(state.releasesRepo, "openclaw-macos-publish.yml", [
-          ...macosInputs(ctx, true),
-          `resume_notarization_run_id=${preflightId}`,
-          `resume_notarization_run_attempt=${String(preflight.run_attempt)}`,
-          "resume_notarization_variant=all",
-        ]),
-        "# Resolve the new preflight run ID and supply it on resume.",
-        ctx.resume("macos", ["--macos-preflight-run-id", "<new-run-id>"]),
-      ],
-    );
+  for (const [lane, id] of [
+    ["validate", validateId],
+    ["preflight", preflightId],
+  ] as const) {
+    const run = await waitForRun(ctx, state.releasesRepo, id, "macos", 3 * HOUR, true);
+    if (run.conclusion !== "success") {
+      throw new ReleaseRefusal(`macOS ${lane} run ${id} concluded ${String(run.conclusion)}.`, [
+        workflowCommand(
+          state.releasesRepo,
+          lane === "validate" ? "openclaw-macos-validate.yml" : "openclaw-macos-publish.yml",
+          lane === "validate"
+            ? [`tag=${state.tag}`]
+            : [
+                ...macosInputs(ctx, true),
+                `resume_notarization_run_id=${id}`,
+                `resume_notarization_run_attempt=${String(run.run_attempt)}`,
+                "resume_notarization_variant=all",
+              ],
+        ),
+        `# Resolve the new ${lane} run ID and supply it on resume.`,
+        ctx.resume("macos", [`--macos-${lane}-run-id`, "<new-run-id>"]),
+      ]);
+    }
   }
   if (!state.macos.publishRunId) {
     const release = await readGithubRelease(ctx);
@@ -396,6 +358,64 @@ async function closeoutAssetsPresent(ctx: ReleaseContext): Promise<boolean> {
   return expected.every((name) => assets.includes(name));
 }
 
+async function verifyWebsite(ctx: ReleaseContext): Promise<void> {
+  const repo = "openclaw/openclaw.ai";
+  const workflow = "companion-downloads-deployed.yml";
+  // A phase restart retains prior receipts. A completed verification is history,
+  // not proof of the current download service; retain IDs only while unfinished.
+  if (ctx.state.closeout.verifiedAt) {
+    delete ctx.state.closeout.websiteRunId;
+    delete ctx.state.closeout.verifiedAt;
+    ctx.save();
+  }
+  if (!ctx.state.closeout.websiteRunId) {
+    // The website owns production refresh and download verification; its workflow
+    // can request a rebuild under the release owner's deployment authority.
+    const result = await ctx.run(
+      "gh",
+      [
+        "api",
+        "--method",
+        "POST",
+        "-H",
+        "X-GitHub-Api-Version: 2022-11-28",
+        `repos/${repo}/actions/workflows/${workflow}/dispatches`,
+        "-f",
+        "ref=main",
+        "-F",
+        "return_run_details=true",
+        "-f",
+        "inputs[site_url]=https://openclaw.ai/",
+        "--jq",
+        ".workflow_run_id",
+      ],
+      { dryRunStdout: "503" },
+    );
+    const runId = result.stdout.trim();
+    if (!/^[1-9][0-9]*$/.test(runId)) {
+      throw new Error("Website dispatch did not return a run ID.");
+    }
+    ctx.state.closeout.websiteRunId = runId;
+    ctx.save();
+  }
+  const runId = ctx.state.closeout.websiteRunId;
+  const run = await waitForRun(ctx, repo, runId, "closeout", 30 * MINUTE);
+  if (run.conclusion !== "success") {
+    ctx.state.history.push({
+      at: new Date().toISOString(),
+      phase: "closeout",
+      event: "website-verification-failed",
+      detail: JSON.stringify({ runId, conclusion: run.conclusion }),
+    });
+    delete ctx.state.closeout.websiteRunId;
+    ctx.save();
+    throw new ReleaseRefusal(`Website verification ${runId} concluded ${String(run.conclusion)}.`, [
+      shellCommand("gh", ["run", "view", runId, "--repo", repo, "--log-failed"]),
+      ctx.resume("closeout"),
+    ]);
+  }
+}
+
 export async function closeout(ctx: ReleaseContext): Promise<void> {
   const { state } = ctx;
   ctx.log("closeout", "waiting for the publish parent and checking the shipped state on main");
@@ -430,17 +450,19 @@ export async function closeout(ctx: ReleaseContext): Promise<void> {
   const manifest = pkg.exitCode === 0 ? parseJson(pkg.stdout, "main package.json") : undefined;
   if (
     !isRecord(manifest) ||
-    manifest.version !== state.release ||
+    typeof manifest.version !== "string" ||
+    !isStableReleaseVersionAtLeast(manifest.version, state.release) ||
     mainNotes.exitCode !== 0 ||
     tagNotes.exitCode !== 0 ||
     mainNotes.stdout !== tagNotes.stdout
   ) {
     throw new ReleaseRefusal(
-      "Main does not carry the shipped version and exact changelog.",
+      "Main must carry the shipped or a later stable version and the exact shipped changelog.",
       closeoutMainRecovery(ctx),
     );
   }
   if (await closeoutAssetsPresent(ctx)) {
+    await verifyWebsite(ctx);
     state.closeout.verifiedAt = new Date().toISOString();
     ctx.save();
     return;
@@ -477,6 +499,7 @@ export async function closeout(ctx: ReleaseContext): Promise<void> {
       ],
     );
   }
+  await verifyWebsite(ctx);
   state.closeout.verifiedAt = new Date().toISOString();
   ctx.save();
 }

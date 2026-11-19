@@ -1,60 +1,92 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withWorktreeGitConfig, type WorktreeGitPolicy } from "./checkout-git-config.js";
 
+type ProcessOptions = { env?: NodeJS.ProcessEnv; beforeRun?: () => void };
 const fixture = vi.hoisted(() => ({
   common: "",
   beforeProcess: async (_view: string) => {},
   views: [] as string[],
-  run: vi.fn(
-    async (
-      _cwd: string,
-      args: string[],
-      options: { env?: NodeJS.ProcessEnv; beforeRun?: () => void } = {},
-    ) => {
-      options.beforeRun?.();
-      if (args[0] === "config") {
-        return { code: 1, stdout: "", stderr: "" };
-      }
-      const view = options.env?.GIT_COMMON_DIR;
-      if (!view) {
-        throw new Error("Content operation lost its isolated configuration");
-      }
-      fixture.views.push(view);
-      await fixture.beforeProcess(view);
-      return { code: 0, stdout: "", stderr: "" };
-    },
-  ),
+  run: vi.fn(async (_cwd: string, args: string[], options: ProcessOptions = {}) => {
+    options.beforeRun?.();
+    if (args[0] === "config") {
+      return { code: 1, stdout: "", stderr: "" };
+    }
+    const view = options.env?.GIT_COMMON_DIR;
+    if (!view) {
+      throw new Error("Content operation lost its isolated configuration");
+    }
+    fixture.views.push(view);
+    await fixture.beforeProcess(view);
+    return { code: 0, stdout: "", stderr: "" };
+  }),
 }));
+// mock-isolation: simulate Git processes while real filesystem operations exercise Windows metadata lifetime.
 vi.mock("./git.js", () => ({
   requireGit: async (_cwd: string, args: string[]) =>
-    args.includes("--git-common-dir") ? fixture.common : "a".repeat(40),
+    args.includes("--git-common-dir") ? fixture.common : "sha1",
+  requireGitPath: async () => fixture.common,
   runGit: fixture.run,
   runGitBytes: fixture.run,
   runGitBuffered: fixture.run,
   commandError: () => new Error("Git failed"),
 }));
-// Real filesystem operations exercise the Windows junction/copy strategy on this
-// host. Native Windows path conversion and process spawning have separate owners.
-vi.mock("../../infra/git-exec.js", () => ({
-  normalizeGitPathForFilesystem: (value: string) => value,
-  gitNullConfigPath: () => "NUL",
-  requireGitCommandOutput: () => "",
-}));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
+it("checks the shared caller once per Git attempt and retains distinct caller and scope fences", async () => {
+  const root = dirs.make("git-authority-");
+  fixture.common = path.join(root, "common");
+  await fs.mkdir(fixture.common);
+  fixture.beforeProcess = async () => {};
+  const caller = new AbortController();
+  const scope = new AbortController();
+  const assertCaller = vi.fn(() => caller.signal.throwIfAborted());
+  let otherCurrent = true;
+  const assertOther = vi.fn(() => {
+    if (!otherCurrent) {
+      throw new Error("distinct caller stale");
+    }
+  });
+  let retained: (() => void) | undefined;
+  await withWorktreeGitConfig(
+    root,
+    true,
+    { beforeRun: assertCaller, signal: scope.signal },
+    async (git) => {
+      for (const beforeRun of [assertCaller, assertOther]) {
+        await git.run(root, ["status"], { beforeRun });
+        retained = fixture.run.mock.calls.at(-1)![2]!.beforeRun;
+        assertCaller.mockClear();
+        assertOther.mockClear();
+        retained!();
+        expect(assertCaller).toHaveBeenCalledOnce();
+        expect(assertOther).toHaveBeenCalledTimes(beforeRun === assertOther ? 1 : 0);
+      }
+      await Promise.resolve();
+      otherCurrent = false;
+      expect(retained).toThrow("distinct caller stale");
+      otherCurrent = true;
+      caller.abort(new Error("caller replaced"));
+      expect(retained).toThrow("caller replaced");
+      scope.abort(new Error("scope aborted"));
+      expect(retained).toThrow("scope aborted");
+    },
+  );
+  expect(retained).toThrow();
+});
+
 it("isolates copied metadata per Windows process and keeps views until in-flight work settles", async () => {
+  fixture.views = [];
   const root = dirs.make("windows-git-view-");
   fixture.common = path.join(root, "common");
   for (const name of ["objects", "refs", "worktrees"]) {
     await fs.mkdir(path.join(fixture.common, name), { recursive: true });
   }
   await fs.writeFile(path.join(fixture.common, "packed-refs"), "first");
-  fixture.views = [];
-  fixture.beforeProcess = async () => {};
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
   const links = vi.spyOn(fs, "symlink");
   const entered = createDeferredCore();
@@ -81,9 +113,7 @@ it("isolates copied metadata per Windows process and keeps views until in-flight
       finished = true;
     });
     await entered.promise;
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await setImmediate();
     expect(finished).toBe(false);
     expect((await fs.stat(fixture.views.at(-1)!)).isDirectory()).toBe(true);
     expect(links.mock.calls.every((call) => call[2] === "junction")).toBe(true);

@@ -10,6 +10,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { projectUpdateRehearsalDatabaseConfig } from "../infra/update-rehearsal-paths.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { type EnvSubstitutionWarning, resolveConfigEnvVars } from "./env-substitution.js";
@@ -26,6 +27,7 @@ import type {
   NormalizedConfigIoDeps,
   ParseConfigJson5Result,
 } from "./io.read.types.js";
+import { normalizeLegacyWorkboardDatabaseConfig } from "./legacy-workboard-database.js";
 import { resolveConfigPath, resolveIncludeRoots, resolveStateDir } from "./paths.js";
 import { createConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
@@ -119,11 +121,11 @@ export function normalizeConfigIoDeps(overrides: ConfigIoDeps = {}): NormalizedC
   const env = overrides.env ?? process.env;
   return {
     fs: overrides.fs ?? fs,
-    json5: overrides.json5 ?? JSON5,
     env,
     lowerPrecedenceEnv: overrides.lowerPrecedenceEnv ?? {},
     homedir: overrides.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir)),
     configPath: overrides.configPath ?? "",
+    mapIncludePath: overrides.mapIncludePath ?? ((absolutePath) => absolutePath),
     logger: overrides.logger ?? console,
     measure: overrides.measure ?? (async (_name, run) => await run()),
     suppressFutureVersionWarning:
@@ -134,12 +136,9 @@ export function normalizeConfigIoDeps(overrides: ConfigIoDeps = {}): NormalizedC
   };
 }
 
-export function parseConfigJson5(
-  raw: string,
-  json5: { parse: (value: string) => unknown } = JSON5,
-): ParseConfigJson5Result {
+export function parseConfigJson5(raw: string): ParseConfigJson5Result {
   try {
-    return { ok: true, parsed: parseJsonWithJson5Fallback(raw, json5) };
+    return { ok: true, parsed: parseJsonWithJson5Fallback(raw, JSON5) };
   } catch (err) {
     return { ok: false, error: String(err) };
   }
@@ -153,17 +152,6 @@ function isPathLikeConfigKey(key: string | undefined): boolean {
   return Boolean(key && (PATH_LIKE_CONFIG_KEY_RE.test(key) || PATH_LIKE_CONFIG_LIST_KEYS.has(key)));
 }
 
-function expandAuthoredTildePath(value: string, home: string): string {
-  const suffix = value.slice(1);
-  if (!suffix) {
-    return home;
-  }
-  if (suffix.startsWith("/") || suffix.startsWith("\\")) {
-    return path.join(home, suffix.slice(1));
-  }
-  return value;
-}
-
 export function restoreAuthoredTildePathsForWrite(
   next: unknown,
   authored: unknown,
@@ -175,7 +163,7 @@ export function restoreAuthoredTildePathsForWrite(
     typeof authored === "string" &&
     isPathLikeConfigKey(key) &&
     TILDE_PATH_VALUE_RE.test(authored.trim()) &&
-    path.normalize(next) === path.normalize(expandAuthoredTildePath(authored.trim(), home))
+    path.normalize(next) === path.join(home, authored.trim().slice(2))
   ) {
     return authored;
   }
@@ -239,6 +227,7 @@ export function resolveConfigIncludesForRead(
     configPath,
     {
       readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+      mapPath: deps.mapIncludePath,
       onLexicalPath: recordIncludeWatchPath,
       onIncludeResolved,
       readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) => {
@@ -270,7 +259,7 @@ export function resolveConfigIncludesForRead(
           throw error;
         }
       },
-      parseJson: (raw) => deps.json5.parse(raw),
+      parseJson: (raw) => JSON5.parse(raw),
     },
     { allowedRoots },
   );
@@ -300,7 +289,10 @@ export function resolveConfigForRead(
     onResolvedEnvSecretRef: (id, configPath) => resolvedEnvSecretRefs.set(configPath, id),
   });
   return {
-    resolvedConfigRaw,
+    resolvedConfigRaw: normalizeLegacyWorkboardDatabaseConfig(
+      projectUpdateRehearsalDatabaseConfig(resolvedConfigRaw, env),
+      env,
+    ),
     envSnapshotForRestore: cloneEnvWithPlatformSemantics(env),
     envWarnings,
     resolutionFacts: createConfigResolutionFacts(

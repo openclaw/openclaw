@@ -12,102 +12,82 @@ afterEach(() => {
   process.argv = originalArgv;
   testApi.resetConfigGuardStateForTests();
 });
+const runtime = () => ({
+  log: vi.fn(),
+  error: vi.fn(),
+  exit: vi.fn((code: number): never => {
+    throw new ExitError(code);
+  }),
+});
+const ready =
+  (commandPath = ["config", "get"], suppressDoctorStdout?: boolean) =>
+  (host: RuntimeEnv) =>
+    ensureConfigReady({ runtime: host, commandPath, suppressDoctorStdout });
+const unreadable = "OpenClaw config could not be read";
+const missingInclude = "Failed to read include file: missing.json";
+const unreadableConfig = JSON.stringify({ $include: "missing.json" });
 
-function runtime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number): never => {
-      throw new ExitError(code);
-    }),
-  };
+function withConfig(raw: string, run: (host: ReturnType<typeof runtime>) => Promise<void>) {
+  return withOpenClawTestState({}, async (state) => {
+    await fs.writeFile(state.configPath, raw);
+    await run(runtime());
+    expect(await fs.readFile(state.configPath, "utf8")).toBe(raw);
+  });
 }
 
-const entrypoints = [
-  {
-    name: "gateway restart readiness",
-    run: (host: RuntimeEnv) =>
-      ensureConfigReady({ runtime: host, commandPath: ["gateway", "restart"] }),
-  },
-  {
-    name: "command readiness",
-    run: (host: RuntimeEnv) => ensureConfigReady({ runtime: host, commandPath: ["config", "get"] }),
-  },
-  {
-    name: "command config validation",
-    run: (host: RuntimeEnv) => requireValidConfigFileSnapshot(host, { observe: false }),
-  },
-  {
-    name: "config mutation validation",
-    run: async (host: RuntimeEnv) =>
+it.each([
+  ["gateway restart readiness", ready(["gateway", "restart"])],
+  ["command readiness", ready()],
+  ["JSON command readiness", ready(), true],
+  ["command config validation", (host) => requireValidConfigFileSnapshot(host, { observe: false })],
+  [
+    "config mutation validation",
+    async (host) =>
       ensureValidConfigSnapshotForCli(await readConfigFileSnapshot({ observe: false }), host),
-  },
-];
-
-it.each(entrypoints)(
-  "$name reports unavailable metadata without suggesting config repair",
-  async ({ run }) => {
-    await withOpenClawTestState({}, async (state) => {
-      await state.writeConfig({ $include: "missing.json" });
-      const before = await fs.readFile(state.configPath);
-      const host = runtime();
+  ],
+] satisfies [string, (host: RuntimeEnv) => unknown, boolean?][])(
+  "%s reports unavailable metadata without suggesting config repair",
+  async (_name, run, json?: boolean) =>
+    withConfig(unreadableConfig, async (host) => {
+      if (json) {
+        process.argv = [process.execPath, "openclaw", "config", "get", "gateway", "--json"];
+      }
       await expect(run(host)).rejects.toMatchObject({ name: "ExitError", code: 1 });
       const diagnostic = host.error.mock.calls.flat().join("\n");
-      expect(diagnostic).toContain("OpenClaw config could not be read");
-      expect(diagnostic).toContain("Failed to read include file: missing.json");
+      expect(diagnostic).toContain(unreadable);
+      expect(diagnostic).toContain(missingInclude);
       expect(diagnostic).not.toContain("config is invalid");
       expect(diagnostic).not.toContain("doctor --fix");
-      expect(await fs.readFile(state.configPath)).toEqual(before);
-    });
-  },
+      if (json) {
+        expect(host.log).toHaveBeenCalledTimes(1);
+        expect(JSON.parse(String(host.log.mock.calls[0]?.[0]))).toMatchObject({
+          ok: false,
+          error: { message: expect.stringContaining(unreadable) },
+          issues: [{ message: expect.stringContaining(missingInclude) }],
+        });
+      }
+    }),
 );
 
-it("retains read-failure classification in JSON readiness output", async () => {
-  await withOpenClawTestState({}, async (state) => {
-    await state.writeConfig({ $include: "missing.json" });
-    process.argv = [process.execPath, "openclaw", "config", "get", "gateway", "--json"];
-    const host = runtime();
-    await expect(
-      ensureConfigReady({ runtime: host, commandPath: ["config", "get"] }),
-    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-    expect(host.log).toHaveBeenCalledTimes(1);
-    const output = JSON.parse(String(host.log.mock.calls[0]?.[0]));
-    expect(output).toMatchObject({
-      ok: false,
-      error: { message: expect.stringContaining("OpenClaw config could not be read") },
-      issues: [{ message: expect.stringContaining("Failed to read include file: missing.json") }],
-    });
-  });
-});
-
-it("keeps read-only remote commands available after a config read failure", async () => {
-  await withOpenClawTestState({}, async (state) => {
-    await state.writeConfig({ $include: "missing.json" });
-    const host = runtime();
-    await ensureConfigReady({ runtime: host, commandPath: ["gateway", "call"] });
+it("keeps gateway probes available after a config read failure", async () =>
+  withConfig(unreadableConfig, async (host) => {
+    await ready(["gateway", "probe"])(host);
     expect(host.exit).not.toHaveBeenCalled();
-    expect(host.error.mock.calls.flat().join("\n")).toContain("OpenClaw config could not be read");
-  });
-});
+    expect(host.error.mock.calls.flat().join("\n")).toContain(unreadable);
+  }));
 
 it.each([
-  { name: "invalid JSON", raw: "{ bad" },
-  { name: "invalid schema", raw: JSON.stringify({ gateway: { port: "bad" } }) },
-])("retains invalid-config diagnosis and repair guidance for $name", async ({ raw }) => {
-  await withOpenClawTestState({}, async (state) => {
-    await fs.writeFile(state.configPath, raw);
-    const host = runtime();
-    await expect(
-      ensureConfigReady({
-        runtime: host,
-        commandPath: ["config", "get"],
-        suppressDoctorStdout: true,
-      }),
-    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+  ["invalid JSON", "{ bad"],
+  ["invalid schema", JSON.stringify({ gateway: { port: "bad" } })],
+])("retains invalid-config diagnosis and repair guidance for %s", async (_name, raw) =>
+  withConfig(raw, async (host) => {
+    await expect(ready(undefined, true)(host)).rejects.toMatchObject({
+      name: "ExitError",
+      code: 1,
+    });
     const diagnostic = host.error.mock.calls.flat().join("\n");
     expect(diagnostic).toContain("OpenClaw config is invalid");
     expect(diagnostic).toContain("doctor --fix");
     expect(diagnostic).not.toContain("config could not be read");
-    expect(await fs.readFile(state.configPath, "utf8")).toBe(raw);
-  });
-});
+  }),
+);

@@ -7,7 +7,7 @@ private func runCLI() async -> Int32 {
     do {
         let descriptors = CLIRegistry.descriptors
         let program = Program(descriptors: descriptors)
-        let invocation = try program.resolve(argv: ["swabble"] + CommandLine.arguments.dropFirst())
+        let invocation = try program.resolve(arguments: ["swabble"] + CommandLine.arguments.dropFirst())
         try await CLIRegistry.run(parsed: invocation.parsedValues, path: invocation.path)
         return 0
     } catch {

@@ -238,8 +238,30 @@ function resolveProviderType(
   switch (api) {
     case "anthropic-messages":
       return { type: "anthropic", baseUrl };
-    case "azure-openai-responses":
-      return resolveAzureProviderType(baseUrl, azureApiVersion);
+    case "azure-openai-responses": {
+      let url: URL;
+      try {
+        url = new URL(baseUrl);
+      } catch {
+        throw new Error(COPILOT_BYOK_PROVIDER_ERROR);
+      }
+      if (isOpenAICompatibleAzureResponsesBaseUrl(url)) {
+        return { type: "openai", wireApi: "responses", baseUrl };
+      }
+      if (!isTraditionalAzureOpenAIHost(url.hostname)) {
+        throw new Error(COPILOT_BYOK_PROVIDER_ERROR);
+      }
+      url.pathname = "";
+      url.search = "";
+      url.hash = "";
+      const resolvedApiVersion = normalizeOptionalString(azureApiVersion);
+      return {
+        type: "azure",
+        wireApi: "responses",
+        baseUrl: url.toString().replace(/\/+$/, ""),
+        ...(resolvedApiVersion ? { azure: { apiVersion: resolvedApiVersion } } : {}),
+      };
+    }
     case "openai-responses":
       return { type: "openai", wireApi: "responses", baseUrl };
     case "openai-completions":
@@ -248,39 +270,6 @@ function resolveProviderType(
     default:
       throw new Error(COPILOT_BYOK_PROVIDER_ERROR);
   }
-}
-
-function resolveAzureProviderType(
-  baseUrl: string,
-  apiVersion: string | undefined,
-): {
-  type: NonNullable<ProviderConfig["type"]>;
-  wireApi: NonNullable<ProviderConfig["wireApi"]>;
-  baseUrl: string;
-  azure?: NonNullable<ProviderConfig["azure"]>;
-} {
-  let url: URL;
-  try {
-    url = new URL(baseUrl);
-  } catch {
-    throw new Error(COPILOT_BYOK_PROVIDER_ERROR);
-  }
-  if (isOpenAICompatibleAzureResponsesBaseUrl(url)) {
-    return { type: "openai", wireApi: "responses", baseUrl };
-  }
-  if (!isTraditionalAzureOpenAIHost(url.hostname)) {
-    throw new Error(COPILOT_BYOK_PROVIDER_ERROR);
-  }
-  url.pathname = "";
-  url.search = "";
-  url.hash = "";
-  const resolvedApiVersion = normalizeOptionalString(apiVersion);
-  return {
-    type: "azure",
-    wireApi: "responses",
-    baseUrl: url.toString().replace(/\/+$/, ""),
-    ...(resolvedApiVersion ? { azure: { apiVersion: resolvedApiVersion } } : {}),
-  };
 }
 
 function isTraditionalAzureOpenAIHost(hostname: string): boolean {

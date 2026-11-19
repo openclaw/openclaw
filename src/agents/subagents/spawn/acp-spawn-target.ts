@@ -1,9 +1,18 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasAcpAgentAllowlist, resolveAcpAgentPolicyError } from "../../../acp/policy.js";
 import { getAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentIdStrict, normalizeOptionalAgentId } from "../../../routing/session-key.js";
-import { listAgentEntries, resolveAgentEntry } from "../../agent-scope-config.js";
-import { listAgentIds } from "../../agent-scope.js";
+import {
+  resolveConfiguredAcpHarnessIds,
+  resolveConfiguredAcpSubagentTargetIds,
+} from "../../agent-roster.js";
+import { resolveAgentEntry } from "../../agent-scope-config.js";
+import { resolveAcpSenderSpawnError } from "./acp-spawn-policy.js";
+import {
+  describeTargetIdList,
+  resolveRequesterSpawnTargetPolicy,
+} from "./subagent-target-policy.js";
 
 type ResolvedAcpAgentTarget = {
   ok: true;
@@ -39,7 +48,8 @@ export function resolveTargetAcpAgentId(params: {
   if (normalizedRequest && !normalizedRequest.ok) {
     return { ok: false, error: `agentId "${params.requestedAgentId}" was not found` };
   }
-  const requested = normalizedRequest?.value;
+  const requested =
+    normalizedRequest?.value ?? normalizeOptionalAgentId(params.cfg.acp?.defaultAgent);
   if (requested) {
     const configuredAgent = resolveAgentEntry(params.cfg, requested);
     if (configuredAgent?.runtime?.type === "acp") {
@@ -66,17 +76,6 @@ export function resolveTargetAcpAgentId(params: {
     });
   }
 
-  const configuredDefault = normalizeOptionalAgentId(params.cfg.acp?.defaultAgent);
-  if (configuredDefault) {
-    const configuredAgent = resolveAgentEntry(params.cfg, configuredDefault);
-    return resolveAcpAgentTarget({
-      cfg: params.cfg,
-      agentId: configuredDefault,
-      agentBackend:
-        configuredAgent?.runtime?.type === "acp" ? configuredAgent.runtime.acp?.backend : undefined,
-    });
-  }
-
   return {
     ok: false,
     error:
@@ -85,38 +84,64 @@ export function resolveTargetAcpAgentId(params: {
 }
 
 function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): boolean {
-  return (cfg.acp?.allowedAgents ?? []).some((entry) => {
-    if (entry.trim() === "*") {
-      return true;
-    }
-    const normalized = normalizeOptionalAgentId(entry);
-    return normalized === agentId;
-  });
+  return (cfg.acp?.allowedAgents ?? []).some(
+    (entry) => entry.trim() === "*" || normalizeOptionalAgentId(entry) === agentId,
+  );
 }
 
-export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {
-  const ids = new Set<string>(listAgentIds(cfg));
-  for (const agent of listAgentEntries(cfg)) {
-    if (agent.runtime?.type !== "acp") {
-      continue;
+/**
+ * Describe the sessions_spawn `agentId` parameter for `runtime="acp"`.
+ * Pass `subagentRequesterId` when the requester is a subagent or sender-restricted:
+ * ACP spawns then also go through its requireAgentId and allowAgents policy. Pass
+ * `sender` to apply the inherited sender restrictions ACP admission enforces.
+ */
+export function describeAcpSpawnTargetParameter(
+  cfg: OpenClawConfig,
+  subagentRequesterId?: string,
+  sender?: Omit<Parameters<typeof resolveAcpSenderSpawnError>[0], "targetAgentId" | "cwd">,
+): string {
+  const senderRestricted = sender?.inheritedToolPolicySource === "sender";
+  // Ask the real admission path so the text never advertises a rejected id.
+  const isAccepted = (requestedAgentId?: string) => {
+    const target = resolveTargetAcpAgentId({ requestedAgentId, cfg });
+    if (!target.ok) {
+      return false;
     }
-    const acpAgent = normalizeOptionalAgentId(agent.runtime.acp?.agent);
-    if (acpAgent) {
-      ids.add(acpAgent);
-    }
+    // The tool checks the requested id before ACP resolves it to a harness.
+    const senderTargetIds = requestedAgentId
+      ? [requestedAgentId, target.agentId]
+      : [target.agentId];
+    return (
+      (!sender ||
+        senderTargetIds.every(
+          (targetAgentId) => !resolveAcpSenderSpawnError({ ...sender, targetAgentId }),
+        )) &&
+      resolveAcpAgentPolicyError(cfg, target.agentId) === null &&
+      (subagentRequesterId === undefined ||
+        resolveRequesterSpawnTargetPolicy({
+          cfg,
+          requesterAgentId: subagentRequesterId,
+          targetAgentId: target.agentId,
+          requestedAgentId,
+          configuredAgentIds: Array.from(resolveConfiguredAcpSubagentTargetIds(cfg)),
+        }).ok)
+    );
+  };
+  const defaultAgentId = normalizeOptionalAgentId(cfg.acp?.defaultAgent);
+  const omitClause =
+    defaultAgentId && isAccepted()
+      ? `Omit to use the configured ACP default ("${defaultAgentId}").`
+      : "agentId is required.";
+  const acceptedIds = Array.from(resolveConfiguredAcpHarnessIds(cfg))
+    .filter((id) => isAccepted(id))
+    .toSorted((a, b) => a.localeCompare(b));
+  if (hasAcpAgentAllowlist(cfg) || subagentRequesterId !== undefined || senderRestricted) {
+    return acceptedIds.length > 0
+      ? `${describeTargetIdList("ACP harness id from", acceptedIds)} ${omitClause}`
+      : `No ACP harness id is allowed. ${omitClause}`;
   }
-  const defaultAgent = normalizeOptionalAgentId(cfg.acp?.defaultAgent);
-  if (defaultAgent) {
-    ids.add(defaultAgent);
-  }
-  for (const entry of cfg.acp?.allowedAgents ?? []) {
-    if (entry.trim() === "*") {
-      continue;
-    }
-    const id = normalizeOptionalAgentId(entry);
-    if (id) {
-      ids.add(id);
-    }
-  }
-  return Array.from(ids);
+  const examples = acceptedIds.length > 0 ? acceptedIds : ["codex", "claude"].filter(isAccepted);
+  return examples.length > 0
+    ? `${describeTargetIdList("ACP harness id, for example", examples)} ${omitClause}`
+    : `ACP harness id. ${omitClause}`;
 }

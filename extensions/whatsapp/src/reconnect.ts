@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   computeBackoff,
   sleepWithAbort,
@@ -20,25 +19,18 @@ export const DEFAULT_RECONNECT_POLICY: ReconnectPolicy = {
   maxAttempts: 12,
 };
 
-export function resolveHeartbeatSeconds(cfg: OpenClawConfig, overrideSeconds?: number): number {
-  void cfg;
-  const candidate = overrideSeconds;
-  if (typeof candidate === "number" && candidate > 0) {
-    return candidate;
+export function resolveHeartbeatSeconds(overrideSeconds?: number): number {
+  if (typeof overrideSeconds === "number" && overrideSeconds > 0) {
+    return overrideSeconds;
   }
   return DEFAULT_HEARTBEAT_SECONDS;
 }
 
-export function resolveReconnectPolicy(
-  cfg: OpenClawConfig,
-  overrides?: Partial<ReconnectPolicy>,
-): ReconnectPolicy {
-  void cfg;
-  const overrideConfig = overrides ?? {};
-  const merged = {
+export function resolveReconnectPolicy(overrides?: Partial<ReconnectPolicy>): ReconnectPolicy {
+  const merged: ReconnectPolicy = {
     ...DEFAULT_RECONNECT_POLICY,
-    ...overrideConfig,
-  } as ReconnectPolicy;
+    ...overrides,
+  };
 
   merged.initialMs = Math.max(250, merged.initialMs);
   merged.maxMs = Math.max(merged.initialMs, merged.maxMs);

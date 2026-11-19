@@ -4,15 +4,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 const mocks = vi.hoisted(() => ({
   stat: vi.fn(),
   prepare: vi.fn(),
-  cold: vi.fn(),
   prewarm: vi.fn(),
 }));
 vi.mock("node:fs/promises", () => ({ default: { stat: mocks.stat } }));
 vi.mock("../config/sessions/session-sqlite-target.js", () => ({
   prepareSqliteTargetFromSessionStorePath: mocks.prepare,
 }));
+// mock-isolation: Check Gateway prewarm selection without starting native worker pools.
 vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
-  isSessionHistoryWorkerCold: mocks.cold,
   prewarmSessionHistoryWorker: mocks.prewarm,
 }));
 import { prewarmGatewaySessionHistory } from "./server-history-prewarm.js";
@@ -23,7 +22,6 @@ const config: OpenClawConfig = {
 };
 
 beforeEach(() => {
-  mocks.cold.mockReset().mockReturnValue(true);
   mocks.prewarm.mockReset().mockResolvedValue(undefined);
   mocks.stat.mockReset().mockResolvedValue({ isFile: () => true });
   mocks.prepare.mockReset().mockImplementation(async (_storePath, options) => ({
@@ -32,38 +30,47 @@ beforeEach(() => {
   }));
 });
 
-it("warms existing configured stores and skips absent databases", async () => {
-  mocks.stat.mockRejectedValueOnce(Object.assign(new Error("absent"), { code: "ENOENT" }));
-  await prewarmGatewaySessionHistory(config);
-  expect(mocks.prepare.mock.calls.map(([storePath]) => storePath)).toEqual([
-    "/synthetic/main/sessions.json",
-    "/synthetic/research/sessions.json",
-  ]);
-  expect(mocks.prewarm).toHaveBeenCalledExactlyOnceWith({
-    agentId: "research",
-    path: "/synthetic/research/openclaw-agent.sqlite",
-  });
-});
-
-it("does no store discovery for warm connections or cancelled work", async () => {
-  mocks.cold.mockReturnValue(false);
-  await prewarmGatewaySessionHistory(config, { onlyIfCold: true });
-  await prewarmGatewaySessionHistory(config, { isCancelled: () => true });
-  expect(mocks.prepare).not.toHaveBeenCalled();
-  expect(mocks.stat).not.toHaveBeenCalled();
-  expect(mocks.prewarm).not.toHaveBeenCalled();
-});
-
-it("continues after discovery failure and rechecks cancellation after discovery", async () => {
-  mocks.prepare.mockRejectedValueOnce(new Error("store unavailable"));
-  await expect(prewarmGatewaySessionHistory(config)).resolves.toBeUndefined();
-  expect(mocks.prewarm).toHaveBeenCalledOnce();
-  mocks.prewarm.mockClear();
-  let cancelled = false;
-  mocks.stat.mockImplementationOnce(async () => {
-    cancelled = true;
-    return { isFile: () => true };
-  });
-  await prewarmGatewaySessionHistory(config, { isCancelled: () => cancelled });
-  expect(mocks.prewarm).not.toHaveBeenCalled();
-});
+it.each(["absent", "unavailable", "available", "cancelled", "cancelled after discovery"])(
+  "prewarms only eligible stores when the first store is %s",
+  async (scenario) => {
+    let cancelled = scenario === "cancelled";
+    if (scenario === "absent") {
+      mocks.stat.mockRejectedValueOnce(Object.assign(new Error("absent"), { code: "ENOENT" }));
+    } else if (scenario === "unavailable") {
+      mocks.prepare.mockRejectedValueOnce(new Error("store unavailable"));
+    } else if (scenario === "cancelled after discovery") {
+      mocks.stat.mockImplementationOnce(async () => {
+        cancelled = true;
+        return { isFile: () => true };
+      });
+    }
+    await expect(
+      prewarmGatewaySessionHistory(config, {
+        isCancelled: () => cancelled,
+      }),
+    ).resolves.toBeUndefined();
+    const skipped = scenario === "cancelled";
+    const discovered = skipped
+      ? []
+      : scenario === "cancelled after discovery"
+        ? ["/synthetic/main/sessions.json"]
+        : ["/synthetic/main/sessions.json", "/synthetic/research/sessions.json"];
+    expect(mocks.prepare.mock.calls.map(([storePath]) => storePath)).toEqual(discovered);
+    if (scenario === "absent" || scenario === "unavailable") {
+      expect(mocks.prewarm).toHaveBeenCalledExactlyOnceWith({
+        agentId: "research",
+        path: "/synthetic/research/openclaw-agent.sqlite",
+      });
+    } else if (scenario === "available") {
+      expect(mocks.prewarm.mock.calls.map(([database]) => database.agentId)).toEqual([
+        "main",
+        "research",
+      ]);
+    } else {
+      expect(mocks.prewarm).not.toHaveBeenCalled();
+    }
+    if (skipped) {
+      expect(mocks.stat).not.toHaveBeenCalled();
+    }
+  },
+);

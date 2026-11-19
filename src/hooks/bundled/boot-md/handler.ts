@@ -1,4 +1,3 @@
-// Boot.md hook injects workspace boot notes into agent startup context.
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { createDefaultDeps } from "../../../cli/deps.js";
 import { runBootOnce } from "../../../gateway/boot.js";
@@ -10,7 +9,6 @@ import { isGatewayStartupEvent } from "../../internal-hooks.js";
 
 const log = createSubsystemLogger("hooks/boot-md");
 
-/** Gateway-startup hook that runs BOOT.md checks once per unique agent workspace. */
 const runBootChecklist: HookHandler = async (event) => {
   if (!isGatewayStartupEvent(event)) {
     return;

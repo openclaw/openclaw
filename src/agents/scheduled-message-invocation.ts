@@ -13,7 +13,7 @@ import {
 } from "./conversation-tool-policy-pipeline.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { applyToolPolicyPipeline, type ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
-import type { DeclaredToolAllowlistContext, ToolPolicyLike } from "./tool-policy.js";
+import type { DeclaredToolAllowlistContext } from "./tool-policy.js";
 
 /** Admit each new invocation against published policy without changing an accepted invocation. */
 export function createScheduledMessageInvocationAdmission(params: {
@@ -46,7 +46,6 @@ export function createEmbeddedMessageInvocationPolicy(params: {
   pluginMetadataSnapshot?: Parameters<
     typeof resolveConversationCapabilityProfile
   >[0]["pluginMetadataSnapshot"];
-  ownerOnlyCoreToolPolicy?: ToolPolicyLike;
   catalog: () => {
     tools: AnyAgentTool[];
     declaredToolAllowlist?: DeclaredToolAllowlistContext;
@@ -54,23 +53,21 @@ export function createEmbeddedMessageInvocationPolicy(params: {
   };
   isAvailable: () => boolean;
 }) {
-  const policies = resolveConversationToolPolicies({
-    capabilityProfile: params.capabilityProfile,
-    additionalProfileAllow: params.runtimeProfileAlsoAllow,
-    additionalPolicyAllow: params.toolSearchControlAllowlist,
-  });
+  const resolvePolicies = (capabilityProfile: ResolvedConversationCapabilityProfile) =>
+    resolveConversationToolPolicies({
+      capabilityProfile,
+      additionalProfileAllow: params.runtimeProfileAlsoAllow,
+      additionalPolicyAllow: params.toolSearchControlAllowlist,
+    });
+  const policies = resolvePolicies(params.capabilityProfile);
   const filter = (
     currentProfile = params.capabilityProfile,
     onFilter?: (event: ToolPolicyFilterEvent) => void,
+    // Listing retains the requester's own ceiling; completion replay only gates calls.
+    scope: "turn" | "session" = "turn",
   ): AnyAgentTool[] => {
     const currentPolicies =
-      currentProfile === params.capabilityProfile
-        ? policies
-        : resolveConversationToolPolicies({
-            capabilityProfile: currentProfile,
-            additionalProfileAllow: params.runtimeProfileAlsoAllow,
-            additionalPolicyAllow: params.toolSearchControlAllowlist,
-          });
+      currentProfile === params.capabilityProfile ? policies : resolvePolicies(currentProfile);
     const { tools, declaredToolAllowlist, unavailableCoreToolReason } = params.catalog();
     return applyToolPolicyPipeline({
       tools,
@@ -86,16 +83,11 @@ export function createEmbeddedMessageInvocationPolicy(params: {
           sandboxPolicy: policies.sandboxPolicy,
           subagentPolicy: policies.subagentPolicy,
           runtimeToolPolicy: policies.runtimeToolPolicy,
-          inheritedToolPolicy: policies.inheritedToolPolicy,
+          inheritedToolPolicy:
+            scope === "session"
+              ? params.capabilityProfile.policy.sessionInheritedToolPolicy
+              : policies.inheritedToolPolicy,
         },
-        additionalStepsAfterSandbox: [
-          {
-            policy: params.ownerOnlyCoreToolPolicy,
-            source: { kind: "session" },
-            label: "gateway sender owner-only tools",
-            unavailableCoreToolReason,
-          },
-        ],
         includeRuntimeToolPolicy: true,
         unavailableCoreToolReason,
       }),
@@ -124,6 +116,8 @@ export function createEmbeddedMessageInvocationPolicy(params: {
                 scheduledToolPolicy: params.scheduledToolPolicy,
                 runtimePluginToolGrant: profile.policy.runtimePluginToolGrant,
                 pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+                // The filter retains the admitted turn's resource and inherited ceilings.
+                preparedSessionCapabilityStore: {},
               });
         return (
           params.isAvailable() && filter(currentProfile).some((tool) => tool.name === "message")

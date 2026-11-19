@@ -1,9 +1,9 @@
-import { once } from "node:events";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { verifyEvent, type Event } from "nostr-tools";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "ws";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 export const PREFIX_ACK_REASON = "connection failure: historical diagnostic";
 
@@ -17,6 +17,12 @@ export async function createNostrRelayFixture(
     onEvent?: (event: Event) => void;
   } = {},
 ) {
+  const subscriptions: unknown[][] = [];
+  let acceptSubscription: (() => void) | undefined;
+  const subscribed = new Promise<void>((resolve) => {
+    acceptSubscription = resolve;
+  });
+  const inboundSends: Array<(events: Event[]) => void> = [];
   const events: Event[] = [];
   const acknowledgements: Array<["OK", string, boolean, string]> = [];
   const errors: unknown[] = [];
@@ -49,8 +55,19 @@ export async function createNostrRelayFixture(
     socket.on("error", (error) => errors.push(error));
     socket.on("message", (data) => {
       try {
-        const [kind, value] = JSON.parse(rawDataToString(data)) as [string, string | Event];
+        const [kind, value, ...filters] = JSON.parse(rawDataToString(data)) as [
+          string,
+          string | Event,
+          ...unknown[],
+        ];
         if (kind === "REQ" && typeof value === "string") {
+          subscriptions.push(filters);
+          inboundSends.push((incoming) => {
+            for (const event of incoming) {
+              socket.send(JSON.stringify(["EVENT", value, event]));
+            }
+          });
+          acceptSubscription?.();
           // Settle the real pool's EOSE timer through the wire, including cleanup paths.
           socket.send(JSON.stringify(["EOSE", value]));
         } else if (kind === "EVENT" && typeof value !== "string") {
@@ -94,13 +111,7 @@ export async function createNostrRelayFixture(
         new Promise<void>((resolve, reject) => {
           sockets.close((error) => (error ? reject(error) : resolve()));
         }),
-        new Promise<void>((resolve, reject) => {
-          if (!server.listening) {
-            resolve();
-            return;
-          }
-          server.close((error) => (error ? reject(error) : resolve()));
-        }),
+        server.listening ? server[Symbol.asyncDispose]() : Promise.resolve(),
       ]);
       const failures = results.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],
@@ -112,15 +123,16 @@ export async function createNostrRelayFixture(
     return closePromise;
   };
   try {
-    const listening = once(server, "listening");
-    server.listen(0, "127.0.0.1");
-    await listening;
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing Nostr fixture listen port");
-    }
+    const port = await listenOnLoopback(server);
     return {
-      url: `ws://127.0.0.1:${address.port}/`,
+      url: `ws://127.0.0.1:${port}/`,
+      subscribed,
+      subscriptions,
+      sendIncoming: (incoming: Event[]) => {
+        for (const send of inboundSends) {
+          send(incoming);
+        }
+      },
       events,
       acknowledgements,
       errors,

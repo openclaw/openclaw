@@ -30,26 +30,6 @@ export function recordRunSkillUsage(params: RunSkillUsage & { runId?: string }):
   pruneMapToMaxSize(skillUsageByRun, MAX_TRACKED_SKILL_USAGE_RUNS);
 }
 
-/** Checks whether this run demonstrably used one writable workspace skill. */
-export function hasRunWorkspaceSkillUsage(params: {
-  runId: string | undefined;
-  name: string;
-  skillFile: string;
-}): boolean {
-  if (!params.runId) {
-    return false;
-  }
-  for (const usage of skillUsageByRun.get(params.runId)?.values() ?? []) {
-    if (
-      usage.source === "workspace" &&
-      (usage.skillFile === params.skillFile || (!usage.skillFile && usage.name === params.name))
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /** Transfers one completed run's usage receipt to its terminal side effects. */
 export function consumeRunSkillUsage(runId: string | undefined): RunSkillUsage[] {
   if (!runId) {

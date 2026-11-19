@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const hoistedMocks = vi.hoisted(() => ({
-  applyPluginAutoEnable: vi.fn(),
+  applyPluginAutoEnableAsync: vi.fn(),
   materializePluginAutoEnableCandidates: vi.fn(),
   collectChannelDoctorCompatibilityMutations: vi.fn(),
   collectOpenAICodexAuthProfileStoreIdMap: vi.fn(),
@@ -13,7 +13,6 @@ const hoistedMocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
   maybeRepairGroupAllowFromFallback: vi.fn(),
   maybeRepairPluginOpenClawHostLinks: vi.fn(),
-  maybeRepairLegacyOAuthSidecarProfiles: vi.fn(),
   migrateLegacyTailscaleProfileIdentities: vi.fn(),
   repairMergedGatewayOwnerProfile: vi.fn(),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn(),
@@ -32,8 +31,9 @@ const hoistedMocks = vi.hoisted(() => ({
   resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
 
+// mock-isolation: Sequencing fixtures supply activation outcomes; the setup regression exercises the real loader separately.
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: hoistedMocks.applyPluginAutoEnable,
+  applyPluginAutoEnableAsync: hoistedMocks.applyPluginAutoEnableAsync,
   materializePluginAutoEnableCandidates: hoistedMocks.materializePluginAutoEnableCandidates,
 }));
 
@@ -50,10 +50,6 @@ vi.mock("../doctor-plugin-registry.js", () => ({
   maybeRepairStaleManagedNpmBundledPlugins: hoistedMocks.maybeRepairStaleManagedNpmBundledPlugins,
 }));
 
-vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
-  maybeRepairLegacyOAuthSidecarProfiles: hoistedMocks.maybeRepairLegacyOAuthSidecarProfiles,
-}));
-
 vi.mock("../../state/user-profiles-tailscale-migration.js", () => ({
   migrateLegacyTailscaleProfileIdentities: hoistedMocks.migrateLegacyTailscaleProfileIdentities,
 }));
@@ -62,6 +58,7 @@ vi.mock("../../state/user-profiles-owner-migration.js", () => ({
   repairMergedGatewayOwnerProfile: hoistedMocks.repairMergedGatewayOwnerProfile,
 }));
 
+// mock-isolation: Scenario fixtures own credential state and migration outcomes; isolate filesystem writes and provider login effects proved by their owner suites.
 vi.mock("../doctor-auth-flat-profiles.js", () => ({
   maybeRepairLegacyAuthProfileStores: ({
     profileIdMap,
@@ -70,6 +67,7 @@ vi.mock("../doctor-auth-flat-profiles.js", () => ({
   }) => ({
     changes: [],
     warnings: [],
+    findings: [],
     profileIdMap,
   }),
   collectOpenAICodexAuthProfileStoreIdMap: hoistedMocks.collectOpenAICodexAuthProfileStoreIdMap,
@@ -184,6 +182,14 @@ vi.mock("./shared/stale-plugin-config.js", () => ({
   maybeRepairStalePluginConfig: hoistedMocks.maybeRepairStalePluginConfig,
 }));
 
+vi.mock("./shared/context-engine-plugin-id-selector.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared/context-engine-plugin-id-selector.js")>()),
+  maybeRepairContextEnginePluginIdSelector: (cfg: OpenClawConfig) => ({
+    config: cfg,
+    changes: [],
+  }),
+}));
+
 vi.mock("./shared/stale-oauth-profile-shadows.js", () => ({
   repairStaleOAuthProfileShadows: hoistedMocks.repairStaleOAuthProfileShadows,
 }));
@@ -197,43 +203,6 @@ vi.mock("./shared/invalid-plugin-config.js", () => ({
     config: cfg,
     changes: [],
   }),
-}));
-
-vi.mock("./shared/legacy-tools-by-sender.js", () => ({
-  maybeRepairLegacyToolsBySenderKeys: (cfg: OpenClawConfig) => {
-    const channels = cfg.channels as Record<string, unknown> | undefined;
-    const tools = channels?.tools as
-      | { exec?: { toolsBySender?: Record<string, unknown> } }
-      | undefined;
-    const bySender = tools?.exec?.toolsBySender;
-    const rawKey = bySender
-      ? Object.keys(bySender).find((key) => !key.startsWith("id:"))
-      : undefined;
-    if (!bySender || !rawKey) {
-      return { config: cfg, changes: [] };
-    }
-    const targetKey = `id:${rawKey.trim()}`;
-    return {
-      config: {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          tools: {
-            ...(channels?.tools as Record<string, unknown> | undefined),
-            exec: {
-              ...tools?.exec,
-              toolsBySender: {
-                [targetKey]: bySender[rawKey],
-              },
-            },
-          },
-        },
-      },
-      changes: [
-        `channels.tools.exec.toolsBySender: migrated 1 legacy key to typed id: entries (${rawKey} -> ${targetKey})`,
-      ],
-    };
-  },
 }));
 
 vi.mock("./shared/exec-safe-bins.js", () => ({

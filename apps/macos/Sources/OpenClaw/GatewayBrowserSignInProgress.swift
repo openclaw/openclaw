@@ -58,7 +58,7 @@ final class GatewayBrowserSignInProgress {
                 self.isOpeningBrowser = true
                 self.error = nil
                 gatewayBrowserSignInLogger.info("browser launch requested action=\(action.id, privacy: .public)")
-                NSWorkspace.shared.open(url, configuration: configuration) { [weak self] application, error in
+                AppActivation.shared.open(url, configuration: configuration) { [weak self] application, error in
                     // Never log the URL or localized error: both can contain the sign-in transfer key.
                     if let error = error as NSError? {
                         gatewayBrowserSignInLogger.error(

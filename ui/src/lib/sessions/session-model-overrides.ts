@@ -1,7 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionPatch, SessionPatchOptions } from "./patch.ts";
-import type { SessionConnectionScope } from "./session-capability.ts";
 import type { SessionMutationsHost } from "./session-mutations-host.ts";
+import type { SessionConnectionScope } from "./session-types.ts";
 
 type Host = Pick<SessionMutationsHost, "connection" | "readState" | "publish" | "publishedRow">;
 
@@ -34,20 +34,19 @@ export function createSessionModelOverrides(host: Host) {
       pendingModelPatch.revision += 1;
     }
     const state = host.readState();
+    const normalizedValue = typeof value === "string" ? value.trim() : value;
+    const hasOverride = Object.hasOwn(state.modelOverrides, normalizedKey);
+    if (
+      normalizedValue === undefined
+        ? !hasOverride
+        : hasOverride && state.modelOverrides[normalizedKey] === normalizedValue
+    ) {
+      return;
+    }
     const modelOverrides = { ...state.modelOverrides };
-    if (value === undefined) {
-      if (!Object.hasOwn(state.modelOverrides, normalizedKey)) {
-        return;
-      }
+    if (normalizedValue === undefined) {
       delete modelOverrides[normalizedKey];
     } else {
-      const normalizedValue = value === null ? null : value.trim();
-      if (
-        modelOverrides[normalizedKey] === normalizedValue &&
-        Object.hasOwn(modelOverrides, normalizedKey)
-      ) {
-        return;
-      }
       modelOverrides[normalizedKey] = normalizedValue;
     }
     host.publish({ ...state, modelOverrides });

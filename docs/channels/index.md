@@ -66,6 +66,7 @@ Full walkthrough: [Telegram](/channels/telegram). Command reference:
 - [WeChat](/channels/wechat) - WeChat channel setup through the external openclaw-weixin plugin (external plugin).
 - [WeCom](/channels/wecom) - Install the external WeCom plugin and find its versioned setup documentation (external plugin).
 - [WhatsApp](/channels/whatsapp) - WhatsApp channel support, access controls, delivery behavior, and operations (official plugin).
+- [X / Twitter](/channels/x) - X / Twitter mentions, allowlisted public replies, thread context, and event modes (bundled plugin).
 - [Yuanbao](/channels/yuanbao) - Yuanbao bot overview, features, and configuration (external plugin).
 - [Zalo](/channels/zalo) - Zalo bot support status, capabilities, and configuration (official plugin).
 - [Zalo ClawBot](/channels/zaloclawbot) - Zalo ClawBot channel setup through the external openclaw-zaloclawbot plugin (external plugin).
@@ -88,8 +89,7 @@ there, grounded in what that platform can actually show it.
 `channels.<channel>.joinIntro: false`, or override a single account with
 `channels.<channel>.accounts.<accountId>.joinIntro`. Resolution order is the
 account value, then the channel value, then the default of `true`. There is no
-per-room switch, because a room is only configurable after the bot has already
-joined it. Only Discord, LINE, Matrix, Slack, and Telegram accept this option; other channels
+per-room introduction switch. Only Discord, LINE, Matrix, Slack, and Telegram accept this option; other channels
 reject it rather than accepting a setting they never read.
 
 **What it reads.** Core requests up to 100 recent messages plus room metadata,
@@ -108,6 +108,9 @@ When history is unavailable or unreadable, the introduction is still posted from
 room metadata alone and says what it can see rather than inventing activity.
 
 **Where it posts.** LINE, Matrix, Slack, and Telegram introduce in the room that was joined.
+Slack excludes direct messages and group DMs, and Enterprise Slack introductions
+retain the listener workspace. Telegram forum introductions use the General topic's
+access policy and configured agent.
 Discord joins a server rather than a channel, so it uses the system channel when
 it can both view and send there, otherwise the first text channel that qualifies;
 if no channel qualifies, it records a skip instead of posting.

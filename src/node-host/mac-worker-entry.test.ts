@@ -20,7 +20,6 @@ describe("Mac node worker entry", () => {
         ...args,
       ]),
     ).toEqual({
-      ok: true,
       profile: "work",
       argv: [
         "/runtime/bin/node",
@@ -39,12 +38,12 @@ describe("Mac node worker entry", () => {
     ["node", "worker", "--host", "localhost"],
     ["node", "worker", "extra"],
   ])("rejects unrelated command arguments %s", (...args) => {
-    expect(
+    expect(() =>
       resolveMacNodeWorkerArgv([
         "/runtime/bin/node",
         "/runtime/openclaw/dist/mac-node-worker.js",
         ...args,
       ]),
-    ).toEqual({ ok: false, error: "Private macOS worker accepts only: node worker" });
+    ).toThrow("Private macOS worker accepts only: node worker");
   });
 });

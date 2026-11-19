@@ -9,9 +9,8 @@ import type {
   LobsterPetPersonalityId,
   LobsterRunOutcome,
 } from "./lobster-pet-contract.ts";
-import { canonicalLobsterLook, lobsterPetName, mulberry32 } from "./lobster-pet-look.ts";
+import { canonicalLobsterLook, lobsterPetName, mulberry32 } from "./lobster-pet-identity.ts";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
-import { THEME_CRITTER_CROSS_MS } from "./theme-flair-sprites.ts";
 
 export type LobsterPetAct =
   | "wave"
@@ -156,7 +155,8 @@ const LOBSTER_PASSER_CROSS_MS: Partial<Record<LobsterPasserKind, number>> = {
   snail: 90_000,
   duck: 14_000,
   jellyfish: 16_000,
-  ...THEME_CRITTER_CROSS_MS,
+  penguin: 13_000,
+  fedora: 9_000,
 };
 
 export type LobsterPetAnchor = "top" | "floor";
@@ -175,13 +175,7 @@ export function isLobsterTwinLoad(seed: number): boolean {
   return mulberry32((seed ^ 0x7715) >>> 0)() < 0.04;
 }
 
-export type LobsterPasserPlan = {
-  kind: LobsterPasserKind;
-  atMs: number;
-  direction: 1 | -1;
-  floor: boolean;
-  hops: boolean;
-};
+export type LobsterPasserPlan = NonNullable<ReturnType<typeof planLobsterPasser>>;
 
 export type LobsterPasserOptions = {
   critters?: readonly string[];
@@ -203,7 +197,7 @@ export function resolveLobsterPasserCrossMs(
 export function planLobsterPasser(
   seed: number,
   { critters = [], strangers = true }: LobsterPasserOptions = {},
-): LobsterPasserPlan | null {
+) {
   const rng = mulberry32((seed ^ 0xcab) >>> 0);
   const roll = rng() * 1000;
   const weights: Array<readonly [LobsterPasserKind, number]> = [

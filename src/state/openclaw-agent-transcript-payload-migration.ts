@@ -3,6 +3,7 @@ import {
   MAX_COMPRESSED_EVENT_BYTES,
   prepareTranscriptPayload,
 } from "../config/sessions/transcript-payload.js";
+import { readSqliteTextEncoding } from "../infra/sqlite-schema-admission.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { resolveZstdCodec } from "../infra/zstd-codec.js";
@@ -62,7 +63,10 @@ function assertTranscriptRebuildInputs(database: DatabaseSync): void {
 }
 
 /** Convert original bytes under the admitted agent migration; never hydrate oversized identity rows. */
-export function migrateTranscriptPayloadStorageInTransaction(database: DatabaseSync): void {
+export function migrateTranscriptPayloadStorageInTransaction(
+  database: DatabaseSync,
+  schemaSql: string,
+): void {
   if (
     !database.isTransaction ||
     database.prepare("PRAGMA foreign_keys").get()?.foreign_keys !== 0
@@ -72,11 +76,11 @@ export function migrateTranscriptPayloadStorageInTransaction(database: DatabaseS
     );
   }
   assertTranscriptRebuildInputs(database);
-  const utf8 = database.prepare("PRAGMA encoding").get()?.encoding === "UTF-8";
+  const utf8 = readSqliteTextEncoding(database) === "UTF-8";
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   const codec = resolveZstdCodec();
   database.exec(
-    extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "transcript_events").replace(
+    extractSqliteTableSchema(schemaSql, "transcript_events").replace(
       "IF NOT EXISTS transcript_events",
       MIGRATION_TABLE,
     ),
@@ -124,11 +128,10 @@ export function migrateTranscriptPayloadStorageInTransaction(database: DatabaseS
         // Invalid historical UTF-8 remains native TEXT, preserving its exact stored bytes.
       }
       if (text !== undefined) {
-        const payload = prepareTranscriptPayload(database, text);
+        const payload = prepareTranscriptPayload(database, text, undefined, "UTF-8");
         navigation = payload.navigation_json;
         if (payload.event_zstd !== null) {
           if (
-            !codec ||
             payload.event_utf8_bytes === null ||
             !codec.decompress(payload.event_zstd, payload.event_utf8_bytes).equals(bytes)
           ) {

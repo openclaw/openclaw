@@ -1,0 +1,219 @@
+title: Cron trusted job owner conversation
+
+scenario:
+  id: cron-trusted-owner-conversation
+  surface: cron
+  gatewayConfigPatch:
+    commands:
+      ownerAllowFrom:
+        - qa-driver
+    tools:
+      gatewayPolicy:
+        allow: [automations]
+        actions:
+          automations: [list, get, add, update]
+        automations:
+          scope: caller
+  coverage:
+    primary:
+      - automation.cron-rpcs
+    secondary:
+      - automation.isolated-cron-execution
+  objective: Verify a conversation can pause the operator-created automations it owns, that its prompt edits narrow them to its own authority, and that other conversations still cannot see them.
+  successCriteria:
+    - Operator-created jobs with an owner conversation keep trusted scheduled authority.
+    - The owner conversation pauses a trusted job whose owner record has no account, and the job stays trusted.
+    - Another conversation cannot pause the owner's trusted job.
+    - A prompt and tool edit from the owner conversation drops the job to account authority bound to that conversation.
+    - A legacy owner record without an account cannot change what a trusted job runs or where its failures alert.
+    - An owner conversion to a system event keeps the account ceiling after an operator restores an agent turn.
+    - A conversation declaration with the same key never replaces its trusted job.
+  docsRefs:
+    - docs/automation/cron-jobs.md
+  codeRefs:
+    - src/gateway/server-methods/cron-caller-scope.ts
+    - src/gateway/server-methods/cron.ts
+    - src/cron/service/jobs-tool-policy.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-cron-trusted-owner.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Owns operator-created cron jobs and two qa-channel conversations that edit them; caller-scoped automation policy matches an owner turn without management grants.
+    channel: qa-channel
+    retryCount: 0
+    timeoutMs: 300000
+    summary: Create trusted jobs owned by one conversation, pause and edit them from that conversation, and require another conversation to be refused.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-cron-trusted-owner
+      otherConversationId: qa-cron-trusted-owner-other
+      readyMarker: QA-CRON-TRUSTED-OWNER-READY
+      pauseMarker: QA-CRON-TRUSTED-OWNER-PAUSED
+      foreignMarker: QA-CRON-TRUSTED-OWNER-FOREIGN
+      ownedMarker: QA-CRON-TRUSTED-OWNER-OWNED-PAUSED
+      narrowMarker: QA-CRON-TRUSTED-OWNER-NARROWED
+      legacyNarrowMarker: QA-CRON-TRUSTED-OWNER-LEGACY-REFUSED
+      realertMarker: QA-CRON-TRUSTED-OWNER-REALERT-REFUSED
+      dormantMarker: QA-CRON-TRUSTED-OWNER-DORMANT
+      redeclareMarker: QA-CRON-TRUSTED-OWNER-REDECLARED
+
+flow:
+  steps:
+    - name: the owner conversation pauses its legacy trusted job without changing its authority
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: cron trusted owner proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForQaChannelReady
+          args: [{ ref: env }, 60000]
+        - call: reset
+        - set: ownerSessionKey
+          value:
+            expr: "`agent:qa:qa-channel:group:group:${config.conversationId}`"
+        - set: ask
+          value:
+            expr: "async (conversationId, text, marker) => { const sinceIndex = state.getSnapshot().messages.filter((row) => row.direction === 'outbound').length; await transport.sendInbound({ conversation: { id: conversationId, kind: 'group' }, senderId: 'qa-driver', senderName: 'QA Driver', text: `@openclaw ${text}` }); await transport.waitForOutbound({ conversation: { id: conversationId, kind: 'group' }, sinceIndex, textIncludes: marker, timeoutMs: 60000 }); return true; }"
+        - set: readyReply
+          value:
+            expr: "await ask(config.conversationId, `Cron trusted owner ready. Reply exactly \\`${config.readyMarker}\\`.`, config.readyMarker)"
+        - set: addTrustedJob
+          value:
+            expr: "async (owner) => await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cron-trusted-owner-${randomUUID()}`, enabled: true, deleteAfterRun: false, owner, schedule: { kind: 'at', at: new Date(Date.now() + 10 * 60 * 1000).toISOString() }, sessionTarget: 'isolated', wakeMode: 'now', payload: { kind: 'agentTurn', message: 'Operator check-in.', toolsAllow: ['read'] }, delivery: { mode: 'none' } }, { timeoutMs: 30000 })"
+        - set: legacyJob
+          value:
+            expr: "await addTrustedJob({ agentId: 'qa', sessionKey: ownerSessionKey })"
+        - set: ownedJob
+          value:
+            expr: "await addTrustedJob({ agentId: 'qa', sessionKey: ownerSessionKey, accountId: 'default' })"
+        - assert:
+            expr: "[legacyJob, ownedJob].every((job) => job.scheduledToolPolicy?.mode === 'trusted') && !legacyJob.owner?.accountId"
+            message:
+              expr: "`operator jobs did not keep trusted authority: ${JSON.stringify([legacyJob, ownedJob].map((job) => ({ owner: job.owner, policy: job.scheduledToolPolicy })))}`"
+        - set: pauseReply
+          value:
+            expr: "await ask(config.conversationId, `Trusted automation owner QA check: action=pause target=${legacyJob.id} marker=${config.pauseMarker}`, config.pauseMarker)"
+        - set: lastToolOutput
+          value:
+            expr: "async () => (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).filter((request) => String(request.prompt ?? '').includes('Trusted automation owner QA check') && request.toolOutput).map((request) => String(request.toolOutput).slice(0, 1200)).slice(-1)"
+        - set: pausedJob
+          value:
+            expr: "await env.gateway.call('cron.get', { id: legacyJob.id }, { timeoutMs: 30000 })"
+        - assert:
+            expr: "pausedJob.enabled === false && pausedJob.scheduledToolPolicy?.mode === 'trusted'"
+            message:
+              expr: "`owner pause did not disable the trusted job in place: ${JSON.stringify({ enabled: pausedJob.enabled, policy: pausedJob.scheduledToolPolicy, tool: await lastToolOutput() })}`"
+      detailsExpr: "`paused enabled=${pausedJob.enabled} policy=${pausedJob.scheduledToolPolicy?.mode}`"
+
+    - name: another conversation cannot pause the owner's trusted job
+      actions:
+        - set: foreignReply
+          value:
+            expr: "await ask(config.otherConversationId, `Trusted automation owner QA check: action=pause target=${ownedJob.id} marker=${config.foreignMarker}`, config.foreignMarker)"
+        - set: foreignJob
+          value:
+            expr: "await env.gateway.call('cron.get', { id: ownedJob.id }, { timeoutMs: 30000 })"
+        - assert:
+            expr: "foreignJob.enabled === true && foreignJob.scheduledToolPolicy?.mode === 'trusted' && String((await lastToolOutput())[0] ?? '').includes('not found')"
+            message:
+              expr: "`another conversation changed the owner's trusted job: ${JSON.stringify({ enabled: foreignJob.enabled, policy: foreignJob.scheduledToolPolicy, tool: await lastToolOutput() })}`"
+      detailsExpr: "`foreign enabled=${foreignJob.enabled}`"
+
+    - name: the owner conversation pauses its account-stamped trusted job
+      actions:
+        - set: ownedReply
+          value:
+            expr: "await ask(config.conversationId, `Trusted automation owner QA check: action=pause target=${ownedJob.id} marker=${config.ownedMarker}`, config.ownedMarker)"
+        - set: ownedPaused
+          value:
+            expr: "await env.gateway.call('cron.get', { id: ownedJob.id }, { timeoutMs: 30000 })"
+        - assert:
+            expr: "ownedPaused.enabled === false && ownedPaused.scheduledToolPolicy?.mode === 'trusted'"
+            message:
+              expr: "`owner pause did not disable the account-stamped trusted job: ${JSON.stringify({ enabled: ownedPaused.enabled, policy: ownedPaused.scheduledToolPolicy, tool: await lastToolOutput() })}`"
+      detailsExpr: "`owned paused enabled=${ownedPaused.enabled} policy=${ownedPaused.scheduledToolPolicy?.mode}`"
+
+    - name: the owner conversation's prompt edit narrows its trusted job to the conversation's authority
+      actions:
+        - set: narrowReply
+          value:
+            expr: "await ask(config.conversationId, `Trusted automation owner QA check: action=narrow target=${ownedJob.id} marker=${config.narrowMarker}`, config.narrowMarker)"
+        - set: narrowedJob
+          value:
+            expr: "await env.gateway.call('cron.get', { id: ownedJob.id }, { timeoutMs: 30000 })"
+        - assert:
+            expr: "narrowedJob.payload?.message === 'Narrowed by the owner conversation.' && narrowedJob.scheduledToolPolicy?.mode === 'account' && narrowedJob.scheduledToolPolicy.ownerSessionKey === ownerSessionKey"
+            message:
+              expr: "`owner prompt edit did not narrow the trusted job: ${JSON.stringify({ message: narrowedJob.payload?.message, policy: narrowedJob.scheduledToolPolicy, tool: await lastToolOutput() })}`"
+        - set: legacyNarrowReply
+          value:
+            expr: "await ask(config.conversationId, `Trusted automation owner QA check: action=narrow target=${legacyJob.id} marker=${config.legacyNarrowMarker}`, config.legacyNarrowMarker)"
+        - set: legacyAfter
+          value:
+            expr: "await env.gateway.call('cron.get', { id: legacyJob.id }, { timeoutMs: 30000 })"
+        - assert:
+            expr: "legacyAfter.payload?.message === 'Operator check-in.' && legacyAfter.scheduledToolPolicy?.mode === 'trusted' && String((await lastToolOutput())[0] ?? '').includes('owner record has no account')"
+            message:
+              expr: "`a legacy owner record changed what a trusted job runs: ${JSON.stringify({ message: legacyAfter.payload?.message, policy: legacyAfter.scheduledToolPolicy, tool: await lastToolOutput() })}`"
+      detailsExpr: "`narrowed policy=${narrowedJob.scheduledToolPolicy?.mode} legacy policy=${legacyAfter.scheduledToolPolicy?.mode}`"
+
+    - name: a legacy owner record cannot move a trusted job's failure alerts
+      actions:
+        - set: realertReply
+          value:
+            expr: "await ask(config.conversationId, `Trusted automation owner QA check: action=realert target=${legacyJob.id} marker=${config.realertMarker}`, config.realertMarker)"
+        - set: realertAfter
+          value:
+            expr: "await env.gateway.call('cron.get', { id: legacyJob.id }, { timeoutMs: 30000 })"
+        - assert:
+            expr: "!realertAfter.failureAlert && realertAfter.scheduledToolPolicy?.mode === 'trusted' && String((await lastToolOutput())[0] ?? '').includes('owner record has no account')"
+            message:
+              expr: "`a legacy owner record moved a trusted job's failure alerts: ${JSON.stringify({ failureAlert: realertAfter.failureAlert, policy: realertAfter.scheduledToolPolicy, tool: await lastToolOutput() })}`"
+      detailsExpr: "`realert failureAlert=${JSON.stringify(realertAfter.failureAlert ?? null)} policy=${realertAfter.scheduledToolPolicy?.mode}`"
+
+    - name: an owner conversion to a system event keeps the account ceiling through operator restoration
+      actions:
+        - set: dormantJob
+          value:
+            expr: "await addTrustedJob({ agentId: 'qa', sessionKey: ownerSessionKey, accountId: 'default' })"
+        - set: dormantReply
+          value:
+            expr: "await ask(config.conversationId, `Trusted automation owner QA check: action=dormant target=${dormantJob.id} marker=${config.dormantMarker}`, config.dormantMarker)"
+        - set: dormantAfter
+          value:
+            expr: "await env.gateway.call('cron.get', { id: dormantJob.id }, { timeoutMs: 30000 })"
+        - set: restored
+          value:
+            expr: "await env.gateway.call('cron.update', { id: dormantJob.id, patch: { sessionTarget: 'isolated', payload: { kind: 'agentTurn', message: 'Restored by the operator.', toolsAllow: ['read'] } } }, { timeoutMs: 30000 })"
+        - set: restoredJob
+          value:
+            expr: "await env.gateway.call('cron.get', { id: dormantJob.id }, { timeoutMs: 30000 })"
+        - assert:
+            expr: "dormantAfter.payload?.kind === 'systemEvent' && dormantAfter.scheduledToolPolicy?.mode === 'account' && restoredJob.payload?.kind === 'agentTurn' && restoredJob.scheduledToolPolicy?.mode === 'account' && restoredJob.scheduledToolPolicy.ownerSessionKey === ownerSessionKey"
+            message:
+              expr: "`a dormant owner conversion lost its account ceiling: ${JSON.stringify({ dormant: dormantAfter.scheduledToolPolicy, restored: restoredJob.scheduledToolPolicy, tool: await lastToolOutput() })}`"
+      detailsExpr: "`dormant policy=${dormantAfter.scheduledToolPolicy?.mode} restored policy=${restoredJob.scheduledToolPolicy?.mode}`"
+
+    - name: a conversation's declaration never replaces its trusted job
+      actions:
+        - set: declarationKey
+          value:
+            expr: "`qa-trusted-owner-${randomUUID().slice(0, 8)}`"
+        - set: keyedJob
+          value:
+            expr: "await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cron-trusted-keyed-${randomUUID()}`, declarationKey, enabled: true, deleteAfterRun: false, owner: { agentId: 'qa', sessionKey: ownerSessionKey, accountId: 'default' }, schedule: { kind: 'at', at: new Date(Date.now() + 10 * 60 * 1000).toISOString() }, sessionTarget: 'isolated', wakeMode: 'now', payload: { kind: 'agentTurn', message: 'Operator check-in.', toolsAllow: ['read'] }, delivery: { mode: 'none' } }, { timeoutMs: 30000 })"
+        - set: keyedBefore
+          value:
+            expr: "keyedJob.job ?? keyedJob"
+        - set: redeclareReply
+          value:
+            expr: "await ask(config.conversationId, `Trusted automation owner QA check: action=redeclare target=${declarationKey} marker=${config.redeclareMarker}`, config.redeclareMarker)"
+        - set: keyedAfter
+          value:
+            expr: "await env.gateway.call('cron.get', { id: keyedBefore.id }, { timeoutMs: 30000 })"
+        - assert:
+            expr: "keyedBefore?.scheduledToolPolicy?.mode === 'trusted' && keyedAfter.payload?.kind === 'agentTurn' && keyedAfter.payload?.message === 'Operator check-in.' && keyedAfter.scheduledToolPolicy?.mode === 'trusted' && !String((await lastToolOutput())[0] ?? '').includes('Invalid arguments')"
+            message:
+              expr: "`a conversation declaration replaced its trusted job: ${JSON.stringify({ before: keyedBefore?.scheduledToolPolicy, after: { payload: keyedAfter.payload, policy: keyedAfter.scheduledToolPolicy }, tool: await lastToolOutput() })}`"
+      detailsExpr: "`redeclare stored payload=${keyedAfter.payload?.kind} policy=${keyedAfter.scheduledToolPolicy?.mode} tool=${String((await lastToolOutput())[0] ?? '').replace(/\\s+/g, ' ').slice(0, 160)}`"

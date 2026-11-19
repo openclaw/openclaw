@@ -22,19 +22,15 @@ describe("sharing identity display", () => {
       profiles: [
         {
           id: "profile-1",
-          displayName: "  ",
-          emails: ["new-name@example.test"],
-          githubIdentity: null,
-          mergedInto: null,
-          createdAt: 1,
+          label: "new-name@example.test",
           updatedAt: 2,
-          avatarMime: null,
           hasAvatar: false,
         },
       ],
     });
     expect(identities.find((item) => item.id === "profile-1")).toMatchObject({
       label: "new-name@example.test",
+      avatarUrl: "/api/users/profile-1/avatar?v=2",
       identity: { type: "profile", id: "profile-1" },
     });
     expect(identities.find((item) => item.id === "agent-1")).toMatchObject({

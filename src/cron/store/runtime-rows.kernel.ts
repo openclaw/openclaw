@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { CronStoredJob } from "../types.js";
 import {
   deleteCronJobRowInDatabase,
   loadedCronStoreFromRows,
   loadCronRows,
-  upsertCronJobRow,
+  updateCronRuntimeRow,
 } from "./row-codec.js";
 import {
   prepareCronRunReceiptWriteSchema,
@@ -17,7 +17,7 @@ import {
 import type { CronStoreTransactionHooks } from "./transaction-hooks.types.js";
 
 export type CronRuntimeRowsMutation<T> = (context: {
-  database: DatabaseSync;
+  database: EngineConnection;
   receiptSchema: CronRunReceiptWriteSchema;
   jobs: ReadonlyMap<string, CronStoredJob>;
 }) => {
@@ -29,7 +29,7 @@ export type CronRuntimeRowsMutation<T> = (context: {
 
 /** The caller owns the transaction; target rows and their authority are reread under its write lock. */
 export function mutateCronRuntimeRowsInDatabase<T>(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   storeKey: string;
   jobIds: ReadonlySet<string>;
   transactionHooks?: Pick<CronStoreTransactionHooks, "beforeWrite" | "afterWrite">;
@@ -52,6 +52,7 @@ export function mutateCronRuntimeRowsInDatabase<T>(params: {
     });
   }
   const jobs = new Map(loadedJobs.map((job) => [job.id, job] as const));
+  const previousEnabled = new Map(loadedJobs.map((job) => [job.id, job.enabled ?? true] as const));
   const mutation = params.mutate({ database: db, jobs, receiptSchema });
   const upsertJobIds = [...new Set(mutation.upsertJobIds ?? [])].toSorted();
   const deleteJobIds = [...new Set(mutation.deleteJobIds ?? [])].toSorted();
@@ -66,7 +67,7 @@ export function mutateCronRuntimeRowsInDatabase<T>(params: {
     const row = rowsByJobId.get(jobId);
     const job = jobs.get(jobId);
     if (row && job && !deleteJobIds.includes(jobId)) {
-      upsertCronJobRow(db, storeKey, job, row.sort_order, { knownExistingRow: row });
+      updateCronRuntimeRow(db, storeKey, job, previousEnabled.get(jobId));
     }
   }
   if (runHooks) {

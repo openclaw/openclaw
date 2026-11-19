@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"net/url"
 	"os"
 	"regexp"
@@ -55,34 +56,32 @@ func translateDocBodyChunked(ctx context.Context, translator docsTranslator, rel
 	if strings.TrimSpace(body) == "" {
 		return body, nil
 	}
-	placeholderState := NewPlaceholderState(body)
-	placeholders := make([]string, 0, 8)
-	mapping := map[string]string{}
-	maskedBody := maskMarkdownFencedLiterals(body, placeholderState.Next, &placeholders, mapping)
-	maskedBody = maskMarkdownDocSyntax(maskedBody, placeholderState.Next, &placeholders, mapping)
-	listPlaceholders := maskedListMarkerPlaceholders(mapping)
+	state := NewPlaceholderState(body)
+	maskedBody := maskMarkdownFencedLiterals(body, state)
+	maskedBody = maskMarkdownDocSyntax(maskedBody, state)
+	listPlaceholders := maskedListMarkerPlaceholders(state.mapping)
 	blocks := splitDocBodyIntoBlocks(maskedBody)
 	groups := groupDocBlocks(blocks, docsI18nDocChunkMaxBytes())
 	logDocChunkPlan(relPath, blocks, groups)
 	out := strings.Builder{}
 	for index, group := range groups {
 		chunkID := fmt.Sprintf("%s.chunk-%03d", relPath, index+1)
-		translated, err := translateDocBlockGroup(ctx, translator, chunkID, group, placeholders, listPlaceholders, srcLang, tgtLang)
+		translated, err := translateDocBlockGroup(ctx, translator, chunkID, group, state.placeholders, listPlaceholders, srcLang, tgtLang)
 		if err != nil {
 			return "", err
 		}
 		out.WriteString(translated)
 	}
 	translatedBody := out.String()
-	translatedBody = normalizeMaskedListMarkerPlaceholders(translatedBody, mapping)
+	translatedBody = normalizeMaskedListMarkerPlaceholders(translatedBody, state.mapping)
 	translatedBody = normalizeMaskedListMarkerSpacing(maskedBody, translatedBody, listPlaceholders)
 	translatedBody = escapeUnexpectedListItemBodyMarkers(maskedBody, translatedBody, listPlaceholders)
 	translatedBody = escapeUnexpectedMarkdownListMarkers(translatedBody, listPlaceholders)
-	if err := validatePlaceholders(translatedBody, placeholders); err != nil {
+	if err := validatePlaceholders(translatedBody, state.placeholders); err != nil {
 		return "", fmt.Errorf("%s: restore fenced literals: %w", relPath, err)
 	}
 	maskedListMarkers := extractMarkdownListMarkerPrefixes(translatedBody)
-	translatedBody = unmaskMarkdown(translatedBody, placeholders, mapping)
+	translatedBody = unmaskMarkdown(translatedBody, state.placeholders, state.mapping)
 	if err := validateDocBodyFencedLiterals(body, translatedBody); err != nil {
 		log.Printf(
 			"docs-i18n: final list diagnostics %s source=%q masked=%q translated=%q",
@@ -223,43 +222,24 @@ func splitDocBodyIntoBlocks(body string) []string {
 	if current.Len() > 0 {
 		blocks = append(blocks, current.String())
 	}
-	if len(blocks) == 0 {
-		return []string{body}
-	}
 	return blocks
 }
 
 func groupDocBlocks(blocks []string, maxBytes int) [][]string {
-	if len(blocks) == 0 {
-		return nil
-	}
 	if maxBytes <= 0 {
 		maxBytes = defaultDocChunkMaxBytes
 	}
-	groups := make([][]string, 0, len(blocks))
-	current := make([]string, 0, 8)
+	var groups [][]string
 	currentBytes := 0
-	flush := func() {
-		if len(current) == 0 {
-			return
-		}
-		groups = append(groups, current)
-		current = make([]string, 0, 8)
-		currentBytes = 0
-	}
 	for _, block := range blocks {
-		blockBytes := len(block)
-		if len(current) > 0 && currentBytes+blockBytes > maxBytes {
-			flush()
+		if len(groups) == 0 || currentBytes+len(block) > maxBytes {
+			groups = append(groups, []string{})
+			currentBytes = 0
 		}
-		if blockBytes > maxBytes {
-			groups = append(groups, []string{block})
-			continue
-		}
-		current = append(current, block)
-		currentBytes += blockBytes
+		last := len(groups) - 1
+		groups[last] = append(groups[last], block)
+		currentBytes += len(block)
 	}
-	flush()
 	return groups
 }
 
@@ -298,10 +278,11 @@ func validateDocChunkTranslation(source, translated string) error {
 	if err := validateDocChunkLiterals(sourceStructure, translatedStructure); err != nil {
 		return err
 	}
-	if !slices.Equal(sortedKeys(sourceStructure.tagCounts), sortedKeys(translatedStructure.tagCounts)) {
+	keys := slices.Sorted(maps.Keys(sourceStructure.tagCounts))
+	if !slices.Equal(keys, slices.Sorted(maps.Keys(translatedStructure.tagCounts))) {
 		return fmt.Errorf("component tag set mismatch")
 	}
-	for _, key := range sortedKeys(sourceStructure.tagCounts) {
+	for _, key := range keys {
 		if sourceStructure.tagCounts[key] != translatedStructure.tagCounts[key] {
 			return fmt.Errorf("component tag mismatch for %s: source=%d translated=%d", key, sourceStructure.tagCounts[key], translatedStructure.tagCounts[key])
 		}
@@ -620,15 +601,6 @@ func parseDocsMarkdown(source []byte) ast.Node {
 	return goldmark.New(goldmark.WithExtensions(extension.GFM, extension.Footnote)).Parser().Parse(textpkg.NewReader(source))
 }
 
-func sortedKeys(counts map[string]int) []string {
-	keys := make([]string, 0, len(counts))
-	for key := range counts {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	return keys
-}
-
 func updateFenceDelimiter(current, line string) (string, bool) {
 	delimiter := leadingFenceDelimiter(line)
 	if delimiter == "" {
@@ -675,17 +647,13 @@ func isClosingFenceLine(line, delimiter string) bool {
 func hasUnexpectedTopLevelProtocolWrapper(source, translated string) bool {
 	sourceTrimmed := strings.ToLower(strings.TrimSpace(source))
 	translatedTrimmed := strings.ToLower(strings.TrimSpace(translated))
-	checks := []struct {
-		token string
-		match func(string) bool
-	}{
-		{token: frontmatterTagStart, match: func(text string) bool { return strings.HasPrefix(text, strings.ToLower(frontmatterTagStart)) }},
-		{token: bodyTagStart, match: func(text string) bool { return strings.HasPrefix(text, strings.ToLower(bodyTagStart)) }},
-		{token: frontmatterTagEnd, match: func(text string) bool { return strings.HasSuffix(text, strings.ToLower(frontmatterTagEnd)) }},
-		{token: bodyTagEnd, match: func(text string) bool { return strings.HasSuffix(text, strings.ToLower(bodyTagEnd)) }},
+	for _, token := range []string{frontmatterTagStart, bodyTagStart} {
+		if strings.HasPrefix(translatedTrimmed, token) && !strings.HasPrefix(sourceTrimmed, token) {
+			return true
+		}
 	}
-	for _, check := range checks {
-		if check.match(translatedTrimmed) && !check.match(sourceTrimmed) {
+	for _, token := range []string{frontmatterTagEnd, bodyTagEnd} {
+		if strings.HasSuffix(translatedTrimmed, token) && !strings.HasSuffix(sourceTrimmed, token) {
 			return true
 		}
 	}
@@ -698,7 +666,6 @@ func containsProtocolWrapperToken(text string) bool {
 }
 
 func translatePlannedDocChunkGroups(ctx context.Context, translator docsTranslator, chunkID, source string, groups [][]string, protectedPlaceholders []string, listPlaceholders map[string]string, srcLang, tgtLang string) (string, error) {
-	var out strings.Builder
 	translatedGroups := make([]string, 0, len(groups))
 	for index, group := range groups {
 		translated, err := translateDocBlockGroup(ctx, translator, fmt.Sprintf("%s.%02d", chunkID, index+1), group, protectedPlaceholders, listPlaceholders, srcLang, tgtLang)
@@ -706,9 +673,8 @@ func translatePlannedDocChunkGroups(ctx context.Context, translator docsTranslat
 			return "", err
 		}
 		translatedGroups = append(translatedGroups, translated)
-		out.WriteString(translated)
 	}
-	translated := out.String()
+	translated := strings.Join(translatedGroups, "")
 	if merged, ok := mergeSplitPureFencedDocTranslations(source, translatedGroups); ok {
 		translated = merged
 	}
@@ -742,12 +708,14 @@ func mergeSplitPureFencedDocTranslations(source string, translatedGroups []strin
 
 func splitPureFencedDocSection(text string) (prefix, opening, inner, closing, suffix string, ok bool) {
 	lines := strings.SplitAfter(text, "\n")
-	if len(lines) < 2 {
-		return "", "", "", "", "", false
+	openingIndex, closingIndex := 0, len(lines)-1
+	for openingIndex <= closingIndex && strings.TrimSpace(lines[openingIndex]) == "" {
+		openingIndex++
 	}
-	openingIndex := firstNonEmptyLineIndex(lines)
-	closingIndex := lastNonEmptyLineIndex(lines)
-	if openingIndex == -1 || closingIndex <= openingIndex {
+	for closingIndex > openingIndex && strings.TrimSpace(lines[closingIndex]) == "" {
+		closingIndex--
+	}
+	if closingIndex <= openingIndex {
 		return "", "", "", "", "", false
 	}
 	opening = lines[openingIndex]
@@ -757,9 +725,6 @@ func splitPureFencedDocSection(text string) (prefix, opening, inner, closing, su
 	}
 	prefix = strings.Join(lines[:openingIndex], "")
 	suffix = strings.Join(lines[closingIndex+1:], "")
-	if strings.TrimSpace(prefix) != "" || strings.TrimSpace(suffix) != "" {
-		return "", "", "", "", "", false
-	}
 	inner = strings.Join(lines[openingIndex+1:closingIndex], "")
 	closing = lines[closingIndex]
 	return prefix, opening, inner, closing, suffix, true
@@ -775,11 +740,13 @@ func planDocChunkSplit(blocks []string, maxBytes, promptBudget int) (docChunkSpl
 	}
 	normalizedSource, _ := stripCommonIndent(source)
 	estimatedPromptCost := estimateDocPromptCost(normalizedSource)
-	if len(blocks) > 1 && promptBudget > 0 && estimatedPromptCost > promptBudget {
+	overBytes := maxBytes > 0 && len(source) > maxBytes
+	overPrompt := promptBudget > 0 && estimatedPromptCost > promptBudget
+	if len(blocks) > 1 && overPrompt {
 		return splitDocChunkBlocksMidpoint(blocks, fmt.Sprintf("prompt-budget:%d>%d", estimatedPromptCost, promptBudget))
 	}
-	if len(blocks) == 1 {
-		return planSingletonDocChunk(blocks[0], maxBytes, promptBudget)
+	if len(blocks) == 1 && (overBytes || overPrompt) {
+		return planSingletonDocChunkWithMode(blocks[0], maxBytes, promptBudget, false)
 	}
 	return docChunkSplitPlan{}, false
 }
@@ -792,30 +759,19 @@ func splitDocChunkBlocksMidpoint(blocks []string, reason string) (docChunkSplitP
 	return docChunkSplitPlan{groups: [][]string{blocks[:mid], blocks[mid:]}, reason: reason}, true
 }
 
-func planSingletonDocChunk(block string, maxBytes, promptBudget int) (docChunkSplitPlan, bool) {
-	normalizedBlock, _ := stripCommonIndent(block)
-	estimatedPromptCost := estimateDocPromptCost(normalizedBlock)
-	overBytes := maxBytes > 0 && len(block) > maxBytes
-	overPrompt := promptBudget > 0 && estimatedPromptCost > promptBudget
-	if !overBytes && !overPrompt {
-		return docChunkSplitPlan{}, false
-	}
-
-	return planSingletonDocChunkWithMode(block, maxBytes, promptBudget, false)
-}
-
 func planSingletonDocChunkWithMode(block string, maxBytes, promptBudget int, force bool) (docChunkSplitPlan, bool) {
 	prefix := "singleton-"
 	if force {
 		prefix = "singleton-retry-"
 	}
-	if sections := splitDocBlockSections(block); len(sections) > 1 {
-		if groups := wrapDocChunkSections(sections); len(groups) > 1 {
-			return docChunkSplitPlan{
-				groups: groups,
-				reason: prefix + "structural",
-			}, true
+	groups := [][]string{}
+	for _, section := range splitDocBlockSections(block) {
+		if strings.TrimSpace(section) != "" {
+			groups = append(groups, []string{section})
 		}
+	}
+	if len(groups) > 1 {
+		return docChunkSplitPlan{groups: groups, reason: prefix + "structural"}, true
 	}
 
 	if groups, ok := splitPureFencedDocSectionWithMode(block, maxBytes, promptBudget, force); ok {
@@ -835,45 +791,21 @@ func planSingletonDocChunkWithMode(block string, maxBytes, promptBudget int, for
 	return docChunkSplitPlan{}, false
 }
 
-func wrapDocChunkSections(sections []string) [][]string {
-	groups := make([][]string, 0, len(sections))
-	for _, section := range sections {
-		if strings.TrimSpace(section) == "" {
-			continue
-		}
-		groups = append(groups, []string{section})
-	}
-	return groups
-}
-
 func splitDocBlockSections(block string) []string {
 	lines := strings.SplitAfter(block, "\n")
 	sections := make([]string, 0, len(lines))
 	var current strings.Builder
 	fenceDelimiter := ""
 	for _, line := range lines {
-		lineDelimiter := leadingFenceDelimiter(line)
-		if fenceDelimiter == "" && lineDelimiter != "" {
-			if current.Len() > 0 {
-				sections = append(sections, current.String())
-				current.Reset()
-			}
-			current.WriteString(line)
-			fenceDelimiter = lineDelimiter
-			continue
+		wasInFence := fenceDelimiter != ""
+		var toggled bool
+		fenceDelimiter, toggled = updateFenceDelimiter(fenceDelimiter, line)
+		if !wasInFence && toggled && current.Len() > 0 {
+			sections = append(sections, current.String())
+			current.Reset()
 		}
-
 		current.WriteString(line)
-		if fenceDelimiter != "" {
-			if lineDelimiter != "" && lineDelimiter[0] == fenceDelimiter[0] && len(lineDelimiter) >= len(fenceDelimiter) && isClosingFenceLine(line, fenceDelimiter) {
-				sections = append(sections, current.String())
-				current.Reset()
-				fenceDelimiter = ""
-			}
-			continue
-		}
-
-		if strings.TrimSpace(line) == "" {
+		if (wasInFence && toggled) || (fenceDelimiter == "" && strings.TrimSpace(line) == "") {
 			sections = append(sections, current.String())
 			current.Reset()
 		}
@@ -936,17 +868,10 @@ func splitPlainDocSectionWithMode(text string, maxBytes, promptBudget int, force
 	if current.Len() > 0 {
 		groups = append(groups, []string{current.String()})
 	}
-	if len(groups) <= 1 {
-		if !force {
-			return nil, false
-		}
-		return splitPlainDocSectionMidpoint(lines)
+	if len(groups) > 1 {
+		return groups, true
 	}
-	return groups, true
-}
-
-func splitPlainDocSectionMidpoint(lines []string) ([][]string, bool) {
-	if len(lines) <= 1 {
+	if !force {
 		return nil, false
 	}
 	mid := len(lines) / 2
@@ -958,44 +883,18 @@ func splitPlainDocSectionMidpoint(lines []string) ([][]string, bool) {
 	return [][]string{{left}, {right}}, true
 }
 
-func firstNonEmptyLineIndex(lines []string) int {
-	for index, line := range lines {
-		if strings.TrimSpace(line) != "" {
-			return index
-		}
-	}
-	return -1
-}
-
-func lastNonEmptyLineIndex(lines []string) int {
-	for index := len(lines) - 1; index >= 0; index-- {
-		if strings.TrimSpace(lines[index]) != "" {
-			return index
-		}
-	}
-	return -1
-}
-
 func docsI18nDocChunkMaxBytes() int {
-	value := strings.TrimSpace(os.Getenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES"))
-	if value == "" {
-		return defaultDocChunkMaxBytes
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 {
-		return defaultDocChunkMaxBytes
-	}
-	return parsed
+	return docsI18nPositiveInt("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", defaultDocChunkMaxBytes)
 }
 
 func docsI18nDocChunkPromptBudget() int {
-	value := strings.TrimSpace(os.Getenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_PROMPT_BUDGET"))
-	if value == "" {
-		return defaultDocChunkPromptBudget
-	}
-	parsed, err := strconv.Atoi(value)
+	return docsI18nPositiveInt("OPENCLAW_DOCS_I18N_DOC_CHUNK_PROMPT_BUDGET", defaultDocChunkPromptBudget)
+}
+
+func docsI18nPositiveInt(name string, fallback int) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
 	if err != nil || parsed <= 0 {
-		return defaultDocChunkPromptBudget
+		return fallback
 	}
 	return parsed
 }
@@ -1042,11 +941,7 @@ func stripCommonIndent(text string) (string, string) {
 			out.WriteString(line)
 			continue
 		}
-		if strings.HasPrefix(line, common) {
-			out.WriteString(strings.TrimPrefix(line, common))
-			continue
-		}
-		out.WriteString(line)
+		out.WriteString(strings.TrimPrefix(line, common))
 	}
 	return out.String(), common
 }

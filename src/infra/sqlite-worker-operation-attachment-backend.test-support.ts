@@ -31,7 +31,7 @@ export function createSqliteWorkerBackend(
       assert("word" in attachment && attachment.word instanceof SharedArrayBuffer);
       assert.equal(attachment.word.byteLength, 32);
       assert("label" in attachment && attachment.label === "ordinary-attachment");
-      assert.throws(takeSqliteWorkerOperationAdmissionAttachment, /attachment is unavailable/);
+      assert.equal(takeSqliteWorkerOperationAdmissionAttachment(), attachment);
       requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: "ordinary-js-backend" });
       const word = new Int32Array(attachment.word);
       assert.equal(Atomics.add(word, 0, 1), 0);

@@ -5,53 +5,60 @@ import { readQaScenarioById } from "./scenario-catalog.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { waitForOutboundMessage } from "./suite-runtime-transport.js";
 
-type ReplySequence =
-  | "sent-key-echo"
-  | "edited-key-echo"
-  | "deleted-preview"
-  | "edited-final"
-  | "late-edited-final"
-  | "file-backed-ref"
-  | "late-file-write"
-  | "json-file-ref"
-  | "json5-config"
-  | "config-write-migrations"
-  | "unexpected-migration-marker"
-  | "tilde-file-ref"
-  | "relative-file-ref"
-  | "array-root-file-ref"
-  | "drops-embeddings-destination"
-  | "drops-unrelated-config"
-  | "invalid-single-value-ref"
-  | "invalid-provider-alias"
-  | "invalid-json-pointer-ref"
-  | "symlink-file-ref"
-  | "sibling-file-ref"
-  | "escaped-file-ref";
-
-async function runCredentialHandoffScenario(replySequence: ReplySequence) {
-  const state = createQaBusState();
-  const stateDir = "/qa/state";
-  const keyFilePath = path.join(stateDir, "secrets/key.txt");
-  const providerPath = replySequence === "sibling-file-ref" ? "/qa/secrets/key.txt" : keyFilePath;
-  const scenario = readQaScenarioById("operator-api-key-handoff-live");
-  const oldKey = scenario.execution.config?.oldKey;
-  if (typeof oldKey !== "string") {
-    throw new Error("credential handoff scenario needs an old synthetic key");
-  }
-  const initialConfigValue = {
+function configWithKey(apiKey: string | { source: string; provider: string; id: string }) {
+  return {
     gateway: { mode: "local" },
     memory: {
       search: {
         enabled: false,
         provider: "openai-compatible",
-        remote: { baseUrl: "https://memory.example.invalid/v1/", apiKey: oldKey },
+        remote: { baseUrl: "https://memory.example.invalid/v1/", apiKey },
       },
     },
   };
-  let configText = JSON.stringify(initialConfigValue);
-  let secretFile = "";
+}
 
+type HandoffOptions = {
+  reply?: "sent-key-echo" | "edited-key-echo" | "late-edited-final";
+  file?: {
+    mode?: "json";
+    id?: string;
+    provider?: string;
+    path?: string;
+    realPath?: string;
+    isFile?: boolean;
+    mtimeMs?: number;
+    payload?: (key: string) => unknown;
+  };
+  migrate?: boolean;
+  unrelatedMigration?: boolean;
+};
+
+async function runCredentialHandoffScenario(options: HandoffOptions = {}) {
+  const state = createQaBusState();
+  const stateDir = "/qa/state";
+  const providerPath = options.file?.path ?? path.join(stateDir, "secrets/key.txt");
+  const scenario = readQaScenarioById("operator-api-key-handoff-live");
+  const oldKey = scenario.execution.config?.oldKey;
+  if (typeof oldKey !== "string") {
+    throw new Error("credential handoff scenario needs an old synthetic key");
+  }
+  let configText = JSON.stringify(configWithKey(oldKey));
+  let secretFile = "";
+  const send = (text: string, timestamp: number) =>
+    state.addOutboundMessage({
+      accountId: "qa-channel",
+      to: "dm:operator-key-rotation",
+      text,
+      timestamp,
+    });
+  const edit = (messageId: string, text: string, timestamp: number) =>
+    state.editMessage({
+      accountId: "qa-channel",
+      messageId,
+      text,
+      timestamp,
+    });
   const result = await runLoadedScenarioFlow(scenario.id, {
     state,
     api: {
@@ -69,9 +76,7 @@ async function runCredentialHandoffScenario(replySequence: ReplySequence) {
       },
       fs: {
         realpath: async (filePath: string) =>
-          replySequence === "escaped-file-ref" && filePath === providerPath
-            ? "/outside/key.txt"
-            : filePath,
+          filePath === providerPath ? (options.file?.realPath ?? filePath) : filePath,
         readFile: async (filePath: string) => {
           if (filePath === "/qa/openclaw.json") {
             return configText;
@@ -82,20 +87,16 @@ async function runCredentialHandoffScenario(replySequence: ReplySequence) {
           throw new Error(`unexpected QA file read: ${filePath}`);
         },
         stat: async (filePath: string) => {
-          if (filePath !== "/qa/openclaw.json") {
-            throw new Error(`unexpected QA file stat: ${filePath}`);
-          }
+          expect(filePath).toBe("/qa/openclaw.json");
           return { mtimeMs: 100 };
         },
         lstat: async (filePath: string) => {
-          if (filePath !== providerPath) {
-            throw new Error(`unexpected QA file lstat: ${filePath}`);
-          }
+          expect(filePath).toBe(providerPath);
           return {
-            mtimeMs: replySequence === "late-file-write" ? 250 : 100,
+            mtimeMs: options.file?.mtimeMs ?? 100,
             mode: 0o100600,
             nlink: 1,
-            isFile: () => replySequence !== "symlink-file-ref",
+            isFile: () => options.file?.isFile ?? true,
           };
         },
       },
@@ -104,179 +105,86 @@ async function runCredentialHandoffScenario(replySequence: ReplySequence) {
         if (!newKey) {
           throw new Error("operator request did not contain the new synthetic key");
         }
-        const updatedConfigValue = structuredClone(initialConfigValue);
-        updatedConfigValue.memory.search.remote.apiKey = newKey;
-        configText = JSON.stringify(updatedConfigValue);
-        if (
-          replySequence === "file-backed-ref" ||
-          replySequence === "late-file-write" ||
-          replySequence === "json-file-ref" ||
-          replySequence === "invalid-single-value-ref" ||
-          replySequence === "invalid-provider-alias" ||
-          replySequence === "invalid-json-pointer-ref" ||
-          replySequence === "tilde-file-ref" ||
-          replySequence === "relative-file-ref" ||
-          replySequence === "array-root-file-ref" ||
-          replySequence === "symlink-file-ref" ||
-          replySequence === "sibling-file-ref" ||
-          replySequence === "escaped-file-ref"
-        ) {
-          const jsonProvider =
-            replySequence === "json-file-ref" ||
-            replySequence === "invalid-json-pointer-ref" ||
-            replySequence === "array-root-file-ref";
-          const providerAlias = replySequence === "invalid-provider-alias" ? "QA_KEY" : "qa_key";
-          secretFile =
-            replySequence === "array-root-file-ref"
-              ? JSON.stringify([{ key: newKey }])
-              : jsonProvider
-                ? JSON.stringify({
-                    qa: {
-                      [replySequence === "invalid-json-pointer-ref" ? "~2key" : "key"]: newKey,
+        const file = options.file;
+        const provider = file?.provider ?? "qa_key";
+        const config = configWithKey(
+          file
+            ? {
+                source: "file",
+                provider,
+                id: file.id ?? (file.mode === "json" ? "/qa/key" : "value"),
+              }
+            : newKey,
+        );
+        secretFile =
+          file?.mode === "json"
+            ? JSON.stringify(file.payload ? file.payload(newKey) : { qa: { key: newKey } })
+            : `${newKey}\n`;
+        configText = `// operator-authored config\n${JSON.stringify({
+          ...config,
+          ...(file
+            ? {
+                secrets: {
+                  providers: {
+                    [provider]: {
+                      source: "file",
+                      path: providerPath,
+                      mode: file.mode ?? "singleValue",
                     },
-                  })
-                : `${newKey}\n`;
-          configText = JSON.stringify({
-            ...updatedConfigValue,
-            memory: {
-              ...updatedConfigValue.memory,
-              search: {
-                ...updatedConfigValue.memory.search,
-                remote: {
-                  ...updatedConfigValue.memory.search.remote,
-                  apiKey: {
-                    source: "file",
-                    provider: providerAlias,
-                    id: jsonProvider
-                      ? replySequence === "invalid-json-pointer-ref"
-                        ? "/qa/~2key"
-                        : replySequence === "array-root-file-ref"
-                          ? "/0/key"
-                          : "/qa/key"
-                      : replySequence === "invalid-single-value-ref"
-                        ? "wrong"
-                        : "value",
                   },
                 },
-              },
-            },
-            secrets: {
-              providers: {
-                [providerAlias]: {
-                  source: "file",
-                  path:
-                    replySequence === "tilde-file-ref"
-                      ? "~/state/secrets/key.txt"
-                      : replySequence === "relative-file-ref"
-                        ? "state/secrets/key.txt"
-                        : providerPath,
-                  mode: jsonProvider ? "json" : "singleValue",
+              }
+            : {}),
+          ...(options.migrate || options.unrelatedMigration
+            ? {
+                meta: {
+                  migrations: options.unrelatedMigration
+                    ? { unrelatedMarker: true }
+                    : { modelPolicyAllowlist: true, utilityModelSeparation: true },
                 },
-              },
-            },
-          });
-        }
-        if (replySequence === "json5-config") {
-          configText = `// operator-authored config\n${JSON.stringify(updatedConfigValue)}`;
-        }
-        if (replySequence === "config-write-migrations") {
-          configText = JSON.stringify({
-            ...updatedConfigValue,
-            meta: {
-              migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true },
-            },
-          });
-        }
-        if (replySequence === "unexpected-migration-marker") {
-          configText = JSON.stringify({
-            ...updatedConfigValue,
-            meta: { migrations: { unrelatedMarker: true } },
-          });
-        }
-        if (replySequence === "drops-embeddings-destination") {
-          configText = JSON.stringify({
-            gateway: updatedConfigValue.gateway,
-            memory: { search: { remote: { apiKey: newKey } } },
-          });
-        }
-        if (replySequence === "drops-unrelated-config") {
-          configText = JSON.stringify({ memory: updatedConfigValue.memory });
-        }
-        if (replySequence === "sent-key-echo" || replySequence === "edited-key-echo") {
-          const message = state.addOutboundMessage({
-            accountId: "qa-channel",
-            to: "dm:operator-key-rotation",
-            text: replySequence === "sent-key-echo" ? `Temporary echo: ${newKey}` : "Working.",
-            timestamp: 200,
-          });
-          if (replySequence === "edited-key-echo") {
-            state.editMessage({
-              accountId: "qa-channel",
-              messageId: message.id,
-              text: `Temporary echo: ${newKey}`,
-              timestamp: 250,
-            });
+              }
+            : {}),
+        })}`;
+        if (options.reply === "sent-key-echo" || options.reply === "edited-key-echo") {
+          const message = send(
+            options.reply === "sent-key-echo" ? `Temporary echo: ${newKey}` : "Working.",
+            200,
+          );
+          if (options.reply === "edited-key-echo") {
+            edit(message.id, `Temporary echo: ${newKey}`, 250);
           }
-          state.editMessage({
-            accountId: "qa-channel",
-            messageId: message.id,
-            text: "Configuration updated.",
-            timestamp: 300,
-          });
-          return;
+          edit(message.id, "Configuration updated.", 300);
+        } else {
+          const preview = send("Working on the configuration.", 50);
+          if (options.reply === "late-edited-final") {
+            edit(preview.id, "Configuration updated.", 300);
+          } else {
+            state.deleteMessage({ accountId: "qa-channel", messageId: preview.id });
+            send("Configuration updated.", 200);
+          }
         }
-        if (replySequence === "edited-final" || replySequence === "late-edited-final") {
-          const preview = state.addOutboundMessage({
-            accountId: "qa-channel",
-            to: "dm:operator-key-rotation",
-            text: "Working on the configuration.",
-            timestamp: replySequence === "late-edited-final" ? 50 : 200,
-          });
-          state.editMessage({
-            accountId: "qa-channel",
-            messageId: preview.id,
-            text: "Configuration updated.",
-            timestamp: 300,
-          });
-          return;
-        }
-        const preview = state.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "dm:operator-key-rotation",
-          text: "Working on the configuration.",
-          timestamp: 50,
-        });
-        state.deleteMessage({ accountId: "qa-channel", messageId: preview.id });
-        state.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "dm:operator-key-rotation",
-          text: "Configuration updated.",
-          timestamp: 200,
-        });
       },
       waitForOutboundMessage: async (...args: Parameters<typeof waitForOutboundMessage>) => {
-        const [transportState, predicate, , options] = args;
-        return await waitForOutboundMessage(transportState, predicate, 10, options);
+        const [transportState, predicate, , waitOptions] = args;
+        return await waitForOutboundMessage(transportState, predicate, 10, waitOptions);
       },
     },
   });
-
   return { result, state };
 }
 
 describe("operator key handoff scenario assertions", () => {
   it.each(["sent-key-echo", "edited-key-echo"] as const)(
-    "rejects a key echoed in an outbound %s and then edited away",
-    async (replySequence) => {
-      await expect(runCredentialHandoffScenario(replySequence)).rejects.toThrow(
+    "rejects %s even when edited away",
+    async (reply) => {
+      await expect(runCredentialHandoffScenario({ reply })).rejects.toThrow(
         "The assistant repeated a key",
       );
     },
   );
 
-  it("accepts a deleted preview followed by one durable final reply", async () => {
-    const { result, state } = await runCredentialHandoffScenario("deleted-preview");
-
+  it("accepts config migrations and a deleted preview followed by one durable final", async () => {
+    const { result, state } = await runCredentialHandoffScenario({ migrate: true });
     expect(result.status).toBe("pass");
     expect(result.steps[0]?.details).toBe("configUpdated=true; outboundCount=1; keyEcho=false");
     expect(state.getSnapshot().messages.map((message) => message.deleted === true)).toEqual([
@@ -285,105 +193,78 @@ describe("operator key handoff scenario assertions", () => {
     ]);
   });
 
-  it("accepts a surviving edited final sent after the config update", async () => {
-    const { result } = await runCredentialHandoffScenario("edited-final");
-
-    expect(result.status).toBe("pass");
-    expect(result.steps[0]?.details).toBe("configUpdated=true; outboundCount=1; keyEcho=false");
-  });
-
-  it("rejects a final reply sent before the config update even when edited later", async () => {
-    await expect(runCredentialHandoffScenario("late-edited-final")).rejects.toThrow(
-      "The assistant did not update the OpenClaw embeddings API key before the final reply.",
-    );
-  });
-
-  it.each(["file-backed-ref", "json-file-ref"] as const)(
-    "accepts a %s that resolves to the supplied key",
-    async (replySequence) => {
-      const { result } = await runCredentialHandoffScenario(replySequence);
-
+  it.each(["singleValue", "json"] as const)(
+    "accepts a %s file resolving to the supplied key",
+    async (mode) => {
+      const { result } = await runCredentialHandoffScenario({
+        file: mode === "json" ? { mode } : {},
+      });
       expect(result.status).toBe("pass");
       expect(result.steps[0]?.details).toBe("configUpdated=true; outboundCount=1; keyEcho=false");
     },
   );
 
-  it("accepts an authorized update written as JSON5", async () => {
-    const { result } = await runCredentialHandoffScenario("json5-config");
-
-    expect(result.status).toBe("pass");
-  });
-
-  it("accepts config-write migration markers with the authorized key update", async () => {
-    const { result } = await runCredentialHandoffScenario("config-write-migrations");
-
-    expect(result.status).toBe("pass");
-  });
-
   it.each([
-    "drops-embeddings-destination",
-    "drops-unrelated-config",
-    "unexpected-migration-marker",
-  ] as const)("rejects an update that %s", async (replySequence) => {
-    await expect(runCredentialHandoffScenario(replySequence)).rejects.toThrow(
+    [
+      "final predates config",
+      { reply: "late-edited-final" },
+      "The assistant did not update the OpenClaw embeddings API key before the final reply.",
+    ],
+    [
+      "final predates key file",
+      { file: { mtimeMs: 250 } },
+      "The assistant did not update the OpenClaw embeddings API key before the final reply.",
+    ],
+    [
+      "unrelated migration",
+      { unrelatedMigration: true },
       "The assistant changed unrelated OpenClaw configuration while rotating the key.",
-    );
-  });
-
-  it("refuses a key file resolving outside the isolated Gateway", async () => {
-    await expect(runCredentialHandoffScenario("escaped-file-ref")).rejects.toThrow(
+    ],
+    [
+      "escaped file",
+      { file: { realPath: "/outside/key.txt" } },
       "The embeddings key file is outside the isolated QA Gateway state directory.",
-    );
-  });
-
-  it("rejects a sibling key file inside the QA temp root but outside the state directory", async () => {
-    await expect(runCredentialHandoffScenario("sibling-file-ref")).rejects.toThrow(
-      "The embeddings key file is outside the isolated QA Gateway state directory.",
-    );
-  });
-
-  it("rejects a tilde key path even when it resolves inside the isolated state directory", async () => {
-    await expect(runCredentialHandoffScenario("tilde-file-ref")).rejects.toThrow(
+    ],
+    [
+      "relative path",
+      { file: { path: "~/state/secrets/key.txt" } },
       "The embeddings key file provider path is not absolute.",
-    );
-  });
-
-  it("rejects a relative file-provider path", async () => {
-    await expect(runCredentialHandoffScenario("relative-file-ref")).rejects.toThrow(
-      "The embeddings key file provider path is not absolute.",
-    );
-  });
-
-  it("rejects a JSON array-root key file that OpenClaw cannot resolve", async () => {
-    await expect(runCredentialHandoffScenario("array-root-file-ref")).rejects.toThrow(
-      "The embeddings key file provider payload is not a JSON object.",
-    );
-  });
-
-  it("rejects a symlinked file-backed provider", async () => {
-    await expect(runCredentialHandoffScenario("symlink-file-ref")).rejects.toThrow(
+    ],
+    [
+      "symlink",
+      { file: { isFile: false } },
       "The embeddings key file is not a private regular file.",
-    );
-  });
-
-  it("rejects an invalid singleValue SecretRef id", async () => {
-    await expect(runCredentialHandoffScenario("invalid-single-value-ref")).rejects.toThrow(
+    ],
+    [
+      "array root",
+      { file: { mode: "json", payload: (key: string) => [{ key }] } },
+      "The embeddings key file provider payload is not a JSON object.",
+    ],
+    [
+      "invalid singleValue id",
+      { file: { id: "wrong" } },
       "The embeddings key references an invalid file provider.",
-    );
-  });
-
-  it.each(["invalid-provider-alias", "invalid-json-pointer-ref"] as const)(
-    "rejects an invalid file SecretRef with %s",
-    async (replySequence) => {
-      await expect(runCredentialHandoffScenario(replySequence)).rejects.toThrow(
-        "The embeddings key references an invalid file provider.",
-      );
+    ],
+    [
+      "invalid provider alias",
+      { file: { provider: "QA_KEY" } },
+      "The embeddings key references an invalid file provider.",
+    ],
+    [
+      "invalid JSON pointer escape",
+      {
+        file: {
+          mode: "json",
+          id: "/qa/~2key",
+          payload: (key: string) => ({ qa: { "~2key": key } }),
+        },
+      },
+      "The embeddings key references an invalid file provider.",
+    ],
+  ] satisfies Array<[string, HandoffOptions, string]>)(
+    "rejects %s",
+    async (_label, options, error) => {
+      await expect(runCredentialHandoffScenario(options)).rejects.toThrow(error);
     },
   );
-
-  it("rejects a key file updated after the final reply", async () => {
-    await expect(runCredentialHandoffScenario("late-file-write")).rejects.toThrow(
-      "The assistant did not update the OpenClaw embeddings API key before the final reply.",
-    );
-  });
 });

@@ -1,6 +1,3 @@
-/**
- * Public SDK facade for browser cleanup and trash operations.
- */
 import type { SessionEntryCurrentPreparation } from "../config/sessions/session-entry-current.types.js";
 import { tryLoadActivatedBundledPluginPublicSurfaceModule } from "./facade-runtime.js";
 export { movePathToTrash, type MovePathToTrashOptions } from "./browser-trash.js";
@@ -18,10 +15,6 @@ type BrowserMaintenanceSurface = {
   closeTrackedBrowserTabsForSessions: (params: CloseTrackedBrowserTabsParams) => Promise<number>;
 };
 
-function hasRequestedSessionKeys(sessionKeys: Array<string | undefined>): boolean {
-  return sessionKeys.some((key) => Boolean(key?.trim()));
-}
-
 /** Closes tracked browser tabs for requested session keys when the browser plugin is active. */
 export async function closeTrackedBrowserTabsForSessions(
   params: CloseTrackedBrowserTabsParams,
@@ -30,7 +23,7 @@ export async function closeTrackedBrowserTabsForSessions(
     params.onWarn?.("browser cleanup unavailable: sessionEntryCurrent requires prepareCurrent");
     return 0;
   }
-  if (params.isCurrent?.() === false || !hasRequestedSessionKeys(params.sessionKeys)) {
+  if (params.isCurrent?.() === false || !params.sessionKeys.some((key) => Boolean(key?.trim()))) {
     return 0;
   }
 

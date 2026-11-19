@@ -61,6 +61,59 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
   </Accordion>
 </AccordionGroup>
 
+## Provider names and icons
+
+Set `models.providers.<id>.name` and `icon` to customize how a provider appears
+in model pickers and provider settings. These fields are presentation only: the
+provider ID, model references, credentials, routing, and existing sessions stay
+unchanged. Omit them to keep the existing appearance.
+
+```json5
+{
+  models: {
+    providers: {
+      workstation: {
+        baseUrl: "http://127.0.0.1:8080/v1",
+        api: "openai-completions",
+        auth: "none",
+        name: "Workstation",
+        icon: { source: "file", path: "icons/workstation.png" },
+        models: [{ id: "local-model", name: "Local model" }],
+      },
+    },
+  },
+}
+```
+
+The optional name must contain 1–100 characters after trimming. Choose one icon source:
+
+- Local artwork: `{ source: "file", path: "icons/workstation.png" }`. Absolute
+  paths and `~/` are supported. Relative paths resolve from the directory containing
+  the active OpenClaw configuration file, not the workspace or browser. The file
+  must be readable by the Gateway user.
+- HTTPS artwork: `{ source: "url", url: "https://images.example.com/icon.png" }`.
+  URLs must not contain credentials or fragments. Only public HTTPS destinations
+  are supported; private-network destinations and unsafe redirects are rejected.
+- Bundled artwork: `{ source: "builtin", name: "server" }`. Use an icon bundled
+  with the Control UI; an unknown name falls back gracefully.
+
+Local and remote artwork supports **PNG, JPEG, WebP, and GIF**, at most **2 MiB**
+and **4096 pixels per side**. The Gateway validates and decodes the image, removes
+metadata and animation, and serves a static PNG thumbnail no larger than 256 × 256.
+SVG and other active or unsupported formats are not accepted. Remote downloads
+are bounded by a five-second timeout and the same byte limit; the browser never
+fetches the configured remote URL directly.
+
+The UI tries the configured icon first, then the provider's built-in brand, then
+an initial from the effective display name. Missing, unreadable, invalid, or
+unavailable artwork does not prevent model selection. Local files are served
+through a provider-scoped Gateway asset route; that route accepts a provider ID,
+not an arbitrary filesystem path or remote URL.
+
+Save the configuration through the normal configuration lifecycle to reload
+presentation changes. No frontend rebuild, provider rename, or model-reference
+migration is needed.
+
 ## Provider field details
 
 <AccordionGroup>
@@ -78,6 +131,8 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `models.providers.*.timeoutSeconds`: optional per-provider model HTTP request timeout in seconds, including connect, headers, body, and total request abort handling.
     - `models.providers.*.injectNumCtxForOpenAICompat`: for Ollama + `openai-completions`, inject `options.num_ctx` into requests (default: `true`).
     - `models.providers.*.authHeader`: force credential transport in the `Authorization` header when required.
+    - `models.providers.*.name`: optional display name (1–100 characters), independent of the provider ID.
+    - `models.providers.*.icon`: optional file, HTTPS URL, or bundled artwork; see [Provider names and icons](/gateway/config-tools/custom-providers#provider-names-and-icons).
     - `models.providers.*.baseUrl`: upstream API base URL.
     - `models.providers.*.headers`: extra static headers for proxy/tenant routing.
 
@@ -86,7 +141,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     `models.providers.*.request`: transport overrides for model-provider HTTP requests.
 
     - `request.headers`: extra headers (merged with provider defaults). Values accept SecretRef.
-    - `request.auth`: auth strategy override. Modes: `"provider-default"` (use provider's built-in auth), `"authorization-bearer"` (with `token`), `"header"` (with `headerName`, `value`, optional `prefix`).
+    - `request.auth`: auth strategy override. Modes: `"provider-default"` (use provider's built-in auth), `"authorization-bearer"` (with `token`), `"header"` (with `headerName`, `value`, optional `prefix`). An explicitly selected bearer/header override must resolve to a non-empty credential; an empty or unavailable credential is an error, not a request to fall back to provider defaults or send anonymously.
     - `request.proxy`: HTTP proxy override. Modes: `"env-proxy"` (use `HTTP_PROXY`/`HTTPS_PROXY` env vars), `"explicit-proxy"` (with `url`). Both modes accept an optional `tls` sub-object.
     - `request.tls`: TLS override for direct connections. Fields: `ca`, `cert`, `key`, `passphrase` (all accept SecretRef), `serverName`, `insecureSkipVerify`.
     - `request.allowPrivateNetwork`: when `true`, allow guarded model-provider HTTP and WebSocket requests to private, CGNAT, or similar ranges through the shared private-network policy. Custom/local provider base URLs already trust the exact configured origin, except metadata, link-local, and local-use NAT64 (`64:ff9b:1::/48`) origins, which remain blocked without explicit opt-in. Set this to `false` to opt out of exact-origin trust. Default `false`.
@@ -97,10 +152,14 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `models.providers.*.models.*.input`: model input modalities. Use `["text"]` for text-only models and `["text", "image"]` for native image/vision models. Image attachments are only injected into agent turns when the selected model is marked image-capable.
     - `models.providers.*.models.*.contextWindow`: native context-window metadata for that model.
     - `models.providers.*.models.*.contextTokens`: optional active-input cap for that model; use it when you want an effective budget distinct from the model's native `contextWindow`; `openclaw models list` shows both when they differ.
+    - `models.providers.*.models.*.responseModelEquivalent`: optional boolean for a user-authored custom-provider row in config. Set `true` when a router or broker resolves this model id itself and reports the concrete model it served. OpenClaw then treats any response model from that endpoint as the requested route, including endpoint-internal substitutions. The served model id and usage remain visible in metadata, but no model route change is announced to parent agents. OpenClaw fallbacks and overrides to another configured model or provider still produce a notice. Bundled and official provider policy remains authoritative; this key cannot override it, even if the provider has no equivalence hook. Plugin/catalog rows, agent `models.json` rows, and rows marked `metadataSource: "models-add"` cannot grant equivalence. Omitted or `false` preserves normal route detection. This optional key requires no Doctor migration.
+
+    OpenAI-compatible stream response ids and served-model metadata ignore empty
+    keepalives and role-only placeholders; those frames do not establish a model route change.
 
     #### Custom provider capability declarations
 
-    Provider catalogs own `compat` for bundled and catalog-known model routes. Do not copy those flags into config: OpenClaw uses the catalog row when the configured `api` and `baseUrl` still identify that route. `openclaw doctor --fix` removes matching legacy overrides and reports divergent values for review.
+    Provider catalogs own `compat` defaults for bundled and catalog-known model routes. Explicit `supportsReasoningEffort`, `supportedReasoningEfforts`, and `reasoningEffortMap` declarations override catalog reasoning metadata on the same route. Other flags still use the catalog row when the configured `api` and `baseUrl` identify that route. `openclaw doctor --fix` removes matching legacy overrides and reports divergent values for review.
 
     A `compat` block remains supported for a genuinely custom provider, custom model, or catalog model routed to a different endpoint. Set only capabilities verified against that endpoint:
 
@@ -109,7 +168,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `supportsStore` | Accepts the OpenAI `store` request field. |
     | `supportsPromptCacheKey` | Accepts OpenAI prompt-cache/session-affinity keys. |
     | `supportsDeveloperRole` | Accepts `developer` messages instead of requiring `system`. |
-    | `supportsReasoningEffort` | Accepts a reasoning-effort control. |
+    | `supportsReasoningEffort` | Accepts a reasoning-effort control. Custom `openai-completions` routes enable this by default for models marked `reasoning: true`; set `false` to opt out. |
     | `supportsTemperature` | Accepts `temperature` for this model and adapter. |
     | `supportsUsageInStreaming` | Emits usage metadata in streaming responses. |
     | `supportsInstructions` | Responses API only: accepts the system prompt via top-level `instructions` instead of embedded in `input`. Defaults to `true` only for native OpenAI and xAI's main route — the two routes with confirmed contract evidence. Every other route, bundled or custom, defaults to `false`; set explicitly once verified against that endpoint. |
@@ -118,8 +177,8 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `requiresStringContent` | Requires plain-string Chat Completions message content. |
     | `strictMessageKeys` | Requires outgoing messages to contain only accepted keys. |
     | `visibleReasoningDetailTypes` | Names reasoning detail block types safe to show in transcripts. |
-    | `supportedReasoningEfforts` | Lists the endpoint's accepted reasoning labels. |
-    | `reasoningEffortMap` | Maps OpenClaw thinking labels to endpoint-specific labels. |
+    | `supportedReasoningEfforts` | Lists the endpoint's accepted reasoning labels. Requests are clamped to this ladder. Unknown models default to `low`, `medium`, and `high`. |
+    | `reasoningEffortMap` | Maps OpenClaw thinking labels to endpoint-specific labels. Unknown Completions and Responses routes omit effort for `off` by default; an explicit off mapping can send the endpoint's accepted disable value. |
     | `maxTokensField` | Selects `max_tokens` or `max_completion_tokens`. |
     | `thinkingFormat` | Selects the endpoint's reasoning payload dialect. |
     | `requiresToolResultName` | Requires a tool name on tool-result messages. |
@@ -130,6 +189,12 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `unsupportedToolSchemaKeywords` | Removes named JSON Schema keywords rejected by the endpoint before tool schemas are sent. Use this for endpoint-specific gaps beyond a profile's targeted transformations. |
     | `toolCallArgumentsEncoding` | Selects the endpoint's tool-call argument encoding. |
     | `requiresOpenAiAnthropicToolPayload` | Converts OpenAI-shaped tool calls to Anthropic-family payloads. |
+
+    After upgrading, existing custom `openai-completions` models with `reasoning: true` start sending `reasoning_effort` for enabled thinking unless explicitly opted out. If the server rejects the field, the request error names the remedy: set `compat.supportsReasoningEffort: false` on that entry in `models.providers.<provider>.models`. See [custom endpoint thinking](/tools/thinking#custom-openai-compatible-endpoints) for effort mapping and `/think off` behavior.
+
+    Unknown remote `openai-completions` endpoints default to `supportsUsageInStreaming: false`, so OpenClaw does not request `stream_options.include_usage`. Loopback endpoints and the bundled llama.cpp, LM Studio, Ollama, and vLLM providers already request or collect usage. For a custom remote server that supports this option, set `compat.supportsUsageInStreaming: true` on each model entry. Ollama `/v1` and LM Studio return streamed usage when this option is enabled.
+
+    When a successful stream returns no usage, OpenClaw marks provider context usage unavailable so compaction uses content estimates instead of treating missing counts as zero. Estimates are approximate; token and cost accounting cannot be recovered from a missing usage record. Custom remote endpoints with streaming usage disabled also log `<provider>/<model> returned no token usage` once per model, with the config hint above.
 
   </Accordion>
   <Accordion title="Amazon Bedrock discovery">

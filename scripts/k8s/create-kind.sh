@@ -75,7 +75,7 @@ detect_provider() {
     if command -v "$candidate" &>/dev/null; then
       case "$candidate" in
         podman)
-          fail "Podman is installed but not responding, and no responsive Docker daemon was found. Ensure the podman machine is running (podman machine start) or start Docker."
+          fail "Podman is installed but not responding, and no responsive Docker daemon was found. Start the podman machine (podman machine start) or start Docker."
           ;;
         docker)
           fail "Docker is installed but not running, and no responsive Podman machine was found. Start Docker or start Podman."
@@ -102,7 +102,7 @@ if ! "$CONTAINER_CMD" info &>/dev/null; then
   if [[ "$CONTAINER_CMD" == "docker" ]]; then
     fail "Docker daemon is not running. Start it and try again."
   elif [[ "$CONTAINER_CMD" == "podman" ]]; then
-    fail "Podman is not responding. Ensure the podman machine is running (podman machine start)."
+    fail "Podman is not responding. Start the podman machine (podman machine start)."
   fi
 fi
 

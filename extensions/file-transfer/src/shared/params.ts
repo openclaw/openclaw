@@ -23,11 +23,10 @@ export function readClampedInt(params: {
   input: Record<string, unknown>;
   key: string;
   defaultValue: number;
-  hardMin: number;
   hardMax: number;
 }): number {
   const requested = readPositiveIntegerParam(params.input, params.key) ?? params.defaultValue;
-  return Math.max(params.hardMin, Math.min(requested, params.hardMax));
+  return Math.max(1, Math.min(requested, params.hardMax));
 }
 
 export function humanSize(bytes: number): string {

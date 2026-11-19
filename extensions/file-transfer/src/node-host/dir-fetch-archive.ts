@@ -1,18 +1,12 @@
-import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
+import {
+  createPluginRuntimeProcessEntrypoint,
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+  runCommandBuffered,
+} from "openclaw/plugin-sdk/process-runtime";
 
 const CANONICAL_PATH_CHANGED_EXIT_CODE = 78;
-const CANONICAL_TAR_WORKER = [
-  'const fs=require("node:fs");',
-  'const {spawn}=require("node:child_process");',
-  "const [directory,expected,device,inode,tar]=process.argv.slice(1);",
-  "try{process.chdir(directory);}catch{process.exit(1);}",
-  'if(fs.realpathSync(".")!==expected){process.exit(78);}',
-  'const bound=fs.statSync(".",{bigint:true});',
-  "if(String(bound.dev)!==device||String(bound.ino)!==inode){process.exit(78);}",
-  'const child=spawn(tar,["-czf","-","."],{stdio:["ignore","inherit","inherit"]});',
-  'child.once("error",()=>process.exit(1));',
-  'child.once("exit",code=>process.exit(code??1));',
-].join("");
+const workerEntry = createPluginRuntimeProcessEntrypoint("fileTransferDirFetch", import.meta.url);
 
 type TarArchiveResult = Buffer | "TOO_LARGE" | "TIMEOUT" | "CANONICAL_PATH_CHANGED" | "ERROR";
 
@@ -31,8 +25,7 @@ export async function createTarArchive(
   const result = await runCommandBuffered(
     [
       process.execPath,
-      "-e",
-      CANONICAL_TAR_WORKER,
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(workerEntry)),
       directoryPath,
       expectedCanonicalPath,
       expectedDevice,

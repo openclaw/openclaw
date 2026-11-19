@@ -1,6 +1,9 @@
-// Starts and monitors SSH tunnels for remote gateway access.
 import { spawn } from "node:child_process";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { isIPv6 } from "node:net";
+import {
+  containsAsciiControlCharacter,
+  normalizeStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import { createAbortError, isAbortError, racePromiseWithAbortSignal } from "./abort-signal.js";
 import { sleepWithAbort } from "./backoff.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
@@ -24,13 +27,7 @@ export type SshTunnel = {
 };
 
 function hasControlOrWhitespace(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || code === 0x7f || /\s/.test(char)) {
-      return true;
-    }
-  }
-  return false;
+  return containsAsciiControlCharacter(value) || /\s/.test(value);
 }
 
 function isSafeSshTargetUser(user: string): boolean {
@@ -44,13 +41,14 @@ function isSafeSshTargetHost(host: string): boolean {
   return (
     !hasControlOrWhitespace(host) &&
     !host.startsWith("-") &&
-    !host.startsWith(":") &&
-    !host.endsWith(":") &&
+    (isIPv6(host) || (!host.startsWith(":") && !host.endsWith(":"))) &&
+    !host.includes("[") &&
+    !host.includes("]") &&
     !host.includes("@")
   );
 }
 
-export function parseSshTarget(raw: string): SshParsedTarget | null {
+export function parseSshTarget(raw: string): (SshParsedTarget & { explicitPort: boolean }) | null {
   const trimmed = raw.trim().replace(/^ssh\s+/, "");
   if (!trimmed) {
     return null;
@@ -60,10 +58,22 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
   const user = at === -1 ? undefined : trimmed.slice(0, at).trim() || undefined;
   let host = at === -1 ? trimmed : trimmed.slice(at + 1).trim();
   let port: number | null = 22;
-  const colonIdx = host.lastIndexOf(":");
-  if (colonIdx > 0 && colonIdx < host.length - 1) {
-    port = parseTcpPort(host.slice(colonIdx + 1).trim());
-    host = host.slice(0, colonIdx).trim();
+  let explicitPort = false;
+  if (host.startsWith("[")) {
+    const bracketed = host.match(/^\[([^\]]+)\](?::(.*))?$/);
+    if (!bracketed?.[1] || !isIPv6(bracketed[1])) {
+      return null;
+    }
+    host = bracketed[1];
+    explicitPort = bracketed[2] !== undefined;
+    port = explicitPort ? parseTcpPort(bracketed[2]) : 22;
+  } else if (!isIPv6(host)) {
+    const colonIdx = host.lastIndexOf(":");
+    if (colonIdx > 0 && colonIdx < host.length - 1) {
+      explicitPort = true;
+      port = parseTcpPort(host.slice(colonIdx + 1).trim());
+      host = host.slice(0, colonIdx).trim();
+    }
   }
   if (
     !host ||
@@ -73,7 +83,7 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
   ) {
     return null;
   }
-  return { user, host, port };
+  return { user, host, port, explicitPort };
 }
 
 async function waitForLocalListener(
@@ -149,7 +159,7 @@ export async function startSshPortForward(opts: {
     `127.0.0.1:${localPort}:127.0.0.1:${opts.remotePort}`,
     // An omitted port belongs to the selected OpenSSH alias, not an implicit
     // command-line -p 22 that would override its configured destination.
-    ...(/:\d+$/.test(opts.target.trim()) ? ["-p", String(parsed.port)] : []),
+    ...(parsed.explicitPort ? ["-p", String(parsed.port)] : []),
     "-o",
     "ExitOnForwardFailure=yes",
     "-o",

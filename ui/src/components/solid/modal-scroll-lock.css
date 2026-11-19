@@ -1,0 +1,7 @@
+.oc-modal-scroll-gutter {
+  scrollbar-gutter: stable;
+}
+
+.oc-modal-scroll-lock body {
+  overflow: hidden;
+}

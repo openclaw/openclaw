@@ -11,14 +11,13 @@ export class SlackResponseAlreadyReportedError extends Error {}
 /** Count every response_url attempt, including requests Slack rejects. */
 export function createSlackResponseUrlBudget<TPayload>(
   respond: (payload: TPayload) => Promise<unknown>,
-  maxCalls = SLACK_RESPONSE_URL_MAX_CALLS,
 ): SlackResponseUrlBudget<TPayload> {
-  let remaining = maxCalls;
+  let remaining = SLACK_RESPONSE_URL_MAX_CALLS;
   return {
     remaining: () => remaining,
     respond: async (payload) => {
       if (remaining <= 0) {
-        throw new Error(`Slack response_url cannot be used more than ${String(maxCalls)} times.`);
+        throw new Error("Slack response_url cannot be used more than 5 times.");
       }
       remaining -= 1;
       return await respond(payload);

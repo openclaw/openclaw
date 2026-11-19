@@ -6,6 +6,7 @@ import {
   asPositiveFiniteNumber,
   resolveIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
+import { copyOwnedBuffer, encodeOwnedBuffer } from "../shared/owned-buffer.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 
 export type CommandOutputCaptureMode = "head" | "tail" | "discard";
@@ -73,24 +74,24 @@ export function appendCapturedOutput(
   maxBytes: number,
   mode: CommandOutputCaptureMode,
 ): void {
-  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
   if (mode === "discard") {
-    capture.truncatedBytes += buffer.byteLength;
+    capture.truncatedBytes += Buffer.byteLength(chunk);
     return;
   }
+  const buffer = Buffer.isBuffer(chunk) ? chunk : encodeOwnedBuffer(chunk);
   if (mode === "head") {
     const remaining = Math.max(0, maxBytes - capture.bytes);
     if (remaining > 0) {
       const kept = buffer.subarray(0, remaining);
       // A clipped prefix must not retain the discarded backing bytes.
-      capture.chunks.push(kept.byteLength < buffer.byteLength ? Buffer.from(kept) : kept);
+      capture.chunks.push(kept.byteLength < buffer.byteLength ? copyOwnedBuffer(kept) : kept);
       capture.bytes += kept.byteLength;
     }
     capture.truncatedBytes += Math.max(0, buffer.byteLength - remaining);
     return;
   }
   if (buffer.byteLength >= maxBytes) {
-    capture.chunks = [Buffer.from(buffer.subarray(buffer.byteLength - maxBytes))];
+    capture.chunks = [copyOwnedBuffer(buffer.subarray(buffer.byteLength - maxBytes))];
     capture.truncatedBytes += capture.bytes + buffer.byteLength - maxBytes;
     capture.bytes = maxBytes;
     return;
@@ -106,7 +107,7 @@ export function appendCapturedOutput(
       capture.bytes -= first.byteLength;
       capture.truncatedBytes += first.byteLength;
     } else {
-      capture.chunks[0] = Buffer.from(first.subarray(overflow));
+      capture.chunks[0] = copyOwnedBuffer(first.subarray(overflow));
       capture.bytes -= overflow;
       capture.truncatedBytes += overflow;
     }

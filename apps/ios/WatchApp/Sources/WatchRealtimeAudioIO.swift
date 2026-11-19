@@ -193,12 +193,7 @@ final class WatchRealtimeAudioIO: @unchecked Sendable {
     }
 
     private func configureGraph() throws {
-        self.running = false
-        if self.hasTap { self.engine.inputNode.removeTap(onBus: 0)
-            self.hasTap = false
-        }
-        self.clearPlayback()
-        self.engine.stop()
+        self.stopGraph()
         guard let codec = self.codec
         else { throw WatchRealtimeMediaError.unavailable(String(localized: "Voice audio is not ready.")) }
         let input = self.engine.inputNode
@@ -230,6 +225,15 @@ final class WatchRealtimeAudioIO: @unchecked Sendable {
         self.engine.prepare()
         try self.engine.start()
         self.running = true
+    }
+
+    private func stopGraph() {
+        self.running = false
+        if self.hasTap { self.engine.inputNode.removeTap(onBus: 0)
+            self.hasTap = false
+        }
+        self.clearPlayback()
+        self.engine.stop()
     }
 
     private func capture(_ buffer: AVAudioPCMBuffer) {
@@ -353,12 +357,7 @@ final class WatchRealtimeAudioIO: @unchecked Sendable {
     }
 
     private func finishStopIfPossible() {
-        self.running = false
-        if self.hasTap { self.engine.inputNode.removeTap(onBus: 0)
-            self.hasTap = false
-        }
-        self.clearPlayback()
-        self.engine.stop()
+        self.stopGraph()
         self.observations.forEach { NotificationCenter.default.removeObserver($0) }
         self.observations.removeAll()
         let start = self.startContinuation

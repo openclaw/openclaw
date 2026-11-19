@@ -1,4 +1,7 @@
-import type { PluginRegistry } from "../../../plugins/registry.js";
+import type {
+  PluginHttpRouteRegistration,
+  PluginRegistry,
+} from "../../../plugins/registry-types.js";
 import {
   resolvePluginNodeCapabilityTtlMs,
   type PluginNodeCapabilitySurface,
@@ -6,13 +9,13 @@ import {
 import type { PluginRoutePathContext } from "./path-context.js";
 import { findMatchingPluginHttpRoutes } from "./route-match.js";
 
-type PluginHttpRouteEntry = NonNullable<PluginRegistry["httpRoutes"]>[number];
-
-export type PluginNodeCapabilityRoute = PluginHttpRouteEntry & {
+export type PluginNodeCapabilityRoute = PluginHttpRouteRegistration & {
   nodeCapability: PluginNodeCapabilitySurface;
 };
 
-function hasNodeCapabilityRoute(route: PluginHttpRouteEntry): route is PluginNodeCapabilityRoute {
+function hasNodeCapabilityRoute(
+  route: PluginHttpRouteRegistration,
+): route is PluginNodeCapabilityRoute {
   return Boolean(route.nodeCapability?.surface?.trim());
 }
 

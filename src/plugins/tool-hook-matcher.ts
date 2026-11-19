@@ -50,7 +50,8 @@ export function normalizePluginToolMatcher(matcher: unknown): PluginToolMatcher 
     ) {
       throw new TypeError("tool hook matcher entries must use canonical OpenClaw tool ids");
     }
-    normalized.add(canonicalToolName);
+    // Preserve shipped literal matchers without changing hook events or payload fields.
+    normalized.add(canonicalToolName === "tool_call" ? "dispatch_action" : canonicalToolName);
   }
   const toolNames = Array.from(normalized).toSorted();
   const [firstToolName, ...remainingToolNames] = toolNames;

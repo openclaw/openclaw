@@ -5,7 +5,7 @@ import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { withManagedWorktreeGit } from "./checkout-policy.js";
 import { worktreePathExists } from "./git.js";
 import { getRegistryWorktreeProvisionedPaths } from "./registry.js";
-import { resolveRepository } from "./service-preparation.js";
+import { resolveRepository } from "./repository-paths.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 /** A broken link is orphaned only when its original repository is still available. */
@@ -29,7 +29,12 @@ export async function hasMissingManagedWorktreeGitdir(record: ManagedWorktreeRec
 export async function inspectManagedWorktreeCheckout(
   record: ManagedWorktreeRecord,
   kind: "lossless" | "provisioned" | "nested-repository",
-  context: { env: NodeJS.ProcessEnv; getConfig: () => OpenClawConfig },
+  context: {
+    env: NodeJS.ProcessEnv;
+    getConfig: () => OpenClawConfig;
+    signal?: AbortSignal;
+    beforeRun?: () => void;
+  },
 ) {
   const input =
     kind === "nested-repository"
@@ -41,10 +46,14 @@ export async function inspectManagedWorktreeCheckout(
         };
   // Known provisioning ledgers need only filesystem checks. Legacy rows without
   // a ledger retain Git admission so missing metadata still reaches orphan recovery.
+  const guard = { signal: context.signal, assertCurrent: context.beforeRun };
   if (input.kind === "provisioned" && input.provisionedPaths !== undefined) {
-    return await runGitWorkerOperation({ type: "worktree.cleanup-inspection", input });
+    return await runGitWorkerOperation({ type: "worktree.cleanup-inspection", input }, guard);
   }
   return await withManagedWorktreeGit({ record, ...context }, async (git) =>
-    runGitWorkerOperation({ type: "worktree.cleanup-inspection", input }, { git: git.worker }),
+    runGitWorkerOperation(
+      { type: "worktree.cleanup-inspection", input },
+      { ...guard, git: git.worker },
+    ),
   );
 }

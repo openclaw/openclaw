@@ -62,12 +62,6 @@ export function resolveMatrixAllowListMatch(params: {
   userId?: string;
 }): MatrixAllowListMatch {
   const allowList = params.allowList;
-  if (allowList.length === 0) {
-    return { allowed: false };
-  }
-  if (allowList.includes("*")) {
-    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
-  }
   const userId = normalizeMatrixUser(params.userId);
   const candidates: Array<{ value?: string; source: MatrixAllowListMatchSource }> = [
     { value: userId, source: "id" },

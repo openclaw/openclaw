@@ -5,8 +5,55 @@ import SwiftUI
 import Testing
 @testable import OpenClaw
 
+@Suite(.testWaitLimit)
 @MainActor
 struct QuickChatPresentationTests {
+    func checkConnectionStatusSurvivesModelCatalogFailure() async throws {
+        for (gate, message) in [
+            (QuickChatConnectionGate.unconfigured, "Not configured"),
+            (.paused, "OpenClaw is paused"),
+            (.disconnected, "Gateway disconnected"),
+            (.available, "Couldn't load model settings."),
+        ] {
+            let model = QuickChatModel(
+                sessionKeyProvider: { "agent:main:main" },
+                agentsProvider: { throw URLError(.notConnectedToInternet) },
+                agentIdentityProvider: { _ in .placeholder },
+                permissionStatusProvider: { _ in [:] },
+                connectionGateProvider: { gate },
+                modelControlsProvider: { _ in throw URLError(.notConnectedToInternet) },
+                modelCatalogEventsProvider: { AsyncStream { $0.finish() } })
+            let controller = QuickChatController(
+                enableUI: true, model: model, monitoringEnabled: false,
+                hotkeyRegistrar: { _ in }, hotkeyRemover: {})
+            defer { controller.stop() }
+            controller.present()
+            try await TestWait.state("failed model controls") { model.modelControlStatusMessage != nil }
+            let panel = try #require(AppKitTestSupport.application.windows.first {
+                ($0.contentView as? NSHostingView<QuickChatView>)?.rootView.model === model
+            })
+            var renderedMessages = Set<String>()
+            var stableSince = ContinuousClock.now
+            try await TestWait.state("settled Quick Chat status") {
+                let elements = try await AppKitTestSupport.accessibilityElements(in: panel)
+                let labels = Set(elements.compactMap {
+                    let value: Any? = $0.accessibilityValue?()
+                    return (value as? String) ?? AppKitTestSupport.accessibilityName(of: $0)
+                })
+                let nextMessages = labels.intersection([
+                    "Not configured", "OpenClaw is paused", "Gateway disconnected", "Couldn't load model settings.",
+                ])
+                if nextMessages != renderedMessages {
+                    renderedMessages = nextMessages
+                    stableSince = .now
+                }
+                // An outgoing status can remain accessible during SwiftUI's transition.
+                return !renderedMessages.isEmpty && stableSince.duration(to: .now) >= .milliseconds(350)
+            }
+            #expect(renderedMessages == [message])
+        }
+    }
+
     func checkConversationDisclosurePreservesOneComposerAndItsDraft() async throws {
         let application = AppKitTestSupport.application
         let suiteName = "ai.openclaw.quickchat-proof.\(UUID().uuidString)"
@@ -64,7 +111,7 @@ struct QuickChatPresentationTests {
             })
         defer { controller.stop() }
         controller.present()
-        try await self.waitUntil { model.canUseModelControls && !model.isLoadingModelControls }
+        try await TestWait.state("ready model controls") { model.canUseModelControls && !model.isLoadingModelControls }
         let panel = try #require(application.windows.first {
             ($0.contentView as? NSHostingView<QuickChatView>)?.rootView.model === model
         })
@@ -79,7 +126,7 @@ struct QuickChatPresentationTests {
         #expect(accepted)
         controller.handleSendAcceptedForTesting(openChat: false)
         let reply = try #require(controller.replyBinding.viewModel)
-        try await self.waitUntil {
+        try await TestWait.observed("reply history and context") {
             reply.messages.count == 2 && !reply.isLoading &&
                 reply.contextUsage != nil && reply.progressCard?.steps?.count == 2
         }
@@ -98,7 +145,7 @@ struct QuickChatPresentationTests {
         #expect(self.composerCount(in: content) == 1, "Expanded Quick Chat must keep a single composer")
         #expect(reply.sessionKey == "agent:main:main")
         await transport.beginThinking()
-        try await self.waitUntil { reply.streamingAssistantText != nil }
+        try await TestWait.observed("streaming reply") { reply.streamingAssistantText != nil }
         let streamingText = try #require(reply.streamingAssistantText)
         _ = try await AppKitTestSupport.waitForAccessibilityElement(
             in: panel, description: "the live reply before collapsing")
@@ -175,13 +222,17 @@ struct QuickChatPresentationTests {
             let index = try #require(menu.items.firstIndex { $0.title.hasPrefix("Release notes") })
             menu.performActionForItem(at: index)
         }
-        try await self.waitUntil { model.sessionKey == "agent:main:notes" }
+        try await TestWait.observed("selected notes session") { model.sessionKey == "agent:main:notes" }
         #expect(controller.replyBinding.route == nil)
         #expect(controller.replyBinding.viewModel == nil, "Hidden replies cannot retain another conversation's context")
         #expect(model.text == "Keep this next draft.")
     }
 
-    private func waitForDisclosure(in panel: NSWindow, expanded: Bool) async throws {
+    private func waitForDisclosure(
+        in panel: NSWindow,
+        expanded: Bool,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws
+    {
         _ = try await AppKitTestSupport.waitForAccessibilityElement(
             in: panel, description: expanded ? "the expanded conversation" : "the collapsed composer")
         { elements in
@@ -190,21 +241,16 @@ struct QuickChatPresentationTests {
             }
         }
         // SwiftUI retains outgoing views until their transition finishes.
-        let deadline = ContinuousClock.now + .seconds(5)
         var frame = panel.frame
         var stableSince = ContinuousClock.now
-        repeat {
-            try await Task.sleep(for: .milliseconds(20))
+        try await TestWait.state("settled conversation disclosure", sourceLocation: sourceLocation) {
             if panel.frame != frame {
                 frame = panel.frame
                 stableSince = .now
             }
             let hasExpectedSize = expanded ? frame.height > 400 : frame.height < 200
-            if hasExpectedSize, stableSince.duration(to: .now) >= .milliseconds(350) {
-                return
-            }
-        } while ContinuousClock.now < deadline
-        Issue.record("The conversation disclosure animation must settle")
+            return hasExpectedSize && stableSince.duration(to: .now) >= .milliseconds(350)
+        }
     }
 
     private func composerCount(in view: NSView) -> Int {
@@ -235,7 +281,7 @@ struct QuickChatPresentationTests {
 
     func checkShortcutPresentsAnEditorWithoutRequiringForegroundOwnership() async throws {
         let application = AppKitTestSupport.application
-        #expect(AppKitTestSupport.didSetActivationPolicy)
+        #expect(AppKitTestSupport.hasAccessoryActivationPolicy)
         var shortcut: (() -> Void)?
         let model = QuickChatModel(
             sessionKeyProvider: { "agent:main:main" },
@@ -266,13 +312,14 @@ struct QuickChatPresentationTests {
         let registeredShortcut = try #require(shortcut)
         registeredShortcut()
 
-        try await self.waitUntil { controller.isVisible && !model.isLoadingModelControls }
+        try await TestWait
+            .observed("visible Quick Chat controls") { controller.isVisible && !model.isLoadingModelControls }
         let panel = try #require(application.windows.first {
             ($0.contentView as? NSHostingView<QuickChatView>)?.rootView.model === model
         })
         #expect(panel.isVisible)
         #expect(!panel.hidesOnDeactivate)
-        try await self.waitUntil { panel.firstResponder is NSTextView }
+        try await TestWait.state("Quick Chat editor focus") { panel.firstResponder is NSTextView }
         #expect(panel.firstResponder is NSTextView)
         print(
             "Quick Chat presented: visible=\(panel.isVisible), active=\(application.isActive), key=\(panel.isKeyWindow), editorReady=\(panel.firstResponder is NSTextView)")
@@ -290,17 +337,13 @@ struct QuickChatPresentationTests {
         controller.dismiss()
         let reopenedShortcut = try #require(shortcut)
         reopenedShortcut()
-        try await self.waitUntil { controller.isVisible }
+        try await TestWait.observed("reopened Quick Chat") { controller.isVisible }
         #expect(panel.isVisible)
         print("Quick Chat reopened: visible=\(panel.isVisible)")
         controller.setEnabled(false)
         #expect(!controller.isVisible)
         #expect(shortcut == nil)
         print("Quick Chat disabled: visible=\(controller.isVisible), shortcutRegistered=\(shortcut != nil)")
-    }
-
-    private func waitUntil(_ condition: () -> Bool) async throws {
-        #expect(try await self.poll(condition))
     }
 
     private func poll(_ condition: () -> Bool) async throws -> Bool {

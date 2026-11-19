@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { expect, it, vi } from "vitest";
 import { createProgramContext } from "./context.js";

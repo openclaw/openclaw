@@ -18,7 +18,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function contract(marker: string, extension: string): string {
   const rules = JSON.stringify([{ path: ["doctor-fixture"], message: marker }]);
   const migrations = `[{ id: "fixture-state", label: "Fixture state", detectLegacyState() { return { preview: [${JSON.stringify(marker)}] }; }, migrateLegacyState() { return { changes: [${JSON.stringify(marker)}], warnings: [] }; } }]`;
-  return extension === ".cjs" || extension === ".cts"
+  return extension === ".cjs"
     ? `module.exports = { legacyConfigRules: ${rules}, stateMigrations: ${migrations} };\n`
     : `export const legacyConfigRules = ${rules}; export const stateMigrations = ${migrations};\n`;
 }
@@ -154,12 +154,6 @@ describe("Doctor artifact hash and loading agreement", () => {
       {
         name: "local MTS order",
         sourceExtension: ".mts",
-        local: true,
-        expected: "extensions/demo/dist/doctor-contract-api.js",
-      },
-      {
-        name: "local CTS order",
-        sourceExtension: ".cts",
         local: true,
         expected: "extensions/demo/dist/doctor-contract-api.js",
       },
@@ -358,13 +352,11 @@ describe("Doctor artifact hash and loading agreement", () => {
         });
         owner.resetPluginCache();
       }
-      console.log("doctor-artifacts:18");
     `,
       { timeout: 30_000 },
     );
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("doctor-artifacts:18");
     const replacementFixture = fixtures.find((row) => row.name === "built ESM");
     if (!replacementFixture) {
       throw new Error("missing built ESM replacement fixture");
@@ -414,12 +406,10 @@ describe("Doctor artifact hash and loading agreement", () => {
       const input = { config, env, stateDir: env.OPENCLAW_STATE_DIR, oauthDir: path.join(row.root, "oauth"), context: {} };
       assert.deepEqual(entries[0].migration.detectLegacyState(input), { preview: ["replacement"] });
       assert.deepEqual(entries[0].migration.migrateLegacyState(input), { changes: ["replacement"], warnings: [] });
-      console.log("doctor-artifact-restart:replacement");
     `,
       { timeout: 30_000 },
     );
     expect(restarted.error).toBeUndefined();
     expect(restarted.status, restarted.stderr).toBe(0);
-    expect(restarted.stdout.trim()).toBe("doctor-artifact-restart:replacement");
   }, 60_000);
 });

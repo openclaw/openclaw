@@ -1,58 +1,100 @@
-// Retry-decision tests preserve provider classifications before cron message matching.
 import { describe, expect, it, vi } from "vitest";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { runGatewayCronSessionEvent } from "../../gateway/server-cron-event-dispatch.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
-import { createNoopLogger } from "../service.test-harness.js";
-import { createCronServiceState } from "./state.js";
+import { resolveCronRunErrorReason } from "../run-error-reason.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../scheduled-occurrence.test-support.js";
+import type { CronServiceDeps, DeferredCronNotifications } from "./state.js";
 import { executeJobCore } from "./timer-execution.js";
 import { applyJobResult } from "./timer-outcomes.js";
 import { resolveTransientCronRetryDecision } from "./timer-trigger.js";
 
+const startedAt = Date.parse("2026-08-20T12:00:00.000Z");
+const endedAt = startedAt + 500;
+
+function makeJob(scheduleKind: "at" | "every") {
+  return makeCronJob({
+    schedule:
+      scheduleKind === "at"
+        ? { kind: "at", at: new Date(startedAt).toISOString() }
+        : { kind: "every", everyMs: 60 * 60_000, anchorMs: startedAt },
+    state: { runningAtMs: startedAt, nextRunAtMs: startedAt },
+  });
+}
+
+async function executeAndApply(job: ReturnType<typeof makeJob>, deps: Partial<CronServiceDeps>) {
+  const state = createCronRegressionState({
+    storePath: "/tmp/cron-retry-classification.json",
+    nowMs: () => endedAt,
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    ...deps,
+  });
+  state.store = { version: 1, jobs: [job] };
+  const result = await executeJobCore(state, job);
+  const deferredNotifications: DeferredCronNotifications = [];
+  applyJobResult(
+    state,
+    job,
+    {
+      ...result,
+      errorReason: resolveCronRunErrorReason(
+        result.error,
+        result.provider,
+        result.errorClassification,
+      ),
+      executionStarted: true,
+      startedAt,
+      endedAt,
+    },
+    { deferredNotifications },
+  );
+  return deferredNotifications;
+}
+
 describe("resolveTransientCronRetryDecision", () => {
+  it.each([false, true])(
+    "disables an invalid-target one-shot with a visible reason (alert route: %s)",
+    async (route) => {
+      const job = makeJob("at");
+      job.sessionTarget = "main";
+      job.failureAlert = route
+        ? { channel: "telegram", to: "synthetic-owner", cooldownMs: 60_000 }
+        : false;
+      job.state.lastFailureAlertAtMs = endedAt;
+      const notifications = await executeAndApply(job, {
+        runSessionEvent: (request) =>
+          runGatewayCronSessionEvent({ ...request, occurrence: TEST_SCHEDULED_OCCURRENCE }, () => ({
+            runtimeConfig: {},
+          })),
+      });
+      expect(job.enabled).toBe(false);
+      expect(job.state.nextRunAtMs).toBeUndefined();
+      expect(job.state.lastError).toBe("Automation has no valid session destination");
+      expect(notifications).toHaveLength(1);
+      const notice = notifications[0];
+      const text =
+        notice?.kind === "failure-alert"
+          ? notice.payload.text
+          : notice?.kind === "auto-disabled"
+            ? notice.text
+            : undefined;
+      expect(text).toContain("auto-disabled");
+      expect(text).toContain("invalid automation target");
+    },
+  );
+
   it.each(["at", "every"] as const)(
     "does not retry an incidental numeric command failure for %s jobs",
     async (scheduleKind) => {
-      const error = "529 lines of output";
-      const startedAt = Date.parse("2026-08-20T12:00:00.000Z");
-      const endedAt = startedAt + 500;
-      const job = makeCronJob({
-        payload: { kind: "command", argv: ["local-task"] },
-        schedule:
-          scheduleKind === "at"
-            ? { kind: "at", at: new Date(startedAt).toISOString() }
-            : { kind: "every", everyMs: 60 * 60_000, anchorMs: startedAt },
-        state: { runningAtMs: startedAt, nextRunAtMs: startedAt },
-      });
-      const state = createCronServiceState({
-        scheduler: createTestGatewayScheduler(),
-        storePath: `/tmp/cron-incidental-${scheduleKind}.json`,
-        cronEnabled: true,
-        log: createNoopLogger(),
-        nowMs: () => endedAt,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      const job = makeJob(scheduleKind);
+      job.payload = { kind: "command", argv: ["local-task"] };
+      await executeAndApply(job, {
         runCommandJob: vi.fn(async () => ({
           status: "error" as const,
-          error,
+          error: "529 lines of output",
           errorClassification: { kind: "permanent" as const },
         })),
       });
-      state.store = { version: 1, jobs: [job] };
-
-      const result = await executeJobCore(state, job);
-      applyJobResult(
-        state,
-        job,
-        {
-          ...result,
-          executionStarted: true,
-          startedAt,
-          endedAt,
-        },
-        { deferredNotifications: [] },
-      );
-
       expect(job.state.lastErrorReason).toBeUndefined();
       expect(job.enabled).toBe(scheduleKind === "every");
       expect(job.state.nextRunAtMs).toBe(
@@ -64,47 +106,34 @@ describe("resolveTransientCronRetryDecision", () => {
   it.each(["at", "every"] as const)(
     "retries provider-attributed overload for %s jobs",
     async (scheduleKind) => {
-      const error = "HTTP 529";
-      const startedAt = Date.parse("2026-08-20T12:00:00.000Z");
-      const endedAt = startedAt + 500;
-      const job = makeCronJob({
-        schedule:
-          scheduleKind === "at"
-            ? { kind: "at", at: new Date(startedAt).toISOString() }
-            : { kind: "every", everyMs: 60 * 60_000, anchorMs: startedAt },
-        state: { runningAtMs: startedAt, nextRunAtMs: startedAt },
-      });
-      const state = createCronServiceState({
-        scheduler: createTestGatewayScheduler(),
-        storePath: "/tmp/cron-provider-overload.json",
-        cronEnabled: true,
-        log: createNoopLogger(),
-        nowMs: () => endedAt,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
+      const job = makeJob(scheduleKind);
+      await executeAndApply(job, {
         runIsolatedAgentJob: vi.fn(async () => ({
           status: "error" as const,
-          error,
+          error: "HTTP 529",
           provider: "provider-fixture",
         })),
       });
-      state.store = { version: 1, jobs: [job] };
-
-      applyJobResult(
-        state,
-        job,
-        {
-          ...(await executeJobCore(state, job)),
-          executionStarted: true,
-          startedAt,
-          endedAt,
-        },
-        { deferredNotifications: [] },
-      );
-
       expect(job.state.lastErrorReason).toBe("overloaded");
       expect(job.enabled).toBe(true);
       expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
+    },
+  );
+
+  it.each([
+    { reason: "auth_permanent", consecutiveErrors: 1, expected: "permanent error" },
+    { reason: "server_error", consecutiveErrors: 4, expected: "max retries exhausted" },
+  ] as const)(
+    "does not retry $reason after $consecutiveErrors errors",
+    ({ reason, consecutiveErrors, expected }) => {
+      expect(
+        resolveTransientCronRetryDecision({
+          error: "The AI service is having trouble.",
+          errorClassification: { kind: "reason", reason },
+          executionStarted: true,
+          consecutiveErrors,
+        }),
+      ).toMatchObject({ retryable: false, reason: expected });
     },
   );
 

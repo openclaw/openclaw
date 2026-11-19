@@ -1,9 +1,6 @@
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 
-export {
-  listKnownProviderAuthEnvVarNamesCore as listKnownProviderEnvApiKeyNames,
-  resolveProviderAuthLookupMaps as resolveProviderEnvAuthLookupMaps,
-} from "../secrets/provider-env-vars.js";
+export { resolveProviderAuthLookupMaps as resolveProviderEnvAuthLookupMaps } from "../secrets/provider-env-vars.js";
 
 /** Lists every provider key represented by either env candidates or auth evidence. */
 export function listProviderEnvAuthLookupKeys(params: {

@@ -1,0 +1,99 @@
+import { createHash } from "node:crypto";
+import { expect, it } from "vitest";
+import { scanMemoryUsageCostRollup } from "./session-cost-usage-rollup-scan.js";
+
+const message = (input: number, fields: Record<string, unknown> = {}) => ({
+  type: "message",
+  timestamp: "2026-10-18T12:00:00.000Z",
+  ...fields,
+  message: {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "tool-1", name: "read", arguments: {} }],
+    usage: { input, output: 2, totalTokens: input + 2, cost: { total: 1 } },
+  },
+});
+
+const scan = (json: string[]) =>
+  scanMemoryUsageCostRollup({
+    file: {
+      kind: "sqlite",
+      filePath: "synthetic-memory-transcript",
+      sourcePath: "synthetic-memory-transcript",
+      sessionId: "memory-scan",
+      size: json.reduce((bytes, row) => bytes + Buffer.byteLength(row), 0),
+      mtimeMs: 1,
+      maxSeq: json.length,
+      eventCount: json.length,
+    },
+    events: json.map((eventJson, index) => ({ seq: index + 1, eventJson })),
+    pricingFingerprint: "fixture",
+    resolveCosts: async (pairs) => pairs.map(() => undefined),
+  });
+
+it("does not retain decoded payloads while refreshing memory usage", async () => {
+  // Eight ordinary turns with real id/parent links: every turn is billed (72).
+  const count = 8;
+  const result = await scan(
+    Array.from({ length: count }, (_row, index) =>
+      JSON.stringify(
+        message(7, { id: `a${index}`, parentId: index === 0 ? null : `a${index - 1}` }),
+      ),
+    ),
+  );
+  const bucket = Object.values(result.rollup.buckets)[0]!;
+  expect(result.parsedRecords).toBe(count);
+  expect(result.countedRecords).toBe(count);
+  expect(bucket.totals).toMatchObject({
+    input: 7 * count,
+    output: 2 * count,
+    totalTokens: 9 * count,
+    totalCost: count,
+  });
+  expect(bucket.tools).toEqual([{ name: "read", count }]);
+  // The 640 MiB / 512 MiB heap scan that proves no decoded payload is retained is
+  // opt-in and never ran in CI; it is kept with this task's proof instead.
+});
+
+it("preserves rewind, side append and parentless navigation with canonical byte anchors", async () => {
+  // The real append path writes a side artifact without a parentId, so it hangs
+  // off the leaf that was active when it landed, and a later rewind chains its
+  // leaf control onto it. Billing therefore still reaches the displaced tip `b`.
+  const events = [
+    message(3, { id: "a", parentId: null }),
+    message(5, { id: "b", parentId: "a" }),
+    {
+      type: "custom",
+      id: "side",
+      customType: "audit",
+      appendMode: "side",
+      timestamp: "2026-10-18T12:00:00.000Z",
+    },
+    { type: "leaf", id: "rewind", parentId: "side", targetId: "a", billsDisplaced: true },
+    message(7, { id: "c" }),
+  ];
+  // The last raw event is outside the visible branch, but still owns the byte anchor.
+  const tail = message(200, { id: "hidden", parentId: "c", appendMode: "side" });
+  const json = [...events, tail].map((event) => JSON.stringify(event, null, 2));
+  const result = await scan(json);
+  // Base reports 15 tokens for this history (rewind after a side append), so the
+  // one in-place transcript bills a, the displaced b and the new c.
+  expect(result.parsedRecords).toBe(3);
+  expect(Object.values(result.rollup.buckets)[0]!.totals).toMatchObject({
+    input: 15,
+    output: 6,
+    totalCost: 3,
+  });
+  expect(result.checkpoint).toMatchObject({
+    kind: "sqlite",
+    maxSeq: 6,
+    eventCount: 6,
+    visibleLeafId: "c",
+    anchorHash: createHash("sha256").update(JSON.stringify(tail)).digest("base64url"),
+  });
+  const empty = await scan([]);
+  expect(empty.parsedRecords).toBe(0);
+  expect(empty.checkpoint).toMatchObject({
+    maxSeq: 0,
+    anchorHash: createHash("sha256").update("").digest("base64url"),
+  });
+});

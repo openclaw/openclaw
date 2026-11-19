@@ -6,6 +6,14 @@ import {
 } from "./tool-hook-matcher.js";
 
 describe("plugin tool hook matchers", () => {
+  it("keeps shipped dispatcher matchers scoped to the renamed dispatcher", () => {
+    expect(pluginToolMatcherCoversTool(["tool_call"], "dispatch_action")).toBe(true);
+    expect(pluginToolMatcherCoversTool(["tool_call"], "exec")).toBe(false);
+    expect(createPluginToolMatcherScope([["tool_call", "dispatch_action"]])).toEqual({
+      matchAll: false,
+      toolNames: ["dispatch_action"],
+    });
+  });
   it("normalizes canonical OpenClaw tool ids without provider alias expansion", () => {
     expect(normalizePluginToolMatcher([" EXEC ", "apply_patch", "exec"])).toEqual([
       "apply_patch",

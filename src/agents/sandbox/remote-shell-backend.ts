@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
@@ -36,6 +35,7 @@ type ResolvedRemoteRuntimePaths = {
 };
 export type RemoteShellSandboxBackendOptions = {
   createSession: () => Promise<RemoteShellSandboxSession>;
+  prepareCurrent?: () => Promise<void>;
   backendId?: string;
   runtimeId?: string;
   configLabel?: string;
@@ -126,6 +126,7 @@ class RemoteShellSandboxBackendImpl {
             env: prepared.env,
             cwd: prepared.cwd,
             stdinMode: "pipe-open",
+            prepareCurrent: this.params.prepareCurrent,
             assertCurrent: this.params.createParams.assertRuntimeCurrent,
             finalizeToken,
           };
@@ -486,7 +487,8 @@ function buildRemoteShellRuntimeId(scopeKey: string): string {
   }
   // Keep the path human-readable while hashing the original scope to avoid
   // collisions after normalization and truncation.
-  const safe = normalizeLowercaseStringOrEmpty(trimmed)
+  const safe = trimmed
+    .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 32);

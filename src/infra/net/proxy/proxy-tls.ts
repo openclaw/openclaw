@@ -1,5 +1,3 @@
-// Managed proxy TLS helpers resolve and load CA trust only for HTTPS forward
-// proxies that OpenClaw owns or inherited from a parent process.
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -11,24 +9,13 @@ export type ManagedProxyTlsOptions = Readonly<{
   ca?: string;
 }>;
 
-function isHttpsProxyUrl(value: string | undefined): boolean {
-  if (!value) {
-    return false;
-  }
-  try {
-    return new URL(value).protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 /** Returns a CA file only for HTTPS proxy URLs; HTTP proxies do not need TLS trust. */
 export function resolveManagedProxyCaFileForUrl(params: {
   proxyUrl: string | undefined;
   config?: ProxyConfig;
   caFileOverride?: string;
 }): string | undefined {
-  if (!isHttpsProxyUrl(params.proxyUrl)) {
+  if (!params.proxyUrl || URL.parse(params.proxyUrl)?.protocol !== "https:") {
     return undefined;
   }
   return (

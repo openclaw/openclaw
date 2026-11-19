@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { hasErrnoCode } from "./errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
 import { tryResolvePathCaseInsensitive } from "./path-case.js";
 import type { ManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
 
@@ -10,10 +10,7 @@ function sourceKey(resource: string): string {
   try {
     return path.join(fs.realpathSync(path.dirname(absolute)), path.basename(absolute));
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return absolute;
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? absolute;
   }
 }
 
@@ -21,11 +18,8 @@ function fileIdentity(file: string) {
   try {
     return fs.statSync(file, { bigint: true });
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
     // Unreadable identities cannot establish that the resource is unrelated.
-    throw error;
+    return ignoreMissingPath(error);
   }
 }
 

@@ -87,9 +87,9 @@ Plan targets are accepted for supported credential paths in [SecretRef Credentia
 
 `target.type` must be a recognized target type, and the normalized `target.path` must match that type's registered path shape.
 
-Some target types accept a compatibility alias as `target.type` for existing plans, in addition to their canonical type name:
+Some target types accept a compatibility alias as `target.type` for existing plans, in addition to their primary type name:
 
-| Canonical type                       | Accepted alias                                  |
+| Primary type                         | Accepted alias                                  |
 | ------------------------------------ | ----------------------------------------------- |
 | `models.providers.apiKey`            | `models.providers.*.apiKey`                     |
 | `skills.entries.apiKey`              | `skills.entries.*.apiKey`                       |

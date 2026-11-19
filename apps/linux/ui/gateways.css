@@ -2,51 +2,9 @@
   --gateway-control-height: 38px;
 }
 
-* {
-  box-sizing: border-box;
-}
-[hidden] {
-  display: none !important;
-}
-body {
-  margin: 0;
-  min-width: 320px;
-}
-button,
 input,
 select {
   font: inherit;
-}
-button {
-  cursor: default;
-}
-svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex: none;
-}
-
-.gateways-shell {
-  display: flex;
-  justify-content: center;
-  min-height: 100vh;
-  min-height: 100dvh;
-  padding: 24px;
-}
-
-.gateways-panel {
-  width: min(560px, 100%);
-  margin-block: auto;
-  padding: 24px 32px 28px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--card);
-  box-shadow: var(--shadow-sm);
 }
 
 .gateway-header {
@@ -56,16 +14,7 @@ svg {
   gap: 16px;
   margin-bottom: 24px;
 }
-.gateway-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-strong);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  line-height: 1;
-}
+
 .gateway-brand img {
   display: block;
 }
@@ -82,13 +31,7 @@ h2,
 p {
   margin: 0;
 }
-h1 {
-  color: var(--text-strong);
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
-}
+
 .gateway-heading p {
   color: var(--muted);
   font-size: 14px;
@@ -103,93 +46,23 @@ h1 {
 .field {
   gap: 6px;
 }
-.field label {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 500;
-}
+
 .optional {
   font-weight: 400;
 }
 
 .field input,
 .field select {
-  width: 100%;
-  min-width: 0;
-  height: var(--gateway-control-height);
-  padding: 8px 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  background: var(--card);
-  color: var(--text-strong);
   outline: none;
-  box-shadow: var(--input-shadow);
 }
 
-.field-select {
-  position: relative;
-}
-.field-select select {
-  appearance: none;
-  padding-right: 34px;
-}
-.field-select::after {
-  position: absolute;
-  right: 15px;
-  bottom: calc(var(--gateway-control-height) / 2 - 3px);
-  width: 6px;
-  height: 6px;
-  border-right: 1.5px solid var(--muted);
-  border-bottom: 1.5px solid var(--muted);
-  content: "";
-  transform: rotate(45deg);
-  pointer-events: none;
-}
-
-input::placeholder {
-  color: var(--muted);
-}
-.field input:focus-visible,
-.field select:focus-visible {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
-}
-button:focus-visible,
-summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-}
 button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 36px;
-  padding: 8px 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  background: var(--bg-elevated);
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 500;
   white-space: nowrap;
 }
 button:hover {
   background: var(--bg-hover);
 }
-button:disabled,
-input:disabled,
-select:disabled {
-  opacity: 0.5;
-}
-button.primary {
-  padding: 10px 16px;
-  border-color: var(--accent);
-  background: var(--primary);
-  color: var(--primary-foreground);
-  font-size: 14px;
-  font-weight: 600;
-}
+
 button.primary:hover {
   background: var(--primary-hover);
 }
@@ -229,9 +102,6 @@ button.button-back:hover {
   padding-top: 0;
 }
 .gateway-copy {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
   overflow-wrap: anywhere;
 }
 .gateway-name {
@@ -239,10 +109,7 @@ button.button-back:hover {
   font-size: 14px;
   font-weight: 600;
 }
-.gateway-endpoint {
-  color: var(--muted);
-  font-size: 12px;
-}
+
 .gateway-selected {
   justify-self: start;
   color: var(--accent);
@@ -308,45 +175,12 @@ button.button-back:hover {
 .gateway-disclosure[open] > summary {
   margin-bottom: 10px;
 }
-.gateway-auth {
-  display: grid;
-  grid-template-columns: 124px minmax(0, 1fr);
-  align-items: end;
-  gap: 12px;
-}
-.gateway-credential {
-  position: relative;
-}
-.gateway-credential input {
-  padding-right: 42px;
-}
-button.secret-toggle {
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 32px;
-  height: 32px;
-  min-height: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
-}
+
 button.secret-toggle:hover {
   color: var(--text-strong);
   background: var(--bg-hover);
 }
-.secret-toggle[aria-pressed="true"] .secret-hidden {
-  display: none;
-}
-.gateway-hint,
-.gateway-status,
-.gateway-footer {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
+
 .gateway-hint {
   margin-top: -6px;
 }
@@ -410,9 +244,7 @@ button.secret-toggle:hover {
   :root {
     --gateway-control-height: 44px;
   }
-  .gateways-panel {
-    padding: 20px 20px 24px;
-  }
+
   h1 {
     font-size: 20px;
   }
@@ -421,16 +253,11 @@ button.secret-toggle:hover {
   button.primary {
     min-height: 44px;
   }
-  button.secret-toggle {
-    width: 38px;
-    height: 38px;
-  }
+
 }
 
 @media (max-width: 560px) {
-  .gateways-shell {
-    padding: 16px;
-  }
+
   .gateway-profile {
     grid-template-columns: minmax(0, 1fr);
     gap: 10px;
@@ -441,10 +268,7 @@ button.secret-toggle:hover {
   .gateway-header {
     gap: 8px;
   }
-  .gateway-auth {
-    grid-template-columns: 110px minmax(0, 1fr);
-    gap: 8px;
-  }
+
   .optional {
     display: none;
   }

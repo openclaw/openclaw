@@ -55,18 +55,8 @@ public enum OpenClawChatWidgetURLResolver {
     private static let documentsPath = "/__openclaw__/canvas/documents"
 
     public static func resolve(surfaceURL rawSurfaceURL: String?, target rawTarget: String) -> URL? {
-        guard let target = self.relativeWidgetTarget(rawTarget),
-              var surface = self.capabilitySurface(rawSurfaceURL)
-        else { return nil }
-
-        var surfacePath = surface.percentEncodedPath
-        while surfacePath.hasSuffix("/") {
-            surfacePath.removeLast()
-        }
-        surface.percentEncodedPath = surfacePath + target.percentEncodedPath
-        surface.percentEncodedQuery = target.percentEncodedQuery
-        surface.fragment = target.fragment
-        return surface.url
+        guard let target = self.relativeWidgetTarget(rawTarget) else { return nil }
+        return GatewayPluginSurfaceURL.appendingTarget(target, toCapabilitySurface: rawSurfaceURL)
     }
 
     public static func supportsTarget(_ rawTarget: String) -> Bool {
@@ -170,27 +160,6 @@ public enum OpenClawChatWidgetURLResolver {
         return components
     }
 
-    private static func capabilitySurface(_ rawSurfaceURL: String?) -> URLComponents? {
-        let raw = rawSurfaceURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !raw.isEmpty,
-              let components = URLComponents(string: raw),
-              self.isWebURL(components),
-              components.user == nil,
-              components.password == nil,
-              components.percentEncodedQuery == nil,
-              components.fragment == nil
-        else { return nil }
-
-        let segments = components.percentEncodedPath.split(separator: "/", omittingEmptySubsequences: true)
-        guard segments.count >= 3,
-              segments[segments.count - 3] == "__openclaw__",
-              segments[segments.count - 2] == "cap",
-              let capability = String(segments[segments.count - 1]).removingPercentEncoding,
-              !capability.isEmpty
-        else { return nil }
-        return components
-    }
-
     private static func resolve(
         surface: GatewayCanvasHostRoute,
         role: OpenClawChatWidgetSurfaceRole,
@@ -247,11 +216,6 @@ public enum OpenClawChatWidgetURLResolver {
             candidate.tlsFingerprintSHA256 != failedResource.tlsFingerprintSHA256
     }
 
-    private static func isWebURL(_ components: URLComponents) -> Bool {
-        let scheme = components.scheme?.lowercased()
-        return (scheme == "http" || scheme == "https") && components.host?.isEmpty == false
-    }
-
     private static func isCanonicalPath(_ path: String) -> Bool {
         let segments = path.split(separator: "/", omittingEmptySubsequences: false)
         guard segments.first?.isEmpty == true else { return false }
@@ -292,22 +256,50 @@ enum ChatInlineWidgetExport {
     }
 }
 
+extension EnvironmentValues {
+    /// Apps can retire embedded browser content while native transport remains usable.
+    @Entry public var openClawEmbeddedBrowserUnavailableReason: String?
+}
+
+struct ChatInlineWidgetScope: Hashable {
+    let modelID: ObjectIdentifier
+    let sessionTarget: OpenClawChatSessionTarget
+    let sessionGeneration: UInt64
+}
+
+/// Resource equality describes navigation identity, not the latest recovery route.
+/// SwiftUI must also deliver role/attempt changes to a retained coordinator.
+private struct ChatInlineWidgetResolution: Equatable {
+    let resource: OpenClawChatWidgetResource
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.resource == rhs.resource &&
+            lhs.resource.surfaceRole == rhs.resource.surfaceRole &&
+            lhs.resource.attemptedSurfaceRoles == rhs.resource.attemptedSurfaceRoles
+    }
+}
+
 @MainActor
 struct ChatInlineWidgetView: View {
+    @Environment(\.openClawEmbeddedBrowserUnavailableReason) private var browserUnavailableReason
     let preview: OpenClawChatCanvasPreview
     let resolverReady: Bool
     let resolveResource: @MainActor @Sendable (
         String,
         OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
 
-    @State private var resolvedResource: OpenClawChatWidgetResource?
+    @State private var resolution: ChatInlineWidgetResolution?
     @State private var recoveryAttempts = 0
-    @State private var refreshInFlight = false
+    @State private var resolutionInFlight = false
+    @State private var pendingFailure: OpenClawChatWidgetResource?
     @State private var unavailable = false
     @State private var activePath: String?
-    /// A reset can keep the same path while installing a new connection route.
-    /// Its generation prevents older resolver completions from restoring stale trust state.
+    /// Each revalidation retires earlier resolver and snapshot completions, even when the browser stays mounted.
     @State private var loadGeneration = UUID()
+
+    private var resolvedResource: OpenClawChatWidgetResource? {
+        self.resolution?.resource
+    }
 
     #if canImport(WebKit) && (os(iOS) || os(macOS))
     @State private var snapshotRequest: ChatInlineWidgetSnapshotRequest?
@@ -334,7 +326,11 @@ struct ChatInlineWidgetView: View {
             }
 
             #if canImport(WebKit) && (os(iOS) || os(macOS))
-            if let resolvedResource {
+            if let browserUnavailableReason {
+                Text(browserUnavailableReason)
+                    .font(OpenClawChatTypography.footnote)
+                    .foregroundStyle(OpenClawChatTheme.muted)
+            } else if let resolvedResource {
                 self.renderedWidget(resource: resolvedResource)
             } else if self.unavailable {
                 Text("Widget unavailable")
@@ -351,13 +347,16 @@ struct ChatInlineWidgetView: View {
                 .foregroundStyle(OpenClawChatTheme.muted)
             #endif
         }
-        .task(id: LoadID(path: self.preview.inlineWidgetPath, resolverReady: self.resolverReady)) {
+        .task(id: LoadID(
+            path: self.preview.inlineWidgetPath,
+            resolverReady: self.resolverReady,
+            browserAvailable: self.browserUnavailableReason == nil))
+        {
             let path = self.preview.inlineWidgetPath
-            if self.activePath != path {
-                self.reset(path: path)
-            }
-            guard self.resolverReady else { return }
-            self.reset(path: path)
+            self.reset(
+                path: path,
+                preservingResource: self.activePath == path && self.browserUnavailableReason == nil)
+            guard self.resolverReady, self.browserUnavailableReason == nil else { return }
             guard let path else {
                 self.unavailable = true
                 return
@@ -366,23 +365,23 @@ struct ChatInlineWidgetView: View {
         }
         #if canImport(WebKit) && (os(iOS) || os(macOS))
         .alert("Widget export failed", isPresented: self.isPresentingExportError) {
-            Button(role: .cancel) {
-                self.exportErrorMessage = nil
-            } label: {
-                Text("OK")
-                    .font(OpenClawChatTypography.body)
+                Button(role: .cancel) {
+                    self.exportErrorMessage = nil
+                } label: {
+                    Text("OK")
+                        .font(OpenClawChatTypography.body)
+                }
+            } message: {
+                if let exportErrorMessage {
+                    Text(exportErrorMessage)
+                        .font(OpenClawChatTypography.body)
+                }
             }
-        } message: {
-            if let exportErrorMessage {
-                Text(exportErrorMessage)
-                    .font(OpenClawChatTypography.body)
+            #if os(iOS)
+            .sheet(item: self.$sharedImage) { item in
+                ChatInlineWidgetShareSheet(image: item.image)
             }
-        }
-        #if os(iOS)
-        .sheet(item: self.$sharedImage) { item in
-            ChatInlineWidgetShareSheet(image: item.image)
-        }
-        #endif
+            #endif
         #endif
     }
 
@@ -504,14 +503,21 @@ struct ChatInlineWidgetView: View {
     private struct LoadID: Hashable {
         let path: String?
         let resolverReady: Bool
+        let browserAvailable: Bool
     }
 
-    private func reset(path: String?) {
+    private func reset(path: String?, preservingResource: Bool) {
         self.loadGeneration = UUID()
         self.activePath = path
-        self.setResolvedResource(nil)
+        #if canImport(WebKit) && (os(iOS) || os(macOS))
+        self.snapshotRequest = nil
+        #endif
+        if !preservingResource {
+            self.setResolvedResource(nil)
+            self.pendingFailure = nil
+        }
         self.recoveryAttempts = 0
-        self.refreshInFlight = false
+        self.resolutionInFlight = false
         self.unavailable = false
     }
 
@@ -520,14 +526,27 @@ struct ChatInlineWidgetView: View {
         replacing failedResource: OpenClawChatWidgetResource?,
         generation: UUID) async
     {
-        let candidate = await self.resolveResource(path, failedResource)
-        guard !Task.isCancelled,
-              self.activePath == path,
+        guard self.browserUnavailableReason == nil, !Task.isCancelled,
+              self.activePath == path, self.loadGeneration == generation
+        else { return }
+        self.resolutionInFlight = true
+        let candidate = await resolveResource(path, failedResource)
+        guard self.activePath == path,
               self.loadGeneration == generation
         else { return }
-        let resource = candidate?.hasValidTLSBinding == true ? candidate : nil
+        self.resolutionInFlight = false
+        guard !Task.isCancelled else { return }
+        // A recovery must replace the failed navigation, not leave its dead page mounted.
+        let resource = candidate?.hasValidTLSBinding == true && candidate != failedResource ? candidate : nil
         self.setResolvedResource(resource)
         self.unavailable = resource == nil
+        let pendingFailure = self.pendingFailure
+        self.pendingFailure = nil
+        if let resource, resource == pendingFailure {
+            // A retained browser can fail while ordinary revalidation is suspended.
+            // Recover afterward using the resolver result's latest role/attempt metadata.
+            self.handleLoadFailure(resource: resource)
+        }
     }
 
     private func setResolvedResource(_ resource: OpenClawChatWidgetResource?) {
@@ -536,26 +555,27 @@ struct ChatInlineWidgetView: View {
             self.snapshotRequest = nil
         }
         #endif
-        self.resolvedResource = resource
+        self.resolution = resource.map(ChatInlineWidgetResolution.init)
     }
 
     private func handleLoadFailure(resource: OpenClawChatWidgetResource) {
-        guard self.resolvedResource == resource,
-              let path = self.activePath,
-              !self.refreshInFlight
+        guard let currentResource = self.resolvedResource, currentResource == resource,
+              let path = self.activePath
         else { return }
+        if self.resolutionInFlight {
+            self.pendingFailure = currentResource
+            return
+        }
         guard self.recoveryAttempts < 3 else {
             self.setResolvedResource(nil)
             self.unavailable = true
             return
         }
         self.recoveryAttempts += 1
-        self.refreshInFlight = true
+        self.resolutionInFlight = true
         let generation = self.loadGeneration
         Task { @MainActor in
-            await self.load(path: path, replacing: resource, generation: generation)
-            guard self.activePath == path, self.loadGeneration == generation else { return }
-            self.refreshInFlight = false
+            await self.load(path: path, replacing: currentResource, generation: generation)
         }
     }
 }
@@ -633,7 +653,7 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
         }
     }
 
-    let onFailure: @MainActor @Sendable () -> Void
+    var onFailure: @MainActor @Sendable () -> Void
     var onSnapshot: @MainActor @Sendable (ChatInlineWidgetSnapshotOutcome) -> Void
     private var contentProcessRecovery = ChatInlineWidgetContentProcessRecovery()
     private var allowsStaticResources = false
@@ -654,11 +674,8 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
     {
-        if navigationAction.targetFrame?.isMainFrame == false {
-            decisionHandler(.cancel)
-            return
-        }
-        guard navigationAction.request.httpMethod?.caseInsensitiveCompare("GET") == .orderedSame,
+        guard navigationAction.targetFrame?.isMainFrame != false,
+              navigationAction.request.httpMethod?.caseInsensitiveCompare("GET") == .orderedSame,
               let url = navigationAction.request.url,
               self.matchesExpectedDocument(url)
         else {
@@ -677,14 +694,11 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
             let response = navigationResponse.response as? HTTPURLResponse
             self.allowsStaticResources = ChatInlineWidgetResourcePolicy.allowsStaticResources(
                 contentSecurityPolicy: response?.value(forHTTPHeaderField: "Content-Security-Policy"))
-        }
-        if navigationResponse.isForMainFrame,
-           let response = navigationResponse.response as? HTTPURLResponse,
-           response.statusCode >= 400
-        {
-            self.onFailure()
-            decisionHandler(.cancel)
-            return
+            if let response, response.statusCode >= 400 {
+                self.onFailure()
+                decisionHandler(.cancel)
+                return
+            }
         }
         decisionHandler(.allow)
     }
@@ -782,9 +796,11 @@ private struct ChatInlineWidgetWebView {
     }
 
     func updateWebView(_ webView: WKWebView, coordinator: ChatInlineWidgetNavigationDelegate) {
+        coordinator.onFailure = self.onFailure
         coordinator.onSnapshot = self.onSnapshot
-        if coordinator.resource != self.resource {
-            coordinator.resource = self.resource
+        let needsNavigation = coordinator.resource != self.resource
+        coordinator.resource = self.resource
+        if needsNavigation {
             webView.load(URLRequest(url: self.resource.url, cachePolicy: .reloadIgnoringLocalCacheData))
         }
         coordinator.snapshotCapture.capture(

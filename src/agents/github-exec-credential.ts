@@ -4,6 +4,7 @@ import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseDocument } from "yaml";
 import { readSecureFile } from "../infra/fs-safe.js";
+import { resolveConfiguredGitHubHost } from "./github-host.js";
 
 export const GITHUB_EXEC_CREDENTIAL_UNAVAILABLE =
   "GitHub Identity credential is unavailable or insecure. Reconnect or change GitHub Identity, then retry.";
@@ -34,8 +35,9 @@ async function privateProfileStat(profileDir: string) {
 }
 
 /** Called only inside the local launcher, never by the Gateway or its supervision pipeline. */
-export async function readGitHubExecToken(profileDir: string): Promise<string> {
+export async function readGitHubExecToken(profileDir: string, host?: string): Promise<string> {
   try {
+    const githubHost = resolveConfiguredGitHubHost({ gateway: { github: { host } } });
     const profile = await privateProfileStat(profileDir);
     const realProfileDir = await fs.realpath(profileDir);
     const filePath = path.join(profileDir, "hosts.yml");
@@ -65,9 +67,11 @@ export async function readGitHubExecToken(profileDir: string): Promise<string> {
         throw new Error(GITHUB_EXEC_CREDENTIAL_UNAVAILABLE);
       }
       const parsed: unknown = document.toJS({ maxAliasCount: 0 });
-      const host = isRecord(parsed) ? parsed["github.com"] : undefined;
+      const hostEntry = isRecord(parsed) ? parsed[githubHost] : undefined;
       const token =
-        isRecord(host) && typeof host.oauth_token === "string" ? host.oauth_token.trim() : "";
+        isRecord(hostEntry) && typeof hostEntry.oauth_token === "string"
+          ? hostEntry.oauth_token.trim()
+          : "";
       if (!token || /[\r\n\0]/u.test(token)) {
         throw new Error(GITHUB_EXEC_CREDENTIAL_UNAVAILABLE);
       }

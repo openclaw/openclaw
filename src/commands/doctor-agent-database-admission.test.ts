@@ -26,7 +26,7 @@ describe("Doctor agent database admission", () => {
     const stateDir = fs.realpathSync.native(tempDirs.make("doctor-agent-admission-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: { default: true }, cleaner: {} } },
+      agents: { entries: { main: {}, cleaner: {} } },
     };
     const ownerPath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
     closeOpenClawAgentDatabasesForTest();

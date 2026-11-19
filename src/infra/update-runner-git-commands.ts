@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseDocument } from "yaml";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
+import { resolveExecutablePath } from "./executable-path.js";
+import { isFullGitObjectId } from "./update-dev-target.js";
 import { resolvePnpmCandidateEnv } from "./update-package-manager.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
@@ -27,8 +29,53 @@ export type StepFactory = (
   env?: NodeJS.ProcessEnv,
 ) => RunStepOptions;
 
-function looksLikeFullCommitSha(value: string): boolean {
-  return /^[0-9a-f]{40}$/i.test(value.trim());
+export function createGitStepFactory(root: string, step: StepFactory) {
+  return (name: string, ...args: string[]) => step(name, ["git", "-C", root, ...args], root);
+}
+
+// `rev-parse --path-format=absolute` (Git 2.31) locates the object directory; older Git
+// echoes the flag back as a revision instead of failing, so the update breaks later.
+const MINIMUM_GIT_VERSION = [2, 31] as const;
+
+/** One operator-facing line when the updater's Git is too old for a Git-checkout update. */
+export async function describeUnsupportedGit(
+  runCommand: CommandRunner,
+  options: Parameters<CommandRunner>[1],
+): Promise<string | null> {
+  // Only a known old version refuses. A missing or unreadable Git keeps its existing failure.
+  const probe = await runCommand(["git", "--version"], options).catch(() => null);
+  const match = probe?.code === 0 ? /^git version (\d+)\.(\d+)\S*/u.exec(probe.stdout) : null;
+  const [major, minor] = [Number(match?.[1]), Number(match?.[2])];
+  if (
+    !match ||
+    major > MINIMUM_GIT_VERSION[0] ||
+    (major === MINIMUM_GIT_VERSION[0] && minor >= MINIMUM_GIT_VERSION[1])
+  ) {
+    return null;
+  }
+  // The updater's PATH puts its Node directory and system directories first, so name the
+  // Git it actually runs rather than the one the operator's shell finds.
+  const found = match[0].replace(/^git version /u, "");
+  const required = `Git ${MINIMUM_GIT_VERSION.join(".")} or newer`;
+  const location = resolveExecutablePath("git", { cwd: options.cwd, useCache: false });
+  return location
+    ? `Update refused: Git ${found} at ${location} is too old for Git-checkout updates. Replace it with ${required}, then retry openclaw update. No changes were made.`
+    : `Update refused: Git ${found} is too old for Git-checkout updates. Install ${required}, then retry openclaw update. No changes were made.`;
+}
+
+/** Older Git may lazily fetch promised objects; that must not block an update. */
+export async function resolveGitNoLazyFetchArgs(
+  runCommand: CommandRunner,
+  options: Parameters<CommandRunner>[1],
+): Promise<string[]> {
+  const probe = await runCommand(["git", "--no-lazy-fetch", "version"], options);
+  return probe.code === 0 &&
+    probe.stdout.startsWith("git version ") &&
+    !probe.killed &&
+    !probe.signal &&
+    (!probe.termination || probe.termination === "exit")
+    ? ["--no-lazy-fetch"]
+    : [];
 }
 
 export function resolveTagFetchRef(candidate: string): string | null {
@@ -38,7 +85,7 @@ export function resolveTagFetchRef(candidate: string): string | null {
 
 export function buildDevTargetRefResolutionCandidates(devTargetRef: string): string[] {
   const trimmed = devTargetRef.trim();
-  if (looksLikeFullCommitSha(trimmed) || trimmed.startsWith("refs/remotes/")) {
+  if (isFullGitObjectId(trimmed) || trimmed.startsWith("refs/remotes/")) {
     return [trimmed];
   }
   if (trimmed.startsWith("refs/heads/")) {
@@ -112,15 +159,19 @@ function resolveBuildNodeOptions(baseOptions: string | undefined): string {
   return current.replace(/(?:^|\s)--max-old-space-size=\d+(?=\s|$)/, ` ${desired}`).trim();
 }
 
-export function resolveBuildEnv(
+export function resolveGitUpdateCommandEnv(
   env: NodeJS.ProcessEnv = process.env,
-  buildCacheRoot?: string,
 ): NodeJS.ProcessEnv {
+  // Ordinary updates need runnable artifacts; immutable releases own their build policy.
+  return { ...env, OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD ?? "1" };
+}
+
+export function resolveBuildEnv(env: NodeJS.ProcessEnv, buildCacheRoot: string): NodeJS.ProcessEnv {
   return {
     ...env,
     OPENCLAW_UPDATE_IN_PROGRESS: "1",
     NODE_OPTIONS: resolveBuildNodeOptions(env.NODE_OPTIONS ?? process.env.NODE_OPTIONS),
-    ...(buildCacheRoot ? { BUILD_ALL_CACHE_ROOT: buildCacheRoot } : {}),
+    BUILD_ALL_CACHE_ROOT: buildCacheRoot,
   };
 }
 
@@ -138,30 +189,6 @@ export function gitCleanCheckArgs(
     ":!dist/control-ui/",
     ...sourceTreeStagingPaths.map((relative) => `:(top,exclude,literal)${relative}`),
   ];
-}
-
-async function hasExplicitPnpmPreferOfflineConfig(params: {
-  runCommand: CommandRunner;
-  cwd: string;
-  timeoutMs: number;
-  env: NodeJS.ProcessEnv;
-}): Promise<boolean> {
-  try {
-    const result = await params.runCommand(["pnpm", "config", "get", "prefer-offline"], {
-      cwd: params.cwd,
-      timeoutMs: params.timeoutMs,
-      env: params.env,
-    });
-    if (result.code !== 0) {
-      return true;
-    }
-    // pnpm reports only explicitly configured typed values; these sentinels mean absent.
-    const value = result.stdout.trim();
-    return value !== "" && value !== "undefined" && value !== "null";
-  } catch {
-    // A failed provenance check must not override an operator's possible explicit policy.
-    return true;
-  }
 }
 
 export async function prepareCandidateCommandEnv(
@@ -182,27 +209,37 @@ export async function prepareCandidateCommandEnv(
   }
   const hasExplicitPreferOffline =
     effectiveEnv.pnpm_config_prefer_offline !== undefined ||
-    effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE !== undefined;
-  const hasConfigPreferOffline = hasExplicitPreferOffline
-    ? false
-    : await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv });
+    effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE !== undefined ||
+    (await (async () => {
+      try {
+        const result = await runCommand(["pnpm", "config", "get", "prefer-offline"], {
+          cwd,
+          timeoutMs,
+          env: effectiveEnv,
+        });
+        if (result.code !== 0) {
+          return true;
+        }
+        // pnpm reports only explicitly configured typed values; these sentinels mean absent.
+        const value = result.stdout.trim();
+        return value !== "" && value !== "undefined" && value !== "null";
+      } catch {
+        // A failed provenance check must not override an operator's possible explicit policy.
+        return true;
+      }
+    })());
   const candidateEnv: NodeJS.ProcessEnv = {
     ...resolvePnpmCandidateEnv(effectiveEnv, "node_modules/.pnpm"),
     PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
     npm_config_resolution_mode: env?.npm_config_resolution_mode ?? "highest",
     pnpm_config_resolution_mode: env?.pnpm_config_resolution_mode ?? "highest",
   };
-  if (!hasExplicitPreferOffline && !hasConfigPreferOffline) {
+  if (!hasExplicitPreferOffline) {
     candidateEnv.PNPM_CONFIG_PREFER_OFFLINE = "true";
     candidateEnv.pnpm_config_prefer_offline = "true";
   }
   const workspaceFile = path.join(cwd, "pnpm-workspace.yaml");
-  const original = await fs.readFile(workspaceFile, "utf8").catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const original = await fs.readFile(workspaceFile, "utf8").catch(ignoreMissingPath);
   if (original === undefined) {
     return { env: candidateEnv };
   }
@@ -210,6 +247,7 @@ export async function prepareCandidateCommandEnv(
   // Only the disposable worktree gets this override; retain all operator settings.
   const workspace = parseDocument(original);
   workspace.set("virtualStoreDir", "node_modules/.pnpm");
+  workspace.set("virtualStoreType", "project");
   const isolated = workspace.toString();
   const backupDirectory = await fs.mkdtemp(path.join(path.dirname(cwd), "workspace-original-"));
   const backupFile = path.join(backupDirectory, "pnpm-workspace.yaml");

@@ -24,6 +24,12 @@ OpenAI Responses transports. This header remains enabled when prompt caching is
 disabled. Low-level SDK stream callers should supply `sessionId` in their stream
 options.
 
+Zen and Go discovery requests and model requests on the OpenAI-compatible,
+Anthropic, and Gemini transports identify the client as `openclaw/<version>` on
+their native endpoints, including the current `/inference/...` routes returned
+by upstream discovery and the retained `/zen/...` aliases. Custom proxy URLs do
+not inherit this attribution. OpenClaw does not impersonate the OpenCode client.
+
 Standalone `openclaw infer model run --local` calls and the
 [prepared completion helper](/plugins/sdk-runtime/models#prepared-completion-sdk-compatibility)
 generate a fresh routing header per invocation when no explicit routing header
@@ -124,10 +130,11 @@ Live discovery combines the models available to your OpenCode account with
 authoritative model metadata from `https://models.opencode.ai/api.json`.
 OpenClaw fetches and caches that catalog only when OpenCode Zen or Go is
 configured or explicitly selected with OpenCode credentials; startup and
-unrelated providers never download it. New upstream models become available
-without an OpenClaw update when their metadata describes a supported transport
-on the trusted OpenCode endpoint. A key-scoped response can omit models
-unavailable to that workspace. Metadata and lifecycle status refresh together;
+unrelated providers never download it. New listed chat models become available
+without an OpenClaw update. Models with trusted metadata keep their upstream
+transport and capabilities; listed IDs without metadata use Zen's native
+OpenAI-compatible route with default limits. A key-scoped response can omit
+models unavailable to that workspace. Metadata and lifecycle status refresh together;
 deprecated models are excluded from active discovery and its offline fallback.
 Deprecated explicit refs remain resolvable for existing configurations but are
 not shown as current recommendations.
@@ -137,18 +144,37 @@ list. A successful empty or fully filtered account response stays empty.
 The separate public metadata feed can still use trusted offline metadata when
 it is unavailable; that does not replace or retry the account-list request.
 
+Some Zen free-tier models only accept requests from the OpenCode client. A
+`403 FreeTierError` means that the model's free tier is restricted, not that
+your saved key has expired. Choose another model or use a paid plan that allows
+API access. Signing in again or changing the User-Agent does not grant access.
+This refusal marks only the selected model unavailable; it does not put the
+credential into cooldown for other models.
+An ID in the account listing alone does not prove that it can run in OpenClaw.
+The listing has no free-tier flag, so OpenClaw does not guess access from model
+names. A `402` insufficient-funds response means that the account needs more
+credit, not that the model ID is unknown.
+
 Price estimates also refresh through the [hosted model catalog](/concepts/models#hosted-catalog-updates),
 using the same public OpenCode pricing feed as live discovery. Hosted updates
 activate after the next Gateway restart; the bundled snapshot remains available
 offline. Explicit model prices in your configuration or agent-local `models.json`
 keep precedence. These are advertised-price estimates, not verified invoice totals.
 
+#### Kimi K3 thinking
+
+For `opencode/kimi-k3`, choose **Off**, **Low**, **High**, or **Max**. Its provider
+default is **High**. **Off** explicitly
+sends `reasoning_effort: "none"`; omitting the effort does not disable reasoning
+on Zen. These choices apply to the Zen route, not other Kimi providers. The picker
+may also show [**Ultra**](/tools/thinking), a separate harness mode.
+
 ### Go
 
-| Property         | Value                                                                             |
-| ---------------- | --------------------------------------------------------------------------------- |
-| Runtime provider | `opencode-go`                                                                     |
-| Example models   | `opencode-go/kimi-k3`, `opencode-go/deepseek-v4-flash`, `opencode-go/qwen3.8-max` |
+| Property         | Value                                                                               |
+| ---------------- | ----------------------------------------------------------------------------------- |
+| Runtime provider | `opencode-go`                                                                       |
+| Example models   | `opencode-go/kimi-k3`, `opencode-go/deepseek-v4.1-flash`, `opencode-go/qwen3.8-max` |
 
 See [OpenCode Go](/providers/opencode-go) for discovery, routing, and access
 requirements. Go's model-list endpoint advertises its general lineup; listing

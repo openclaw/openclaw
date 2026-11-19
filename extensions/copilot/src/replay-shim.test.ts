@@ -1,99 +1,31 @@
 // Copilot tests cover replay shim plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  classifyResumeFailure,
+  isMissingCopilotSessionError,
   computeReplayMetadata,
   copilotToolMetasHavePotentialSideEffects,
-  decideReplayAction,
 } from "./replay-shim.js";
 
-describe("decideReplayAction", () => {
-  it("returns create when no input is supplied", () => {
-    const decision = decideReplayAction();
-    expect(decision).toEqual({
-      action: "create",
-      downgradedFromResume: false,
-      downgradeReason: "no-replay-state",
-    });
-  });
-
-  it("returns create when sdkSessionId is absent", () => {
-    expect(decideReplayAction({})).toEqual({
-      action: "create",
-      downgradedFromResume: false,
-      downgradeReason: "no-sdk-session-id",
-    });
-    expect(decideReplayAction({ replayInvalid: false })).toEqual({
-      action: "create",
-      downgradedFromResume: false,
-      downgradeReason: "no-sdk-session-id",
-    });
-  });
-
-  it("returns create for empty or whitespace-only sdkSessionId", () => {
-    for (const sdkSessionId of ["", "   ", "\t\n"]) {
-      expect(decideReplayAction({ sdkSessionId })).toMatchObject({
-        action: "create",
-        downgradeReason: "no-sdk-session-id",
-      });
-    }
-  });
-
-  it("trims whitespace around sdkSessionId before resuming", () => {
-    expect(decideReplayAction({ sdkSessionId: "  sess-3  ", replayInvalid: false })).toEqual({
-      action: "resume",
-      sdkSessionId: "sess-3",
-      downgradedFromResume: false,
-    });
-  });
-
-  it("downgrades to create when replayInvalid is true even with sdkSessionId", () => {
-    expect(decideReplayAction({ sdkSessionId: "sess-4", replayInvalid: true })).toEqual({
-      action: "create",
-      downgradedFromResume: true,
-      downgradeReason: "replay-invalid",
-    });
-  });
-});
-
-describe("classifyResumeFailure", () => {
+describe("isMissingCopilotSessionError", () => {
   it("treats undefined / null as unrecoverable", () => {
-    expect(classifyResumeFailure(undefined)).toEqual({
-      recoverable: false,
-      kind: "unknown",
-    });
-    expect(classifyResumeFailure(null)).toEqual({
-      recoverable: false,
-      kind: "unknown",
-    });
+    expect(isMissingCopilotSessionError(undefined)).toBe(false);
+    expect(isMissingCopilotSessionError(null)).toBe(false);
   });
 
   it("treats a non-Error throw value as unrecoverable", () => {
-    expect(classifyResumeFailure("string-error")).toEqual({
-      recoverable: false,
-      kind: "unknown",
-    });
-    expect(classifyResumeFailure(42)).toEqual({
-      recoverable: false,
-      kind: "unknown",
-    });
+    expect(isMissingCopilotSessionError("string-error")).toBe(false);
+    expect(isMissingCopilotSessionError(42)).toBe(false);
   });
 
   it("classifies statusCode:404 errors as missing/recoverable", () => {
     const error = Object.assign(new Error("Not Found"), { statusCode: 404 });
-    expect(classifyResumeFailure(error)).toEqual({
-      recoverable: true,
-      kind: "missing",
-    });
+    expect(isMissingCopilotSessionError(error)).toBe(true);
   });
 
   it("classifies recognised code strings as missing/recoverable", () => {
     for (const code of ["SESSION_NOT_FOUND", "session_not_found", "NotFound", "ENOENT"]) {
       const error = Object.assign(new Error("session gone"), { code });
-      expect(classifyResumeFailure(error)).toEqual({
-        recoverable: true,
-        kind: "missing",
-      });
+      expect(isMissingCopilotSessionError(error)).toBe(true);
     }
   });
 
@@ -106,43 +38,25 @@ describe("classifyResumeFailure", () => {
       "no such session",
     ];
     for (const message of messages) {
-      expect(classifyResumeFailure(new Error(message))).toEqual({
-        recoverable: true,
-        kind: "missing",
-      });
+      expect(isMissingCopilotSessionError(new Error(message))).toBe(true);
     }
   });
 
   it("does not over-match unrelated errors", () => {
-    expect(classifyResumeFailure(new Error("network ECONNRESET"))).toEqual({
-      recoverable: false,
-      kind: "unknown",
-    });
-    expect(classifyResumeFailure(new Error("Unauthorized"))).toEqual({
-      recoverable: false,
-      kind: "unknown",
-    });
-    expect(classifyResumeFailure(new Error("rate limit exceeded"))).toEqual({
-      recoverable: false,
-      kind: "unknown",
-    });
+    expect(isMissingCopilotSessionError(new Error("network ECONNRESET"))).toBe(false);
+    expect(isMissingCopilotSessionError(new Error("Unauthorized"))).toBe(false);
+    expect(isMissingCopilotSessionError(new Error("rate limit exceeded"))).toBe(false);
   });
 
   it("reads message from plain objects with a message string", () => {
     const error = { message: "session not found" };
-    expect(classifyResumeFailure(error)).toEqual({
-      recoverable: true,
-      kind: "missing",
-    });
+    expect(isMissingCopilotSessionError(error)).toBe(true);
   });
 
   it("prefers structured signals over message heuristics", () => {
     // status:404 wins even when message is unrelated
     const error = Object.assign(new Error("Internal server error"), { status: 404 });
-    expect(classifyResumeFailure(error)).toEqual({
-      recoverable: true,
-      kind: "missing",
-    });
+    expect(isMissingCopilotSessionError(error)).toBe(true);
   });
 });
 

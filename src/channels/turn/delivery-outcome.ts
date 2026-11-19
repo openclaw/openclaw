@@ -15,14 +15,12 @@ export type ChannelDeliveryOutcome = {
   content?: string;
 };
 
-/** Durable delivery queue intent recorded when a reply is deferred. */
 export type ChannelDeliveryIntent = {
   id: string;
   kind: "outbound_queue";
   queuePolicy: OutboundDeliveryQueuePolicy;
 };
 
-/** Result returned after delivering one channel reply payload. */
 export type ChannelDeliveryResult = ChannelDeliveryOutcome & {
   deliveryIntent?: ChannelDeliveryIntent;
   /** Intentional no-send outcome after payload policy or modifying hooks settle. */

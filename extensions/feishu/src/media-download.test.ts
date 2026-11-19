@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import { withEnvAsync, withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { saveMessageResourceFeishu } from "./media.js";
 
 const messageResourceGet = vi.hoisted(() => vi.fn());
 vi.mock("./client.js", () => ({
@@ -12,11 +13,6 @@ vi.mock("./client.js", () => ({
 const cfg: ClawdbotConfig = {
   channels: { feishu: { appId: "synthetic-app-id", appSecret: "synthetic-app-secret" } },
 };
-let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFeishu;
-
-beforeAll(async () => {
-  ({ saveMessageResourceFeishu } = await import("./media.js"));
-});
 
 afterAll(() => {
   vi.doUnmock("./client.js");

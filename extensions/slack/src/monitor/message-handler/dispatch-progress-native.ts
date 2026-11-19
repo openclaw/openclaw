@@ -36,8 +36,11 @@ export function createSlackNativeProgressTransport(params: {
     return !delivery.streamFailed;
   };
 
-  const start = async (update: { text?: string; chunks?: AnyChunk[] }): Promise<boolean> => {
-    const streamThreadTs = replyPlan.nextThreadTs();
+  const start = async (
+    update: { text?: string; chunks?: AnyChunk[] },
+    retainedThreadTs?: string,
+  ): Promise<boolean> => {
+    const streamThreadTs = retainedThreadTs ?? replyPlan.nextThreadTs();
     if (!streamThreadTs) {
       logVerbose(
         "slack-stream: no reply thread target for native progress stream start, falling back",
@@ -49,26 +52,34 @@ export function createSlackNativeProgressTransport(params: {
     const startPromise = delivery.startStream({
       threadTs: streamThreadTs,
       ...(update.text ? { text: update.text } : {}),
-      ...(update.chunks?.length ? { chunks: update.chunks } : {}),
+      // Explicit empty chunks (a text-only continuation) flush the SDK buffer.
+      ...(update.chunks ? { chunks: update.chunks } : {}),
       taskDisplayMode: "plan",
     });
     delivery.nativeProgressStreamStartPromise = startPromise;
     try {
       await startPromise;
       const delivered = markDelivered(streamThreadTs);
-      return update.chunks?.length ? delivered : true;
+      return update.chunks ? delivered : true;
     } finally {
-      if (delivery.nativeProgressStreamStartPromise === startPromise) {
-        delivery.nativeProgressStreamStartPromise = null;
-      }
+      delivery.nativeProgressStreamStartPromise = null;
     }
   };
 
-  const append = async (update: { text?: string; chunks?: AnyChunk[] }): Promise<boolean> => {
+  const append = async (update: {
+    text?: string;
+    chunks?: AnyChunk[];
+  }): Promise<boolean | "rotated"> => {
+    if (await delivery.rotateInterruptedStream()) {
+      // The caller must reconcile a full snapshot for the replacement stream.
+      return "rotated";
+    }
     const session = delivery.streamSession;
     if (!session) {
       return false;
     }
+    // Account before the call: Slack may hold the content even when the response is lost.
+    delivery.streamLedger.record(update);
     await appendSlackStream({
       session,
       ...(update.text ? { text: update.text } : {}),

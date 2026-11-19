@@ -31,10 +31,19 @@ export function isRetainedSourceIssue(issue: DoctorSessionSqliteIssue): boolean 
   return [
     "entry_invalid",
     "historical_duplicate_settled",
+    "legacy_import_deferred",
     "transcript_malformed",
+    "transcript_filename_mismatch",
     "transcript_missing",
     "retained_plugin_source_index_rebuilt",
+    "retained_missing_transcript_superseded",
+    "retained_plugin_receipt_superseded",
   ].includes(issue.code);
+}
+
+export function isRetainedSourceSettlementIssue(issue: DoctorSessionSqliteIssue): boolean {
+  // Unavailable historical recovery does not invalidate this import's verified originals.
+  return isRetainedSourceIssue(issue) || issue.code === "historical_transcript_deferred";
 }
 
 export function isInformationalMissingSessionIndex(
@@ -88,6 +97,7 @@ export type DoctorSessionSqliteOptions = {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   mode: DoctorSessionSqliteMode;
+  integrityCheck?: "quick" | "full";
   store?: string;
 };
 
@@ -159,41 +169,3 @@ export type DoctorSessionSqliteReport = {
     validatedTranscriptEvents: number;
   };
 };
-
-export function sumDoctorSessionSqliteTargets(
-  targets: DoctorSessionSqliteTargetReport[],
-  value: (target: DoctorSessionSqliteTargetReport) => number,
-): number {
-  return targets.reduce((total, target) => total + value(target), 0);
-}
-
-export function createDoctorSessionSqliteTotals(
-  targets: DoctorSessionSqliteTargetReport[],
-  values: Partial<
-    Omit<DoctorSessionSqliteReport["totals"], "issues" | "sqliteEntries" | "targets">
-  > = {},
-): DoctorSessionSqliteReport["totals"] {
-  const { archivedLegacyStoreFiles, reclaimedBytes } = values;
-  const sqliteEntries = new Map<string, number>();
-  for (const target of targets) {
-    sqliteEntries.set(
-      target.sqlitePath,
-      Math.max(sqliteEntries.get(target.sqlitePath) ?? 0, target.sqliteEntries),
-    );
-  }
-  return {
-    ...(archivedLegacyStoreFiles === undefined ? {} : { archivedLegacyStoreFiles }),
-    archivedTranscriptFiles: values.archivedTranscriptFiles ?? 0,
-    archivedUnreferencedJsonlFiles: values.archivedUnreferencedJsonlFiles ?? 0,
-    importedEntries: values.importedEntries ?? 0,
-    importedTranscriptEvents: values.importedTranscriptEvents ?? 0,
-    issues: sumDoctorSessionSqliteTargets(targets, (target) => target.issues.length),
-    legacyEntries: values.legacyEntries ?? 0,
-    ...(reclaimedBytes === undefined ? {} : { reclaimedBytes }),
-    sqliteEntries: [...sqliteEntries.values()].reduce((total, count) => total + count, 0),
-    targets: targets.length,
-    unreferencedJsonlFiles: values.unreferencedJsonlFiles ?? 0,
-    validatedEntries: values.validatedEntries ?? 0,
-    validatedTranscriptEvents: values.validatedTranscriptEvents ?? 0,
-  };
-}

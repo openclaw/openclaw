@@ -3,6 +3,9 @@
   "compilerOptions": {
     // Lifecycle hooks and compatibility shims must stay executable by plain Node.
     "allowJs": true,
+    // Benchmarks exercise the real Control UI owners and their Solid dependencies.
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web",
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "tsBuildInfoFile": ".artifacts/tsgo-cache/scripts.tsbuildinfo"
@@ -11,7 +14,7 @@
     "scripts/**/*",
     "src/**/*.d.ts",
     "packages/**/*.d.ts",
-    "ui/src/i18n/virtual-locale.d.ts"
+    "ui/src/**/*.d.ts"
   ],
   "exclude": [
     "node_modules",

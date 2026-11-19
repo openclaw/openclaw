@@ -1,11 +1,11 @@
 // Documents how failover reasons map to cooldown probe slot decisions.
 import { describe, expect, it } from "vitest";
-import type { FailoverReason } from "./embedded-agent-helpers.js";
 import {
   shouldAllowCooldownProbeForReason,
   shouldPreserveTransientCooldownProbeSlot,
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
+import type { FailoverReason } from "./failover/signal.js";
 
 type ReasonCase = [
   reason: FailoverReason | null | undefined,
@@ -23,6 +23,7 @@ const CASES: ReasonCase[] = [
   ["no_error_details", true, true, false],
   ["unclassified", true, true, false],
   ["model_not_found", false, false, true],
+  ["route_unavailable", false, false, true],
   ["format", false, false, true],
   ["auth", false, false, true],
   ["auth_permanent", false, false, true],

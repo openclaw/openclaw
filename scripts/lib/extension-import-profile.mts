@@ -6,17 +6,10 @@ import { asNullableRecord, readStringField } from "@openclaw/normalization-core/
 
 export const RESOURCE_MARKER = "__OPENCLAW_IMPORT_RESOURCES__=";
 
-export type ImportResources = {
-  pid: number;
-  maxRssKb: number;
-  userCpuUs: number;
-  systemCpuUs: number;
-  totalCpuUs: number;
-  runtime: { node: string; v8: string; abi: string; platform: string; arch: string };
-};
+export type ImportResources = NonNullable<ReturnType<typeof parseImportResources>>;
 
 /** Accept only complete native counter observations; missing is never zero. */
-export function parseImportResources(line: string): ImportResources | null {
+export function parseImportResources(line: string) {
   if (!line.startsWith(RESOURCE_MARKER)) {
     return null;
   }

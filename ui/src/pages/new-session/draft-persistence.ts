@@ -1,13 +1,14 @@
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import type {
+  DurableComposerDraft,
   DurableComposerDraftScope,
   DurableDraftModelSelection,
 } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { nextDraftRevision } from "../../lib/chat/outbox-store-draft-state.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
+import { chatAttachmentDraftSignature } from "../chat/composer-draft.ts";
 import {
   captureDurableChatAttachments,
-  chatAttachmentDraftSignature,
   durableComposerScopeIdentity,
   hydrateDurableComposerAttachments,
   reportDurableComposerStorageError,
@@ -20,6 +21,7 @@ type NewSessionDraftState = {
   mentions?: readonly HumanMention[];
   attachments: ChatAttachment[];
   incognito: boolean;
+  permissionMode?: DurableComposerDraft["permissionMode"];
 };
 
 type DraftRetirement = { revision: number; writeId?: string };
@@ -47,7 +49,11 @@ const createMutation = (): DraftMutation => ({
   writes: new Set(),
 });
 
-const durableComposerStore = import("../../lib/chat/composer-draft-store.runtime.ts");
+// Reuse the settled promise so later persistence operations retain their existing ordering.
+let durableComposerStore: Promise<typeof import("../../lib/chat/composer-draft-store.runtime.ts")>;
+const loadDurableComposerStore = () =>
+  (durableComposerStore ??= import("../../lib/chat/composer-draft-store.runtime.ts"));
+
 const NEW_SESSION_DRAFT_PERSIST_DELAY_MS = 200;
 
 export class NewSessionDraftPersistence {
@@ -60,7 +66,7 @@ export class NewSessionDraftPersistence {
     | undefined;
   private restorePromise: Promise<boolean> | undefined;
   private contentReconciled = false;
-  private pendingModelSelectionMutation = false;
+  private readonly pendingSelectionMutations = new Set<"model" | "permission">();
   private gatewayOwner = "";
   private recoveryScope = "";
   private routeKey = "";
@@ -88,10 +94,8 @@ export class NewSessionDraftPersistence {
   constructor(
     private readonly read: () => NewSessionDraftState,
     private readonly apply: (
-      message: string,
-      attachments: ChatAttachment[],
+      state: Omit<NewSessionDraftState, "incognito">,
       resetVisibility?: boolean,
-      mentions?: readonly HumanMention[],
     ) => void,
     private readonly onStorageError: () => void,
   ) {}
@@ -114,8 +118,8 @@ export class NewSessionDraftPersistence {
     this.gatewayOwner = gatewayOwner;
     this.recoveryScope = recoveryScope;
     if (currentOwner && !preserveCurrent) {
-      this.pendingModelSelectionMutation = false;
-      this.apply("", [], true);
+      this.pendingSelectionMutations.clear();
+      this.apply({ message: "", attachments: [], permissionMode: undefined }, true);
     }
     // The route may win the startup race; activate it as soon as its owner exists.
     if (!preserveCurrent) {
@@ -151,7 +155,7 @@ export class NewSessionDraftPersistence {
     if (this.routeKey !== routeKey) {
       this.persistNow();
       if (this.routeKey) {
-        this.pendingModelSelectionMutation = false;
+        this.pendingSelectionMutations.clear();
       }
       this.routeKey = routeKey;
       this.contentReconciled = false;
@@ -184,14 +188,29 @@ export class NewSessionDraftPersistence {
       undefined,
       baseline.mentions,
     );
-    const restoring = this.restoreScope(scope, generation, mutationGeneration, signature);
+    const isCurrent = () => {
+      const current = this.read();
+      return (
+        generation === this.restoreGeneration &&
+        mutationGeneration === this.mutationGeneration &&
+        this.matchesScope(scope) &&
+        signature ===
+          chatAttachmentDraftSignature(
+            current.message,
+            current.attachments,
+            undefined,
+            current.mentions,
+          )
+      );
+    };
+    const restoring = this.restoreScope(scope, mutationGeneration, isCurrent);
     this.restorePromise = restoring;
     void restoring.then(
       (reconciled) => {
         if (this.restorePromise === restoring) {
           this.restorePromise = undefined;
           this.contentReconciled = reconciled;
-          this.flushModelSelectionMutation();
+          this.flushSelectionMutations();
         }
       },
       () => {
@@ -214,26 +233,26 @@ export class NewSessionDraftPersistence {
     this.pristineMutationBaseline = this.mutationGeneration;
   }
 
-  noteModelSelectionMutation() {
+  noteSelectionMutation(field: "model" | "permission") {
     // A pristine submission cancels content hydration; a rejected create must not
-    // let the next model-only edit CAS-write the still-empty composer over that content.
+    // let the next selection-only edit CAS-write the still-empty composer over that content.
     const rehydrate =
       !this.contentReconciled &&
       this.mutationGeneration === this.pristineMutationBaseline &&
       (this.submittedMutation === this.mutation || !this.restorePromise);
     this.submittedMutation = null;
-    this.pendingModelSelectionMutation = true;
+    this.pendingSelectionMutations.add(field);
     if (rehydrate) {
       this.restoredIdentity = "";
       this.activateRoute(this.routeKey);
     } else {
-      this.flushModelSelectionMutation();
+      this.flushSelectionMutations();
     }
   }
 
-  private flushModelSelectionMutation() {
+  private flushSelectionMutations() {
     if (
-      this.pendingModelSelectionMutation &&
+      this.pendingSelectionMutations.size > 0 &&
       !this.restorePromise &&
       this.restoredIdentity &&
       (this.contentReconciled || this.mutationGeneration > this.pristineMutationBaseline) &&
@@ -241,11 +260,13 @@ export class NewSessionDraftPersistence {
       this.submittedMutation !== this.mutation
     ) {
       this.noteUserMutation();
+      // Discrete choices can be followed immediately by reload; do not debounce them.
+      this.persistNow();
     }
   }
 
   noteUserMutation() {
-    this.pendingModelSelectionMutation = false;
+    this.pendingSelectionMutations.clear();
     this.mutationGeneration += 1;
     this.mutation = createMutation();
     this.pendingHandoffMutation = null;
@@ -277,7 +298,7 @@ export class NewSessionDraftPersistence {
     // Revoke delayed writes immediately, including older edits of this route.
     lineage.localWriteIds.clear();
     lineage.retirement = (async () => {
-      const { retireDurableComposerDraft } = await durableComposerStore;
+      const { retireDurableComposerDraft } = await loadDurableComposerStore();
       const minimumRevision = Math.max(requestedRevision, lineage.revision);
       const result = await retireDurableComposerDraft(scope, minimumRevision);
       if (result.status === "storage-failed") {
@@ -293,7 +314,7 @@ export class NewSessionDraftPersistence {
   }
 
   captureSubmission() {
-    this.pendingModelSelectionMutation = false;
+    this.pendingSelectionMutations.clear();
     this.reconcileHandoffCommit();
     this.submittedMutation = this.mutation;
     // Freeze pristine restoration; a dirty draft must still finish its CAS
@@ -325,12 +346,7 @@ export class NewSessionDraftPersistence {
   }
 
   adoptHandoff(handoff: NewSessionDraftHandoff) {
-    const scope = this.scope();
-    if (
-      scope &&
-      handoff.scope &&
-      durableComposerScopeIdentity(scope) === durableComposerScopeIdentity(handoff.scope)
-    ) {
+    if (handoff.scope && this.matchesScope(handoff.scope)) {
       this.mutation = handoff.mutation;
       this.revision = Math.max(this.revision, handoff.revision);
       if (handoff.pendingEdit && !handoff.mutation.committedRevision) {
@@ -347,14 +363,7 @@ export class NewSessionDraftPersistence {
   ): Promise<void> {
     submitted.mutation.retired = true;
     const { scope } = submitted;
-    const currentScope = this.scope();
-    if (
-      this.mutation === submitted.mutation &&
-      ((!scope && !currentScope) ||
-        (scope &&
-          currentScope &&
-          durableComposerScopeIdentity(scope) === durableComposerScopeIdentity(currentScope)))
-    ) {
+    if (this.mutation === submitted.mutation && this.matchesScope(scope)) {
       this.modelSelection?.retire();
       consume?.();
     }
@@ -364,7 +373,7 @@ export class NewSessionDraftPersistence {
     if (!scope) {
       return;
     }
-    const { readDurableComposerDraft } = await durableComposerStore;
+    const { readDurableComposerDraft } = await loadDurableComposerStore();
     // Retire captured writes, including the store's text-only oversized-file
     // projection. A newer edit has a different write ID even when its text matches.
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -503,6 +512,14 @@ export class NewSessionDraftPersistence {
     };
   }
 
+  private matchesScope(scope: DurableComposerDraftScope | null): boolean {
+    const current = this.scope();
+    return scope === null
+      ? current === null
+      : current !== null &&
+          durableComposerScopeIdentity(scope) === durableComposerScopeIdentity(current);
+  }
+
   private snapshot(): PendingDraftSnapshot | null {
     const scope = this.scope();
     if (!scope || this.revision <= 0 || this.mutation.retired) {
@@ -528,41 +545,18 @@ export class NewSessionDraftPersistence {
         ? { mentions: state.mentions.map((mention) => ({ ...mention })) }
         : {}),
       modelSelection: this.modelSelection?.read(),
+      permissionMode: state.permissionMode,
       storedAttachments: captureDurableChatAttachments(state.attachments),
       writeId,
     };
   }
 
-  private isRestoreCurrent(
-    scope: DurableComposerDraftScope,
-    generation: number,
-    mutationGeneration: number,
-    signature: string,
-  ): boolean {
-    const current = this.read();
-    const currentScope = this.scope();
-    return (
-      generation === this.restoreGeneration &&
-      mutationGeneration === this.mutationGeneration &&
-      currentScope !== null &&
-      durableComposerScopeIdentity(scope) === durableComposerScopeIdentity(currentScope) &&
-      signature ===
-        chatAttachmentDraftSignature(
-          current.message,
-          current.attachments,
-          undefined,
-          current.mentions,
-        )
-    );
-  }
-
   private async restoreScope(
     scope: DurableComposerDraftScope,
-    generation: number,
     mutationGeneration: number,
-    signature: string,
+    isCurrent: () => boolean,
   ): Promise<boolean> {
-    const { readDurableComposerDraft } = await durableComposerStore;
+    const { readDurableComposerDraft } = await loadDurableComposerStore();
     const result = await readDurableComposerDraft(scope);
     if (result.status === "storage-failed") {
       reportDurableComposerStorageError(scope, this.onStorageError);
@@ -574,7 +568,7 @@ export class NewSessionDraftPersistence {
     // An absent authoritative row clears committed facts, never in-flight IDs.
     lineage.revision = storedRevision ?? 0;
     lineage.writeId = storedWriteId;
-    if (!this.isRestoreCurrent(scope, generation, mutationGeneration, signature)) {
+    if (!isCurrent()) {
       return false;
     }
     this.reconcileHandoffCommit();
@@ -610,15 +604,21 @@ export class NewSessionDraftPersistence {
         return false;
       }
     }
-    if (!this.isRestoreCurrent(scope, generation, mutationGeneration, signature)) {
+    if (!isCurrent()) {
       return false;
     }
     this.revision = storedRevision;
-    if (result.status === "found" && result.draft.mentions) {
-      this.apply(result.draft.text, attachments, undefined, result.draft.mentions);
-    } else {
-      this.apply(result.status === "found" ? result.draft.text : "", attachments);
-    }
+    const draft = result.status === "found" ? result.draft : undefined;
+    // A choice made while content hydrates belongs to this draft's current edit.
+    const permissionMode = this.pendingSelectionMutations.has("permission")
+      ? this.read().permissionMode
+      : draft?.permissionMode;
+    this.apply({
+      message: draft?.text ?? "",
+      attachments,
+      mentions: draft?.mentions,
+      permissionMode,
+    });
     this.modelSelection?.restore(
       result.status === "found" ? result.draft.modelSelection : undefined,
     );
@@ -690,18 +690,12 @@ export class NewSessionDraftPersistence {
     revision: number,
     writeId?: string,
   ) {
-    const identity = durableComposerScopeIdentity(scope);
     const lineage = this.lineage(scope);
     lineage.revision = revision;
     if (writeId) {
       lineage.writeId = writeId;
     }
-    const currentScope = this.scope();
-    if (
-      currentScope &&
-      durableComposerScopeIdentity(currentScope) === identity &&
-      revision > this.revision
-    ) {
+    if (this.matchesScope(scope) && revision > this.revision) {
       this.revision = revision;
     }
   }

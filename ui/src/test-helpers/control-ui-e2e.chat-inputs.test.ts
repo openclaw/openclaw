@@ -1,47 +1,59 @@
 /* @vitest-environment jsdom */
-import { expect } from "vitest";
+import { expect, type TestAPI } from "vitest";
+import type { MockGatewayWindow } from "./control-ui-e2e-contract.ts";
 import {
   createControlUiMockGatewayInitScript,
-  type ControlUiMockGateway,
+  type ControlUiMockGatewayScenario,
 } from "./control-ui-e2e.ts";
 import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
 
+type GatewayPage = typeof it extends TestAPI<{ gatewayPage: infer Page }> ? Page : never;
+const sessionKey = "agent:main:main";
+const input = (id: string) => ({ sessionKey, message: id, idempotencyKey: id });
+async function connect(page: GatewayPage, scenario: ControlUiMockGatewayScenario = {}) {
+  page.execute(createControlUiMockGatewayInitScript(scenario));
+  const socket = page.connect();
+  await flushMockTimers();
+  const gateway = (page.window as MockGatewayWindow).openclawControlUiE2eGateway;
+  if (!gateway) {
+    throw new Error("Mock Gateway was not installed");
+  }
+  const readHistory = (id: string, inputRunIds?: string[], key = sessionKey) =>
+    socket.request(id, "chat.history", { sessionKey: key, inputRunIds });
+  return { ...socket, gateway, readHistory };
+}
+
 it.for([false, true])(
-  "commits default chat input before model execution (attachment: %s)",
+  "commits input before execution (%s)",
   async (attachment, { gatewayPage }) => {
-    gatewayPage.execute(
-      createControlUiMockGatewayInitScript({
-        historyMessages: [
-          { role: "assistant", content: "Ready", __openclaw: { id: "ready", seq: 4 } },
-        ],
-      }),
-    );
-    const { request, frames } = gatewayPage.connect();
-    await flushMockTimers();
+    const { request, frames, readHistory } = await connect(gatewayPage, {
+      historyMessages: [
+        { role: "assistant", content: "Ready", __openclaw: { id: "ready", seq: 4 } },
+      ],
+    });
+    const file = { type: "file", fileName: "a.txt", mimeType: "text/plain", content: "aA==" };
+    const media = {
+      fileName: "a.txt",
+      contentType: "text/plain",
+      url: "data:text/plain;base64,aA==",
+    };
     const params = {
-      sessionKey: "agent:main:main",
-      message: "Keep the submitted source",
-      idempotencyKey: "source-run",
-      ...(attachment
-        ? {
-            attachments: [
-              { type: "file", fileName: "source.txt", mimeType: "text/plain", content: "aGVsbG8=" },
-            ],
-          }
-        : {}),
+      ...input("source-run"),
+      ...(attachment ? { attachments: [file] } : {}),
     };
     const ack = await request("send", "chat.send", params);
-    const history = await request("history", "chat.history", {
-      sessionKey: params.sessionKey,
-      inputRunIds: ["source-run", "unknown"],
-    });
+    const history = await readHistory("history", ["source-run", "unknown"]);
     expect(history.messages).toEqual([
       expect.objectContaining({ role: "assistant", content: "Ready" }),
       expect.objectContaining({
         role: "user",
         content: params.message,
         idempotencyKey: "source-run:user",
-        __openclaw: expect.objectContaining({ id: "mock-user:source-run", seq: 5 }),
+        __openclaw: expect.objectContaining({
+          id: "mock-user:source-run",
+          seq: 5,
+          ...(attachment ? { media: [expect.objectContaining(media)] } : {}),
+        }),
       }),
     ]);
     expect(history.inputReceipts).toEqual([
@@ -54,91 +66,40 @@ it.for([false, true])(
         (frame) => frame.type === "event" && frame.event === "session.message",
       );
       expect(event).toBeGreaterThan(frames.findIndex((frame) => frame.id === "send"));
-      expect(
-        (history.messages as Array<{ __openclaw?: unknown }>)[1]?.["__openclaw"],
-      ).toMatchObject({
-        media: [
-          {
-            fileName: "source.txt",
-            contentType: "text/plain",
-            url: "data:text/plain;base64,aGVsbG8=",
-          },
-        ],
-      });
     } else {
       expect(ack.messageSeq).toBe(5);
     }
     await request("retry", "chat.send", params);
-    expect(
-      (await request("again", "chat.history", { sessionKey: params.sessionKey })).messages,
-    ).toEqual(history.messages);
-    const other = await request("other", "chat.history", {
-      sessionKey: "agent:main:other",
-      inputRunIds: ["source-run"],
-    });
+    expect((await readHistory("again")).messages).toEqual(history.messages);
+    const other = await readHistory("other", ["source-run"], "agent:main:other");
     expect(other.inputReceipts).toEqual([]);
     expect(other.messages).toHaveLength(1);
   },
 );
 
-it("does not invent consumption for held, explicitly resolved, or raw terminal inputs", async ({
-  gatewayPage,
-}) => {
-  const { window, execute } = gatewayPage;
-  execute(createControlUiMockGatewayInitScript({ deferredMethods: ["chat.send"] }));
-  const gateway = (window as typeof window & { openclawControlUiE2eGateway: ControlUiMockGateway })
-    .openclawControlUiE2eGateway;
-  const { request, send } = gatewayPage.connect();
-  await flushMockTimers();
-  send("held", "chat.send", {
-    sessionKey: "agent:main:main",
-    message: "Unconfirmed source",
-    idempotencyKey: "held-run",
+it("does not consume held, resolved or raw terminal input", async ({ gatewayPage }) => {
+  const { gateway, send, readHistory } = await connect(gatewayPage, {
+    deferredMethods: ["chat.send"],
   });
-  const query = { sessionKey: "agent:main:main", inputRunIds: ["held-run"] };
-  expect(await request("before", "chat.history", query)).toMatchObject({
-    messages: [],
-    inputReceipts: [],
-  });
+  send("held", "chat.send", input("held-run"));
+  const empty = { messages: [], inputReceipts: [] };
+  expect(await readHistory("before", ["held-run"])).toMatchObject(empty);
   gateway.resolveDeferred("chat.send", { runId: "held-run", status: "started" });
-  gateway.emit("chat", { sessionKey: query.sessionKey, runId: "held-run", state: "final" });
-  expect(await request("after", "chat.history", query)).toMatchObject({
-    messages: [],
-    inputReceipts: [],
-  });
+  gateway.emit("chat", { sessionKey, runId: "held-run", state: "final" });
+  expect(await readHistory("after", ["held-run"])).toMatchObject(empty);
 });
 
-it("keeps an explicit display snapshot separate from durable input receipts", async ({
-  gatewayPage,
-}) => {
-  const { window, execute } = gatewayPage;
-  execute(createControlUiMockGatewayInitScript());
-  const gateway = (window as typeof window & { openclawControlUiE2eGateway: ControlUiMockGateway })
-    .openclawControlUiE2eGateway;
-  const { request } = gatewayPage.connect();
-  await flushMockTimers();
-  await request("send", "chat.send", {
-    sessionKey: "agent:main:main",
-    message: "Committed original",
-    idempotencyKey: "committed-run",
-  });
-  const messages = [{ role: "assistant", content: "An intentionally older display snapshot" }];
+it("separates display snapshots from durable receipts", async ({ gatewayPage }) => {
+  const { gateway, request, readHistory } = await connect(gatewayPage);
+  await request("send", "chat.send", input("committed-run"));
+  const messages = [{ role: "assistant", content: "Old snapshot" }];
   gateway.setHistoryMessages(messages);
-  expect(
-    await request("history", "chat.history", {
-      sessionKey: "agent:main:main",
-      inputRunIds: ["committed-run"],
-    }),
-  ).toMatchObject({
+  expect(await readHistory("history", ["committed-run"])).toMatchObject({
     messages,
     inputReceipts: [
       { runId: "committed-run", state: "consumed", consumedByEventId: "mock-user:committed-run" },
     ],
   });
-  const next = await request("next", "chat.send", {
-    sessionKey: "agent:main:main",
-    message: "Next committed source",
-    idempotencyKey: "next-run",
-  });
+  const next = await request("next", "chat.send", input("next-run"));
   expect(next.messageSeq).toBe(2);
 });

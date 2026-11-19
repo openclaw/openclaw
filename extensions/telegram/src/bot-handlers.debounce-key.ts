@@ -3,6 +3,5 @@ export function buildTelegramInboundDebounceKey(params: {
   conversationKey: string;
   senderId: string;
 }): string {
-  const resolvedAccountId = params.accountId?.trim() || "default";
-  return `telegram:${resolvedAccountId}:${params.conversationKey}:${params.senderId}`;
+  return `telegram:${params.accountId?.trim() || "default"}:${params.conversationKey}:${params.senderId}`;
 }

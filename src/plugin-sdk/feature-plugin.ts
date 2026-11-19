@@ -1,4 +1,6 @@
 /** Registers typed feature operations on existing host-owned tools, commands, and actions. */
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { TSchema } from "typebox";
 import type { AgentToolUpdateCallback } from "../agents/runtime/index.js";
 import { jsonResult } from "../agents/tools/common.js";
@@ -177,7 +179,7 @@ export function defineFeaturePlugin<C extends FeatureContract>(
           );
         };
         const requiredScope = operation.kind === "query" ? "operator.read" : "operator.write";
-        api.registerSessionAction({
+        api.session.controls.registerSessionAction({
           id,
           description: operation.description,
           // SAFETY: registerSessionAction validates the schema as bounded JSON before retaining it.
@@ -193,7 +195,13 @@ export function defineFeaturePlugin<C extends FeatureContract>(
               if (error instanceof FeatureValidationError) {
                 return { ok: false, error: error.message, code: error.code };
               }
-              throw error;
+              const message = String(asOptionalObjectRecord(error)?.message ?? error);
+              const errorMessage = truncateUtf16Safe(message, 2000);
+              return {
+                ok: false,
+                error: errorMessage.trim() ? errorMessage : "Feature operation failed",
+                code: "OPERATION_FAILED",
+              };
             }
           },
         });

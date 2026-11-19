@@ -4,7 +4,6 @@ export type WorkboardSqliteFailure = {
   code?: string | number;
   errcode?: number;
   errstr?: string;
-  cleanupConnection?: number;
   aggregate?: WorkboardSqliteFailure[];
   cause?: WorkboardSqliteFailure;
 };

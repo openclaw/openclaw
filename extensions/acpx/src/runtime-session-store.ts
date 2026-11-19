@@ -7,12 +7,7 @@ import type {
   AcpSessionStore,
 } from "acpx/runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import {
-  asOptionalObjectRecord,
-  normalizeOptionalString,
-  normalizeStringEntries,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AcpRuntime } from "../runtime-api.js";
 import { renderAgentCommand, splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import {
@@ -23,8 +18,11 @@ import {
 } from "./process-lease.js";
 import { isOpenClawLeaseAwareAcpxProcessCommand } from "./process-reaper.js";
 type OpenClawRuntimeHandle = Awaited<ReturnType<AcpRuntime["ensureSession"]>>;
-export type AcpLoadedSessionRecord = Awaited<ReturnType<AcpSessionStore["load"]>>;
-export type ResetAwareSessionStore = AcpSessionStore & {
+export type AcpLoadedSessionRecord =
+  | (AcpSessionRecord & Partial<OpenClawLeaseSessionMetadata>)
+  | undefined;
+export type ResetAwareSessionStore = Omit<AcpSessionStore, "load"> & {
+  load: (sessionKey: string) => Promise<AcpLoadedSessionRecord>;
   markFresh: (sessionKey: string) => void;
   isFresh: (sessionKey: string) => boolean;
   loadForClose: (sessionKey: string) => Promise<AcpLoadedSessionRecord>;
@@ -63,7 +61,7 @@ export type AcpxGeneration = {
   retired: boolean;
   activeOperations: number;
   pendingAdmissions: number;
-  admissionState: "unadmitted" | "failed" | "admitted";
+  admitted: boolean;
   activeRecordOperations: Map<string, number>;
   closedRecordIds: Set<string>;
   afterReset: boolean;
@@ -92,47 +90,12 @@ export type GenerationHandle = OpenClawRuntimeHandle & { [acpxGenerationKey]?: A
 export const acpxOperationScope = new AsyncLocalStorage<{
   generation: AcpxGeneration;
   closeRecord?: AcpLoadedSessionRecord;
-  recordId?: string;
 }>();
-
-export function readSessionRecordName(record: unknown): string {
-  return normalizeOptionalString(asOptionalObjectRecord(record)?.name) ?? "";
-}
 
 export function readRecordAgentCommand(
   record: AcpLoadedSessionRecord,
 ): AcpxAgentCommand | undefined {
   return record?.agentArgv ?? record?.agentCommand;
-}
-
-export function readRecordCwd(record: unknown): string | undefined {
-  return normalizeOptionalString(asOptionalObjectRecord(record)?.cwd);
-}
-
-export function readRecordResetOnNextEnsure(record: unknown): boolean {
-  return (
-    asOptionalObjectRecord(asOptionalObjectRecord(record)?.acpx)?.reset_on_next_ensure === true
-  );
-}
-
-export function readRecordAgentPid(record: unknown): number | undefined {
-  const { pid, processId } = asOptionalObjectRecord(record) ?? {};
-  const rawPid = pid ?? processId;
-  const numericPid =
-    typeof rawPid === "number"
-      ? rawPid
-      : typeof rawPid === "string"
-        ? parseStrictPositiveInteger(rawPid)
-        : undefined;
-  return numericPid && Number.isInteger(numericPid) && numericPid > 0 ? numericPid : undefined;
-}
-
-export function readOpenClawLeaseIdFromRecord(record: unknown): string | undefined {
-  return normalizeOptionalString(asOptionalObjectRecord(record)?.openclawLeaseId);
-}
-
-export function readOpenClawGatewayInstanceIdFromRecord(record: unknown): string | undefined {
-  return normalizeOptionalString(asOptionalObjectRecord(record)?.openclawGatewayInstanceId);
 }
 
 export function extractGeneratedWrapperPath(command: AcpxAgentCommand | undefined): string {
@@ -200,29 +163,20 @@ export function createResetAwareSessionStore(
         return undefined;
       }
       const record = await baseStore.load(sessionId);
-      if (
-        scope?.generation.retired ||
-        freshSessionKeys.has(scope?.generation.resource ?? normalized)
-      ) {
-        return undefined;
-      }
       if (scope && record) {
         captureGenerationRecord(scope.generation, record);
       }
       if (!record || !params?.leaseStore || !params.gatewayInstanceId) {
         return record;
       }
-      const sessionName = readSessionRecordName(record) || normalized;
+      const sessionName = record.name || normalized;
       const lease = selectCurrentSessionLease({
         leases: await params.leaseStore.listOpen(params.gatewayInstanceId),
         sessionKeys: [sessionName, normalized],
-        rootPid: readRecordAgentPid(record),
+        rootPid: record.pid,
       });
       if (!lease) {
         return record;
-      }
-      if (scope?.generation.retired) {
-        return undefined;
       }
       const leasedRecord = withOpenClawLeaseSessionMetadata(record, lease);
       if (scope) {
@@ -264,7 +218,7 @@ export function createResetAwareSessionStore(
         }
         let recordToSave = record;
         const launch = params?.launchScope?.getStore();
-        const sessionName = readSessionRecordName(record);
+        const sessionName = record.name;
         const agentCommand = readRecordAgentCommand(record);
         const leasedCommand = launch?.leasedCommand ?? agentCommand;
         const leaseIdentity = launch ?? readAcpxProcessLeaseIdentity(leasedCommand);
@@ -281,9 +235,6 @@ export function createResetAwareSessionStore(
           })
         ) {
           const existing = await params.leaseStore.load(leaseIdentity.leaseId);
-          if (scope?.generation.retired) {
-            return;
-          }
           const ownsExisting =
             !existing ||
             (existing.gatewayInstanceId === leaseIdentity.gatewayInstanceId &&

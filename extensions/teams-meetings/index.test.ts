@@ -5,8 +5,8 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it } from "vitest";
+import { TEAMS_MEETINGS_CLI_METADATA } from "./cli-metadata.js";
 import plugin from "./index.js";
-import { TEAMS_MEETINGS_CLI_METADATA } from "./src/cli-output-mode.js";
 
 const MEETING_URL =
   "https://teams.microsoft.com/l/meetup-join/19%3ameeting_owned%40thread.v2/0?context=%7b%7d";

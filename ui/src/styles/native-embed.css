@@ -5,8 +5,8 @@ html.openclaw-native-embed .shell--embed {
   --shell-chrome-safe-area-left: 0px;
 
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
-  grid-template-areas: "content";
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "notice" "content";
 }
 
 .shell--embed.shell--chat openclaw-chat-page[data-native-conversation] {
@@ -79,6 +79,27 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
   padding-inline: 0;
 }
 
+/* The selector's avatar and chevron share the list rows' edges. */
+.settings-embed-list .settings-sidebar__agent {
+  padding: 0;
+}
+
+.settings-embed-list .settings-sidebar__agent .agent-select__trigger {
+  padding-inline: var(--space-4);
+}
+
+.settings-embed-list .settings-sidebar__search {
+  margin: var(--space-2) 0 var(--space-3);
+  padding-bottom: 0;
+}
+
+.settings-embed-list .settings-sidebar__search-input {
+  --control-ui-touch-input-size: 16px;
+
+  height: 44px;
+  font-size: 16px;
+}
+
 .settings-embed-list .settings-sidebar__nav {
   overflow: visible;
   padding-inline: 0;
@@ -99,11 +120,11 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
   font-size: 16px;
 }
 
-.settings-embed-list .settings-sidebar__item + .settings-sidebar__item {
-  border-top: 1px solid var(--border);
+.settings-embed-list .settings-sidebar__empty {
+  margin-inline: 0;
 }
 
-.settings-embed-list .settings-sidebar__item-label {
+.settings-embed-list :is(.settings-sidebar__item-label, .settings-sidebar__subitem-label) {
   white-space: normal;
   overflow-wrap: anywhere;
 }
@@ -117,5 +138,12 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
     --content-inline-padding: var(--space-3);
 
     padding: var(--space-3);
+  }
+}
+
+/* The native apps keep the platform's touch rows. */
+@media (pointer: coarse) {
+  .shell--embed {
+    --menu-item-height: 44px;
   }
 }

@@ -1,4 +1,3 @@
-// Gateway WebSocket node pairing can finish a fresh capability-free request over SSH.
 import { isDeepStrictEqual } from "node:util";
 import type { ConnectPairingRequiredReason } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";

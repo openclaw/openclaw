@@ -1,24 +1,13 @@
 import {
-  defineLegacyConfigMigration,
+  createLegacyConfigRule as rule,
   ensureRecord,
   getRecord,
   type LegacyConfigMigrationSpec,
-  type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { mergeMissing } from "../../../config/merge-missing.js";
 import { normalizeConfiguredMemoryExtraPaths } from "../../../memory-host-sdk/host/config-utils.js";
 import type { MemoryExtraPath } from "../../../memory-host-sdk/host/types.js";
 import { deleteRetiredPath, visitAgentConfigScopes } from "./legacy-config-record-shared.js";
-
-const rule = (
-  path: string[],
-  message: string,
-  match?: LegacyConfigRule["match"],
-): LegacyConfigRule => ({
-  path,
-  message: `${message} Run "openclaw doctor --fix".`,
-  ...(match ? { match } : {}),
-});
 
 function hasRetiredAgentMemoryQmd(value: unknown): boolean {
   const memory = getRecord(getRecord(value)?.memory);
@@ -26,10 +15,7 @@ function hasRetiredAgentMemoryQmd(value: unknown): boolean {
   return Boolean(search && Object.hasOwn(search, "qmd"));
 }
 
-type RetiredQmdExternalPath = {
-  path: string;
-  pattern?: string;
-};
+type RetiredQmdExternalPath = Exclude<MemoryExtraPath, string>;
 
 function readRetiredQmdExternalPaths(value: unknown): RetiredQmdExternalPath[] {
   if (!Array.isArray(value)) {
@@ -60,7 +46,7 @@ function migrateRetiredQmdExternalPaths(params: {
   }
   const memory = ensureRecord(params.scope, "memory");
   const search = ensureRecord(memory, "search");
-  const existingPaths = normalizeConfiguredMemoryExtraPaths(
+  const nextPaths = normalizeConfiguredMemoryExtraPaths(
     Array.isArray(search.extraPaths)
       ? search.extraPaths.filter(
           (entry): entry is MemoryExtraPath =>
@@ -68,10 +54,9 @@ function migrateRetiredQmdExternalPaths(params: {
         )
       : [],
   );
-  const nextPaths: MemoryExtraPath[] = [...existingPaths];
   const entryKey = (entry: MemoryExtraPath) =>
     typeof entry === "string" ? `${entry}\0` : `${entry.path}\0${entry.pattern?.trim() ?? ""}`;
-  const seen = new Set(existingPaths.map(entryKey));
+  const seen = new Set(nextPaths.map(entryKey));
   let added = 0;
   for (const entry of params.entries) {
     const nextEntry: MemoryExtraPath = entry.pattern ? entry : entry.path;
@@ -190,40 +175,38 @@ function migrateRetiredMemoryQmd(raw: Record<string, unknown>, changes: string[]
   }
 }
 
-export const LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD: LegacyConfigMigrationSpec =
-  defineLegacyConfigMigration({
-    id: "runtime.memory-qmd-retired",
-    describe: "Remove retired QMD memory configuration",
-    legacyRules: [
-      rule(
-        ["memory", "backend"],
-        "memory.backend is retired; builtin memory is now the only memory engine.",
-      ),
-      rule(
-        ["memory", "qmd"],
-        "memory.qmd is retired because the QMD memory backend was removed; configured external paths migrate to memory.search.extraPaths.",
-      ),
-      rule(
-        ["memory", "search", "qmd"],
-        "memory.search.qmd is retired because the QMD memory backend was removed; configured external collections migrate to memory.search.extraPaths.",
-      ),
-      rule(
-        ["agents", "defaults", "memory", "search", "qmd"],
-        "agents.defaults.memory.search.qmd is retired because the QMD memory backend was removed; configured external collections migrate to memory.search.extraPaths.",
-      ),
-      rule(
-        ["agents", "entries"],
-        "agents.entries.*.memory.search.qmd is retired because the QMD memory backend was removed; configured external collections migrate to the matching agent memory.search.extraPaths.",
-        (value) => {
-          const entries = getRecord(value);
-          return entries ? Object.values(entries).some(hasRetiredAgentMemoryQmd) : false;
-        },
-      ),
-      rule(
-        ["agents", "list"],
-        "agents.list.*.memory.search.qmd is retired because the QMD memory backend was removed; configured external collections migrate to the matching agent memory.search.extraPaths.",
-        (value) => Array.isArray(value) && value.some(hasRetiredAgentMemoryQmd),
-      ),
-    ],
-    apply: migrateRetiredMemoryQmd,
-  });
+export const LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD: LegacyConfigMigrationSpec = {
+  id: "runtime.memory-qmd-retired",
+  legacyRules: [
+    rule(
+      ["memory", "backend"],
+      "memory.backend is retired; builtin memory is now the only memory engine.",
+    ),
+    rule(
+      ["memory", "qmd"],
+      "memory.qmd is retired because the QMD memory backend was removed; configured external paths migrate to memory.search.extraPaths.",
+    ),
+    rule(
+      ["memory", "search", "qmd"],
+      "memory.search.qmd is retired because the QMD memory backend was removed; configured external collections migrate to memory.search.extraPaths.",
+    ),
+    rule(
+      ["agents", "defaults", "memory", "search", "qmd"],
+      "agents.defaults.memory.search.qmd is retired because the QMD memory backend was removed; configured external collections migrate to memory.search.extraPaths.",
+    ),
+    rule(
+      ["agents", "entries"],
+      "agents.entries.*.memory.search.qmd is retired because the QMD memory backend was removed; configured external collections migrate to the matching agent memory.search.extraPaths.",
+      (value) => {
+        const entries = getRecord(value);
+        return entries ? Object.values(entries).some(hasRetiredAgentMemoryQmd) : false;
+      },
+    ),
+    rule(
+      ["agents", "list"],
+      "agents.list.*.memory.search.qmd is retired because the QMD memory backend was removed; configured external collections migrate to the matching agent memory.search.extraPaths.",
+      (value) => Array.isArray(value) && value.some(hasRetiredAgentMemoryQmd),
+    ),
+  ],
+  apply: migrateRetiredMemoryQmd,
+};

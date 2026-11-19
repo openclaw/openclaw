@@ -15,6 +15,11 @@ export const sandboxExecServerRegistry = {
         }
       }
       server.node.leases.clear();
+    } else {
+      for (const { unsubscribe } of server.processAuthorities?.values() ?? []) {
+        unsubscribe();
+      }
+      server.processAuthorities?.clear();
     }
     for (const client of server.server.clients) {
       client.close(1001, "shutdown");

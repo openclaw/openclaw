@@ -1,7 +1,7 @@
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import {
   createAdmittedRunOperatorAuthority,
   readRunOperatorAuthority,
@@ -14,6 +14,7 @@ import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-r
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadExactSessionEntry,
   loadTranscriptEventsSync,
@@ -28,6 +29,7 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
+import { companionRuntimeConfig } from "./session-companion-runtime.test-support.js";
 import { createSessionCompanion } from "./session-companion.js";
 
 const runLoop = vi.hoisted(() =>
@@ -53,46 +55,39 @@ describe("Side chat with a published Gateway runtime", () => {
         label: "companion-runtime",
         env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
       });
-      const cfg: OpenClawConfig = {
-        agents: {
-          entries: { main: { workspace: state.workspaceDir } },
-          defaults: {
-            workspace: state.workspaceDir,
-            model: "test-provider/test-model",
-            utilityModel: "test-provider/utility-model",
-          },
-        },
-        models: {
-          providers: {
-            "test-provider": {
-              api: "openai-completions",
-              apiKey: "synthetic-test-key",
-              baseUrl: "http://127.0.0.1:9/v1",
-              models: ["test-model", "utility-model"].map((id) => ({
-                id,
-                name: id,
-                reasoning: false,
-                input: ["text" as const],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 8192,
-                maxTokens: 1024,
-              })),
+      const cfg: OpenClawConfig = companionRuntimeConfig(
+        {
+          agents: {
+            entries: {
+              main: {
+                workspace: state.workspaceDir,
+                models: { "test-provider/utility-model": { codeMode: true } },
+                tools: { codeMode: true },
+              },
+            },
+            defaults: {
+              models: { "test-provider/utility-model": { codeMode: true } },
             },
           },
+          plugins: { allow: [], slots: { memory: "none" } },
+          tools: {
+            codeMode: true,
+            toolSearch: { enabled: true, mode: "directory" },
+            sessions: { visibility: "all" },
+            fs: { workspaceOnly: false },
+          },
         },
-        plugins: { allow: [], slots: { memory: "none" } },
-        tools: {
-          codeMode: true,
-          toolSearch: { enabled: true, mode: "directory" },
-          sessions: { visibility: "all" },
-          fs: { workspaceOnly: false },
-        },
-      };
+        state.workspaceDir,
+        "test-provider",
+        ["test-model", "utility-model"],
+      );
       const companion = createSessionCompanion({
         scheduler: createTestGatewayScheduler(),
         getConfig: () => cfg,
         contextReader: defaultSessionCompanionContextReader,
-        sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
+        sessionObserver: {
+          getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }),
+        },
       });
       const observedTools: string[][] = [];
       const observedModels: Array<{
@@ -159,6 +154,7 @@ describe("Side chat with a published Gateway runtime", () => {
           sessionId: "selected-session",
           sessionKey: "agent:main:selected",
           storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+          ownerId: "shared",
         };
         const seededEntry = { sessionId: selected.sessionId, updatedAt: 1 };
         await patchSessionEntryCore(selected, () => seededEntry, {
@@ -175,10 +171,12 @@ describe("Side chat with a published Gateway runtime", () => {
         await waitForSessionTranscriptProjection(selected);
         const retained = selectedManager.getPersistedEntries();
         // Admission must use committed Gateway policy, not the caller's stale config.
-        await refreshPreparedModelRuntimeSnapshots(
-          { ...cfg, messages: { responsePrefix: "committed" } },
-          { gatewayLifecycle: true, catalogMode: "static" },
-        );
+        const committedConfig = { ...cfg, messages: { responsePrefix: "committed" } };
+        setRuntimeConfigSnapshot(committedConfig);
+        await refreshPreparedModelRuntimeSnapshots(committedConfig, {
+          gatewayLifecycle: true,
+          catalogMode: "static",
+        });
         // Keep source-module preparation outside the RPC deadline and hydration barrier.
         await import("../agents/embedded-agent-runner/run.js");
         let connected = true;
@@ -229,12 +227,11 @@ describe("Side chat with a published Gateway runtime", () => {
           const controller = new AbortController();
           const pending = invoke("What is it doing?", controller.signal);
           try {
-            const target = await Promise.race([
+            const target = await awaitGateBeforeSettlement(
               received.promise,
-              pending.then(() => {
-                throw new Error("Ask settled before hydration barrier");
-              }),
-            ]);
+              pending,
+              "Ask settled before hydration barrier",
+            );
             expect(
               loadTranscriptEventsSync(target).filter(
                 (entry) => isRecord(entry) && entry.type === "message",
@@ -283,84 +280,32 @@ describe("Side chat with a published Gateway runtime", () => {
         const deniedAuthority = operatorAuthority([]);
         const syncOpen = SessionManager.open.bind(SessionManager);
         const asyncOpen = SessionManager.openAsync.bind(SessionManager);
-        const nativeExec: unknown = Object.getOwnPropertyDescriptor(
-          DatabaseSync.prototype,
-          "exec",
-        )?.value;
-        if (typeof nativeExec !== "function") {
-          throw new Error("Expected the native SQLite exec method");
-        }
-        let nextHydrationProbe = 0;
-        const observeHydrationSql = (target: Parameters<typeof SessionManager.open>[0]) => {
-          const execCalls: Array<{
-            database: string | null | undefined;
-            stack: string | undefined;
-          }> = [];
+        let hydrationCount = 0;
+        const hydrationFailures: unknown[] = [];
+        const probeHydration = () => {
           const sql = observeMainThreadSql();
-          const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-          exec.mockImplementation(function (this: DatabaseSync, statement) {
-            let database: string | null | undefined;
-            try {
-              database = this.location();
-            } catch {
-              // Diagnostic lookup must not replace the native operation's error.
-              database = undefined;
-            }
-            const stackTraceLimit = Error.stackTraceLimit;
-            let stack: string | undefined;
-            try {
-              // Coordinator callers can sit beyond the default ten stack frames.
-              Error.stackTraceLimit = Math.max(stackTraceLimit, 32);
-              stack = new Error("Observed SQLite exec").stack;
-            } finally {
-              Error.stackTraceLimit = stackTraceLimit;
-            }
-            execCalls.push({ database, stack });
-            Reflect.apply(nativeExec, this, [statement]);
-          });
           return {
-            ...sql,
-            diagnostics: {
-              probe: ++nextHydrationProbe,
-              agentId: target.agentId,
-              sessionId: target.sessionId,
-              storePath: target.storePath,
-              execCalls,
+            [Symbol.dispose]() {
+              hydrationCount++;
+              try {
+                sql.expectIdle();
+              } catch (error) {
+                hydrationFailures.push(error);
+              } finally {
+                sql.restore();
+              }
             },
           };
         };
-        let hydrationCount = 0;
-        const hydrationFailures: unknown[] = [];
-        const recordHydration = (sql: ReturnType<typeof observeHydrationSql>) => {
-          hydrationCount++;
-          try {
-            sql.expectIdle();
-          } catch (error) {
-            console.error("Side chat hydration SQL diagnostics", JSON.stringify(sql.diagnostics));
-            hydrationFailures.push(error);
-          }
-        };
         const syncProbe = vi.spyOn(SessionManager, "open").mockImplementation((...args) => {
-          const sql = observeHydrationSql(args[0]);
-          try {
-            const result = syncOpen(...args);
-            recordHydration(sql);
-            return result;
-          } finally {
-            sql.restore();
-          }
+          using _ = probeHydration();
+          return syncOpen(...args);
         });
         const asyncProbe = vi
           .spyOn(SessionManager, "openAsync")
           .mockImplementation(async (...args) => {
-            const sql = observeHydrationSql(args[0]);
-            try {
-              const result = await asyncOpen(...args);
-              recordHydration(sql);
-              return result;
-            } finally {
-              sql.restore();
-            }
+            using _ = probeHydration();
+            return await asyncOpen(...args);
           });
         try {
           for (const question of ["What is it doing?", "What did I ask before?"]) {
@@ -376,6 +321,7 @@ describe("Side chat with a published Gateway runtime", () => {
               sessionKey: selected.sessionKey,
               question: "What is it doing now?",
               connId: "restricted-connection",
+              ownerId: "profile:restricted",
               operatorAuthority: authority,
             }),
           ).resolves.toMatchObject({ answer: "The selected session is ready." });
@@ -385,6 +331,7 @@ describe("Side chat with a published Gateway runtime", () => {
               sessionKey: selected.sessionKey,
               question: "Use another model?",
               connId: "denied-connection",
+              ownerId: "profile:denied",
               operatorAuthority: deniedAuthority,
             }),
           ).rejects.toThrow("Side chat");

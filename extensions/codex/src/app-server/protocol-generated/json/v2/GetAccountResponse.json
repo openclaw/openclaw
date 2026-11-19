@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "properties": {"account":{"anyOf":[{"$ref":"./CodexAppServerProtocolDefinitions.json#/definitions/Account"},{"type":"null"}]},"requiresOpenaiAuth":{"type":"boolean"}},
+  "properties": {"account":{"anyOf":[{"$ref":"./CodexAppServerProtocolDefinitions.json#/definitions/Account"},{"type":"null"}]},"requiresOpenaiAuth":{"type":"boolean"},"userId":{"default":null,"description":"ChatGPT user ID belonging to this account response, when available.","type":["string","null"]},"workspaceRouting":{"anyOf":[{"$ref":"./CodexAppServerProtocolDefinitions.json#/definitions/WorkspaceRouting"},{"type":"null"}]}},
   "required": ["requiresOpenaiAuth"],
   "title": "GetAccountResponse",
   "type": "object"

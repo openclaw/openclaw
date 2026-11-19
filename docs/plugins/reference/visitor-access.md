@@ -20,3 +20,11 @@ Manage expiring visitor grants through one Cloudflare Access email policy.
 ## Surface
 
 - Contracts: `tools`
+
+<!-- openclaw-plugin-reference:manual-start -->
+
+GitHub login lookups use the Gateway's configured GitHub API credential
+(`gateway.controlUi.github.token`, or `GH_TOKEN`/`GITHUB_TOKEN`). Rate-limit errors
+report the retry/reset time and suggest configuring the credential when absent.
+
+<!-- openclaw-plugin-reference:manual-end -->

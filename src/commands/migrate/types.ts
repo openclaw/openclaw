@@ -1,11 +1,6 @@
-/** Shared option types for the migrate command family. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationPlan } from "../../plugins/types.js";
 
-/** Embedded migration mode that returns config patch details instead of persisting them. */
-type MigrationConfigPatchMode = "return";
-
-/** Common options accepted by migrate list, plan, apply, and default flows. */
 export type MigrateCommonOptions = {
   provider?: string;
   source?: string;
@@ -26,7 +21,7 @@ export type MigrateCommonOptions = {
   configOverride?: OpenClawConfig;
   // Internal embedded mode for config patch items. Default CLI behavior persists
   // patches when this is omitted; onboarding can request returned patch details.
-  configPatchMode?: MigrationConfigPatchMode;
+  configPatchMode?: "return";
   // Internal embedded target. Standalone CLI migrations use the configured default agent.
   targetAgentId?: string;
   // Internal embedded scope. Providers may skip unrelated discovery when this is set.
@@ -35,18 +30,18 @@ export type MigrateCommonOptions = {
   itemIds?: string[];
 };
 
-/** Options for migrate apply, including backup and preflight-plan controls. */
 export type MigrateApplyOptions = MigrateCommonOptions & {
   yes?: boolean;
   noBackup?: boolean;
   force?: boolean;
   backupOutput?: string;
+  // Imports from the Gateway or onboarding: the process cwd is incidental.
+  preferHomeBackupOutput?: boolean;
   preflightPlan?: MigrationPlan;
   // Internal RPC mode: return item-level failures with recovery metadata.
   allowPartialResult?: boolean;
 };
 
-/** Options for the default migrate command that can plan, dry-run, or apply. */
 export type MigrateDefaultOptions = MigrateApplyOptions & {
   dryRun?: boolean;
 };

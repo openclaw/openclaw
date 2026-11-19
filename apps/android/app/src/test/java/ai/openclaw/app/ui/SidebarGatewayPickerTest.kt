@@ -104,6 +104,7 @@ import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowInfoTrackerDecorator
 import androidx.window.layout.WindowLayoutInfo
 import com.google.mlkit.common.sdkinternal.MlKitContext
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
@@ -339,9 +340,7 @@ class SidebarGatewayPickerTest {
     composeRule.onNodeWithTag("gateway-add-code").performTextReplacement(code)
     composeRule.onNodeWithText("Continue").performScrollTo().performClick()
     composeRule.onNodeWithTag("gateway-add-connect").performScrollTo().performClick()
-    composeRule.waitUntil {
-      runtime.gatewayConnectionHandoff.value.let { !it.pending && it.focusedStableId == endpoint.stableId }
-    }
+    awaitFocus(endpoint.stableId)
     composeRule.onNodeWithTag("gateway-addition").assertDoesNotExist()
     composeRule.runOnIdle {
       assertTrue(prefs.onboardingCompleted.value)
@@ -746,7 +745,7 @@ class SidebarGatewayPickerTest {
     }
     openPicker()
     gatewayItem(beta).performClick()
-    composeRule.waitUntil { !runtime.gatewayConnectionHandoff.value.pending }
+    awaitFocus(beta.stableId)
     openPicker()
     capture(if (stop) "voice-note-stop" else "voice-note-disposal", popup = true)
     composeRule.runOnIdle {
@@ -1076,10 +1075,22 @@ class SidebarGatewayPickerTest {
   }
 
   private fun awaitFocus(entry: GatewayRegistryEntry) {
-    composeRule.waitUntil {
-      composeRule.runOnIdle {
-        runtime.gatewayConnectionHandoff.value.let { !it.pending && it.focusedStableId == entry.stableId }
+    awaitFocus(entry.stableId)
+  }
+
+  private fun awaitFocus(stableId: String) {
+    try {
+      drainWithMainLooper {
+        withTimeout(5_000) {
+          runtime.gatewayConnectionHandoff.first { !it.pending && it.focusedStableId == stableId }
+        }
       }
+    } catch (error: TimeoutCancellationException) {
+      val handoff = runtime.gatewayConnectionHandoff.value
+      throw AssertionError(
+        "Gateway focus did not settle: expected=$stableId current=${handoff.focusedStableId} pending=${handoff.pending}",
+        error,
+      )
     }
     composeRule.waitForIdle()
   }

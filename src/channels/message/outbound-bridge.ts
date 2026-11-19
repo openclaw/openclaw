@@ -60,7 +60,6 @@ type CreateChannelMessageAdapterFromOutboundParams<TConfig = unknown> = {
 
 type MessageSendResultParams = {
   kind: MessageReceiptPartKind;
-  normalizeReceiptKind?: boolean;
   threadId?: string | number | null;
   replyToId?: string | null;
 };
@@ -70,7 +69,7 @@ function toMessageSendResult(
   params: MessageSendResultParams,
 ): ChannelMessageSendResult {
   const receipt = result.receipt
-    ? params.normalizeReceiptKind
+    ? params.kind === "poll"
       ? {
           ...result.receipt,
           parts: result.receipt.parts.map((part) => ({ ...part, kind: params.kind })),
@@ -101,27 +100,6 @@ function toMessageSendResult(
   };
 }
 
-function adaptOutboundBridgeContext<
-  TContext extends {
-    onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void;
-  },
->(
-  ctx: TContext,
-  resultParams: MessageSendResultParams,
-): ChannelMessageOutboundBridgeContext<TContext> {
-  const { onDeliveryResult, ...outboundCtx } = ctx;
-  return {
-    ...outboundCtx,
-    ...(onDeliveryResult
-      ? {
-          onDeliveryResult: async (result: ChannelMessageOutboundBridgeResult) => {
-            await onDeliveryResult(toMessageSendResult(result, resultParams));
-          },
-        }
-      : {}),
-  };
-}
-
 async function sendThroughOutboundBridge<
   TContext extends Pick<
     ChannelMessageSendTextContext,
@@ -136,12 +114,21 @@ async function sendThroughOutboundBridge<
 ): Promise<ChannelMessageSendResult> {
   const resultParams = {
     kind,
-    ...(kind === "poll" ? { normalizeReceiptKind: true } : {}),
     threadId: ctx.threadId,
     replyToId: ctx.replyToId,
   };
+  const { onDeliveryResult, ...outboundCtx } = ctx;
   return toMessageSendResult(
-    await send(adaptOutboundBridgeContext(ctx, resultParams)),
+    await send({
+      ...outboundCtx,
+      ...(onDeliveryResult
+        ? {
+            onDeliveryResult: async (result: ChannelMessageOutboundBridgeResult) => {
+              await onDeliveryResult(toMessageSendResult(result, resultParams));
+            },
+          }
+        : {}),
+    }),
     resultParams,
   );
 }

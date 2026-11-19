@@ -3,7 +3,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { sharedVitestExcludePatterns } from "../../test/vitest/vitest.pattern-file.ts";
+import {
+  matchesVitestGlob,
+  sharedVitestExcludePatterns,
+  vitestE2eTestGlob,
+} from "../../test/vitest/vitest.pattern-file.ts";
 import {
   controlUiE2eTestGlobs,
   controlUiTestGlobs,
@@ -106,10 +110,10 @@ export function createCrabboxGatePlan({
         throw new Error(`Crabbox gate cannot inventory Control UI tests for ${target}`);
       }
       const exclude = sharedVitestExcludePatterns.filter(
-        (pattern) => !e2e || pattern !== "**/*.e2e.test.ts",
+        (pattern) => !e2e || pattern !== vitestE2eTestGlob,
       );
       inventory = files.filter(
-        (file) => !exclude.some((pattern) => path.matchesGlob(file, pattern)),
+        (file) => !exclude.some((pattern) => matchesVitestGlob(file, pattern)),
       );
       uiInventories.set(e2e, inventory);
     }

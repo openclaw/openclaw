@@ -8,14 +8,14 @@ export function createAgentRunStaleLifecycleError(): Error {
   });
 }
 
-export function isAgentRunStaleLifecycleError(value: unknown): boolean {
+export function hasLifecycleErrorCode(value: unknown, code: string): boolean {
   try {
-    return (
-      value instanceof Error &&
-      "code" in value &&
-      value.code === AGENT_RUN_STALE_LIFECYCLE_ERROR_CODE
-    );
+    return value instanceof Error && "code" in value && value.code === code;
   } catch {
     return false;
   }
+}
+
+export function isAgentRunStaleLifecycleError(value: unknown): boolean {
+  return hasLifecycleErrorCode(value, AGENT_RUN_STALE_LIFECYCLE_ERROR_CODE);
 }

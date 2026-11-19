@@ -116,9 +116,10 @@ final class WatchReplyCoordinator {
         destination: OpenClawWatchMessageReceiptDestination = .watch) async throws -> OpenClawWatchMessageEntry
     {
         guard !self.stopped else { throw WatchMessagingError.admissionUnavailable }
-        try await self.journal.recoverInterruptedWork(nowMs: Self.nowMs())
+        try await self.journal.recoverInterruptedWork(nowMs: WatchMessagingPayloadCodec.nowMs())
         guard !self.stopped, !Task.isCancelled else { throw CancellationError() }
-        let entry = try await self.journal.admit(command, nowMs: Self.nowMs(), destination: destination)
+        let entry = try await self.journal.admit(
+            command, nowMs: WatchMessagingPayloadCodec.nowMs(), destination: destination)
         guard !self.stopped else { throw CancellationError() }
         self.updateStorageWarning(nil)
         // Neither transport nor provider work belongs to the application's admission ACK.
@@ -140,7 +141,7 @@ final class WatchReplyCoordinator {
         guard !self.stopped else { return }
         if resetRetryBudget { self.retryAttempts.removeAll() }
         do {
-            try await self.journal.recoverInterruptedWork(nowMs: Self.nowMs())
+            try await self.journal.recoverInterruptedWork(nowMs: WatchMessagingPayloadCodec.nowMs())
             try await self.sendPendingReceipts()
             for entry in try await self.journal.entries() {
                 guard let command = entry.command else { continue }
@@ -238,7 +239,7 @@ final class WatchReplyCoordinator {
         guard case let .available(lease) = await transport.acquireOutboxRouteLease() else { return false }
         do {
             guard !Task.isCancelled else { return false }
-            guard let claim = try await self.journal.claim(command, nowMs: Self.nowMs())
+            guard let claim = try await self.journal.claim(command, nowMs: WatchMessagingPayloadCodec.nowMs())
             else {
                 try await self.sendPendingReceipts()
                 return false
@@ -323,6 +324,9 @@ final class WatchReplyCoordinator {
                         outcome: .reply(text: OpenClawWatchChatDeliveryCodec.boundedReplyText(text)))
                     return
                 }
+            } catch is CancellationError {
+                // Route invalidation must release a pending reconnect without the history retry delay.
+                return
             } catch {
                 if inputRunIDs != nil, IOSGatewayChatTransport.isUnsupportedHistoryInputRunIDsError(error) {
                     inputRunIDs = nil
@@ -337,7 +341,9 @@ final class WatchReplyCoordinator {
 
     private func finish(_ entry: OpenClawWatchMessageEntry, outcome: OpenClawWatchChatDeliveryOutcome) async {
         do {
-            guard try await self.journal.recordTerminal(entry, outcome: outcome, nowMs: Self.nowMs()) == .applied else {
+            guard try await self.journal.recordTerminal(
+                entry, outcome: outcome, nowMs: WatchMessagingPayloadCodec.nowMs()) == .applied
+            else {
                 return
             }
             try await self.sendPendingReceipts()
@@ -380,7 +386,7 @@ final class WatchReplyCoordinator {
                       let current = try await self.journal.entries(owner: owner).first(where: {
                           $0.id == entry.id
                       }), current.receipt == receipt,
-                      (current.expiresAtMs ?? 0) > Self.nowMs(), !Task.isCancelled, !self.stopped
+                      (current.expiresAtMs ?? 0) > WatchMessagingPayloadCodec.nowMs(), !Task.isCancelled, !self.stopped
                 else { return }
                 self.updateStorageWarning(nil)
             } catch {
@@ -405,9 +411,5 @@ final class WatchReplyCoordinator {
     private func updateStorageWarning(_ message: String?) {
         guard !self.stopped, !Task.isCancelled else { return }
         self.reportStorageWarning(message)
-    }
-
-    private static func nowMs() -> Int64 {
-        Int64(Date().timeIntervalSince1970 * 1000)
     }
 }

@@ -61,14 +61,10 @@
   box-shadow: var(--focus-ring);
 }
 
-.option-card__choice--recommended,
-.option-card__choice--selected {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-}
-
 /* Hover must not swap the accent tint for the neutral one; the mismatched
    layers read as the card overlapping itself. */
+.option-card__choice--recommended,
+.option-card__choice--selected,
 .option-card__choice--recommended:hover:not(:disabled),
 .option-card__choice--selected:hover:not(:disabled) {
   border-color: var(--accent);

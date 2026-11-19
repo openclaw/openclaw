@@ -55,31 +55,18 @@ export function createNativeOpenAIResponsesModel() {
 
 export function createNativeOpenAICodexResponsesModel() {
   return {
-    id: "gpt-5.4",
-    name: "GPT-5.4",
+    ...createNativeOpenAIResponsesModel(),
     api: "openai-chatgpt-responses",
-    provider: "openai",
     baseUrl: "https://chatgpt.com/backend-api",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 8_192,
   };
 }
 
 export function createProxyOpenAIResponsesModel() {
   return {
+    ...createNativeOpenAIResponsesModel(),
     id: "custom-gpt",
     name: "Custom GPT",
-    api: "openai-responses",
-    provider: "openai",
     baseUrl: "https://proxy.example.com/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 8_192,
   };
 }
 

@@ -1,13 +1,23 @@
-import type { AssistantMessage, Usage } from "../llm/types.js";
+import type { AssistantMessage, ImageContent, TextContent, Usage } from "../llm/types.js";
+
+function projectWorkerTextContent(part: TextContent) {
+  return {
+    type: "text" as const,
+    text: part.text,
+    ...(part.textSignature ? { textSignature: part.textSignature } : {}),
+  };
+}
+
+export function projectWorkerTextOrImageContent(part: TextContent | ImageContent) {
+  return part.type === "text"
+    ? projectWorkerTextContent(part)
+    : { type: "image" as const, data: part.data, mimeType: part.mimeType };
+}
 
 // Provider adapters retain scratch fields; outbound messages use the closed worker schema.
 export function projectWorkerAssistantContent(part: AssistantMessage["content"][number]) {
   if (part.type === "text") {
-    return {
-      type: "text" as const,
-      text: part.text,
-      ...(part.textSignature ? { textSignature: part.textSignature } : {}),
-    };
+    return projectWorkerTextContent(part);
   }
   if (part.type === "thinking") {
     return {
@@ -34,6 +44,7 @@ export function projectWorkerTokenUsage(usage: Usage) {
     cacheRead: usage.cacheRead,
     cacheWrite: usage.cacheWrite,
     totalTokens: usage.totalTokens,
+    ...(usage.usageReport ? { usageReport: { ...usage.usageReport } } : {}),
     cost: {
       input: usage.cost.input,
       output: usage.cost.output,

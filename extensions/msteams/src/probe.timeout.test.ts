@@ -58,7 +58,7 @@ describe("probeMSTeams request deadline", () => {
       expected: {
         ok: false,
         appId: "app-id",
-        error: `MS Teams Bot Framework probe token timed out after ${MSTEAMS_REQUEST_TIMEOUT_MS}ms`,
+        error: `MS Teams Bot Framework token check timed out after ${MSTEAMS_REQUEST_TIMEOUT_MS}ms`,
       },
     },
     {
@@ -68,7 +68,7 @@ describe("probeMSTeams request deadline", () => {
         appId: "app-id",
         graph: {
           ok: false,
-          error: `MS Teams Graph probe token timed out after ${MSTEAMS_REQUEST_TIMEOUT_MS}ms`,
+          error: `MS Teams Graph token check timed out after ${MSTEAMS_REQUEST_TIMEOUT_MS}ms`,
         },
       },
     },

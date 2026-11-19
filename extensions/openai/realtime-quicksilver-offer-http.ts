@@ -1,4 +1,3 @@
-// Transport helpers for the GPT-Live browser offer endpoint.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -9,15 +8,7 @@ import {
   sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 
-type ResponseDeliveryWaiter = {
-  result: Promise<boolean>;
-  cancel: () => void;
-};
-
-export function createResponseDeliveryWaiter(
-  res: ServerResponse,
-  onDelivered: () => void,
-): ResponseDeliveryWaiter {
+export function createResponseDeliveryWaiter(res: ServerResponse, onDelivered: () => void) {
   const { promise: result, resolve } = createDeferred<boolean>();
   const settle = (delivered: boolean) => {
     res.removeListener("finish", onFinish);

@@ -62,8 +62,8 @@ export function verifyChainSegment(
 export function decryptAuditText(entry: AuditEntry, auditKey: Uint8Array): AuditEntry {
   const key = validateAuditKey(auditKey);
   return {
-    ...structuredClone(entry),
-    event: { ...structuredClone(entry.event), payload: decryptSensitive(entry.event.payload, key) },
+    ...entry,
+    event: { ...entry.event, payload: decryptSensitive(entry.event.payload, key) },
   };
 }
 

@@ -15,6 +15,14 @@ type SessionTranscriptTreeEntry = {
 export type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
   entry: T;
   index: number;
+  /**
+   * For a leaf control: the canonical active leaf this control displaced.
+   *
+   * The scan resolves navigation in file order, so only it knows which branch was
+   * current when a control arrived. A control's raw `parentId` is the physical
+   * append cursor, which side appends and plugin rows move off the active branch.
+   */
+  displacedLeafId?: string | null;
 };
 
 export type SessionTranscriptTree<T> = {
@@ -180,13 +188,13 @@ export type SessionTranscriptNavigationStorage<T> = {
 export function scanSessionTranscriptTree<T>(entries: Iterable<T>): SessionTranscriptTree<T> {
   const nodes: SessionTranscriptTreeNode<T>[] = [];
   const byId = new Map<string, SessionTranscriptTreeNode<T>>();
-  const navigation = scanSessionTranscriptNavigation(entries, {
+  const storage: SessionTranscriptNavigationStorage<T> = {
     byId,
     addNode: (node) => nodes.push(node),
     resetDescendantIds: new Set(),
     invalidLeafControlIds: new Set(),
-  });
-  return { nodes, byId, ...navigation };
+  };
+  return { nodes, byId, ...scanSessionTranscriptNavigation(entries, storage) };
 }
 
 /** Resolves the active branch leaf from the same transcript tree used by branch listing. */
@@ -213,11 +221,13 @@ export function scanSessionTranscriptNavigation<T>(
   for (const entry of entries) {
     const index = nextIndex++;
     let explicitTreeEntry = parseSessionTranscriptTreeEntry(entry);
+    const isLeafControl =
+      explicitTreeEntry !== undefined && isRecord(entry) && entry.type === "leaf";
     if (
       latestResetId &&
       leafId !== null &&
       explicitTreeEntry?.leafId !== undefined &&
-      isSessionTranscriptLeafControl(entry) &&
+      isLeafControl &&
       (explicitTreeEntry.leafId === null || !resetDescendantIds.has(explicitTreeEntry.leafId))
     ) {
       explicitTreeEntry = {
@@ -231,7 +241,7 @@ export function scanSessionTranscriptNavigation<T>(
       id === null || (byId.has(id) && !invalidLeafControlIds.has(id));
     const invalidLeafControl =
       explicitTreeEntry?.leafId !== undefined &&
-      isSessionTranscriptLeafControl(entry) &&
+      isLeafControl &&
       (!isKnownLeafReference(explicitTreeEntry.leafId) ||
         !isKnownLeafReference(explicitTreeEntry.appendParentId));
     if (invalidLeafControl && explicitTreeEntry) {
@@ -285,7 +295,12 @@ export function scanSessionTranscriptNavigation<T>(
     if (!treeEntry) {
       continue;
     }
-    const node: SessionTranscriptTreeNode<T> = { ...treeEntry, entry, index };
+    const node: SessionTranscriptTreeNode<T> = {
+      ...treeEntry,
+      entry,
+      index,
+      ...(isLeafControl ? { displacedLeafId: leafId } : {}),
+    };
     storage.addNode(node);
     byId.set(node.id, node);
     if (isRecord(entry) && entry.type === "reset") {
@@ -307,7 +322,7 @@ export function scanSessionTranscriptNavigation<T>(
         hasExplicitLeafUpdate = true;
       }
     }
-    if (isSessionTranscriptLeafControl(entry)) {
+    if (isLeafControl) {
       hasLeafControl = true;
     }
   }
@@ -399,7 +414,18 @@ export function* selectSessionTranscriptActiveEntryIndexes<T>(params: {
   }
 }
 
-export function selectSessionTranscriptTreeTipNodes<T>(tree: SessionTranscriptTree<T>) {
+/**
+ * Branch tips: every non-control node no other node continues, plus the current
+ * leaf, which stays offerable even once a cut gave it descendants.
+ *
+ * `leafId` names which node counts as current. Callers that scanned a tree with
+ * their own pending control appended pass the leaf from before it, so the tips
+ * they see are the ones the owner would list now.
+ */
+export function selectSessionTranscriptTreeTipNodes<T>(
+  tree: SessionTranscriptTree<T>,
+  leafId: string | null = tree.leafId,
+) {
   const referencedParents = new Set(
     tree.nodes.flatMap((node) =>
       isSessionTranscriptLeafControl(node.entry) || node.parentId === null ? [] : [node.parentId],
@@ -408,7 +434,7 @@ export function selectSessionTranscriptTreeTipNodes<T>(tree: SessionTranscriptTr
   return tree.nodes.filter(
     (node) =>
       !isSessionTranscriptLeafControl(node.entry) &&
-      (node.id === tree.leafId || !referencedParents.has(node.id)),
+      (node.id === leafId || !referencedParents.has(node.id)),
   );
 }
 

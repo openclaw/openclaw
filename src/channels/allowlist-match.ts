@@ -42,10 +42,6 @@ export function compileAllowlist(entries: ReadonlyArray<string>): CompiledAllowl
   };
 }
 
-function compileSimpleAllowlist(entries: ReadonlyArray<string | number>): CompiledAllowlist {
-  return compileAllowlist(entries.map((entry) => normalizeLowercaseStringOrEmpty(String(entry))));
-}
-
 export function resolveAllowlistCandidates<TSource extends string>(params: {
   compiledAllowlist: CompiledAllowlist;
   candidates: Array<{ value?: string; source: TSource }>;
@@ -100,7 +96,9 @@ export function resolveAllowlistMatchSimple(params: {
   const senderId = normalizeLowercaseStringOrEmpty(params.senderId);
   const senderName = normalizeOptionalLowercaseString(params.senderName);
   return resolveCompiledAllowlistMatch({
-    compiledAllowlist: compileSimpleAllowlist(params.allowFrom),
+    compiledAllowlist: compileAllowlist(
+      params.allowFrom.map((entry) => normalizeLowercaseStringOrEmpty(String(entry))),
+    ),
     candidates: [
       { value: senderId, source: "id" },
       { value: params.allowNameMatching === true ? senderName : undefined, source: "name" },

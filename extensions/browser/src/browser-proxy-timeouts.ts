@@ -1,4 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { BROWSER_STARTUP_TIMEOUT_MS } from "./browser/constants.js";
 
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
 const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 5_000;
@@ -11,9 +12,10 @@ export function resolveBrowserProxyTimeoutMs(timeoutMs?: number): number {
 export function resolveBrowserProxyTimeouts(timeoutMs?: number) {
   const proxyTimeoutMs = Math.min(
     resolveBrowserProxyTimeoutMs(timeoutMs),
-    MAX_TIMER_TIMEOUT_MS - 2 * BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS,
+    MAX_TIMER_TIMEOUT_MS - BROWSER_STARTUP_TIMEOUT_MS - 2 * BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS,
   );
-  const nodeInvokeTimeoutMs = proxyTimeoutMs + BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS;
+  const nodeInvokeTimeoutMs =
+    proxyTimeoutMs + BROWSER_STARTUP_TIMEOUT_MS + BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS;
   const gatewayTimeoutMs = nodeInvokeTimeoutMs + BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS;
   return { proxyTimeoutMs, nodeInvokeTimeoutMs, gatewayTimeoutMs };
 }

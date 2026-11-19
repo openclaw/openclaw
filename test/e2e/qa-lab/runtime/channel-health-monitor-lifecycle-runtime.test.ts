@@ -11,7 +11,7 @@ describe("channel health monitor lifecycle producer", () => {
       singleFlight: true,
       settledRearmed: true,
       cooldownBounded: true,
-      hourlyCapLogged: true,
+      exactCadenceThrottled: true,
       failureRecovered: true,
       shutdownStoppedChecks: true,
     });

@@ -38,9 +38,7 @@ export function normalizeMattermostAllowEntry(entry: string): string {
   if (accessGroupName) {
     return `accessGroup:${accessGroupName}`;
   }
-  const normalized = trimmed
-    .replace(/^(mattermost|user):/i, "")
-    .replace(/^@/, "")
-    .trim();
-  return normalized ? normalizeLowercaseStringOrEmpty(normalized) : "";
+  return normalizeLowercaseStringOrEmpty(
+    trimmed.replace(/^(mattermost|user):/i, "").replace(/^@/, ""),
+  );
 }

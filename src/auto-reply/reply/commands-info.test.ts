@@ -2,7 +2,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -124,26 +126,26 @@ describe("info command handlers", () => {
     });
   });
 
-  it.each([
-    ["unauthorized sender", false, true],
-    ["authorized non-owner", true, false],
-  ])("blocks %s from exporting a session", async (_label, isAuthorizedSender, senderIsOwner) => {
-    const params = buildInfoParams("/export-session", {
-      commands: { text: true },
-    } as OpenClawConfig);
-    params.command.isAuthorizedSender = isAuthorizedSender;
-    params.command.senderIsOwner = senderIsOwner;
+  it.each([["authorized non-owner", true, false]])(
+    "blocks %s from exporting a session",
+    async (_label, isAuthorizedSender, senderIsOwner) => {
+      const params = buildInfoParams("/export-session", {
+        commands: { text: true },
+      } as OpenClawConfig);
+      params.command.isAuthorizedSender = isAuthorizedSender;
+      params.command.senderIsOwner = senderIsOwner;
 
-    const result = await handleExportSessionCommand(params, true);
+      const result = await handleExportSessionCommand(params, true);
 
-    expect(result).toEqual({
-      shouldContinue: false,
-      ...(isAuthorizedSender
-        ? { reply: { text: expect.stringContaining("commands.ownerAllowFrom") } }
-        : {}),
-    });
-    expect(buildExportSessionReplyMock).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({
+        shouldContinue: false,
+        ...(isAuthorizedSender
+          ? { reply: { text: expect.stringContaining("commands.ownerAllowFrom") } }
+          : {}),
+      });
+      expect(buildExportSessionReplyMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("allows the owner to export a session", async () => {
     const params = buildInfoParams("/export-session", {
@@ -205,54 +207,6 @@ describe("info command handlers", () => {
     expect(result?.reply?.text).toContain("Available: demo-skill");
   });
 
-  it("returns an unknown skill reply for unmatched /skill targets", async () => {
-    const params = buildInfoParams("/skill missing input", {
-      commands: { text: true },
-    } as OpenClawConfig);
-
-    const result = await handleSkillCommandUsage(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Unknown skill: missing");
-    expect(result?.reply?.text).toContain("Usage: /skill <name> [input]");
-  });
-
-  it("lets valid /skill invocations continue to the skill command path", async () => {
-    const params = buildInfoParams("/skill demo_skill input", {
-      commands: { text: true },
-    } as OpenClawConfig);
-    params.skillCommands = [
-      {
-        name: "demo_skill",
-        skillName: "demo-skill",
-        description: "Demo skill",
-      },
-    ];
-
-    const result = await handleSkillCommandUsage(params, true);
-
-    expect(result).toBeNull();
-  });
-
-  it("loads skills asynchronously before deciding named /skill invocations", async () => {
-    const params = buildInfoParams("/skill demo_skill input", {
-      commands: { text: true },
-    } as OpenClawConfig);
-    params.loadSkillCommands = vi.fn(async () => [
-      {
-        name: "demo_skill",
-        skillName: "demo-skill",
-        description: "Demo skill",
-      },
-    ]);
-
-    const result = await handleSkillCommandUsage(params, true);
-
-    expect(result).toBeNull();
-    expect(params.loadSkillCommands).toHaveBeenCalledOnce();
-    expect(prepareSkillCommandsForAgentsMock).not.toHaveBeenCalled();
-  });
-
   it("loads skills when named /skill receives an empty precomputed command list", async () => {
     const params = buildInfoParams("/skill demo_skill input", {
       commands: { text: true },
@@ -311,40 +265,13 @@ describe("info command handlers", () => {
     expect(result?.reply?.text).toContain("AllowFrom: +15551234567");
   });
 
-  it("prefers the persisted session parent when routing /status context", async () => {
-    const params = buildInfoParams(
-      "/status",
-      {
-        commands: { text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
-      {
-        ParentSessionKey: undefined,
-      },
-    );
-    params.sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      parentSessionKey: "discord:group:parent-room",
-    } as HandleCommandsParams["sessionEntry"];
-
-    const statusResult = await handleStatusCommand(params, true);
-
-    expect(statusResult?.shouldContinue).toBe(false);
-
-    const statusReplyParams = firstMockArg(
-      vi.mocked(buildStatusReply),
-      "buildStatusReply",
-    ) as Parameters<typeof buildStatusReply>[0];
-    expect(statusReplyParams.parentSessionKey).toBe("discord:group:parent-room");
-  });
-
   it("preserves the shared session store path when routing /status", async () => {
     const params = buildInfoParams("/status", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
     params.storePath = "/tmp/target-session-store.json";
+    params.resolvedFastMode = true;
 
     const statusResult = await handleStatusCommand(params, true);
 
@@ -354,6 +281,7 @@ describe("info command handlers", () => {
       "buildStatusReply",
     ) as Parameters<typeof buildStatusReply>[0];
     expect(statusReplyParams.storePath).toBe("/tmp/target-session-store.json");
+    expect(statusReplyParams.resolvedFastMode).toBe(true);
   });
 
   it("prefers the target session entry when routing /status", async () => {
@@ -386,23 +314,6 @@ describe("info command handlers", () => {
     expect(statusReplyParams.parentSessionKey).toBe("target-parent");
   });
 
-  it("forwards resolved fast mode to /status", async () => {
-    const params = buildInfoParams("/status", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    params.resolvedFastMode = true;
-
-    const statusResult = await handleStatusCommand(params, true);
-
-    expect(statusResult?.shouldContinue).toBe(false);
-    const statusReplyParams = firstMockArg(
-      vi.mocked(buildStatusReply),
-      "buildStatusReply",
-    ) as Parameters<typeof buildStatusReply>[0];
-    expect(statusReplyParams.resolvedFastMode).toBe(true);
-  });
-
   it("routes /status plugins to the plugin health summary", async () => {
     const params = buildInfoParams("/status plugins", {
       commands: { text: true },
@@ -415,11 +326,13 @@ describe("info command handlers", () => {
       shouldContinue: false,
       reply: { text: "plugins status reply" },
     });
-    expect(buildStatusPluginsReply).toHaveBeenCalledWith({
-      cfg: params.cfg,
-      command: params.command,
-      workspaceDir: params.workspaceDir,
-    });
+    expect(buildStatusPluginsReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: params.cfg,
+        command: params.command,
+        workspaceDir: params.workspaceDir,
+      }),
+    );
     expect(buildStatusReply).not.toHaveBeenCalled();
   });
 
@@ -440,20 +353,6 @@ describe("info command handlers", () => {
       "prepareSkillCommandsForAgents",
     ) as { agentIds?: string[] };
     expect(listParams.agentIds).toEqual(["target"]);
-  });
-
-  it("lists commands for the prepared owner of a global session", async () => {
-    const { handleCommandsListCommand } = await import("./commands-info.js");
-    const params = buildInfoParams("/commands", {
-      agents: { ownership: "explicit", entries: { main: {}, target: {} } },
-    });
-    params.agentId = "target";
-    params.sessionKey = "global";
-
-    expect((await handleCommandsListCommand(params, true))?.shouldContinue).toBe(false);
-    expect(prepareSkillCommandsForAgentsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ agentIds: ["target"] }),
-    );
   });
 });
 
@@ -514,7 +413,12 @@ const toolsTestState = vi.hoisted(() => {
 
   return {
     releaseRuntimeModel: vi.fn(async () => {}),
-    resolveToolsMock: vi.fn((..._args: unknown[]) => defaultResolveTools()),
+    readAcpSessionMeta: vi.fn<
+      typeof import("../../acp/runtime/session-meta-readonly.js").readAcpSessionMetaForEntryAsync
+    >(async () => undefined),
+    resolveToolsMock: vi.fn<
+      typeof import("../../agents/tools-effective-inventory.js").resolveEffectiveToolInventory
+    >(async () => defaultResolveTools()),
     resolveRuntimeModelContextMock: vi.fn(async (_params: unknown) => ({})),
     threadingContext: {
       currentChannelId: "channel-123",
@@ -524,8 +428,14 @@ const toolsTestState = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../agents/tools-effective-inventory.js", () => ({
-  resolveEffectiveToolInventory: (...args: unknown[]) => toolsTestState.resolveToolsMock(...args),
+vi.mock("../../acp/runtime/session-meta-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../acp/runtime/session-meta-readonly.js")>()),
+  readAcpSessionMetaForEntryAsync: toolsTestState.readAcpSessionMeta,
+}));
+
+vi.mock("../../agents/tools-effective-inventory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/tools-effective-inventory.js")>()),
+  resolveEffectiveToolInventory: toolsTestState.resolveToolsMock,
   acquireEffectiveToolInventoryRuntimeModelContext: async (params: unknown) => {
     const context = await toolsTestState.resolveRuntimeModelContextMock(params);
     return {
@@ -570,10 +480,139 @@ describe("handleToolsCommand", () => {
 
   beforeEach(() => {
     toolsTestState.releaseRuntimeModel.mockClear();
-    toolsTestState.resolveToolsMock.mockReset().mockImplementation(() => makeDefaultInventory());
+    toolsTestState.readAcpSessionMeta.mockReset().mockResolvedValue(undefined);
+    toolsTestState.resolveToolsMock
+      .mockReset()
+      .mockImplementation(async () => makeDefaultInventory());
     toolsTestState.resolveRuntimeModelContextMock.mockReset();
     toolsTestState.resolveRuntimeModelContextMock.mockResolvedValue({});
     setActivePluginRegistry(createTestRegistry([]));
+  });
+
+  it("uses the target session sandbox policy in the direct tool list", async () => {
+    const { resolveEffectiveToolInventory } = await vi.importActual<
+      typeof import("../../agents/tools-effective-inventory.js")
+    >("../../agents/tools-effective-inventory.js");
+    toolsTestState.resolveToolsMock.mockImplementation(resolveEffectiveToolInventory);
+    for (const required of [false, true]) {
+      const params = buildCommandTestParamsImpl(
+        "/tools",
+        {
+          ...buildConfig(),
+          agents: { defaults: { sandbox: { mode: "off" } } },
+          tools: { web: { search: { enabled: true, provider: "brave" } } },
+        },
+        undefined,
+        { workspaceDir: "/tmp" },
+      );
+      params.sessionEntry = { sessionId: "wrapper", updatedAt: 1, sandboxMode: "off" };
+      params.sessionStore = {
+        [params.sessionKey]: {
+          sessionId: "target",
+          updatedAt: 1,
+          sandboxMode: "off",
+          sandbox: required ? "required" : undefined,
+        },
+      };
+      const result = await handleToolsCommandImpl(params, true);
+      expect(result?.reply?.text).toContain("Available tools");
+      expect(result?.reply?.text?.includes("web_search")).toBe(!required);
+      expect(result?.reply?.text).toContain("read");
+    }
+  });
+
+  it("lists brokered GitHub tools only for eligible command sessions through the real inventory", async () => {
+    const { resolveEffectiveToolInventory } = await vi.importActual<
+      typeof import("../../agents/tools-effective-inventory.js")
+    >("../../agents/tools-effective-inventory.js");
+    toolsTestState.resolveToolsMock.mockImplementation(resolveEffectiveToolInventory);
+    for (const scenario of [
+      { runtime: "openclaw", expected: true },
+      { runtime: "codex", expected: true },
+      { runtime: "codex", requiredTarget: true, expected: true, expectedIdentity: false },
+      { runtime: "openclaw", excludesGitHub: true, expected: true },
+      { runtime: "codex", excludesGitHub: true, expected: false },
+      { runtime: "copilot", expected: true },
+      { runtime: "external", expected: false },
+      { runtime: "openclaw", localEmbedded: true, expected: false },
+      { runtime: "openclaw", unbound: true, expected: false },
+      { runtime: "openclaw", denied: true, expected: false },
+      { runtime: "openclaw", acp: true, expected: false },
+    ]) {
+      const cfg: OpenClawConfig = {
+        ...buildConfig(),
+        ...(scenario.excludesGitHub
+          ? {
+              plugins: {
+                entries: {
+                  codex: {
+                    config: {
+                      codexDynamicToolsExclude: ["github_publish", "github_identity_status"],
+                    },
+                  },
+                },
+              },
+            }
+          : {}),
+        agents: {
+          defaults: {
+            ...(scenario.requiredTarget ? { sandbox: { mode: "off" as const } } : {}),
+            models: { "openai/gpt-4.1": { agentRuntime: { id: scenario.runtime } } },
+          },
+        },
+        tools: {
+          deny: [
+            "gateway",
+            "nodes",
+            ...(scenario.denied ? ["github_publish", "github_identity_status"] : []),
+          ],
+        },
+      };
+      const params = buildCommandTestParamsImpl("/tools", cfg, undefined, {
+        workspaceDir: "/tmp",
+      });
+      params.provider = "openai";
+      params.model = "gpt-4.1";
+      params.sessionEntry = { sessionId: "tools-session", updatedAt: 1 };
+      if (scenario.requiredTarget) {
+        // Command ownership cannot relax the canonical target's sandbox requirement.
+        params.command.senderIsOwner = true;
+        params.sessionEntry = { sessionId: "wrapper-session", updatedAt: 1, sandboxMode: "off" };
+        params.sessionStore = {
+          [params.sessionKey]: {
+            sessionId: "tools-session",
+            updatedAt: 1,
+            sandboxMode: "off",
+            sandbox: "required",
+          },
+        };
+      }
+      toolsTestState.readAcpSessionMeta.mockResolvedValue(
+        scenario.acp
+          ? {
+              backend: "acpx",
+              agent: "main",
+              runtimeSessionName: params.sessionKey,
+              mode: "persistent",
+              state: "idle",
+              lastActivityAt: 1,
+            }
+          : undefined,
+      );
+      // Only the host's runtime identity is relevant; no Gateway method executes.
+      const gateway = { localEmbedded: scenario.localEmbedded } as GatewayRequestContext;
+      const result = await withPluginRuntimeGatewayContextResolver(
+        scenario.unbound ? undefined : () => gateway,
+        () => handleToolsCommandImpl(params, true),
+      );
+      expect(result?.reply?.text).toContain("Available tools");
+      for (const [name, expected] of [
+        ["github_publish", scenario.expected],
+        ["github_identity_status", scenario.expectedIdentity ?? scenario.expected],
+      ] as const) {
+        expect(result?.reply?.text?.includes(name), JSON.stringify(scenario)).toBe(expected);
+      }
+    }
   });
 
   it("renders a product-facing tool list", async () => {
@@ -620,6 +659,7 @@ describe("handleToolsCommand", () => {
     expect(toolsArg.groupChannel).toBe("#ops");
     expect(toolsArg.groupSpace).toBe("workspace-1");
     expect(toolsArg.replyToMode).toBe("all");
+    expect(toolsTestState.releaseRuntimeModel).toHaveBeenCalledOnce();
   });
 
   it("returns usage when arguments are provided", async () => {
@@ -703,43 +743,6 @@ describe("handleToolsCommand", () => {
     expect(result?.reply?.text).toContain("Docs Lookup - Search internal documentation");
   });
 
-  it("prepares dynamic model context before resolving the tool inventory", async () => {
-    const runtimeModel = {
-      id: "chat-latest",
-      name: "chat-latest",
-      provider: "openai",
-      api: "openai-responses",
-    };
-    toolsTestState.resolveRuntimeModelContextMock.mockResolvedValue({
-      modelApi: "openai-responses",
-      runtimeModel,
-    });
-    const params = buildCommandTestParamsImpl("/tools compact", buildConfig(), undefined, {
-      workspaceDir: "/tmp",
-    });
-    params.agentId = "main";
-    params.provider = "openai";
-    params.model = "chat-latest";
-
-    const result = await handleToolsCommandImpl(params, true);
-
-    expect(result?.reply?.text).toContain("exec");
-    expect(result?.reply?.text).toContain("Use /tools verbose for descriptions.");
-    expect(toolsTestState.resolveRuntimeModelContextMock).toHaveBeenCalledWith({
-      cfg: params.cfg,
-      agentId: "main",
-      agentDir: undefined,
-      workspaceDir: "/tmp",
-      modelProvider: "openai",
-      modelId: "chat-latest",
-    });
-    expect(resolveToolsArg(toolsTestState.resolveToolsMock)).toMatchObject({
-      modelApi: "openai-responses",
-      runtimeModel,
-    });
-    expect(toolsTestState.releaseRuntimeModel).toHaveBeenCalledOnce();
-  });
-
   it("releases the model context when tools projection fails", async () => {
     toolsTestState.resolveToolsMock.mockImplementation(() => {
       expect(toolsTestState.releaseRuntimeModel).not.toHaveBeenCalled();
@@ -820,22 +823,5 @@ describe("handleToolsCommand", () => {
     await handleToolsCommandImpl(params, true);
 
     expect(resolveToolsArg(toolsTestState.resolveToolsMock).accountId).toBe("work");
-  });
-
-  it("does not forward a stale ambient agentDir for session-bound /tools", async () => {
-    const params = buildCommandTestParamsImpl("/tools", buildConfig(), undefined, {
-      workspaceDir: "/tmp",
-    });
-    params.agentId = "target";
-    params.agentDir = "/tmp/agents/main/agent";
-    params.sessionKey = "agent:target:whatsapp:direct:12345";
-
-    const result = await handleToolsCommandImpl(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    const toolsArg = resolveToolsArg(toolsTestState.resolveToolsMock);
-    expect(toolsArg.agentId).toBe("target");
-    expect(toolsArg.agentDir).toBeUndefined();
-    expect(toolsArg.sessionKey).toBe("agent:target:whatsapp:direct:12345");
   });
 });

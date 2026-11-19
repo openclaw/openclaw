@@ -278,14 +278,14 @@ private fun AccessibilityDevScreen(
         OutlinedButton(onClick = ::observeDelayed, enabled = connected && !observeRunning) {
           Text(nativeString("Observe in 3s"))
         }
-        GlobalActionButton(nativeString("Back"), connected && !observeRunning) {
-          actGlobal(GlobalActionName.Back)
+        OutlinedButton(onClick = { actGlobal(GlobalActionName.Back) }, enabled = connected && !observeRunning) {
+          Text(nativeString("Back"))
         }
-        GlobalActionButton(nativeString("Home"), connected && !observeRunning) {
-          actGlobal(GlobalActionName.Home)
+        OutlinedButton(onClick = { actGlobal(GlobalActionName.Home) }, enabled = connected && !observeRunning) {
+          Text(nativeString("Home"))
         }
-        GlobalActionButton(nativeString("Recents"), connected && !observeRunning) {
-          actGlobal(GlobalActionName.Recents)
+        OutlinedButton(onClick = { actGlobal(GlobalActionName.Recents) }, enabled = connected && !observeRunning) {
+          Text(nativeString("Recents"))
         }
       }
 
@@ -342,17 +342,6 @@ private fun AccessibilityDevScreen(
         }
       }
     }
-  }
-}
-
-@Composable
-private fun GlobalActionButton(
-  label: String,
-  enabled: Boolean,
-  onClick: () -> Unit,
-) {
-  OutlinedButton(onClick = onClick, enabled = enabled) {
-    Text(label)
   }
 }
 

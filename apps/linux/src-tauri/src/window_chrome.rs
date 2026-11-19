@@ -35,7 +35,7 @@ pub fn install(window: &Window) -> tauri::Result<()> {
     #[cfg(target_os = "linux")]
     return crate::window_chrome_linux::install(window);
     #[cfg(target_os = "macos")]
-    return crate::window_chrome_macos::install_window(window);
+    return crate::window_chrome_macos::set_unified(window, false);
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = window;
@@ -154,18 +154,18 @@ pub(super) fn authorized_source(app: &AppHandle, label: &str, source: &Url) -> b
     }
 }
 
-pub(super) fn authorized(app: &AppHandle, webview: &Webview) -> bool {
+fn authorize(app: &AppHandle, webview: &Webview) -> Result<(), String> {
     webview
         .url()
         .is_ok_and(|url| authorized_source(app, webview.label(), &url))
+        .then_some(())
+        .ok_or_else(|| "Window controls are no longer available for this page.".into())
 }
 
 #[cfg(not(target_os = "macos"))]
 #[tauri::command(async)]
 pub fn window_chrome_drag(app: AppHandle, webview: Webview) -> Result<(), String> {
-    if !authorized(&app, &webview) {
-        return Err("Window controls are no longer available for this page.".into());
-    }
+    authorize(&app, &webview)?;
     webview
         .window()
         .start_dragging()
@@ -178,16 +178,12 @@ pub async fn window_chrome_request(
     webview: Webview,
     action: WindowAction,
 ) -> Result<WindowState, String> {
-    if !authorized(&app, &webview) {
-        return Err("Window controls are no longer available for this page.".into());
-    }
+    authorize(&app, &webview)?;
     let window = webview.window();
     if matches!(action, WindowAction::State) {
         let (_, _, can_go_back, can_go_forward) =
             crate::native_browser_platform::navigation_state(&webview).await?;
-        if !authorized(&app, &webview) {
-            return Err("The window document changed.".into());
-        }
+        authorize(&app, &webview).map_err(|_| "The window document changed.")?;
         let mut current = state(&window)?;
         current.history = Some(HistoryState {
             can_go_back,
@@ -196,25 +192,16 @@ pub async fn window_chrome_request(
         return Ok(current);
     }
     match action {
-        WindowAction::Ready => {
+        WindowAction::Ready | WindowAction::NativeFrame => {
+            let unified = matches!(action, WindowAction::Ready);
             #[cfg(target_os = "macos")]
-            crate::window_chrome_macos::set_unified(&window, true)
-                .map_err(|error| error.to_string())?;
+            {
+                crate::window_chrome_macos::set_unified(&window, unified)
+            }
             #[cfg(not(target_os = "macos"))]
-            window
-                .set_decorations(false)
-                .map_err(|error| error.to_string())?;
-            Ok(())
-        }
-        WindowAction::NativeFrame => {
-            #[cfg(target_os = "macos")]
-            crate::window_chrome_macos::set_unified(&window, false)
-                .map_err(|error| error.to_string())?;
-            #[cfg(not(target_os = "macos"))]
-            window
-                .set_decorations(true)
-                .map_err(|error| error.to_string())?;
-            Ok(())
+            {
+                window.set_decorations(!unified)
+            }
         }
         WindowAction::Minimize => window.minimize(),
         WindowAction::ToggleMaximize => {

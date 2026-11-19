@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { asBoolean, asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { inspectStrictBase64 } from "../shared/base64.js";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
+import { inspectStrictBase64, normalizeBase64ForCompare } from "../shared/base64.js";
 import { humanSize } from "../shared/params.js";
 import {
   FILE_TRANSFER_SUBDIR,
@@ -10,10 +11,6 @@ import {
   FILE_WRITE_TOOL_DESCRIPTOR,
 } from "./descriptors.js";
 import { invokeNodeToolPayload, readRequiredNodePath } from "./node-tool-invoke.js";
-
-function normalizeBase64ForCompare(value: string): string {
-  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
-}
 
 function decodeStrictBase64(value: string): Buffer {
   const decodedBytes = inspectStrictBase64(value);
@@ -72,11 +69,8 @@ export function createFileWriteTool(): AnyAgentTool {
       const overwrite = asBoolean(raw.overwrite) ?? false;
       const createParents = asBoolean(raw.createParents) ?? false;
 
-      // Compute the sha256 of the bytes we're sending so the node can do
-      // an end-to-end integrity check after writing. This is always
-      // sender-side computed; ignore any caller-supplied expectedSha256
-      // to avoid the model passing a wrong hash and triggering an
-      // unintended unlink.
+      // Compute the integrity hash from the sent bytes rather than trusting a
+      // caller-supplied expectedSha256 that could reject an otherwise valid write.
       const sourceBytes = await readSourceBytes({ contentBase64, sourceMediaId });
       const buffer = sourceBytes.buffer;
       const expectedSha256 = crypto.createHash("sha256").update(buffer).digest("hex");
@@ -109,15 +103,10 @@ export function createFileWriteTool(): AnyAgentTool {
       });
 
       const overwriteNote = typed.overwritten ? " (overwrote existing file)" : "";
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Wrote ${typed.path} (${humanSize(typed.size)}, sha256:${typed.sha256.slice(0, 12)})${overwriteNote}`,
-          },
-        ],
-        details: { ...typed, source: sourceBytes.source },
-      };
+      return textResult(
+        `Wrote ${typed.path} (${humanSize(typed.size)}, sha256:${typed.sha256.slice(0, 12)})${overwriteNote}`,
+        { ...typed, source: sourceBytes.source },
+      );
     },
   };
 }

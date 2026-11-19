@@ -196,7 +196,7 @@ Discord YAML module scenarios (`qa/scenarios/channels/discord-*.yaml`):
 - `discord-canary`
 - `discord-mention-gating`
 - `discord-native-help-command-registration`
-- `discord-progress-draft-lifecycle` - runs a deterministic tool turn, verifies
+- `discord-progress-draft-lifecycle` - runs a fixed tool turn, verifies
   the final answer has no synthesized activity receipt, confirms the working
   draft is deleted after a successful final, and confirms an error final keeps
   its draft visible as diagnostic context.

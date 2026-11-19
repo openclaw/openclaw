@@ -10,12 +10,11 @@ import { assignSessionOwner } from "./session-organizer-operations.runtime.ts";
 
 function createHarness() {
   let current = true;
-  let sessionError: string | null = null;
-  let settleAssignment: ((result: null) => void) | undefined;
+  let rejectAssignment: ((error: unknown) => void) | undefined;
   const assignOwner = vi.fn(
     () =>
-      new Promise<null>((resolve) => {
-        settleAssignment = resolve;
+      new Promise<null>((_resolve, reject) => {
+        rejectAssignment = reject;
       }),
   );
   const publishSessionMutationError = vi.fn();
@@ -28,9 +27,6 @@ function createHarness() {
     gateway: { snapshot },
     sessions: {
       assignOwner,
-      get state() {
-        return { error: sessionError };
-      },
     } as unknown as SessionCapability,
     selectedAgentId: "main",
   } as SidebarSessionMutationScope;
@@ -52,10 +48,7 @@ function createHarness() {
     },
     scope,
     session,
-    setError: (error: string) => {
-      sessionError = error;
-    },
-    settle: () => settleAssignment?.(null),
+    reject: (error: unknown) => rejectAssignment?.(error),
   };
 }
 
@@ -69,14 +62,11 @@ describe("assignSessionOwner", () => {
       harness.scope,
     );
 
-    harness.setError("Owner assignment rejected.");
-    harness.settle();
+    const failure = new Error("Owner assignment rejected.");
+    harness.reject(failure);
     await pending;
 
-    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
-      harness.scope,
-      "Owner assignment rejected.",
-    );
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(harness.scope, failure);
   });
 
   it("keeps a retired assignment rejection silent", async () => {
@@ -88,9 +78,8 @@ describe("assignSessionOwner", () => {
       harness.scope,
     );
 
-    harness.setError("Retired assignment rejection.");
     harness.retire();
-    harness.settle();
+    harness.reject(new Error("Retired assignment rejection."));
     await pending;
 
     expect(harness.assignOwner).toHaveBeenCalledOnce();

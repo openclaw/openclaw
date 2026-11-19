@@ -85,9 +85,9 @@ export async function createTrustedNativeTypeScriptParser(toolingRoot) {
     throw new Error("parser package is outside trusted tooling: typescript");
   }
   const entries = [
-    ["typescript/unstable/sync", "dist/api/sync/api.js"],
-    ["typescript/unstable/fs", "dist/api/fs.js"],
-    ["typescript/unstable/ast", "dist/ast/index.js"],
+    ["typescript/sync", "dist/api/sync/api.js"],
+    ["typescript/fs", "dist/api/fs.js"],
+    ["typescript/ast", "dist/ast/index.js"],
   ];
   for (const [specifier, relativePath] of entries) {
     if (

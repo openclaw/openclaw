@@ -1,47 +1,28 @@
-import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-
 const IDENTIFY_WINDOW_MS = 5_000;
 
-type IdentifyRateState = {
-  lastObservedAt: number;
-  nextAllowedAt: number;
-};
-
-function normalizeMaxConcurrency(value: number | undefined): number {
-  const parsed = parseFiniteNumber(value);
-  return parsed === undefined ? 1 : Math.max(1, Math.floor(parsed));
-}
-
 class GatewayIdentifyLimiter {
-  private stateByKey = new Map<number, IdentifyRateState>();
+  private nextAllowedAt = 0;
 
-  async wait(params: { shardId?: number; maxConcurrency?: number }): Promise<void> {
-    const maxConcurrency = normalizeMaxConcurrency(params.maxConcurrency);
-    const rateKey = (params.shardId ?? 0) % maxConcurrency;
-    const now = Date.now();
-    const state = this.stateByKey.get(rateKey);
-    const clockMovedBackward = state !== undefined && now < state.lastObservedAt;
-    const nextAllowedAt =
-      state === undefined
-        ? now
-        : clockMovedBackward
-          ? now + IDENTIFY_WINDOW_MS
-          : state.nextAllowedAt;
-    const waitMs = Math.max(0, nextAllowedAt - now);
-    this.stateByKey.set(rateKey, {
-      lastObservedAt: now,
-      nextAllowedAt: Math.max(now, nextAllowedAt) + IDENTIFY_WINDOW_MS,
-    });
-    if (waitMs > 0) {
+  // Runs `identify` once the shared window is free; it returns whether it sent IDENTIFY.
+  // Only a sent IDENTIFY claims the window: a caller whose socket went stale while
+  // waiting must not reserve one, or abandoned waits push the queue ahead of real time.
+  async schedule(identify: () => boolean): Promise<void> {
+    for (;;) {
+      const waitMs = this.nextAllowedAt - performance.now();
+      if (waitMs <= 0) {
+        break;
+      }
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, waitMs);
-        timer.unref?.();
+        setTimeout(resolve, waitMs).unref();
       });
+    }
+    if (identify()) {
+      this.nextAllowedAt = performance.now() + IDENTIFY_WINDOW_MS;
     }
   }
 
   reset(): void {
-    this.stateByKey.clear();
+    this.nextAllowedAt = 0;
   }
 }
 

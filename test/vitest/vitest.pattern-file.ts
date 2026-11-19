@@ -4,11 +4,15 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { Minimatch } from "minimatch";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
-import { narrowIncludePatterns } from "./vitest.include-patterns.ts";
+import { narrowIncludePatterns, resolveNonBrowserTestPattern } from "./vitest.include-patterns.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const require = createRequire(import.meta.url);
 const globMatchers = new Map<string, Minimatch>();
+
+// Match Vitest's script-extension grammar so broad selectors cannot leak opt-in suites.
+export const vitestE2eTestGlob = "**/*.e2e.test.?(c|m)[jt]s?(x)";
+export const vitestLiveTestGlob = "**/*.live.test.?(c|m)[jt]s?(x)";
 
 export const sharedVitestExcludePatterns: readonly string[] = Object.freeze([
   "dist/**",
@@ -19,8 +23,8 @@ export const sharedVitestExcludePatterns: readonly string[] = Object.freeze([
   "**/vendor/**",
   "dist/OpenClaw.app/**",
   "**/._*",
-  "**/*.live.test.ts",
-  "**/*.e2e.test.ts",
+  vitestLiveTestGlob,
+  vitestE2eTestGlob,
 ]);
 
 export function isSharedVitestExcludedPath(file: string, scopedDir = ""): boolean {
@@ -32,6 +36,11 @@ export function isSharedVitestExcludedPath(file: string, scopedDir = ""): boolea
 }
 
 export function matchesVitestGlob(value: string, pattern: string): boolean {
+  // Preserve the original Node/Bun spelling while native discovery uses the full basename.
+  const nonBrowser = resolveNonBrowserTestPattern(pattern);
+  if (nonBrowser) {
+    return matchesVitestGlob(value, nonBrowser);
+  }
   // CI plans tests before installing dependencies; keep Node's matcher dependency-free.
   if (!process.versions.bun) {
     return path.matchesGlob(value, pattern);

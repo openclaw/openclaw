@@ -12,7 +12,7 @@ import { die, repoRoot, run, say, sh } from "./host-command.ts";
 import type { PackageArtifact } from "./types.ts";
 
 export async function extractPackageJsonFromTgz<T>(tgzPath: string, entry: string): Promise<T> {
-  const output = run("tar", ["-xOf", tgzPath, entry], { quiet: true }).stdout;
+  const output = run("tar", ["-xOf", tgzPath, entry]).stdout;
   return JSON.parse(output) as T;
 }
 
@@ -62,7 +62,7 @@ export function resolveOpenClawRegistryVersion(specOrAlias: string): string {
   if (betaMatch) {
     const betaSuffix = `-beta.${betaMatch[1]}`;
     const versions = JSON.parse(
-      run("npm", ["view", "openclaw", "versions", "--json"], { quiet: true }).stdout,
+      run("npm", ["view", "openclaw", "versions", "--json"]).stdout,
     ) as string[];
     const match = versions
       .filter((version) => version.endsWith(betaSuffix))
@@ -77,42 +77,33 @@ export function resolveOpenClawRegistryVersion(specOrAlias: string): string {
 }
 
 function npmViewVersion(spec: string): string {
-  return run("npm", ["view", spec, "version"], { quiet: true }).stdout.trim();
+  return run("npm", ["view", spec, "version"]).stdout.trim();
 }
 
-async function ensureCurrentBuildUnlocked(input: {
-  requireControlUi?: boolean;
-  checkDirty?: boolean;
-}): Promise<void> {
-  const head = run("git", ["rev-parse", "HEAD"], { quiet: true }).stdout.trim();
+async function ensureCurrentBuildUnlocked(input: { requireControlUi?: boolean }): Promise<void> {
+  const head = run("git", ["rev-parse", "HEAD"]).stdout.trim();
   const buildInfoPath = path.join(repoRoot, "dist/build-info.json");
   let buildCommit = "";
   if (await exists(buildInfoPath)) {
     buildCommit = (await readJson<{ commit?: string }>(buildInfoPath)).commit ?? "";
   }
   const dirty =
-    input.checkDirty !== false &&
-    run(
-      "git",
-      [
-        "status",
-        "--porcelain",
-        "--",
-        "src",
-        "ui",
-        "packages",
-        "extensions",
-        "package.json",
-        "pnpm-lock.yaml",
-        "tsconfig*.json",
-      ],
-      { quiet: true },
-    ).stdout.trim() !== "";
+    run("git", [
+      "status",
+      "--porcelain",
+      "--",
+      "src",
+      "ui",
+      "packages",
+      "extensions",
+      "package.json",
+      "pnpm-lock.yaml",
+      "tsconfig*.json",
+    ]).stdout.trim() !== "";
   const controlReady =
     !input.requireControlUi ||
     ((await exists(path.join(repoRoot, "dist/control-ui/index.html"))) &&
-      sh("compgen -G 'dist/control-ui/assets/*' >/dev/null", { check: false, quiet: true })
-        .status === 0);
+      sh("compgen -G 'dist/control-ui/assets/*' >/dev/null", { check: false }).status === 0);
   if (buildCommit === head && !dirty && controlReady) {
     return;
   }
@@ -122,13 +113,12 @@ async function ensureCurrentBuildUnlocked(input: {
     say("Build Control UI for current head");
     run("pnpm", ["ui:build"]);
   }
-  const drift = run(
-    "git",
-    ["status", "--porcelain", "--", ":(glob)extensions/*/src/host/**/.bundle.hash"],
-    {
-      quiet: true,
-    },
-  ).stdout.trim();
+  const drift = run("git", [
+    "status",
+    "--porcelain",
+    "--",
+    ":(glob)extensions/*/src/host/**/.bundle.hash",
+  ]).stdout.trim();
   if (drift) {
     die(`generated file drift after build; commit or revert before Parallels packaging:\n${drift}`);
   }
@@ -143,18 +133,14 @@ export async function packOpenClaw(input: {
   await mkdir(input.destination, { recursive: true });
   if (input.packageSpec) {
     say(`Pack target package tgz: ${input.packageSpec}`);
-    const output = run(
-      "npm",
-      [
-        "pack",
-        input.packageSpec,
-        "--ignore-scripts",
-        "--json",
-        "--pack-destination",
-        input.destination,
-      ],
-      { quiet: true },
-    ).stdout;
+    const output = run("npm", [
+      "pack",
+      input.packageSpec,
+      "--ignore-scripts",
+      "--json",
+      "--pack-destination",
+      input.destination,
+    ]).stdout;
     const packed = resolveNpmPackTarballFilename(JSON.parse(output));
     const tgzPath = path.join(input.destination, packed);
     const version = await packageVersionFromTgz(tgzPath);
@@ -165,29 +151,24 @@ export async function packOpenClaw(input: {
 
   return await withPackageLock(path.join(tmpdir(), "openclaw-parallels-build.lock"), async () => {
     await ensureCurrentBuildUnlocked({
-      checkDirty: true,
       requireControlUi: input.requireControlUi,
     });
-    const shortHead = run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim();
+    const shortHead = run("git", ["rev-parse", "--short", "HEAD"]).stdout.trim();
     const tgzPath = path.join(input.destination, `openclaw-main-${shortHead}.tgz`);
     // The canonical helper inventories the package, bundles private workspace runtime code,
     // and rejects tarballs that still depend on unpublished workspace packages.
-    const packedPath = run(
-      "node",
-      [
-        "scripts/package-openclaw-for-docker.mjs",
-        "--allow-unreleased-changelog",
-        "--skip-build",
-        "--source-dir",
-        repoRoot,
-        "--output-dir",
-        input.destination,
-        "--output-name",
-        path.basename(tgzPath),
-        "--pnpm-pack",
-      ],
-      { quiet: true },
-    ).stdout.trim();
+    const packedPath = run("node", [
+      "scripts/package-openclaw-for-docker.mjs",
+      "--allow-unreleased-changelog",
+      "--skip-build",
+      "--source-dir",
+      repoRoot,
+      "--output-dir",
+      input.destination,
+      "--output-name",
+      path.basename(tgzPath),
+      "--pnpm-pack",
+    ]).stdout.trim();
     if (path.resolve(packedPath) !== path.resolve(tgzPath)) {
       die(`package helper wrote an unexpected tarball: ${packedPath}`);
     }

@@ -101,6 +101,8 @@ export function adoptRuntimeChannelRegistrations(
     if (
       !record?.enabled ||
       !donorRecord ||
+      // The borrowing projection already bound this registration to the target lifetime.
+      record === donorRecord ||
       !local?.acceptingCalls ||
       !runtime?.acceptingCalls ||
       !registration ||
@@ -119,8 +121,5 @@ export function adoptRuntimeChannelRegistrations(
     changed = true;
     return { ...scoped, borrowedRuntimeRecord: donorRecord };
   });
-  if (!source.isCurrent()) {
-    throw new Error("Channel runtime owner changed during prepared registry admission");
-  }
   return changed ? { ...target, channels } : target;
 }

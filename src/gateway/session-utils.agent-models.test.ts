@@ -1,8 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
-import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { getSessionDefaults } from "./session-utils-model.js";
+import { prepareOperatorModelPolicyPresentation } from "./operator-model-presentation.js";
 import { listAgentsForGateway } from "./session-utils-store.js";
 import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
 
@@ -25,153 +24,136 @@ beforeEach(() => {
 
 afterAll(closeSessionSqliteDatabasesForTest);
 
-describe("listAgentsForGateway model identity", () => {
-  test.each([
-    {
-      shared: "local-utility/shared@local-utility:setup",
-      ops: "local-utility/ops@local-utility:ops",
+test("projects welcome metadata only for its configured agent", async () => {
+  const { agents } = await listAgentsForGateway({
+    agents: {
+      entries: {
+        briefing: {
+          description: " Follows your repositories. ",
+          recommendedPrompts: ["Set up a repository", "Brief me"],
+        },
+        plain: {},
+      },
     },
-    { shared: "helper@local-utility:setup", ops: "helper@local-utility:ops" },
-    { shared: "helper", ops: "helper" },
-  ])(
-    "separates canonical utility availability from primary readiness: $shared",
-    async (utility) => {
-      const cfg: OpenClawConfig = {
+  });
+  expect(agents.find((agent) => agent.id === "briefing")).toMatchObject({
+    description: "Follows your repositories.",
+    recommendedPrompts: ["Set up a repository", "Brief me"],
+  });
+  const plain = agents.find((agent) => agent.id === "plain");
+  expect(plain).not.toHaveProperty("description");
+  expect(plain).not.toHaveProperty("recommendedPrompts");
+});
+
+type ModelCase = {
+  name: string;
+  cfg: OpenClawConfig;
+  expected: { id: string; primary?: string; utility?: string; fallbacks?: string[] }[];
+  ready?: string;
+};
+
+describe("listAgentsForGateway model identity", () => {
+  test.each<ModelCase>([
+    {
+      name: "canonical utility and primary readiness",
+      cfg: {
         meta: { migrations: { utilityModelSeparation: true } },
         agents: {
           defaults: {
-            utilityModel: utility.shared,
+            utilityModel: "helper@local-utility:setup",
             models: { "local-utility/shared": { alias: "helper" } },
           },
           entries: {
-            main: { default: true },
+            main: {},
             ops: {
               model: {
                 primary: "openai/gpt-5.5@openai:primary",
                 fallbacks: ["openai/gpt-5.4@openai:backup"],
               },
-              utilityModel: utility.ops,
+              utilityModel: "helper@local-utility:ops",
               models: { "local-utility/ops": { alias: "helper" } },
             },
             disabled: { utilityModel: "" },
           },
         },
-      };
-      const original = structuredClone(cfg);
-
-      const { agents } = await listAgentsForGateway(cfg);
-      const main = agents.find((agent) => agent.id === "main");
-      const ops = agents.find((agent) => agent.id === "ops");
-      const disabled = agents.find((agent) => agent.id === "disabled");
-
-      expect(main?.utilityModel).toBe("local-utility/shared");
-      expect(main?.model?.primary).toBeUndefined();
-      expect(ops?.utilityModel).toBe("local-utility/ops");
-      expect(ops?.model).toEqual({
-        primary: "openai/gpt-5.5",
-        fallbacks: ["openai/gpt-5.4"],
-      });
-      expect(disabled?.utilityModel).toBeUndefined();
-      expect(disabled?.model?.primary).toBeTruthy();
-      expect(cfg).toEqual(original);
+      },
+      expected: [
+        { id: "main", utility: "local-utility/shared" },
+        {
+          id: "ops",
+          primary: "openai/gpt-5.5",
+          fallbacks: ["openai/gpt-5.4"],
+          utility: "local-utility/ops",
+        },
+        { id: "disabled" },
+      ],
+      ready: "disabled",
     },
-  );
-
-  test.each(["local-utility/small@local:utility", "helper@local:utility"])(
-    "preserves the legacy Gateway primary for a sole provider matching utility %s",
-    async (utilityModel) => {
-      const cfg: OpenClawConfig = {
+    {
+      name: "model-owned suffix",
+      cfg: {
         agents: {
-          defaults: {
-            utilityModel,
-            models: { "local-utility/small": { alias: "helper" } },
-          },
-          entries: {
-            main: { default: true },
-            ops: {
-              utilityModel: "worker-helper@local:ops",
-              models: { "local-utility/small": { alias: "worker-helper" } },
-            },
-            disabled: { utilityModel: "" },
-          },
+          defaults: { model: { primary: "lmstudio/gemma-4-31b-it@q8_0@lmstudio:setup-fake" } },
+          entries: { main: {} },
         },
-        models: {
-          providers: {
-            "local-utility": {
-              baseUrl: "http://127.0.0.1:9/v1",
-              models: [
-                makeProviderModelFixture({
-                  id: "small",
-                  provider: "local-utility",
-                  api: "openai-completions",
-                  baseUrl: "http://127.0.0.1:9/v1",
-                }),
-              ],
-            },
-          },
-        },
-      };
-      const original = structuredClone(cfg);
-      const { agents } = await listAgentsForGateway(cfg);
-
-      for (const id of ["main", "ops", "disabled"]) {
-        expect(agents.find((agent) => agent.id === id)?.model?.primary).toBe("local-utility/small");
-      }
-      expect(agents.find((agent) => agent.id === "main")?.utilityModel).toBe("local-utility/small");
-      expect(agents.find((agent) => agent.id === "ops")?.utilityModel).toBe("local-utility/small");
-      expect(agents.find((agent) => agent.id === "disabled")?.utilityModel).toBeUndefined();
-      expect(cfg).toEqual(original);
+      },
+      expected: [{ id: "main", primary: "lmstudio/gemma-4-31b-it@q8_0" }],
     },
-  );
+  ])("projects $name without mutating config", async ({ cfg, expected, ready }) => {
+    const original = structuredClone(cfg);
+    const { agents } = await listAgentsForGateway(cfg);
+    for (const { id, primary, utility, fallbacks } of expected) {
+      const agent = agents.find((row) => row.id === id);
+      expect(agent?.utilityModel).toBe(utility);
+      if (id === ready) {
+        expect(agent?.model?.primary).toBeTruthy();
+      } else {
+        expect(agent?.model).toEqual({
+          ...(primary ? { primary } : {}),
+          ...(fallbacks ? { fallbacks } : {}),
+        });
+      }
+    }
+    expect(cfg).toEqual(original);
+  });
+});
 
-  test("listAgentsForGateway projects a profile-qualified default as canonical model identity", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.6-sol@openai:setup-fake",
-            fallbacks: ["anthropic/claude-sonnet-4-6@anthropic:backup"],
-          },
-        },
-        list: [{ id: "main", default: true }],
+describe("thinking level an agent override falls back to", () => {
+  // Global Low, a shared per-model param of High, and coder's own Medium.
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: "openai/gpt-5.5",
+        thinkingDefault: "low",
+        models: { "openai/gpt-5.5": { params: { thinking: "high" } } },
       },
-    } as OpenClawConfig;
-    const catalog = [
-      {
-        provider: "openai",
-        id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
-        reasoning: true,
-      },
-    ];
+      entries: { main: {}, coder: { thinkingDefault: "medium" } },
+    },
+  };
 
-    const result = await listAgentsForGateway(cfg, catalog);
-    const defaults = getSessionDefaults(cfg, catalog);
-
-    expect(result.agents[0]?.model).toEqual({
-      primary: "openai/gpt-5.6-sol",
-      fallbacks: ["anthropic/claude-sonnet-4-6"],
+  test("is reported only for agents with their own thinkingDefault", async () => {
+    const { agents } = await listAgentsForGateway(cfg);
+    const row = (id: string) => agents.find((agent) => agent.id === id);
+    // Clearing coder's override resolves the per-model param before the global default.
+    expect(row("coder")).toMatchObject({
+      thinkingDefault: "medium",
+      thinkingInheritedDefault: "high",
     });
-    expect(result.agents[0]?.thinkingLevels).toEqual(defaults.thinkingLevels);
-    expect(result.agents[0]?.thinkingDefault).toBe(defaults.thinkingDefault);
+    expect(row("main")).toMatchObject({ thinkingDefault: "high" });
+    expect(row("main")).not.toHaveProperty("thinkingInheritedDefault");
   });
 
-  test.each([
-    ["custom/vertex-ai_claude-haiku-4-5@20251001", "custom/vertex-ai_claude-haiku-4-5@20251001"],
-    [
-      "custom/vertex-ai_claude-haiku-4-5@20251001@custom:setup-fake",
-      "custom/vertex-ai_claude-haiku-4-5@20251001",
-    ],
-    ["lmstudio/gemma-4-31b-it@q8_0", "lmstudio/gemma-4-31b-it@q8_0"],
-    ["lmstudio/gemma-4-31b-it@q8_0@lmstudio:setup-fake", "lmstudio/gemma-4-31b-it@q8_0"],
-  ])("listAgentsForGateway preserves model-owned @ suffixes in %s", async (primary, expected) => {
-    const cfg = {
-      agents: {
-        defaults: { model: { primary } },
-        list: [{ id: "main", default: true }],
-      },
-    } as OpenClawConfig;
-
-    expect((await listAgentsForGateway(cfg)).agents[0]?.model?.primary).toBe(expected);
+  test("is dropped by a model-restricted roster, which reports the override as thinkingDefault", async () => {
+    const { agents } = await listAgentsForGateway(cfg);
+    const coder = agents.find((agent) => agent.id === "coder")!;
+    // The policy permits the configured model; the projection still resolves its own defaults.
+    const presentation = prepareOperatorModelPolicyPresentation({
+      cfg,
+      policy: { models: [], allows: () => true },
+    })!;
+    const projected = presentation.forAgent("coder").agent(coder);
+    expect(projected).not.toHaveProperty("thinkingInheritedDefault");
+    // The UI receives the override here, so it must not read it as the inherited level.
+    expect(projected.thinkingDefault).toBe("medium");
   });
 });
