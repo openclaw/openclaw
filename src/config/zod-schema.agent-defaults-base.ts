@@ -3,6 +3,7 @@ import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   AgentCompactionMaxSummaryCharsSchema,
+  AgentCompactionMaxSummaryReserveTokensSchema,
   AgentModelMapSchema,
   AgentModelPolicySchema,
   WorkspaceFileModeSchema,
@@ -150,6 +151,8 @@ export const AgentDefaultsBaseSchema = z.strictObject({
       keepRecentTokens: z.number().int().positive().optional(),
       /** Maximum persisted client-side summary characters. Default: 16000. */
       maxSummaryChars: AgentCompactionMaxSummaryCharsSchema.optional(),
+      /** Maximum reserve tokens for safeguard summary requests. Default: 20000. */
+      maxSummaryReserveTokens: AgentCompactionMaxSummaryReserveTokensSchema.optional(),
       /** Identifier-preservation instruction policy for compaction summaries. */
       identifierPolicy: z.union([z.literal("strict"), z.literal("off")]).optional(),
       /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */

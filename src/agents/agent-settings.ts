@@ -26,10 +26,13 @@ export function applyAgentCompactionSettingsFromConfig(params: {
   // prepared manager; same-manager resource reloads reuse cfg and reapply explicit values.
   const configuredEnabled = compactionCfg?.enabled;
 
-  const maxSummaryChars =
-    (params.cfg && params.agentId
-      ? resolveAgentConfig(params.cfg, params.agentId)?.compaction?.maxSummaryChars
-      : undefined) ?? compactionCfg?.maxSummaryChars;
+  const agentCompactionCfg =
+    params.cfg && params.agentId
+      ? resolveAgentConfig(params.cfg, params.agentId)?.compaction
+      : undefined;
+  const maxSummaryChars = agentCompactionCfg?.maxSummaryChars ?? compactionCfg?.maxSummaryChars;
+  const maxSummaryReserveTokens =
+    agentCompactionCfg?.maxSummaryReserveTokens ?? compactionCfg?.maxSummaryReserveTokens;
   const configuredKeepRecentTokens = compactionCfg?.keepRecentTokens;
   const contextTokenBudget = floorPositiveFiniteNumber(params.contextTokenBudget);
   const requestedReserveTokens = Math.max(
@@ -46,10 +49,17 @@ export function applyAgentCompactionSettingsFromConfig(params: {
         });
   const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
 
-  const overrides: { reserveTokens?: number; keepRecentTokens?: number; maxSummaryChars?: number } =
-    {};
+  const overrides: {
+    reserveTokens?: number;
+    keepRecentTokens?: number;
+    maxSummaryChars?: number;
+    maxSummaryReserveTokens?: number;
+  } = {};
   if (maxSummaryChars !== undefined) {
     overrides.maxSummaryChars = maxSummaryChars;
+  }
+  if (maxSummaryReserveTokens !== undefined) {
+    overrides.maxSummaryReserveTokens = maxSummaryReserveTokens;
   }
   if (targetReserveTokens !== currentReserveTokens) {
     overrides.reserveTokens = targetReserveTokens;

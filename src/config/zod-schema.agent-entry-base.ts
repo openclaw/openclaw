@@ -12,6 +12,9 @@ export const WorkspaceFileModeSchema = z.enum(["0600", "0620", "0640", "0660"], 
 /** Persisted client-side summary ceiling; the active model token budget may require less. */
 export const AgentCompactionMaxSummaryCharsSchema = z.number().int().min(1_000).max(200_000);
 
+/** Safeguard summary reserve ceiling; the summary model's output limit still applies. */
+export const AgentCompactionMaxSummaryReserveTokensSchema = z.number().int().min(1_000);
+
 export const AgentRuntimePolicySchema = z
   .strictObject({
     id: z.string().optional(),
@@ -137,6 +140,8 @@ export const AgentEntryBaseSchema = z.strictObject({
     .strictObject({
       /** Override the default persisted client-side summary character ceiling. */
       maxSummaryChars: AgentCompactionMaxSummaryCharsSchema.optional(),
+      /** Override the default safeguard summary reserve ceiling. */
+      maxSummaryReserveTokens: AgentCompactionMaxSummaryReserveTokensSchema.optional(),
     })
     .optional(),
   params: z.record(z.string(), z.unknown()).optional(),

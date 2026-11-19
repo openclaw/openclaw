@@ -4,6 +4,7 @@ import type { ThinkingBudgets, Transport } from "../../llm/types.js";
 
 interface CompactionSettings {
   maxSummaryChars?: number; // default: 16000
+  maxSummaryReserveTokens?: number; // default: 20000 (safeguard summary reserve ceiling)
   enabled?: boolean; // default: true
   reserveTokens?: number; // default: 16384
   keepRecentTokens?: number; // default: 20000

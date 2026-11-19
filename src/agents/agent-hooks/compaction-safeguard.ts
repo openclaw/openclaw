@@ -454,7 +454,11 @@ export async function executeCompactionSafeguard(
       apiKey: authResult.apiKey ?? "",
       headers,
       signal,
-      reserveTokens: resolveSummaryReserveTokens(preparation.settings.reserveTokens, model),
+      reserveTokens: resolveSummaryReserveTokens(
+        preparation.settings.reserveTokens,
+        model,
+        preparation.settings.maxSummaryReserveTokens,
+      ),
       summarizationInstructions,
       thinkingLevel,
       streamFn,

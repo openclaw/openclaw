@@ -42,10 +42,20 @@ export function resolveQualityGuardMaxRetries(value: number | undefined): number
   );
 }
 
-export function resolveSummaryReserveTokens(requestedReserveTokens: number, model: Model): number {
-  // Safeguard owns retained-summary policy, so its summary requests reserve at most 20k output
-  // tokens; generic callers own their output budget.
-  const requested = Math.max(1, Math.min(Math.floor(requestedReserveTokens), 20_000));
+/** Safeguard summary reserve ceiling unless compaction.maxSummaryReserveTokens raises or lowers it. */
+const DEFAULT_MAX_SUMMARY_RESERVE_TOKENS = 20_000;
+
+export function resolveSummaryReserveTokens(
+  requestedReserveTokens: number,
+  model: Model,
+  maxSummaryReserveTokens = DEFAULT_MAX_SUMMARY_RESERVE_TOKENS,
+): number {
+  // Safeguard owns retained-summary policy, so its summary requests reserve at most the configured
+  // ceiling (20k output tokens by default); generic callers own their output budget.
+  const requested = Math.max(
+    1,
+    Math.min(Math.floor(requestedReserveTokens), Math.floor(maxSummaryReserveTokens)),
+  );
   const modelMaxTokens = model.maxTokens;
   if (!Number.isFinite(modelMaxTokens) || modelMaxTokens <= 0) {
     return requested;

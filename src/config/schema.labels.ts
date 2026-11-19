@@ -412,8 +412,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.thinkingLevel": "Compaction Thinking Level",
   "agents.defaults.compaction.keepRecentTokens": "Compaction Keep Recent Tokens",
   "agents.defaults.compaction.maxSummaryChars": "Compaction Summary Max Characters",
+  "agents.defaults.compaction.maxSummaryReserveTokens": "Compaction Summary Max Reserve Tokens",
   "agents.entries.*.compaction": "Agent Compaction",
   "agents.entries.*.compaction.maxSummaryChars": "Agent Compaction Summary Max Characters",
+  "agents.entries.*.compaction.maxSummaryReserveTokens":
+    "Agent Compaction Summary Max Reserve Tokens",
   "agents.defaults.compaction.identifierPolicy": "Compaction Identifier Policy",
   "agents.defaults.compaction.recentTurnsPreserve": "Compaction Preserve Recent Turns",
   "agents.defaults.compaction.qualityGuard": "Compaction Quality Guard",
