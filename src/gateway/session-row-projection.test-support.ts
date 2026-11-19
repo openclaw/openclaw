@@ -5,7 +5,6 @@ import {
 } from "../../packages/session-url-contract/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import {
   assignSessionOwner,
@@ -51,7 +50,6 @@ import {
   projectGatewaySessionRunState,
   resolveGatewaySessionDisplayName,
 } from "./session-utils-display.js";
-import { listProjectedSessions } from "./session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
   materializeSessionRow,
@@ -84,11 +82,7 @@ export function seedProjectionRow(
   };
 }
 
-export function seedAgentOwnedSession(
-  key: string,
-  owner: string,
-  fields: Partial<SessionEntry> = {},
-) {
+function seedAgentOwnedSession(key: string, owner: string, fields: Partial<SessionEntry> = {}) {
   const seeded = seedProjectionRow(key, fields);
   assignSessionOwner(seeded.scope, {
     owner: { type: "agent", id: owner },
@@ -566,7 +560,11 @@ export function createResidentSessionRowReader() {
   };
 }
 
-export async function verifyConfiguredAgentOwnerFacets(expect: typeof import("vitest").expect) {
+export async function verifyConfiguredAgentOwnerFacets(
+  expect: typeof import("vitest").expect,
+  listProjectedSessions: typeof import("./session-utils-list.js").listProjectedSessions,
+  setRuntimeConfigSnapshot: typeof import("../config/runtime-snapshot.js").setRuntimeConfigSnapshot,
+) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     let cfg: OpenClawConfig = {
       agents: { entries: { main: {}, owner: {} } },

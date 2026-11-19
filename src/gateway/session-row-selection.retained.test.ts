@@ -683,7 +683,7 @@ describe("session selection retained boundaries", () => {
   });
 
   it("refreshes agent owner facets when the sidebar roster changes", async () => {
-    await verifyConfiguredAgentOwnerFacets(expect);
+    await verifyConfiguredAgentOwnerFacets(expect, listProjectedSessions, setRuntimeConfigSnapshot);
   });
 
   it("selects canonical participant involvement without reading display fields", () => {
