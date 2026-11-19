@@ -986,6 +986,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/dreaming-startup-admission.test.ts",
   "src/state/openclaw-agent-canonical-validation-schema.test.ts",
   "src/state/openclaw-agent-latest-stable-upgrade.test.ts",
+  "src/state/openclaw-agent-v44-postgres-upgrade.evidence.test.ts",
   "src/state/openclaw-agent-json-predicate-schema.test.ts",
   "src/state/openclaw-agent-db-maintenance.test.ts",
   "src/state/openclaw-agent-db-maintenance.schema-renewal.test.ts",
