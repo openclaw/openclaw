@@ -642,6 +642,27 @@ export function createOpenClawIdService(params: {
       (queue = queue.then(restartForRebind, restartForRebind)).then(() => status),
   });
 
+  const resetOwner = createServiceReset({
+    getStateDir: params.getStateDir,
+    getConfig: params.getConfig,
+    getAuthority,
+    gatewayKey,
+    applyEvents,
+    publish: publishReported,
+    restartRemoteAccess: () =>
+      (queue = queue.then(restartForRebind, restartForRebind)).then(() => status),
+    log: params.log,
+  });
+
+  // Re-binds and resets stage, cancel and promote the same `.next` key files, so their steps
+  // run one at a time: a cancel can't delete the key a reset is committing to.
+  let ceremonyLane: Promise<unknown> = Promise.resolve();
+  const inCeremonyLane = <T>(step: () => Promise<T>): Promise<T> => {
+    const result = ceremonyLane.then(step, step);
+    ceremonyLane = result.catch(() => {});
+    return result;
+  };
+
   localPrincipals.publish();
 
   return {
@@ -761,19 +782,11 @@ export function createOpenClawIdService(params: {
       return { ...result, ...(publication ? { publication } : {}) };
     },
 
-    rebind: rebindOwner.run,
+    rebind: (...args: Parameters<typeof rebindOwner.run>) =>
+      inCeremonyLane(() => rebindOwner.run(...args)),
 
-    resetOwner: createServiceReset({
-      getStateDir: params.getStateDir,
-      getConfig: params.getConfig,
-      getAuthority,
-      gatewayKey,
-      applyEvents,
-      publish: publishReported,
-      restartRemoteAccess: () =>
-        (queue = queue.then(restartForRebind, restartForRebind)).then(() => status),
-      log: params.log,
-    }),
+    resetOwner: (...args: Parameters<typeof resetOwner>) =>
+      inCeremonyLane(() => resetOwner(...args)),
 
     /** Retries publication with a code (after linking, or `needs_link_code`) held until success. */
     async publish(enrollmentCode?: string): Promise<PublishOutcome | undefined> {

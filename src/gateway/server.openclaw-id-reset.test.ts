@@ -39,6 +39,8 @@ const CODE = "LINK-CODE-1";
 
 type Recorded = { method: string; url: string; keyid: string | undefined; body: any };
 const recorded: Recorded[] = [];
+// What the stand-in Discovery publishes for the claw: its stored root and binding.
+let publishedDescriptor: { root_pub?: unknown; binding?: unknown } = {};
 let discovery: http.Server;
 let discoveryUrl: string;
 
@@ -61,7 +63,9 @@ beforeAll(async () => {
         res.statusCode = known ? 200 : 404;
         res.end(
           JSON.stringify(
-            known ? { descriptor: {} } : { error: { code: "not_found", message: "not found" } },
+            known
+              ? { descriptor: publishedDescriptor }
+              : { error: { code: "not_found", message: "not found" } },
           ),
         );
         return;
@@ -99,7 +103,9 @@ async function storeLinkedClaw() {
     path.join(claw.stateDir, "openclaw-id", "gateway.key"),
     path.join(keyDir, "gateway.key"),
   );
-  return { claw, before: (await store.read())! };
+  const before = (await store.read())!;
+  publishedDescriptor = { root_pub: before.authority!.anchor.root_pub, binding: before.binding };
+  return { claw, before };
 }
 
 async function configure() {

@@ -138,9 +138,9 @@ can reset:
 The reset then runs in an interactive terminal:
 
 1. The command lists what the reset removes and asks you to type the claw's name.
-2. It makes a new recovery kit on this computer. The new owner key signs the claw's next
-   binding, and the kit is printed once. It is never stored, passed as an argument or written
-   to JSON output.
+2. It makes a new recovery kit on this computer and prints it once, before anything changes.
+   The kit is never stored, passed as an argument or written to JSON output. Type `saved` once
+   you have saved it; the new owner key then signs the claw's next binding.
 3. The Gateway removes every owner device, person, node and invite, closes every remote session
    and revokes the sign-ins issued over the tunnel. Access on this computer is unaffected.
 4. The claw keeps its id, address, connection key and data, and gets a new Gateway key. The
@@ -157,14 +157,16 @@ it takes the link code from that account. The browser you reset from becomes the
 device under the new key.
 
 A wrong, used or expired code, or one from another account, is refused with `code_invalid` and
-changes nothing. A reset is refused while a move to new keys is not published yet
+changes nothing. So is a reset when Discovery publishes a different owner key or binding than
+this computer has, for example after restoring an older backup (`binding_superseded`): bring the
+computer up to date with `openclaw id rebind` first. A reset is refused while a move to new keys is not published yet
 (`rebind_unpublished`: run `openclaw id publish --code <link-code>` first), and a move to new
 keys, or another reset, is refused while a reset is not published yet (`reset_unpublished`).
 If the publication fails after the reset, the Gateway keeps retrying with the code while it
 runs; after a restart, run `openclaw id publish --code <link-code>`.
 
-If the command can't confirm the outcome, it prints the kit anyway and exits with code **2**:
-keep the kit until `openclaw id status` shows which owner key the claw has.
+If the command can't confirm the outcome, or a step after the stored reset fails, it says so and
+exits with code **2**: keep the kit until `openclaw id status` shows which owner key the claw has.
 
 ## Publish
 

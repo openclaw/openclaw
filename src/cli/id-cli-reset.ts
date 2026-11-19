@@ -26,6 +26,8 @@ type ResetResult = {
   removed: ResetRemoved;
   /** Discovery's answer to the Gateway's publication; null when it couldn't be read. */
   publication: { state?: string; code?: string } | null;
+  /** A step after the stored reset failed. */
+  followUpError?: string;
 };
 
 /** The name the owner picked when linking: the hostname's first label without the account tag. */
@@ -58,8 +60,8 @@ function publicationLine(result: ResetResult): string {
 }
 
 /**
- * Runs the reset: check the owner account's code and confirm by name, make the kit, commit,
- * then show the kit once.
+ * Runs the reset: check the owner account's code and confirm by name, make the kit and show it,
+ * and commit only after the operator says it is saved, so a lost answer never loses the kit.
  */
 export async function runReset(opts: ResetOpts, readCode: () => Promise<string>): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -97,13 +99,23 @@ export async function runReset(opts: ResetOpts, readCode: () => Promise<string>)
     },
     root,
   );
-  const kitLines = [
-    "",
-    "New recovery kit. It is shown only now and is not stored on this computer:",
-    `  Recovery code:   ${kit}`,
-    `  Recovery kit ID: ${displayFingerprint(await fingerprint(rootPub))}`,
-    "Anyone with this kit can control this claw. Save it somewhere safe.",
-  ];
+  process.stdout.write(
+    `${[
+      "",
+      "New recovery kit. It is shown only now and is not stored on this computer:",
+      `  Recovery code:   ${kit}`,
+      `  Recovery kit ID: ${displayFingerprint(await fingerprint(rootPub))}`,
+      "Anyone with this kit can control this claw. Save it somewhere safe.",
+      "",
+    ].join("\n")}\n`,
+  );
+  const saved = (await promptText('Type "saved" once the kit is saved to reset owner access: '))
+    .trim()
+    .toLowerCase();
+  if (saved !== "saved") {
+    process.stdout.write("Not reset. Discard the kit above; it was never used.\n");
+    return;
+  }
   let result: ResetResult;
   try {
     // SAFETY: reset_commit answers with ResetCommitResult (service-reset.ts).
@@ -114,27 +126,30 @@ export async function runReset(opts: ResetOpts, readCode: () => Promise<string>)
       code,
     })) as ResetResult;
   } catch (error) {
-    // A Gateway refusal changed nothing. Any other failure (a dropped connection, a timeout)
-    // may follow a stored reset, and this kit is then the only way back in for owners.
-    const { isGatewayClientRequestError } = await import("../gateway/call.js");
-    if (!isGatewayClientRequestError(error)) {
-      process.stdout.write(
-        `${["The reset may have been applied. Keep this kit until openclaw id status shows which owner key the claw has.", ...kitLines].join("\n")}\n`,
-      );
-      process.exitCode = 2;
-      return;
+    // Only the reset handler's own refusals carry a code, and they precede any change. Anything
+    // else (a dropped connection, a timeout, a dispatcher error) may follow a stored reset.
+    if (typeof (error as { details?: { code?: unknown } }).details?.code === "string") {
+      process.stdout.write("Not reset. Discard the kit above; it was never used.\n");
+      throw error;
     }
-    throw error;
+    process.stdout.write(
+      "The reset may have been applied. Keep the kit above until openclaw id status shows which owner key the claw has.\n",
+    );
+    process.exitCode = 2;
+    return;
   }
   const { ownerDevices, members, nodes, invites } = result.removed;
   process.stdout.write(
     `${[
       "Owner access reset.",
       `Removed ${ownerDevices} owner device(s), ${members} person(s), ${nodes} node(s) and ${invites} invite(s).`,
-      publicationLine(result),
-      ...kitLines,
-      "",
-      "Set up your browsers again with this kit: open the claw's address and choose Use a recovery kit.",
+      result.followUpError
+        ? `A step after the reset failed (${sanitizeTerminalText(result.followUpError)}); run openclaw id status.`
+        : publicationLine(result),
+      "Set up your browsers again with the kit above: open the claw's address and choose Use a recovery kit.",
     ].join("\n")}\n`,
   );
+  if (result.followUpError) {
+    process.exitCode = 2;
+  }
 }

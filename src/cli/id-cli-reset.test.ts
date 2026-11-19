@@ -3,7 +3,8 @@ import type { ResetPreparation } from "../gateway/openclaw-id/reset-operations.j
 
 const gateway = vi.hoisted(() => ({ call: vi.fn() }));
 vi.mock("./gateway-rpc.js", () => ({ callGatewayFromCli: gateway.call }));
-vi.mock("./prompt.js", () => ({ promptText: vi.fn(async () => "studio") }));
+const answers = vi.hoisted(() => ({ queue: [] as string[] }));
+vi.mock("./prompt.js", () => ({ promptText: vi.fn(async () => answers.queue.shift() ?? "") }));
 
 const prep: ResetPreparation = {
   claw_id: "0123456789abcdef0123456789abcdef",
@@ -30,6 +31,8 @@ beforeEach(() => {
     return true;
   });
   process.exitCode = undefined;
+  // The claw's name, then confirmation that the shown kit is saved.
+  answers.queue = ["studio", "saved"];
 });
 
 afterEach(() => {
@@ -42,7 +45,7 @@ afterEach(() => {
 const params = () => gateway.call.mock.calls.map((call) => call[2] as Record<string, unknown>);
 
 describe("openclaw id reset", () => {
-  it("sends the owner account's code with both steps and shows the new kit once", async () => {
+  it("shows the new kit once, before the commit, and sends the owner account's code with both steps", async () => {
     gateway.call.mockResolvedValueOnce(prep).mockResolvedValueOnce({
       ok: true,
       reset: true,
@@ -66,8 +69,7 @@ describe("openclaw id reset", () => {
 
   it("changes nothing and shows no kit when the name doesn't match", async () => {
     gateway.call.mockResolvedValueOnce(prep);
-    const prompt = await import("./prompt.js");
-    vi.mocked(prompt.promptText).mockResolvedValueOnce("someone-else");
+    answers.queue = ["someone-else"];
     const { runReset } = await import("./id-cli-reset.js");
     await runReset({}, async () => "LINK-CODE-1");
     expect(params()).toEqual([{ action: "reset_prepare", code: "LINK-CODE-1" }]);
@@ -75,7 +77,16 @@ describe("openclaw id reset", () => {
     expect(output.join("")).not.toMatch(/OCK1-/);
   });
 
-  it("shows no kit for a Gateway refusal, but keeps it when the outcome is unknown", async () => {
+  it("commits nothing until the operator says the kit is saved", async () => {
+    gateway.call.mockResolvedValueOnce(prep);
+    answers.queue = ["studio", "not yet"];
+    const { runReset } = await import("./id-cli-reset.js");
+    await runReset({}, async () => "LINK-CODE-1");
+    expect(params()).toEqual([{ action: "reset_prepare", code: "LINK-CODE-1" }]);
+    expect(output.join("")).toContain("Not reset. Discard the kit above; it was never used.");
+  });
+
+  it("tells a refusal from an unknown outcome, which keeps the kit already shown", async () => {
     const refusal = Object.assign(new Error("the link code is unknown"), {
       name: "GatewayClientRequestError",
       gatewayCode: "INVALID_REQUEST",
@@ -85,13 +96,36 @@ describe("openclaw id reset", () => {
     gateway.call.mockResolvedValueOnce(prep).mockRejectedValueOnce(refusal);
     const { runReset } = await import("./id-cli-reset.js");
     await expect(runReset({}, async () => "LINK-CODE-1")).rejects.toBe(refusal);
-    expect(output.join("")).not.toMatch(/OCK1-/);
+    expect(output.join("")).toContain("Discard the kit above; it was never used.");
 
+    // A dispatcher error without a refusal code may follow a stored reset.
     output.length = 0;
-    gateway.call.mockResolvedValueOnce(prep).mockRejectedValueOnce(new Error("socket closed"));
+    answers.queue = ["studio", "saved"];
+    const unavailable = Object.assign(new Error("unavailable"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+    });
+    gateway.call.mockResolvedValueOnce(prep).mockRejectedValueOnce(unavailable);
     await runReset({}, async () => "LINK-CODE-1");
-    expect(output.join("")).toContain("The reset may have been applied.");
-    expect(output.join("").match(/OCK1-[A-Z0-9-]+/g)).toHaveLength(1);
+    const text = output.join("");
+    expect(text.match(/OCK1-[A-Z0-9-]+/g)).toHaveLength(1);
+    expect(text.indexOf("OCK1-")).toBeLessThan(text.indexOf("The reset may have been applied."));
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("reports a stored reset whose follow-up failed, with exit code 2", async () => {
+    gateway.call.mockResolvedValueOnce(prep).mockResolvedValueOnce({
+      ok: true,
+      reset: true,
+      bindingSeq: 2,
+      removed: prep.removes,
+      publication: null,
+      followUpError: "pairings unavailable",
+    });
+    const { runReset } = await import("./id-cli-reset.js");
+    await runReset({}, async () => "LINK-CODE-1");
+    expect(output.join("")).toContain("A step after the reset failed (pairings unavailable)");
     expect(process.exitCode).toBe(2);
   });
 });

@@ -5,9 +5,15 @@
 // tokens and publishes the new root, K_gw' and the current K_gw's RootReset with the code.
 //
 // Both steps first check the code with Discovery (the published-descriptor read, which does not
-// spend it), so a reset never commits on this computer when Discovery would refuse to publish
+// spend it) and that Discovery still publishes this computer's root and binding, which the reset
+// evidence must continue. So a reset never commits here when Discovery would refuse to publish
 // it: that would cut every remote device off with nothing to reconnect to.
-import type { AuthorityEvent, Channel } from "../../../packages/openclaw-id-protocol/src/index.js";
+import {
+  canonicalize,
+  type AuthorityEvent,
+  type Channel,
+  type JsonValue,
+} from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import type { AuthorityRefusal } from "./authority-result.js";
 import type { OpenClawIdAuthority } from "./authority.js";
@@ -25,6 +31,8 @@ export type ResetCommitResult = {
   removed: ResetRemoved;
   removal: OpenClawIdRemovalSummary | null;
   publication: PublishOutcome | null;
+  /** A step after the stored reset failed; the reset stays, `openclaw id status` shows the rest. */
+  followUpError?: string;
 };
 
 /** What a reset step takes: the new root's statements (commit) and the owner account's code. */
@@ -73,12 +81,14 @@ export function createServiceReset(deps: {
       import("./discovery-client.js"),
     ]);
     const signer = await loadStagedGatewaySigner(deps.getStateDir());
+    let published: unknown;
     try {
-      await createDiscoveryClient({ baseUrl: discoveryUrl, signer }).getPublishedDescriptor(
-        record.claw_id,
-        code,
-      );
-      return undefined;
+      published = (
+        await createDiscoveryClient({ baseUrl: discoveryUrl, signer }).getPublishedDescriptor(
+          record.claw_id,
+          code,
+        )
+      ).descriptor;
     } catch (error) {
       // SAFETY: error is a thrown value; an optional code property is compared with ===.
       const failure = (error as { code?: unknown }).code;
@@ -93,6 +103,19 @@ export function createServiceReset(deps: {
             `couldn't check the link code with Discovery: ${error instanceof Error ? error.message : String(error)}`,
           );
     }
+    // SAFETY: an untrusted object; only its root and binding are compared, as canonical JSON.
+    const theirs = (published ?? {}) as { root_pub?: unknown; binding?: unknown };
+    if (
+      theirs.root_pub !== record.authority?.anchor.root_pub ||
+      canonicalize((theirs.binding ?? null) as JsonValue) !==
+        canonicalize(record.binding as unknown as JsonValue)
+    ) {
+      return refusal(
+        "binding_superseded",
+        "Discovery publishes a different owner key or binding for this claw than this computer has (an older backup, or a move on another computer). Bring this computer up to date with openclaw id rebind first, then reset",
+      );
+    }
+    return undefined;
   };
 
   return async (
@@ -112,12 +135,17 @@ export function createServiceReset(deps: {
     }
     const { stageGatewayKey } = await import("./gateway-key.js");
     const staged = { kGw: await stageGatewayKey(deps.getStateDir()) };
+    // This computer's own reasons to refuse (an unpublished move or reset) come first.
+    const preparation = await owner.prepareReset(staged);
+    if ("ok" in preparation) {
+      return preparation;
+    }
     const codeRefusal = await checkOwnerCode(owner, input.code);
     if (codeRefusal) {
       return codeRefusal;
     }
     if (action === "prepare") {
-      return await owner.prepareReset(staged);
+      return preparation;
     }
     const key = await deps.gatewayKey.tryLoad();
     if (!key.ok) {
@@ -128,23 +156,36 @@ export function createServiceReset(deps: {
       return result;
     }
     deps.log.info(`openclaw-id: owner access reset (binding ${result.bindingSeq})`);
-    // The publication below is the one the reset's publish_snapshot asks for.
-    const removal = await deps.applyEvents(
-      result.events.filter((event) => event.type !== "publish_snapshot"),
-    );
-    // The stored binding names K_gw' now: the publication signs with it and spends the code.
-    const publication = await deps.publish(input.code!);
-    const status = await deps.restartRemoteAccess();
-    if (status.state === "failed" || status.state === "keys_refused") {
-      deps.log.warn(`openclaw-id: remote access did not restart after the reset: ${status.reason}`);
-    }
-    return {
+    const committed: ResetCommitResult = {
       ok: true,
       reset: true,
       bindingSeq: result.bindingSeq,
       removed: result.removed,
-      removal: removal ?? null,
-      publication: publication ?? null,
+      removal: null,
+      publication: null,
     };
+    // The reset is stored: a failure from here on is reported with it, never as a refusal, so
+    // the caller keeps the new kit.
+    try {
+      // The publication below is the one the reset's publish_snapshot asks for.
+      committed.removal =
+        (await deps.applyEvents(
+          result.events.filter((event) => event.type !== "publish_snapshot"),
+        )) ?? null;
+      // The stored binding names K_gw' now: the publication signs with it and spends the code.
+      committed.publication = (await deps.publish(input.code!)) ?? null;
+      const status = await deps.restartRemoteAccess();
+      if (status.state === "failed" || status.state === "keys_refused") {
+        deps.log.warn(
+          `openclaw-id: remote access did not restart after the reset: ${status.reason}`,
+        );
+      }
+      return committed;
+    } catch (error) {
+      return {
+        ...committed,
+        followUpError: error instanceof Error ? error.message : String(error),
+      };
+    }
   };
 }

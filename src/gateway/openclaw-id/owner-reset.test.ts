@@ -41,9 +41,11 @@ const config = {
 
 type DiscoveryCall = { method: string; path: string; body: Record<string, unknown> };
 
-// A Discovery that knows CODE as the owner account's code and accepts every publication. The
-// tunnel never starts here: remote access restarts after a reset and fails, which is reported.
+// A Discovery that knows CODE as the owner account's code, publishes `discoveryHas` (set from
+// each claw's stored root and binding) and accepts every publication. The tunnel never starts
+// here: remote access restarts after a reset and fails, which is reported.
 let discovery: DiscoveryCall[];
+let discoveryHas: { root_pub?: unknown; binding?: unknown } = {};
 beforeEach(() => {
   discovery = [];
   vi.spyOn(tunnelRuntime, "startTunnelRuntime").mockRejectedValue(new Error("no tunnel in tests"));
@@ -54,7 +56,7 @@ beforeEach(() => {
     discovery.push({ method: init?.method ?? "GET", path: url.pathname, body });
     if (url.pathname.endsWith("/published-descriptor")) {
       return body.code === CODE
-        ? Response.json({ descriptor: {} })
+        ? Response.json({ descriptor: discoveryHas })
         : Response.json({ error: { code: "not_found", message: "not found" } }, { status: 404 });
     }
     return new Response(null, { status: 204 });
@@ -102,6 +104,7 @@ async function populatedClaw() {
   await store.write(record);
   // A fresh authority over the edited record, as after a Gateway restart.
   const authority = createOpenClawIdAuthority(store);
+  discoveryHas = { root_pub: record.authority!.anchor.root_pub, binding: record.binding };
   return { ...claw, authority, store, member, node, before: record };
 }
 
@@ -408,6 +411,59 @@ describe("owner reset", () => {
     ).toMatchObject({ ok: false, code: "not_published" });
   });
 
+  it("is refused, changing nothing, when Discovery publishes another binding than this computer has", async () => {
+    const claw = await populatedClaw();
+    const { service } = serviceFor(claw.authority, config, claw.stateDir);
+    const { input } = await signReset(await prepared(service));
+    // Discovery moved on (a re-bind elsewhere, or this computer was restored from a backup).
+    discoveryHas = {
+      ...discoveryHas,
+      binding: await signStatement(
+        "ServerBinding",
+        { ...claw.before.binding!.body, binding_seq: 2 },
+        claw.root,
+      ),
+    };
+    for (const step of ["prepare", "commit"] as const) {
+      expect(
+        await service.resetOwner(step, "local_operator", { ...input, code: CODE }),
+      ).toMatchObject({ ok: false, code: "binding_superseded" });
+    }
+    expect((await claw.store.read())?.authority).toEqual(claw.before.authority);
+    expect(published()).toEqual([]);
+  });
+
+  it("runs after a queued re-bind cancel, which can't delete the key the reset commits to", async () => {
+    const claw = await populatedClaw();
+    const { service } = serviceFor(claw.authority, config, claw.stateDir);
+    const prep = await prepared(service);
+    const { input } = await signReset(prep);
+    const [reset, cancel] = await Promise.all([
+      service.resetOwner("commit", "local_operator", { ...input, code: CODE }),
+      service.rebind("cancel", "local_operator"),
+    ]);
+    expect(reset).toMatchObject({ ok: true, bindingSeq: 2 });
+    expect(cancel).toEqual({ ok: true });
+    const { loadGatewaySigner } = await import("./gateway-key.js");
+    expect((await loadGatewaySigner(claw.stateDir, prep.k_gw)).pub).toBe(prep.k_gw);
+  });
+
+  it("reports a stored reset with its follow-up failure instead of a refusal", async () => {
+    const claw = await populatedClaw();
+    const { service, effects } = serviceFor(claw.authority, config, claw.stateDir);
+    vi.mocked(effects.removeNodePairings!).mockRejectedValue(new Error("pairings unavailable"));
+    const { input } = await signReset(await prepared(service));
+    expect(
+      await service.resetOwner("commit", "local_operator", { ...input, code: CODE }),
+    ).toMatchObject({
+      ok: true,
+      reset: true,
+      bindingSeq: 2,
+      followUpError: "pairings unavailable",
+    });
+    expect((await claw.store.read())?.authority?.anchor.root_pub).toBe(input.root_pub);
+  });
+
   it("enrolls the resetting browser as the first owner device under the new root", async () => {
     const claw = await populatedClaw();
     const { service } = serviceFor(claw.authority, config, claw.stateDir);
@@ -470,7 +526,7 @@ describe("owner reset", () => {
     // The descriptor write's answer is lost (it may have landed): binding 2 stays unconfirmed.
     vi.mocked(fetch).mockImplementation(async (input) =>
       String(input).endsWith("/published-descriptor")
-        ? Response.json({ descriptor: {} })
+        ? Response.json({ descriptor: discoveryHas })
         : new Response("", { status: 503 }),
     );
     const first = await signReset(await prepared(service));
@@ -511,7 +567,7 @@ describe("owner reset", () => {
     const { service } = serviceFor(fresh.authority, config, fresh.stateDir);
     vi.mocked(fetch).mockImplementation(async (input) =>
       String(input).endsWith("/published-descriptor")
-        ? Response.json({ descriptor: {} })
+        ? Response.json({ descriptor: discoveryHas })
         : new Response("", { status: 503 }),
     );
     const { input } = await signReset(await prepared(service));
