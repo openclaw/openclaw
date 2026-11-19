@@ -112,8 +112,9 @@ The optional **Create Template** action in the agent's left-sidebar row menu
 still invokes the same skill in that agent's existing main chat. Pinned agents
 keep this action in a focused row menu.
 
-The inline review card shows the exact archive files and declared skill, plugin,
-MCP, and automation requirements. Open an item to inspect its contents, or use
+The draft appears as a compact card in chat. Select **Preview** to inspect the
+exact archive files and declared skill, plugin, MCP, and automation requirements
+in the same review dialog used for imports. Open an item to inspect it, or use
 **View all** to inspect the archive files. Review is read-only. To change a name,
 description, file, or requirement, ask the agent to revise its private proposal
 in the same conversation, then inspect the fresh review. The agent's display
@@ -123,11 +124,14 @@ source workspace, memories, or raw conversations. Known private paths and
 credential-like text are rejected. Review the remaining text for personal facts
 and private context.
 
-Sign in with `clawhub login` on the Gateway host. **Publish** uploads the exact
-reviewed artifact using that account. An agent turn cannot authorize publication.
+Sign in with `clawhub login` on the Gateway host. Select **Publish** on the card
+or in the preview dialog to upload the exact reviewed artifact using that
+account. Opening the preview is optional. An agent turn cannot authorize publication.
 The card stays in the conversation and shows **Pending** while ClawHub checks
-the submission; **View submission** opens its ClawHub page. Once the registry
-confirms publication, the card shows **Published** and offers **Copy link**.
+the submission; **View submission** opens its ClawHub page. While pending,
+the open card checks again 30 seconds after each response. Checks stop after
+ClawHub confirms publication or failure. On success, the card shows
+**Published** and offers **Copy link**.
 Others can then discover the Template and Add it as an ordinary agent.
 
 ## Add through the setup helper
