@@ -70,15 +70,14 @@ function expectOriginalCapture(params: {
         .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
         .get("fixture.original"),
     ).toEqual({ value_json: '{"message":"acknowledged before update"}' });
-    expect(
-      original
-        .prepare("SELECT run_id FROM update_runs")
-        .all()
-        .map((row) => row.run_id)
-        .toSorted(),
-    ).toEqual(
-      [params.previousRunId, ...(params.copiedAfterAdmission ? [params.runId] : [])].toSorted(),
+    const runIds = original
+      .prepare("SELECT run_id FROM update_runs")
+      .all()
+      .map((row) => String(row.run_id));
+    expect(new Set(runIds)).toEqual(
+      new Set([params.previousRunId, ...(params.copiedAfterAdmission ? [params.runId] : [])]),
     );
+    expect(runIds).toHaveLength(params.copiedAfterAdmission ? 2 : 1);
   } else {
     expect(captured).toEqual({
       kind: "missing",
