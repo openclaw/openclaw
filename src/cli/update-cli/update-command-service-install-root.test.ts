@@ -74,49 +74,42 @@ async function pnpmStoreLayout() {
   return { previous, next, entry, state, verdict, before, swap };
 }
 
-itOnPosix.each(["kept", "pruned"] as const)(
-  "restarts the stopped service of the same pnpm installation after the update (old store %s)",
-  async (oldStore) => {
+itOnPosix.each([
+  ["old store kept", "restarts"],
+  ["old store pruned", "restarts"],
+  ["another installation", "refuses"],
+  ["an edited definition", "refuses"],
+] as const)(
+  "after a pnpm package update (%s) revalidation %s the stopped service",
+  async (change, outcome) => {
     const layout = await pnpmStoreLayout();
     expect(layout.verdict).toMatchObject({ kind: "owned", refreshDefinition: true });
     await layout.swap();
-    if (oldStore === "pruned") {
-      await fs.rm(path.dirname(path.dirname(layout.previous)), { recursive: true });
-    }
-
-    // The restart names the updated install root; the unit still names the old store path.
-    await expect(
-      revalidateManagedGatewayServiceAfterUpdate({
-        state: layout.state,
-        root: layout.entry,
-        preManagedServiceStop: layout.before,
-        allowInstallRootChange: true,
-      }),
-    ).resolves.toMatchObject({ kind: "owned", requiresInstallRootRefresh: true });
-  },
-);
-
-itOnPosix.each(["another installation", "an edited definition"] as const)(
-  "still refuses a stopped service that %s replaced",
-  async (change) => {
-    const layout = await pnpmStoreLayout();
-    await layout.swap();
-    const elsewhere = path.join(home, "elsewhere", "openclaw");
-    await writeInstall(elsewhere, "2026.11.5");
     const state = stoppedService(await fs.realpath(layout.previous));
-    if (change === "another installation") {
+    if (change === "old store pruned") {
+      await fs.rm(path.dirname(path.dirname(layout.previous)), { recursive: true });
+    } else if (change === "another installation") {
+      const elsewhere = path.join(home, "elsewhere", "openclaw");
+      await writeInstall(elsewhere, "2026.11.5");
       state.command = stoppedService(elsewhere).command;
-    } else {
+    } else if (change === "an edited definition") {
       state.command?.programArguments.push("--verbose");
     }
 
-    await expect(
-      revalidateManagedGatewayServiceAfterUpdate({
-        state,
-        root: layout.entry,
-        preManagedServiceStop: layout.before,
-        allowInstallRootChange: true,
-      }),
-    ).rejects.toThrow("Gateway service ownership or manager identity changed");
+    // The restart names the updated install root; the unit still names the old store path.
+    const revalidated = revalidateManagedGatewayServiceAfterUpdate({
+      state,
+      root: layout.entry,
+      preManagedServiceStop: layout.before,
+      allowInstallRootChange: true,
+    });
+    await (outcome === "restarts"
+      ? expect(revalidated).resolves.toMatchObject({
+          kind: "owned",
+          requiresInstallRootRefresh: true,
+        })
+      : expect(revalidated).rejects.toThrow(
+          "Gateway service ownership or manager identity changed",
+        ));
   },
 );

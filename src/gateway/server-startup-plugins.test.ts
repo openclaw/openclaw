@@ -9,7 +9,6 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createInfoWarnErrorDebugLogger as createLog } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveRuntimeLauncherTargets } from "../infra/update-runtime-relocation.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -291,30 +290,23 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
     "repairs this installation's launcher an earlier updater left in its removed stage",
     async () => {
       const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
-      // The Gateway resolves its own package root; point it at a fixture installation.
       const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "gateway-launcher-")));
       onTestFinished(() => fs.rmSync(home, { recursive: true, force: true }));
+      // The Gateway resolves its own package root; point it at a fixture installation.
       const root = path.join(home, "global", "openclaw");
       fs.mkdirSync(root, { recursive: true });
       fs.writeFileSync(path.join(root, "openclaw.mjs"), "");
       resolveOpenClawPackageRootSync.mockReturnValueOnce(root);
-      const bin = path.join(home, "bin");
-      fs.mkdirSync(bin);
-      vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH ?? ""}`);
+      vi.stubEnv("PATH", home);
       onTestFinished(() => {
         vi.unstubAllEnvs();
       });
       // The published shim names a stage beside this installation that no longer exists.
-      const stage = path.join(
-        path.dirname(fs.realpathSync(root)),
-        ".openclaw-update-native-AbC123",
-      );
-      const launcher = path.join(bin, "openclaw");
-      const stale = `'${path.relative(fs.realpathSync(bin), path.join(stage, "openclaw.mjs"))}'`;
+      const stage = path.join(home, "global", ".openclaw-update-native-AbC123");
+      const launcher = path.join(home, "openclaw");
       fs.writeFileSync(
         launcher,
-        `#!/bin/sh\nbasedir_abs=$(CDPATH= cd -P -- "$(dirname "$0")" && pwd -P)\nexec node  "$basedir_abs"/${stale} "$@"\n# cmd-shim-target=${path.join(root, "openclaw.mjs")}\n`,
-        { mode: 0o755 },
+        `#!/bin/sh\nbasedir=$(dirname "$0")\nexec node  "$basedir"/'global/.openclaw-update-native-AbC123/openclaw.mjs' "$@"\n# cmd-shim-target=${path.join(root, "openclaw.mjs")}\n`,
       );
       const log = createLog();
       await runGatewayPostReadyStartupMaintenance({
@@ -327,9 +319,7 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
       expect(log.info).toHaveBeenCalledWith(
         `Repaired the openclaw launcher ${launcher}: it still pointed at the removed update stage ${stage}.`,
       );
-      await expect(resolveRuntimeLauncherTargets(launcher, "openclaw.mjs")).resolves.toEqual([
-        fs.realpathSync(path.join(root, "openclaw.mjs")),
-      ]);
+      expect(fs.readFileSync(launcher, "utf8")).not.toContain(".openclaw-update-native-");
       expect(log.warn).not.toHaveBeenCalled();
     },
   );

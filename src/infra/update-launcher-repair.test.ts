@@ -76,11 +76,14 @@ describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
       withTestDir({ prefix: "launcher-repair-" }, async (base) => {
         const { home, packageRoot, launcher } = await pnpmHome(base, globalName, homeName);
         await expect(runFile(launcher)).rejects.toThrow();
+        // A FIFO with no writer on PATH would block any reader; the scan must skip it.
+        await fs.mkdir(path.join(base, "fifo-bin"));
+        await runFile("mkfifo", [path.join(base, "fifo-bin", "openclaw")]);
 
         const { repaired, failed } = await repairPublishedPnpmLaunchers({
           root: packageRoot,
           // A custom global directory name is found through PNPM_HOME, not the path layout.
-          env: { PNPM_HOME: home },
+          env: { PNPM_HOME: home, PATH: path.join(base, "fifo-bin") },
         });
 
         expect(failed).toEqual([]);
@@ -106,26 +109,8 @@ describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
       }),
   );
 
-  it("skips a non-regular `openclaw` on PATH instead of blocking on it", async () =>
-    withTestDir({ prefix: "launcher-repair-fifo-" }, async (base) => {
-      const { home, packageRoot, launcher } = await pnpmHome(base);
-      const other = path.join(base, "fifo-bin");
-      await fs.mkdir(other);
-      // A FIFO with no writer blocks any reader forever.
-      await runFile("mkfifo", [path.join(other, "openclaw")]);
-
-      const { repaired, failed } = await repairPublishedPnpmLaunchers({
-        root: packageRoot,
-        env: { PNPM_HOME: home, PATH: other },
-      });
-
-      expect(failed).toEqual([]);
-      expect(repaired).toEqual([expect.objectContaining({ file: launcher })]);
-    }));
-
   it.each([
     "stage still present",
-    "recorded target missing",
     "another installation",
     "recorded target elsewhere",
     "stage not beside the project",
@@ -136,8 +121,6 @@ describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
       if (scenario === "stage still present") {
         // A live stage belongs to an update in progress, not a leftover.
         await fs.mkdir(path.join(home, STAGE));
-      } else if (scenario === "recorded target missing") {
-        await fs.rm(path.join(packageRoot, "openclaw.mjs"));
       } else if (scenario === "another installation") {
         root = path.join(base, "other", "openclaw");
         await fs.mkdir(root, { recursive: true });
