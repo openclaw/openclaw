@@ -122,6 +122,17 @@ command-arg-mode: raw
 """
         self.assertTrue(*self.validate_content(content))
 
+    def test_accepts_declared_version_frontmatter(self):
+        content = """---
+name: versioned-skill
+description: A skill that declares its version
+version: 1.0.0
+---
+# Skill
+"""
+        self.assertTrue(*self.validate_content(content))
+        with patch.object(quick_validate, "yaml", None):
+            self.assertTrue(*self.validate_content(content))
 
 if __name__ == "__main__":
     main()
