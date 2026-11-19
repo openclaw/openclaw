@@ -4,12 +4,13 @@
  * Default fixture: 50,000 events / 220,291,661 raw UTF-8 bytes, qualified navigation and full FTS.
  * Run against a fresh copy: --state-dir <copy> [--source-root <baseline-checkout>] [--sweep].
  * --sweep selects the candidate's deferred cleanup; baseline has no sweep operation.
- * --profile records native SQL, zstd and iterator costs separately from uninstrumented timings.
+ * --profile records native SQL and zstd costs separately from uninstrumented timings.
  * --flow uses actual maintenance and concurrent transcript appends, with the companion observer preloaded:
  * NODE_OPTIONS=--import=./scripts/perf/session-cold-writer-observer.mjs node --import ./scripts/tsx.mjs \
  *   scripts/perf/session-cold-writer.mjs --state-dir <copy> --flow
+ * --restore-flow measures public restoration and concurrent appends from a closed cold fixture.
  * Imports, fixture generation, pre/post digests and close are outside measured owner timings.
- * Archive elapsed includes preparation + publication + all cleanup sweeps; restore remains one transaction.
+ * Elapsed includes preparation and all bounded writes through final publication.
  * Holds include COMMIT, exclude BEGIN wait. Native profile timings include instrumentation overhead.
  * Set OPENCLAW_COLD_WRITER_PROFILE_DIR to an existing directory for sampled allocations
  * (including collected objects) and CPU profiles, flushed before worker teardown.
@@ -37,6 +38,7 @@ const { values } = parseArgs({
     sweep: { type: "boolean" },
     profile: { type: "boolean" },
     flow: { type: "boolean" },
+    "restore-flow": { type: "boolean" },
     appends: { type: "string", default: "200" },
     events: { type: "string", default: "50000" },
     sessions: { type: "string", default: "1" },
@@ -63,7 +65,10 @@ const { readSessionColdTranscript } = await load(
   "src/config/sessions/session-cold-storage-state.ts",
 );
 const { readTranscriptPayload } = await load("src/config/sessions/transcript-payload.ts");
-const owner = await load("src/config/sessions/session-cold-storage-worker.ts");
+const owner = { ...(await load("src/config/sessions/session-cold-storage-worker.ts")) };
+if (fs.existsSync(path.join(source, "src/config/sessions/session-cold-storage-restore.ts"))) {
+  Object.assign(owner, await load("src/config/sessions/session-cold-storage-restore.ts"));
+}
 const options = { agentId: "main", path: path.join(root, "agent.sqlite") };
 const manifestPath = path.join(root, "fixture.json");
 const environment = () => ({
@@ -373,16 +378,20 @@ async function measureOwners() {
         sessionId,
         archive: readSessionColdTranscript(database.db, sessionId),
       };
-      const records = await owner.prepareSessionColdRestoreInWorker(plan);
-      const replay = values.profile
-        ? (current) => ({
-            [Symbol.iterator]() {
-              const iterator = records(current)[Symbol.iterator]();
-              return { next: () => timed("decodeNext", () => iterator.next()) };
-            },
-          })
-        : records;
-      assert(owner.mutateSessionColdTranscriptInWorker(plan, replay, () => {}).restored);
+      if (owner.restoreSessionColdTranscriptInWorker) {
+        assert(
+          (
+            await owner.restoreSessionColdTranscriptInWorker(
+              plan,
+              async (run) => run(),
+              () => {},
+            )
+          ).restored,
+        );
+      } else {
+        const records = await owner.prepareSessionColdRestoreInWorker(plan);
+        assert(owner.mutateSessionColdTranscriptInWorker(plan, records, () => {}).restored);
+      }
     }
     const restore = {
       elapsedMs: performance.now() - restoreStart,
@@ -413,7 +422,15 @@ async function measureOwners() {
 }
 
 async function measureFlow() {
-  const { runSessionColdStorageMaintenance } = await load(
+  const { captureRuntimeConfigAsyncReader } = await load("src/config/io.runtime.ts");
+  await captureRuntimeConfigAsyncReader()();
+  if (values["restore-flow"]) {
+    const { resolveMaintenanceConfig } = await load(
+      "src/config/sessions/store-maintenance-runtime.ts",
+    );
+    assert.equal(resolveMaintenanceConfig().maxDiskBytes, null, "Disable fixture disk eviction");
+  }
+  const { runSessionColdStorageMaintenance, restoreSessionColdTranscript } = await load(
     "src/config/sessions/session-cold-storage.ts",
   );
   const { acquireGatewayStateOwner } = await load("src/infra/gateway-state-owner.ts");
@@ -432,11 +449,12 @@ async function measureFlow() {
   const { appendTranscriptEvent } = await load(
     "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
   );
+  const interactiveId = values["restore-flow"] ? "restore-interactive" : "interactive";
   const scope = {
     agentId: "main",
     storePath: options.path,
-    sessionKey: "agent:main:interactive",
-    sessionId: "interactive",
+    sessionKey: `agent:main:${interactiveId}`,
+    sessionId: interactiveId,
   };
   const channel = new BroadcastChannel("cold-writer-proof");
   const reservations = [];
@@ -448,7 +466,7 @@ async function measureFlow() {
   const sessionWriteChannel = diagnosticChannel("openclaw.session.write");
   sessionWriteChannel.subscribe(observeReservation);
   try {
-    await entry.replaceSessionEntry(scope, { sessionId: "interactive", updatedAt: Date.now() });
+    await entry.replaceSessionEntry(scope, { sessionId: interactiveId, updatedAt: Date.now() });
     await appendTranscriptEvent(scope, {
       type: "custom",
       customType: "synthetic",
@@ -468,7 +486,10 @@ async function measureFlow() {
       } else if (data.type === "close") {
         closes.push(data);
       }
-      if (data.type === "archiving" && archivalStartedAt === undefined) {
+      if (
+        data.type === (values["restore-flow"] ? "restoring" : "archiving") &&
+        archivalStartedAt === undefined
+      ) {
         archivalStartedAt = performance.now();
         for (let index = 0; index < appendCount; index++) {
           appends.push(
@@ -501,15 +522,22 @@ async function measureFlow() {
     const cpuStart = process.cpuUsage();
     const heapStart = process.memoryUsage();
     const start = performance.now();
-    const result = await runSessionColdStorageMaintenance({
-      config: {
-        agents: { entries: { main: {} } },
-        session: {
-          store: options.path,
-          maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
-        },
-      },
-    });
+    const result = values["restore-flow"]
+      ? await restoreSessionColdTranscript({
+          agentId: "main",
+          storePath: options.path,
+          sessionKey: "agent:main:synthetic-0",
+          sessionId: "synthetic-0",
+        })
+      : await runSessionColdStorageMaintenance({
+          config: {
+            agents: { entries: { main: {} } },
+            session: {
+              store: options.path,
+              maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+            },
+          },
+        });
     const finishedAt = performance.now();
     assert(
       appends.length === appendCount,
@@ -600,7 +628,7 @@ async function measureFlow() {
 try {
   if (values.prepare) {
     await prepare();
-  } else if (values.flow) {
+  } else if (values.flow || values["restore-flow"]) {
     await measureFlow();
   } else {
     await measureOwners();

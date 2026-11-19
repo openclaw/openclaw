@@ -154,7 +154,7 @@ async function waitForUpstreamClose() {
 }
 
 describe("inference HTTP transport ownership", () => {
-  it.each(["", "?client_version=0.167.0"])(
+  it.each(["", "?client_version=0.169.0"])(
     "relays catalog GETs%s without mixing native accounts or requiring a turn",
     async (query) => {
       const bindModelExecution = vi.fn(() => {
@@ -186,6 +186,28 @@ describe("inference HTTP transport ownership", () => {
       }
       expect(seen).toEqual(["first", "second", "expired"]);
       expect(bindModelExecution).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["disconnect", "relay shutdown"])(
+    "releases a streaming catalog response after %s",
+    async (cause) => {
+      handle = (_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.write('{"models":[');
+      };
+      const controller = new AbortController();
+      const response = await fetch(proxy.baseUrl + "/models", { signal: controller.signal });
+      expect(response.status).toBe(200);
+      const body = response.text();
+      const rejected = expect(body).rejects.toThrow();
+      if (cause === "disconnect") {
+        controller.abort();
+      } else {
+        proxy.close();
+      }
+      await rejected;
+      await waitForUpstreamClose();
     },
   );
 

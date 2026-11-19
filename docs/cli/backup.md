@@ -100,6 +100,11 @@ A PostgreSQL capture contains the original anchor, a sanitized SQLite export
 image, and a format-2 manifest with the profile, engine, store UUID, versions,
 active fragments, allocation facts, sizes, and hashes. The manifest contains no
 DSN. Keep these artifacts together; copying only the anchor does not back up rows.
+Before upgrading, keep a verified PostgreSQL backup made with the release you
+might roll back to. Newer OpenClaw can verify and restore exports that lack a
+row digest identifier. Older releases such as 2026.11.3 reject `typed-v1`
+exports before writing PostgreSQL data. If you roll back to one of those
+releases, restore its pre-upgrade backup instead.
 Existing format-1 SQLite snapshots remain readable. See
 [Database engines](/reference/database-engines#anchors-and-backups) for matched
 restore and update-recovery behavior.

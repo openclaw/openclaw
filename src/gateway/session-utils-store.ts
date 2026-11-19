@@ -525,6 +525,7 @@ export async function listAgentsForGateway(
     roster.map(async (entry) => {
       const { id } = entry;
       const agentConfig = resolveAgentConfig(cfg, id);
+      const description = agentConfig?.description?.trim();
       const newSessionPermissionMode = agentConfig?.newSessionPermissionMode;
       const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
       // This label must never overstate permissiveness. When sandbox policy can vary
@@ -597,6 +598,10 @@ export async function listAgentsForGateway(
             : {}),
           ...(options?.includeSystem ? { kind: entry.kind } : {}),
           name: entry.name,
+          ...(description ? { description } : {}),
+          ...(agentConfig?.recommendedPrompts?.length
+            ? { recommendedPrompts: agentConfig.recommendedPrompts }
+            : {}),
           identity: identityById.get(id),
           workspace,
           workspaceGit,

@@ -28,6 +28,7 @@ vi.mock("./bun-sqlite-library.js", () => ({ ensureSqliteLibrarySelected() {} }))
 
 function makeWorker() {
   return Object.assign(new EventEmitter(), {
+    stderr: new EventEmitter(),
     unref: vi.fn(),
     terminate: vi.fn(async () => 0),
   });

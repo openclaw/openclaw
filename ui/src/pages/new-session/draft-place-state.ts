@@ -241,8 +241,7 @@ export class DraftPlaceState {
       !this.deviceFolder &&
       !this.hostedEnvironment &&
       !this.freshWorkspace &&
-      (this.repository.kind !== "direct" || Boolean(this.browser.projectId)) &&
-      (this.repositoryState.checkoutVisible || Boolean(this.browser.projectId))
+      this.repositoryState.checkoutVisible(Boolean(this.browser.projectId))
     );
   }
 

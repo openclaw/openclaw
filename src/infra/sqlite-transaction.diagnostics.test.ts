@@ -56,6 +56,60 @@ function asWorker(
 
 const thread = { isMainThread, pid: process.pid, threadId };
 
+it.each([false, true])("reports affected rows in write holds (bigints=%s)", (bigints) => {
+  const { db, advance, run, logger } = fixture();
+  observeConnection(db);
+  const insert = db.prepare("INSERT INTO entries VALUES (?, ?)");
+  const update = db.prepare("UPDATE entries SET value = ?");
+  const remove = db.prepare("DELETE FROM entries WHERE id <= ?");
+  for (const statement of [insert, update, remove]) {
+    statement.setReadBigInts(bigints);
+  }
+  run(
+    () => {
+      for (let index = 0; index < 5; index++) {
+        insert.run(String(index), "private-value");
+      }
+      update.run("private-update");
+      remove.run("1");
+      remove.run("4");
+      remove.run("4");
+      expect(() => insert.run("invalid-binding-count")).toThrow();
+      expect(db.prepare("SELECT id FROM entries").all()).toEqual([]);
+      advance(1_200);
+    },
+    { operationLabel: "audit.writer.process" },
+  );
+  expect(logger.warn).toHaveBeenCalledTimes(1);
+  expect(logger.warn.mock.calls[0]?.[0]).toBe("slow SQLite transaction hold");
+  const statements = logger.warn.mock.calls[0]?.[1].statementTiming.statements;
+  for (const [operation, count, changes] of [
+    ["INSERT", 6, 5],
+    ["UPDATE", 1, 5],
+    ["DELETE", 3, 5],
+  ]) {
+    expect(
+      statements.find((entry: { operation: string }) => entry.operation === operation),
+    ).toEqual({
+      id: expect.stringMatching(/^[a-f0-9]{16}$/),
+      operation,
+      count,
+      changes,
+      totalMs: expect.any(Number),
+      maxMs: expect.any(Number),
+    });
+  }
+  expect(statements.find((entry: { operation: string }) => entry.operation === "SELECT")).toEqual({
+    id: expect.stringMatching(/^[a-f0-9]{16}$/),
+    operation: "SELECT",
+    count: 1,
+    rows: 0,
+    totalMs: expect.any(Number),
+    maxMs: expect.any(Number),
+  });
+  expect(JSON.stringify(logger.warn.mock.calls)).not.toMatch(/entries|private|binding/);
+});
+
 it("names the admitted writer in a contending BEGIN and clears it after rollback", () => {
   const filename = resources.file();
   const holder = resources.open(filename, {}, true);

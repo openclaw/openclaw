@@ -69,7 +69,7 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
         </For>
       </div>
       {/* The people below follow the filter: who is online, or every user. */}
-      <div class="sidebar-online__heading">
+      <div class="sidebar-section-heading">
         <span class="sidebar-recent-sessions__label-text">
           {host.people.presenceFilter === "online"
             ? t("presence.rosterTitle")

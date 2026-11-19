@@ -3,7 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { serialize } from "node:v8";
 import { constants, deflateRawSync, zstdCompress } from "node:zlib";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
 import type { LocalWorkspacePauseReason } from "../../agents/sandbox/local-workspace-quiescence.js";
+import type { LocalWorkspacePausePhase } from "../../agents/sandbox/types.js";
 import { startWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRunEndContext,
@@ -11,14 +14,20 @@ import {
   withWorktreeRunEnd,
 } from "../../agents/worktrees/run-end-lifecycle.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
+import { isAbortError } from "../../infra/abort-signal.js";
+import { isAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
+import { GitCommandTimeoutError } from "../../infra/git-exec.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
+import { hasSqliteWorkerErrorCode } from "../../infra/sqlite-worker-error.js";
 import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
+import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
+import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import {
@@ -40,6 +49,7 @@ import type {
   LocalWorkspaceProjection,
   LocalWorkspaceRejectedResult,
 } from "./local-workspace-store.types.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
 export type { LocalWorkspaceProjection } from "./local-workspace-store.types.js";
 
@@ -48,6 +58,37 @@ const log = createSubsystemLogger("agents/worktrees");
 const reconciliationContext = new AsyncLocalStorage<Record<string, string>>();
 const shortDigest = (value: string | Uint8Array) =>
   createHash("sha256").update(value).digest("hex").slice(0, 16);
+
+function reconciliationAbortReason(error: unknown) {
+  const causes = collectNestedErrorCandidates(error);
+  for (const cause of causes) {
+    if (cause instanceof AcceptedWorkspacePublicationIndeterminateError) {
+      return "publication-indeterminate";
+    }
+    if (cause instanceof OpenClawStateLeaseError) {
+      return cause.loss ? (`lease-${cause.loss.reason}` as const) : cause.code;
+    }
+    for (const code of ["outcome-unknown", "closed", "overloaded", "unavailable"] as const) {
+      if (hasSqliteWorkerErrorCode(cause, code)) {
+        return `sqlite-${code}` as const;
+      }
+    }
+    if (cause instanceof WorkerTaskError) {
+      return `worker-${cause.code}` as const;
+    }
+    if (cause instanceof GitCommandTimeoutError) {
+      return "git-timeout";
+    }
+    if (isAgentRunStaleLifecycleError(cause)) {
+      return "stale-lifecycle";
+    }
+    const { stopReason } = resolveAgentRunErrorLifecycleFields(cause, undefined);
+    if (stopReason) {
+      return stopReason;
+    }
+  }
+  return causes.some(isAbortError) ? "cancelled" : "operation-failed";
+}
 
 export async function withLocalWorkspaceReconciliation<T extends { conflictPaths: string[] }>(
   input: {
@@ -58,7 +99,7 @@ export async function withLocalWorkspaceReconciliation<T extends { conflictPaths
     target: "canonical" | "projection";
     reason: LocalWorkspacePauseReason;
   },
-  run: (markApplied: () => void) => Promise<T>,
+  run: (markPhase: (phase: LocalWorkspacePausePhase) => void) => Promise<T>,
 ): Promise<T> {
   const correlation = {
     workspace: shortDigest(input.worktreeId),
@@ -74,14 +115,22 @@ export async function withLocalWorkspaceReconciliation<T extends { conflictPaths
     const started = performance.now();
     let applied = false;
     let outcome = "aborted";
+    let phase: LocalWorkspacePausePhase = "operation";
+    let abortReason: ReturnType<typeof reconciliationAbortReason> | undefined;
     log.info(`Local workspace reconcile start: correlation=${fields}`);
     try {
-      const result = await run(() => (applied = true));
+      const result = await run((next) => {
+        phase = next;
+        applied ||= next === "apply";
+      });
       outcome = result.conflictPaths.length ? "conflict" : applied ? "applied" : "replayed";
       return result;
+    } catch (error) {
+      abortReason = reconciliationAbortReason(error);
+      throw error;
     } finally {
       log.info(
-        `Local workspace reconcile finish: correlation=${fields} outcome=${outcome} durationMs=${(performance.now() - started).toFixed(1)}`,
+        `Local workspace reconcile finish: correlation=${fields} outcome=${outcome} durationMs=${(performance.now() - started).toFixed(1)}${abortReason ? ` abortReason=${abortReason} phase=${phase}` : ""}`,
       );
     }
   });

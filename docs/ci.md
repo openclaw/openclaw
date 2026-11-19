@@ -60,6 +60,12 @@ runtime policies, within the existing 150-second test budget.
 Other runners, preparation modes, parallel jobs, and full validation keep their
 standalone boundary ownership.
 
+Hosted compact Gateway-methods groups retain the existing 96-file ceiling and
+dedicated rows above 32 files even when a full dual-runtime dispatch uses the
+compact PR layout. File membership, worker limits, row caps, and deadlines are
+unchanged. Smaller tails and hourly main validation keep their existing packing;
+these bounds do not replace fresh whole-row timing qualification.
+
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 
@@ -443,8 +449,11 @@ Release-path migration matrices isolate channel switching and each published
 baseline on separate runners when multiple baselines are selected; per-host
 weighted resource limits and exact-candidate artifact checks remain unchanged.
 Package Acceptance admits its long standalone upgrade lanes before expanded
-scenario jobs and orders pinned baseline cohorts newest first, without changing
-its matrix cap or scenario coverage.
+scenario jobs and orders pinned baseline cohorts newest first. Its
+[expanded package-survivor matrix](/ci/release-validation/package-acceptance)
+admits up to 48 jobs on GitHub-hosted runners without a custom runner group;
+source-only, unexpanded, self-hosted/custom-group, and update-migration matrices
+retain 32. Scenario coverage and per-runner limits are unchanged.
 
 Android native resource preparation uses the Mermaid renderer's filtered dependency install, including optional build tooling. Pnpm retains root dependencies but omits unrelated plugin packages; Gradle still builds the assets and runs the selected native tests and lint. Historical targets keep their compatibility path.
 

@@ -8,10 +8,9 @@ import { keyboardHintsVisible } from "../lib/reactive/keyboard-hints.ts";
 import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import { createScrollPosition } from "../lib/reactive/scroll-state.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { type FileKind, fileKindForPath } from "./file-kind.ts";
 import { FilePreviewDocument, filePreviewDocumentLink } from "./file-preview-document.tsx";
 import { CopyButton } from "./solid/copy-button.tsx";
-import { Icon, type IconName } from "./solid/icon.tsx";
+import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
 import { PanelLoadingSkeleton } from "./solid/panel-loading-skeleton.tsx";
 import styles from "./file-preview-modal.styles.css?inline";
@@ -184,9 +183,6 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
       onMouseDown={preventItemPointerFocus}
       onClick={() => select(file.path)}
     >
-      <span class="item-icon">
-        <Icon name={FILE_KIND_ICONS[fileKindForPath(file.path)]} />
-      </span>
       <span class="item-name" title={file.path}>
         {props.layout === "document" ? file.path.split("/").pop() : file.path}
       </span>
@@ -478,17 +474,6 @@ function fileKind(path: string): string {
   };
   return Object.hasOwn(map, ext) ? map[ext]! : ext ? ext.toUpperCase() : t("filePreview.kind.file");
 }
-const FILE_KIND_ICONS: Record<FileKind, IconName> = {
-  code: "fileCode",
-  component: "layoutGrid",
-  data: "braces",
-  file: "fileText",
-  image: "image",
-  markdown: "book",
-  package: "box",
-  shell: "terminal",
-  skill: "pencilSparkles",
-};
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-file-preview-modal": OpenClawFilePreviewModal;

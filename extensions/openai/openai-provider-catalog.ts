@@ -16,7 +16,11 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENAI_UNKNOWN_MODEL_COST } from "./account-models.js";
-import { OPENAI_CODEX_RESPONSES_BASE_URL, resolveOpenAIDefaultBaseUrl } from "./base-url.js";
+import {
+  OPENAI_CODEX_RESPONSES_BASE_URL,
+  resolveOpenAICodexModelsEndpoint,
+  resolveOpenAIDefaultBaseUrl,
+} from "./base-url.js";
 import {
   normalizeOpenAICodexCatalogModel,
   readCodexReasoningLevels,
@@ -209,8 +213,7 @@ async function buildOpenAICodexLiveProviderConfig(params: {
   const catalogRuntime = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
   const { getCachedLiveCatalogValue } = await import("openclaw/plugin-sdk/provider-catalog-shared");
   const { fetchLiveProviderModelRows, LiveModelCatalogHttpError } = catalogRuntime;
-  // Discover the account's broader catalog; the runtime still owns turn compatibility.
-  const endpoint = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=99.0.0`;
+  const endpoint = await resolveOpenAICodexModelsEndpoint();
   try {
     return await getCachedLiveCatalogValue({
       ttlMs: OPENAI_CODEX_MODELS_CACHE_TTL_MS,
@@ -402,7 +405,6 @@ export function buildOpenAIProviderCatalog(): Pick<
               apiKey: auth.apiKey,
               baseUrl: resolveOpenAICatalogBaseUrl(ctx),
               discoveryApiKey,
-              catalogContext: ctx,
             }),
             auth.profileId,
           );

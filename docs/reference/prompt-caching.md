@@ -77,6 +77,14 @@ Code Mode catalog, including `screen`, without borrowing execution authority.
 The next operator declaration updates that session fact; current-turn execution
 gates and the live requesting-browser check still enforce calls.
 
+Message-tool listing uses configured channel capabilities and the recorded prompt
+source, not connection health or the current turn’s reaction grant. A WebChat
+operator declaration retains local prompt-reaction support even when the session
+keeps an external delivery route. A session with neither a supported source nor a
+configured messaging route omits the tool. This presentation-only omission does
+not become a permanent restriction on children or automations; their final policy
+and schema checks still apply.
+
 GitHub tool listing follows the session's Gateway publication capability and
 workspace support, not the current turn's operator or GitHub identity. Operator,
 channel, scheduled, heartbeat, and senderless wake turns retain the same
@@ -147,6 +155,11 @@ is preserved without secret masking. Large batches can exceed
 the aggregate result budget when reducing them would rewrite already-sent
 history; session pruning and compaction remain the owners of intentional
 history changes.
+
+When a preflight check predicts overflow, OpenClaw can cap results from the
+current tool batch before sending them. If that cannot make room, it compacts
+retained history instead of truncating previously sent results in place.
+Recovery after an actual provider rejection can still truncate those results.
 
 OpenAI Chat Completions also preserves valid native tool-call IDs during replay
 and disambiguates repeated IDs deterministically. Changing result text or IDs
@@ -313,6 +326,7 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 - Responses API payloads can also expose `input_tokens_details.cache_write_tokens`, mapped to `cacheWrite` and priced at the model's cache-write rate; Responses payloads that omit the field keep `cacheWrite` at `0`. Chat Completions payloads that include `prompt_tokens_details.cache_write_tokens` also populate `cacheWrite`; availability depends on the model and route.
 - Captured consecutive Responses request bodies retained byte-identical history prefixes, so history rewriting did not explain the observed shortfall. Provider breakpoint placement can affect reported `cacheRead`: OpenAI documents message-end breakpoints for GPT-5.6 and later on the Platform API, while the ChatGPT-backed Responses route was observed to report hits in 1,024-token steps. See [OpenAI live expectations](#openai-live-expectations) below.
 - On native OpenAI Responses routes the system prompt is pinned for the session and sent unchanged as `instructions`. Later changes to its sections (skills, workspace memory, temporal context, config-driven sections) arrive as instruction messages after the current user turn, so the cached `instructions` prefix and earlier history stay byte-identical. Changing the route or selected personal profile, resetting, or compacting starts a new series and re-caches from the start; see [Context](/concepts/context#how-openclaw-builds-the-system-prompt) and [Session prefix stability](#session-prefix-stability).
+- Some models never cache the `instructions` field. Their catalog entry sets `compat.cachesInstructions: false` (including GPT-6.2 Astra and Sol). On the OpenAI API-key Responses route, OpenClaw sends the same pinned system prompt as a `developer` input item so it is eligible for caching. The prompt leads fresh input and follows the compaction item on replay, because OpenAI can discard input placed before the checkpoint. The separate `/responses/compact` call still uses `instructions` so the returned window does not retain an old copy of the prompt. With `previous_response_id`, the stored item carries forward and deltas do not send it again. If the system prompt changes, OpenClaw drops `previous_response_id` and sends the full history with only the new item, so the model never sees two system prompts.
 
 ### OpenAI 12-hour cache lifetime
 

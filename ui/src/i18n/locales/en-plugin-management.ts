@@ -262,6 +262,9 @@ const enPluginManagement = {
         "This credential comes from {name} in the Gateway environment. Change that environment variable at its source. Its value is never shown here.",
       source: "Source",
       provider: "Provider",
+      defaultProvider: "Default for this source",
+      enterProvider: "Enter another provider…",
+      customProvider: "Custom provider alias",
       identifier: "Identifier",
       sources: {
         env: "Environment",
@@ -477,6 +480,7 @@ const enPluginManagement = {
     detailType: "Type",
     detailSecurity: "Security audit",
     detailSecurityAudit: "View security audit",
+    detailSecurityInfo: "ClawHub checks each release for vulnerabilities and agentic risk.",
     detailNoReadme: "This plugin does not include a README.",
     detailNoSkills: "This plugin does not declare any skills.",
     detailNoConfiguration: "This plugin does not declare any configuration fields.",

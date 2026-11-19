@@ -17,7 +17,7 @@ it("keeps the edited input and focus while its form and validation update", asyn
   const view = mountSolid(() => <CronView {...props()} />);
   await vi.dynamicImportSettled();
   await waitForSolid(() => expect(view.container.querySelector("#cron-name")).not.toBeNull());
-  const input = getElement(view.container, "#cron-name", HTMLInputElement);
+  const input = getElement(view.container, "#cron-name", HTMLTextAreaElement);
   input.focus();
   input.value = "Daily check";
   input.dispatchEvent(new Event("input", { bubbles: true }));

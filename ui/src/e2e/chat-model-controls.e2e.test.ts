@@ -240,7 +240,7 @@ suite.define(() => {
         .getByRole("button", { name: "Collapse sidebar", exact: true });
       const toggleSidebar = async () => {
         for (const pressed of ["false", "true"]) {
-          // Sessions reopens a collapsed panel; while open it would open the agent menu.
+          // Sessions reopens a collapsed panel; the panel header collapses it.
           await (pressed === "false" ? collapse : sessions).click();
           await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe(pressed);
           await page.locator(".shell").evaluate(async (shell) => {
@@ -336,8 +336,11 @@ suite.define(() => {
             },
             "users.listModelAccounts": {
               profileId: "test-person",
-              // Reopening retries an empty inventory; a populated one stays cached.
-              accounts: input === "keyboard" ? [] : [personal],
+              accounts: Array.from({ length: 12 }, (_, index) => ({
+                ...personal,
+                authProfileId: "openai:extra-" + index,
+                label: "Saved account " + index,
+              })),
               nextCursor: "accounts-page-2",
               links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
             },
@@ -364,112 +367,72 @@ suite.define(() => {
             })
             .toBe(true);
         }
+        const rpc = "users.listModelAccounts";
+        const popover = picker.locator(".chat-controls__account-popover");
+        const manage = popover.locator('[data-chat-account-option="manage"]');
+        const loading = popover.locator(".chat-controls__account-page-loader");
+        await gateway.waitForRequest(rpc);
+        await expect.poll(() => trigger.isEnabled()).toBe(true);
+        const baseline = (await gateway.getRequests(rpc)).length;
+        await gateway.deferNext(rpc, { cursor: "accounts-page-2" });
         await trigger.click();
-        const more = picker.locator('[data-chat-account-option="more"]');
-        await expect.poll(() => more.isVisible()).toBe(true);
         expect(await currentOption.textContent()).toContain("personal@example.com");
-        await trigger.click();
-        await expect.poll(() => more.isVisible()).toBe(false);
-        await expect.poll(() => picker.isVisible()).toBe(true);
-        await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
-        const refreshRequests = await gateway.getRequests("users.listModelAccounts");
-        if (input === "keyboard") {
-          await gateway.deferNext("users.listModelAccounts", {});
-        }
-        await trigger.press("Enter");
-        await expect.poll(() => more.isVisible()).toBe(true);
-        const pendingMoreTarget = more;
-        if (input === "keyboard") {
-          const refresh = await gateway.waitForRequest("users.listModelAccounts", {
-            after: refreshRequests.length,
-          });
-          expect(refresh.params).toEqual({});
-          const loading = picker.locator('[data-chat-account-option="loading"]');
-          await expect.poll(() => loading.isVisible()).toBe(true);
-          expect(await pendingMoreTarget.isDisabled()).toBe(true);
-          await pendingMoreTarget.focus();
-          await gateway.resolveDeferred("users.listModelAccounts", {
-            profileId: "test-person",
-            accounts: [personal],
-            nextCursor: "accounts-page-2",
-            links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
-          });
-          await expect.poll(() => loading.isVisible()).toBe(false);
-          await expect.poll(() => pendingMoreTarget.isEnabled()).toBe(true);
-          await expect
-            .poll(() => pendingMoreTarget.evaluate((element) => element === document.activeElement))
-            .toBe(true);
-        } else {
-          expect(await gateway.getRequests("users.listModelAccounts")).toEqual(refreshRequests);
-        }
         expect(await currentOption.getAttribute("aria-selected")).toBe("true");
-        const loading = picker.locator('[data-chat-account-option="loading"]');
-        const beginAccountPage = async (cursor: string) => {
-          const requestsBefore = await gateway.getRequests("users.listModelAccounts");
-          await gateway.deferNext("users.listModelAccounts", { cursor });
-          const beforeUrl = page.url();
-          if (input === "keyboard") {
-            await page.keyboard.press("Enter");
-          } else {
-            await pendingMoreTarget.click();
-          }
-          await expect
-            .poll(
-              async () =>
-                (await gateway.getRequests("users.listModelAccounts")).length >
-                  requestsBefore.length || page.url() !== beforeUrl,
-            )
-            .toBe(true);
-          expect(page.url()).toBe(beforeUrl);
-          const request = await gateway.waitForRequest("users.listModelAccounts", {
-            after: requestsBefore.length,
-          });
-          expect(request.params).toEqual({ cursor });
-          await expect.poll(() => loading.isVisible()).toBe(true);
-          expect(await pendingMoreTarget.isDisabled()).toBe(true);
-          if (input === "keyboard") {
-            await page.keyboard.press("Enter");
-          } else {
-            await pendingMoreTarget.hover();
-            expect(await pendingMoreTarget.evaluate((row) => row.matches(":hover"))).toBe(true);
-            await page.mouse.down();
-            await page.mouse.up();
-          }
-          expect(await gateway.getRequests("users.listModelAccounts")).toHaveLength(
-            requestsBefore.length + 1,
-          );
-          expect(page.url()).toBe(beforeUrl);
-        };
-        await beginAccountPage("accounts-page-2");
-        await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
-        await gateway.resolveDeferred("users.listModelAccounts", {
+        expect(await picker.locator('[data-chat-account-option="more"]').count()).toBe(0);
+        expect(await gateway.getRequests(rpc)).toHaveLength(baseline);
+        // The fixture overflows. Reaching the footer via focus or wheel loads the next page.
+        if (input === "keyboard") {
+          await manage.focus();
+        } else {
+          await currentOption.hover();
+          await page.mouse.wheel(0, 2_000);
+        }
+        expect((await gateway.waitForRequest(rpc, { after: baseline })).params).toEqual({
+          cursor: "accounts-page-2",
+        });
+        await expect.poll(() => loading.isVisible()).toBe(true);
+        await expect
+          .poll(() =>
+            loading.evaluate((loader) => {
+              const skeleton = loader.querySelector(".chat-controls__account-page-skeleton");
+              if (!skeleton || getComputedStyle(skeleton).animationName !== "none") {
+                return false;
+              }
+              const box = skeleton.getBoundingClientRect();
+              return loader.contains(
+                document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+              );
+            }),
+          )
+          .toBe(true);
+        const lastAccount = popover.locator('[data-chat-account-option^="account:"]').last();
+        const [loaderBox, accountBox, manageBox] = await Promise.all(
+          [loading, lastAccount, manage].map((row) => row.boundingBox()),
+        );
+        expect(loaderBox!.y).toBeGreaterThanOrEqual(accountBox!.y + accountBox!.height - 1);
+        expect(loaderBox!.y + loaderBox!.height).toBeLessThanOrEqual(manageBox!.y + 1);
+        expect(await currentOption.isVisible()).toBe(true);
+        expect(await gateway.getRequests(rpc)).toHaveLength(baseline + 1);
+        await gateway.deferNext(rpc, { cursor: "accounts-page-3" });
+        await gateway.resolveDeferred(rpc, {
           profileId: "test-person",
           accounts: [work],
           nextCursor: "accounts-page-3",
-          links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+          links: [],
         });
-        await expect.poll(() => loading.isVisible()).toBe(false);
-        await expect.poll(() => pendingMoreTarget.isEnabled()).toBe(true);
         if (input === "keyboard") {
-          expect(await pendingMoreTarget.evaluate((row) => row === document.activeElement)).toBe(
-            true,
-          );
+          expect(await manage.evaluate((row) => row === document.activeElement)).toBe(true);
+          await manage.scrollIntoViewIfNeeded();
+        } else {
+          await manage.hover();
+          await page.mouse.wheel(0, 2_000);
         }
-        await beginAccountPage("accounts-page-3");
-        const manage = picker.locator('[data-chat-account-option="manage"]');
-        if (input === "keyboard") {
-          await manage.focus();
-        }
-        await gateway.resolveDeferred("users.listModelAccounts", {
-          profileId: "test-person",
-          accounts: [],
-          links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+        expect((await gateway.waitForRequest(rpc, { after: baseline + 1 })).params).toEqual({
+          cursor: "accounts-page-3",
         });
+        await gateway.resolveDeferred(rpc, { profileId: "test-person", accounts: [], links: [] });
         await expect.poll(() => loading.isVisible()).toBe(false);
-        await expect.poll(() => more.isVisible()).toBe(false);
-        if (input === "keyboard") {
-          expect(await manage.evaluate((button) => button === document.activeElement)).toBe(true);
-        }
+        expect(await gateway.getRequests(rpc)).toHaveLength(baseline + 2);
         const workOption = picker.locator(
           `[data-chat-account-option="account:${work.authProfileId}"]`,
         );
@@ -477,7 +440,7 @@ suite.define(() => {
         expect(await workOption.textContent()).toContain("work@example.com");
         await trigger.click();
         const search = composer.locator("[data-chat-model-search]");
-        await search.fill("account");
+        await search.fill("workspace");
         await expect.poll(() => workOption.isVisible()).toBe(true);
         if (input === "keyboard") {
           await workOption.press("Enter");

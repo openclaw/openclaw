@@ -175,7 +175,6 @@ suite.define(() => {
       await expectCount(page, '[data-test-id="cron-new-task"]', 0);
 
       await openAutomation(page, readOnlyJob.id);
-      await page.locator("fieldset.cron-editor:disabled").waitFor();
       await page.getByRole("note").filter({ hasText: "owner with automation access" }).waitFor();
       await expectCount(page, ".cron-job-menu", 0);
       expect(
@@ -185,11 +184,10 @@ suite.define(() => {
       await expectCount(page, '[data-test-id="cron-submit"]', 0);
       await expectCount(page, ".cron-editor-actions", 0);
 
-      await page.locator('[data-test-id="cron-detail-tab-history"]').click();
       await page.getByText("Read-only history remains available", { exact: true }).waitFor();
-      expect(
-        await page.locator('[data-test-id="cron-detail-description"]').textContent(),
-      ).toContain(readOnlyJob.description);
+      await page.locator('[data-test-id="cron-edit"]').click();
+      await page.locator("fieldset.cron-editor:disabled").waitFor();
+      await expectCount(page, '[data-test-id="cron-submit"]', 0);
 
       const mutationMethods = new Set(["cron.add", "cron.remove", "cron.run", "cron.update"]);
       expect(
@@ -392,7 +390,6 @@ suite.define(() => {
         .toBeGreaterThan(previousHistoryRequestCount);
 
       await openAutomation(page, selectedJob.id);
-      await page.locator('[data-test-id="cron-detail-tab-history"]').click();
       await expectRunCount(page, "Selected task history", 1);
 
       await gateway.resolveDeferred(
@@ -403,6 +400,7 @@ suite.define(() => {
       await expectRunCount(page, "Selected task history", 1);
       await expectRunCount(page, "Late overview history", 0);
 
+      await page.locator('[data-test-id="cron-runs-filters-toggle"]').click();
       const statusTrigger = page.locator('[data-filter="status"] .cron-filter-dropdown__trigger');
       const deliveryTrigger = page.locator(
         '[data-filter="delivery"] .cron-filter-dropdown__trigger',
@@ -448,6 +446,7 @@ suite.define(() => {
       });
 
       await openAutomation(page, existingJob.id);
+      await page.locator('[data-test-id="cron-edit"]').click();
       await page.locator("details.cron-advanced > summary").click();
       expect(await page.locator("#cron-timeout-seconds").inputValue()).toBe("0");
       await page.locator("#cron-payload-text").fill("Continue until the edited task finishes");

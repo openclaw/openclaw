@@ -184,7 +184,7 @@ it.each([
 
 it("keeps Pages flat and rail pins independently ordered", async () => {
   const stylesheet = document.createElement("style");
-  stylesheet.textContent = ["sidebar-reorder", "sidebar-rail"]
+  stylesheet.textContent = ["sidebar-reorder", "sidebar-rail", "sidebar-pages"]
     .map((name) => readStyleSheet(`ui/src/styles/${name}.css`))
     .join("\n");
   document.head.append(stylesheet);
@@ -223,6 +223,11 @@ it("keeps Pages flat and rail pins independently ordered", async () => {
   // A child's page shows the parent's sidebar: the parent, then each child, the open one current.
   sidebar.activeRouteId = "plugin";
   sidebar.activePluginTabId = "example/notes";
+  await context.router.navigate("plugin", context, undefined, {
+    pathname: "/plugin",
+    search: "?plugin=example&id=notes",
+    hash: "",
+  });
   await waitForFast(() => expect(dom.query(".sidebar-plugin-section")).not.toBeNull());
   const section = domProbe(dom.query(".sidebar-plugin-section")!);
   const listed = [...section.all<HTMLElement>('[data-sidebar-entry^="plugin:example/"]')];

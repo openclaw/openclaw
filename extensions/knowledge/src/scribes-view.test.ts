@@ -498,8 +498,9 @@ it.each([false, true])(
 
 it("asks an earlier scribe's conversation to update it once and offers an edited one the current message", async () => {
   const runMessage = setupPrompt(reviewSetup).match(/```text\n([\s\S]+)\n```$/)![1]!;
-  // The claims-only consolidation message an earlier version generated.
+  // The claims-only consolidation message an earlier version generated, before run amounts.
   const earlier = runMessage
+    .replace(/\n\nSettings:\n- Each run: [^\n]+/, "")
     .replace(
       /Follow every step of [^\n]+ even when no claim is left to link\./,
       'Follow the "Scribe runs" section of the knowledge-claim-consolidation skill: consolidate every claim that names no page until none is left to decide.',
@@ -583,9 +584,13 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
   expect(buttonNamed(view, "Open run")).toBeTruthy();
   buttonNamed(view, "Replace with new…").click();
   const confirm = page.querySelector("dialog")!;
-  // Only the changed lines: the claims-only step and counts out, the five-step ones in.
+  // Only the changed lines: the run amounts in, the claims-only step and counts out, the five-step
+  // ones in.
   const changed = [...confirm.querySelectorAll("pre del, pre ins")].map((line) => line.textContent);
   expect(changed).toEqual([
+    "+ Settings:\n",
+    "+ - Each run: retire 15 written Timelines and review 6 pages.\n",
+    "+ \n",
     expect.stringMatching(/^− 2\. Follow the "Scribe runs"/),
     expect.stringMatching(/^− 3\. End your reply .*withdrawn and left>`\.\n$/),
     expect.stringMatching(/^\+ 2\. Follow every step/),

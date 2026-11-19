@@ -1499,6 +1499,20 @@ async function loadDefaultLiveGatewayDistFence(): Promise<LiveGatewayDistFenceFn
   }
 }
 
+function readParentResidentMemoryBytes(): number | null {
+  if (process.platform !== "linux") {
+    return null;
+  }
+  try {
+    const status = fs.readFileSync(`/proc/${process.ppid}/status`, "utf8");
+    const rss = status.match(/^VmRSS:\s+(\d+)\s+kB$/mu)?.[1];
+    const bytes = rss === undefined ? Number.NaN : Number(rss) * 1024;
+    return Number.isSafeInteger(bytes) ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function runTsdownBuild(
   argv: string[] = process.argv.slice(2),
   options: {
@@ -1536,15 +1550,29 @@ export async function runTsdownBuild(
                   sample: "after-refusal",
                   memoryCapacity: readProcessMemoryCapacity({}),
                   rssBytes: process.memoryUsage().rss,
-                  cgroup: readProcessCgroupV2Snapshot()
+                  parentRssBytes: readParentResidentMemoryBytes(),
+                  cgroup: readProcessCgroupV2Snapshot({}, { includeMemoryDetails: true })
                     ?.slice(0, 8)
                     .map(({ counters }, depth) => {
                       const current = Number(counters["memory.current"] ?? Number.NaN);
                       const peak = Number(counters["memory.peak"] ?? Number.NaN);
+                      const max = /^\d+\s*$/u.test(counters["memory.max"] ?? "")
+                        ? Number(counters["memory.max"])
+                        : Number.NaN;
+                      const high = /^\d+\s*$/u.test(counters["memory.high"] ?? "")
+                        ? Number(counters["memory.high"])
+                        : Number.NaN;
+                      const inactiveFile = Number(
+                        counters["memory.stat"]?.match(/^inactive_file\s+(\d+)$/mu)?.[1] ??
+                          Number.NaN,
+                      );
                       return {
                         depth,
                         currentBytes: Number.isSafeInteger(current) ? current : null,
                         peakBytes: Number.isSafeInteger(peak) ? peak : null,
+                        maxBytes: Number.isSafeInteger(max) ? max : null,
+                        highBytes: Number.isSafeInteger(high) ? high : null,
+                        inactiveFileBytes: Number.isSafeInteger(inactiveFile) ? inactiveFile : null,
                       };
                     }),
                 }),

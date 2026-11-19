@@ -61,16 +61,16 @@ Remove this patch and its exact-version guard entry when the dependency probe
 passes with an upstream release. The idle case requires collection without
 subsequent reactive work. An explicit `flush()` is a no-op when no work is scheduled.
 
-`chrome-devtools-mcp@1.11.0` has an approved exact-version snapshot-identity patch, backported from [ChromeDevTools/chrome-devtools-mcp#2788](https://github.com/ChromeDevTools/chrome-devtools-mcp/pull/2788) at `06c8d4bc44f68bde8bd3fcd97dcc47375df81fe9` and forward-ported onto tag commit `a878bcad39584337e055778353246820deafa7c0`. Stable IDs include the frame's captured CDP session and document generation; ambiguous IDs stay capture-local, and stale lazy handles cannot resolve into a replacement renderer. Frame-local lookup and retained extra handles preserve actions and labeled screenshots. The 1.11.0 CSS-style lookup resolves the same guarded handle and stays within its captured renderer, failing closed when the embedded DevTools target cannot represent a cross-renderer frame. Version 1.11.0 already exports its bundled `CdpFrame`, so the patch changes only the snapshot owner and its DOM-result caller. Original license notices remain intact, with modifications recorded in `build/src/OPENCLAW_PATCH_NOTICE.md`.
+`chrome-devtools-mcp@1.12.0` has an approved exact-version snapshot-identity patch, backported from [ChromeDevTools/chrome-devtools-mcp#2788](https://github.com/ChromeDevTools/chrome-devtools-mcp/pull/2788) at `06c8d4bc44f68bde8bd3fcd97dcc47375df81fe9` and forward-ported onto tag commit `af2834411a564d366f9cab63efb046d9084f4dba`. Stable IDs include the frame's captured CDP session and document generation; ambiguous IDs stay capture-local, and stale lazy handles cannot resolve into a replacement renderer. Frame-local lookup and retained extra handles preserve actions and labeled screenshots. The 1.12.0 CSS-style lookup resolves the same guarded handle and stays within its captured renderer, failing closed when the embedded DevTools target cannot represent a cross-renderer frame. Version 1.12.0 already exports its bundled `CdpFrame`, so the patch changes only the snapshot owner and its DOM-result caller. Original license notices remain intact, with modifications recorded in `build/src/OPENCLAW_PATCH_NOTICE.md`.
 
-The published integrity is `sha512-CytJ/5tnzrS+J/74be2P5aCOsS/mmGRHys/Si+IYC4ucrbnWAmES/dYdxGJjeUCECRcoFUilZAysdjlwqUjXIA==`; the patch SHA-256 is `c2e391b196607620c519f04eb1563dc4a8f01aebed3b70bd77e6635ae03a5c9a`.
+The published integrity is `sha512-lAGpH0zXT1ZdaPefP1KK/MvxwihOlu7VGQ7p4wbhD9OhN17vUC4KWk/ImUYR9DE4s+7r4r0ySV4xr2OkTa7ZMA==`; the patch SHA-256 is `1512760e206b35bf417387b18d4c1a5d0f68e2ffeef994cb733c9e02ba4eba92`.
 
 | Target | Published SHA-256 | Patched SHA-256 |
 | --- | --- | --- |
-| `build/src/McpPage.js` | `ad350b4b067b7c8e34706488d543869e71a7bcba73f2df45e35f7d518469f358` | `4044a30df6292a5d4517f718c32818e9c85f8051c318ec88bef7aa127d883a36` |
-| `build/src/OPENCLAW_PATCH_NOTICE.md` | Added | `41aada055258ec8754581f6cee1e3ed505499be8373969e6267031ebabc00594` |
-| `build/src/TextSnapshot.js` | `c81a4b9d989524256d365e252c2610ec1e8d8883f976da18e4d6b115e274b83d` | `5c647c3d0b416bdfc1bcaf1b1136f6a7682db05cf59982e3ab6f17d00d2d17ac` |
-| `build/src/third_party/index.js` | `b047499006b0027bd37165fa8197fa6fa5caa9b8c07d938992857659270ec493` | Unchanged |
+| `build/src/McpPage.js` | `70f22c6f6d4e721e001de5167d4dab7b012b4c024d5e5d89b480c85c1c2a163a` | `313ce4bfaaea85ab3c57a0bb8f4ad23c093ad33f25407170b2bef6f1654b30b8` |
+| `build/src/OPENCLAW_PATCH_NOTICE.md` | Added | `c490fb032360cf26141c4a8d72c6ab4587613051619aa88c346662eaaa6daee5` |
+| `build/src/TextSnapshot.js` | `a8d830eebe70a4a0dda162d24e1ef5c83d334b09b72b6491e8ddd380da76e9c4` | `21be06826da0dafaadf712b1dc689f6f07c63042a0b6ee30c4afca9a0d616963` |
+| `build/src/third_party/index.js` | `e1752f75684b672362dc3ae77a399407c509b76471fca08f967fc44fe2cb267b` | Unchanged |
 
 The root package bundles this patched dependency so npm installations preserve the same bytes as pnpm source installs. Browser launches the packaged CLI directly with the runtime running OpenClaw, Node or Bun. Remove this patch, its registration, and the patch-specific package checks when a published upstream version passes `pnpm test:e2e:browser-mcp` and the installed-package stdio proof, including renderer replacement, cross-origin frames, cancellation, and snapshot → wait → action.
 
@@ -80,7 +80,9 @@ Remove the noVNC patch, its registration, and its exact-version guard exception 
 
 `matrix-js-sdk@44.0.0` has an approved temporary patch for saved-sync verification replay. Classic sync propagates its existing cache provenance through ordinary client events, and the crypto listener ignores restored events. This preserves room history, sync cursors, ordinary event listeners, fresh verification events, and to-device processing while preventing cached verification requests from restarting after a clean client shutdown. Version 44.0.0 still routes restored events into crypto, so the patch remains necessary.
 
-The published integrity is `sha512-5wjcYMIX1aqhJC9hSUGjfSW+7SWEaLC8NUaek0xH5KGXqAO11M4Z5Mk7Voodsk+16Jm9PYB8/wMtyqIKFm0VAQ==`; the patch SHA-256 is `c3ad7f3afbd9ded4643fbfa31f5862d48d4e05d198cb438efbb4fcdaa845b0cc`.
+The same Matrix patch unrefs request deadline timers so finished CLI commands can exit, and catches late in-room verification failures after client shutdown instead of leaving an unhandled rejection. These are independent of saved-sync replay; retain them until `extensions/matrix/src/matrix/sdk/matrix-js-sdk-patch.sdk.test.ts` passes with the unpatched dependency.
+
+The published integrity is `sha512-5wjcYMIX1aqhJC9hSUGjfSW+7SWEaLC8NUaek0xH5KGXqAO11M4Z5Mk7Voodsk+16Jm9PYB8/wMtyqIKFm0VAQ==`; the patch SHA-256 is `823022214a1466879aba6c60460809768e76f747411fd95c8a99d56096100f48`.
 
 Remove the Matrix patch, its registration, and its exact-version guard exception when an upstream release passes `node scripts/run-vitest.mjs extensions/matrix/src/matrix/client/file-sync-store.test.ts` and the full Matrix QA catalog, including the original DM SAS-to-QR sequence. The regression exercises the real SQLite sync store, SDK cache hydration, and crypto event wiring; it observes crypto input rather than substituting for native verification proof.
 
@@ -89,14 +91,14 @@ runner, and `@vitest/runner@5.0.0` is not published, so no standalone runner
 dependency or patch remains. The published package integrity is
 `sha512-cPODOMF8YnkiiYtDdHo6n4wWmBrOBBbOIYH2d33M4l3CdNn72h+qMmO6uXffUN6A5AZFXNND/d+krS9mgkXRfg==`.
 The patch SHA-256 is
-`abb35069c56858589f463527013088f26c8da59c6cccfd5c48b35c472caac355`
+`a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6`
 and it changes exactly these nine published files:
 
 | Target | Published SHA-256 | Patched SHA-256 |
 | --- | --- | --- |
 | `dist/chunks/cac.CLrZKo1g.js` | `cbe6e023d5b1e5c8de648da0d43242e660d88676b172a022d2b95f22a88b78c0` | `5c429f733a64ee9a0de35db6fe15f5ee10d03ae784f664faf0afe940896ad7fb` |
 | `dist/chunks/cli-api.De07GUeT.js` | `8b75d08fd468ac1428ef5562e43883e2cf1953c8953a7eab95da17b30ed97945` | `39173bec8f75564cd8db538593973cdf101a8321fd2a9c26d9d5edfa6ac3af53` |
-| `dist/chunks/index.1TqnEahn.js` | `4e311af8b4db378a5c3d4e768b5210b0779d2ae0d0ec05f81a72378dbaf25412` | `17c97be7f0b926e164c7d36273677964379959884024a74e72c0b2fed07d3baa` |
+| `dist/chunks/index.1TqnEahn.js` | `4e311af8b4db378a5c3d4e768b5210b0779d2ae0d0ec05f81a72378dbaf25412` | `5e145f05fb6a3626b30ecdb984b993380915b03c1ba580b60ee58d3603979d5b` |
 | `dist/chunks/index.CK-t0WMg.js` | `4712d1e9acaefca5d215c21f53007eeae30904768d45a10cd1fd09c01c6fd46e` | `605c675633a59166e5ca9b04108f4b34ca9f3cf2e3cc41a292f8277ec64aaa99` |
 | `dist/chunks/index.aTZaPVhf.js` | `381472b0170386acbc3f7d05b68ef05b3da53dcaa1058d2750d138648cd2933a` | `9fed49edda9cac115628ff4203ca307200ff721786925654044fbe4076be5ad9` |
 | `dist/chunks/init-forks.CRxIPOJR.js` | `ef3f4026f3bc661f0542e379186637000cd2e6721e78733a4d5b5e9d3de46a64` | `03632dcb32e05236d984c58f2c8aed1a3eac7cb945594e9e0bd8bb32b2a18316` |
@@ -131,6 +133,10 @@ The patch owns these temporary invariants and removal gates:
   transform temporary markers; invalidation covers the root and selected
   projects. Remove these hunks when stock Vitest passes the five cache-generation
   and invalidation regressions in `test/vitest-performance-config.test.ts`.
+- **Cached-source decoding (`index.1TqnEahn.js`):** decode transform-cache files as
+  UTF-8 before splitting their source maps. Remove this hunk when the published
+  dependency reads cached source as text and passes the cache-generation
+  regressions in `test/vitest-performance-config.test.ts`.
 - **Graceful fork shutdown (`index.1TqnEahn.js`,
   `init-forks.CRxIPOJR.js`, `plugin.d.C8mmycim.d.ts`, `dist/node.d.ts`):**
   built-in fork workers flush a `willExit` response, exit explicitly, and are
@@ -166,7 +172,7 @@ dependency files manually. A clean `pnpm install --frozen-lockfile` must apply
 the recorded patch hash to the published integrity and reproduce every patched
 target hash above.
 
-`baileys@7.0.0-rc14` needs a two-line adapter for `audio-decode@3.12.0`:
+`baileys@7.0.0-rc14` contains two independent repairs. Its adapter for `audio-decode@3.12.0` must
 read the first decoded channel from `channelData[0]` and require the matching
 3.x peer. Version 3 returns raw channel arrays instead of an AudioBuffer;
 Baileys otherwise catches the missing `getChannelData()` method and silently
@@ -174,7 +180,7 @@ omits voice-note waveforms. The existing Baileys owner retains waveform
 normalization, media preparation, and best-effort decoding errors.
 
 The patch SHA-256 is
-`03ae85550381d1bda7d014c9aa9f544ad421d35d745d1167fd5d33f7f715dafb`.
+`c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded`.
 The regression in `extensions/whatsapp/src/baileys-audio.test.ts` prepares a
 real Baileys voice-note payload from deterministic PCM and checks its complete
 64-byte waveform. Isolated dependency proof also covered Buffer, file, and
@@ -182,21 +188,25 @@ stream decoding, WAV and Ogg Opus voice payloads, and malformed-audio handling.
 The plugin package owner bundles patched runtime dependencies so installed
 WhatsApp plugins retain the adapter. Remove this patch and its registration
 when an upstream Baileys version accepts the current decoder and passes the
-same voice-note regression.
+same voice-note regression. The upload repair also selects the existing Node HTTP
+uploader on Bun, preserving configured proxy agents and replayable redirect
+bodies, and keeps diagnostics for upload errors without a stack. Retire that
+part only when unpatched Baileys passes
+`extensions/whatsapp/src/session.media-upload.test.ts` on Node and supported Bun;
+an audio-only upstream fix does not replace the upload contract.
 
-`apache-arrow@21.2.0` replaces per-builder JavaScript generation for null
-sentinels with a direct predicate for the common `[null]` case and a snapshot
-`Set` for other sentinels. NaN, signed zero, undefined, bigint, and literal
-strings retain their equality semantics. Both CommonJS and ESM distributions,
-the TypeScript source, declarations, and maps are generated from the same owner.
-This lets LanceDB serialize memory writes when code generation from strings is
-disabled and avoids compiling a predicate for each column on ordinary Node/Bun.
+`ghostty-web@0.4.0` releases the selection manager’s document mousedown
+listener and retained target on disposal. It also adds an optional terminal
+`onCopy` callback after clipboard writing succeeds, including the fallback path.
+The Control UI uses that success notification for copy feedback; selection
+changes alone do not prove that anything reached the clipboard.
 
-Remove this patch and its registration when an upstream release passes
-`extensions/memory-lancedb/arrow-null-predicates.test.ts` and the existing
-`lancedb-store.delete.test.ts` and `lancedb-store.staleness.test.ts` contracts. The former exercises both module formats in a
-Node process with `--disallow-code-generation-from-strings`; the latter covers
-memory writes, vector search, agent isolation, and reopened tables.
+Remove this patch and its registration when an upstream release releases the
+listener and supplies equivalent success-only copy feedback, with
+`ui/src/e2e/terminal-runtime.e2e.test.ts` and
+`ui/src/components/terminal/terminal-controller-lifecycle.test.ts` passing. Keep
+failure, pending-copy and disposal cases; a copy-request callback is not the same
+contract as clipboard completion.
 
 `@shinyoshiaki/binary-data@0.6.1` uses ordinary closures for its finite numeric,
 stream, transaction, and BufferList methods instead of compiling functions at
@@ -213,7 +223,7 @@ covers all numeric codec wire bytes and fragmented transactional reads, plus a
 real werift DTLS handshake and encrypted application-data exchange over an
 in-memory datagram transport, with string compilation disabled throughout.
 
-`@openclaw/crabline@0.1.30` uses fixed generated protobuf codecs for Feishu frames instead of building codecs from a reflected schema on first use. The protobuf wire format, required fields, decimal uint64 IDs, object conversion, and private schema ownership are unchanged. The runtime imports only `protobufjs/minimal.js`; no dynamic-code-generation setting is required.
+`@openclaw/crabline@0.2.0` uses fixed generated protobuf codecs for Feishu frames instead of building codecs from a reflected schema on first use. The protobuf wire format, required fields, decimal uint64 IDs, object conversion, and private schema ownership are unchanged. The runtime imports only `protobufjs/minimal.js`; no dynamic-code-generation setting is required.
 
 The patch includes the canonical `dist/src/servers/feishu-wire.proto` plus `dist/src/servers/generate-feishu-wire.mjs`. Regenerate in the extracted package with `node dist/src/servers/generate-feishu-wire.mjs` (the generator uses pinned protobufjs-cli 2.7.0 and protobufjs 8.8.0 at build time). The original reflection source map is removed with its source-map reference rather than shipping incorrect debugger mappings. Existing public declarations remain unchanged; the new codec is an internal JavaScript module.
 
@@ -271,7 +281,7 @@ normal exit, and signal cleanup. Its package file list explicitly retains the
 published changelog during patch regeneration. The existing Crabline package
 patch is unchanged.
 
-`@clawdbot/lobster@2026.9.16` has an approved temporary validation patch. Its two
+`@clawdbot/lobster@2026.10.1` has an approved temporary validation patch. Its two
 fixed LLM payload/envelope checks are generated with Ajv at build time. A scoped
 compiler callback lets the OpenClaw plugin use the shared codegen-free validator
 on AOT hosts while keeping native Ajv validation on Node and JIT Bun. The scope
@@ -291,7 +301,7 @@ Normalize pnpm's trailing header tabs, then refresh the native patch hash:
 ```sh
 node --input-type=module <<'JS'
 import { readFileSync, writeFileSync } from "node:fs";
-const patch = "patches/@clawdbot__lobster@2026.9.16.patch";
+const patch = "patches/@clawdbot__lobster@2026.10.1.patch";
 const source = readFileSync(patch, "utf8");
 writeFileSync(patch, source.replace(/^(?:---|\+\+\+) .+\t$/gm, (line) => line.slice(0, -1)));
 JS

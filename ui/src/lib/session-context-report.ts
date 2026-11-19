@@ -29,6 +29,9 @@ export type SessionCostTotal = {
   unpriced: boolean;
   /** Share of prompt tokens served from the provider cache; null when no prompt was billed. */
   cacheHitRate: number | null;
+  /** Lifetime uncached input and output tokens; lower bounds while `partial`. */
+  input: number;
+  output: number;
 };
 type SessionContextReportSnapshot = {
   report: SessionSystemPromptReport | null;
@@ -148,6 +151,8 @@ function createSessionContextReports(gateway: ApplicationGateway) {
                 unpriced: usage.totalCost === 0 && usage.missingCostEntries > 0,
                 // Unlike cost, a ratio of incomplete counters is no bound: withhold it.
                 cacheHitRate: response.partial || row?.computing ? null : promptCacheHitRate(usage),
+                input: usage.input,
+                output: usage.output,
               }
             : null,
           loading: false,

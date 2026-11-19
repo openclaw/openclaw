@@ -190,7 +190,8 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     ),
     "Prepared npm adoption requires the exact FRV run and attempt.",
   );
-  const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
+  const { createReleaseEvidenceClient, loadPublicationParentEvidence } =
+    await import("./release-ci-summary.mjs");
   const { authenticateFullReleaseValidationEvidence, revalidateCandidateArtifactAuthority } =
     await import("./validate-full-release-validation-evidence.mjs");
   const client =
@@ -220,7 +221,12 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
   }
   const runId = String(params.fullReleaseValidationRunId);
   const runAttempt = Number(params.fullReleaseValidationRunAttempt);
-  const { manifest } = await client.loadManifest(runId, runAttempt);
+  const { manifestJson: manifest } = await loadPublicationParentEvidence({
+    client,
+    repository,
+    runId,
+    expectedRunAttempts: new Map([[runId, runAttempt]]),
+  });
   const selected = manifest.sourceAdmission?.publicationSelection;
   // Derive the operation only after the validator authenticates the whole
   // admission. Its owner decides whether this is a covered plugin-only subset.
@@ -998,7 +1004,7 @@ async function runPreparedNpmCommand(argv) {
             shareAcquisitionReads: true,
           });
     } else if (command === "authorize" || command === "consume") {
-      // Parent dispatch and direct commands lack a carrier. Share raw reads only
+      // Parent dispatch and direct recovery lack a carrier. Share raw reads only
       // within this command; the final sweep still refreshes live authority.
       adoptionParams.immutableReads = createReleaseEvidenceReplay({}, undefined, {
         shareAcquisitionReads: true,

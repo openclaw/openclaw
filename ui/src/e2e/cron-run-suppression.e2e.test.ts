@@ -84,7 +84,6 @@ suite.define(() => {
         for (const scope of ["all", "job"] as const) {
           if (scope === "job") {
             await openAutomation(page, job.id);
-            await page.locator('[data-test-id="cron-detail-tab-history"]').click();
           }
           await expect
             .poll(async () =>

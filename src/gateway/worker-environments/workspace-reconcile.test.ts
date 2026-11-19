@@ -102,6 +102,28 @@ function stageResult({ ref, base, current }: Awaited<ReturnType<typeof resultFix
   });
 }
 
+it("does not reinspect ordinary files for directory cleanup during apply", async () => {
+  await writeWorkspaceFiles(local, { "modified.txt": "base\n" });
+  const base = await manifestFor(local);
+  await fs.mkdir(path.join(local, "new", "__pycache__"), { recursive: true });
+  await fs.writeFile(path.join(local, "new", "__pycache__", "cache.pyc"), "derived");
+  await writeWorkspaceFiles(staged, { "modified.txt": "updated\n", new: "new source\n" });
+  const current = await manifestFor(staged);
+  const worker = await import("./workspace-manifest-worker.js");
+  const run = worker.runWorkspaceFilesystemComputation;
+  const cleanupPaths: string[] = [];
+  using observe = vi.spyOn(worker, "runWorkspaceFilesystemComputation");
+  observe.mockImplementation((command, options) => {
+    if (command.type === "workspace.reconcile.apply") {
+      cleanupPaths.push(...command.input.appliedEntries.map((entry) => entry.path));
+    }
+    return run(command, options);
+  });
+  await apply(base, current);
+  await expectWorkspaceFiles(local, { "modified.txt": "updated\n", new: "new source\n" });
+  expect(cleanupPaths).toEqual(["new"]);
+});
+
 it.each(["base", "current"] as const)(
   "identifies only a current-manifest path rejection before staging (%s invalid)",
   async (invalid) => {

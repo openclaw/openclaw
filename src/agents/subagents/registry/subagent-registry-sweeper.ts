@@ -349,15 +349,13 @@ export function createSubagentRegistrySweeper(params: {
         if (typeof entry.execution.endedAt !== "number") {
           // A running row from an earlier process never resumes; its requester still
           // needs a terminal outcome. Any other unended row is retained history.
-          if (executionRetired) {
-            await settleRestartInterruptedSubagentRun({
-              runId,
-              entry,
-              readScope,
-              complete: params.completeSubagentRunWithRecovery,
-              now,
-            });
-          }
+          await settleRestartInterruptedSubagentRun({
+            runId,
+            entry,
+            readScope,
+            complete: params.completeSubagentRunWithRecovery,
+            now,
+          });
           continue;
         }
 
