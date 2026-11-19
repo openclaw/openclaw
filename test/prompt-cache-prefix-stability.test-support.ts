@@ -49,6 +49,33 @@ function onlyMessagesChanged(
   );
 }
 
+type GeminiParts = { parts?: Array<{ functionResponse?: { response?: { output?: unknown } } }> };
+
+/** True when `after` is `before` with only shortened, truncation-marked tool outputs. */
+function outputTrimmed(before: string, after: string): boolean {
+  const original = JSON.parse(before) as GeminiParts;
+  const trimmed = JSON.parse(after) as GeminiParts;
+  let changed = false;
+  for (const [index, part] of (trimmed.parts ?? []).entries()) {
+    const response = part.functionResponse?.response;
+    const full = original.parts?.[index]?.functionResponse?.response?.output;
+    const output = response?.output;
+    if (
+      response &&
+      typeof output === "string" &&
+      typeof full === "string" &&
+      output !== full &&
+      output.length < full.length &&
+      output.includes("more characters truncated")
+    ) {
+      // Restore the known change; everything else in the message must still match.
+      response.output = full;
+      changed = true;
+    }
+  }
+  return changed && JSON.stringify(trimmed) === before;
+}
+
 // Gemini replay also drops the call id of the merged call and of its result.
 const withoutCallIds = (message: string) =>
   message.replace(/("function(?:Call|Response)":\{.*?),"id":"[^"]*"\}/g, "$1}");
@@ -102,16 +129,7 @@ export const KNOWN_BREAKS: ReadonlyArray<{
     // The pre-request pressure check trims tool results that earlier requests already sent.
     api: "google-generative-ai",
     chat: "other",
-    accepts: (previous, current) =>
-      onlyMessagesChanged(
-        previous,
-        current,
-        (before, after) =>
-          before.includes("functionResponse") &&
-          after.includes("functionResponse") &&
-          after.includes("more characters truncated") &&
-          after.length < before.length,
-      ),
+    accepts: (previous, current) => onlyMessagesChanged(previous, current, outputTrimmed),
     owner: "https://github.com/openclaw/openclaw/pull/199530",
   },
   { api: "openai-completions", chat: "target", accepts: cronReplyMerged, owner: CRON_REPLY_TWICE },
