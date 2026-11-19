@@ -46,12 +46,15 @@ const STABLE_116_CI_FAILURES = new Map([
 
 const FRV16_TARGET_SHA = "995f9059b6e6fe3ba0865a3354924fd2bcbfceea";
 const FRV16_CI_FAILURES = new Map([
-  ...[15, 23, 3, 32, 11, 41, 18, 30].map((shard) => [
+  ...[15, 23, 3, 32, 11, 41, 18, 30, 17, 21, 43, 20, 19].map((shard) => [
     "checks-node-compact-large-" + shard + " (node)",
     "checks-node-core-test-nondist-shard",
   ]),
   ["checks-node-compact-small-38 (node)", "checks-node-core-test-nondist-shard"],
+  ["checks-node-compact-small-12 (node)", "checks-node-core-test-nondist-shard"],
+  ["checks-node-compact-large-39 (bun)", "checks-node-core-test-nondist-shard"],
   ["checks-ui-e2e (2/13)", "checks-ui-e2e"],
+  ["checks-ui-e2e (4/13)", "checks-ui-e2e"],
 ]);
 const FRV16_QA_JOB = "Run QA Lab runtime-pair lane (core)";
 
@@ -132,7 +135,7 @@ const RELEASE_VALIDATION_WAIVERS = [
     targetVersion: "2026.11.10-beta.1",
     targetSha: FRV16_TARGET_SHA,
     reason:
-      "Dallin Romney authorized tooling-only acceptance on 2026-11-19 at 06:44 UTC, preserving C=Q 995f9059b6e6fe3ba0865a3354924fd2bcbfceea. The lead assessment found no demonstrated high-risk product defect; runtime, worker, UI and cron uncertainty remains accepted, not fixed or proven flaky. Following his 2026-11-19 07:06 UTC instruction, these grants apply across runs and attempts for the named terminal failed jobs on this exact release and candidate. Preserve raw failures, required execution and complete evidence. Other jobs, targets, unknown aggregate causes, missing/cancelled/incomplete evidence, integrity, install/update and publication gates remain blocking.",
+      "Dallin Romney authorized tooling-only acceptance on 2026-11-19 at 06:44 UTC, preserving C=Q 995f9059b6e6fe3ba0865a3354924fd2bcbfceea. The lead assessment found no demonstrated high-risk product defect; runtime, worker, UI and cron uncertainty remains accepted, not fixed or proven flaky. On 2026-11-19 at 10:12 UTC he additionally authorized the eight observed FRV17 failures after a focused check of the ambiguous chat-permissions case. That unchanged-candidate Bun test passed, including private-message and access-revocation assertions; the original CI failure remains unexplained. The other new failures are an infrastructure download timeout and suspected timing failures, not established harmless flakes. Following his 2026-11-19 07:06 UTC instruction, these grants apply across runs and attempts for the named terminal failed jobs on this exact release and candidate. Preserve raw failures, required execution and complete evidence. Other jobs, targets, unknown aggregate causes, missing/cancelled/incomplete evidence, integrity, install/update and publication gates remain blocking.",
   })),
   ...[...STABLE_116_CI_FAILURES.keys()].map((jobName) => ({
     targetVersion: "2026.11.6",

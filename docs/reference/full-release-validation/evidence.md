@@ -114,9 +114,16 @@ in 44465878180/1, only for candidate
 UI, and cron uncertainty, not a claim of fixes or passing tests. Their aggregates
 require the exact observed causes and failed steps; the silent QA status-check
 aggregate additionally requires the SHA-256 of its complete reviewed original
-log. These FRV16 grants apply across runs and attempts for the same release,
-candidate, and named jobs. Different candidates and additional failed jobs are
-not granted.
+log. The November 19, 10:12 UTC authorization extends these grants to the eight
+additional observed CI failures in FRV17: Node large shards 17, 19, 20, 21, and 43,
+Node small shard 12, Bun large shard 39, and UI shard 4/13. The focused
+chat-permissions test passed on the unchanged candidate under Bun, including
+private-message and access-revocation assertions; its original failure remains
+unexplained. The remaining new failures are a browser-download infrastructure
+timeout and suspected timing failures, not proven harmless flakes. These grants
+apply across runs and attempts for the same release, candidate, and named jobs.
+Different candidates and additional failed jobs are not granted. Cancelled,
+timed-out, or incomplete jobs remain coverage gaps, not accepted failures.
 
 Changing P alone does not invalidate retained evidence for unchanged C/Q, coverage,
 inputs, and source digests. With reuse enabled, admitted P reevaluates sealed child
