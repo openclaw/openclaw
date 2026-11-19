@@ -10,6 +10,10 @@ sidebarTitle: "Update methods"
 
 Install-type switching, the source-server reference script, the installer, and manual package-manager updates. Part of the [Updating](/install/updating) guide.
 
+When you ask an agent to update the Gateway, it should identify the running
+installation and use the update procedure authorized by its host. An update
+request alone does not request a switch between installation methods.
+
 ## Switch between npm and git installs
 
 Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. Before retiring an old source wrapper, the updater rechecks its identity and contents and confirms that it still owns the update. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
@@ -159,11 +163,6 @@ selector are not enumerated. Stop those instances with their native service
 commands before building. Discovered macOS LaunchDaemons are inspected in the
 `system` domain; global LaunchAgents remain in the invoking user’s GUI domain.
 This observation does not grant the updater control of a system LaunchDaemon.
-
-Agents first check how the running Gateway is managed. For a Gateway running directly from
-a Git checkout, an agent can update that checkout with Git when the host
-authorizes it. You don't need to specify a commit or tag. To switch installation
-methods, ask for that change explicitly.
 
 Teams running a gateway directly from a git checkout on a server can update it
 with `scripts/update-gateway.sh` from inside that checkout. It is the reference

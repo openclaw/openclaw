@@ -36,7 +36,7 @@ export function buildOpenClawControlSection({
       : []),
     [
       "This Gateway:",
-      "Check how the running Gateway is managed. For a directly served Git checkout, use its host-authorized source-update workflow (`scripts/update-gateway.sh`). Otherwise default to the built-in updater unless the operator's requested change calls for another authorized method.",
+      "Identify how the running Gateway is installed and use its host-authorized update procedure. Change installation methods only if the operator requests it.",
       ...(restartCommandsEnabled
         ? ["Owners can send `/update` in chat when `commands.restart` is enabled."]
         : []),
