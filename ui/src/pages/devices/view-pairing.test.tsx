@@ -103,7 +103,12 @@ describe("device pairing dialog", () => {
   it.each([
     { lifecycle: { phase: "selection", access: "full" }, choices: true, selectable: true },
     {
-      lifecycle: { phase: "error", source: "create", access: "full", message: "Try again" },
+      lifecycle: {
+        phase: "error",
+        source: "create",
+        access: "full",
+        error: new Error("Try again"),
+      },
       choices: true,
       selectable: true,
     },
@@ -248,5 +253,30 @@ describe("device pairing dialog", () => {
     expect(view.getByRole("status")).toBe(status);
     expect(status.textContent).toBe("");
     view.getByText(waiting);
+  });
+
+  it("offers secure access setup instead of the raw error for a loopback-only Gateway", () => {
+    const refusal = Object.assign(new Error("Gateway is only bound to loopback."), {
+      details: { code: "DEVICE_PAIR_GATEWAY_LOOPBACK_ONLY" },
+    });
+    const view = mountSolid(() => (
+      <Pairing lifecycle={{ phase: "error", source: "create", access: "full", error: refusal }} />
+    ));
+    expect(view.getByText("Set up secure access")).toBeTruthy();
+    expect(view.queryByText("Couldn’t create a setup code. Try again.")).toBeNull();
+    expect(view.getByRole("button", { name: /Retry/ })).toBeTruthy();
+
+    const other = mountSolid(() => (
+      <Pairing
+        lifecycle={{
+          phase: "error",
+          source: "create",
+          access: "full",
+          error: new Error("No auth"),
+        }}
+      />
+    ));
+    expect(other.queryByText("Set up secure access")).toBeNull();
+    expect(other.getByText("No auth")).toBeTruthy();
   });
 });

@@ -1,5 +1,4 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import { isDevicePairGatewayLoopbackOnlyError } from "@openclaw/gateway-protocol/gateway-error-details";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   DevicePairSetupCodeParams,
@@ -35,9 +34,8 @@ export type DevicePairSetupLifecycle = { access: DevicePairSetupAccess } & (
   | { phase: "loading" }
   | { phase: "waiting"; setup: DevicePairSetup }
   | { phase: "reconciling"; setupId: string }
-  | { phase: "error"; source: "create"; message: string }
-  // No phone can reach a loopback-only Gateway until the owner sets up secure access.
-  | { phase: "secure-access-required" }
+  // The dialog formats the failure and recognizes the loopback-only refusal.
+  | { phase: "error"; source: "create"; error: unknown }
   | { phase: "error"; source: "status"; setupId: string; message: string }
   | { phase: "success"; deviceName?: string }
   | { phase: "delivery-uncertain" }
@@ -364,9 +362,7 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
       state.client === client &&
       state.devicePairSetupOpen
     ) {
-      state.devicePairSetupLifecycle = isDevicePairGatewayLoopbackOnlyError(err)
-        ? { phase: "secure-access-required", access }
-        : { phase: "error", source: "create", access, message: formatUiError(err) };
+      state.devicePairSetupLifecycle = { phase: "error", source: "create", access, error: err };
     }
   } finally {
     if (devicePairSetupRequests.get(state) === requestToken) {
@@ -381,7 +377,6 @@ export async function setDevicePairSetupAccess(
 ) {
   if (
     (state.devicePairSetupLifecycle.phase !== "selection" &&
-      state.devicePairSetupLifecycle.phase !== "secure-access-required" &&
       (state.devicePairSetupLifecycle.phase !== "error" ||
         state.devicePairSetupLifecycle.source !== "create")) ||
     state.devicePairSetupLifecycle.access === access

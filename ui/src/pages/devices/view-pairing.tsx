@@ -1,12 +1,14 @@
 import "../../styles/device-pair-setup.css";
 import { action, createOptimistic, For, Show, until } from "solid-js";
-import { handleCopyButton } from "../../components/copy-button-state.ts";
+import { isDevicePairGatewayLoopbackOnlyError } from "../../../../packages/gateway-protocol/src/device-pair-error-details.ts";
 import "../../components/modal-dialog.tsx";
+import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Radio } from "../../components/solid/radio.tsx";
+import { registerDevicePairSecureAccessEnglish } from "../../i18n/locales/en-device-pair-secure-access.ts";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import type {
   DevicePairSetupAccess,
@@ -19,6 +21,7 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { showToast } from "../../lib/toast.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
+registerEnglishCatalog(registerDevicePairSecureAccessEnglish);
 
 const MOBILE_PAIRING_DOCS_URL =
   "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended";
@@ -53,7 +56,7 @@ type PairingOutcomeLifecycle = Extract<
 // Loopback stays the default; the owner chooses and applies a route on the Gateway host.
 function SecureAccessSetup() {
   return (
-    <div class="device-pair-setup__command device-pair-setup__secure-access" role="status">
+    <div class="device-pair-setup__command device-pair-setup__secure-access">
       <strong>{t("devices.pairing.secureAccess.title")}</strong>
       <p>{t("devices.pairing.secureAccess.intro")}</p>
       <section class="device-pair-setup__command">
@@ -198,9 +201,18 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
     );
   const isNodeSetup = () => props.lifecycle.access === "node";
   // A code is minted for one access level, so the choice only shows while it can still change.
-  const needsSecureAccess = () => props.lifecycle.phase === "secure-access-required";
+  const failure = () => {
+    const current = error();
+    return current?.source === "create"
+      ? isDevicePairGatewayLoopbackOnlyError(current.error)
+        ? undefined
+        : { source: current.source, message: formatUiError(current.error) }
+      : current;
+  };
+  // No phone can reach a loopback-only Gateway, so the owner gets setup steps instead of the raw error.
+  const needsSecureAccess = () => Boolean(error()) && !failure();
   const showAccessChoices = () =>
-    props.lifecycle.phase === "selection" || needsSecureAccess() || error()?.source === "create";
+    props.lifecycle.phase === "selection" || error()?.source === "create";
   const canSelectAccess = () => !refreshing() && showAccessChoices();
   const copyLabel = () => t("devices.pairing.copySetupCode");
   return (
@@ -278,17 +290,17 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 </span>
               </div>
             </Show>
-            <Show when={error()}>
-              {(failure) => (
+            <Show when={failure()}>
+              {(current) => (
                 <InlineAlert tone="danger" class="device-pair-setup__error" role="alert">
                   <strong>
                     {t(
-                      failure().source === "status"
+                      current().source === "status"
                         ? "devices.pairing.statusFailed"
                         : "devices.pairing.failed",
                     )}
                   </strong>
-                  <span>{failure().message}</span>
+                  <span>{current().message}</span>
                 </InlineAlert>
               )}
             </Show>
@@ -442,7 +454,7 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 {t("devices.pairing.generateCode")}
               </button>
             </Show>
-            <Show when={error() || needsSecureAccess()}>
+            <Show when={error()}>
               <button
                 class="btn primary"
                 type="button"

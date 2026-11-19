@@ -7,7 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { DevicePairErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { registerDevicesCli } from "../../cli/devices-cli.js";
 import * as gatewayRpc from "../../cli/gateway-rpc.js";
@@ -497,7 +497,7 @@ describe("device.pair.setupCode", () => {
     expect(ok).toBe(false);
     expect(error?.message).toBe(PAIRING_GATEWAY_LOOPBACK_ERROR);
     expect(error?.details).toEqual({
-      code: GatewayErrorDetailCodes.DEVICE_PAIR_GATEWAY_LOOPBACK_ONLY,
+      code: DevicePairErrorDetailCodes.GATEWAY_LOOPBACK_ONLY,
     });
   });
 

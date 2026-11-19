@@ -231,23 +231,6 @@ const enDevices = {
       nodeWaiting: "Run the command on the device, then review its pairing request here.",
       helpNewTab: "Connection help (opens in a new tab)",
       manageDevices: "Manage devices",
-      secureAccess: {
-        title: "Set up secure access",
-        intro:
-          "Your phone can’t reach OpenClaw yet. Right now it only accepts connections from this computer.",
-        tailscaleTitle: "Use Tailscale (recommended)",
-        tailscaleSteps:
-          "Encrypted from anywhere, and OpenClaw stays private to this computer. Install Tailscale on this computer and your phone and sign in on both. Then run this command and restart OpenClaw.",
-        tailscaleGuide: "Tailscale setup guide",
-        lanTitle: "Use your home Wi‑Fi instead",
-        lanWarning:
-          "Only on a network you trust. The connection isn’t encrypted, so others on the network can see it, and OpenClaw stays reachable on any network this computer joins. Phones get Limited access, which still includes chat history and approvals. Run this command, then restart OpenClaw.",
-        lanUndo:
-          "To undo, run {command}, restart OpenClaw, and remove devices you no longer want in Manage devices.",
-        publicTitle: "Use a public HTTPS address",
-        publicHint:
-          "If you already run one, set gateway.publicOrigin to it, or set the device-pair plugin’s publicUrl.",
-      },
     },
     capabilities: {
       browser: { label: "Browser", description: "Browse and interact with web pages." },

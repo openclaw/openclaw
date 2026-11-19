@@ -1,7 +1,7 @@
 import {
+  DevicePairErrorDetailCodes,
   ErrorCodes,
   errorShape,
-  GatewayErrorDetailCodes,
   validateDevicePairSetupCodeParams,
   validateDevicePairSetupStatusParams,
   type DevicePairSetupCodeResult,
@@ -150,7 +150,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
               resolved.error,
               // Lets the dashboard offer secure access setup instead of the raw config hint.
               resolved.error === PAIRING_GATEWAY_LOOPBACK_ERROR
-                ? { details: { code: GatewayErrorDetailCodes.DEVICE_PAIR_GATEWAY_LOOPBACK_ONLY } }
+                ? { details: { code: DevicePairErrorDetailCodes.GATEWAY_LOOPBACK_ONLY } }
                 : undefined,
             ),
           );

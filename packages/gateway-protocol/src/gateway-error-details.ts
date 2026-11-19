@@ -51,8 +51,6 @@ export const GatewayErrorDetailCodes = {
   TEMPLATE_REVIEW_REQUIRED,
   PENDING_INPUT_NOT_RETIRED: "PENDING_INPUT_NOT_RETIRED",
   OPENCLAW_CONFIG_READONLY: "OPENCLAW_CONFIG_READONLY",
-  /** A setup code was refused because no phone can reach a loopback-only Gateway. */
-  DEVICE_PAIR_GATEWAY_LOOPBACK_ONLY: "DEVICE_PAIR_GATEWAY_LOOPBACK_ONLY",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
@@ -143,8 +141,7 @@ export type GatewayErrorDetails =
   | TemplateReviewRequiredErrorDetails
   | PendingInputNotRetiredErrorDetails
   | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY }
-  | { code: typeof GatewayErrorDetailCodes.OPENCLAW_CONFIG_READONLY }
-  | { code: typeof GatewayErrorDetailCodes.DEVICE_PAIR_GATEWAY_LOOPBACK_ONLY };
+  | { code: typeof GatewayErrorDetailCodes.OPENCLAW_CONFIG_READONLY };
 
 export function readTemplateReviewRequiredError(
   error: unknown,
@@ -181,14 +178,6 @@ export function readCronJobNotFoundError(error: unknown): CronJobNotFoundErrorDe
   }
   const jobId = typeof details.jobId === "string" ? details.jobId.trim() : "";
   return jobId ? { code: CRON_JOB_NOT_FOUND, jobId } : null;
-}
-
-export function isDevicePairGatewayLoopbackOnlyError(error: unknown): boolean {
-  const record = asProtocolRecord(error);
-  return (
-    asProtocolRecord(record?.details)?.code ===
-    GatewayErrorDetailCodes.DEVICE_PAIR_GATEWAY_LOOPBACK_ONLY
-  );
 }
 
 export function isMcpAppViewExpiredError(error: unknown): boolean {

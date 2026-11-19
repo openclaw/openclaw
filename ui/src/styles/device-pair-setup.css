@@ -131,6 +131,10 @@
   gap: var(--space-2);
 }
 
+.device-pair-setup__command > p {
+  margin: 0;
+}
+
 .device-pair-setup .login-gate__command {
   min-width: 0;
 }
@@ -208,7 +212,7 @@
   transform: rotate(90deg);
 }
 
-.device-pair-setup__fallback code {
+.device-pair-setup__fallback > code {
   display: block;
   max-height: 110px;
   margin-top: var(--space-2);
