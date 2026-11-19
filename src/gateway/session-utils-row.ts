@@ -52,7 +52,7 @@ import { sessionClassificationForRow } from "./session-classification.js";
 import { projectSessionRowProfiles } from "./session-identity-projection.js";
 import { sessionModelRevision } from "./session-model-revision.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
-import { reuseSessionRowFields } from "./session-row-identity.js";
+import { freezeSessionRow } from "./session-row-identity.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { projectSessionRowProviderReview } from "./session-row-provider-review.js";
 import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
@@ -550,9 +550,7 @@ export function materializeSessionRow(
   });
   return Object.freeze({
     publicationIdentity: previous?.publicationIdentity ?? {},
-    row: freezeTrustedJsonSnapshot<Readonly<GatewaySessionRow>>(
-      reuseSessionRowFields(row, previous?.row),
-    ),
+    row: freezeSessionRow(row, previous?.row),
     source: Object.freeze({
       parsedKey: parseAgentSessionKey(key),
       backgroundProcessScope: prepareGatewaySessionBackgroundProcessScope(input),
@@ -594,16 +592,11 @@ export function replaceSessionRowFacts(
   source?: Partial<ReturnType<typeof materializeSessionRow>["source"]>,
 ): ReturnType<typeof materializeSessionRow> {
   const nextSource = source ? { ...materialized.source, ...source } : materialized.source;
-  freezeTrustedJsonSnapshot(nextSource.childLinks);
+  freezeTrustedJsonSnapshot(source?.childLinks);
   return Object.freeze({
     publicationIdentity: materialized.publicationIdentity,
     row: row
-      ? freezeTrustedJsonSnapshot(
-          reuseSessionRowFields(
-            omitUndefinedFields({ ...materialized.row, ...row }),
-            materialized.row,
-          ),
-        )
+      ? freezeSessionRow(omitUndefinedFields({ ...materialized.row, ...row }), materialized.row)
       : materialized.row,
     source: Object.freeze(nextSource),
   });
