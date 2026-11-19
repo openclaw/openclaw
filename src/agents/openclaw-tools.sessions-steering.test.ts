@@ -271,9 +271,9 @@ it.each([
       pending.push(send);
       await Promise.race([queued.promise, send, prompt]);
       expect(session.pendingMessageCount).toBe(1);
-      // Reply waiting cannot acknowledge volatile input or withdraw it before
-      // the independent durable-admission deadline and receiver consumption.
-      await vi.advanceTimersByTimeAsync(30_000);
+      // Stay below the fixed admission deadline while checking that input remains
+      // pending until the receiver consumes it.
+      await vi.advanceTimersByTimeAsync(15_000);
       vi.useRealTimers();
       expect(acknowledged).toBe(false);
       expect(session.pendingMessageCount).toBe(1);

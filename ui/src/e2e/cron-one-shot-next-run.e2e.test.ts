@@ -58,7 +58,7 @@ suite.define(() => {
         const input = page.locator("#cron-schedule-at");
         await input.waitFor({ state: "visible" });
         expect(await input.inputValue()).toBe("2026-10-30T12:00");
-        const summary = page.locator(".cron-schedule-summary");
+        const summary = page.locator('[data-test-id="cron-schedule-note"]');
         const frame = await takeControlUiScreenshotFrame(page, summary, [summary, input], {
           animations: "disabled",
           scrollTo: summary,
@@ -66,8 +66,7 @@ suite.define(() => {
         writeFileSync(artifacts + "/schedule.png", frame.png);
         const summaryText = await summary.textContent();
         writeFileSync(artifacts + "/observed.txt", summaryText ?? "");
-        expect(summaryText).toContain("Next activity at 10/30/2026, 12:10 PM");
-        expect(summaryText).not.toContain("Runs once at");
+        expect(summaryText).toBe("Next activity at 10/30/2026, 12:10 PM");
         await page.locator("#cron-name").fill("Check the fictional build again");
         await page.locator('[data-test-id="cron-submit"]').click();
         await gateway.waitForRequest("cron.update");
@@ -83,6 +82,29 @@ suite.define(() => {
         await expect
           .poll(() => summary.textContent())
           .toContain("Next activity at 10/30/2026, 12:10 PM");
+
+        await page.setViewportSize({ width: 700, height: 900 });
+        const reason = "Automation deferred while its agent is busy";
+        job.state = {
+          ...job.state,
+          admissionDeferred: {
+            reason,
+            sinceMs: Date.parse("2026-10-30T12:00:00Z"),
+            attempts: 2,
+            retryAtMs: Date.parse("2026-10-30T12:10:00Z"),
+          },
+        };
+        await gateway.setMethodResponse("cron.list", cronList([job], "one-shot-waiting"));
+        await gateway.setMethodResponse("cron.get", job);
+        await gateway.emitGatewayEvent("cron", { jobId: job.id, action: "updated" });
+        await expect.poll(() => summary.textContent()).toContain(reason);
+        await expect
+          .poll(async () => {
+            const clock = await page.locator(".cron-prompt__clock").boundingBox();
+            const runControls = await page.locator(".cron-prompt__run-controls").boundingBox();
+            return clock && runControls && runControls.y < clock.y + clock.height;
+          })
+          .toBe(true);
       },
     );
   });

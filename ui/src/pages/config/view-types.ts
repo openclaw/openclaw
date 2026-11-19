@@ -80,6 +80,8 @@ type ConfigViewOptions = Partial<
     | "devicePermissionsHref"
     | "onOpenDeviceSettings"
     | "onOpenDevicePermissions"
+    | "notificationAgents"
+    | "onNotificationAgentsLoad"
     | "onWebPushSubscribe"
     | "onWebPushUnsubscribe"
     | "onWebPushTest"

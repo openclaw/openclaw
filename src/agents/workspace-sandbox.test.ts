@@ -8,6 +8,9 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 import { resolveAttemptWorkspaceSandbox, resolveHarnessWorkspace } from "./workspace-sandbox.js";
+import { readRegistryWorktrees } from "./worktrees/registry-read.js";
+import { insertRegistryWorktree } from "./worktrees/registry.js";
+import { makeWorktreeRecord } from "./worktrees/service.test-support.js";
 
 const sandboxConfig = (sandbox: AgentSandboxConfig) => ({ agents: { defaults: { sandbox } } });
 const runParams = (workspaceDir: string, sessionId = "execution") => ({
@@ -15,6 +18,33 @@ const runParams = (workspaceDir: string, sessionId = "execution") => ({
   sessionId,
   sessionKey: "agent:main:" + sessionId,
   agentId: "main",
+});
+
+it("records native and plugin workspace use on the managed checkout", async () => {
+  await withOpenClawTestState({ label: "workspace-activity" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
+    const params = runParams(state.workspaceDir, "activity");
+    const record = makeWorktreeRecord(state.workspaceDir, "activity-worktree", {
+      ownerId: params.sessionKey,
+    });
+    await insertRegistryWorktree(state.env, record);
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: params.sessionKey },
+      {
+        sessionId: params.sessionId,
+        updatedAt: 1,
+        worktree: { id: record.id, branch: record.branch, repoRoot: record.repoRoot },
+      },
+    );
+    const started = Date.now();
+    using workspace = await resolveAttemptWorkspaceSandbox({
+      ...params,
+      config: sandboxConfig({ mode: "off" }),
+    });
+    const updated = (await readRegistryWorktrees(state.env)).find((row) => row.id === record.id);
+    expect(updated?.lastActiveAt).toBeGreaterThanOrEqual(started);
+    expect(workspace.effectiveCwd).toBe(state.workspaceDir);
+  });
 });
 
 it("keeps cwd authority with the selected local or remote workspace owner", () => {

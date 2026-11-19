@@ -152,6 +152,7 @@ export function SearchSetup(
                 context={{
                   pluginId: props.provider.pluginId,
                   baseHash: props.state().configSnapshot?.hash ?? null,
+                  configState: props.state(),
                   gateway: props.gateway,
                   canInspect: props.canEdit(),
                   getPresentationLifetime: () => props.getPresentationLifetime(),

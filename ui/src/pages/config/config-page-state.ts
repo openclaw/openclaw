@@ -655,6 +655,8 @@ export function createConfigPage(
         nativeDeviceSettings: deviceSettings ? deviceSettings.read() : undefined,
         webPush: { ...webPush.read() },
       }),
+      notificationAgents: { ...agents.read() },
+      onNotificationAgentsLoad: () => void context.agents.ensureList(),
     };
   }
   const refresh = () => {

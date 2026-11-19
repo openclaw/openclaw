@@ -21,6 +21,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError, formatUiExternalText, UserFacingError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { NativeDeviceNotificationSection } from "./native-device-notifications.tsx";
+import type { NotificationAgentCatalog } from "./notification-agents.tsx";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import type { ConfigProps } from "./view-types.ts";
 import {
@@ -48,7 +49,7 @@ export type NotificationsSectionProps = Pick<
   | "onWebPushTest"
   | "onWebPushSetUserPreferences"
   | "onWebPushSetDevicePreferences"
->;
+> & { notificationAgents?: NotificationAgentCatalog; onNotificationAgentsLoad?: () => void };
 
 function NotificationSection(props: {
   title: string;
@@ -267,6 +268,7 @@ function WebPushSection(props: {
         void present(completion, edit).catch(() => {});
       });
     }
+    return completion;
   };
   const busy = () => saving() || props.push.loading;
   const registered = () => props.push.subscription === "registered";
@@ -344,7 +346,7 @@ function WebPushSection(props: {
                     <button
                       class="btn"
                       disabled={busy() || !props.actions.connected}
-                      onClick={() => submit(props.actions.onWebPushUnsubscribe?.())}
+                      onClick={() => void submit(props.actions.onWebPushUnsubscribe?.())}
                     >
                       <Icon name="x" /> {t("configView.notifications.unsubscribe")}
                     </button>
@@ -352,7 +354,7 @@ function WebPushSection(props: {
                       <button
                         class="btn"
                         disabled={busy() || !props.actions.connected}
-                        onClick={() => submit(props.actions.onWebPushTest?.())}
+                        onClick={() => void submit(props.actions.onWebPushTest?.())}
                       >
                         <Icon name="send" /> {t("configView.notifications.testAllBrowsers")}
                       </button>
@@ -363,7 +365,7 @@ function WebPushSection(props: {
                     <button
                       class="btn primary"
                       disabled={busy() || !props.actions.connected}
-                      onClick={() => submit(props.actions.onWebPushSubscribe?.())}
+                      onClick={() => void submit(props.actions.onWebPushSubscribe?.())}
                     >
                       <Show when={busy()}>
                         <span class="btn__spinner" aria-hidden="true" />
@@ -402,6 +404,9 @@ function WebPushSection(props: {
               <div class="settings-stack" inert={busy() || isPending(authoritativePreferences)}>
                 <Show when={current().durableIdentity}>
                   <UserNotificationPreferences
+                    presentationScope={props.actions.presentationRetired()}
+                    agentCatalog={props.actions.notificationAgents}
+                    onLoadAgents={props.actions.onNotificationAgentsLoad}
                     disabled={!props.push.canManage || !props.actions.connected}
                     preferences={current().user}
                     onChange={(value) =>
@@ -413,6 +418,10 @@ function WebPushSection(props: {
                   />
                 </Show>
                 <DeviceNotificationPreferences
+                  presentationScope={props.actions.presentationRetired()}
+                  agentCatalog={props.actions.notificationAgents}
+                  onLoadAgents={props.actions.onNotificationAgentsLoad}
+                  inheritedAgentIds={current().user.agentIds}
                   disabled={!props.push.canManage || !props.actions.connected}
                   preferences={current().device}
                   onChange={(value) =>
