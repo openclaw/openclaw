@@ -59,6 +59,13 @@ afterEach(() => {
 });
 
 describe("receipt-backed aggregate recovery", () => {
+  it("rejects a recovery title for a different request", async () => {
+    const test = aggregateFixture();
+    test.run.name = "Receipt Recovery 87654321-1234-4123-8123-123456789abc";
+    await expect(test.authenticate()).rejects.toThrow("aggregate run identity differs");
+    expect(test.originalRead).not.toHaveBeenCalled();
+  });
+
   it.each(["failed seal", "reordered seal", "changed observations", "valid"] as const)(
     "authenticates aggregate seal and observation bytes before original qualification: %s",
     async (fault) => {

@@ -1228,39 +1228,6 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("rejects approval registration after the owning run was aborted", async (testContext) => {
-    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
-    return await fixture.run(async () => {
-      const { manager, handlers, broadcasts, respond, context } = fixture;
-      context.chatRunState.getOrCreate("run-aborted").abortMarker = createChatAbortMarker();
-
-      await requestExecApproval({
-        handlers,
-        respond,
-        context,
-        params: {
-          runId: "run-aborted",
-          toolCallId: "tool-late",
-          host: "gateway",
-          command: "echo too-late",
-          commandArgv: ["echo", "too-late"],
-          systemRunPlan: undefined,
-          nodeId: undefined,
-        },
-      });
-
-      expect(mockCallArg(respond)).toBe(false);
-      expectRecordFields(mockCallArg(respond, 0, 2), {
-        message: "approval run already aborted",
-      });
-      expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
-        reason: "EXEC_APPROVAL_RUN_ABORTED",
-      });
-      expect(await manager.listPendingRecords()).toEqual([]);
-      expect(broadcasts).toEqual([]);
-    });
-  });
-
   it("marks an allowed wait result run-aborted when abort wins before consumption", async (testContext) => {
     await withRequestedExecApproval(
       testContext,

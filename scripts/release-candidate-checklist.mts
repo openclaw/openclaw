@@ -1463,7 +1463,6 @@ async function waitForSuccessfulRun(
       }
       const receiptRecovery =
         expected.workflowName === "Full Release Validation" &&
-        info.workflowName === "Full Release Receipt Recovery" &&
         info.workflowPath === ".github/workflows/full-release-receipt-recovery.yml";
       if (info.workflowName !== expected.workflowName && !receiptRecovery) {
         throw new Error(

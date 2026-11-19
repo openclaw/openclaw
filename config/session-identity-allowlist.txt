@@ -793,8 +793,7 @@ src/gateway/desktop/computer-service.ts	2
 src/gateway/device-revocation.ts	1
 src/gateway/event-web-push.ts	2
 src/gateway/exec-approval-authority.ts	1
-src/gateway/exec-approval-consumption.ts	1
-src/gateway/exec-approval-manager.ts	4
+src/gateway/exec-approval-manager.ts	2
 src/gateway/exec-approval-resolution-authority.ts	1
 src/gateway/gateway-codex-harness.command-evidence.live-helpers.ts	1
 src/gateway/github-oauth-lifecycle.ts	1
