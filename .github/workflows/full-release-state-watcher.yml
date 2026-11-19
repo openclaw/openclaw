@@ -95,8 +95,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: scripts
-          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Checkout admitted qualification verifier
@@ -105,8 +103,6 @@ jobs:
         with:
           ref: ${{ inputs.qualification_workflow_sha }}
           path: qualification-verifier
-          sparse-checkout: scripts
-          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -122,6 +118,38 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+
+      - name: Setup qualification verifier dependencies
+        if: inputs.qualification_workflow_sha == ''
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          package-manager-file: ./package.json
+          lockfile-path: ./pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install qualification verifier dependencies
+        if: inputs.qualification_workflow_sha == ''
+        working-directory: .
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      - name: Setup qualification verifier dependencies
+        if: inputs.qualification_workflow_sha != ''
+        uses: ./qualification-verifier/.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          package-manager-file: qualification-verifier/package.json
+          lockfile-path: qualification-verifier/pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install qualification verifier dependencies
+        if: inputs.qualification_workflow_sha != ''
+        working-directory: qualification-verifier
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Evaluate release state
         id: state

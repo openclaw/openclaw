@@ -282,7 +282,11 @@ export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog 
       );
     }
     const signatures = parseNodeFailureReport(String(await getJobLog(job.id)), true);
-    if (!isDeepStrictEqual(signatures, waiver.testFailures.signatures)) {
+    if (
+      ![waiver.testFailures.signatures, ...(waiver.testFailures.alternativeSignatures ?? [])].some(
+        (accepted) => isDeepStrictEqual(signatures, accepted),
+      )
+    ) {
       throw new ReleaseAggregateValidationError(
         `Release test job has an unwaived or incomplete failure: ${waiver.jobName}`,
       );

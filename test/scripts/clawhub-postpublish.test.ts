@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { crc32 } from "node:zlib";
 import * as tar from "tar/raw";
@@ -29,7 +29,6 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import { releaseExecutionPlanSha256 } from "../../scripts/full-release-validation-policy.mjs";
 import { waitForClawHubPublicVersion } from "../../scripts/lib/clawhub-publication-state.mjs";
-import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
 import { verifyPublishedClawHubPackage } from "../../scripts/verify-clawhub-published-artifact.mjs";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 
@@ -555,8 +554,10 @@ function addSealedSibling(f: ReturnType<typeof fixture>) {
   return { manifest, artifact: f.recoveryArtifact, sibling };
 }
 
-function authenticatedParentRecoveryFixture(mode: "full" | "selected" | "omitted sibling") {
-  const qualification = candidatePublicationFixture();
+function authenticatedParentRecoveryFixture(
+  mode: "full" | "selected" | "omitted sibling",
+  qualification = candidatePublicationFixture(),
+) {
   const version = qualification.source.projection!.version;
   const f = parentRecoveryFixture(
     fixture(false, qualification.p, "example", 1, {
@@ -714,6 +715,9 @@ function authenticatedParentRecoveryFixture(mode: "full" | "selected" | "omitted
   };
   const evidenceClient = {
     ...qualification.client,
+    verifyRetainedPublicationArtifacts() {
+      throw new Error("Unexpected retained publication verification");
+    },
     downloadArtifactArchive() {
       throw new Error("Unexpected publication artifact download");
     },
@@ -1275,6 +1279,20 @@ describe("original sealed ClawHub source", () => {
       workflow_run: { id: Number(runId) },
     };
     f.metadata.set(artifactsPath(Number(runId)), { artifacts: [artifact, artifact] });
+    f.metadata.set(`actions/runs/${runId}`, f.qualification.parent);
+    const metadataFile = join(f.directory, "cli-metadata.json");
+    writeFileSync(metadataFile, JSON.stringify([...f.metadata]));
+    writeFileSync(
+      join(f.directory, "gh"),
+      `#!${process.execPath}
+const fs = require("node:fs");
+const metadata = new Map(JSON.parse(fs.readFileSync(${JSON.stringify(metadataFile)}, "utf8")));
+const path = process.argv[3].replace("repos/openclaw/openclaw/", "");
+if (process.argv[2] !== "api" || !metadata.has(path)) throw new Error("Unexpected CLI fixture request: " + path);
+process.stdout.write(JSON.stringify(metadata.get(path)));
+`,
+      { mode: 0o755 },
+    );
     const request = join(f.directory, "original-request.json");
     const output = join(f.directory, "original-descriptor.json");
     const preload = join(f.directory, "cli-io.mjs");
@@ -1322,7 +1340,11 @@ globalThis.fetch = async (input, init) => {
       {
         encoding: "utf8",
         timeout: 10_000,
-        env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...f.options.env },
+        env: {
+          ...f.options.env,
+          PATH: `${f.directory}${delimiter}${process.env.PATH}`,
+          SystemRoot: process.env.SystemRoot,
+        },
       },
     );
     expect(result.error).toBeUndefined();
@@ -1715,10 +1737,10 @@ describe("ClawHub parent-requested recovery", () => {
     await expect(
       recoverClawHubFromParent({
         ...f.options,
-        evidenceClient: { ...createReleaseEvidenceClient(repository), loadManifest },
+        evidenceClient: { ...candidatePublicationFixture({ runId: "40" }).client, loadManifest },
       }),
     ).rejects.toThrow("Original FRV provenance unavailable");
-    expect(loadManifest).toHaveBeenCalledWith("40", 1);
+    expect(loadManifest).toHaveBeenCalledWith("40", 1, undefined);
     expect(f.githubReads).toContain("actions/runs/10/attempts/1");
     expect(f.githubReads).toContain("actions/runs/20/attempts/1");
   });

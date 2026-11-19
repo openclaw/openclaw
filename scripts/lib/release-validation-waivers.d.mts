@@ -38,6 +38,7 @@ export interface ReleaseValidationWaiver {
   testFailures?: {
     stepName: string;
     signatures: { kind: "vitest"; file: string; test: string }[];
+    alternativeSignatures?: { kind: "vitest"; file: string; test: string }[][];
   };
   evidence?: { runId: string; runAttempt: number };
   qualificationExemption?: QualificationExemptionEvidence;
