@@ -101,6 +101,16 @@ and short reason; optional `targetSha` and `evidence: { runId, runAttempt }` res
 candidate/execution. Checked-in list is authoritative; retain release-specific
 authorization/diagnostics in PR or handoff.
 
+For a newly approved job waiver, default to the exact release version, child
+role, and job across all future FRV runs, attempts, and candidates for that
+release. Omit `evidence` and `targetSha` restrictions unless the operator
+explicitly limits the approval. Reserve attempt-specific waivers for
+exceptionally high-risk cases where only the reviewed execution is accepted;
+record the risk and the explicit limit in the PR or handoff. A diagnostic run
+ID is evidence of the original failure, not a reason to restrict an ordinary
+waiver to that attempt. This default does not broaden existing grants or waive
+other jobs, versions, required execution, or evidence-integrity checks.
+
 A `testFailures` entry additionally requires the sole failed step and the complete
 ordered set of exact test/error signatures from the native test-evidence parser.
 The verifier reads the original leaf log and requires completed invocation
@@ -114,9 +124,16 @@ in 44465878180/1, only for candidate
 UI, and cron uncertainty, not a claim of fixes or passing tests. Their aggregates
 require the exact observed causes and failed steps; the silent QA status-check
 aggregate additionally requires the SHA-256 of its complete reviewed original
-log. These FRV16 grants apply across runs and attempts for the same release,
-candidate, and named jobs. Different candidates and additional failed jobs are
-not granted.
+log. The November 19, 10:12 UTC authorization extends these grants to the eight
+additional observed CI failures in FRV17: Node large shards 17, 19, 20, 21, and 43,
+Node small shard 12, Bun large shard 39, and UI shard 4/13. The focused
+chat-permissions test passed on the unchanged candidate under Bun, including
+private-message and access-revocation assertions; its original failure remains
+unexplained. The remaining new failures are a browser-download infrastructure
+timeout and suspected timing failures, not proven harmless flakes. These grants
+apply across runs and attempts for the same release, candidate, and named jobs.
+Different candidates and additional failed jobs are not granted. Cancelled,
+timed-out, or incomplete jobs remain coverage gaps, not accepted failures.
 
 Changing P alone does not invalidate retained evidence for unchanged C/Q, coverage,
 inputs, and source digests. With reuse enabled, admitted P reevaluates sealed child

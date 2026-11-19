@@ -46,12 +46,15 @@ const STABLE_116_CI_FAILURES = new Map([
 
 const FRV16_TARGET_SHA = "995f9059b6e6fe3ba0865a3354924fd2bcbfceea";
 const FRV16_CI_FAILURES = new Map([
-  ...[15, 23, 3, 32, 11, 41, 18, 30].map((shard) => [
+  ...[15, 23, 3, 32, 11, 41, 18, 30, 17, 21, 43, 20, 19].map((shard) => [
     "checks-node-compact-large-" + shard + " (node)",
     "checks-node-core-test-nondist-shard",
   ]),
   ["checks-node-compact-small-38 (node)", "checks-node-core-test-nondist-shard"],
+  ["checks-node-compact-small-12 (node)", "checks-node-core-test-nondist-shard"],
+  ["checks-node-compact-large-39 (bun)", "checks-node-core-test-nondist-shard"],
   ["checks-ui-e2e (2/13)", "checks-ui-e2e"],
+  ["checks-ui-e2e (4/13)", "checks-ui-e2e"],
 ]);
 const FRV16_QA_JOB = "Run QA Lab runtime-pair lane (core)";
 
@@ -81,6 +84,42 @@ const EXTENDED_1033_MOBILE_JOBS = new Map([
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
+  {
+    targetVersion: "2026.11.6",
+    targetSha: "06afb10d3272cc9deaf38ca6a3b7b839d5935638",
+    childRole: "normalCi",
+    jobName: "checks-node-compact-large-23 (node)",
+    testFailures: {
+      stepName: "Run Node test shard",
+      signatures: [
+        {
+          kind: "vitest",
+          file: "src/gateway/worker-environments/provider-destroy-authority.test.ts",
+          test: 'worker deletion request authority > checks queued deletion before acceptance: {"force":true,"revoked":false} :: AssertionError: {"code":"UNAVAILABLE","message":"worker environment destruction failed"}: expected false to be true // Object.is equality\n\n- Expected\n+ Received\n\n- true\n+ false\n\n❯ src/gateway/worker-environments/provider-destroy-authority.test.ts:74:54\n72|     }\n73|     const response = await deleting;\n74|     expect(response[0], JSON.stringify(response[2])).toBe(!revoked);\n|                                                      ^\n75|     expect(support.testState.store.get(original.environmentId)).toMatc…\n76|       revoked',
+        },
+      ],
+    },
+    reason:
+      "Dallin Romney authorized known-error acceptance on 2026-11-19 at 08:22 UTC after diagnosis and repair. Accept only the exact worker deletion fixture assertion from FRV 44467669773/1, CI 44468273128/1 job 135371689694, if it recurs on this repaired candidate. The queued-deletion fixture now waits for the environment queue before releasing provisioning; the original failure was not reproduced. This is accepted failure, not proof of a harmless flake or a passing test. Preserve complete execution and raw evidence. Changed or additional failures, other candidates, cancellation, incomplete coverage, security/integrity, install/update and publication gates remain blocking.",
+  },
+  {
+    targetVersion: "2026.11.6",
+    targetSha: "06afb10d3272cc9deaf38ca6a3b7b839d5935638",
+    childRole: "normalCi",
+    jobName: "checks-node-compact-large-24 (node)",
+    testFailures: {
+      stepName: "Run Node test shard",
+      signatures: [
+        {
+          kind: "vitest",
+          file: "src/trajectory/runtime-store-writer.test.ts",
+          test: 'rolls back the successful attempt\'s diagnostic prefix with its terminal event and retries once :: Error: Session reader validation does not match its current physical owner\n❯ createError src/state/openclaw-state-worker-error-identity.ts:250:14\n248|       return new SessionMetadataUnavailableError(node.reason, undefine…\n249|     case "error":\n250|       return new Error(node.message);\n|              ^\n251|     case "mcp-oauth-corruption":\n252|       return new McpOAuthStoreCorruptionError("", "");\n❯ src/state/openclaw-state-worker-error.ts:199:14\n❯ decodeErrorGraph src/state/openclaw-state-worker-error.ts:192:26\n❯ hydrateOpenClawStateWorkerError src/state/openclaw-state-worker-error.ts:277:57\n❯ decodeSessionTranscriptWorkerReadError src/config/sessions/session-history-worker-errors.ts:<redacted len=6>\n❯ unwrapSessionTranscriptWorkerReply src/config/sessions/session-history-worker-errors.ts:<redacted len=4>\n❯ Object.runRequest src/config/sessions/session-transcript-worker-runtime.ts:<redacted len=6>\n❯ withSessionHistoryWorkerDatabase src/config/sessions/session-transcript-worker-runtime.ts:<redacted len=6>\n❯ withTrajectoryState.activeWriterRunId src/trajectory/runtime-store-writer.test.ts:368:16',
+        },
+      ],
+    },
+    reason:
+      "Dallin Romney authorized known-error acceptance on 2026-11-19 at 08:22 UTC after diagnosis and repair. Accept only the exact trajectory fixture assertion from FRV 44467669773/1, CI 44468273128/1 job 135371696902, if it recurs on this repaired candidate. The original schema-changing trigger fixture is replaced by the landed native commit-refusal fixture; the original failure was not causally reproduced. This is accepted failure, not proof of a harmless flake or a passing test. Preserve complete execution and raw evidence. Changed or additional failures, other candidates, cancellation, incomplete coverage, security/integrity, install/update and publication gates remain blocking.",
+  },
   ...[
     ...[...FRV16_CI_FAILURES.keys()].map((jobName) => ({
       childRole: "normalCi",
@@ -96,7 +135,7 @@ const RELEASE_VALIDATION_WAIVERS = [
     targetVersion: "2026.11.10-beta.1",
     targetSha: FRV16_TARGET_SHA,
     reason:
-      "Dallin Romney authorized tooling-only acceptance on 2026-11-19 at 06:44 UTC, preserving C=Q 995f9059b6e6fe3ba0865a3354924fd2bcbfceea. The lead assessment found no demonstrated high-risk product defect; runtime, worker, UI and cron uncertainty remains accepted, not fixed or proven flaky. Following his 2026-11-19 07:06 UTC instruction, these grants apply across runs and attempts for the named terminal failed jobs on this exact release and candidate. Preserve raw failures, required execution and complete evidence. Other jobs, targets, unknown aggregate causes, missing/cancelled/incomplete evidence, integrity, install/update and publication gates remain blocking.",
+      "Dallin Romney authorized tooling-only acceptance on 2026-11-19 at 06:44 UTC, preserving C=Q 995f9059b6e6fe3ba0865a3354924fd2bcbfceea. The lead assessment found no demonstrated high-risk product defect; runtime, worker, UI and cron uncertainty remains accepted, not fixed or proven flaky. On 2026-11-19 at 10:12 UTC he additionally authorized the eight observed FRV17 failures after a focused check of the ambiguous chat-permissions case. That unchanged-candidate Bun test passed, including private-message and access-revocation assertions; the original CI failure remains unexplained. The other new failures are an infrastructure download timeout and suspected timing failures, not established harmless flakes. Following his 2026-11-19 07:06 UTC instruction, these grants apply across runs and attempts for the named terminal failed jobs on this exact release and candidate. Preserve raw failures, required execution and complete evidence. Other jobs, targets, unknown aggregate causes, missing/cancelled/incomplete evidence, integrity, install/update and publication gates remain blocking.",
   })),
   ...[...STABLE_116_CI_FAILURES.keys()].map((jobName) => ({
     targetVersion: "2026.11.6",

@@ -731,21 +731,31 @@ describe("beta.1 exact FRV11 test failures", () => {
   });
 });
 
-// FRV16 grants follow the frozen release/candidate, not a run or attempt.
-describe("beta.1 release-scoped FRV16 grants", () => {
+// Accepted FRV16/17 jobs follow the frozen release/candidate, not a run or attempt.
+describe("beta.1 release-scoped FRV16/17 grants", () => {
   const targetVersion = "2026.11.10-beta.1";
   const candidateSha = "995f9059b6e6fe3ba0865a3354924fd2bcbfceea";
   const ciNames = [
     "checks-ui-e2e (2/13)",
     "checks-node-compact-small-38 (node)",
-    ...[15, 23, 3, 32, 11, 41, 18, 30].map((n) => "checks-node-compact-large-" + n + " (node)"),
+    ...[15, 23, 3, 32, 11, 41, 18, 30, 17, 21, 43, 20, 19].map(
+      (n) => "checks-node-compact-large-" + n + " (node)",
+    ),
+    "checks-node-compact-small-12 (node)",
+    "checks-node-compact-large-39 (bun)",
+    "checks-ui-e2e (4/13)",
   ];
   const ci = {
     ...child,
     runId: "44465881623",
     runAttempt: 1,
     jobs: [
-      ...ciNames.map((name, id) => ({ status: "completed", conclusion: "failure", id, name })),
+      ...ciNames.map((name, id) => ({
+        status: "completed",
+        conclusion: "failure",
+        id: 100 + id,
+        name,
+      })),
       gate,
     ],
   };
@@ -931,4 +941,40 @@ describe("beta.1 release-scoped FRV16 grants", () => {
       }),
     ).rejects.toThrow("non-policy failure");
   });
+});
+
+it("binds the repaired 2026.11.6 trajectory exception to its exact candidate and completed leaf", () => {
+  const repairedSha = "06afb10d3272cc9deaf38ca6a3b7b839d5935638";
+  const leaf = {
+    id: 11624,
+    name: "checks-node-compact-large-24 (node)",
+    status: "completed",
+    conclusion: "failure",
+  };
+  const input = {
+    targetVersion: "2026.11.6",
+    targetSha: repairedSha,
+    child: { ...child, jobs: [leaf] },
+  };
+  const policy = evaluateReleaseChildPolicy(input);
+  expect(policy.waivers).toHaveLength(1);
+  expect(policy.waivers[0]?.testFailures?.signatures).toMatchObject([
+    {
+      kind: "vitest",
+      file: "src/trajectory/runtime-store-writer.test.ts",
+    },
+  ]);
+  expect(policy.waivers[0]?.testFailures?.signatures[0]?.test).toContain(
+    "Session reader validation does not match its current physical owner",
+  );
+  expect(
+    evaluateReleaseChildPolicy({ ...input, targetSha: "6f6cfa150a7c77a1d94168f7952c136ef7fac6bb" })
+      .waivers,
+  ).toEqual([]);
+  expect(
+    evaluateReleaseChildPolicy({
+      ...input,
+      child: { ...child, jobs: [{ ...leaf, conclusion: "cancelled" }] },
+    }).waivers,
+  ).toEqual([]);
 });
