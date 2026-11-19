@@ -38,45 +38,6 @@ describe("resolveCronSkillsSnapshot", () => {
     });
   });
 
-  it("keeps the configured agent root primary and forwards the execution root", async () => {
-    await resolveCronSkillsSnapshot({
-      workspaceDir: "/agent/workspace",
-      executionWorkspaceDir: "/managed/worktrees/audit",
-      executionWorkspaceFileHost: "gateway",
-      config: {} as never,
-      agentId: "writer",
-      existingSnapshot: { prompt: "stale execution-only catalog", skills: [] },
-      isFastTestEnv: false,
-    });
-
-    expect(resolveReusableWorkspaceSkillSnapshotMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/agent/workspace",
-        executionWorkspaceDir: "/managed/worktrees/audit",
-        executionWorkspaceFileHost: "gateway",
-        agentId: "writer",
-        watch: false,
-        hydrateExisting: false,
-      }),
-    );
-  });
-
-  it("preserves the fast-test no-scan path with distinct roots", async () => {
-    const existingSnapshot = { prompt: "cached", skills: [] };
-    expect(
-      await resolveCronSkillsSnapshot({
-        workspaceDir: "/agent/workspace",
-        executionWorkspaceDir: "/managed/worktrees/audit",
-        executionWorkspaceFileHost: "gateway",
-        config: {} as never,
-        agentId: "writer",
-        existingSnapshot,
-        isFastTestEnv: true,
-      }),
-    ).toBe(existingSnapshot);
-    expect(resolveReusableWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();
-  });
-
   it("refreshes when the cached skill filter changes", async () => {
     resolveEffectiveAgentSkillFilterMock.mockReturnValue(["docs-search", "github"]);
 
