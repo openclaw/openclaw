@@ -5,7 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { resolveExecutablePath } from "../infra/executable-path.js";
+import { resolveExecutablePathAsync } from "../infra/executable-path.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../infra/process-env.js";
 import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -222,7 +222,7 @@ export async function readNativeGitHubToken(
       if (
         !hasErrnoCode(result.error, "ENOENT") ||
         !(await fs.stat(cwd)).isDirectory() ||
-        resolveExecutablePath("gh", { env: effectiveEnv, cwd, useCache: false })
+        (await resolveExecutablePathAsync("gh", { env: effectiveEnv, cwd, useCache: false }))
       ) {
         throw new GitHubIdentityError("unverified");
       }

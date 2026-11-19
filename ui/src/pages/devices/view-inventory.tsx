@@ -73,7 +73,9 @@ export function DeviceInventoryContent(props: DevicesProps & { pending: boolean 
         <button
           class="btn"
           title={
-            props.connected && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : ""
+            props.connected && !props.canManagePairing
+              ? t("devices.readOnly.pairingRequiredTooltip")
+              : ""
           }
           disabled={props.inventorySaving || !props.connected || !props.canManagePairing}
           onClick={() => props.onInventoryCleanup(stale().map(toRemovalRequest))}
@@ -297,7 +299,9 @@ function InventoryEntry(props: {
   const showRoles = () => props.entry.roles.some((role) => !tokenRoles().has(role));
   const showScopes = () => props.entry.scopes.some((scope) => !tokenScopes().has(scope));
   const desktopUnavailable = () =>
-    !desktopEnvironment() && props.entry.node?.commands?.includes("desktop.stream");
+    props.devices.desktopEnvironments !== undefined &&
+    !desktopEnvironment() &&
+    props.entry.node?.commands?.includes("desktop.stream");
   const liveStats = () => (rowConnected() ? props.entry.node?.hostStats : undefined);
   const hasAlerts = () =>
     warnings().length > 0 || (liveStats() !== undefined && liveStats() !== null);

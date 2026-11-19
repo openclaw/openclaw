@@ -1,2 +1,0 @@
-# Exact net test-line growth from the claude-cli history-after-/new fix (#165954): regression for an empty reset after a long session.
-66

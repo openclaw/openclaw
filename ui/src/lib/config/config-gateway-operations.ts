@@ -88,7 +88,8 @@ export type RuntimeConfigExternalMutationResult<T> =
     }
   | {
       ok: false;
-      reason: "conflict" | "error" | "rejected" | "suspended" | "unavailable";
+      /** `deferred`: saved, and the Gateway applies it once a busy plugin reload finishes. */
+      reason: "conflict" | "deferred" | "error" | "rejected" | "suspended" | "unavailable";
       error: string;
       /** With `saveStatus`: whether the shared save status shows this failure. */
       reported?: boolean;
@@ -205,14 +206,25 @@ export async function executeConfigExternalMutation<T>(
       };
     }
     const outcome = configMutationFailure(state, error);
+    const deferred =
+      outcome.status !== "conflict" &&
+      error instanceof GatewayRequestError &&
+      isRecord(error.details) &&
+      isDeferredApplication(error.details);
+    if (deferred) {
+      // Saved but not applied: applied-revision polling retires the waiting status.
+      state.configNeedsApply = true;
+    }
     return {
       ok: false,
       reason:
         outcome.status === "conflict"
           ? "conflict"
-          : isDefinitiveConfigMutationRejection(error)
-            ? "rejected"
-            : "error",
+          : deferred
+            ? "deferred"
+            : isDefinitiveConfigMutationRejection(error)
+              ? "rejected"
+              : "error",
       error: outcome.message,
     };
   }
@@ -381,6 +393,10 @@ function persistedConfigApplication(application: unknown): PersistedConfigApplic
   return typeof status === "string"
     ? { kind: "unapplied", message: t("configView.savedNotApplied") }
     : null;
+}
+
+function isDeferredApplication(details: Record<string, unknown>): boolean {
+  return isRecord(details.application) && details.application.status === "deferred";
 }
 
 function persistedConfigReceipt(

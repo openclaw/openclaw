@@ -473,7 +473,7 @@ it("preserves capacity and cancellation contexts when draining receipts", async 
 
 const quiet = { script: "return { fire: false }" };
 
-it("keeps checks beyond three queued in due order while other runs start", async () => {
+it("keeps checks beyond three queued in due order, off the run slots", async () => {
   await withOpenClawTestState({ label: "cron-condition-checks" }, async (fixture) => {
     const storeKey = fixture.statePath("cron", "jobs.json");
     const watch = (id: string, dueAtMs: number) =>
@@ -486,9 +486,9 @@ it("keeps checks beyond three queued in due order while other runs start", async
     ];
     const queue = await queueStore(storeKey, jobs, now);
     await queue.request(jobs.map((job) => scheduled(storeKey, job, job.state.nextRunAtMs!)));
-    const launch = async () => (await queue.drain([], 7)).launches.map(({ job }) => job.id);
-    const first = await queue.drain([], 7);
-    // A run slot is free, but early and late wait for one of the three checks.
+    const launch = async () => (await queue.drain([], 3)).launches.map(({ job }) => job.id);
+    const first = await queue.drain([], 3);
+    // The long runs take every run slot; three checks start anyway, and early and late wait.
     expect(first.launches.map(({ job }) => job.id)).toEqual([
       "w1",
       "w2",
@@ -498,17 +498,58 @@ it("keeps checks beyond three queued in due order while other runs start", async
       "long-c",
     ]);
     expect(await launch()).toEqual([]);
-    // A fired condition frees its check for the earliest waiter, which takes the free slot.
-    const fired = first.launches[0]!.runReceipt;
-    await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
-      type: "cron.settleConditionCheck",
-      input: { storeKey, jobId: fired.jobId, receiptId: fired.receiptId },
+    const fired = first.launches[1]!.runReceipt;
+    const fire = () =>
+      executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+        type: "cron.settleConditionCheck",
+        input: { storeKey, jobId: fired.jobId, receiptId: fired.receiptId },
+      });
+    // A fired condition waits for a run slot, and frees its check for the earliest waiter; it
+    // takes the next slot that opens.
+    expect(await fire()).toMatchObject({
+      runSlot: false,
+      job: { state: { runSlotWaitReceiptId: fired.receiptId } },
     });
     expect(await launch()).toEqual(["early"]);
+    await queue.drain([], 4);
+    expect(await fire()).toMatchObject({ runSlot: true });
     // The check still waiting was never started, so a restart keeps its occurrence.
     await queue.recover();
     const late = (await queue.read()).jobs.find((job) => job.id === "late")!;
     expect(late.state).toMatchObject({ nextRunAtMs: now, queuedAtMs: now });
     expect(late.state.lastError).toBeUndefined();
+  });
+});
+
+it("gives freed run slots to fired conditions and queued runs in due order", async () => {
+  await withOpenClawTestState({ label: "cron-run-slot-order" }, async (fixture) => {
+    const storeKey = fixture.statePath("cron", "jobs.json");
+    const jobs = [
+      ...["long-a", "long-b"].map((id) =>
+        queueJob(id, now, { state: { nextRunAtMs: now - 2_000 } }),
+      ),
+      queueJob("older", now, { state: { nextRunAtMs: now - 1_000 } }),
+      queueJob("watch", now, { trigger: quiet, state: { nextRunAtMs: now - 500 } }),
+      queueJob("newer", now, { state: { nextRunAtMs: now } }),
+    ];
+    const queue = await queueStore(storeKey, jobs, now);
+    await queue.request(jobs.map((job) => scheduled(storeKey, job, job.state.nextRunAtMs!)));
+    const launch = async (runSlots: number) =>
+      (await queue.drain([], runSlots)).launches.map(({ job }) => job.id);
+    expect(await launch(2)).toEqual(["long-a", "long-b", "watch"]);
+    const watch = (await queue.read()).jobs.find((job) => job.id === "watch")!;
+    const fire = () =>
+      executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+        type: "cron.settleConditionCheck",
+        input: { storeKey, jobId: watch.id, receiptId: watch.state.runningReceiptId! },
+      });
+    expect(await fire()).toMatchObject({ runSlot: false });
+    // The first free slot goes to the run due before the condition fired, not to the condition.
+    expect(await launch(3)).toEqual(["older"]);
+    expect(await fire()).toMatchObject({ runSlot: false });
+    // The next goes to the fired condition, ahead of the run due after it.
+    expect(await launch(4)).toEqual([]);
+    expect(await fire()).toMatchObject({ runSlot: true });
+    expect(await launch(5)).toEqual(["newer"]);
   });
 });

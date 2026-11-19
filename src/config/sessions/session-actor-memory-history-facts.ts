@@ -46,7 +46,10 @@ import {
   isIndexedSessionEntry,
 } from "./session-entry-codec.js";
 import { extractSessionBranchHeadline } from "./session-message-cut-content.js";
-import { readSessionTranscriptAccountingTail } from "./session-transcript-accounting-policy.js";
+import {
+  readSessionTranscriptAccountingTail,
+  selectSessionTranscriptAccountingTail,
+} from "./session-transcript-accounting-policy.js";
 import { SQLITE_USAGE_TAIL_MAX_EVENTS } from "./session-transcript-accounting.types.js";
 import type {
   SessionTranscriptMaintenanceFacts,
@@ -241,7 +244,7 @@ function maintenance(
               ? { writes: collectCodeModeStoreWrites(events), incremental: false }
               : undefined,
           }
-        : { events }),
+        : { events: events && [...events] }),
     };
   }
 
@@ -557,11 +560,13 @@ export function readSessionActorMemoryHistoryFacts(
             }
           : {}),
         ...(options.includeUsage || options.includeTurnTaint
-          ? readSessionTranscriptAccountingTail((visit) => {
-              for (let index = tail.length - 1; index >= 0; index -= 1) {
-                visit(tail[index]!.event);
-              }
-            }, options)
+          ? readSessionTranscriptAccountingTail(
+              selectSessionTranscriptAccountingTail(tail, (row) => row.event)
+                .toReversed()
+                .map((row) => row.event),
+              options,
+              tail.length,
+            )
           : {}),
       };
     }
@@ -576,7 +581,7 @@ export function readSessionActorMemoryHistoryFacts(
       for (const row of rows.slice(start, start + SOURCE_PAGE_MAX_MESSAGES)) {
         if (row.serializedBytes > SOURCE_PAGE_MAX_BYTES) {
           throw new Error(
-            `Transcript source message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
+            `Chat history message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
           );
         }
         if (bytes + row.serializedBytes > SOURCE_PAGE_MAX_BYTES) {

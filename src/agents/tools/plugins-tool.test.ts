@@ -249,6 +249,24 @@ it.each([false, true])(
   },
 );
 
+it.each(["@expediagroup/expedia-openclaw", "openclaw-travel-themes"])(
+  "finds exact package %s without guessing its plugin id",
+  async (packageName) => {
+    callGateway.mockResolvedValue({
+      plugins: [{ id: "travel-themes", packageName, state: "enabled" }],
+      mutationAllowed: true,
+    });
+    const result = await createPluginsTool().execute("package", {
+      action: "list",
+      query: packageName,
+    });
+    expect(result.details).toMatchObject({
+      plugins: [{ id: "travel-themes", packageName, state: "enabled" }],
+      matching: 1,
+    });
+  },
+);
+
 it.each(["plugin-24", "café"])("bounds inventory and narrows it with %s", async (query) => {
   const plugins = Array.from({ length: 25 }, (_, index) => ({
     id: `plugin-${index}`,

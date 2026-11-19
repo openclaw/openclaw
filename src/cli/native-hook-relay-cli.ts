@@ -64,7 +64,13 @@ export async function runNativeHookRelayCliFromArgv(argv: string[]): Promise<num
   return await runNativeHookRelayCli(opts);
 }
 
-/** Run one native hook relay invocation from stdin JSON to stdout/stderr response streams. */
+/**
+ * Run one native hook relay invocation from stdin JSON to stdout/stderr response streams.
+ *
+ * Codex starts its hook timeout before spawning this process and treats a hook it
+ * kills as non-blocking. The deadline therefore counts from process start
+ * (`performance.now()` origin), so slow startup still leaves time to refuse.
+ */
 export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Promise<number> {
   const { stdin, stdout, stderr } = process;
   const provider = readRequiredOption(opts.provider, "provider");
@@ -280,13 +286,15 @@ function formatRelayCliError(prefix: string, error: unknown): string {
 
 function createNativeHookRelayDeadline(timeoutMs: number) {
   const controller = new AbortController();
+  // performance.now() counts from process start, where Codex's hook timeout began.
+  const expiresAtMs = timeoutMs;
   const timer = setSafeTimeout(
     () => controller.abort(new NativeHookRelayDeadlineError(timeoutMs)),
-    timeoutMs,
+    expiresAtMs - performance.now(),
   );
   timer.unref?.();
   return {
-    expiresAtMs: performance.now() + timeoutMs,
+    expiresAtMs,
     signal: controller.signal,
     timeoutMs,
     dispose: () => clearTimeout(timer),

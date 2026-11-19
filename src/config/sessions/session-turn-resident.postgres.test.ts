@@ -38,7 +38,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL resident turn preparation", (
     try {
       await run(fixture);
     } finally {
-      fixture.close();
+      await fixture.close();
     }
   });
 });

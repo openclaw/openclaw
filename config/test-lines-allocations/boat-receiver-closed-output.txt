@@ -1,2 +1,0 @@
-# Boat receiver restores native Git when the SSH output readers close before cancellation.
-82

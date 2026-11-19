@@ -71,9 +71,19 @@ function resolveNextCooldownModel(
   if (!isActiveUnusableWindow(existing.cooldownUntil, now)) {
     return modelId;
   }
-  // Keep an active scope only while every failure names the same model.
-  // An already profile-wide window cannot narrow until it expires.
   const previousModel = existing.cooldownModel;
+  // Missing models do not establish shared profile failure. This single-model
+  // window retains the latest miss rather than blocking unrelated fallbacks.
+  if (
+    reason === "model_not_found" &&
+    existing.cooldownReason === "model_not_found" &&
+    previousModel &&
+    modelId
+  ) {
+    return modelId;
+  }
+  // Other active scopes stay narrow only while every failure names the same model.
+  // An already profile-wide window cannot narrow until it expires.
   return !previousModel || previousModel === modelId ? previousModel : undefined;
 }
 

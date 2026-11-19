@@ -9,7 +9,10 @@ import {
   type UpstreamProviderCatalog,
   type UpstreamProviderCatalogModel,
 } from "./provider-catalog-live-runtime.js";
-import { listProviderCatalogSnapshotEntries } from "./provider-catalog-snapshot.internal.js";
+import {
+  listProviderCatalogSnapshotEntries,
+  projectProviderCatalogSnapshotRows,
+} from "./provider-catalog-snapshot.internal.js";
 
 const endpoint = "https://models.opencode.ai/api.json";
 async function loadProvider(fetchGuard: LiveModelCatalogFetchGuard, providerId = "opencode") {
@@ -56,6 +59,33 @@ async function fetchedModel(
 }
 
 beforeEach(() => clearLiveCatalogCacheForTests());
+
+it("retains a negative chat capability for models.dev-shaped audio output metadata", async () => {
+  const model = await fetchedModel({
+    id: "voice-v2",
+    modalities: { input: ["text"], output: ["audio"] },
+    limit: { context: 8192, output: 4096 },
+  });
+  expect(model).toMatchObject({ inference: { chat: false } });
+  assert(model);
+  const snapshot = new Map([[model.id, { model }]]);
+  expect(listProviderCatalogSnapshotEntries(snapshot)[0]?.inference?.chat).toBe(false);
+  expect(projectProviderCatalogSnapshotRows([{ id: model.id }], snapshot)[0]?.inference?.chat).toBe(
+    false,
+  );
+  const chat = project({
+    id: "chat",
+    modalities: { output: ["text"] },
+    limit: { context: 8192, output: 4096 },
+  });
+  assert(chat);
+  expect(
+    projectProviderCatalogSnapshotRows(
+      [{ id: chat.id, modalities: { output: ["audio"] } }],
+      new Map([[chat.id, { model: chat }]]),
+    )[0]?.inference?.chat,
+  ).toBe(false);
+});
 
 it("lazily shares one anonymous upstream metadata download across provider ids", async () => {
   const { fetchGuard, release } = buildFetchGuard({
@@ -108,7 +138,7 @@ it("projects pricing, reasoning, tools, and modalities from object tiers JSON", 
       reasoning: true,
       tool_call: true,
       reasoning_options: [{ type: "effort", values: ["low", "high", "high", false] }],
-      modalities: { input: ["text", "image", "video"] },
+      modalities: { input: ["text", "image", "video"], output: ["text"] },
       provider: { npm: "@ai-sdk/openai" },
       limit: { context: 1_000_000, input: 900_000, output: 128_000 },
       cost: { input: 2, output: 6, cache_read: 0.5, cache_write: 1, tiers: {} },
@@ -156,6 +186,7 @@ it.each([
     const model = project(
       {
         id: "reasoning-fixture",
+        modalities: { output: ["text"] },
         reasoning: true,
         limit: { context: 128_000, output: 8192 },
         reasoning_options: options,
@@ -182,6 +213,7 @@ it.each([
   async (npm, api, baseUrl) => {
     const model = await fetchedModel({
       id: "opaque-preview-id",
+      modalities: { output: ["text"] },
       name: "Opaque Preview",
       provider: { npm },
       limit: { context: 128_000, output: 8192 },
@@ -199,6 +231,7 @@ it("rejects upstream metadata that would redirect authenticated inference to ano
   const provider = makeProvider();
   const model = {
     id: "opaque-preview-id",
+    modalities: { output: ["text"] },
     name: "Opaque Preview",
     limit: { context: 128_000, output: 8192 },
   };

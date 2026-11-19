@@ -1,2 +1,0 @@
-# Pin migrated snippet output and prevent duplicate PostgreSQL headline evaluation.
-21

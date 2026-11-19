@@ -16,6 +16,22 @@ function expectInvalid(result: ReturnType<typeof parseTemplateManifest>, path: s
 }
 
 describe("portable Template schema conformance", () => {
+  it.each(["Brief me", [""], ["   "], [12]])(
+    "rejects invalid conversation starters %j",
+    (recommendedPrompts) => {
+      expectInvalid(
+        parseTemplateManifest({
+          ...baseManifest,
+          agent: { ...baseManifest.agent, recommendedPrompts },
+        }),
+        "$.agent.recommendedPrompts" +
+          (Array.isArray(recommendedPrompts) && typeof recommendedPrompts[0] !== "string"
+            ? "[0]"
+            : ""),
+      );
+    },
+  );
+
   it("preserves optional portable categories", () => {
     const result = parseTemplateManifest({ ...baseManifest, categories: ["travel", "personal"] });
     expect(result).toMatchObject({ ok: true, manifest: { categories: ["travel", "personal"] } });
@@ -121,6 +137,21 @@ describe("portable Template schema conformance", () => {
       ]).ok,
     ).toBe(true);
   });
+
+  it.each(["Avatars\\Agent.png", "Avatars/Agent.png"])(
+    "stores the declared destination for avatar %s",
+    (avatar) => {
+      const result = parseTemplateManifest({
+        ...baseManifest,
+        agent: { ...baseManifest.agent, identity: { avatar } },
+        workspace: { files: [{ source: "workspace/avatar.png", path: "avatars/agent.png" }] },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        manifest: { agent: { identity: { avatar: "avatars/agent.png" } } },
+      });
+    },
+  );
 
   it("requires portable cron timezone, session, field count, and delivery", () => {
     const valid = {

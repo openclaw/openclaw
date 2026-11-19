@@ -1,2 +1,0 @@
-# Hold the real receipt-only finalization in the existing on-exit rearm regression.
-38

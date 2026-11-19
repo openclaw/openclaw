@@ -114,6 +114,8 @@ const schemaCases: Array<[string, unknown, boolean]> = [
     { allowPromptInjection: false, allowConversationAccess: "yes" },
     false,
   ],
+  ["plugins.entries.voice-call.hooks", { allowModelRequest: true }, true],
+  ["plugins.entries.voice-call.hooks", { allowModelRequest: "true" }, false],
   ["plugins.entries.voice-call.subagent", { allowModelOverride: "yes", allowedModels: [1] }, false],
   [
     "plugins.entries.voice-call.llm",

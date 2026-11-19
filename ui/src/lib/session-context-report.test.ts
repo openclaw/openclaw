@@ -248,6 +248,7 @@ it.each(["sessionId", "model", "provider"] as const)(
     await store.refresh(target);
     expect(store.get(target)).toEqual({
       report: null,
+      cost: null,
       loading: false,
       failed: false,
       offline: false,
@@ -338,4 +339,62 @@ it("recovers once for two consumers and preserves server backoff while demand is
   await vi.advanceTimersByTimeAsync(600_000);
   expect(request).toHaveBeenCalledTimes(5);
   expect(vi.getTimerCount()).toBe(0);
+});
+
+it("reads the bound instance's lifetime cost, flagging lower bounds and unpriced usage", async () => {
+  const { request, store } = setup();
+  const owner = {};
+  onTestFinished(() => store.unwatch(owner));
+  const usage = (totalCost: number, missingCostEntries = 0) => ({
+    totalCost,
+    missingCostEntries,
+    input: 1_000,
+    output: 200,
+    cacheRead: 3_000,
+    cacheWrite: 0,
+  });
+  const read = async (row: Record<string, unknown>, partial?: object) => {
+    request.mockResolvedValueOnce({
+      sessions: [{ key: target.sessionKey, sessionId: target.sessionId, ...row }],
+      ...(partial ? { partial } : {}),
+    });
+    await store.refresh(target);
+    return store.get(target).cost;
+  };
+  request.mockResolvedValue({ sessions: [] });
+  store.watch(owner, target);
+  await store.refresh(target);
+  request.mockClear();
+
+  expect(await read({ usage: usage(99.14) })).toEqual({
+    usd: 99.14,
+    partial: false,
+    unpriced: false,
+    cacheHitRate: 0.75,
+    input: 1_000,
+    output: 200,
+  });
+  // The whole history, not today's calendar window, makes up the session total.
+  expect(request).toHaveBeenCalledWith(
+    "sessions.usage",
+    expect.objectContaining({ key: target.sessionKey, range: "all", groupBy: "instance" }),
+    expect.anything(),
+  );
+  expect(asNullableObjectRecord(request.mock.calls[0]?.[1])).not.toHaveProperty("startDate");
+  expect(await read({ usage: usage(4, 2) })).toMatchObject({ usd: 4, partial: true });
+  // Incomplete counters bound the cost but give no meaningful ratio.
+  expect(await read({ usage: usage(4), computing: true })).toMatchObject({
+    partial: true,
+    cacheHitRate: null,
+  });
+  expect(await read({ usage: usage(4) }, { reason: "time-budget", message: "slow" })).toMatchObject(
+    { partial: true, cacheHitRate: null },
+  );
+  // Input from calls without a cache split is left out, not counted as a miss.
+  expect(
+    await read({ usage: { ...usage(4), input: 2_000, cacheUnmeasuredInput: 1_000 } }),
+  ).toMatchObject({ cacheHitRate: 0.75 });
+  expect(await read({ usage: usage(0, 3) })).toMatchObject({ unpriced: true });
+  // A rotated instance's total belongs to that instance, not this chat.
+  expect(await read({ sessionId: "previous", usage: usage(12) })).toBeNull();
 });

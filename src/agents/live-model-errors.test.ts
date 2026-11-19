@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
+import { isListedModelChatRejection, isModelNotFoundErrorMessage } from "./live-model-errors.js";
 
 function expectMessages(expected: boolean, messages: string[]) {
   for (const message of messages) {
@@ -12,7 +12,7 @@ it("detects generic model-not-found messages", () => {
     "Model not found: openai/gpt-6",
     "model_not_found",
     "The model gpt-foo does not exist.",
-    "This model was not found. Choose another model in the Control UI.",
+    "This model was not found. Choose another model in the OpenClaw app.",
     '{"code":404,"message":"model not found"}',
     '{"error":{"message":"A stealth model. Find it here: https://example.com/model","code":404}}',
     "model: MiniMax-M2.7-highspeed not found",
@@ -31,6 +31,7 @@ it("detects generic model-not-found messages", () => {
   expectMessages(false, [
     "The endpoint has been deprecated. Transition to v2 API for continued access.",
     "The deployment does not exist or you do not have access.",
+    "The service ID does not exist, or the model does not match the service. Please confirm the service ID in the Online Inference Service list in the console.",
     '{"error":{"message":"Resource missing","code":404}}',
     "This model is not supported for tool calling.",
     "This model is not supported when using tool calling.",
@@ -53,4 +54,16 @@ it("treats a hard model deprecation as model-unavailable, not deprecation warnin
     "Parameter top_k is deprecated for this model.",
     "Warning: model gpt-4o-2024-05-13 is deprecated and will be removed on 2026-12-01.",
   ]);
+});
+
+it("limits listed-model chat rejections to deterministic 400, 403 and 404 responses", () => {
+  const message =
+    "The model `fixture-listed-model` does not exist or you do not have access to it.";
+  for (const status of [400, 403, 404]) {
+    expect(isListedModelChatRejection(status, message), String(status)).toBe(true);
+  }
+  for (const status of [undefined, 200, 401, 402, 408, 429, 500, 503]) {
+    expect(isListedModelChatRejection(status, message), String(status)).toBe(false);
+  }
+  expect(isListedModelChatRejection(400, "Invalid value for 'temperature'.")).toBe(false);
 });

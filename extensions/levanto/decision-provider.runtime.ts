@@ -3,14 +3,18 @@ import type {
   DecisionProviderContextV2,
   ProviderDecisionOutcomeV2,
 } from "openclaw/plugin-sdk/decisions";
-import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { evaluateDecisionHttp } from "openclaw/plugin-sdk/decisions-http-runtime";
 import {
-  resolveProviderHttpRequestConfig,
-  sanitizeConfiguredModelProviderRequest,
-} from "openclaw/plugin-sdk/provider-http";
-import { encodeSageDecisionInput } from "./decision-codec.js";
-import { executeSageDecision } from "./decision-execution.js";
-import type { SageImageProbe } from "./sage-validation.js";
+  decodeSageDecisionResult,
+  encodeSageDecisionInput,
+  encodeSageDecisionRequest,
+} from "./decision-codec.js";
+import {
+  parseSageBatchResponse,
+  parseSageResponse,
+  validateSageImage,
+  type SageImageProbe,
+} from "./sage-validation.js";
 
 export async function evaluateLevantoDecision(
   batch: DecisionBatchV2,
@@ -23,45 +27,34 @@ export async function evaluateLevantoDecision(
   } catch {
     return { status: "unavailable", reason: "unsupported-input" };
   }
-  if (!encoded) {
+  const request =
+    encoded &&
+    encodeSageDecisionRequest(encoded.nativeContent, encoded.questions, context.reasoning);
+  if (!encoded || !request) {
     return { status: "unavailable", reason: "unsupported-input" };
   }
-  return executeSageDecision(batch, {
-    input: encoded,
-    modelId: context.model.id,
-    capabilities: context.model.inference?.decision,
-    reasoning: context.reasoning,
-    signal: context.signal,
-    deadlineMonotonicMs: context.deadlineMonotonicMs,
-    isAdmissible: context.isAdmissible,
-    probeImage,
-    prepareRoute: () => {
-      const configuredRequest = resolveMergedModelProviderConfig(
-        context.config,
-        "levanto",
-      )?.request;
-      // The host has already resolved header/SecretRef precedence and explicit auth.
-      // Only network policy is read here; never resolve or replay configured credentials.
-      const networkRequest = sanitizeConfiguredModelProviderRequest({
-        proxy: configuredRequest?.proxy,
-        tls: configuredRequest?.tls,
-        allowPrivateNetwork: configuredRequest?.allowPrivateNetwork,
-      });
-      return resolveProviderHttpRequestConfig({
-        provider: "levanto",
-        baseUrl: context.model.baseUrl,
-        defaultBaseUrl: "https://sage.levanto.ai",
-        api: context.model.api,
-        capability: "other",
-        transport: "http",
-        headers: context.model.headers,
-        defaultHeaders:
-          configuredRequest?.auth?.mode === "header" ||
-          configuredRequest?.auth?.mode === "authorization-bearer"
-            ? undefined
-            : { Authorization: `Bearer ${context.auth.apiKey}` },
-        request: networkRequest,
-      });
-    },
+  const { nativeContent, questions } = encoded;
+  if (typeof nativeContent !== "string" && nativeContent.kind === "image") {
+    try {
+      await validateSageImage(nativeContent.media, probeImage);
+    } catch {
+      return { status: "unavailable", reason: "unsupported-input" };
+    }
+  }
+  return evaluateDecisionHttp(context, {
+    provider: "levanto",
+    baseUrl: context.model.baseUrl ?? "https://sage.levanto.ai",
+    endpointPath: "requests" in request ? "decide/batch" : "decide",
+    body: JSON.stringify(request),
+    decode: (payload) =>
+      decodeSageDecisionResult(
+        batch,
+        questions,
+        "requests" in request
+          ? parseSageBatchResponse(payload, request)
+          : parseSageResponse(payload, request.question, request.content),
+        context.model.id,
+        context.model.inference?.decision,
+      ),
   });
 }

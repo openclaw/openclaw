@@ -93,6 +93,13 @@ new tool results, against the full window even when proactive compaction is
 disabled. It stops an over-window submission and uses the existing safe recovery
 path. Native Codex and Claude CLI keep their own compaction policies.
 
+If tool-result trimming cannot change the saved context, recovery falls through
+to compaction instead of retrying the same oversized request. Same-turn retries
+reuse the recorded keyed input and its runtime context, preserving completed tool
+results without appending another continuation prompt. Recovery estimates count
+only tool-result text the transcript owner can trim; context-engine projections
+that are absent from the saved transcript require compaction.
+
 Scheduled turns in an existing session use the same built-in request checks.
 Their context totals update during requests and after completion even when the
 automation preserves the conversation's displayed model and billing snapshot.
@@ -119,6 +126,14 @@ For OpenAI-compatible Chat Completions, an automatically context-capped response
 Before automatically reducing the output budget for an OpenAI-compatible tool request, OpenClaw uses a minimum output budget equal to one eighth of the model’s declared maximum output, bounded between 16 and 2,048 tokens. If that minimum cannot fit, compaction runs before the request is sent. Requests without active tools keep the 16-token floor, and explicit output limits that fit remain valid.
 
 Overflow recovery trims tool results within the current model-context window. Older messages and reset boundaries remain in retained history without being copied into new transcript entries.
+
+Before using the Responses compact endpoint, OpenClaw checks that its input fits
+the model and request window. Oversized input goes directly to the bounded client
+summarizer. If the endpoint still reports context overflow during automatic
+compaction, OpenClaw logs the reason and commits a deterministic reduction without
+another model request. Recent turns and the pending request stay in context;
+older messages remain in saved history. Manual `/compact` keeps trying the bounded
+client summarizer after an endpoint failure.
 
 If overflow recovery cannot make the prompt fit, the failed reply suggests `/reset`, `/new`, or a larger-context model. If the recovery compaction itself fails, for example because the summary model errors or times out, the reply says so and suggests trying again or running `/compact`. The Control UI shows this guidance in Details and keeps it in saved chat history. For a single oversized prompt, shorten the prompt before resending it in a new session.
 
@@ -388,6 +403,9 @@ worker or process restarts. An independent event-count limit can still shorten
 unusually dense histories.
 If the previous turn exceeds the cap, the loader keeps its newest affordable
 atomic frames rather than starting the next turn with only the new prompt.
+When a retry reloads history in the middle of a turn whose tool results exceed
+the cap, the loader keeps the request that opened the turn in front of those
+frames, so the retry still sees its task.
 
 This selection does not delete saved history, create a summary, run a memory
 flush, or trigger compaction notifications. Older context can therefore remain

@@ -20,7 +20,11 @@ import {
   providerDisplayLabel,
   type ProviderPresentation,
 } from "../../components/provider-icon-data.ts";
-import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
+import {
+  listSelectableAgents,
+  normalizeAgentLabel,
+  resolveAgentConfig,
+} from "../../lib/agents/display.ts";
 import {
   canonicalModelAuthProviderId,
   isMonitoredAuthProvider,
@@ -582,6 +586,32 @@ export function buildUnconfiguredProviderOptions(
   return [...options.values()].toSorted((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
+export type AgentUtilityOverride = {
+  agentId: string;
+  label: string;
+  /** Own primary; "" disables utility for the agent, undefined inherits the default primary. */
+  model: string | undefined;
+  fallbacks: string[];
+};
+
+/**
+ * Agents with their own utilityModel primary or fallbacks. An explicit empty fallback
+ * chain without a primary is not listed (accepted: rare, and visible in raw config).
+ */
+export function listAgentUtilityOverrides(
+  configObject: Record<string, unknown> | null,
+  agents: AgentsListResult["agents"],
+): AgentUtilityOverride[] {
+  return agents.flatMap((agent) => {
+    const own = readModelSetting(resolveAgentConfig(configObject, agent.id).entry?.utilityModel);
+    const model = modelSettingPrimary(own);
+    const fallbacks = modelSettingFallbacks(own);
+    return model === undefined && fallbacks.length === 0
+      ? []
+      : [{ agentId: agent.id, label: normalizeAgentLabel(agent), model, fallbacks }];
+  });
+}
+
 /** Assembles admitted snapshots for the Models page without owning state or effects. */
 export function buildModelProviderPresentation(params: {
   configObject: Record<string, unknown> | null;
@@ -634,6 +664,7 @@ export function buildModelProviderPresentation(params: {
       decisionModels: catalog.decisionModels ?? [],
       authStatus: data.authStatus,
       automaticUtilityModel: catalog.defaultModels?.automaticUtilityModel,
+      utilityOverrides: listAgentUtilityOverrides(params.configObject, agents),
       utilityRuntime: catalog.defaultModels?.utilityRuntime,
       thinkingLevel: defaults.thinkingLevel,
       thinkingOverridden: defaults.thinkingOverridden,

@@ -158,7 +158,16 @@ function BuildRow(props: { title: string; label: string; build: AboutBuild }) {
       <Show when={buildReport(props.build)}>
         {(report) => (
           <div class="settings-row__control">
-            <CopyButton text={report()} idleLabel={t("aboutPage.copyBuild")} />
+            <CopyButton
+              text={report()}
+              idleLabel={t(
+                props.build.version && props.build.commit
+                  ? "aboutPage.copyBuild"
+                  : props.build.version
+                    ? "aboutPage.copyVersion"
+                    : "aboutPage.copyAvailableCommit",
+              )}
+            />
           </div>
         )}
       </Show>

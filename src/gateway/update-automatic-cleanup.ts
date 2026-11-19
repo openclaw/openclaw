@@ -1,4 +1,5 @@
 import type { RecoveryCleanupReport } from "../commands/doctor-session-sqlite-recovery-inventory.js";
+import { settleWithCleanup } from "../infra/error-graph-internal.js";
 import { captureStateDatabaseAccess } from "../infra/gateway-state-owner.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -59,18 +60,21 @@ function runGatewayRecoveryCleanup<T>(
         maxPendingTasks: 1,
         restartOnError: false,
       });
-      try {
-        return await pool.run(
-          { ...selection, env: { ...env }, authority: admission.port },
-          { transferList: (input) => [input.authority], signal: owner.signal },
-        );
-      } finally {
-        try {
-          await pool.close();
-        } finally {
-          admission.finish();
-        }
-      }
+      return settleWithCleanup(
+        (async () => {
+          return await pool.run(
+            { ...selection, env: { ...env }, authority: admission.port },
+            { transferList: (input) => [input.authority], signal: owner.signal },
+          );
+        })(),
+        () =>
+          settleWithCleanup(
+            (async () => pool.close())(),
+            () => admission.finish(),
+            "Recovery worker and admission cleanup failed",
+          ),
+        "Recovery operation and cleanup failed",
+      );
     })();
     return settle ? settle(work, assertCurrent) : work;
   });

@@ -1,7 +1,7 @@
 import type { BigIntStats } from "node:fs";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
-import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
+import type { LocalWorkspaceCapture } from "./local-workspace-store.types.js";
 import { workspaceCtimeIsReusable } from "./workspace-hash-memo.js";
 import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
 
@@ -61,7 +61,7 @@ export function prepareLocalWorkspaceFingerprints(
   }
   const device = decoded?.readBigUInt64LE(1);
   const reused = new Map<string, string>();
-  const changed = new Map<string, string>();
+  const changed = new Map<string, { identity: string; reusable?: boolean }>();
   let allReusable = decoded !== undefined;
   let observedReusable = 0;
 
@@ -91,14 +91,15 @@ export function prepareLocalWorkspaceFingerprints(
       allReusable = false;
       return undefined;
     },
-    observe(entryPath: string, identity: string) {
+    // A hashed read can establish eligibility after discovery's earlier timestamp.
+    observe(this: void, entryPath: string, identity: string, reusable?: boolean) {
       if (reused.get(entryPath) === identity) {
         observedReusable++;
       } else {
         // A hashed read can report a newer identity than its initial lstat.
         allReusable = false;
         reused.delete(entryPath);
-        changed.set(entryPath, identity);
+        changed.set(entryPath, { identity, reusable });
       }
     },
     encode(
@@ -157,8 +158,8 @@ export function prepareLocalWorkspaceFingerprints(
           decoded!.copy(bytes, targetOffset, offset, offset + FILE_BYTES);
           continue;
         }
-        const identity = changed.get(entryPath);
-        if (!identity) {
+        const observed = changed.get(entryPath);
+        if (!observed) {
           if (invalidatedPaths) {
             // An applied path needs a fresh identity; unchanged target slots keep their own stats.
             bytes.writeBigInt64LE(RACY_CTIME_NS, targetOffset + 8);
@@ -166,7 +167,7 @@ export function prepareLocalWorkspaceFingerprints(
           }
           return null;
         }
-        const fields = identity.split(":");
+        const fields = observed.identity.split(":");
         const statDev = sourceDevice(BigInt(fields[1]!));
         dev ??= statDev;
         // One header cannot describe files spanning devices. Those scans stay correct by hashing.
@@ -176,7 +177,9 @@ export function prepareLocalWorkspaceFingerprints(
         const ctimeNs = BigInt(fields[5]!);
         bytes.writeBigUInt64LE(BigInt(fields[2]!), targetOffset);
         bytes.writeBigInt64LE(
-          workspaceCtimeIsReusable(ctimeNs, scanStartedAtMs) ? ctimeNs : RACY_CTIME_NS,
+          (observed.reusable ?? workspaceCtimeIsReusable(ctimeNs, scanStartedAtMs))
+            ? ctimeNs
+            : RACY_CTIME_NS,
           targetOffset + 8,
         );
       }

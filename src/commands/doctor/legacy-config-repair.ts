@@ -1,8 +1,10 @@
 // Update-channel config repair for legacy config files before normal command startup.
 import { readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
+import { getDeferredPluginMigrationConfigFacts } from "../../config/deferred-plugin-migration-config.js";
 import type { ConfigWriteOptions } from "../../config/io.types.js";
 import { resolveConfigIncludeWriteBoundary } from "../../config/mutate.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ValidateConfigWithPluginsParams } from "../../config/validation-plugin-rules.js";
 import { validateConfigObjectRawWithPlugins } from "../../config/validation.js";
 import { preparePluginDoctorContractModules } from "../../plugins/doctor-contract-preparation.js";
 import {
@@ -30,21 +32,31 @@ export type LegacyConfigUpdatePlan = {
 export function planLegacyConfigForUpdateChannel(
   configSnapshot: ConfigSnapshot,
   includeIdentity: LegacyConfigUpdatePlan["includeIdentity"] = {},
+  semanticValidation?: ValidateConfigWithPluginsParams["semanticValidation"],
 ): LegacyConfigUpdatePlan | undefined {
   const hasAuthoredIncludes = containsAuthoredInclude(configSnapshot.parsed);
-  const migrated = migrateLegacyConfig(configSnapshot.sourceConfig, {
-    sourceConfigBeforeMigrations: configSnapshot.sourceConfigBeforeMigrations,
-    context: {
-      authoredRaw: configSnapshot.parsed,
-      resolvedRaw: configSnapshot.sourceConfig,
+  const migrated = migrateLegacyConfig(
+    configSnapshot.sourceConfig,
+    {
+      sourceConfigBeforeMigrations: configSnapshot.sourceConfigBeforeMigrations,
+      context: {
+        authoredRaw: configSnapshot.parsed,
+        resolvedRaw: configSnapshot.sourceConfig,
+      },
     },
-  });
+    semanticValidation,
+  );
+  const deferred = getDeferredPluginMigrationConfigFacts(configSnapshot.sourceConfig);
   if (!migrated.config && !migrated.warnings?.length) {
     return undefined;
   }
 
   const nextConfig = migrated.sourceConfig ?? migrated.config ?? configSnapshot.sourceConfig;
-  const validated = validateConfigObjectRawWithPlugins(migrated.config ?? nextConfig);
+  // Deferred migrations skip plugin schema checks; ordinary plans are already validated.
+  const validated =
+    migrated.config && !migrated.partiallyValid && !deferred?.length
+      ? { ok: true as const, config: migrated.config }
+      : validateConfigObjectRawWithPlugins(migrated.config ?? nextConfig, { semanticValidation });
   if (!validated.ok) {
     return undefined;
   }

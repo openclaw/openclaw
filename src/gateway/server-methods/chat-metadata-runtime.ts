@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
+import {
+  getPreparedRuntimeAuthProfileStoreSnapshot,
+  type AuthProfileStore,
+} from "../../agents/auth-profiles.js";
 import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import { getPendingPreparedModelRuntimeReplacement } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
@@ -29,10 +33,14 @@ import {
   authStoresCurrent,
   captureGenerationFacts,
   ChatMetadataSnapshotUnavailableError,
+  ChatMetadataStartingError,
   generationFactsMatch,
   type PreparedGenerationFacts,
 } from "./chat-metadata-facts.js";
-import { createChatMetadataModelList } from "./chat-metadata-model-list.js";
+import {
+  createChatMetadataModelList,
+  retainPublishedModelsList,
+} from "./chat-metadata-model-list.js";
 import {
   hasSessionCatalogContext,
   prepareChatMetadataModelProjection,
@@ -76,6 +84,7 @@ type PreparedMetadataGeneration = {
 type ChatMetadataRefreshOptions = { notifyIfUnchanged?: boolean };
 
 const CHAT_METADATA_CACHE_MAX_ENTRIES = 64;
+const EMPTY_AUTH_STORE: AuthProfileStore = { version: 1, profiles: {} };
 
 export function createGatewayChatMetadataRuntime(params: {
   getConfig: () => OpenClawConfig;
@@ -102,6 +111,7 @@ export function createGatewayChatMetadataRuntime(params: {
   ) => Promise<ChatStartupProjectionResult | undefined>;
 } {
   let current: PreparedMetadataGeneration | undefined;
+  let hasPublished = false;
   let lastError: Error | undefined;
   let replacement: Deferred | undefined;
   let failed = false;
@@ -321,6 +331,7 @@ export function createGatewayChatMetadataRuntime(params: {
       assertOpen();
       // Mid-refresh config changes are best effort; the next publication refreshes these facts.
       current = generation;
+      hasPublished ||= facts.agents.length > 0;
       notifyChanged(facts, options.notifyIfUnchanged);
     } else if (options.notifyIfUnchanged) {
       notifyChanged(facts, true);
@@ -369,6 +380,10 @@ export function createGatewayChatMetadataRuntime(params: {
     project: (generation: PreparedMetadataGeneration) => Promise<PreparedProjection<Result>>,
   ): Promise<Result> => {
     assertOpen();
+    // Empty startup catch-up is not a publication; terminal failures and retired owners stay errors.
+    if (!hasPublished && !lastError) {
+      throw new ChatMetadataStartingError("Chat metadata is starting; retry shortly.");
+    }
     await pending;
     if (!current && replacement) {
       await replacement.promise;
@@ -393,8 +408,15 @@ export function createGatewayChatMetadataRuntime(params: {
     return readProjection.read();
   };
 
-  // Catalog changes during a rebuild are best effort; serve the last rendered list until publication.
-  const publishedModelLists = new Map<string, ModelsListResult>();
+  // Retained rows remain visible only while their provider config and credentials are unchanged.
+  const publishedModelLists = new Map<
+    string,
+    {
+      result: ModelsListResult;
+      source: Parameters<typeof retainPublishedModelsList>[1];
+      readAuthStore: () => AuthProfileStore;
+    }
+  >();
   const retainedModelsList = async (key: string, request: PreparedModelsListRequest) => {
     const published = publishedModelLists.get(key);
     if (!published) {
@@ -410,7 +432,11 @@ export function createGatewayChatMetadataRuntime(params: {
       return undefined;
     }
     assertAgentDatabaseReadAdmitted(request.agentId);
-    return published;
+    return retainPublishedModelsList(published.result, published.source, {
+      config: params.getConfig(),
+      agentId: published.source.agentId,
+      authStore: published.readAuthStore(),
+    });
   };
   const readModelsList = async (
     request: PreparedModelsListRequest,
@@ -435,9 +461,11 @@ export function createGatewayChatMetadataRuntime(params: {
     if (retained) {
       return retained;
     }
+    let generation: PreparedMetadataGeneration | undefined;
     let result: ModelsListResult | undefined;
     try {
       result = await readCurrent(request.agentId, async (read) => {
+        generation = read;
         const prepared = await read.modelLists.read(request);
         return prepared ?? { isCurrent: () => true, read: () => undefined };
       });
@@ -452,8 +480,21 @@ export function createGatewayChatMetadataRuntime(params: {
       }
       throw error;
     }
-    if (result) {
-      publishedModelLists.set(key, result);
+    const agent = generation?.facts.agents.find((candidate) => candidate.agentId === agentId);
+    if (result && generation && agent) {
+      const { agentDir, inheritedAuthDir, metadataSnapshot } = agent.owner;
+      publishedModelLists.set(key, {
+        result,
+        source: {
+          config: generation.facts.config,
+          agentId,
+          authStore: agent.authStore,
+          providerPlugins: metadataSnapshot.owners.providers,
+        },
+        readAuthStore: () =>
+          getPreparedRuntimeAuthProfileStoreSnapshot(agentDir, inheritedAuthDir) ??
+          EMPTY_AUTH_STORE,
+      });
       pruneMapToMaxSize(publishedModelLists, CHAT_METADATA_CACHE_MAX_ENTRIES);
     }
     return result;

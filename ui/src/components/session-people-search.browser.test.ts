@@ -88,13 +88,37 @@ it.each(["assignment", "compact assignment", "members"] as const)(
       await expect.element(input).toBeVisible();
     }
     if (surface === "assignment") {
-      const style = getComputedStyle(input.element().closest('[role="menu"]')!);
-      expect(style).toMatchObject({ width: "320px", maxHeight: "420px", overflowY: "auto" });
+      const menu = input.element().closest('[role="menu"]')!;
+      const style = getComputedStyle(menu);
+      expect(style).toMatchObject({ width: "320px", maxHeight: "366px", overflowY: "auto" });
+      // Engines paint the bar over the radius; half of it keeps the thumb inside each corner.
+      const inset = Number.parseFloat(style.borderTopRightRadius) / 2;
+      expect(inset).toBeGreaterThan(0);
+      const track = getComputedStyle(menu, "::-webkit-scrollbar-track");
+      expect(
+        [track.marginTop, track.marginBottom].map((margin) => Number.parseFloat(margin)),
+      ).toEqual([inset, inset]);
     }
     const selector = !members
       ? '[data-value^="assign-owner:"]'
       : 'button.chat-pane__sharing-permission[data-value^="permission:"]';
     await expect.poll(() => root.querySelectorAll(selector).length).toBe(count + (members ? 0 : 2));
+    if (surface === "assignment") {
+      const first = root.querySelector<HTMLElement>(selector)!;
+      const scrollport = input.element().closest<HTMLElement>('[role="menu"]')!;
+      first.focus();
+      scrollport.scrollTop = first.offsetTop;
+      await expect
+        .poll(() => {
+          const rect = input.element().getBoundingClientRect();
+          return document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        })
+        .toBe(input.element());
+      await userEvent.click(input);
+      expect(document.activeElement).toBe(input.element());
+      first.focus();
+    }
+
     for (const name of ["Next", "Previous"]) {
       await expect.element(page.getByRole("button", { name, exact: true })).not.toBeInTheDocument();
     }

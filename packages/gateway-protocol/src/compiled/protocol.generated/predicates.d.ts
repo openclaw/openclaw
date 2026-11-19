@@ -467,6 +467,21 @@ export function isModelsProbeParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ModelsProbeParamsSchema
 >;
+export function isToolUsageStatusParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ToolUsageStatusParamsSchema
+>;
+export function isToolUsageImportParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ToolUsageImportParamsSchema
+>;
+export function isToolUsageResetParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ToolUsageResetParamsSchema
+>;
 export function isConversationListParams(
   value: unknown,
 ): value is import("typebox").Static<

@@ -1,2 +1,0 @@
-# New-session link connection recovery and native Gateway lifecycle in the mobile shell.
-40

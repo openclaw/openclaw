@@ -9,7 +9,7 @@ import {
   normalizeGoogleGenerativeAiBaseUrl,
 } from "./provider-policy.js";
 
-function resolveTrustedGoogleGenerativeAiBaseUrl(baseUrl?: string): string {
+export function resolveTrustedGoogleGenerativeAiBaseUrl(baseUrl?: string): string {
   const normalized = normalizeGoogleGenerativeAiBaseUrl(baseUrl) ?? DEFAULT_GOOGLE_API_BASE_URL;
   const url = URL.parse(normalized);
   if (!url) {

@@ -22,6 +22,9 @@
  * backend dispatch, daemon identity, filesystem-bridge setup and registry publication.
  * --engine docker|podman selects the synthetic engine (default: docker); Podman
  * models a local rootless engine, including its native target-resolution probes.
+ * --call-latency-ms injects per-call delay after warmup; --pause-cycle measures
+ * quiesce/resume with real registry custody. --workspace-fixture uses an existing
+ * synthetic scale workspace (read-only to the benchmark; never production data).
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
@@ -43,6 +46,9 @@ const { values } = parseArgs({
     "cold-create": { type: "boolean", default: false },
     backend: { type: "boolean", default: false },
     engine: { type: "string", default: "docker" },
+    "call-latency-ms": { type: "string", default: "0" },
+    "workspace-fixture": { type: "string" },
+    "pause-cycle": { type: "boolean", default: false },
   },
 });
 assert(values.owner, "--owner must select a built or source sandbox owner");
@@ -57,11 +63,23 @@ const iterations = parseStrictIntegerOption({
 });
 await fs.mkdir(".local", { recursive: true });
 const root = await fs.mkdtemp(path.resolve(".local/sandbox-start-measure-"));
-const workspaceDir = path.join(root, "workspace");
+const workspaceDir = values["workspace-fixture"]
+  ? path.resolve(values["workspace-fixture"])
+  : path.join(root, "workspace");
+const callLatencyMs = parseStrictIntegerOption({
+  raw: values["call-latency-ms"],
+  label: "--call-latency-ms",
+  min: 0,
+  fallback: 0,
+});
+assert(
+  !values["pause-cycle"] || (values.backend && !values["cold-create"]),
+  "--pause-cycle requires --backend without --cold-create",
+);
 const bin = path.join(root, "bin");
 const callsFile = path.join(root, "calls");
 const containerId = "c".repeat(64);
-await fs.mkdir(workspaceDir);
+await fs.mkdir(workspaceDir, { recursive: true });
 await fs.mkdir(bin);
 Object.assign(process.env, {
   OPENCLAW_STATE_DIR: path.join(root, "state"),
@@ -92,6 +110,7 @@ await fs.writeFile(
 if [ "$1" = --remote=false ]; then shift; fi
 if [ "$1" = --host ]; then shift 2; fi
 printf '%s\n' "$1" >> "$SANDBOX_MEASURE_CALLS"
+if [ -n "$SANDBOX_MEASURE_LATENCY" ]; then sleep "$SANDBOX_MEASURE_LATENCY"; fi
 case "$1" in
   context) printf '{"Host":"unix:///synthetic-sandbox.sock"}\n' ;;
   info)
@@ -115,6 +134,9 @@ case "$1" in
     fi
     read -r config_hash < "$SANDBOX_MEASURE_CONTAINER"
     case "$3" in
+      *'"State":{{json .State}}'*) printf '{"Id":"%s","State":{"Running":true,"Paused":false},"Labels":{"openclaw.configHash":"%s"},"ReadonlyRootfs":true,"Mounts":[],"Tmpfs":{}}\\n' "$SANDBOX_MEASURE_ID" "$config_hash" ;;
+      '{{.Id}} {{.State.Running}} {{.State.Paused}}') printf '%s true false\\n' "$SANDBOX_MEASURE_ID" ;;
+      '{{.State.Paused}}') if [ -f "$SANDBOX_MEASURE_CONTAINER.paused" ]; then printf 'true\\n'; else printf 'false\\n'; fi ;;
       '{{.State.Running}}') printf 'true\n' ;;
       '{{.Id}} {{.HostConfig.ReadonlyRootfs}}') printf '%s true\n' "$SANDBOX_MEASURE_ID" ;;
       *'.State.Running}'*'.HostConfig.ReadonlyRootfs}'*) printf '%s\ntrue\ntrue\n%s\n' "$SANDBOX_MEASURE_ID" "$config_hash" ;;
@@ -130,6 +152,8 @@ case "$1" in
     done
     printf '%s\n' "$SANDBOX_MEASURE_ID" ;;
   exec) printf '1 0 8:1 / / rw - ext4 /dev/synthetic rw\n' ;;
+  pause) touch "$SANDBOX_MEASURE_CONTAINER.paused" ;;
+  unpause) rm "$SANDBOX_MEASURE_CONTAINER.paused" ;;
   image|start) ;;
   *) printf 'Unsupported fixture operation\n' >&2; exit 2 ;;
 esac
@@ -192,7 +216,7 @@ try {
     readOnlyResourceMounts,
     cfg,
   };
-  const invoke = values.backend
+  let invoke = values.backend
     ? async () => {
         const { createSandboxBackend } =
           owner as typeof import("../../src/agents/sandbox/backend.js");
@@ -212,8 +236,33 @@ try {
         assert.equal(result.containerId, containerId);
         assert.equal(result.currentConfig, true);
       };
+  if (values["pause-cycle"]) {
+    await invoke();
+    const { quiesceLocalWorkspace } = (await import(
+      pathToFileURL(path.resolve(path.dirname(values.owner), "local-workspace-quiescence.ts")).href
+    )) as typeof import("../../src/agents/sandbox/local-workspace-quiescence.js");
+    invoke = async () => {
+      let receipt: Array<{ name: string; id: string }> = [];
+      const control = await quiesceLocalWorkspace({
+        workspaceDir,
+        retained: receipt,
+        reason: "checkpoint",
+        persist: (rows) => {
+          receipt = rows;
+        },
+        assertCurrent: () => {},
+      });
+      assert.equal(receipt.length, 1);
+      await control.resume();
+      assert.equal(receipt.length, 0);
+    };
+  }
   for (let index = 0; index < 10; index++) {
     await invoke();
+  }
+  // Inject only after warmup: the delay models queue/CLI latency, not host CPU.
+  if (callLatencyMs) {
+    process.env.SANDBOX_MEASURE_LATENCY = String(callLatencyMs / 1000);
   }
   await fs.writeFile(callsFile, "");
   global.gc();
@@ -259,14 +308,16 @@ try {
   }
   const calls = (await fs.readFile(callsFile, "utf8")).trim().split("\n");
   const callsByOperation = Object.fromEntries(
-    ["inspect", "image", "create", "start", "context", "info", "exec"].map((operation) => [
-      operation,
-      calls.filter((call) => call === operation).length / iterations,
-    ]),
+    ["inspect", "image", "create", "start", "context", "info", "exec", "pause", "unpause"].map(
+      (operation) => [operation, calls.filter((call) => call === operation).length / iterations],
+    ),
   );
   if (values["cold-create"]) {
     assert.equal(callsByOperation.create, 1);
     assert.equal(callsByOperation.start, 1);
+  } else if (values["pause-cycle"]) {
+    assert.equal(callsByOperation.pause, 1);
+    assert.equal(callsByOperation.unpause, 1);
   } else {
     assert(
       calls.every((call) => ["inspect", "context", "info", "exec"].includes(call)),
@@ -287,6 +338,9 @@ try {
       resourceMounts: readOnlyResourceMounts.length,
       allocations: values.allocations,
       coldCreate: values["cold-create"],
+      pauseCycle: values["pause-cycle"],
+      callLatencyMs,
+      workspaceDir,
       backend: values.backend,
       engine,
       callsByOperation,

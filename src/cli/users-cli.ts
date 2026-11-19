@@ -54,7 +54,7 @@ export function registerUsersCli(program: Command) {
             "users.list",
             opts,
             {},
-            { scopes: ["operator.read"], signal },
+            { scopes: ["operator.read"] },
           );
           if (!signal?.aborted) {
             writeUsersList(result, opts.json === true);

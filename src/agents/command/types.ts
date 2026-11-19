@@ -8,6 +8,7 @@ import type {
 } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { CronCreatorAuthorityCapability } from "../../gateway/cron-creator-authority-grant.types.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { ImageContent as LlmImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
@@ -24,7 +25,6 @@ import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-app
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/session-binding.types.js";
-import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import type { RequesterOrigin } from "../requester-origin.js";
@@ -146,6 +146,8 @@ export type AgentCommandOpts = {
   abortSignal?: AbortSignal;
   /** Private source-owner fence; cancellation alone does not establish current authority. */
   assertSourceCurrent?: import("../../auto-reply/command-owner-authority.js").CommandOwnerAssertion;
+  /** Host-only source check after queue selection, before preflight or execution. */
+  assertTurnAdmissionCurrent?: () => void;
   /** Original operator restriction; host-only and never accepted from public ingress. */
   operatorAuthority?: import("../admitted-run-context.js").AdmittedRunOperatorAuthority;
   /** Host-captured requester identity for policy resolution across internal continuations. */
@@ -269,6 +271,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   pinnedWidgetAuthoring: undefined,
   operationalRunInstance: undefined,
   assertSourceCurrent: undefined,
+  assertTurnAdmissionCurrent: undefined,
   operatorAuthority: undefined,
   requesterOrigin: undefined,
   privateCompletion: undefined,
