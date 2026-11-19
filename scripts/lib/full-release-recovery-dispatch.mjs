@@ -19,7 +19,6 @@ import {
   authenticateReceiptRecovery,
   receiptRecoverySourceRequest,
   validateReceiptRecoveryRequest,
-  verifyOriginalReceiptQualification,
 } from "../full-release-receipt-recovery.mjs";
 import {
   releaseChildSpec,
@@ -594,7 +593,7 @@ export async function reconcileReceiptRecovery(path, client) {
   };
 }
 
-export async function dispatchReceiptRecovery(options, client, dependencies = {}) {
+export async function dispatchReceiptRecovery(options, client) {
   if (options.reconcileRequest) {
     return reconcileReceiptRecovery(options.reconcileRequest, client);
   }
@@ -623,7 +622,16 @@ export async function dispatchReceiptRecovery(options, client, dependencies = {}
       /^ {2}FULL_RELEASE_RECEIPT_RECOVERY_REQUEST_CONTRACT: ["']?1["']?$/mu.test(workflow),
     "P lacks retained recovery dispatch identity",
   );
-  await (dependencies.verifyOriginal ?? verifyOriginalReceiptQualification)(request, { client });
+  // Authenticate live admission here; the workflow owns full receipt verification.
+  // Repeating that multi-minute scan locally makes the selected main SHA go stale.
+  const parent = await client.getRunAttempt(request.originalParent.runId, 1);
+  await client.verifyQualificationAdmission({
+    descriptor: request.qualificationAdmission,
+    repository: request.repository,
+    candidateSha: request.candidateBinding.request.targetSha,
+    qualificationSha: request.candidateBinding.request.toolingSha,
+    workflowRef: parent.head_branch,
+  });
   const ref = await client.getRef("refs/heads/main");
   requireValue(
     ref.object?.type === "commit" && ref.object.sha === request.workflowSha,
