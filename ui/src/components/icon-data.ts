@@ -1,5 +1,5 @@
 import { brandIconData } from "./icon-data-brand.ts";
-import { navigationIconData } from "./icon-data-navigation.ts";
+import { navigationFilledIconNames, navigationIconData } from "./icon-data-navigation.ts";
 import { statusIconPaths } from "./icon-data-status.ts";
 import { keyboardIconData, toolIconData } from "./icon-data-tools.ts";
 import { strokeIconData, strokePathData, type IconData } from "./icon-data-types.ts";
@@ -709,7 +709,7 @@ export const iconData = {
 
 export type IconName = keyof typeof iconData;
 
-export { filledIconNames } from "./icon-data-navigation.ts";
+export const filledIconNames: Partial<Record<IconName, IconName>> = navigationFilledIconNames;
 
 export function isIconName(name: string | undefined): name is IconName {
   return Object.hasOwn(iconData, name ?? "");
