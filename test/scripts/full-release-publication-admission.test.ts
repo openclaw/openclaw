@@ -147,17 +147,35 @@ beforeAll(async () => {
   for (const directory of [".github/workflows", "scripts/e2e/lib/upgrade-survivor/config-recipe"]) {
     cpSync(join(repo, directory), join(prepared, directory), { recursive: true });
   }
+  commit(prepared);
+  // Keep compiled JS out of every later source commit; authoritative JS is already tracked.
+  writeFileSync(join(prepared, ".git/info/exclude"), "\n*.js\n", { flag: "a" });
   symlinkSync(join(repo, "node_modules"), join(prepared, "node_modules"), "junction");
   await prepareCopiedSourceModules(
     prepared,
     toolingPaths.filter((file) => /\.[cm]?ts$/u.test(file)),
   );
   rmSync(join(prepared, "node_modules"));
-  commit(prepared);
   const packed = templateDirs.make("frv-publication-packed-tooling-template-");
   cpSync(prepared, packed, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
   git(packed, "repack", "-ad");
   toolingTemplate = { loose: prepared, packed };
+});
+
+publicationIt("keeps compiled fixture JavaScript out of source commits", () => {
+  const sourceRepo = templateDirs.make("frv-source-only-commit-");
+  cpSync(toolingTemplate.loose, sourceRepo, {
+    recursive: true,
+    mode: fsConstants.COPYFILE_FICLONE,
+  });
+  const generated = toolingPaths
+    .filter((file) => /\.[cm]?ts$/u.test(file))
+    .map((file) => file.replace(/\.[cm]?ts$/u, ".js"));
+  expect(generated.some((file) => existsSync(join(sourceRepo, file)))).toBe(true);
+  git(sourceRepo, "add", ".");
+  const tracked = git(sourceRepo, "ls-files").split("\n");
+  expect(tracked.filter((file) => generated.includes(file))).toEqual([]);
+  expect(tracked).toContain("scripts/full-release-publication-contract.mjs");
 });
 
 const selection = publicationSelectionFixture();
