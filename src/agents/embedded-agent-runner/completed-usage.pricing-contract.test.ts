@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
@@ -135,7 +136,7 @@ describe("recorded turn cost over every bundled and hosted row", () => {
   });
 
   it("keeps an authored zero price at $0", async () => {
-    const [row] = hosted;
+    const row = expectDefined(hosted[0], "first hosted row");
     const authored = {
       models: {
         providers: {
