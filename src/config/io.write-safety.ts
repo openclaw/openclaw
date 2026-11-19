@@ -99,7 +99,7 @@ export function captureConfigFileWritePathProof(
     capture(parent);
     let realParent: string;
     try {
-      realParent = ioFs.realpathSync(parent);
+      realParent = ioFs.realpathSync.native(parent);
     } catch (error) {
       if (!isMissingPathError(error)) {
         throw error;
@@ -150,7 +150,8 @@ export function captureConfigRootWriteTarget(filePath: string, ioFs: typeof fs) 
   const directory = path.dirname(filePath);
   let realDirectory: string;
   try {
-    realDirectory = ioFs.realpathSync(directory);
+    // Match the native ancestor resolver, including Windows short-name expansion.
+    realDirectory = ioFs.realpathSync.native(directory);
   } catch (error) {
     if (!isMissingPathError(error)) {
       throw error;

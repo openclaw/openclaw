@@ -36,6 +36,57 @@ describe("config writes through a symlinked state root", () => {
     return { io, env, home, stateDir, target, configPath, physicalPath, raw };
   }
 
+  it.each(["existing", "missing-file", "missing-directories"] as const)(
+    "writes when ordinary realpath retains a directory alias (%s)",
+    async (state) => {
+      const fixtureState = await fixture();
+      const { env, home, raw } = fixtureState;
+      const exists = state === "existing";
+      const suffix = state === "missing-directories" ? path.join("fresh", "nested") : "";
+      const stateDir = path.join(fixtureState.stateDir, suffix);
+      const configPath = path.join(stateDir, "openclaw.json");
+      const physicalPath = path.join(
+        path.dirname(fixtureState.physicalPath),
+        suffix,
+        "openclaw.json",
+      );
+      env.OPENCLAW_STATE_DIR = stateDir;
+      if (!exists) {
+        await fs.unlink(fixtureState.configPath);
+      }
+      // Model Windows short-name spelling through the existing filesystem seam.
+      // Every read, identity check, and publication still uses the real filesystem.
+      const realpathSync = new Proxy(fsNode.realpathSync, {
+        apply(target, thisArg, args) {
+          return args[0] === fixtureState.stateDir
+            ? fixtureState.stateDir
+            : Reflect.apply(target, thisArg, args);
+        },
+      });
+      const io = createConfigIO({
+        env,
+        homedir: () => home,
+        fs: { ...fsNode, realpathSync },
+        logger: { warn: vi.fn(), error: vi.fn() },
+      });
+      const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+      expect(snapshot.path).toBe(configPath);
+      expect(snapshot.exists).toBe(exists);
+
+      await io.writeConfigFile(
+        { gateway: { mode: "local", port: 19001 } },
+        { ...writeOptions, baseSnapshot: snapshot },
+      );
+
+      expect(io.configPath).toBe(configPath);
+      expect(JSON.parse(await fs.readFile(physicalPath, "utf8")).gateway.port).toBe(19001);
+      expect((await fs.lstat(fixtureState.stateDir)).isSymbolicLink()).toBe(true);
+      if (exists) {
+        expect(await fs.readFile(`${physicalPath}.bak`, "utf8")).toBe(raw);
+      }
+    },
+  );
+
   it("creates a missing state directory through the public writer", async () => {
     const home = await roots.make();
     const stateDir = path.join(home, "fresh", "state");
