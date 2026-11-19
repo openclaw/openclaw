@@ -62,9 +62,17 @@ Under Codex, the whole call follows the initiating run's existing execution
 lifetime, covering preparation, every planned pass, and report completion.
 It is not shortened to the generic 90-second tool default or 600-second cap.
 An unlimited initiating run stays unlimited; Stop and authority revocation
-still cancel the review. The helper's timeout remains a per-pass limit, and
-an omitted timeout retains `openclaw agent exec`'s 600-second default for each
-pass. `/btw` retains its separate ten-minute parent deadline.
+still cancel the review. With an updated helper, an explicit timeout limits each
+reviewer process from launch through exit. OpenClaw owns that timer; preparation
+and delivery of an exited reviewer's result use the parent lifetime instead of
+starting another copy of the reviewer timer. An omitted timeout retains
+`openclaw agent exec`'s 600-second default for each pass. `/btw` retains its separate
+ten-minute parent deadline.
+
+Older helpers remain supported with finite limits and keep their existing timeout
+behavior. Their handoff timer can still expire before launch or result delivery
+finishes; update the shared Auto Review helper to remove that race. The tool does
+not refuse an older helper merely because it lacks host-owned timeout support.
 
 Embedded runs, including nested Code Mode calls, publish the parent's finite
 execution deadline as a liveness allowance for the reply watchdog. For an
