@@ -158,6 +158,7 @@ it("offers one sign-in action before drafting is complete and opens review witho
           status: "pending",
           requestId: "request-1",
           verificationUrl: "https://clawhub.example/cli/device",
+          userCode: "ZYXW-2345",
           pollAfterMs: 20,
           expiresAt: Date.now() + 60_000,
         };
@@ -202,6 +203,7 @@ it("offers one sign-in action before drafting is complete and opens review witho
     fireEvent.click(page.getByRole("button", { name: "Sign in" }));
     await vi.advanceTimersByTimeAsync(1);
     expect(page.getByRole("link", { name: "Open ClawHub" })).toBeTruthy();
+    expect(page.getByText("ZYXW-2345", { exact: true })).toBeTruthy();
     await vi.advanceTimersByTimeAsync(30);
     await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
     expect(call.mock.calls.filter(([method]) => method === "templates.drafts.review")).toHaveLength(

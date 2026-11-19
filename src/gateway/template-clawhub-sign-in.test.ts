@@ -12,7 +12,8 @@ function fixture() {
   let now = 100;
   const start = vi.fn(async () => ({
     deviceCode: "synthetic-device-code",
-    verificationUrl: "https://clawhub.example/cli/device?user_code=ZYXW-2345",
+    verificationUrl: "https://clawhub.example/cli/device",
+    userCode: "ZYXW-2345",
     expiresInMs: 10_000,
     intervalMs: 1_000,
   }));

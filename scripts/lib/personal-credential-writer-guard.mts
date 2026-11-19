@@ -797,6 +797,8 @@ const sinks = new Map<string, number>([
     1,
   ],
   [key("src/secrets/store/secret-store-github-handoff.worker.ts", "githubSetup.consume"), 1],
+  // One writeAdmitted upsert. The registry-derived name cannot select another identity secret.
+  [key("src/secrets/store/secret-store-clawhub-template.worker.ts", "templateClawHub.write"), 1],
   // Purge removes already-deleted rows and expiring GitHub handoffs, never live credentials.
   [
     key(
@@ -918,6 +920,10 @@ function conflictUpdateMayIncludeAuthKey(
 }
 
 const credentialCommandOwners = new Map([
+  [
+    "templateClawHub.write",
+    key("src/secrets/store/secret-store-clawhub-template.ts", "savePersonalTemplateClawHubToken"),
+  ],
   [
     "machineState.write",
     key("src/state/config-machine-state-async.ts", "writeConfigMachineStateAsync"),

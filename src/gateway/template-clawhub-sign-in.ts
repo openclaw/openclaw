@@ -1,14 +1,9 @@
-import { createHash, randomUUID } from "node:crypto";
-import path from "node:path";
-import { tryReadSecretFile } from "@openclaw/fs-safe/secret";
+import { randomUUID } from "node:crypto";
 import type { TemplatesDraftsSignInResult } from "../../packages/gateway-protocol/src/schema/template-drafts.js";
-import { resolveOAuthDir } from "../config/paths.js";
 import { ClawHubRequestError, fetchClawHubJson } from "../infra/clawhub-client.js";
 import { pollClawHubDeviceSignIn, startClawHubDeviceSignIn } from "../infra/clawhub-device-auth.js";
-import { writeTextAtomic } from "../infra/json-files.js";
+import { savePersonalTemplateClawHubToken } from "../secrets/store/secret-store-clawhub-template.js";
 import { TemplateProjectError } from "../templates/project.js";
-
-const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
 type Target = {
   profileId: string;
@@ -17,21 +12,6 @@ type Target = {
   draftId: string;
   assertCurrent: () => void;
 };
-
-function credentialPath(target: Pick<Target, "baseUrl" | "profileId">) {
-  return path.join(
-    resolveOAuthDir(),
-    "clawhub-" + hash(JSON.stringify([target.profileId, target.baseUrl])) + ".token",
-  );
-}
-
-export async function readPersonalTemplateClawHubToken(
-  target: Pick<Target, "baseUrl" | "profileId">,
-): Promise<string | undefined> {
-  return await tryReadSecretFile(credentialPath(target), "ClawHub Template token", {
-    rejectSymlink: true,
-  });
-}
 
 export async function readTemplateClawHubPublisher(baseUrl: string, token: string) {
   const result = await fetchClawHubJson<{ user?: { handle?: string | null } }>({
@@ -74,12 +54,7 @@ const defaultDependencies = {
   start: startClawHubDeviceSignIn,
   poll: pollClawHubDeviceSignIn,
   verify: readTemplateClawHubPublisher,
-  save: (target: Target, token: string) =>
-    writeTextAtomic(credentialPath(target), token, {
-      mode: 0o600,
-      dirMode: 0o700,
-      beforeRename: async () => target.assertCurrent(),
-    }),
+  save: savePersonalTemplateClawHubToken,
 };
 
 /** Each Gateway owns one bounded exchange per person and registry. Only the public URL/receipt leaves it. */
@@ -93,6 +68,7 @@ export function createTemplateClawHubSignIn(dependencies = defaultDependencies) 
     status: "pending" as const,
     requestId: attempt.id,
     verificationUrl: device.verificationUrl,
+    userCode: device.userCode,
     expiresAt: attempt.expiresAt,
     pollAfterMs: Math.max(250, attempt.nextPollAt - dependencies.now()),
   });
