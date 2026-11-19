@@ -68,15 +68,22 @@ describe("known prefix breaks", () => {
   });
 
   it("accepts the sent tool-result trim only when nothing else changed", () => {
-    const result = (output: string) =>
-      JSON.stringify({ role: "user", parts: [{ functionResponse: { response: { output } } }] });
+    const result = (output: string, name = "exec") =>
+      JSON.stringify({
+        role: "user",
+        parts: [{ functionResponse: { name, response: { output } } }],
+      });
     const full = result("x".repeat(200));
     const trimmed = result("[... 200 more characters truncated]");
+    const renamed = result("[... 200 more characters truncated]", "read");
     const previous = request(["u1", full, "a1"]);
     expect(known("google-generative-ai", previous, request(["u1", trimmed, "a1", "u2"]))).toBe(
       true,
     );
     expect(known("google-generative-ai", previous, request(["u0", trimmed, "a1", "u2"]))).toBe(
+      false,
+    );
+    expect(known("google-generative-ai", previous, request(["u1", renamed, "a1", "u2"]))).toBe(
       false,
     );
   });
