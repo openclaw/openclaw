@@ -35,6 +35,21 @@ const getReplyFromConfigMock = vi.hoisted(() => vi.fn());
 vi.mock("../../agents/subagents/spawn/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
 }));
+// The state-owner heartbeat checks renewal age with Date.now bound when it loads (a14127f681). Each
+// simulated restart reloads it under this file's frozen fake clock while its worker beats on the
+// real clock, so that age is meaningless here.
+// mock-isolation: Keeps the real heartbeat worker, registration and verification; only the
+// parent-side wall-clock age check is skipped.
+vi.mock("../../infra/gateway-state-owner-heartbeat.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../infra/gateway-state-owner-heartbeat.js")>();
+  return {
+    ...actual,
+    startGatewayStateOwnerHeartbeat: (
+      ...args: Parameters<typeof actual.startGatewayStateOwnerHeartbeat>
+    ) => ({ ...actual.startGatewayStateOwnerHeartbeat(...args), inspect: () => 60_000 }),
+  };
+});
 // The reply owner is the boundary where "a continuation turn ran" is observable.
 vi.mock("../reply/get-reply.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../reply/get-reply.js")>()),
