@@ -191,14 +191,56 @@ export function reconcileHistoryTail(options: {
       changedSources.add(source);
     }
   }
+  const retainedMessages = [...prefix, ...messages];
+  const retainedSources = new Set(retainedMessages.map(nativeHistoryMessageSourceIdentity));
+  let pagination = invalidateChatHistoryPacketSources(options.previousPagination, changedSources);
+  const previousSegments = pagination.segments;
+  const segments = previousSegments?.flatMap((segment) => {
+    const sources = segment.sources.filter((source) => retainedSources.has(source));
+    if (sources.length === segment.sources.length) {
+      return [segment];
+    }
+    if (!sources.length) {
+      return [];
+    }
+    // Removed endpoints retire their cursors with the packet membership. A
+    // surviving neighbor must reopen its own boundary, never borrow that edge.
+    return [
+      {
+        ...segment,
+        sources,
+        boundedPacket: undefined,
+        ...(sources[0] !== segment.sources[0] ? { hasOlder: true, olderCursor: undefined } : {}),
+        ...(sources.at(-1) !== segment.sources.at(-1)
+          ? { hasNewer: true, newerCursor: undefined }
+          : {}),
+      },
+    ];
+  });
+  const first = segments?.[0];
+  const olderChanged = previousSegments?.[0]?.sources[0] !== first?.sources[0];
+  if (olderChanged) {
+    pagination = advanceChatHistoryNavigation(
+      pagination,
+      first && !first.hasOlder
+        ? { hasMore: false }
+        : {
+            hasMore: true,
+            olderCursor: first?.olderCursor,
+            needsBoundary: first?.olderCursor ? undefined : true,
+          },
+      "older",
+    );
+  }
   return {
-    messages: [...prefix, ...messages],
+    messages: retainedMessages,
     retainedCoverage: true,
     pagination: {
-      ...invalidateChatHistoryPacketSources(options.previousPagination, changedSources),
-      ...(unavailable ? { needsBoundary: true as const } : {}),
+      ...pagination,
+      ...(segments ? { segments } : {}),
+      ...(unavailable && !olderChanged ? { needsBoundary: true as const } : {}),
       ...(nextTotal !== undefined ? { totalMessages: nextTotal } : {}),
-      ...(options.previousPagination.hasMore && nextOffset !== undefined ? { nextOffset } : {}),
+      ...(pagination.hasMore && !olderChanged && nextOffset !== undefined ? { nextOffset } : {}),
     },
   };
 }
@@ -218,10 +260,10 @@ export function extendChatHistoryWindow(
   if (direction === "tail" && !retainedCoverage) {
     return prepareChatHistoryTail(incoming, pagination, newerCursor, page);
   }
-  const held = retainedCoverage?.segments ??
-    previous.segments ?? [
-      prepareChatHistorySegment(previousMessages, previous, previous.newerCursor),
-    ];
+  const previousCoverage = retainedCoverage ?? previous;
+  const held = previousCoverage.segments ?? [
+    prepareChatHistorySegment(previousMessages, previousCoverage, previousCoverage.newerCursor),
+  ];
   const known = new Set(held.flatMap((segment) => segment.sources));
   let segments: ChatHistorySegment[];
   if (direction !== "tail" && page.sources.every((source) => known.has(source))) {
@@ -248,8 +290,8 @@ export function extendChatHistoryWindow(
           {
             ...page,
             boundedPacket: undefined,
-            hasOlder: previous.hasMore,
-            olderCursor: previous.hasMore ? previous.olderCursor : undefined,
+            hasOlder: previousCoverage.hasMore,
+            olderCursor: previousCoverage.hasMore ? previousCoverage.olderCursor : undefined,
           },
         ];
   } else {

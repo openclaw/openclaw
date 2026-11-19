@@ -19,5 +19,6 @@
 # plus 550 LF for the frozen 11b integration: preserved current-main fixture
 # coverage, physical compaction ancestry, native Home placement, and typed
 # accepted-steer regressions, less retired unused test helpers.
-# Net 15191 LF = 14791 allocation + 400 allowance.
-1275
+# plus 83 LF for physical-source retirement and end-to-end older recovery after compaction.
+# Net 15274 LF = 14874 allocation + 400 allowance.
+1358
