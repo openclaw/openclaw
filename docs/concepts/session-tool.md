@@ -405,8 +405,9 @@ tasks record their store and can use automatic continuation.
 
 `timeoutSeconds` limits only the reply wait after acceptance, not the receiver's
 execution budget. The default reply wait is 30 seconds; `timeoutSeconds: 0` skips it.
-A separate fixed 30-second admission ceiling covers target lookup, preparation,
-admission, and transcript acknowledgment for every send. The sending tool declares
+A separate fixed 30-second admission ceiling covers target lookup, preparation and
+admission for every send. A message steered into a busy run returns as soon as that
+run accepts it; the accepted message is stored durably and survives a Gateway restart. The sending tool declares
 an upper deadline of its start time plus the admission ceiling plus the reply wait
 to the turn watchdog. An admission timeout can follow accepted input; inspect the
 target before retrying.

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
+import * as sessionReads from "../../../config/sessions/session-entry-read-runtime.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
@@ -43,12 +45,15 @@ function settle(entry: SubagentRunRecord) {
 }
 
 beforeEach(async () => {
+  setRuntimeConfigSnapshot({});
   await resetSubagentRegistryForTests({ persist: false });
+  vi.spyOn(sessionReads, "readSessionEntryReadOnlyInWorker").mockResolvedValue(undefined);
 });
 
 afterEach(async () => {
   await resetSubagentRegistryForTests({ persist: false });
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
 });
 
 it("fails a running child restored from an earlier Gateway so its requester wakes", async () => {
@@ -115,6 +120,22 @@ it.each([
   using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
   const entry = restoredRunningRow();
   prepare(entry);
+
+  const { complete, settled } = settle(entry);
+
+  expect(await settled).toBe(false);
+  expect(complete).not.toHaveBeenCalled();
+  expect(warning).not.toHaveBeenCalled();
+});
+
+it("leaves a child whose session still carries a restart marker to restart resume", async () => {
+  using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+  vi.spyOn(sessionReads, "readSessionEntryReadOnlyInWorker").mockResolvedValue({
+    sessionId: "marked-child",
+    updatedAt: 1,
+    resumeAfterRestart: {},
+  });
+  const entry = restoredRunningRow();
 
   const { complete, settled } = settle(entry);
 

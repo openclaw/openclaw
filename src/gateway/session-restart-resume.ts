@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { resolveSessionYieldWait } from "../agents/subagents/registry/subagent-registry-read.js";
+import {
+  getLatestLiveSubagentRunByChildSessionKey,
+  resolveSessionYieldWait,
+} from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   hasSubagentRunEnded,
   isSubagentRunLive,
@@ -427,7 +430,12 @@ async function resumeRestartStore(
             ) {
               parked = undefined;
             }
-            const skip = restartResumeSkipReason(sessionKey, selected);
+            const child = getLatestLiveSubagentRunByChildSessionKey(sessionKey);
+            const skip = restartResumeSkipReason(
+              sessionKey,
+              selected,
+              child !== null && hasSubagentRunEnded(child) && !isYieldedSubagentRun(child),
+            );
             const sameRun = selected.lifecycleRunId === snapshotEntry.lifecycleRunId;
             const resolved = resolveStartupRestartMarker(selected, sameRun, {
               parked,

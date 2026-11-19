@@ -111,7 +111,8 @@ it("retains missed shutdown markers in terminal writes without marking resets or
         marker: {},
       },
       { name: "cron", shutdown: true, key: "agent:main:cron:scheduled" },
-      { name: "child", shutdown: true, key: "agent:main:subagent:child" },
+      // An interrupted child resumes its own task; only a child settled at shutdown does not.
+      { name: "child", shutdown: true, key: "agent:main:subagent:child", marker: {} },
       { name: "external", shutdown: true, entry: { modelSelectionLocked: true } },
       { name: "archived", shutdown: true, entry: { archivedAt: 1_500 } },
     ];
