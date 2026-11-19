@@ -10,7 +10,6 @@ import {
 } from "../../plugins/service-mcp-events.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { readCronCallerScope } from "./cron-caller-scope.js";
 import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -147,7 +146,6 @@ export const mcpEventsHandlers: GatewayRequestHandlers = {
       ) {
         throw new Error("MCP Events catalog caller authority changed.");
       }
-      assertActiveAgentRuntimeAuthority(client, context);
     };
     try {
       assertCurrent();
