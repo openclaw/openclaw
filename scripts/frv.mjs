@@ -1147,7 +1147,7 @@ export async function inspectContinuation(plan, client, options = {}) {
         jobs: evidence.jobs,
         key: child.key,
         runId: child.runId,
-        runAttempt: child.runAttempt,
+        runAttempt: effectiveRunAttempt,
         status: run.status,
       };
       const policy = evaluateReleaseChildPolicy({
@@ -3625,6 +3625,80 @@ async function pollRelease(state, client, pending, observation, readOptions) {
         formatRunProgress(child.key, run),
         run.html_url,
       );
+      const listings = new Map();
+      const readJobs = (attempt) => {
+        if (!listings.has(attempt)) {
+          listings.set(
+            attempt,
+            read(`${child.key} attempt ${attempt} jobs`, () =>
+              client.getAttemptJobs(runId, attempt, readOptions),
+            ),
+          );
+        }
+        return listings.get(attempt);
+      };
+      const artifact = child.key.startsWith("artifact:");
+      const currentProducer =
+        artifact && Number(child.parentAttempt) === Number(parent.run_attempt);
+      // Reuse the evidence owner's partial-rerun view, including names omitted
+      // from the latest listing. A saved scan marker does not settle promotion.
+      if ((!artifact || currentProducer) && (currentProducer || current > 1)) {
+        const attempts = [];
+        for (let attempt = 1; attempt <= current; attempt += 1) {
+          const jobs = await readJobs(attempt);
+          if (
+            !jobs?.length ||
+            (attempt < current && jobs.some((job) => job.status !== "completed"))
+          ) {
+            return false;
+          }
+          attempts.push({ runAttempt: attempt, jobs });
+        }
+        let composite;
+        try {
+          composite = composeReleaseAttemptJobs(attempts, {
+            plannedRunAttempt: 1,
+            effectiveRunAttempt: current,
+            effectiveRunStatus: run.status,
+          });
+        } catch (error) {
+          if (error?.code !== "FRV_DUPLICATE_JOB_IDENTITY") {
+            throw error;
+          }
+        }
+        if (composite) {
+          for (const job of evaluateReleaseChildPolicy({
+            child: {
+              key: child.key,
+              jobs: composite.jobs,
+              runId,
+              runAttempt: current,
+            },
+            targetVersion: observation.plan?.targetVersion,
+            targetSha: observation.plan?.targetSha,
+            waiverPolicy: observation.waiverPolicy ?? [],
+          }).blockingJobs) {
+            const raw = attempts[job.acceptedRunAttempt - 1].jobs.find(
+              (row) => row.name === job.name && row.conclusion !== "skipped",
+            );
+            let sourceAttempt = Number(raw.run_attempt ?? job.acceptedRunAttempt);
+            // GitHub also restamps retained executions with a new attempt and ID.
+            for (const previous of attempts.slice(0, job.acceptedRunAttempt - 1)) {
+              if (
+                previous.jobs.some((row) => row.name === job.name && sameJobExecution(row, raw))
+              ) {
+                sourceAttempt = Math.min(sourceAttempt, previous.runAttempt);
+              }
+            }
+            if (currentProducer || sourceAttempt < current) {
+              reportFailure(
+                failedJobEvent(child.key, raw, current, runId, sourceAttempt),
+                `blocker:job:${runId}:${current}:${job.name}`,
+              );
+            }
+          }
+        }
+      }
       // Earlier attempts are final; scan each once so a late start still reports them.
       let scansComplete = true;
       for (let attempt = 1; attempt <= current; attempt += 1) {
