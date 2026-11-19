@@ -8,34 +8,6 @@ import {
   type SkillsDiscoveryOutput,
 } from "./discovery-worker-contract.js";
 
-const worker = vi.hoisted(() => ({
-  read: undefined as
-    | ((input: SkillsDiscoveryInput) => SkillsDiscoveryOutput | Promise<SkillsDiscoveryOutput>)
-    | undefined,
-}));
-vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),
-  serveWorkerTasks: (read: NonNullable<typeof worker.read>) => {
-    worker.read = read;
-  },
-}));
-// mock-isolation: File discovery must not load the Gateway's writable database owner.
-vi.mock("../../state/openclaw-state-db.js", () => {
-  throw new Error("Skill discovery must not load the writable shared-state database owner");
-});
-// mock-isolation: Prepared roots must not load another plugin metadata inventory.
-vi.mock("../../plugins/plugin-metadata-snapshot.js", () => {
-  throw new Error("Prepared skill discovery must not load plugin metadata discovery");
-});
-// mock-isolation: Skill scans do not read or validate interactive preview bundles.
-vi.mock("../loading/plugin-skill-bundle.js", () => {
-  throw new Error("Skill discovery must not load plugin skill preview readers");
-});
-// mock-isolation: Ordinary skill scans do not need status cards or registry links.
-vi.mock("../discovery/status-files.js", () => {
-  throw new Error("Skill scans must not load status readers");
-});
-
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
 
@@ -47,90 +19,137 @@ it("scans workspace and prepared plugin skills without loading metadata discover
   vi.stubEnv("PATH", "");
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
 
-  await import("./discovery.worker.js");
-  if (!worker.read) {
-    throw new Error("Discovery worker did not register its task handler");
-  }
-  const result = await worker.read({
-    kind: "scan",
-    nativeMode: "auto",
-    path: "",
-    requests: [
-      {
-        key: "workspace",
-        environment: captureSkillsDiscoveryEnvironment(),
-        selection: {
-          kind: "selected",
-          request: {
-            sourcePlan: {
-              workspaceDir,
-              managedSkillsDir: path.join(workspaceDir, "managed-skills"),
-              pluginSkillRoots: [],
-              roots: [{ dir: skillRoot, source: "openclaw-workspace", tier: "workspace" }],
+  const worker = {
+    read: undefined as
+      | ((input: SkillsDiscoveryInput) => SkillsDiscoveryOutput | Promise<SkillsDiscoveryOutput>)
+      | undefined,
+  };
+
+  // The shared setup imports plugin runtime first; test the worker from a cold graph.
+  vi.resetModules();
+  try {
+    vi.doMock("../../infra/worker-task-server.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),
+      serveWorkerTasks: (read: NonNullable<typeof worker.read>) => {
+        worker.read = read;
+      },
+    }));
+    // mock-isolation: File discovery must not load the Gateway's writable database owner.
+    vi.doMock("../../state/openclaw-state-db.js", () => {
+      throw new Error("Skill discovery must not load the writable shared-state database owner");
+    });
+    // mock-isolation: Prepared roots must not load another plugin metadata inventory.
+    vi.doMock("../../plugins/plugin-metadata-snapshot.js", () => {
+      throw new Error("Prepared skill discovery must not load plugin metadata discovery");
+    });
+    // mock-isolation: Read-only memo registration must not initialize Gateway capture custody.
+    vi.doMock("../../plugins/plugin-source-capture-directory.js", () => {
+      throw new Error("Skill discovery must not initialize Gateway source captures");
+    });
+    // mock-isolation: Skill scans do not read or validate interactive preview bundles.
+    vi.doMock("../loading/plugin-skill-bundle.js", () => {
+      throw new Error("Skill discovery must not load plugin skill preview readers");
+    });
+    // mock-isolation: Ordinary skill scans do not need status cards or registry links.
+    vi.doMock("../discovery/status-files.js", () => {
+      throw new Error("Skill scans must not load status readers");
+    });
+
+    await import("./discovery.worker.js");
+    if (!worker.read) {
+      throw new Error("Discovery worker did not register its task handler");
+    }
+    const result = await worker.read({
+      kind: "scan",
+      nativeMode: "auto",
+      path: "",
+      requests: [
+        {
+          key: "workspace",
+          environment: captureSkillsDiscoveryEnvironment(),
+          selection: {
+            kind: "selected",
+            request: {
+              sourcePlan: {
+                workspaceDir,
+                managedSkillsDir: path.join(workspaceDir, "managed-skills"),
+                pluginSkillRoots: [],
+                roots: [{ dir: skillRoot, source: "openclaw-workspace", tier: "workspace" }],
+              },
+              limits: {
+                maxCandidatesPerRoot: 10,
+                maxSkillsLoadedPerSource: 10,
+                maxSkillFileBytes: 1024,
+              },
+              additionalBins: [],
             },
-            limits: {
-              maxCandidatesPerRoot: 10,
-              maxSkillsLoadedPerSource: 10,
-              maxSkillFileBytes: 1024,
-            },
-            additionalBins: [],
           },
         },
-      },
-    ],
-  });
-  expect(result).toMatchObject({
-    kind: "scan",
-    results: [
-      {
-        key: "workspace",
-        sources: {
-          entries: [
-            {
-              skill: {
-                name: "fixture",
-                description: "Workspace instructions",
-                filePath: path.join(skillDir, "SKILL.md"),
+      ],
+    });
+    expect(result).toMatchObject({
+      kind: "scan",
+      results: [
+        {
+          key: "workspace",
+          sources: {
+            entries: [
+              {
+                skill: {
+                  name: "fixture",
+                  description: "Workspace instructions",
+                  filePath: path.join(skillDir, "SKILL.md"),
+                },
               },
-            },
-          ],
-          executionEntries: [],
-          runtime: { platform: process.platform, bins: [] },
+            ],
+            executionEntries: [],
+            runtime: { platform: process.platform, bins: [] },
+          },
+        },
+      ],
+    });
+
+    const plan = await worker.read({
+      kind: "plan",
+      input: {
+        workspaceDir,
+        environment: captureSkillsDiscoveryEnvironment(),
+        acpRuntimeAvailable: false,
+        pluginContributions: [
+          { id: "fixture", origin: "config", rootDir: workspaceDir, roots: ["skills"] },
+        ],
+        options: {
+          bundledSkillsDir: "",
+          managedSkillsDir: path.join(workspaceDir, "managed-skills"),
+          pluginSkillsDir: path.join(workspaceDir, "plugin-skills"),
         },
       },
-    ],
-  });
-
-  const plan = await worker.read({
-    kind: "plan",
-    input: {
-      workspaceDir,
-      environment: captureSkillsDiscoveryEnvironment(),
-      acpRuntimeAvailable: false,
-      pluginContributions: [
-        { id: "fixture", origin: "config", rootDir: workspaceDir, roots: ["skills"] },
-      ],
-      options: {
-        bundledSkillsDir: "",
-        managedSkillsDir: path.join(workspaceDir, "managed-skills"),
-        pluginSkillsDir: path.join(workspaceDir, "plugin-skills"),
+    });
+    expect(plan).toMatchObject({
+      kind: "plan",
+      plan: {
+        pluginSkillRoots: [{ dir: skillRoot, rejectHardlinks: true }],
+        roots: expect.arrayContaining([
+          expect.objectContaining({ dir: skillRoot, source: "openclaw-extra", tier: "extra" }),
+        ]),
       },
-    },
-  });
-  expect(plan).toMatchObject({
-    kind: "plan",
-    plan: {
-      pluginSkillRoots: [{ dir: skillRoot, rejectHardlinks: true }],
-      roots: expect.arrayContaining([
-        expect.objectContaining({ dir: skillRoot, source: "openclaw-extra", tier: "extra" }),
-      ]),
-    },
-  });
-  await expect(
-    worker.read({
-      kind: "library",
-      nativeMode: "off",
-      input: { kind: "selection", selections: [], revisions: [], stateDir: workspaceDir },
-    }),
-  ).resolves.toEqual({ kind: "library", result: { kind: "selection", entries: [] } });
+    });
+    await expect(
+      worker.read({
+        kind: "library",
+        nativeMode: "off",
+        input: { kind: "selection", selections: [], revisions: [], stateDir: workspaceDir },
+      }),
+    ).resolves.toEqual({ kind: "library", result: { kind: "selection", entries: [] } });
+  } finally {
+    // Restore mocks before global cleanup reloads the legitimate Gateway owners.
+    vi.doUnmock("../../infra/worker-task-server.js");
+    vi.doUnmock("../../state/openclaw-state-db.js");
+    vi.doUnmock("../../plugins/plugin-metadata-snapshot.js");
+    vi.doUnmock("../../plugins/plugin-source-capture-directory.js");
+    vi.doUnmock("../loading/plugin-skill-bundle.js");
+    vi.doUnmock("../discovery/status-files.js");
+    worker.read = undefined;
+    vi.resetModules();
+  }
 });

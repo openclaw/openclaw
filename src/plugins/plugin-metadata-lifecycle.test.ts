@@ -22,9 +22,9 @@ import {
 import { PluginInstance } from "./plugin-instance.js";
 import {
   clearPluginMetadataLifecycleCaches,
-  registerPluginMetadataProcessMemoLifecycleClear,
   retainGatewayPluginMetadata as retainMetadata,
 } from "./plugin-metadata-lifecycle.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-memo-lifecycle.js";
 import { snapshotReaderSlot } from "./plugin-metadata-snapshot-readers.js";
 import {
   getCurrentPluginMetadataSnapshotRequiredRuntime as currentSnapshot,
@@ -35,6 +35,8 @@ import { createPluginMetadataSnapshotFixture as createSnapshot } from "./plugin-
 
 const clearMemo = vi.fn();
 registerPluginMetadataProcessMemoLifecycleClear(clearMemo);
+const clearOperationMemo = vi.fn();
+registerPluginMetadataProcessMemoLifecycleClear(clearOperationMemo, { owner: "operation" });
 
 it("retains running metadata readers through Gateway close after package replacement", async () => {
   const readers = { ...snapshotReaderSlot };
@@ -69,7 +71,9 @@ it("retains running metadata readers through Gateway close after package replace
     setGatewayPluginMetadataSnapshot(snapshot);
     setSnapshot(snapshot, "boot", undefined, undefined, "gateway");
     clearMemo.mockClear();
+    clearOperationMemo.mockClear();
     clearPluginMetadataLifecycleCaches();
+    expect(clearOperationMemo).toHaveBeenCalledOnce();
     // Released modules register by assigning the shared slot directly.
     Object.assign(snapshotReaderSlot, replacementReaders);
     await drainGlobalSingletonLifecycleState("close");
@@ -86,6 +90,7 @@ it("retains running metadata readers through Gateway close after package replace
     await finalClose;
     expect(snapshotState().snapshot).toBeUndefined();
     expect(clearMemo).toHaveBeenCalledOnce();
+    expect(clearOperationMemo).toHaveBeenCalledOnce();
     expect(getPluginCache()).not.toBe(cache);
     await owner.close();
     expect(clearMemo).toHaveBeenCalledOnce();

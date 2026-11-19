@@ -18,7 +18,7 @@ import {
   getProcessPluginCache,
   preparePluginCacheFact,
 } from "./plugin-cache.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-memo-lifecycle.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
 
 type BundledDiscoveryMode = "compat" | "allowlist" | undefined;

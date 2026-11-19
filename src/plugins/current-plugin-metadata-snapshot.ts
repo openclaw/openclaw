@@ -38,7 +38,7 @@ import {
 } from "./plugin-instance-invocation.js";
 import type { PluginExecutionFrame } from "./plugin-instance-invocation.types.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-memo-lifecycle.js";
 import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
 import type {
   PluginMetadataSnapshot,
