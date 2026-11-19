@@ -574,6 +574,7 @@ async function updateCommandInternal(
             inspectActivatedUpdateState({
               result,
               root,
+              candidateOpenedState: execution.candidateOpenedState,
               packageUpdateNodeRunner,
               schemaVersions: execution.schemaVersions,
               candidateSchemaVersions: execution.candidateSchemaVersions,

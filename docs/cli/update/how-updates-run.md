@@ -995,8 +995,12 @@ post-failure [Triage](/cli/triage) starts only after update ownership and servic
 compensation settle; it does not rewrite the failed update or grant new restart
 authority. These temporary validation snapshots are not a full-state backup;
 see [Rollback](/install/updating#rollback).
-If schema state cannot be verified, rollback is refused with
-`rollback-state-unverified`; unknown state never counts as schema-neutral.
+If schema state cannot be verified after a new-version Doctor or boot check may have
+written it, rollback is refused with `rollback-state-unverified`; unknown state never
+counts as schema-neutral. If package activation failed before the candidate Doctor
+opened state, an unreadable store is a recorded warning, not new evidence of data at
+risk; the update retains its original failure. In-place Git updates keep the
+conservative inspection behavior because they rewrite the serving checkout.
 
 If an update fails before activation, recovery observes the existing Gateway once
 without waiting for startup or restarting it. Native service and listener checks

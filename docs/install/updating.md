@@ -1511,6 +1511,13 @@ the retention phase already running in an older updater.
 Post-activation schema inspection preserves captured SQLite database, WAL, and shared-memory
 artifacts so the final Doctor can verify the same migration source.
 
+The inspection reports data at risk only on evidence: a schema that moved, or a store it
+cannot read after a new-version Doctor or boot check may have written it. If package
+activation failed before the candidate Doctor opened state, an unreadable store is a
+recorded warning (`state-schema-verification`), not new evidence of data at risk;
+the update retains its original failure. In-place Git updates rewrite the serving
+checkout, so their schema inspection remains conservative.
+
 When the new release's Gateway starts, its state upgrade can replace
 `state/openclaw.sqlite` and keep the previous file as `openclaw.sqlite.pre-<buildId>`.
 The updater closes its own shared-state handles before it restarts the Gateway and

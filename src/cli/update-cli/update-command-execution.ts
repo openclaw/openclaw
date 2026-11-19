@@ -50,6 +50,7 @@ import { withMutableUpdateForwardScope } from "./update-command-mutable-signals.
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
 import { createPackageUpdateActivationOptions } from "./update-command-package-activation.js";
 import {
+  createPackageUpdateDoctorContext,
   runPackageInstallUpdate,
   type PackageInstallUpdateParams,
 } from "./update-command-package.js";
@@ -186,29 +187,21 @@ export async function executeMutableUpdate(
     readUpdateCandidateSource(env, params.legacyConfigPlan, { configValidation });
   const getDoctorContext: PackageInstallUpdateParams["getDoctorContext"] = () => {
     doctorEntered = true;
-    const runId = originalRun?.runId;
-    const executorFence = originalRun?.executorFence;
-    const requester = requesterAuthority?.requester;
-    const inputHash = validatedConfigSnapshot?.hash;
-    const context = {
-      requester,
-      changes: doctorConfigChanges,
-      databaseBackup: databaseCapture?.backup,
-      originalRecoveryCapture: originalRun?.originalRecoveryCapture,
-      assertCurrent: assertExecutionCurrent,
-      assertBoundChildCurrent,
-      onStateHandoff,
-    };
-    assertExecutionCurrent();
-    if (!doctorConfigWrites) {
-      return undefined;
-    }
-    if (!runId || !executorFence || inputHash === undefined) {
-      throw new Error(
-        "Validated Doctor requires its live update executor and captured config hash.",
-      );
-    }
-    return { ...context, runId, executorFence, inputHash };
+    return createPackageUpdateDoctorContext(
+      {
+        runId: originalRun?.runId,
+        executorFence: originalRun?.executorFence,
+        requester: requesterAuthority?.requester,
+        inputHash: validatedConfigSnapshot?.hash,
+        changes: doctorConfigChanges,
+        databaseBackup: databaseCapture?.backup,
+        originalRecoveryCapture: originalRun?.originalRecoveryCapture,
+        assertCurrent: assertExecutionCurrent,
+        assertBoundChildCurrent,
+        onStateHandoff,
+      },
+      doctorConfigWrites,
+    );
   };
   const originalRecovery = () => readOriginalUpdateRecovery(params, updateStepTimeoutMs);
   const gitMutationRoots =
@@ -707,6 +700,10 @@ export async function executeMutableUpdate(
     result,
     failure,
     mutationStarted,
+    // This updater's Git runner rewrites the serving checkout and stays conservative.
+    // Package candidates open state through Doctor or the --no-restart boot check.
+    candidateOpenedState:
+      params.updateInstallKind !== "package" || doctorEntered || !params.shouldRestart,
     preManagedServiceStop,
     ownedManagedUpdateContext,
     recoveryEnv,

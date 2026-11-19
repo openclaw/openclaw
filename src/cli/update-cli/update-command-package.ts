@@ -87,6 +87,26 @@ type PackageDoctorContext = {
   onStateHandoff?: () => void;
 };
 
+/** Bind validated Doctor writes only to the captured config and live update executor. */
+export function createPackageUpdateDoctorContext(
+  params: Omit<PackageDoctorContext, "runId" | "executorFence" | "inputHash"> & {
+    runId?: string;
+    executorFence?: UpdateRecoveryFence;
+    inputHash?: string;
+  },
+  doctorConfigWrites: boolean,
+): PackageDoctorContext | undefined {
+  const { runId, executorFence, inputHash } = params;
+  params.assertCurrent();
+  if (!doctorConfigWrites) {
+    return undefined;
+  }
+  if (!runId || !executorFence || inputHash === undefined) {
+    throw new Error("Validated Doctor requires its live update executor and captured config hash.");
+  }
+  return { ...params, runId, executorFence, inputHash };
+}
+
 type PackageDoctorOptions = {
   root: string;
   fullIntegrityCheck?: boolean;
