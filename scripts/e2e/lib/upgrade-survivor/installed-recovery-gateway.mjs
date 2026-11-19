@@ -498,7 +498,7 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
         recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
       };
       db.prepare(
-        "UPDATE update_runs SET status = 'failed', reason = 'rollback-state-unverified', finished_at_ms = ?, updated_at_ms = ?, steps_json = ?, verification_json = ? WHERE run_id = ?",
+        "UPDATE update_runs SET status = 'failed', phase = 'finished', reason = 'rollback-state-unverified', finished_at_ms = ?, updated_at_ms = ?, steps_json = ?, verification_json = ? WHERE run_id = ?",
       ).run(now, now, JSON.stringify(steps), JSON.stringify(verification), runId);
     } finally {
       db.close();
