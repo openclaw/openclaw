@@ -1,6 +1,13 @@
 import type { Selectable, Updateable } from "kysely";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
+import type { WorkerWorkspaceManifestEntry } from "./workspace-manifest.js";
+
+export type LocalWorkspacePreparedEntry = {
+  entry: WorkerWorkspaceManifestEntry;
+  identity?: string;
+  objectId?: string;
+};
 
 export type LocalWorkspaceCapture = {
   root: string;
@@ -21,6 +28,8 @@ export type LocalWorkspaceManifestAction =
       target: "canonical" | "projection";
       canonicalRoot: string;
       capture?: LocalWorkspaceCapture;
+      prehash?: true;
+      preparedEntries?: LocalWorkspacePreparedEntry[];
     }
   | { kind: "archive"; canonicalRoot: string; archiveRoot: string; snapshotCommit: string }
   | { kind: "materialize" }
@@ -38,7 +47,7 @@ export type LocalWorkspaceManifestAction =
 
 export type LocalWorkspaceManifestCheckpoint = Omit<
   LocalWorkspaceManifestScan,
-  "observation" | "preparations"
+  "observation" | "preparations" | "preparedEntries" | "existingObjects"
 >;
 
 export type LocalWorkspaceManifestInput = {
@@ -85,6 +94,8 @@ export type LocalWorkspacePreparedUpdate = {
 };
 
 export type LocalWorkspaceManifestScan = {
+  existingObjects?: Array<[string, string]>;
+  preparedEntries?: LocalWorkspacePreparedEntry[];
   version: 1;
   kind: "scan";
   previousRoot: string | null;
@@ -106,7 +117,7 @@ export type LocalWorkspaceManifestScan = {
 
 /** A refused result retains its source receipt without remaining eligible for automatic apply. */
 export type LocalWorkspaceCheckpointReceipt =
-  | Omit<LocalWorkspaceManifestScan, "observation" | "preparations">
+  | LocalWorkspaceManifestCheckpoint
   | {
       kind: "rejected";
       ref: string;

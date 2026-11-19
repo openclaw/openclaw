@@ -10,10 +10,10 @@ import {
   type SessionArchiveReason,
 } from "../config/sessions/artifacts.js";
 import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
+import { resolveSessionFilePathCoreAsync } from "../config/sessions/paths-async.js";
 import {
   resolveSessionArtifactDirectory,
   resolveSessionFilePathCore,
-  resolveSessionFilePathCoreAsync,
 } from "../config/sessions/paths.js";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";

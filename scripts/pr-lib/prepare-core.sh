@@ -45,6 +45,7 @@ retire_prep_evidence() {
     .local/correction-review.md
     .local/correction-incoming-review.json
     .local/correction-incoming-review.md
+    .local/pending-proof-acceptance.json
     .local/prepare-baseline.json
     .local/gates-*.log
   )
@@ -82,6 +83,7 @@ retire_prep_evidence() {
     .local/correction-review.md \
     .local/correction-incoming-review.json \
     .local/correction-incoming-review.md \
+    .local/pending-proof-acceptance.json \
     .local/prepare-baseline.json \
     .local/prepare-push-result.env \
     .local/prepare-sync-result.env || return 1
@@ -379,6 +381,11 @@ prepare_baseline_materialize() (
     snapshot=$(node "$helper" incoming-source-snapshot "$pr" "$expected" "$PREP_INCOMING_JSON_OID") || return 1
   else
     snapshot=$(correction_review_snapshot "$pr") || return 1
+    case "$snapshot" in
+      *".local/pending-proof-acceptance.json "*)
+        echo "Qualified baseline admission still requires a READY correction review; pending proof acceptance applies only to the published head." >&2
+        return 1 ;;
+    esac
   fi
   observation=$(cat .local/pr-meta.json) || return 1
   [ -n "$snapshot" ] && [ -n "$PR_MAIN_SHA" ] || return 1
@@ -997,7 +1004,7 @@ prepare_publish_for_proof() {
   mark_pr_operation_side_effects_started || return 1
   push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$head" "$lease" .local/prepare-push-result.env "$observation" || return $?
   printf 'Published exact candidate %s for pending proof: %s\n' "$head" "$PREP_PROOF_PENDING_FINDINGS"
-  echo "Publication only: NEEDS WORK and unresolved findings remain; fresh proof, READY review and ordinary gates are still required."
+  echo "Publication only: NEEDS WORK and unresolved findings remain. Obtain proof and a READY review, or record explicit maintainer risk acceptance, before ordinary gates."
 }
 
 prepare_push() {

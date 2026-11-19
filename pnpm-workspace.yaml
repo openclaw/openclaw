@@ -52,7 +52,7 @@ overrides:
   "chevrotain>lodash-es": 4.18.1
   "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
   "@chevrotain/gast>lodash-es": 4.18.1
-  "@agentclientprotocol/codex-acp@2.3.0>@openai/codex": 0.164.0
+  "@agentclientprotocol/codex-acp@2.3.0>@openai/codex": 0.169.0
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.15
   "@codemirror/view@6.43.15>@codemirror/state": 6.7.6
   "@anthropic-ai/sdk": 0.137.0
@@ -129,12 +129,10 @@ packageExtensions:
         optional: true
 
 patchedDependencies:
-  "apache-arrow@21.2.0": patches/apache-arrow@21.2.0.patch
   "@shinyoshiaki/binary-data@0.6.1": patches/@shinyoshiaki__binary-data@0.6.1.patch
   "@openclaw/crabline@0.2.0": patches/@openclaw__crabline@0.2.0.patch
   playwright-core@1.64.1: patches/playwright-core@1.64.1.patch
   minizlib@3.1.0: patches/minizlib@3.1.0.patch
-  tar@7.5.22: patches/tar@7.5.22.patch
   "baileys@7.0.0-rc14": patches/baileys@7.0.0-rc14.patch
   "matrix-js-sdk@44.0.0": patches/matrix-js-sdk@44.0.0.patch
   "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch

@@ -176,6 +176,14 @@ it.for(["native", "cross-filesystem", "portable", "helper-unavailable", "revoked
       sourceBytes: 2 * Buffer.byteLength(content),
       spawnCount: process.platform === "linux" ? 1 : 0,
     });
+    if (crossFilesystem && copyDetails.reflinkFallbackReason) {
+      expect(copyDetails).toMatchObject({ copiedFiles: 2, copiedBytes: 2 * content.length });
+      expect(copyDetails.reflinkFallbackRootHash).toMatch(/^[a-f0-9]{16}$/);
+      expect(copyDetails.reflinkFallbackPrefixHash).toMatch(/^[a-f0-9]{16}$/);
+      expect(copyDetails.reflinkFallbackProbeErrno ?? copyDetails.reflinkFallbackErrno).toBe(
+        "EXDEV",
+      );
+    }
     expect(copyDetails.fallbackReason).toBe(
       native
         ? undefined

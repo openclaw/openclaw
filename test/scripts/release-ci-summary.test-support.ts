@@ -6,7 +6,7 @@ import {
   composeReleaseAttemptJobs,
   type ReleaseExecutionPlan,
 } from "../../scripts/full-release-validation-policy.mjs";
-import { verifyReceiptRecoveryAuthority } from "../../scripts/lib/release-evidence-identity.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "../../scripts/lib/release-version.mjs";
 import { expectedChildDispatches } from "../../scripts/release-ci-summary.mjs";
 
 export function rawManifest({
@@ -98,6 +98,8 @@ export function rawManifest({
   };
 }
 
+// Historical producer data remains useful for parsers, artifact I/O, and rejection tests.
+// Qualification/publication acceptance must use candidatePublicationFixture with P admission.
 export function trustedMainPackageFixture({
   manifestVersion = 2,
   parentPath = ".github/workflows/full-release-validation.yml",
@@ -216,16 +218,14 @@ export function trustedMainPackageFixture({
   const client = {
     validateChildReuse: unsupported,
     getRunAttempt: unsupported,
-    verifyRetainedPublicationArtifacts: unsupported,
+    getRunAttemptJobs: unsupported,
+    loadExecutionPlan: unsupported,
     downloadArtifactArchive: unsupported,
     getRunArtifacts: unsupported,
     getArtifact: unsupported,
     loadExecutionPlanEvidence: unsupported,
     verifyQualificationAdmission: () => {
       throw new Error("historical fixture must not request candidate qualification admission");
-    },
-    verifyReceiptRecoveryAuthority(producer: Parameters<typeof verifyReceiptRecoveryAuthority>[1]) {
-      return verifyReceiptRecoveryAuthority("openclaw/openclaw", producer);
     },
     revalidateQualificationAdmissionAuthority: () => {
       throw new Error("historical fixture must not request candidate admission authority");
@@ -281,7 +281,7 @@ export function trustedMainPackageFixture({
   };
 }
 
-export function trustedMainFullFixture(targetSha?: string) {
+function trustedMainFullFixture(targetSha?: string) {
   const fixture = trustedMainPackageFixture({ manifestVersion: 3, targetSha });
   const children = expectedChildDispatches(fixture.runId, 1, "main", 3).filter(
     (child) => child.manifestKey !== "npmTelegram",
@@ -349,11 +349,16 @@ export function trustedMainNpmFixture(
 ) {
   const fixture = trustedMainFullFixture(options.targetSha);
   const beta = releaseProfile === "beta";
-  const coveragePolicy = beta ? "npm-beta-v1" : "npm-stable-v1";
   const targetVersion = options.targetVersion ?? (beta ? "2026.8.28-beta.1" : "2026.8.28");
+  const parsedVersion = parseReleaseVersion(targetVersion);
+  const coveragePolicy = beta
+    ? "npm-beta-v1"
+    : parsedVersion && classifyReleaseTrain(parsedVersion) === "stable"
+      ? "npm-stable-v1"
+      : undefined;
   Object.assign(fixture.manifest, { releaseProfile, runReleaseSoak: String(!beta) });
   Object.assign(fixture.manifest.validationInputs, {
-    coveragePolicy,
+    ...(coveragePolicy ? { coveragePolicy } : {}),
     skipPackageTelegramE2e: String(beta),
     targetContextRef: "release/" + targetVersion.split("-")[0],
     targetVersion,
@@ -451,7 +456,8 @@ export function trustedMainNpmFixture(
   const client = {
     ...fixture.client,
     getJobLog: vi.fn(
-      (jobId: number) => `${originalLog(jobId)}\nCI_RELEASE_SCOPE: npm-${releaseProfile}`,
+      (jobId: number) =>
+        `${originalLog(jobId)}\nCI_RELEASE_SCOPE: ${coveragePolicy ? `npm-${releaseProfile}` : "full"}`,
     ),
     getRunAttemptJobs: vi.fn((runId: string) =>
       jobsForChild(

@@ -473,12 +473,12 @@ describe("successful update finalization ordering", () => {
       verified: false,
     },
     {
-      name: "recovers and retains the package before reporting failed wrapper retirement",
+      name: "keeps the package and warns when wrapper retirement fails without a verified restart",
       denied: true,
       verified: false,
     },
     {
-      name: "keeps a verified target successful when wrapper retirement fails",
+      name: "keeps a verified target and warns when wrapper retirement fails",
       denied: true,
       verified: true,
     },
@@ -497,19 +497,9 @@ describe("successful update finalization ordering", () => {
     if (denied) {
       unlink.mockRejectedValueOnce(new Error("unlink denied"));
     }
-    const rollback = vi
-      .spyOn(rollbackModule, "rollbackFailedUpdate")
-      .mockImplementationOnce(async ({ result }) => ({ result, rolledBack: false }));
-    const retained = {
-      name: "package backup retained",
-      command: "openclaw update",
-      cwd: previousRoot,
-      durationMs: 0,
-      exitCode: 0,
-      stderrTail: "Retained previous package for recovery.",
-    };
+    const rollback = vi.spyOn(rollbackModule, "rollbackFailedUpdate");
     const complete = vi.fn<NonNullable<FinishUpdateParams["packageTransaction"]>["complete"]>(
-      async ({ activationVerified }) => (activationVerified ? undefined : retained),
+      async () => undefined,
     );
     if (verified) {
       mocks.restartService.mockImplementationOnce(async ({ onVerified }) => {
@@ -517,7 +507,7 @@ describe("successful update finalization ordering", () => {
         return "ok";
       });
     }
-    const finishing = finishSuccessfulPackageSwitch(
+    await finishSuccessfulPackageSwitch(
       {
         previousRoot,
         packageRoot: path.join(home, "package"),
@@ -528,46 +518,42 @@ describe("successful update finalization ordering", () => {
         packageTransaction: { backupRoot: previousRoot, rollback: vi.fn(), complete },
       },
     );
-    if (denied && !verified) {
-      await expectUpdateFailure(finishing, "wrapper-retirement-failed", {
-        detail: expect.stringContaining("unlink denied"),
-      });
-      expect(rollback).toHaveBeenCalledOnce();
-      expect(complete).toHaveBeenCalledExactlyOnceWith(
-        { activationVerified: false },
-        expect.any(Function),
-      );
-      expect(mocks.printResult).toHaveBeenCalledOnce();
-      expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
-        status: "error",
-        steps: expect.arrayContaining([{ ...retained, durationMs: expect.any(Number) }]),
-      });
-      expect(mocks.writeSentinel).toHaveBeenCalledOnce();
-      expectFailureReport(mocks.printResult, "wrapper-retirement-failed");
-      expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "wrapper-retirement-failed" }),
-      );
-    } else {
-      await finishing;
-      expect(rollback).not.toHaveBeenCalled();
-      if (verified) {
-        expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
-          status: "ok",
-          steps: expect.arrayContaining([
+    // A wrapper that stays is never a reason to restore the previous package.
+    expect(rollback).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledExactlyOnceWith(
+      { activationVerified: true },
+      expect.any(Function),
+    );
+    expect(mocks.markSentinelFailure).not.toHaveBeenCalled();
+    const reported = mocks.printResult.mock.lastCall?.[0];
+    expect(reported).toMatchObject({ status: "ok" });
+    expect(
+      reported?.steps.filter((step: { name: string }) => step.name === "git-wrapper-retirement"),
+    ).toEqual(
+      denied
+        ? [
             expect.objectContaining({
+              exitCode: 0,
               advisory: {
                 kind: "recoverable-maintenance",
-                message: expect.stringContaining("unlink denied"),
+                message: `Could not finish removing the previous Git checkout's openclaw wrapper: Could not retire ${wrapper}: Error: unlink denied. The package install is kept. If \`openclaw\` still starts the old checkout, remove its wrapper from PATH.`,
               },
             }),
-          ]),
-        });
-        expect(mocks.markSentinelFailure).not.toHaveBeenCalled();
-      }
-      expect(mocks.writeSentinel).toHaveBeenCalledTimes(2);
-      expectBefore(unlink, mocks.writeSentinel, 0, 1);
-      expectBefore(mocks.writeSentinel, mocks.printResult, 1);
-    }
+          ]
+        : [],
+    );
+    // The final notification carries the kept result, warning included.
+    expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(reported);
+    // Only a retirement that succeeded removed the wrapper.
+    await expect(
+      fs.stat(wrapper).then(
+        () => true,
+        () => false,
+      ),
+    ).resolves.toBe(denied);
+    expect(mocks.writeSentinel).toHaveBeenCalledTimes(2);
+    expectBefore(unlink, mocks.writeSentinel, 0, 1);
+    expectBefore(mocks.writeSentinel, mocks.printResult, 1);
   });
 
   registerManagedInstallEnvironmentTest({ tempDirs, mocks });

@@ -119,8 +119,6 @@ export type OpenClawCodingToolsOptions = {
   systemAgentTool?: import("./tools/system-agent-tool.js").SystemAgentToolOptions;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
-  /** Reads the sticky untrusted-content flag for the current user turn. */
-  isTurnTainted?: () => boolean;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   /** Original identities for sandbox-materialized skill instruction paths. */
@@ -151,6 +149,8 @@ export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
   pluginExecutionAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
   pluginExecutionSkillsSnapshot?: SkillSnapshot;
   awaitSessionDiffBaseline?: () => Promise<void>;
+  /** Execution owner's current deadline, without lane cleanup grace. */
+  getRunAbortDeadlineAtMs?: () => number | undefined;
   /** Policy-approved tool names unavailable here but usable in a child's own workspace. */
   additionalInheritedToolNamesRef?: string[];
   /** The host owns continuation policy when this factory builds only part of its tool surface. */

@@ -16,7 +16,6 @@ import {
   CatalogDiscoverySearch,
   CatalogDiscoverySection,
 } from "../../components/solid/catalog-discovery.tsx";
-import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
@@ -28,7 +27,10 @@ import { createPageRequestDelay } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
+import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
 import { preloadTemplateArtwork, TemplateArtwork } from "./template-artwork.tsx";
+import { TemplateUpload } from "./template-upload.tsx";
 import "../../styles/templates-catalog.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
@@ -57,7 +59,7 @@ const templateCategories = [
   ["people", "templatesCatalog.categoryPeople", "users"],
   ["other", "templatesCatalog.categoryOther", "layers"],
 ] as const satisfies readonly (readonly [string, string, IconName])[];
-const SECTION_SIZE = 8;
+const SECTION_SIZE = 4;
 // Enough placeholders and decoded artwork to cover a tall first screen.
 const SKELETON_SECTIONS = 4;
 const FIRST_SCREEN_SIZE = 24;
@@ -106,9 +108,13 @@ function TemplateCard(
         <span class="agents-home__template-art" aria-hidden="true">
           <TemplateArtwork src={props.entry.iconUrl} />
         </span>
-        <div class="agents-home__template-identity">
-          <h3>{props.entry.displayName}</h3>
-          <span>{`@${props.entry.ownerHandle}`}</span>
+        <div class="agents-home__template-content">
+          <div class="agents-home__template-identity">
+            <h3>{props.entry.displayName}</h3>
+            <span>{`@${props.entry.ownerHandle}`}</span>
+          </div>
+          {/* Reserve both lines even when a Template has no summary. */}
+          <p class="agents-home__template-summary">{props.entry.summary}</p>
         </div>
         <button
           type="button"
@@ -131,8 +137,6 @@ function TemplateCard(
           )}
         </button>
       </div>
-      {/* Always present: a Template without a summary keeps the reserved lines. */}
-      <p class="agents-home__template-summary">{props.entry.summary}</p>
       <Show when={props.addFailure?.entry.packageName === props.entry.packageName}>
         <p class="agents-home__template-error" role="alert">
           {props.addFailure?.message}
@@ -173,17 +177,21 @@ function TemplateCatalogSkeleton(props: { overview: boolean }) {
                   <div class="agents-home__template-card oc-card" data-templates-placeholder>
                     <div class="agents-home__template-head">
                       <span class="agents-home__template-art" />
-                      <div class="agents-home__template-identity">
-                        <h3 style={placeholderBar("70%")}>{"\u00a0"}</h3>
-                        <span style={placeholderBar("40%")}>{"\u00a0"}</span>
+                      <div class="agents-home__template-content">
+                        <div class="agents-home__template-identity">
+                          <h3 style={placeholderBar("70%")}>{"\u00a0"}</h3>
+                          <span style={placeholderBar("40%")}>{"\u00a0"}</span>
+                        </div>
+                        <p class="agents-home__template-summary">
+                          <span style={{ display: "block", ...placeholderBar("100%") }}>
+                            {"\u00a0"}
+                          </span>
+                          <span style={{ display: "block", ...placeholderBar("60%") }}>
+                            {"\u00a0"}
+                          </span>
+                        </p>
                       </div>
                     </div>
-                    <p class="agents-home__template-summary">
-                      <span style={{ display: "block", ...placeholderBar("100%") }}>
-                        {"\u00a0"}
-                      </span>
-                      <span style={{ display: "block", ...placeholderBar("60%") }}>{"\u00a0"}</span>
-                    </p>
                   </div>
                 )}
               </Repeat>
@@ -274,14 +282,20 @@ export function TemplatesExplore(
   const unavailable = () => gateway.connected && !canSearch();
   return (
     <openclaw-templates-explore>
-      <HubPageHeader
+      <PluginsHubHeader
+        actions={<TemplateUpload />}
         active="templates"
         subtitle={t("templatesCatalog.exploreDescription")}
         wide
         class="templates-catalog-header"
+        onSelect={(tab) => {
+          if (tab !== "templates") {
+            context.navigate(tab);
+          }
+        }}
       />
       <SettingsPage wide carapace>
-        <div class="agents-home">
+        <div class="agents-home" {...pluginsHubPanel("templates")}>
           <section
             class="agents-home__explore plugin-catalog-results"
             data-templates-explore

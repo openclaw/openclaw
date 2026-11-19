@@ -616,7 +616,7 @@ serveOwnedWorkerTasks(
           if (request.kind === "compaction-preparation") {
             const { readPreparedSessionCompaction } =
               await import("./session-compaction-prepared.worker.js");
-            return readPreparedSessionCompaction(request, control, channel);
+            return readPreparedSessionCompaction(request, control);
           }
           if (
             request.kind === "transcript-hydration" ||
@@ -660,6 +660,9 @@ serveOwnedWorkerTasks(
             request.validation,
             request.kind === "transcript-match" ? request.request.diagnostics : undefined,
             request.readCustody,
+            request.creationClaim
+              ? { witness: request.creationClaim, assertCurrent: () => control.throwIfCancelled() }
+              : undefined,
           )
         : { ok: true, value: await readRequest() };
     } catch (error) {

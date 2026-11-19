@@ -258,30 +258,30 @@ it.each([
   },
 );
 
-it.each(["ready", "retired", "failure"] as const)(
+it.each(["ready", "retired", "failure", "timeout", "cancelled"] as const)(
   "preserves admitted native observations: %s",
   async (outcome) => {
-    const config = {};
     const native: ModelCatalogEntry = nativeEntry();
     let current = true;
-    const failure = new Error("native observation unavailable");
+    const failure = new Error(outcome === "failure" ? "unavailable" : "read timed out");
+    failure.name = outcome === "cancelled" ? "AbortError" : failure.name;
     const loadNativeModelCatalog = vi.fn(async () => {
       if (outcome === "retired") {
         current = false;
         throw new PreparedModelRuntimePublicationSupersededError("retired during observation");
       }
-      if (outcome === "failure") {
+      if (outcome !== "ready") {
         throw failure;
       }
       return catalog([native]);
     });
     const admitted = {
-      ...owner(config, outcome === "retired" ? [native] : [{ ...entry, reasoning: false }]),
+      ...owner({}, outcome === "ready" ? [{ ...entry, reasoning: false }] : [native]),
       isCurrent: () => current,
       loadNativeModelCatalog,
     };
     const result = readAdmitted(admitted, { agentRuntime: "native-one" });
-    if (outcome === "failure") {
+    if (outcome === "failure" || outcome === "cancelled") {
       await expect(result).rejects.toBe(failure);
     } else {
       await expect(result).resolves.toEqual([native]);
@@ -290,6 +290,19 @@ it.each(["ready", "retired", "failure"] as const)(
     expect(preparedSnapshotMock).not.toHaveBeenCalled();
   },
 );
+
+it("keeps the published owner's latest accepted catalog after a lookup timeout", async () => {
+  const accepted = nativeEntry({ reasoning: false });
+  const loadNativeModelCatalog = vi.fn(async () => {
+    throw new Error("read timed out");
+  });
+  publishedSnapshotMock.mockReturnValue({
+    ...owner({}, [nativeEntry()]),
+    loadNativeModelCatalog,
+    readFullModelCatalog: () => catalog([accepted]),
+  });
+  await expect(readThinking({}, { agentRuntime: "native-one" })).resolves.toEqual([accepted]);
+});
 
 it.each([
   { configured: [], before: [entry] },

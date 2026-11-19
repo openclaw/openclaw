@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, For, latest, Loading, onSettled, Repeat, Reveal } from "solid-js";
+import { createMemo, Errored, For, latest, Loading, Repeat, Reveal } from "solid-js";
 import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import {
   CatalogDiscoveryChip,
@@ -14,7 +14,6 @@ import { SettingsSection, SettingsUnavailable } from "../../components/solid/set
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PageReadResult } from "../../lib/page-request.ts";
-import { isPhoneLayout } from "../../lib/phone-layout.ts";
 import type {
   PluginCatalogItem,
   PluginDiscoveryEntry,
@@ -24,7 +23,6 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { categoryIcon } from "./catalog-category-icon.tsx";
 import { PluginCatalogGrid } from "./catalog-grid.tsx";
 import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skeleton.tsx";
-import { PluginArtTile } from "./consent-dialog.tsx";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
@@ -36,7 +34,7 @@ import {
 import type { PluginDiscoveryIntent, PluginDiscoveryState } from "./plugin-discovery.ts";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
-import { resolvePluginCatalogIconUrl } from "./presentation.ts";
+import { PluginArtTile, resolvePluginCatalogIconUrl } from "./presentation.tsx";
 
 export type PluginCatalogResultsProps = PluginDiscoveryState & {
   registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
@@ -540,39 +538,15 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
     }
     return null;
   };
-  let input!: HTMLInputElement;
-  // Focusing the search on a phone would open the keyboard on arrival.
-  const focusOnArrival = !isPhoneLayout();
-  onSettled(() => {
-    if (!focusOnArrival) {
-      return undefined;
-    }
-    input.dataset.autofocused = "true";
-    input.focus();
-    let secondFrame = 0;
-    const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => {
-        if (input.isConnected) {
-          input.focus();
-        }
-      });
-    });
-    return () => {
-      cancelAnimationFrame(firstFrame);
-      cancelAnimationFrame(secondFrame);
-    };
-  });
   return (
     <section class="plugin-catalog-results" aria-label={t("pluginsPage.exploreTitle")}>
       <CatalogDiscoverySearch>
         <input
           type="search"
           class="settings-input"
-          autofocus={focusOnArrival}
           aria-label={t("pluginsPage.searchPlugins")}
           placeholder={t("pluginsPage.searchPlugins")}
           value={props.query}
-          ref={(element) => (input = element)}
           onInput={(event) => props.onQueryChange(event.currentTarget.value)}
         />
       </CatalogDiscoverySearch>

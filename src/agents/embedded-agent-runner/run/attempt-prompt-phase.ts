@@ -462,6 +462,8 @@ export async function runEmbeddedAttemptPromptPhase(
                 config: attempt.config,
                 contextTokenBudget: promptContext.contextTokenBudget,
                 reserveTokens,
+                runId: attempt.runId,
+                isToolBoundarySafe: () => preparedStreamRuntime.isToolBoundarySafe?.() ?? false,
                 timeoutMs: input.sessionLock.compactionTimeoutMs,
                 authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
                 ...(attempt.sessionKey

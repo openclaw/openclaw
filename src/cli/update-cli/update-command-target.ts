@@ -10,7 +10,6 @@ import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-read
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
-  EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
@@ -129,6 +128,7 @@ export async function resolveUpdateCommandTarget(
       if (prepared.nodeSecurityWarning) {
         recordNodeSecurityWarning(prepared.nodeSecurityWarning);
       }
+      prepared.packageActivationSteps?.forEach(recordPreflightStep);
       const resolveMode = async (): Promise<UpdateRunResult["mode"]> => {
         if (malformedConfig) {
           return updateInstallKind === "git" ? "git" : "unknown";
@@ -308,12 +308,10 @@ export async function resolveUpdateCommandTarget(
       }
 
       const unsupportedMain = updateInstallKind === "package" && isMainPackageTarget(explicitTag);
-      if ((channel === "extended-stable" && explicitTag) || unsupportedMain) {
+      if (unsupportedMain) {
         await refuseUpdate(
-          unsupportedMain ? "unsupported-package-target" : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
-          unsupportedMain
-            ? "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow."
-            : undefined,
+          "unsupported-package-target",
+          "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow.",
         );
         return undefined;
       }
@@ -498,7 +496,7 @@ export async function resolveUpdateCommandTarget(
               env: packageInstallEnv,
             });
           let targetMetadata: Awaited<ReturnType<typeof fetchNpmPackageTargetStatus>> | undefined;
-          if (channel === "extended-stable") {
+          if (channel === "extended-stable" && !explicitTag) {
             const extendedStable = await resolveExtendedStablePackage({
               installKind: updateInstallKind,
               timeoutMs,

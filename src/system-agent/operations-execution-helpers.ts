@@ -275,6 +275,9 @@ export async function applyPersistentOperation(params: {
     );
   }
   runtime.log(`[openclaw] done: ${auditOperation}`);
+  runtime.log(
+    `Completed only ${auditOperation}. Other requested actions are not done unless separately confirmed.`,
+  );
   return {
     applied: true,
     ...(outcome.bootstrapPending === undefined

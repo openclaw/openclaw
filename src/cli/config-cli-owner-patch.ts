@@ -145,6 +145,7 @@ export async function bindConfigOwner(requestOwner: OwnerRequest, env: NodeJS.Pr
       restart?: unknown;
       restartPending?: unknown;
       billingRouteWarnings?: unknown;
+      warnings?: unknown;
     }>("config.patch", buildConfigOwnerPatch(change, current.hash));
     return {
       hint:
@@ -152,9 +153,9 @@ export async function bindConfigOwner(requestOwner: OwnerRequest, env: NodeJS.Pr
           ? "The Gateway is restarting to apply it."
           : undefined,
       // Older Gateways omit the field; the owner computed it against its own credentials.
-      warnings: Array.isArray(result.billingRouteWarnings)
-        ? result.billingRouteWarnings.filter((warning) => typeof warning === "string")
-        : [],
+      warnings: [result.billingRouteWarnings, result.warnings].flatMap((warnings) =>
+        Array.isArray(warnings) ? warnings.filter((warning) => typeof warning === "string") : [],
+      ),
     };
   };
 }

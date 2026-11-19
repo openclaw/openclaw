@@ -755,6 +755,14 @@ describe("requester yield ownership", () => {
     // Reporting must not disturb the armed wake or claim the child for turn 2.
     expect(getSubagentRunByRunId(child.runId)).toEqual(settled);
 
+    const acknowledgment =
+      "The existing task is still running. I will report back when it finishes.";
+    const waiting = await turn2.execute("yield-waiting-reply", { acknowledgment });
+    expect(waiting.details).toMatchObject({ status: "yielded", acknowledgment });
+    expect(turn2Yield).toHaveBeenCalledExactlyOnceWith("Turn yielded.", acknowledgment, undefined);
+    expect(getSubagentRunByRunId(child.runId)).toEqual(settled);
+    turn2Yield.mockClear();
+
     // The completion owner stays dispatching until its requester continuation returns.
     assert(settled?.requesterSettleWake);
     await mutateSubagentRuns([child.runId], (rows) => {

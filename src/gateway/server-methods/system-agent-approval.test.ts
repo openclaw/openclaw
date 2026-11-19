@@ -162,7 +162,12 @@ describe("Full Access delegated chat", () => {
             : {
                 action: "config_set",
                 path: source === "repair" ? "gateway.port" : "logging.level",
-                value: source === "repair" ? "18789" : "debug",
+                value:
+                  source === "repair"
+                    ? params.input.includes("[config-verify]")
+                      ? "18789"
+                      : "banana"
+                    : "debug",
               },
         );
         return { text: "Change proposed." };
@@ -461,7 +466,7 @@ describe("Full Access delegated chat", () => {
     const controller = new AbortController();
     let settled = false;
     const pending = fixture
-      .callChat("config set gateway.port banana", {
+      .callChat("Set the Gateway port to banana.", {
         approvalSignals: [controller.signal],
       })
       .then((reply) => {
@@ -561,7 +566,7 @@ describe("Full Access delegated chat", () => {
       if (fails) {
         fixture.runConfigSet.mockRejectedValue(new Error("fixture correction failed"));
       }
-      const reply = await fixture.callChat("config set gateway.port banana", {
+      const reply = await fixture.callChat("Set the Gateway port to banana.", {
         assertAutoApproveChangesCurrent: () => {},
       });
       expect(fixture.runConfigSet).toHaveBeenCalledTimes(2);
@@ -589,9 +594,11 @@ describe("Full Access delegated chat", () => {
   ] as const)(
     "keeps delegated chat pending without blocking other work until %s settles",
     async (outcome, expected, writes, guidance) => {
+      const inferenceBoundary =
+        outcome === "precommit-cancelled" || outcome === "afterDecision-failed";
       const fixture = await createDelegatedChatFixture(
         createTestGatewayScheduler(outcome === "expired" ? "fake-timers" : undefined),
-        "typed",
+        inferenceBoundary ? "model tool" : "typed",
         "durable",
       );
       const controller = new AbortController();
@@ -622,7 +629,9 @@ describe("Full Access delegated chat", () => {
       let settled = false;
       const pending = fixture
         .callChat(
-          "config set logging.level debug",
+          inferenceBoundary
+            ? "Change the logging level to debug."
+            : "config set logging.level debug",
           // A posture boolean without host-held authority still requires approval.
           { approvalSignals: [controller.signal], fullPermission: true },
           observation,

@@ -383,7 +383,12 @@ describe("configured file transcription through Talk RPCs", () => {
         };
         const { call } = fileRpc(config, talkHandlers);
         expect(expectRespondOk(await call("talk.catalog"))).toMatchObject({
-          transcription: { ready: true, activeProvider: "streaming-stt" },
+          transcription: {
+            source: "voice-model",
+            ready: true,
+            activeProvider: "streaming-stt",
+            mediaProviders: [expect.objectContaining({ id: "local-stt", configured: true })],
+          },
         });
         expectRespondOk(await call("talk.session.create", { mode: "transcription" }), {
           provider: "streaming-stt",
@@ -494,7 +499,9 @@ describe("configured file transcription through Talk RPCs", () => {
           release.resolve();
           await catalog.completed;
           const result = expectRespondOk(catalog.respond);
-          expect(result).toMatchObject({ transcription: { ready: false } });
+          expect(result).toMatchObject({
+            transcription: { source: "media-understanding", ready: false },
+          });
           expect(result).not.toHaveProperty("transcription.activeProvider");
           if (reason === "unknown provider" || reason === "missing credentials") {
             expect(result).toMatchObject({
@@ -584,6 +591,31 @@ describe("configured file transcription through Talk RPCs", () => {
       });
     },
   );
+
+  it("refuses a third recording with a typed capacity code while two still transcribe", async () => {
+    const release = createDeferred();
+    onTestFinished(() => release.resolve());
+    await withFileProvider(
+      async () => {
+        const { open, append, start, call } = fileRpc();
+        const closing = [];
+        for (let index = 0; index < 2; index += 1) {
+          const sessionId = await open();
+          await append(sessionId);
+          closing.push(start("talk.session.close", { sessionId }).completed);
+        }
+        expectRespondError(await call("talk.session.create", { mode: "transcription" }), {
+          code: "UNAVAILABLE",
+          retryable: true,
+          details: { code: "TALK_SESSION_CAPACITY" },
+        });
+        release.resolve();
+        await Promise.all(closing);
+        await open();
+      },
+      () => release.promise,
+    );
+  });
 
   it("discards buffered audio when its connection closes before transcription starts", async () => {
     await withFileProvider(async (requests) => {
