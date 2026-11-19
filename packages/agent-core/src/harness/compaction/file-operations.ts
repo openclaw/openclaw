@@ -1,7 +1,9 @@
+import type { ToolCall } from "@openclaw/llm-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../types.js";
 import { createToolCallOccurrenceQueue } from "../session/tool-result-pairing.js";
 import type { FileOperations } from "../types.js";
+import { copyString } from "../utils/truncate.js";
 
 function normalizeFileToolName(value: string): string {
   const name = value.toLowerCase();
@@ -12,7 +14,7 @@ function normalizeFileToolName(value: string): string {
 function addFilePaths(target: Set<string>, value: unknown): void {
   for (const path of Array.isArray(value) ? value : []) {
     if (typeof path === "string") {
-      target.add(path);
+      target.add(copyString(path));
     }
   }
 }
@@ -31,115 +33,134 @@ export function mergeSummaryFileOperations(
   addFilePaths(fileOps.edited, details.modifiedFiles);
 }
 
-type FileCall = { id: string; name: string; path?: string; unchanged?: boolean };
-export type FileOperationMessage =
-  | { role: "assistant"; calls: FileCall[] }
+type FileOperationCallFact = { id: string; name: string; path?: string };
+export type FileOperationMessageFact =
+  | { role: "assistant"; calls: FileOperationCallFact[] }
   | {
       role: "toolResult";
       id: string;
       name: string;
       unchanged: boolean;
-      added: string[];
-      modified: string[];
+      written: Set<string>;
+      edited: Set<string>;
     }
-  | { role: Exclude<AgentMessage["role"], "assistant" | "toolResult"> };
+  | { role: "other" };
 
-/** Record only the paths and occurrence outcomes needed after the raw row is released. */
-export function prepareFileOperationMessage(message: AgentMessage): FileOperationMessage {
+/** Row-local paths and outcome facts; arguments and result payloads never escape. */
+export function collectFileOperationMessageFact(
+  message: AgentMessage,
+  identities?: WeakMap<ToolCall, FileOperationCallFact>,
+): FileOperationMessageFact {
   if (message.role === "assistant") {
-    return {
-      role: message.role,
-      calls: message.content.flatMap((call) => {
-        if (call.type !== "toolCall") {
-          return [];
-        }
+    const calls: FileOperationCallFact[] = [];
+    for (const call of message.content) {
+      if (call.type !== "toolCall") {
+        continue;
+      }
+      let fact = identities?.get(call);
+      if (!fact) {
         const args = asRecord(call.arguments);
-        return [
-          {
-            id: call.id,
-            name: normalizeFileToolName(call.name),
-            path: [args?.path, args?.file_path, args?.filePath].find(
-              (value): value is string => typeof value === "string",
-            ),
-          },
-        ];
-      }),
-    };
+        const path = [args?.path, args?.file_path, args?.filePath].find(
+          (value): value is string => typeof value === "string",
+        );
+        fact = {
+          id: copyString(call.id),
+          name: copyString(normalizeFileToolName(call.name)),
+          path: path === undefined ? undefined : copyString(path),
+        };
+        identities?.set(call, fact);
+      }
+      calls.push(fact);
+    }
+    return { role: "assistant", calls };
   }
   if (message.role !== "toolResult") {
-    return { role: message.role };
+    return { role: "other" };
   }
   const name = normalizeFileToolName(message.toolName);
-  const added = new Set<string>();
-  const modified = new Set<string>();
+  const written = new Set<string>();
+  const edited = new Set<string>();
   if (name === "apply_patch") {
     for (const result of [message, ...(Array.isArray(message.content) ? message.content : [])]) {
       const summary = asRecord(asRecord(asRecord(result)?.details)?.summary);
-      addFilePaths(added, summary?.added);
-      addFilePaths(modified, summary?.modified);
+      addFilePaths(written, summary?.added);
+      addFilePaths(edited, summary?.modified);
     }
   }
+  // Deleted paths no longer exist for a continuation to inspect, so omit them.
   return {
-    role: message.role,
-    id: message.toolCallId,
-    name,
+    role: "toolResult",
+    id: copyString(message.toolCallId),
+    name: copyString(name),
     unchanged: asRecord(message.details)?.changed === false,
-    added: [...added],
-    modified: [...modified],
+    written,
+    edited,
   };
 }
 
-/** Pair outcomes before committing each tool turn's conservative file metadata. */
+/** Recompute outcomes over this exact selection, preserving repeated call occurrences. */
 export function extractFileOpsFromFacts(
-  messages: Iterable<FileOperationMessage>,
+  messages: readonly FileOperationMessageFact[],
   fileOps: FileOperations,
 ): void {
-  const calls = createToolCallOccurrenceQueue<FileCall>();
-  let frame: FileCall[] = [];
-  const flush = () => {
-    for (const call of frame) {
-      if (!call.path || call.unchanged) {
-        continue;
-      }
-      if (call.name === "read") {
-        fileOps.read.add(call.path);
-      } else if (call.name === "write") {
-        fileOps.written.add(call.path);
-      } else if (call.name === "edit") {
-        fileOps.edited.add(call.path);
-      }
-    }
-    calls.clear();
-  };
+  const calls = createToolCallOccurrenceQueue<FileOperationCallFact>();
+  const unchanged = new Set<FileOperationCallFact>();
   for (const message of messages) {
-    if (message.role !== "toolResult") {
-      flush();
-      frame = message.role === "assistant" ? message.calls.map((call) => ({ ...call })) : [];
-      for (const call of frame) {
+    if (message.role === "assistant") {
+      calls.clear();
+      for (const call of message.calls) {
         calls.add(call.id, call);
       }
-      continue;
+    } else if (message.role === "toolResult") {
+      const occurrence = calls.claim(message.id);
+      if (
+        occurrence?.name === message.name &&
+        (message.name === "edit" || message.name === "write") &&
+        message.unchanged
+      ) {
+        unchanged.add(occurrence);
+      }
+    } else {
+      calls.clear();
     }
-    const call = calls.claim(message.id);
-    if (call?.name === message.name && (call.name === "edit" || call.name === "write")) {
-      call.unchanged = message.unchanged;
-    }
-    addFilePaths(fileOps.written, message.added);
-    addFilePaths(fileOps.edited, message.modified);
   }
-  flush();
+  for (const message of messages) {
+    if (message.role === "toolResult") {
+      for (const path of message.written) {
+        fileOps.written.add(path);
+      }
+      for (const path of message.edited) {
+        fileOps.edited.add(path);
+      }
+    } else if (message.role === "assistant") {
+      for (const call of message.calls) {
+        if (!call.path || unchanged.has(call)) {
+          continue;
+        }
+        switch (call.name) {
+          case "read":
+            fileOps.read.add(call.path);
+            break;
+          case "write":
+            fileOps.written.add(call.path);
+            break;
+          case "edit":
+            fileOps.edited.add(call.path);
+            break;
+        }
+      }
+    }
+  }
 }
 
+/** Array callers preserve object-alias outcomes while sharing the fact reducer. */
 export function extractFileOpsFromMessages(
   messages: readonly AgentMessage[],
   fileOps: FileOperations,
 ): void {
+  const identities = new WeakMap<ToolCall, FileOperationCallFact>();
   extractFileOpsFromFacts(
-    (function* () {
-      for (const message of messages) {
-        yield prepareFileOperationMessage(message);
-      }
-    })(),
+    messages.map((message) => collectFileOperationMessageFact(message, identities)),
     fileOps,
   );
 }

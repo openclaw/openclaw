@@ -46,16 +46,20 @@ async function writeStoredRuntime(packageRoot: string, store: string, generation
 }
 
 describe.skipIf(process.platform === "win32")("native package stage", () => {
-  it.each(["bun", "bun-launcher", "pnpm10", "pnpm11", "pnpm12"] as const)(
+  it.each(["bun", "bun-launcher", "pnpm10", "pnpm11", "pnpm12", "pnpm12-quoted"] as const)(
     "preserves the live %s project and executes its relocated candidate launcher",
     async (layout) =>
       withTestDir({ prefix: "native-package-stage-" }, async (base) => {
-        const grouped = layout === "pnpm11" || layout === "pnpm12";
+        // pnpm 12.15+ quotes the shim base and its relative target separately.
+        const pnpm12 = layout === "pnpm12" || layout === "pnpm12-quoted";
+        const grouped = layout === "pnpm11" || pnpm12;
         const bun = layout.startsWith("bun");
         const manager = bun ? "bun" : "pnpm";
+        // An apostrophe in the stage path makes pnpm spell it `'\''` inside quoted words.
         const project = join(
           base,
-          layout === "bun-launcher" ? "Bun ' install" : "",
+          { "bun-launcher": "Bun ' install", "pnpm12-quoted": "team's base" }[layout as string] ??
+            "",
           "install/global",
         );
         const globalRoot = join(
@@ -64,11 +68,11 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         );
         const packageRoot = join(globalRoot, grouped ? "group/node_modules" : "", "openclaw");
         const liveBinDir = join(base, "bin");
-        const binTarget = layout === "pnpm12" ? join(base, "physical", "bin") : liveBinDir;
+        const binTarget = pnpm12 ? join(base, "physical", "bin") : liveBinDir;
         const external = join(base, "shared-store");
         await fs.mkdir(packageRoot, { recursive: true });
         await fs.mkdir(binTarget, { recursive: true });
-        if (layout === "pnpm12") {
+        if (pnpm12) {
           await fs.symlink(binTarget, liveBinDir);
         }
         await fs.mkdir(external);
@@ -99,7 +103,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         const expectModules = async (file: string, store = virtualStoreDir) =>
           expect(await readJson(file)).toEqual({ virtualStoreDir: store, storeDir: external });
         let candidateRoot = join(stage.projectRoot, relative(project, packageRoot));
-        if (layout === "pnpm12") {
+        if (pnpm12) {
           const newGroupRoot = join(stage.globalRoot, "new-group", "node_modules", "openclaw");
           await fs.cp(candidateRoot, newGroupRoot, { recursive: true, verbatimSymlinks: true });
           candidateRoot = newGroupRoot;
@@ -125,7 +129,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         await expectModules(join(candidateRoot, ".modules.yaml"), candidateStore);
         await writeStoredRuntime(candidateRoot, candidateStore, "candidate");
         const internalLauncher = join(candidateRoot, "node_modules", ".bin", "probe");
-        if (layout === "pnpm12") {
+        if (pnpm12) {
           await fs.mkdir(dirname(internalLauncher), { recursive: true });
           await writeLauncher(
             internalLauncher,
@@ -153,14 +157,26 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
           }
         } else {
           const target = relative(stage.binDir, candidateEntry);
-          const basedir = layout === "pnpm12" ? "basedir_abs" : "basedir";
-          const convertedBranch =
-            layout === "pnpm12"
-              ? `basedir_win="$basedir_abs"\nif [ "$1" = win ]; then\n  exec node "$basedir_win/${target}" "$@"\nfi\n`
+          const basedir = pnpm12 ? "basedir_abs" : "basedir";
+          const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+          // Current pnpm (seen from 11.28 and 12.21) quotes the base and target separately:
+          // exec node  "$basedir_abs"/'../global/v11/<group>/node_modules/openclaw/openclaw.mjs' "$@"
+          const reference = (variable: string) =>
+            layout === "pnpm12-quoted"
+              ? `"$${variable}"/${quote(target)}`
+              : `"$${variable}/${target}"`;
+          // Finalize refuses a launcher whose NODE_PATH still names the stage.
+          const nodePath =
+            layout === "pnpm12-quoted"
+              ? `export NODE_PATH=${quote(join(dirname(candidateRoot), ".pnpm", "node_modules"))}\n`
               : "";
+          const convertedBranch = pnpm12
+            ? `basedir_win="$basedir_abs"\nif [ "$1" = win ]; then\n  exec node  ${reference("basedir_win")} "$@"\nfi\n`
+            : "";
+          const entry = reference(basedir);
           await writeLauncher(
             launcher,
-            `#!/bin/sh\n${basedir}=$(CDPATH= cd -P -- "$(dirname "$0")" && pwd -P)\n${convertedBranch}if [ -x "$${basedir}/node" ]; then\n  exec "$${basedir}/node" "$${basedir}/${target}" "$@"\nelse\n  exec node "$${basedir}/${target}" "$@"\nfi\n# cmd-shim-target=${candidateEntry}\n`,
+            `#!/bin/sh\n${basedir}=$(CDPATH= cd -P -- "$(dirname "$0")" && pwd -P)\n${nodePath}${convertedBranch}if [ -x "$${basedir}/node" ]; then\n  exec "$${basedir}/node" ${entry} "$@"\nelse\n  exec node  ${entry} "$@"\nfi\n# cmd-shim-target=${candidateEntry}\n`,
           );
           const node = process.execPath.replaceAll("'", "'\\''");
           await writeLauncher(
@@ -186,7 +202,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         expect(await output(join(liveBinDir, "openclaw"))).toBe(
           bun ? "candidate" : "bin-runtime\ncandidate",
         );
-        if (layout === "pnpm12") {
+        if (pnpm12) {
           expect(await output(join(liveBinDir, "openclaw"), ["win"])).toBe("candidate");
           expect(
             await output(join(liveCandidateRoot, relative(candidateRoot, internalLauncher))),
@@ -222,4 +238,48 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
       expect(await fs.readdir(stage.binDir)).toEqual([]);
     });
   });
+
+  it.each([
+    ["openclaw", "refuses"],
+    // Another global package's shim is never published by this update.
+    ["other-cli", "ignores"],
+  ] as const)(
+    "%s: %s a launcher relocation left pointing into the stage",
+    async (name, outcome) => {
+      await withTestDir({ prefix: "native-package-stage-launcher-" }, async (base) => {
+        const project = join(base, "install", "global");
+        const globalRoot = join(project, "v11");
+        const packageRoot = join(globalRoot, "group", "node_modules", "openclaw");
+        await fs.mkdir(packageRoot, { recursive: true });
+        const stage = await prepareStage(
+          { manager: "pnpm", command: "pnpm", globalRoot, packageRoot },
+          join(base, "bin"),
+        );
+        // A launcher format the relocator does not recognize keeps its stage-relative target.
+        const target = relative(
+          stage.binDir,
+          join(stage.projectRoot, "v11", "group", "openclaw.mjs"),
+        );
+        await writeLauncher(
+          join(stage.binDir, name),
+          `#!/bin/sh\nexec node "$(dirname "$0")/${target}" "$@"\n`,
+        );
+        await fs.mkdir(join(base, "bin"));
+        const snapshot = async () => [await fs.readdir(project), await fs.readdir(packageRoot)];
+        const before = await snapshot();
+        const finalized = finalizeNativePackageStage(stage, "openclaw");
+        if (outcome === "ignores") {
+          await expect(finalized).resolves.toBeTypeOf("function");
+          return;
+        }
+        // The refusal names the verified recovery route, since the CLI is still the old one.
+        await expect(finalized).rejects.toThrow(
+          "The staged openclaw launcher still points into the update stage after relocation; the installation was left unchanged. To install the update directly, run `pnpm add -g --allow-build=openclaw openclaw@<version>` as the account that owns this install, then `openclaw gateway install --force` and `openclaw gateway restart`. Run `openclaw triage` to diagnose the launcher.",
+        );
+        // Refused before activation: the live project and bin directory are untouched.
+        expect(await snapshot()).toEqual(before);
+        expect(await fs.readdir(join(base, "bin"))).toEqual([]);
+      });
+    },
+  );
 });

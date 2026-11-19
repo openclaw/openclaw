@@ -113,6 +113,12 @@ export type ControlUiSurfaceProps = {
     stream: string | null;
     loading: boolean;
   };
+  /** Only the feedback action/receipt beside a terminal run failure, not its details or recovery. */
+  "run-failure-feedback": BoardGetParams & {
+    /** The exact displayed failure, including when adjacent failures are grouped. */
+    runId: string;
+    repeatCount: number;
+  };
   "tool-result": BoardGetParams & {
     toolName: string;
     toolCallId: string;
@@ -195,10 +201,68 @@ export type ControlUiPanel = {
   mount: ControlUiView<BoardGetParams>;
 };
 
+/** A draft offered to the user beside the composer; nothing changes until they accept it. */
+export type ControlUiDraftProposal = {
+  /** Short heading for the proposal card. */
+  title: string;
+};
+
+/** The user's choice; `"dismissed"` also covers the pane, chat, or action retiring first. */
+export type ControlUiDraftProposalOutcome = "accepted" | "dismissed";
+
+/** One line of a running composer task's progress, such as a tool call. */
+export type ControlUiComposerTaskStep = {
+  label: string;
+  state: "running" | "done" | "failed";
+};
+
+/**
+ * Work an action runs for the composer, shown by the host in one card above the input:
+ * working, then a proposal or a failure, without moving the composer. The card leaves when the
+ * task settles, the user cancels, the chat changes, or the action's `signal` aborts.
+ */
+export type ControlUiComposerTask = {
+  /** Aborts when the user cancels the task or the action retires. */
+  readonly signal: AbortSignal;
+  /** Replace the working card's progress: the newest steps and an optional summary. */
+  update: (progress: { steps?: readonly ControlUiComposerTaskStep[]; summary?: string }) => void;
+  /** Turn the card into a proposal of `text`; resolves when the user chooses. */
+  propose: (
+    text: string,
+    proposal: ControlUiDraftProposal,
+  ) => Promise<ControlUiDraftProposalOutcome>;
+  /** Show a failure in the card; the user can dismiss it or run the action again. */
+  fail: (message: string) => void;
+};
+
+export type ControlUiComposerHandle = {
+  readonly draft: string;
+  setDraft: (text: string) => void;
+  /**
+   * Start a task card titled `title`. While it runs, the invoking composer action shows as
+   * pressed, and its Cancel aborts `task.signal`. Starting another task replaces this one.
+   */
+  startTask: (options: { title: string }) => ControlUiComposerTask;
+  /**
+   * Offer `text` as a replacement draft without a working phase. The user accepts it (Use or
+   * Tab) or dismisses it (Dismiss or Escape); it is never sent. Accepting replaces the draft as
+   * one editor change, so undo restores the previous draft, including mentions.
+   */
+  propose: (
+    text: string,
+    proposal: ControlUiDraftProposal,
+  ) => Promise<ControlUiDraftProposalOutcome>;
+};
+
 export type ControlUiAction = {
   id: string;
   label: string;
   placement: "composer" | "header" | "session";
+  /**
+   * Fixed host icon-registry name. A composer action with an icon renders as a compact
+   * toolbar button beside the attachment menu, named and tooltipped by its label.
+   */
+  icon?: string;
   resolve?: (context: BoardGetParams & { session?: ControlUiSession }) => {
     label?: string;
     disabled?: boolean;
@@ -209,6 +273,8 @@ export type ControlUiAction = {
       session?: ControlUiSession;
       host: ControlUiHost;
       signal: AbortSignal;
+      /** Composer placement only: the invoking pane's live draft; retires with `signal`. */
+      composer?: ControlUiComposerHandle;
     },
   ) => void | Promise<void>;
 };

@@ -19,7 +19,11 @@ export function terminalAnswer(prompt: QuestionPrompt, question: QuestionPanelQu
   if (question.isSecret) {
     return t("chat.questions.answered");
   }
-  const answer = prompt.answers?.answers[question.questionId]?.join(", ");
+  const values = prompt.answers?.answers[question.questionId];
+  if (question.allowEmpty && values?.length === 0) {
+    return t("chat.questions.leftBlank");
+  }
+  const answer = values?.join(", ");
   return (
     answer ||
     t(prompt.answeredElsewhere ? "chat.questions.answeredElsewhere" : "chat.questions.answered")

@@ -10,10 +10,11 @@ import {
   registerSessionResourceCleanup,
   type SessionResourceOwner,
 } from "../session-resources.js";
-import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { getResponsesCompactionInputIdentity } from "./openai-responses-compaction-window.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
 import {
+  hasSameResponsesInputPrefix,
+  jsonValuesEqual,
   projectedJsonEqual,
   projectJsonObject,
   projectJsonValue,
@@ -23,6 +24,7 @@ import {
   replayResponsesReasoningUpdates,
   type ResponsesConfigurationUpdate,
 } from "./openai-responses-reasoning-update.js";
+import { normalizeOpenAIResponsesToolArguments } from "./openai-responses-replay.js";
 import { retainedJsonBytes } from "./openai-responses-retained-bytes.js";
 import {
   normalizeOpenAIResponsesFunctionCallId,
@@ -60,11 +62,6 @@ export type ResponsesContinuationStatus =
   | "history_shorter"
   | "no_previous_response"
   | "request_changed";
-
-function jsonValuesEqual(left: object, right: object): boolean {
-  // Finish the left side before evaluating any right-side hook values.
-  return projectedJsonEqual(projectJsonObject(left), projectJsonObject(right));
-}
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
   // Instructions and tools apply to the current response and remain on every wire request.
@@ -199,8 +196,9 @@ function normalizeAssistantReplayInput(
   input: readonly unknown[],
   fromResponse = false,
   ignoreCachedItemIds = false,
+  replayedInput?: readonly unknown[],
 ): unknown[] {
-  return input.map((item) => {
+  return input.map((item, index) => {
     if (!isRecord(item)) {
       return item;
     }
@@ -254,9 +252,11 @@ function normalizeAssistantReplayInput(
       stableItem.call_id = canonicalizeToolCallId(stableItem.call_id, itemId);
     }
     if (fromResponse && item.type === "function_call") {
-      // Only provider output crosses terminal admission; sent arguments must retain real type edits.
-      const args = parseJsonObjectPreservingUnsafeIntegers(stableItem.arguments);
-      stableItem.arguments = args ? JSON.stringify(args) : stableItem.arguments;
+      // Already-sent input stays strict so a real edit cannot reuse an old response.
+      stableItem.arguments = normalizeOpenAIResponsesToolArguments(
+        stableItem.arguments,
+        replayedInput?.[index],
+      );
     }
     if (item.type === "message" && Array.isArray(stableItem.content)) {
       stableItem.content = stableItem.content.map((part) => {
@@ -421,7 +421,7 @@ export function responsesContinuationPrefixFingerprint(
         digest,
         [
           ...normalizeAssistantReplayInput(input.slice(length)),
-          ...normalizeAssistantReplayInput(output, true),
+          ...normalizeAssistantReplayInput(output, true, false, output),
         ],
         length,
       );
@@ -431,7 +431,7 @@ export function responsesContinuationPrefixFingerprint(
   return sha256StableValue(
     projectJsonObject([
       ...normalizeAssistantReplayInput(input),
-      ...normalizeAssistantReplayInput(output, true),
+      ...normalizeAssistantReplayInput(output, true, false, output),
     ]),
   ).digest;
 }
@@ -482,29 +482,18 @@ export function resolveResponsesContinuationRequest(
   const historyToolRoundUnchanged = [false, true].some((ignoreCachedItemIds) =>
     jsonValuesEqual(
       replayedToolRound,
-      normalizeAssistantReplayInput(continuation.lastResponseItems, true, ignoreCachedItemIds),
+      normalizeAssistantReplayInput(
+        continuation.lastResponseItems,
+        true,
+        ignoreCachedItemIds,
+        replayedToolRoundInput,
+      ),
     ),
   );
   if (!historyToolRoundUnchanged) {
     return { request, continuationStatus: "history_changed" };
   }
-  // Conversion already owns these immutable wire items. An identical sent prefix
-  // needs no replay-ID remapping; only the new response and delta need ownership checks.
-  const immutable = getAiTransportHost().immutableData;
-  let samePrefix = true;
-  for (let index = 0; index < previousInput.length; index++) {
-    const item = previousInput[index];
-    if (
-      item !== currentInput[index] ||
-      item === null ||
-      typeof item !== "object" ||
-      !(isSanitizedFrozenResponsesInput(item) || immutable?.isDeeplyFrozenPlainData(item))
-    ) {
-      samePrefix = false;
-      break;
-    }
-  }
-  if (!samePrefix) {
+  if (!hasSameResponsesInputPrefix(previousInput, currentInput)) {
     const historyCurrentInput = currentInput.slice(0, previousInput.length);
     for (const [index, previousItem] of previousInput.entries()) {
       const currentItem = historyCurrentInput[index];

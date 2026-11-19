@@ -25,15 +25,10 @@ import {
 import { bindAgentHarnessHookMessages, takeHookMessageLoader } from "./lifecycle-hook-messages.js";
 
 // mock-isolation: Tests inspect prepared hook params without reaching the global hook runner.
-vi.mock("./lifecycle-hook-helpers.js", () => {
-  const dispatch = vi.fn();
-  return {
-    awaitAgentHarnessAgentEndHook: vi.fn(),
-    runAgentHarnessAgentEndHook: dispatch,
-    // Message hydration is covered with the helper; here the bundled path reaches the same dispatch.
-    startAgentHarnessAgentEndHook: vi.fn(async (params: unknown) => dispatch(params)),
-  };
-});
+vi.mock("./lifecycle-hook-helpers.js", () => ({
+  awaitAgentHarnessAgentEndHook: vi.fn(),
+  runAgentHarnessAgentEndHook: vi.fn(),
+}));
 
 const mockAwaitAgentEndHook = vi.mocked(awaitAgentHarnessAgentEndHook);
 const mockRunAgentEndHook = vi.mocked(runAgentHarnessAgentEndHook);

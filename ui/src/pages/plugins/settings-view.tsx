@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Errored, Loading, Show, createMemo } from "solid-js";
+import { Errored, Loading, Show, createMemo, isPending } from "solid-js";
 import { flattenConfigLeafFields } from "../../components/config-form.leaf-fields.ts";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -16,9 +16,8 @@ import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginReadme } from "./catalog-detail.tsx";
-import { PluginArtTile } from "./consent-dialog.tsx";
-import "./custom-elements.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
+import "./custom-elements.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
@@ -36,6 +35,7 @@ import {
 } from "./plugin-row-message.tsx";
 import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
+import { PluginArtTile } from "./presentation.tsx";
 import { PluginRecommendedPrompts } from "./recommended-prompts.tsx";
 import {
   pluginSettingsNodeOptions,
@@ -144,7 +144,8 @@ function permissionSettings(options: DetailProps): PluginSettingsEditorProps["pe
   if (!options.inspection) {
     return {
       fields: [],
-      loading: true,
+      known: false,
+      loading: isPending(options.inspectionRead.value),
     };
   }
   const fields: PluginSettingsField[] =

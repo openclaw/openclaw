@@ -11,14 +11,16 @@ import { createOllamaEmbeddingProvider } from "./embedding-provider.js";
 import { ollamaMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 vi.mock("node:dns/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:dns/promises")>();
-  return {
-    ...actual,
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
     lookup: (...args: Parameters<typeof actual.lookup>) =>
       args[0].endsWith(".ollama.test")
         ? Promise.resolve([{ address: "127.0.0.1", family: 4 }])
         : actual.lookup(...args),
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 type OllamaRequest = {

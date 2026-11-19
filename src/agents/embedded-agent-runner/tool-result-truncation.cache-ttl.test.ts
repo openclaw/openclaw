@@ -9,8 +9,8 @@ import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState as newState,
   retainEmbeddedSessionPromptState as retainState,
+  type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
-import { replayToolResultPromptProjections } from "./tool-result-projection-replay.js";
 import {
   projectToolResultMessages,
   pruneExpiredCacheTtlToolResults,
@@ -23,6 +23,11 @@ import {
 afterEach(() =>
   clearEmbeddedSessionPromptStates(["ordinary-turn-teardown", "cache-ttl-soft", "cache-ttl-hard"]),
 );
+// Projects with a copy of the state, leaving the original's pruning state unchanged.
+const replayToolResultPromptProjections = (
+  messages: AgentMessage[],
+  state: ToolResultPromptProjectionState,
+) => projectToolResultMessages({ messages, projectionState: newState(state) }).messages;
 const NOW = 1_000_000;
 const checkpoint = (data: unknown) => [{ type: "custom", customType: "openclaw.cache-ttl", data }];
 

@@ -204,6 +204,7 @@ export async function replaceExecutingSessionGoal(params: {
                 entry.goal.updatedAt !== request.expectedGoalUpdatedAt ||
                 !isDirectChatGoalSession({
                   entry,
+                  allowVisibleSpawn: true,
                   acpMeta: entry.acp ?? null,
                   sessionKey: target.canonicalKey,
                   requestedSessionId: request.sessionId,

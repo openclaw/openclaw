@@ -12,7 +12,13 @@ import {
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
 import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
-import { throwingResultObserver } from "./dynamic-tools.test-support.js";
+import {
+  createBridge,
+  createDynamicToolCall,
+  createTool,
+  textToolResult,
+  throwingResultObserver,
+} from "./dynamic-tools.test-support.js";
 import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
 
 const dynamicCallContext = { threadId: "thread-1", turnId: "turn-1", namespace: null };
@@ -443,6 +449,24 @@ describe("dynamic tool execution helpers", () => {
         outcome: "failure",
       }),
     );
+  });
+
+  it("lets the next executed tool recover a call to a missing tool", async () => {
+    const toolBridge = createBridge([
+      createTool("exec", { execute: vi.fn(async () => textToolResult("51")) }),
+    ]);
+    const observeToolTerminal = createContractToolTerminalObserver("run-codex-missing-tool");
+    const call = (tool: string) =>
+      executeTool({
+        call: createDynamicToolCall(tool, {}, `call-${tool}`),
+        toolBridge,
+        observeToolTerminal,
+      });
+
+    const missing = await call("cream_exec");
+    expect(missing).toMatchObject({ executionStarted: false, unknownTool: true });
+    expect(missing.terminalResolution?.lastToolError).toMatchObject({ unknownTool: true });
+    expect((await call("exec")).terminalResolution?.lastToolError).toBeUndefined();
   });
 
   it("preserves partial search timeout details in terminal resolution", async () => {

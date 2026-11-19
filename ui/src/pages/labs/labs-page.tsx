@@ -91,7 +91,8 @@ export function LabsPage() {
     return (
       state.connected &&
       !state.configLoading &&
-      !state.lastError &&
+      // A validation refusal leaves the accepted preference unchanged.
+      (!state.lastError || state.configAutoSaveStatus === "rejected") &&
       state.configSnapshot?.valid !== false &&
       currentConfigObject(state) !== null &&
       editableConfig() !== null
@@ -337,6 +338,21 @@ export function LabsPage() {
         <SettingsPage>
           <SettingsSection description={t("labsPage.sectionDescription")}>
             <For each={LAB_FEATURES}>{(feature) => <FeatureRow feature={feature} />}</For>
+            <For
+              each={config
+                .read()
+                .state.configSnapshot?.warnings?.filter(
+                  (warning) => warning.path === "gateway.openclawId.enabled",
+                )}
+            >
+              {(warning) => (
+                <SettingsRow
+                  role="status"
+                  title={t("labsPage.openclawId.title")}
+                  description={warning.message}
+                />
+              )}
+            </For>
             <Loading on={receipt()}>
               <Errored
                 fallback={(error) => (

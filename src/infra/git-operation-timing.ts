@@ -61,7 +61,15 @@ export function startGitOperationTiming(
     let removalStageStartedAt = 0;
     let removalDurations: Partial<Record<RemovalStage, number>> | undefined;
     let inventory: { tracked: number; untracked: number } | undefined;
+    let recovery: "head" | "capture" | "none" | undefined;
     return {
+      recordRecovery(snapshotRef?: string) {
+        recovery = snapshotRef?.startsWith("refs/openclaw/snapshots/clean-v1/")
+          ? "head"
+          : snapshotRef
+            ? "capture"
+            : "none";
+      },
       recordInventory(counts: { tracked: number; untracked: number }) {
         inventory = counts;
       },
@@ -150,7 +158,11 @@ export function startGitOperationTiming(
             omittedObservations: state.omitted,
             ...details?.(),
             ...(kind === "worktree-removal"
-              ? { tracked: inventory?.tracked ?? null, untracked: inventory?.untracked ?? null }
+              ? {
+                  tracked: inventory?.tracked ?? null,
+                  untracked: inventory?.untracked ?? null,
+                  ...(recovery ? { recovery } : {}),
+                }
               : {}),
           };
           runWithDiagnosticTraceContext(trace, () =>

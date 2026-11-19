@@ -12,6 +12,7 @@ For that one-argument comparison, its Git wrapper reconstructs the baseline cens
 command inside the real worker; the direct-owner comparison loads baseline source.
 The target has 62,000 files / 1.14 GB; 600,000 historical blobs amplify the
 repository-wide promisor scan without copying production data. Creation is excluded.
+--files overrides the target file count (including its one absent target file).
 --extra-packs 1237 adds fragmented promisor history, for 1,239 packs before hydration.
 --extra-refs 20000 adds distinct session tips in 256 packs; --advancing --shallow
 requires a changed-tip refresh from a valid shallow boundary. --negotiation-tip
@@ -34,6 +35,8 @@ import subprocess
 import sys
 
 root = Path(sys.argv[1]).resolve()
+file_count = int(sys.argv[sys.argv.index("--files") + 1]) if "--files" in sys.argv else 62000
+assert 2 <= file_count <= 100000
 if "--measure" in sys.argv:
     # macOS native timing: every Git launch has its own wait4 CPU receipt,
     # including native grandchildren. JS owner CPU/allocation is reported separately.
@@ -203,17 +206,17 @@ def import_objects(final=False):
         commit("main", "missing target", git(origin, "rev-parse", "main"))
         stream.write(b"M 100644 :1 target/missing.txt\n\n")
     else:
-        for index in range(61_999):
+        for index in range(file_count - 1):
             blob(index + 1, f"synthetic target {index}\n".encode().ljust(18_432, b"x"))
         commit("main", "target base")
-        for index in range(61_999):
+        for index in range(file_count - 1):
             stream.write(f"M 100644 :{index + 1} target/d{index // 100}/f{index}.txt\n".encode())
         stream.write(b"\n")
         for index in range(600_000):
-            blob(62_000 + index, f"unrelated historical blob {index}\n".encode().ljust(128, b"h"))
+            blob(file_count + index, f"unrelated historical blob {index}\n".encode().ljust(128, b"h"))
         commit("history", "unrelated history")
         for index in range(600_000):
-            stream.write(f"M 100644 :{62_000 + index} history/d{index // 100}/f{index}.txt\n".encode())
+            stream.write(f"M 100644 :{file_count + index} history/d{index // 100}/f{index}.txt\n".encode())
         stream.write(b"\n")
     stream.close()
     assert process.wait() == 0
@@ -297,7 +300,7 @@ if linked:
         (admin / "commondir").write_text("../..\n")
         (admin / "HEAD").write_text(f"ref: refs/heads/synthetic-{index}\n")
     assert sum(line.startswith("worktree ") for line in git(seed, "worktree", "list", "--porcelain").splitlines()) == linked + 1
-print(json.dumps({"root": str(root), "files": 62000, "targetBytes": 62000 * 18432,
+print(json.dumps({"root": str(root), "files": file_count, "targetBytes": file_count * 18432,
                   "unrelatedHistoricalBlobs": 600000, "missingTargetObjects": 1,
                   "extraRefs": extra_refs, "linkedWorktrees": linked,
                   "packs": len(list((seed / ".git/objects/pack").glob("*.pack"))),

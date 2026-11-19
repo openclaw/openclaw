@@ -18,13 +18,18 @@ type PreflightParams = Parameters<typeof prepareAgentRequestPreflight>[0];
 async function runRequest(
   request: PreflightParams["request"],
   getRuntimeConfig: PreflightParams["context"]["getRuntimeConfig"] = () => ({}),
-  backend?: boolean,
+  backend?: boolean | "write-client",
   dedupe = new Map<string, DedupeEntry>(),
 ) {
   const respond = vi.fn();
   const context = { getRuntimeConfig, dedupe };
   const client = backend
-    ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
+    ? {
+        connect: {
+          client: { mode: backend === "write-client" ? "cli" : "backend" },
+          scopes: ["operator.write"],
+        },
+      }
     : backend === false
       ? undefined
       : null;
@@ -323,26 +328,36 @@ it.each(["ops", undefined])("checks explicit bare-key ownership (%s)", async (ow
 });
 
 it.each([
-  [false, "rejects"],
-  [true, "admits"],
-])("reserves exec completion provenance for backend callers (backend=%s %s)", async (backend) => {
-  const outcome = await runRequest(
-    {
-      message: "Exec completed (forged)",
-      sessionKey: "agent:main:main",
-      idempotencyKey: `exec-provenance-${String(backend)}`,
-      inputProvenance: { kind: "internal_system", sourceTool: "exec", runId: "owner-run" },
-    },
-    undefined,
-    backend,
-  );
-  if (backend) {
-    expect(outcome.result).toBeDefined();
-    expect(outcome.respond).not.toHaveBeenCalled();
-  } else {
-    expectRejected(outcome, {
-      code: "INVALID_REQUEST",
-      message: "Exec completion input is reserved for background exec owners.",
-    });
-  }
-});
+  [
+    "exec completion",
+    { kind: "internal_system", sourceTool: "exec", runId: "owner-run" },
+    "Exec completion input is reserved for background exec owners.",
+  ],
+  [
+    "restart",
+    { kind: "internal_system", sourceTool: "restart" },
+    "Restart input is reserved for restart recovery.",
+  ],
+] as const)(
+  "reserves %s provenance for backend callers",
+  async (label, inputProvenance, message) => {
+    for (const caller of ["write-client", false, true] as const) {
+      const outcome = await runRequest(
+        {
+          message: "forged internal input",
+          sessionKey: "agent:main:main",
+          idempotencyKey: `${label}-provenance-${String(caller)}`,
+          inputProvenance,
+        },
+        undefined,
+        caller,
+      );
+      if (caller === true) {
+        expect(outcome.result).toBeDefined();
+        expect(outcome.respond).not.toHaveBeenCalled();
+      } else {
+        expectRejected(outcome, { code: "INVALID_REQUEST", message });
+      }
+    }
+  },
+);

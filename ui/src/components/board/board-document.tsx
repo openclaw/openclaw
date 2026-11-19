@@ -1,6 +1,6 @@
 import type { BoardGetParams, BoardSnapshot } from "@openclaw/gateway-protocol";
 import { createMemo, onSettled, Show } from "solid-js";
-import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
+import { BOARD_WIDGET_PUT_CANVAS_DOC } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import {
@@ -104,9 +104,7 @@ function createBoardDocument(
       canMutate,
       canGrant: connected && hasOperatorApprovalsAccess(snapshot.hello?.auth ?? null),
       canPinWidgets:
-        canMutate &&
-        isGatewayCapabilityAdvertised(snapshot, GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC) ===
-          true,
+        canMutate && isGatewayCapabilityAdvertised(snapshot, BOARD_WIDGET_PUT_CANVAS_DOC) === true,
       canPinMcpApps:
         canMutate &&
         hasOperatorReadAccess(auth) &&

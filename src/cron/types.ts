@@ -195,11 +195,13 @@ export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>
 export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
   | { kind: "permanent" }
+  | { kind: "session-conflict" }
   /** Operator cancellation or lifecycle retirement, never an execution timeout. */
   | { kind: "aborted" };
 
 /** Closed producer-authored facts allowed in operator-facing failure notifications. */
 export type CronFailureNotificationDetail =
+  | { kind: "invalid-target" }
   | { kind: "command-exit"; exitCode: number }
   | { kind: "command-timeout"; mode: "wall-clock" | "no-output" }
   | {
@@ -360,15 +362,13 @@ export type CronJobState = Omit<
   /** Nonce for a committed schedule edit during the pending run. */
   runningScheduleChangeId?: string;
   /**
-   * Unresolved recovery scope and last notified signature, when an alert was requested.
-   * `repair` records the owner-conversation repair request that replaced the streak's first
-   * alert, and `alerted` that its fallback alert was sent. It lasts until the job succeeds,
-   * so a streak is repaired at most once.
+   * Unresolved recovery scope and last notified signature, when a failure notice was sent.
+   * It lasts until the job succeeds. Stores from 2026.10 may still carry an unread `repair`
+   * marker; the next notice or success drops it.
    */
   failureAlertIncident?: {
     signature?: string;
     scope: "run" | "trigger";
-    repair?: { atMs: number; deadlineAtMs?: number; settledAtMs?: number; alerted?: true };
   };
   /** Fences notification settlement when multiple cycles share a timestamp. */
   lastFailureNotificationId?: string;

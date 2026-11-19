@@ -177,6 +177,8 @@ describe("oMLX setup through the inference catalog", () => {
       models: [
         { id: "custom-chat", contextWindow: 8_192 },
         { id: modelId, contextWindow: 32_768 },
+        // No model_type: unknown, which is offered as chat.
+        { id: "unclassified", contextWindow: 32_768 },
       ],
     });
     expect(fetchMock.mock.lastCall?.[0]).toBe(`${localUrl}/models`);
@@ -440,7 +442,7 @@ describe("oMLX setup through the inference catalog", () => {
     },
   );
 
-  it.each(["missing", "voice", "unclassified", { unexpected: "value" }])(
+  it.each(["missing", "voice", { unexpected: "value" }])(
     "rejects invalid model %j before persistence",
     async (model) => {
       const fetchMock = fixture();

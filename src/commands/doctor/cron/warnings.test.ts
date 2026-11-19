@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { buildUpdateRehearsalPathEnv } from "../../../infra/update-rehearsal-paths.js";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   noteCronDeliveryTargetAdvisory,
@@ -97,6 +98,29 @@ it("bounds the best-effort crontab read", async () => {
     logOutput: false,
     timeoutMs: 5_000,
   });
+});
+
+it.each([
+  ["update Doctor", { OPENCLAW_UPDATE_IN_PROGRESS: "1" }],
+  [
+    "update rehearsal",
+    {
+      ...buildUpdateRehearsalPathEnv("/rehearsal"),
+      OPENCLAW_UPDATE_IN_PROGRESS: "0",
+      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+    },
+  ],
+])("does not spawn setgid crontab from an %s run", async (_label, env) => {
+  const readCrontab = vi.fn(async () => ({
+    stdout: "*/5 * * * * ~/.openclaw/bin/ensure-whatsapp.sh\n",
+  }));
+
+  await expect(
+    collectLegacyWhatsAppCrontabHealthWarning({ platform: "linux", readCrontab, env }),
+  ).resolves.toBeNull();
+  expect(readCrontab).not.toHaveBeenCalled();
 });
 
 it("warns about legacy ensure-whatsapp crontab entries on Linux", async () => {

@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #199706: Git checkouts run from releases behind #198835's link. The tests cover the boot launcher's trial and switch-back, and state restoration by build-ID generation, including interrupted and partial rollbacks, external and symlinked config, and the real-Gateway upgrade backup name. They also cover service ownership gating and the release runner. Each guards a failure found in review or E2E.
+556

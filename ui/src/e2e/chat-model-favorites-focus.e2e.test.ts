@@ -17,6 +17,97 @@ const cases = ["provider", "search"].flatMap((target) =>
 );
 
 suite.define(() => {
+  it("reorders Favorites without selecting a model and keeps the order after reload", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" },
+      async ({ page }) => {
+        const models = [
+          { provider: "openai", id: "example-large", name: "Example Large" },
+          { provider: "anthropic", id: "example-sonnet", name: "Example Sonnet" },
+          { provider: "google", id: "example-flash", name: "Example Flash" },
+        ];
+        const initial = models.map(({ provider, id }) => provider + "/" + id);
+        const [first, second, third] = initial;
+        // An unavailable model ref must not disappear from the saved preference.
+        const missing = "test/unlisted";
+        const gateway = await installMockGateway(page, {
+          agentModel: first,
+          models,
+          presenceUsers: [{ id: "synthetic-operator", self: true }],
+          featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
+          bootstrapPreferences: {
+            profileId: "synthetic-operator",
+            entries: { [prefsKey]: [first, missing, second, third] },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const { picker, trigger, search } = modelPicker(page);
+        await trigger.click();
+        const tab = picker.getByRole("tab", { name: "Favorites" });
+        await tab.click();
+        const list = picker.getByRole("listbox", { name: "Favorites models" });
+        const order = () =>
+          list
+            .getByRole("option")
+            .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-chat-model-option")));
+        const row = (model: string) => list.locator('[data-chat-model-option="' + model + '"]');
+        const handle = (model: string) => row(model).getByRole("button", { name: /^Reorder/ });
+        await expect.poll(order).toEqual(initial);
+        expect(await handle(third!).count()).toBe(0);
+        const firstRow = row(first!);
+        const source = await row(third!).getByText("Example Flash", { exact: true }).boundingBox();
+        const target = await firstRow.boundingBox();
+        if (!source || !target) {
+          throw new Error("Favorite source or destination is not visible");
+        }
+        const x = target.x + target.width - 54;
+        const top = target.y + 5;
+        const bottom = target.y + target.height - 5;
+        await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(x, bottom, { steps: 8 });
+        await page.mouse.move(x - 1, bottom);
+        const marker = () =>
+          firstRow.evaluate((element) => {
+            const style = getComputedStyle(element, "::before");
+            return { top: style.top, bottom: style.bottom, height: style.height };
+          });
+        await expect.poll(marker).toMatchObject({ bottom: "0px", height: "2px" });
+        await page.mouse.move(x, top, { steps: 3 });
+        await expect.poll(marker).toMatchObject({ top: "0px", height: "2px" });
+        await expect
+          .poll(() => row(third!).evaluate((element) => getComputedStyle(element).opacity))
+          .toBe("0.45");
+        await page.mouse.up();
+        await expect.poll(order).toEqual([third, first, second]);
+        expect(
+          await gateway.getRequests("users.prefs.set", {
+            entries: { [prefsKey]: [third, first, missing, second] },
+            expectedEntries: { [prefsKey]: [first, missing, second, third] },
+          }),
+        ).toHaveLength(1);
+        await search.fill("example");
+        await expect
+          .poll(() => picker.locator('[data-chat-model-option][draggable="true"]:visible').count())
+          .toBe(0);
+        await search.clear();
+        await expect.poll(order).toEqual([third, first, second]);
+        await page.reload();
+        await trigger.click();
+        await expect.poll(order).toEqual([third, first, second]);
+        await expect.poll(() => row(first!).getAttribute("draggable")).toBe("true");
+        await row(first!).press("Alt+ArrowDown");
+        await expect.poll(order).toEqual([third, second, first]);
+        await expect
+          .poll(() => row(first!).evaluate((element) => document.activeElement === element))
+          .toBe(true);
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        await row(second!).getByText("Example Sonnet", { exact: true }).click();
+        await expect.poll(async () => (await gateway.getRequests("sessions.patch")).length).toBe(1);
+      },
+    );
+  });
+
   it.each(["chat", "new"])(
     "persists provider drag order after closing and reloading /%s",
     async (route) => {
@@ -136,7 +227,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps stars hover-only and the provider rail quiet and live", async () => {
+  it("shows saved and focused stars while keeping the provider rail quiet and live", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" },
       async ({ page }) => {
@@ -153,7 +244,7 @@ suite.define(() => {
           featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
           bootstrapPreferences: {
             profileId: "synthetic-operator",
-            entries: { [prefsKey]: [favorite] },
+            entries: { [prefsKey]: [favorite, "openai/gpt-4.1"] },
           },
         });
         await page.goto(suite.server.baseUrl + "chat");
@@ -168,6 +259,16 @@ suite.define(() => {
         await expect.poll(() => selectedStar.getAttribute("aria-pressed")).toBe("true");
         await other.waitFor();
         const check = selected.locator(".chat-controls__inline-select-check");
+        for (const query of ["", "GPT"]) {
+          await search.fill(query);
+          await page.mouse.move(0, 0);
+          await expect
+            .poll(() => otherStar.evaluate((el) => getComputedStyle(el).opacity))
+            .toBe("1");
+          expect(await selectedStar.evaluate((el) => getComputedStyle(el).opacity)).toBe("0");
+          expect(await check.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+        }
+        await search.fill("");
         const settings = picker.locator(".chat-controls__provider-settings").first();
         await expect
           .poll(async () => {
@@ -183,6 +284,18 @@ suite.define(() => {
         await selected.hover();
         await expect.poll(() => check.evaluate((el) => getComputedStyle(el).opacity)).toBe("0");
         expect(await selected.boundingBox()).toEqual(rowBounds);
+        const rowHover = await selected.evaluate((el) => getComputedStyle(el).backgroundColor);
+        const idleStarColor = await selectedStar.evaluate((el) => getComputedStyle(el).color);
+        await selectedStar.hover();
+        expect(await selectedStar.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(
+          "rgba(0, 0, 0, 0)",
+        );
+        expect(await selectedStar.evaluate((el) => getComputedStyle(el).color)).not.toBe(
+          idleStarColor,
+        );
+        expect(await selected.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(
+          rowHover,
+        );
         await page.mouse.move(0, 0);
         await expect.poll(() => check.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
         await expect
@@ -192,42 +305,55 @@ suite.define(() => {
             return first && second ? second.y - first.y - first.height : null;
           })
           .toBe(1);
-        // The Default, selected and other rows each carry a hover-only star.
+        // The saved, non-selected model remains identifiable without hover.
         const opacity = () =>
           picker
             .locator("[data-chat-model-favorite]:visible")
             .evaluateAll((stars) => stars.map((star) => getComputedStyle(star).opacity));
-        expect.soft(await opacity()).toEqual(["0", "0", "0"]);
+        expect.soft(await opacity()).toEqual(["0", "0", "1"]);
         await search.press("ArrowDown");
         await expect.poll(() => other.getAttribute("data-chat-model-highlighted")).toBe("");
         await page.clock.install();
         await picker.getByRole("tab", { name: "Anthropic", exact: true }).hover();
         await page.clock.runFor(1_000);
         expect.soft(await picker.getByRole("tooltip").filter({ visible: true }).count()).toBe(0);
-        expect.soft(await opacity()).toEqual(["0", "0", "0"]);
+        expect.soft(await opacity()).toEqual(["0", "0", "1"]);
         await page.mouse.move(0, 0);
         await page.clock.runFor(200);
         await search.press("ArrowUp");
         await expect.poll(() => selected.getAttribute("data-chat-model-highlighted")).toBe("");
-        expect.soft(await opacity()).toEqual(["0", "0", "0"]);
+        expect.soft(await opacity()).toEqual(["0", "0", "1"]);
         for (const row of [selected, other]) {
           await row.hover();
           const star = row.locator("[data-chat-model-favorite]");
           await expect.poll(() => star.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
           await page.mouse.move(0, 0);
-          expect.soft(await opacity()).toEqual(["0", "0", "0"]);
+          expect.soft(await opacity()).toEqual(["0", "0", "1"]);
         }
         await selectedStar.click();
         await expect.poll(() => selectedStar.getAttribute("aria-pressed")).toBe("false");
         await page.mouse.move(0, 0);
-        expect.soft(await opacity()).toEqual(["0", "0", "0"]);
-        // Direct keyboard focus also leaves the star hidden until pointer hover.
+        expect.soft(await opacity()).toEqual(["0", "0", "1"]);
+        // Keyboard users see the active control, including when it replaces the selection check.
+        await selected.focus();
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() => selectedStar.evaluate((el) => el === document.activeElement))
+          .toBe(true);
+        expect(await selectedStar.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+        expect(await selectedStar.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe(
+          "solid",
+        );
+        expect(await selectedStar.evaluate((el) => getComputedStyle(el).outlineWidth)).toBe("2px");
+        expect(await check.evaluate((el) => getComputedStyle(el).opacity)).toBe("0");
         await other.focus();
         await page.keyboard.press("Tab");
         await expect
           .poll(() => otherStar.evaluate((el) => el === document.activeElement))
           .toBe(true);
-        await expect.poll(() => otherStar.evaluate((el) => getComputedStyle(el).opacity)).toBe("0");
+        await expect.poll(() => otherStar.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+        await otherStar.press("Enter");
+        await expect.poll(() => otherStar.getAttribute("aria-pressed")).toBe("false");
         const favoritesTab = picker.getByRole("tab", { name: "Favorites", exact: true });
         await expect.poll(() => favoritesTab.count()).toBe(0);
         await selectedStar.click();

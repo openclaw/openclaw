@@ -22,13 +22,13 @@ it("keeps rich editing history inside its New Session draft owner", async () => 
   await expect.poll(() => f.container.querySelector("[data-composer-editor]")).not.toBeNull();
   const original = f.container.querySelector("textarea")!;
   focusComposerInput(original);
-  await userEvent.keyboard("before route change");
+  await userEvent.keyboard("x");
   f.rerender();
   expect(f.container.querySelector("textarea")).toBe(original);
   await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
   expect(original.value).toBe("@Alex ");
   await userEvent.keyboard(`{${historyModifier}>}{Shift>}Z{/Shift}{/${historyModifier}}`);
-  expect(original.value).toBe("@Alex before route change");
+  expect(original.value).toBe("@Alex x");
 
   f.rerenderForDraftRoute("draft:two", "New route draft");
   await expect.poll(() => f.container.querySelector("textarea")?.value).toBe("New route draft");

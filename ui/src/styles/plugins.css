@@ -1139,8 +1139,7 @@
 }
 .plugin-metadata__facts,
 .plugin-metadata__section,
-.plugin-metadata__links,
-.plugin-catalog-detail__security {
+.plugin-metadata__links {
   margin: 0;
   padding: 0;
 }
@@ -1211,23 +1210,16 @@
   height: 14px;
   flex: 0 0 14px;
 }
-.plugin-catalog-detail__security {
-  display: block;
-  color: inherit;
-  text-decoration: none;
-}
-.plugin-catalog-detail__security h2 {
+.plugin-catalog-detail__security-heading {
   display: flex;
   align-items: center;
-  gap: 6px;
   margin-bottom: var(--space-1);
 }
-.plugin-catalog-detail__security h2 > span {
-  display: inline-flex;
-}
-.plugin-catalog-detail__security h2 svg {
-  width: 1em;
-  height: 1em;
+/* The shared icon button keeps its 28px target; the margin keeps the heading row's height. */
+.plugin-catalog-detail__security .oc-icon-button {
+  --icon-button-glyph: var(--control-ui-text-xs);
+  --icon-button-color: var(--muted-strong);
+  margin-block: -7px;
 }
 .plugin-catalog-detail__security-score {
   /* The hover fill bleeds past the label and bars so neither sits flush with its edge. */
@@ -1240,6 +1232,8 @@
   margin-inline: calc(-1 * var(--plugin-security-score-bleed));
   padding: 6px var(--plugin-security-score-bleed);
   border-radius: var(--radius-md);
+  color: inherit;
+  text-decoration: none;
 }
 .plugin-catalog-detail__security-score strong {
   font-size: var(--control-ui-text-sm);
@@ -1259,7 +1253,7 @@
 .plugin-catalog-detail__security--danger .is-filled {
   background: var(--danger);
 }
-.plugin-catalog-detail__security[href]:hover .plugin-catalog-detail__security-score {
+.plugin-catalog-detail__security-score[href]:hover {
   background: var(--bg-elevated);
 }
 
@@ -1495,10 +1489,6 @@
 
 .plugin-catalog-detail__readme :is(h1, h2, h3) {
   border-bottom: 0;
-}
-
-.plugin-catalog-detail__empty {
-  color: var(--muted);
 }
 
 .skill-library-import {

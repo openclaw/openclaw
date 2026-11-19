@@ -82,7 +82,7 @@ export const API_KEY_EXPIRED_ERROR_CODE = "api_key_expired";
 const API_KEY_EXPIRED_USER_TEXT =
   "This API key has expired. Create a new API key in your provider's console and replace it in OpenClaw or its secret store. Signing in again will not renew this key.";
 const ITEM_CONFLICT_USER_TEXT =
-  "⚠️ The AI service rejected saved conversation state (item_conflict). Run /compact, then retry. If it still fails, choose another model and share the Gateway logs with the operator.";
+  "⚠️ The AI service could not recover saved conversation state (item_conflict). Retry this turn. If it still fails, run /compact or choose another model, and share the Gateway logs with the operator.";
 
 const ASSISTANT_REQUEST_FAILURE_COPY = {
   auth: "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",

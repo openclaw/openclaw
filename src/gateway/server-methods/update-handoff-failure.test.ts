@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installPrivateUpdateHandoffWorker } from "../../../test/helpers/private-update-handoff-store.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
 import {
@@ -85,6 +86,7 @@ describe("update.run handoff refusal diagnostics", () => {
     const root = tempDirs.make("openclaw-handoff-missing-runtime-");
     const tmp = await import("../../infra/tmp-openclaw-dir.js");
     const coordinator = vi.spyOn(tmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+    const leaseWorker = installPrivateUpdateHandoffWorker(root);
     const handoff = await vi.importActual<
       typeof import("../../infra/update-managed-service-handoff.js")
     >("../../infra/update-managed-service-handoff.js");
@@ -111,6 +113,7 @@ describe("update.run handoff refusal diagnostics", () => {
       expectServing();
     } finally {
       coordinator.mockRestore();
+      leaseWorker.mockRestore();
     }
   });
 
@@ -130,19 +133,22 @@ describe("update.run handoff refusal diagnostics", () => {
     async (_kind, output, expected) => {
       const root = tempDirs.make("openclaw-handoff-startup-failure-");
       const tmp = await import("../../infra/tmp-openclaw-dir.js");
-      const runtime = await import("../../infra/update-managed-service-handoff-runtime.js");
-      const stage = runtime.stageManagedHandoffRuntime;
       const coordinator = vi.spyOn(tmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
-      const runtimeFixture = vi
-        .spyOn(runtime, "stageManagedHandoffRuntime")
-        .mockImplementation((directory) => {
-          const files = stage(directory);
+      const leaseWorker = installPrivateUpdateHandoffWorker(root);
+      const prepare = expectDefined(leaseWorker.getMockImplementation(), "private lease worker");
+      leaseWorker.mockImplementation(async (options) => {
+        const store = await prepare(options);
+        const stage = store.stageRuntime.bind(store);
+        store.stageRuntime = async (directory) => {
+          const files = await stage(directory);
           writeFileSync(
             expectDefined(files[0], "staged handoff runtime"),
             `process.stderr.write(${JSON.stringify(output)}); process.exit(1);`,
           );
           return files;
-        });
+        };
+        return store;
+      });
       const handoff = await vi.importActual<
         typeof import("../../infra/update-managed-service-handoff.js")
       >("../../infra/update-managed-service-handoff.js");
@@ -175,8 +181,8 @@ describe("update.run handoff refusal diagnostics", () => {
         expect(report.body).not.toContain("fixture-private-token");
         expectServing();
       } finally {
-        runtimeFixture.mockRestore();
         coordinator.mockRestore();
+        leaseWorker.mockRestore();
       }
     },
   );

@@ -1,35 +1,82 @@
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import {
+  prepareSessionSourceEffect,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type {
   FsSafeCopyReply,
   FsSafeProvisionCopy,
+  FsSafeProvisionCopyInput,
 } from "../../infra/fs-safe-copy-worker-contract.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createWorkerMutationAuthority } from "../../infra/worker-mutation-authority.js";
 import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { installWorkspaceFilesystemEvidence } from "../workspace-state-guard.js";
 import {
   recordWorktreePreparationFailure,
   setWorktreePreparationCopyDetails,
   startWorktreePreparationPhase,
 } from "./preparation-timing.js";
+import type { WorktreeWorkerAuthority } from "./types.js";
 
 type Runtime = {
   pool?: WorkerTaskPool<FsSafeProvisionCopy, FsSafeCopyReply>;
   closing?: Promise<void>;
 };
 
-export async function copyProvisionedPathsInWorker(
+type CopyOptions = {
+  signal?: AbortSignal;
+  assertCurrent?: SessionSourceAssertion;
+  workerAuthority?: WorktreeWorkerAuthority;
+};
+
+export function copyProvisionedPathsInWorker(
   source: string,
   destination: string,
   paths: readonly string[],
-  options: { signal?: AbortSignal; assertCurrent?: () => void },
+  options: CopyOptions,
+): Promise<string[]> {
+  return runCopyInWorker({ type: "provision", source, destination, paths }, options);
+}
+
+export async function cloneRefsTreeInWorker(
+  source: string,
+  destination: string,
+  options: import("./filesystem-backend.types.js").WorktreeFilesystemOptions,
+): Promise<void> {
+  await runCopyInWorker(
+    { type: "refs-copy", source, destination, paths: [], nativeMode: getFsSafeNativeConfig().mode },
+    { ...options, assertCurrent: options.commitGuard },
+  );
+}
+
+async function runCopyInWorker(
+  command: FsSafeProvisionCopyInput,
+  options: CopyOptions,
 ): Promise<string[]> {
   const assertCurrent = () => {
     options.signal?.throwIfAborted();
-    options.assertCurrent?.();
+    if (prepared) {
+      prepared.assertCurrent();
+    } else {
+      options.assertCurrent?.();
+    }
     options.signal?.throwIfAborted();
   };
-  assertCurrent();
+  options.signal?.throwIfAborted();
+  options.assertCurrent?.();
+  const prepared = options.assertCurrent
+    ? await prepareSessionSourceEffect(options.assertCurrent)
+    : undefined;
+  await using _ = { [Symbol.asyncDispose]: async () => await prepared?.release?.() };
+  const workspaceEvidence = [
+    ...new Set([
+      ...(options.workerAuthority?.workspaceEvidence ?? []),
+      ...(prepared?.workspaceEvidence ?? []),
+    ]),
+  ];
   const runtime = resolveGlobalSingleton<Runtime>(
     Symbol.for("openclaw.worktreeProvisionCopies"),
     () => ({}),
@@ -60,10 +107,18 @@ export async function copyProvisionedPathsInWorker(
   let finishCopy: (() => void) | undefined;
   try {
     const reply = await pool.run(
-      { type: "provision", source, destination, paths, decision: authority.buffer },
+      {
+        ...command,
+        decision: authority.buffer,
+        workspaceEvidence,
+        stateOwnerPath: options.workerAuthority?.stateOwnerPath,
+      },
       {
         signal: options.signal,
-        inputBytes: paths.reduce((bytes, pathname) => bytes + Buffer.byteLength(pathname), 0),
+        inputBytes: command.paths.reduce(
+          (bytes, pathname) => bytes + Buffer.byteLength(pathname),
+          0,
+        ),
         onNotification: () => {
           if (authority.onNotification() && !finishCopy) {
             finishWait();
@@ -80,10 +135,20 @@ export async function copyProvisionedPathsInWorker(
     if (reply.type === "failed") {
       throw Object.assign(new Error(reply.message), { code: reply.code });
     }
-    if (reply.type !== "provisioned") {
+    if (
+      (command.type === "provision" && reply.type !== "provisioned") ||
+      (command.type === "refs-copy" && reply.type !== "written")
+    ) {
       throw new Error("Worktree provisioning returned no completion receipt");
     }
-    return reply.paths;
+    if (
+      workspaceEvidence &&
+      (reply.type === "written" || reply.type === "provisioned") &&
+      reply.workspaceEvidence
+    ) {
+      installWorkspaceFilesystemEvidence(workspaceEvidence, reply.workspaceEvidence);
+    }
+    return reply.type === "provisioned" ? reply.paths : [];
   } catch (error) {
     let cause = error;
     try {

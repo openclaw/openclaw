@@ -65,22 +65,19 @@ export function createAdmittedRunOperatorAuthority(
   source: AdmittedRunOperatorAuthority,
 ): AdmittedRunOperatorAuthority {
   const check = source.assertCurrent;
-  const signal = source.signal;
-  let revoked = false;
-  let revocationReason: unknown;
+  const revocation = new AbortController();
+  const signal = source.signal
+    ? AbortSignal.any([source.signal, revocation.signal])
+    : revocation.signal;
   const assertCurrent = composeSessionSourceAssertion(
     [check],
     scopeOperatorAccessDecisions((assertSource: () => void) => {
-      if (revoked) {
-        throw revocationReason;
-      }
+      signal.throwIfAborted();
       try {
-        signal?.throwIfAborted();
         assertSource();
       } catch (error) {
         if (!isOperatorAuthorityUnavailable(error)) {
-          revoked = true;
-          revocationReason = error;
+          revocation.abort(error);
         }
         throw error;
       }
@@ -96,6 +93,7 @@ export function createAdmittedRunOperatorAuthority(
     recoverySnapshot: source.recoverySnapshot
       ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
       : undefined,
+    recoverySnapshotUnavailableReason: source.recoverySnapshotUnavailableReason,
     channelRecoverySource: source.channelRecoverySource
       ? Object.freeze({
           reference: Object.freeze({ ...source.channelRecoverySource.reference }),
@@ -110,6 +108,7 @@ export function createAdmittedRunOperatorAuthority(
     invocation: source.invocation,
     signal,
     retain: source.retain,
+    reauthorize: source.reauthorize,
     onModelPolicyChanged: source.onModelPolicyChanged,
     get modelPolicy() {
       return source.modelPolicy;
@@ -639,6 +638,7 @@ export function prepareAgentRunAdmission(params: {
       admitted ??= runWithSessionSourceScope(
         assertSourceCurrent,
         async () => {
+          operatorAuthority?.reauthorize?.();
           assertSourceCurrent?.();
           const facts = executionIdentitySpawnAdmission({
             operation: "attach",

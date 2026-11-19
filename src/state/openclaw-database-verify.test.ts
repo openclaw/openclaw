@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
+import fs, { statSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -17,6 +18,7 @@ import {
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { assertSqliteDatabaseHeader } from "../infra/sqlite-integrity.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { createPermitPool } from "../shared/permit-pool.js";
 import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
 import { prepareAgentDatabaseStartupVerification as prepareStartupVerification } from "./agent-database-startup-integrity.js";
@@ -146,7 +148,13 @@ it("rejects an impossible freelist header without a full database scan", () => {
 it("binds background startup verification to its original lifetime and physical file", async () => {
   const { path: file, agentId } = f.agent();
   const input = { agentId, paths: [file], env: f.env, signal: new AbortController().signal };
-  const verifyIntegrity = vi.fn(async () => {});
+  const verifyIntegrity = vi.fn(
+    async (verification: Parameters<typeof verifyAgentDatabaseStartupIntegrity>[0]) => {
+      verification.assertCurrent();
+      verification.assertCurrent();
+      verification.assertCurrent();
+    },
+  );
   const activation = { isCurrent: () => true, verifyIntegrity };
   const owner = prepareStartupVerification(input, activation, createPermitPool(1))!;
   owner.revoke();
@@ -154,8 +162,19 @@ it("binds background startup verification to its original lifetime and physical 
   expect(verifyIntegrity).not.toHaveBeenCalled();
   const successor = prepareStartupVerification(input, activation, createPermitPool(1))!;
   owner.revoke();
-  await successor.verify();
-  expect(verifyIntegrity).toHaveBeenCalledOnce();
+  const stat = vi.spyOn(fs, "statSync");
+  syncBuiltinESMExports();
+  try {
+    statSync(file);
+    expect(stat).toHaveBeenCalledOnce();
+    stat.mockClear();
+    await successor.verify();
+    expect(verifyIntegrity).toHaveBeenCalledOnce();
+    expect(stat.mock.calls.filter(([pathname]) => pathname === file)).toHaveLength(0);
+  } finally {
+    stat.mockRestore();
+    syncBuiltinESMExports();
+  }
   successor.revoke();
   const replaced = prepareStartupVerification(input, activation, createPermitPool(1))!;
   closeOpenClawAgentDatabasesForTest();
@@ -342,7 +361,7 @@ it("persists state failure quarantine across restart until doctor repair", () =>
   expect(f.state().db.isOpen).toBe(true);
 });
 
-it.each([false, true])(
+it.each([false, true, "replacement at quarantine grant"] as const)(
   "admits unsealed startup before full verification, corruption=%s",
   async (damaged) => {
     const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("startup-proportionate-")) };
@@ -355,6 +374,14 @@ it.each([false, true])(
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     revokeSqliteDatabaseAdmissionsForPath(pathname);
+    const replaceAtGrant = damaged === "replacement at quarantine grant";
+    const replacementPath = `${pathname}.replacement`;
+    if (replaceAtGrant) {
+      fs.copyFileSync(pathname, replacementPath);
+    }
+    const successorBytes = replaceAtGrant ? fs.readFileSync(replacementPath) : undefined;
+    let quarantineChecks = 0;
+    let heldCommitGranted = false;
     if (damaged) {
       using db = openDatabase(pathname);
       db.exec(
@@ -376,7 +403,55 @@ it.each([false, true])(
           publishAgent: async () => {},
           verifyIntegrity: async (input) => {
             await verification.promise;
-            await verifyAgentDatabaseStartupIntegrity(input);
+            if (!replaceAtGrant) {
+              return verifyAgentDatabaseStartupIntegrity(input);
+            }
+            const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+            const spy = vi
+              .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+              .mockImplementation((admit, attachment, prepare) => {
+                if (attachment) {
+                  return createAdmission(admit, attachment, prepare);
+                }
+                return createAdmission(
+                  (request, grant) => {
+                    admit(request, (beforeRelease) => {
+                      const replace =
+                        request.stage === "commit" &&
+                        request.facts === undefined &&
+                        ++quarantineChecks === 2;
+                      const granted = grant(() => {
+                        beforeRelease?.();
+                        if (replace) {
+                          // The second quarantine guard is inside the real writer transaction.
+                          using probe = openDatabase(
+                            path.join(
+                              env.OPENCLAW_STATE_DIR,
+                              "state",
+                              "openclaw-quarantine.sqlite",
+                            ),
+                          );
+                          probe.exec("PRAGMA busy_timeout=0");
+                          expect(() => probe.exec("BEGIN IMMEDIATE")).toThrow(/locked|busy/i);
+                          fs.renameSync(pathname, `${pathname}.previous`);
+                          fs.renameSync(replacementPath, pathname);
+                        }
+                      });
+                      if (replace) {
+                        heldCommitGranted = granted;
+                      }
+                      return granted;
+                    });
+                  },
+                  attachment,
+                  prepare,
+                );
+              });
+            try {
+              await verifyAgentDatabaseStartupIntegrity(input);
+            } finally {
+              spy.mockRestore();
+            }
           },
         });
         // Join fixture startup before exercising the bounded request-facing write admission.
@@ -387,7 +462,11 @@ it.each([false, true])(
         await replaceSessionEntry(scope, { sessionId: "retained", updatedAt: 2 });
         verification.resolve();
         await admission.pendingPreparation;
-        if (damaged) {
+        if (replaceAtGrant) {
+          expect(heldCommitGranted).toBe(true);
+          expect(fs.readFileSync(pathname)).toEqual(successorBytes);
+          expect(readPersistedQuarantineRow(pathname, { env })).toBeUndefined();
+        } else if (damaged) {
           expect(() => assertAgentDatabaseAdmitted("main", { env })).toThrow(/foreign_key_check/);
           expect(
             readOpenClawDatabaseQuarantineFailure("agent", pathname, { env, fresh: true }),

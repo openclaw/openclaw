@@ -528,6 +528,13 @@ in [CLI automation](/start/wizard-cli-automation).
 
 Clients (macOS app and Control UI) can render steps without re-implementing onboarding logic.
 
+Guided channel setup (`wizard.start` with `flow: "channels"`) closes its input
+when the starting client disconnects, including when the first reply was lost.
+Pending writes and cleanup must finish before another setup can begin; there is
+no additional idle-expiry wait. Completed changes are retained. Reconnect and
+start channel setup again to continue. Full onboarding (`flow: "setup"`) remains
+reconnectable through its existing session ID.
+
 When setup admission is busy, `wizard.start` and the model setup start/activation
 methods return `UNAVAILABLE` with `details.code: "SETUP_ADMISSION_BUSY"`. This
 means that the requested operation did not begin: clients can retire that attempt

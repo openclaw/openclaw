@@ -151,7 +151,7 @@ it("keeps the context counter exempt and usage-link focus during refreshes", asy
   expect(
     query(".context-usage__identity .provider-brand-icon")?.getAttribute("data-provider-icon"),
   ).toBe("claude");
-  expect(query(".context-usage__stats")?.textContent).toContain("9k");
+  expect(query(".context-usage__usage")?.textContent).toContain("9k");
   details.querySelector("summary")!.click();
   flush();
   expect(details.open).toBe(false);

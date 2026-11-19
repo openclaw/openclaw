@@ -1,4 +1,5 @@
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { asNonNegativeFiniteNumber as numericValue } from "openclaw/plugin-sdk/number-runtime";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
 import { seconds } from "./prometheus-format.js";
 import type { PrometheusMetricStore } from "./prometheus-metric-store.js";
@@ -83,6 +84,8 @@ export function recordOperationTimingEvent(
     DiagnosticEventPayload,
     {
       type:
+        | "queue.lane.enqueue"
+        | "queue.lane.dequeue"
         | "gateway.rpc"
         | "sessions.list.baseline.retired"
         | "diagnostic.phase.completed"
@@ -97,6 +100,30 @@ export function recordOperationTimingEvent(
   metadata: DiagnosticEventMetadata,
 ): void {
   switch (evt.type) {
+    case "queue.lane.enqueue":
+    case "queue.lane.dequeue": {
+      // Custom lane names can carry identities even before the first colon.
+      const lane =
+        /^(main|system-agent|system-agent-inference|cron|cron-nested|hook-dispatch|background|restart-recovery|subagent|active-memory|nested|session|cli|context-engine-turn-maintenance|dreaming-narrative|voice|talk|workboard|facetime)(?=:|$)/.exec(
+          evt.lane.trim(),
+        )?.[1] ?? "unknown";
+      const labels = { lane };
+      store.gauge(
+        "openclaw_queue_lane_size",
+        "Current diagnostic queue lane size.",
+        labels,
+        numericValue(evt.queueSize),
+      );
+      if (evt.type === "queue.lane.dequeue") {
+        store.histogram(
+          "openclaw_queue_lane_wait_seconds",
+          "Queue lane wait time in seconds.",
+          labels,
+          seconds(evt.waitMs),
+        );
+      }
+      return;
+    }
     case "sessions.list.baseline.retired":
       if (metadata.trusted) {
         store.counter(
@@ -340,14 +367,11 @@ export function recordOperationTimingEvent(
           const catalog = evt.modelsList;
           store.counter(
             "openclaw_models_list_requests_total",
-            "Model catalog requests by client kind and bounded request shape.",
+            "Model catalog requests by source, view, and scope.",
             {
-              client_kind: catalog.clientKind,
               source: catalog.source,
               view: catalog.view,
               scope: catalog.scope,
-              refresh: String(catalog.refresh),
-              prepared_only: String(catalog.preparedOnly),
             },
           );
         }
@@ -369,9 +393,8 @@ export function recordOperationTimingEvent(
           const cron = evt.cronList;
           store.counter(
             "openclaw_cron_list_requests_total",
-            "Cron list requests by client kind and bounded request shape.",
+            "Cron list requests by source and bounded request shape.",
             {
-              client_kind: cron.clientKind,
               source: cron.source,
               scope: cron.scope,
               compact: String(cron.compact),

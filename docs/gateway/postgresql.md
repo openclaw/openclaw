@@ -216,6 +216,9 @@ plus up to two returned transports**, approximately `isolates × (active + 2)`.
 Here, active means a checked-out connection, including dedicated writable and
 maintenance handles, even when PostgreSQL reports it as idle. This is a retention
 bound, not a process-wide connection limit; concurrent work still needs headroom.
+The chat history lane counts up to four isolates on hosts with three or more CPUs
+during concurrent history reads; isolates above the first retire after their idle
+timeout.
 
 A PostgreSQL 17 synthetic workload (four sessions per agent, startup through six
 idle minutes, then 130 history reads and a usage refresh) measured:
