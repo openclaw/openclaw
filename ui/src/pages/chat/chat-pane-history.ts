@@ -386,6 +386,8 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
   protected handleTranscriptHistoryIntent(event: Event): void {
     const root = this.transcript.scrollElement;
     const direction = this.historyInput.readDirection(event, root);
+    // A downward gesture at the tail may have just captured the end anchor.
+    // Only actual newer-history navigation may retire that owner.
     if (
       !this.presented ||
       !this.visuallyPresented ||
@@ -395,7 +397,8 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
         ? root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX ||
           this.history.loadingOlder ||
           !this.hasOlderMessages()
-        : root.scrollHeight - root.clientHeight - root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX)
+        : !this.state?.chatHistoryPagination.hasNewer ||
+          root.scrollHeight - root.clientHeight - root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX)
     ) {
       return;
     }

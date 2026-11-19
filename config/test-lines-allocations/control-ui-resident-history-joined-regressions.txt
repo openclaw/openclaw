@@ -22,5 +22,6 @@
 # plus 83 LF for physical-source retirement and end-to-end older recovery after compaction.
 # plus 197 LF for cached-send residency/count limits, private generation fences,
 # reverse receipt ordering and bounded asynchronous fixture corrections.
-# Net 15471 LF = 15071 allocation + 400 allowance.
-1555
+# plus 14 LF for native end-anchor retention when downward history is exhausted.
+# Net 15485 LF = 15085 allocation + 400 allowance.
+1569

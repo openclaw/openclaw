@@ -209,3 +209,17 @@ it.each(["nested control", "prevented input"] as const)(
     expect(older).not.toHaveBeenCalled();
   },
 );
+
+it("preserves the end anchor when downward input has no newer history", async () => {
+  const { pane, state, thread, newer, older, correctRange } = await nativeHistoryPane();
+  state.chatHistoryPagination.hasNewer = false;
+  state.chatScrollElement = () => thread;
+  correctRange(60_879, 1_200, 1_946);
+  const cancel = vi.spyOn(pane.transcript, "cancelScroll");
+  thread.dispatchEvent(new WheelEvent("wheel", { deltaY: 40 }));
+  expect(cancel).not.toHaveBeenCalled();
+  expect(newer).not.toHaveBeenCalled();
+  expect(older).not.toHaveBeenCalled();
+  Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 2_146 });
+  expect(pane.transcript.isMaintenanceScroll).toBe(true);
+});
