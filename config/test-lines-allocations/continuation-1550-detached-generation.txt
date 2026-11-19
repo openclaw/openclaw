@@ -1,0 +1,2 @@
+# #1550: re-admit a detached wake on the current generation (work-dispatch.durable-7 row + its work-dispatch-authority fixture). Exact 107-line growth.
+107
