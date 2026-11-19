@@ -74,7 +74,7 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
       // History cannot tell that update's stop from an operator's deliberate one.
       name: "the dead update had stopped the Gateway and this update will not restart it",
       refusal: new RegExp(
-        `stopped the Gateway.*asked not to restart it\\. Run ${repair} to settle it and restart`,
+        `stopped the Gateway.*asked not to restart it\\. .* By hand: Run ${repair} to settle it and restart`,
         "u",
       ),
       dead: { gateway: "stopped", installed: "candidate" },
@@ -114,7 +114,7 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
     },
     {
       name: "the update is a dry run",
-      refusal: /A dry run changes nothing\. Run openclaw update to settle it/u,
+      refusal: /A dry run changes nothing\. .* By hand: Run openclaw update to settle it/u,
       dryRun: true,
     },
     {
