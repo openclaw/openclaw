@@ -30,6 +30,9 @@ import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { toCronBroadcastEvent } from "./server-cron-plugin-job.js";
 import {
   createCronRestartDiagnostics,
+  expectStoredCronOneShotComplete,
+  observeCronRetryDeadline,
+  readCronRetrySnapshot,
   startHeldCronRetryProvider,
   observePostgresPoolReuse,
 } from "./server-database-engine-cron.test-support.js";
@@ -431,11 +434,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       const summary = "Automatically retried one-shot completed.";
       const { providerUrl, requests, accepted, aborted, retryResponse } =
         await startHeldCronRetryProvider(resources, summary);
-      const { trace, elapsedMs } = createCronRestartDiagnostics(
-        signal,
-        resources,
-        () => requests.length,
-      );
+      const { trace } = createCronRestartDiagnostics(signal, resources, () => requests.length);
       trace("await-initial-gateway");
       const initial = await startCronGateway(resources, signal, providerUrl, {
         schedulerEnabled: true,
@@ -468,7 +467,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       };
       const readReceipts = () =>
         queryRows<Receipt>(
-          `SELECT receipt_id, request_run_id, config_revision, delivery_attempt_state, status, CAST(started_at_ms AS double precision) AS started_at_ms FROM ${quoteIdentifier(anchor.namespace)}.cron_run_receipts WHERE job_id = $1 ORDER BY started_at_ms, receipt_id`,
+          `SELECT receipt_id, request_run_id, config_revision, delivery_attempt_state, status, CAST(started_at_ms AS double precision) AS started_at_ms FROM ${quoteIdentifier(anchor.namespace)}.cron_run_receipts WHERE job_id = $1 ORDER BY started_at_ms, receipt_id LIMIT 3`,
           [job.id],
         );
       const firstReceipts = await readReceipts();
@@ -508,16 +507,16 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       await expect(restarted.request("cron.status", {})).resolves.toMatchObject({ enabled: true });
       // The scheduler owns the retry deadline, including any startup deferral.
       const pending = await restarted.request<CronJob>("cron.get", { id: job.id });
-      console.info("cron-restart-deadline", {
-        nextRunDelayMs: (pending.state.nextRunAtMs ?? 0) - Date.now(),
-        startupCatchupDelayMs: (pending.state.startupCatchupAtMs ?? 0) - Date.now(),
-        remainingMs: 210_000 - elapsedMs(),
-      });
       expect(pending).toMatchObject({ enabled: true, schedule: { kind: "at", at } });
       expect(pending.state.nextRunAtMs).toEqual(expect.any(Number));
       expect(pending.state.consecutiveErrors).toBe(activeJob.state.consecutiveErrors);
       trace("await-retry-provider");
-      const completeRetry = await withinTest(retryResponse.promise, signal);
+      const completeRetry = await observeCronRetryDeadline(
+        retryResponse.promise,
+        signal,
+        pending.state.nextRunAtMs!,
+        () => readCronRetrySnapshot(connection!, quoteIdentifier(anchor.namespace), job.id),
+      );
       trace("retry-provider-accepted");
       const receipts = await readReceipts();
       expect(receipts).toHaveLength(2);
@@ -574,10 +573,8 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       expect(completed.enabled).toBe(false);
       expect(completed.state.consecutiveErrors).toBe(0);
       expect(completed.state.nextRunAtMs).toBeUndefined();
-      expect(completed.state.startupCatchupAtMs).toBeUndefined();
       expect(completed.state.runningAtMs).toBeUndefined();
-      expect(completed.state.runningReceiptId).toBeUndefined();
-      expect(completed.state.queuedAtMs).toBeUndefined();
+      await expectStoredCronOneShotComplete(client, quoteIdentifier(anchor.namespace), job.id);
       await disconnectGatewayClient(restarted);
       const child = instance.child!;
       const exited = once(child, "exit");
@@ -603,7 +600,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         { run_id: expect.stringContaining(retry.receipt_id), status: "succeeded" },
       ]);
       expect(
-        history.entries.map((entry) => entry.runId).toSorted((a, b) => a.localeCompare(b)),
+        history.entries.map((entry) => entry.runId!).toSorted((a, b) => a.localeCompare(b)),
       ).toEqual(tasks.map((task) => task.run_id).toSorted((a, b) => a.localeCompare(b)));
     },
   );
