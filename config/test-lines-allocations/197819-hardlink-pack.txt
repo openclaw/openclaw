@@ -1,0 +1,2 @@
+# Exact #197819 regression extension: preserve duplicate-inode declarations through patched dependency pack/install without mutating the source.
+15
