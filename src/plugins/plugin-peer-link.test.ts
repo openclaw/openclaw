@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
+import fs, { type Stats } from "node:fs";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
@@ -8,16 +8,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
+import { safeRealpathSync } from "./path-safety.js";
 import {
   auditDeclaredOpenClawHostDependency,
   auditOpenClawPeerDependenciesInManagedNpmRoot,
   auditOpenClawPeerDependencyLinkSync,
   linkOpenClawPeerDependencies,
+  openClawHostRootsMatch,
   reconcileRegisteredOpenClawHostLinks,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
   repairInstalledOpenClawHostLinks,
 } from "./plugin-peer-link.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+
+vi.mock("./path-safety.js", { spy: true });
 
 const tempDirs: string[] = [];
 
@@ -171,6 +175,38 @@ describe("plugin peer links", () => {
     expect(linked).toEqual({ repaired: 1, skipped: 0 });
     expect(auditOpenClawPeerDependencyLinkSync({ packageDir })).toBeNull();
     expect(fs.realpathSync(peer)).toBe(fs.realpathSync(current));
+  });
+
+  describe("openClawHostRootsMatch physical identity", () => {
+    it.each([
+      ["same directory identity", 1, 100, true],
+      ["distinct inodes", 1, 101, false],
+      ["distinct devices", 2, 100, false],
+    ] as const)("admits case-variant spellings only for %s", (_label, dev, ino, expected) => {
+      const root = makeTempDir();
+      const canonical = path.join(root, "OpenClaw", "node_modules", "openclaw");
+      const variant = path.join(root, "openclaw", "node_modules", "openclaw");
+      fs.mkdirSync(canonical, { recursive: true });
+      const base = fs.statSync(canonical);
+      const withIdentity = (identity: { dev: number; ino: number }) =>
+        Object.create(base, {
+          dev: { value: identity.dev },
+          ino: { value: identity.ino },
+        }) as Stats;
+      const spellings = new Map([
+        [canonical, withIdentity({ dev: 1, ino: 100 })],
+        [variant, withIdentity({ dev, ino })],
+      ]);
+      vi.mocked(safeRealpathSync).mockImplementation((target) => target);
+      const stat = fs.statSync;
+      vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+        const observed = spellings.get(String(args[0]));
+        return observed ?? stat(...args);
+      });
+      syncBuiltinESMExports();
+      expect(openClawHostRootsMatch(variant, canonical)).toBe(expected);
+      vi.mocked(safeRealpathSync).mockReset();
+    });
   });
 
   describe.each([
