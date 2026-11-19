@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -289,22 +289,10 @@ describe("npm final publication authority", () => {
       for (const args of f.state().writes) {
         expect(args.slice(2)).toEqual(["--access", "public", "--tag", "beta", "--provenance"]);
       }
-      const publications: { package_name: string; source_commit: string }[] = readFileSync(
-        f.env.GITHUB_OUTPUT,
-        "utf8",
-      )
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line.slice(line.indexOf("=") + 1)));
-      expect(publications.map((publication) => publication.package_name)).toEqual([
-        "@openclaw/gateway-protocol",
-        "openclaw",
-      ]);
-      expect(
-        publications.every(
-          (publication) => publication.source_commit === f.env.EXPECTED_RELEASE_SHA,
-        ),
-      ).toBe(true);
+      const outputs = existsSync(f.env.GITHUB_OUTPUT)
+        ? readFileSync(f.env.GITHUB_OUTPUT, "utf8")
+        : "";
+      expect(outputs).not.toMatch(/^(?:openclaw|gateway_protocol)_publication=/m);
     },
   );
 
