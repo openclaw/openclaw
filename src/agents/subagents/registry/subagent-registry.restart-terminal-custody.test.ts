@@ -344,10 +344,11 @@ it("3: the root's resume input does not stand in for a delegate's custody receip
   await addRunningChild("resume-unreached");
 
   await shutDownGracefully([reached]);
+  // Upstream #200533 moved queued-input custody to pending rows; the marker carries no ids.
   expect(
     loadExactSessionEntry({ agentId: "main", sessionKey: parent, storePath: parentStorePath })
       ?.entry.resumeAfterRestart,
-  ).toEqual({ queuedInputIds: [] });
+  ).toEqual({});
 
   const enqueue = vi
     .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
