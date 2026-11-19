@@ -253,6 +253,21 @@ describe("original-state capture follows the first state change", () => {
     expect(captureSteps(result.runId)).toEqual(["original-state-capture"]);
   });
 
+  it("still copies the originals once before a real Git update mutates its checkout", async () => {
+    mocks.readPackageVersion.mockResolvedValue(VERSION);
+    const mutation = modules.mockGitUpdateAfterMutation(
+      modules.makeOkUpdateResult({ mode: "git", root: process.cwd() }),
+    );
+
+    await modules.updateCommand({ yes: true, restart: false, json: true });
+
+    const result = output();
+    expect(result.status).toBe("ok");
+    expect(mutation).toHaveBeenCalledOnce();
+    expect(await captures()).toEqual([result.runId]);
+    expect(captureSteps(result.runId)).toEqual(["original-state-capture"]);
+  });
+
   it("copies nothing for a Gateway-started update, which carries its run id", async () => {
     await setup.mockPackageInstallAtCaseDir();
     vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", randomUUID());

@@ -36,7 +36,9 @@ vi.mock("./update-runner-git-preflight.js", () => ({
 vi.mock("./update-runner-git-target.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-runner-git-target.js")>()),
   fetchGitUpdateTarget: async () => ({ ok: true, refreshedRemotes: [] }),
-  prepareGitMutation: async () => {},
+  // Skip the metadata read but keep the mutation hook, where the updater copies its originals.
+  prepareGitMutation: async (params: { beforeGitMutation: (target: object) => Promise<void> }) =>
+    await params.beforeGitMutation({}),
   // The candidate is the commit already running, built into the new release worktree.
   selectGitInspectionTarget: async (params: {
     gitRoot: string;
@@ -100,6 +102,8 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     await git(checkout, "worktree", "add", "--detach", running, "HEAD");
     await publishGitRelease({ prefix, releaseRoot: running, trial: false });
     target.runningRoot = gitReleaseSlot(prefix);
+    // The updater copies its originals in this hook, right before activation.
+    const beforeGitMutation = vi.fn(async () => {});
     const runCommand: CommandRunner = (argv, options) =>
       argv[1]?.endsWith("openclaw.mjs")
         ? Promise.resolve({ code: 0, stdout: "1.0.0\n", stderr: "" })
@@ -115,7 +119,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
         channel: "dev",
         inspectGitTarget: async () => {},
         validateCandidate: async () => [],
-        beforeGitMutation: async () => {},
+        beforeGitMutation,
         runGitDoctor: async () => null,
       },
     });
@@ -125,6 +129,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     // The successful result carries the new release's verdict, not the incomplete one's.
     expect(result.recovery).toMatchObject({ serviceRestartSafe: true });
     expect(await fs.realpath(gitReleaseSlot(prefix))).not.toBe(await fs.realpath(running));
+    expect(beforeGitMutation).toHaveBeenCalledOnce();
   });
 
   it("reports a current release as prepared so finalization never regenerates it", async () => {
@@ -147,6 +152,9 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     const running = (await createGitReleaseDirs(prefix)).releaseRoot;
     await git(checkout, "worktree", "add", "--detach", running, "HEAD");
     await publishGitRelease({ prefix, releaseRoot: running, trial: false });
+    // A built release that equals the running one changes nothing, so it never reaches
+    // the hook where the updater copies its originals.
+    const beforeGitMutation = vi.fn(async () => {});
     const runCommand: CommandRunner = (argv, options) =>
       argv[1]?.endsWith("openclaw.mjs")
         ? Promise.resolve({ code: 0, stdout: "1.0.0\n", stderr: "" })
@@ -162,7 +170,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
         channel: "dev",
         inspectGitTarget: async () => {},
         validateCandidate: async () => [],
-        beforeGitMutation: async () => {},
+        beforeGitMutation,
         runGitDoctor: async () => null,
       },
     });
@@ -170,6 +178,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     expect(target.beforeRuntimeVerified).toEqual([true]);
     // Post-core finalization would otherwise run build scripts inside the release.
     expect(result).toMatchObject({ status: "skipped", sourceRuntimePrepared: true });
+    expect(beforeGitMutation).not.toHaveBeenCalled();
   });
 
   async function checkoutWithTwoCommits() {
