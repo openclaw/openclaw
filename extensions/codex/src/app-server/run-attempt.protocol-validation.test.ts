@@ -345,7 +345,7 @@ it("drains bound command output without one macrotask per notification", async (
   expect(JSON.stringify(result.messagesSnapshot)).toContain('"toolCallId":"cmd-burst"');
 });
 // Wire examples from rust-v0.170.0 protocol/v2/tests.rs and the supported 0.169.0 schema.
-it.each([
+it.each<{ version: string; display: JsonObject }>([
   {
     version: "0.170.0",
     display: {
@@ -388,7 +388,7 @@ it.each([
   const run = runCodexAppServerAttempt(params);
   try {
     await run.waitForTurnAccepted();
-    const notification = turnCompleted({
+    const turn: JsonObject = {
       id: "turn-1",
       status: "completed",
       items: [
@@ -400,11 +400,10 @@ it.each([
           moderation: { moderated: true, display },
         },
       ],
-    });
+    };
+    const notification = turnCompleted(turn);
     // Fail at the real admission boundary instead of waiting for a lost terminal snapshot.
-    expect(prepareCodexServerNotification(notification).completedTurn).toEqual(
-      notification.params.turn,
-    );
+    expect(prepareCodexServerNotification(notification).completedTurn).toEqual(turn);
     await harness.notify(notification);
     // The production validator must retain completedTurn for both projection and settlement.
     expect(await run).toMatchObject({ terminal: { kind: "ok" }, assistantTexts: ["Done."] });

@@ -31,9 +31,9 @@ function step(job: string, name: string) {
 }
 
 it("binds both inline watchers to Q policy without replacing their owner", () => {
-  for (const [job, name] of [
-    ["release_decision", "Evaluate release decision"],
-    ["diagnostic_drain", "Drain child diagnostics"],
+  for (const { job, name } of [
+    { job: "release_decision", name: "Evaluate release decision" },
+    { job: "diagnostic_drain", name: "Drain child diagnostics" },
   ]) {
     const env = step(job, name).env as Record<string, string>;
     expect(env.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
