@@ -254,8 +254,10 @@ describe("operator access cancellation", () => {
         const retained = await target.retain(undefined, client);
         retained.armCancellation();
         occurrence.retire();
-        expect(restored.authority.assertCurrent).toThrow();
         expect(restored.authority.signal?.aborted).toBe(false);
+        expect(restored.authority.assertCurrent).toThrow();
+        // Permanent refusal aborts the occurrence, not its independently accepted turn.
+        expect(restored.authority.signal?.aborted).toBe(true);
         expect(retained.authority!.assertCurrent).not.toThrow();
         expect(retained.authority!.signal?.aborted).not.toBe(true);
         target.expectCurrent();
