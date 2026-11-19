@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { createDynamicToolCall, textToolResult } from "./dynamic-tools.test-support.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
-import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createCodexRuntimePlanFixture,
@@ -19,7 +18,7 @@ import {
   setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
 } from "./run-attempt-test-harness.js";
-import * as attemptTurnState from "./run-attempt-turn-state.js";
+import { keepsCodexTurnAtGatewayStop } from "./run-attempt-turn-state.js";
 
 setupRunAttemptTestHooks();
 afterEach(() => clearRuntimeConfigSnapshot());
@@ -126,44 +125,39 @@ describe("runCodexAppServerAttempt Gateway shutdown", () => {
     expect(terminal).toMatchObject({ aborted: true, promptError: null });
   });
 
-  type TurnResources = StartedCodexAttemptResources;
   it.each([
     ["an app-server the Gateway started", undefined, () => restartAbort(true)],
     ["a remote turn stopped by the user", remoteAppServer, () => new Error("Stopped")],
     // A session reset, or a shutdown of a session the next Gateway will not resume.
     ["a remote turn with a plain restart abort", remoteAppServer, () => restartAbort()],
-    [
-      "a remote turn whose commands the Gateway admits",
-      remoteAppServer,
-      () => restartAbort(true),
-      (resources: TurnResources) => ({
-        ...resources,
-        nativeProcessAuthority: { requiresProcessAdmission: true } as never,
-      }),
-    ],
-    [
-      "a remote turn in a worker-hosted app-server",
-      remoteAppServer,
-      () => restartAbort(true),
-      (resources: TurnResources) => {
-        Object.assign(resources.prompt.context.runtime.connection, { workerHostedCloud: true });
-        return resources;
-      },
-    ],
-  ])("interrupts %s", async (_name, options, reason, turnResources?) => {
-    if (turnResources) {
-      // Sandboxed and worker placements need fixtures this block does not build.
-      const create = attemptTurnState.createCodexAttemptTurnState;
-      const spy = vi
-        .spyOn(attemptTurnState, "createCodexAttemptTurnState")
-        .mockImplementation((resources) => create(turnResources(resources)));
-      onTestFinished(() => spy.mockRestore());
-    }
+  ])("interrupts %s", async (_name, options, reason) => {
     const { harness, run, controller } = await startTurn(options);
     controller.abort(reason());
 
     expect(readAttemptTerminal(await run).aborted).toBe(true);
     expect(cancellationRequests(harness)[0]).toEqual(interruptRequest);
+  });
+
+  const remoteTurn = {
+    abortReason: restartAbort(true),
+    transport: "websocket",
+    openTurnRequests: 0,
+  };
+  // Sandboxed and worker placements need fixtures this block does not build, so the
+  // predicate carries those rows.
+  it.each([
+    ["keeps a resumable remote turn", {}, true],
+    ["interrupts a plain restart abort", { abortReason: restartAbort() }, false],
+    ["interrupts an app-server the Gateway started", { transport: "stdio" }, false],
+    ["interrupts a worker-hosted app-server", { workerHostedCloud: true }, false],
+    [
+      "interrupts a turn whose commands the Gateway admits",
+      { requiresProcessAdmission: true },
+      false,
+    ],
+    ["interrupts a turn that waits on this Gateway", { openTurnRequests: 1 }, false],
+  ])("%s at a Gateway stop", (_name, change, kept) => {
+    expect(keepsCodexTurnAtGatewayStop({ ...remoteTurn, ...change })).toBe(kept);
   });
 
   it("interrupts a remote turn that waits on this Gateway", async () => {

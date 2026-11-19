@@ -66,6 +66,27 @@ class CodexAttemptState {
   currentTurnHadNonTerminalDynamicToolResult = false;
 }
 
+/**
+ * A Gateway stop leaves a resumable turn in an app-server it did not start running, as a
+ * crash does; the next Gateway's restart input waits for it. Open requests to it end, and
+ * so do commands the Gateway admits itself, so such a turn is interrupted as before.
+ */
+export function keepsCodexTurnAtGatewayStop(turn: {
+  abortReason: unknown;
+  transport: string;
+  workerHostedCloud?: boolean;
+  requiresProcessAdmission?: boolean;
+  openTurnRequests: number;
+}): boolean {
+  return (
+    isAgentRunResumableRestartAbortReason(turn.abortReason) &&
+    turn.transport !== "stdio" &&
+    !turn.workerHostedCloud &&
+    !turn.requiresProcessAdmission &&
+    turn.openTurnRequests === 0
+  );
+}
+
 export function createCodexAttemptTurnState(resources: StartedCodexAttemptResources) {
   const {
     prompt,
@@ -99,16 +120,15 @@ export function createCodexAttemptTurnState(resources: StartedCodexAttemptResour
     deadlines.beginSettlement(Date.now());
     resolveCompletion();
   };
-  // A Gateway stop leaves a resumable turn in an app-server it did not start running, as a
-  // crash does; the next Gateway's restart input waits for it. Open requests to it end, and
-  // so do commands the Gateway admits itself, so such a turn is interrupted as before.
   const keepResumableRemoteTurn = (interrupt: () => void) => () => {
     if (
-      isAgentRunResumableRestartAbortReason(runAbortController.signal.reason) &&
-      connection.appServer.start.transport !== "stdio" &&
-      !connection.workerHostedCloud &&
-      !resources.nativeProcessAuthority?.requiresProcessAdmission &&
-      state.activeAppServerTurnRequests === 0
+      keepsCodexTurnAtGatewayStop({
+        abortReason: runAbortController.signal.reason,
+        transport: connection.appServer.start.transport,
+        workerHostedCloud: connection.workerHostedCloud,
+        requiresProcessAdmission: resources.nativeProcessAuthority?.requiresProcessAdmission,
+        openTurnRequests: state.activeAppServerTurnRequests,
+      })
     ) {
       completeTurn();
     } else {
