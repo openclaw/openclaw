@@ -122,8 +122,14 @@ async function handleDiscordComponentEvent(params: {
     consumed.kind === "select" && params.values?.length === 1
       ? params.values[0]?.trim()
       : undefined;
+  // A marked value is the conversation agent's, whichever presentation form produced it.
+  const agentText =
+    consumed.callbackDataKind === "command"
+      ? undefined
+      : agentControlText(consumed.callbackData ?? selectedValue);
   const pluginCallbackData =
-    consumed.callbackData ?? (consumed.callbackDataKind === "callback" ? selectedValue : undefined);
+    consumed.callbackData ??
+    (consumed.callbackDataKind === "callback" || agentText ? selectedValue : undefined);
   if (pluginCallbackData) {
     const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
       ...authorized,
@@ -147,8 +153,8 @@ async function handleDiscordComponentEvent(params: {
         ? selectedValue
         : undefined;
   const eventText =
+    agentText ||
     commandFallback ||
-    agentControlText(pluginCallbackData) ||
     (await loadComponentsRuntime()).formatDiscordComponentEventText({
       kind: consumed.kind === "select" ? "select" : "button",
       label: consumed.label,
