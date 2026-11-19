@@ -1,0 +1,2 @@
+# Reject captionless presentation before outbound effects
+10
