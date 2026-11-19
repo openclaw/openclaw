@@ -12,6 +12,7 @@ import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-
 import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
 import type { CodeModeExecutorId } from "./code-mode-executor-types.js";
 import { disposeAllCodeModeRuns, waitForPendingBridgeSettlement } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness as subscribeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
