@@ -111,8 +111,10 @@ it("keeps a warmed search reader through discovery and retires it through its ca
     );
     const reader = retainSessionHistoryWorkerDatabase(database);
     const search = () =>
-      reader.owner.searchTranscripts(request, () =>
-        projectionWriter.readSessionTranscriptIndexStatus(database),
+      reader.owner.searchTranscripts(
+        { ...request, filterCandidates: true },
+        () => projectionWriter.readSessionTranscriptIndexStatus(database),
+        async (keys) => keys.map(() => true),
       );
     try {
       const initial = await search();

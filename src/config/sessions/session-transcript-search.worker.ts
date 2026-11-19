@@ -1,6 +1,7 @@
 import { sql, type Compilable, type InferResult } from "kysely";
 import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
 import { DatabaseSearchCapabilityUnavailableError } from "../../infra/database-engine/capability-unavailable.js";
+import { engineUnboundedRowLimit } from "../../infra/database-engine/row-limit.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -239,16 +240,27 @@ function* readSessionTranscriptSearch(
         fullText.identity(textIndex).as("fts_rowid"),
         ranking.value.as("rank"),
       ]);
-    const stream = candidates
+    const ordered = candidates
       .select([
         "session_transcript_fts.session_id",
         "session_transcript_fts.message_id",
         "session_transcript_fts.role",
         "session_transcript_fts.timestamp",
-        fullText.snippet(textIndex, "text", 48, literalQuery).as("snippet"),
       ])
       .orderBy(order)
       .orderBy(fullText.identity(textIndex));
+    const snippet = fullText.snippet(textIndex, "text", 48, literalQuery).as("snippet");
+    const stream =
+      filtered && !isPostgresSqlConnection(database.db)
+        ? db
+            // OFFSET prevents flattening, so snippets are evaluated only for consumed hits.
+            .selectFrom(ordered.limit(engineUnboundedRowLimit(database.db)).offset(0).as("ordered"))
+            .crossJoin("session_transcript_fts")
+            .where((eb) => eb(fullText.identity(textIndex), "=", eb.ref("ordered.fts_rowid")))
+            .where(match)
+            .selectAll("ordered")
+            .select(snippet)
+        : ordered.select(snippet);
     const decode = (
       row: Omit<InferResult<typeof stream>[number], "fts_rowid">,
     ): SessionTranscriptSearchResult["hits"][number] | undefined => {

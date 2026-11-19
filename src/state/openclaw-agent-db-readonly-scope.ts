@@ -322,7 +322,10 @@ export function closeIdleOpenClawAgentDatabaseReadOnly(pathname: string): void {
 }
 
 export function retainCachedOpenClawAgentDatabaseReadOnly(options: ReadTarget) {
-  return cachedScope(options).retain(options);
+  const scope = readOnlyScope.getStore();
+  return (scope?.matches(options.agentId, options.path) ? scope : cachedScope(options)).retain(
+    options,
+  );
 }
 
 /** Reuse the caller's matching read scope, or this thread's idle-expiring reader. */
