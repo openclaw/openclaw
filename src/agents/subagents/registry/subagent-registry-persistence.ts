@@ -452,7 +452,7 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
     const evictedIds = [...rows.values()]
       .filter(isSubagentRunPayloadEvicted)
       .map((row) => row.runId);
-    if (evictedIds.length) {
+    if (evictedIds.length && !options.deleteOnly) {
       const payloads = await readFullSubagentRuns(
         context,
         { kind: "ids", runIds: evictedIds },
@@ -475,6 +475,11 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
       throw new Error("Subagent mutation plans must remain synchronous");
     }
     for (const [id, row] of planned.postimages ?? []) {
+      if (options.deleteOnly && row !== null) {
+        throw new SubagentRegistryMutationRejectedError(
+          "Deletion-only subagent mutations cannot write retained payloads",
+        );
+      }
       if (!pending.runIds.has(id) || (row && row.runId !== id)) {
         throw new SubagentRegistryMutationRejectedError(
           "Subagent mutation writes an unadmitted row",
