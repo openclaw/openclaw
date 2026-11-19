@@ -1300,14 +1300,14 @@ async function preparationEvidence(
   };
   const workflow =
     'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n';
-  const sourceResponse = (path: string, source: string) => ({
+  const sourceResponse = (path: string, contents: string) => ({
     type: "file",
     encoding: "base64",
     path,
-    content: Buffer.from(source).toString("base64"),
-    size: Buffer.byteLength(source),
+    content: Buffer.from(contents).toString("base64"),
+    size: Buffer.byteLength(contents),
     sha: createHash("sha1")
-      .update(`blob ${Buffer.byteLength(source)}\0${source}`)
+      .update(`blob ${Buffer.byteLength(contents)}\0${contents}`)
       .digest("hex"),
   });
   const waiverPath = "scripts/lib/release-validation-waivers.json";
