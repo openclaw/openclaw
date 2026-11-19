@@ -435,7 +435,6 @@ it(
       setUserProfileRole(aliceId, "none");
       releaseAbort.resolve();
       await expect(denied).rejects.toThrow("gateway closed (4001): gateway policy changed");
-      // Closing the stale client does not cancel a turn that had already started.
       revokeHold.release.resolve();
       expect(await wait(terminal(revokeRun.runId))).toBe("final");
       expect(
