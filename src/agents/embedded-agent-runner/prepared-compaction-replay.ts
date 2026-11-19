@@ -10,10 +10,10 @@ import { buildBeforeCompactionHookMetrics } from "./compaction-hook-metrics.js";
 import { limitHistoryTurns } from "./history.js";
 import type { PreparedCompactionReplayOptions } from "./prepared-compaction-replay.types.js";
 import {
-  finishGenericReplayHistory,
   prepareGenericReplayHistory,
   validateGenericReplayTurns,
-} from "./replay-history.js";
+} from "./replay-history-generic.js";
+import { finishGenericReplayHistory } from "./replay-history-invariants.js";
 import { readModelSnapshotStateFromEntries } from "./replay-session-state.js";
 import type { ModelSnapshotState } from "./replay-session-state.types.js";
 
@@ -29,7 +29,6 @@ export async function prepareNativeCompactionReplay(
     provider: model.provider,
     modelId: model.id,
     modelApi: model.api,
-    model,
     sessionId,
     policy,
     imageLimits: options.imageLimits,

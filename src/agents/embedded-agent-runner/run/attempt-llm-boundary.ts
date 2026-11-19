@@ -34,7 +34,7 @@ import {
 import type { Agent, AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
 import { bindModelPromptProjectionAppend } from "../../sessions/model-prompt-projection-append.js";
-import { normalizeAssistantReplayContent } from "../replay-history.js";
+import { normalizeAssistantReplayContent } from "../replay-history-generic.js";
 import {
   contentMatchesTimestampOverride,
   findActiveUserMessageIndex,

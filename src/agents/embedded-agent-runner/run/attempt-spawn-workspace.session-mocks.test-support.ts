@@ -1,5 +1,16 @@
 import { vi } from "vitest";
 
+// mock-isolation: Workspace fixtures keep replay caches and media sanitizers outside spawn setup.
+vi.mock("../replay-history-generic.js", () => ({
+  normalizeAssistantReplayContent: <T>(messages: T) => messages,
+}));
+
+// mock-isolation: Workspace fixtures do not load provider hooks or publish session replay state.
+vi.mock("../replay-history.js", () => ({
+  sanitizeSessionHistory: async ({ messages }: { messages: unknown[] }) => messages,
+  validateReplayTurns: async ({ messages }: { messages: unknown[] }) => messages,
+}));
+
 // mock-isolation: Workspace tests supply runtime facts without host discovery.
 vi.mock("../../system-prompt-params.js", () => ({
   resolveSystemPromptRepoRoot: async () => undefined,

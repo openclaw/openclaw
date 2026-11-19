@@ -10,10 +10,8 @@ import {
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { sanitizeSessionMessagesImages } from "../../src/agents/embedded-agent-helpers/images.js";
-import {
-  normalizeAssistantReplayContent,
-  sanitizeSessionHistory,
-} from "../../src/agents/embedded-agent-runner/replay-history.js";
+import { normalizeAssistantReplayContent } from "../../src/agents/embedded-agent-runner/replay-history-generic.js";
+import { sanitizeSessionHistory } from "../../src/agents/embedded-agent-runner/replay-history.js";
 import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { SessionManager } from "../../src/agents/sessions/index.js";
 import { markInboundContextLabel } from "../../src/auto-reply/reply/inbound-context-marker.js";

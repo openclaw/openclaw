@@ -19,10 +19,8 @@ import type { StreamFn } from "../runtime/index.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import {
-  normalizeAssistantReplayContent as normalize,
-  validateReplayTurns,
-} from "./replay-history.js";
+import { normalizeAssistantReplayContent as normalize } from "./replay-history-generic.js";
+import { validateReplayTurns } from "./replay-history.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./run/attempt-tool-call-replay-sanitization.js";
 
 // Preface of carriers persisted before the stable system prompt explained the markers.

@@ -364,12 +364,6 @@ vi.mock("../extensions.js", () => ({
   buildEmbeddedExtensionFactories: () => [],
 }));
 
-vi.mock("../replay-history.js", () => ({
-  normalizeAssistantReplayContent: <T>(messages: T) => messages,
-  sanitizeSessionHistory: async ({ messages }: { messages: unknown[] }) => messages,
-  validateReplayTurns: async ({ messages }: { messages: unknown[] }) => messages,
-}));
-
 vi.mock("../tool-schema-runtime.js", () => ({
   logProviderToolSchemaDiagnostics: () => {},
   normalizeProviderToolSchemas: ({ tools }: { tools: unknown[] }) => tools,

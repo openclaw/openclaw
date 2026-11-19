@@ -15,7 +15,7 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { transformTransportMessages } from "../../transport-message-transform.js";
-import { normalizeAssistantReplayContent } from "../replay-history.js";
+import { normalizeAssistantReplayContent } from "../replay-history-generic.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "../result-fallback-classifier.js";
 import {
   markEmbeddedRunAuthProfileSuccess,

@@ -31,7 +31,7 @@ import {
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
 import { log } from "../logger.js";
-import { normalizeAssistantReplayContent } from "../replay-history.js";
+import { normalizeAssistantReplayContent } from "../replay-history-generic.js";
 import {
   createToolResultPromptProjectionState,
   type ToolResultPromptProjectionState,

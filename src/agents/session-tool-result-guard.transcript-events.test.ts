@@ -47,7 +47,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { createAssistantErrorTranscript } from "./assistant-error-transcript.js";
-import { normalizeAssistantReplayContent } from "./embedded-agent-runner/replay-history.js";
+import { normalizeAssistantReplayContent } from "./embedded-agent-runner/replay-history-generic.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
