@@ -195,9 +195,26 @@ export function withUpdateInstallStatus(
   root: string | null,
 ): UpdateScheduleState {
   if (update.installKind === "host") {
-    // Host ownership is not a package/Git update target in the Gateway protocol.
+    // Host ownership is not a package/Git update target in the Gateway protocol, but clients
+    // need it to show the owner's guidance instead of an update action the Gateway refuses.
     const { install: _install, target: _target, campaign: _campaign, ...rest } = schedule;
-    return { ...rest, autoEnabled: false };
+    const { installOwner } = update;
+    return {
+      ...rest,
+      autoEnabled: false,
+      ...(installOwner
+        ? {
+            install: {
+              kind: "host",
+              host: {
+                owner: installOwner.owner,
+                displayName: installOwner.displayName,
+                updateHint: installOwner.updateHint,
+              },
+            },
+          }
+        : {}),
+    };
   }
   if (update.installKind === "immutable") {
     const { target: _target, campaign: _campaign, ...rest } = schedule;

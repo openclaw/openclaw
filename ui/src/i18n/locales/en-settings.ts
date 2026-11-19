@@ -1395,6 +1395,7 @@ const enSettings = {
     installKind: {
       package: "Package",
       git: "Git checkout",
+      host: "Managed by app",
       unknown: "Unknown",
     },
     page: {
@@ -1453,6 +1454,9 @@ const enSettings = {
       available: "Update available {target}",
       upToDate: "Up to date",
       statusUnavailable: "Update status unavailable",
+      hostManagedStatus: "Managed by {name}",
+      hostManagedTitle: "Update Gateway",
+      hostManagedDescription: "Managed by {name}. {hint}",
       gitCommitAhead: "{count} commit ahead of tracked upstream",
       gitCommitsAhead: "{count} commits ahead of tracked upstream",
       gitDiverged: "Diverged · {ahead} ahead, {behind} behind",

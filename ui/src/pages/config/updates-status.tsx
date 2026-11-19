@@ -53,6 +53,10 @@ export function UpdatesStatus(props: UpdatesViewProps & { checking: boolean }) {
             ? "warn"
             : "accent";
       label = props.update.updateStatusBanner.text;
+    } else if (props.update.updateSchedule?.install?.host) {
+      label = t("updates.page.hostManagedStatus", {
+        name: props.update.updateSchedule.install.host.displayName,
+      });
     } else if (props.update.updateSchedule?.install?.kind === "git") {
       const git = props.update.updateSchedule.install.git;
       if (!git) {

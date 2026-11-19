@@ -47,7 +47,10 @@ export function getGatewayUpdateSchedule(
     ...(campaign ? { campaign } : {}),
   };
   const install = currentUpdateCheckLifecycle().installStatus;
-  return install && (install.status.error?.timeoutMs || install.status.installKind === "immutable")
+  return install &&
+    (install.status.error?.timeoutMs ||
+      install.status.installKind === "immutable" ||
+      install.status.installKind === "host")
     ? withUpdateInstallStatus(result, install.status, true, install.installReceipt, install.root)
     : result;
 }
