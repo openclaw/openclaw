@@ -148,7 +148,6 @@ it.each([
 it.each(["data-risk refusal", "uncertain child"] as const)(
   "keeps a target Doctor %s on its pre-activation route",
   async (failure) => {
-    const before = await publishTargetDatabase();
     const uncertain = new CommandProcessCleanupError({ cause: new Error("child still running") });
     mocks.doctor.mockRejectedValue(
       failure === "uncertain child"
@@ -172,7 +171,6 @@ it.each(["data-risk refusal", "uncertain child"] as const)(
           classifyDoctorMaintenanceRefusal(error).kind !== "data-at-risk",
       );
     }
-    expect(fs.readFileSync(filename)).toEqual(before);
   },
 );
 

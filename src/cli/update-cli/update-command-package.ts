@@ -300,16 +300,14 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   } catch (error) {
     outcome = { error };
   }
-  if (refusal) {
-    const step = "step" in outcome ? outcome.step : completedSteps.at(-1);
+  // Only a settled Doctor step carries the verdict; authority and recording errors keep theirs.
+  if (refusal && "step" in outcome) {
     outcome = {
       error: new DoctorMaintenanceRefusalError(
-        step?.stderrTail?.trim() || `Activation Doctor reported data at risk (${refusal.reason}).`,
+        outcome.step.stderrTail?.trim() ||
+          `Activation Doctor reported data at risk (${refusal.reason}).`,
         refusal,
-        {
-          ...("error" in outcome ? { cause: outcome.error } : {}),
-          failureFacts: step?.failureFacts,
-        },
+        { failureFacts: outcome.step.failureFacts },
       ),
     };
   }

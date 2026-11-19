@@ -450,13 +450,17 @@ it.each([
 it.each([
   { verdict: "data-at-risk", consumer: "runner" },
   { verdict: "data-at-risk", consumer: "package-verification" },
+  { verdict: "data-at-risk", consumer: "revoked-runner" },
   { verdict: "none", consumer: "runner" },
   { verdict: "deferred", consumer: "runner" },
 ] as const)(
   "carries a failed Doctor child's own data-risk verdict ($verdict, $consumer)",
   async ({ verdict, consumer }) => {
     const { root, doctor } = await createDoctorFixture();
+    let settled = false;
+    const revoked = new Error("Update requester authority was revoked.");
     mockDoctor(async (options) => {
+      settled = true;
       await writeFixtureJson(doctorResultPath(options), {
         status: "error",
         failureFacts: [reportedFailure],
@@ -478,7 +482,18 @@ it.each([
       expect(step.failureFacts).toEqual(expect.arrayContaining([reportedFailure]));
       return;
     }
-    const outcome = await doctor({ results }).then(
+    const outcome = await doctor({
+      results,
+      ...(consumer === "revoked-runner"
+        ? {
+            assertCurrent: () => {
+              if (settled) {
+                throw revoked;
+              }
+            },
+          }
+        : {}),
+    }).then(
       (step) => ({ step }),
       (error: unknown) => ({ error }),
     );
@@ -489,6 +504,11 @@ it.each([
       return;
     }
     assert("error" in outcome);
+    if (consumer === "revoked-runner") {
+      // Lost authority after the child settled keeps its own error for the runner's reason.
+      expect(outcome.error).toBe(revoked);
+      return;
+    }
     expect(outcome.error).toBeInstanceOf(DoctorMaintenanceRefusalError);
     expect(outcome.error).toMatchObject({
       refusal: { kind: "data-at-risk", reason: "incomplete-migration" },

@@ -271,7 +271,7 @@ export async function updateGitCheckout(params: {
       if (stateMigrationStarted) {
         rollbackOutcome = {
           status: "not-attempted",
-          reason: "State migration started; restoring code alone cannot restore operator state",
+          reason: "Activation Doctor started; the updater verifies state before restoring code",
         };
         return buildError(reason);
       }
