@@ -345,6 +345,8 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       );
     }
     if (mode === "file-backed-suites") {
+      // These synthetic suites own their complete runtime; no product build is needed.
+      env.OPENCLAW_E2E_SKIP_BUILD = "1";
       const leaf = (name: string, file: string, extra = "") => {
         const config = "test/vitest/vitest." + name + ".config.ts";
         writeConfig(
