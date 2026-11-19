@@ -12,7 +12,6 @@ export function makeIsolatedAgentJobFixture(overrides?: LooseRecord) {
     schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
     sessionTarget: "isolated",
     payload: { kind: "agentTurn", message: "test" },
-    state: {},
     ...overrides,
   } as never;
 }

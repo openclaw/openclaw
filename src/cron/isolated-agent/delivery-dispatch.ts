@@ -2,7 +2,10 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
-import { resolveControlUiAutomationRunUrl } from "../../config/control-ui-link-base.js";
+import {
+  resolveControlUiAutomationRunUrl,
+  resolveControlUiSessionUrl,
+} from "../../config/control-ui-link-base.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -31,6 +34,29 @@ import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 const followup = createLazyImportLoader(() => import("./subagent-followup.runtime.js"));
 const conversationResult = createLazyImportLoader(() => import("../conversation-result.js"));
 const notification = createLazyImportLoader(() => import("../delivery.js"));
+
+/**
+ * Run history outlives the transient run session, so scheduler-claimed runs link to their
+ * recorded Automation run. History records the scheduler's start time (`runningAtMs`); the
+ * executor's later `runStartedAt` would not match. Synthetic jobs (hooks, plugin triggers) are
+ * never persisted and have no start time, and `deleteAfterRun` jobs may be gone before the link
+ * is opened (the Automations route loads the live job), so both keep the session link.
+ */
+function resolveInspectionUrl(params: DispatchCronDeliveryParams): string | undefined {
+  const { job, cfgWithAgentDefaults: cfg } = params;
+  const startedAtMs = job.state?.runningAtMs;
+  if (startedAtMs !== undefined && job.deleteAfterRun !== true) {
+    return resolveControlUiAutomationRunUrl(cfg, {
+      jobId: job.id,
+      runId: createCronExecutionId(job.id, startedAtMs),
+    });
+  }
+  return resolveControlUiSessionUrl(cfg, {
+    sessionKey: params.runSessionKey,
+    fallbackAgentId: params.agentId,
+    exactKey: true,
+  });
+}
 
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
@@ -354,15 +380,7 @@ export async function dispatchCronDelivery(
           );
         },
         tts: { auto: params.ttsAuto },
-        // Run history outlives the run session. Link by the scheduler's start time, which the
-        // history records as `runAtMs`; `runStartedAt` is taken later, inside the executor.
-        inspectionUrl: resolveControlUiAutomationRunUrl(params.cfgWithAgentDefaults, {
-          jobId: params.job.id,
-          runId:
-            params.job.state.runningAtMs === undefined
-              ? undefined
-              : createCronExecutionId(params.job.id, params.job.state.runningAtMs),
-        }),
+        inspectionUrl: resolveInspectionUrl(params),
         abortSignal: params.abortSignal ?? new AbortController().signal,
         bestEffort: params.deliveryBestEffort,
         completion: {

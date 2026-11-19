@@ -22,6 +22,7 @@ import {
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 import { cronRunEntryMatchesLink } from "./run-link.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
+import type { CronJob } from "./types.js";
 
 async function announce(
   payloads: ReplyPayload[],
@@ -29,7 +30,7 @@ async function announce(
     gateway?: NonNullable<Parameters<typeof makeCfg>[2]>["gateway"];
     entries?: Record<string, SessionEntry>;
     delivery?: { mode: "announce"; channel: "last" | "telegram"; to?: string };
-    runningAtMs?: number;
+    job?: Partial<CronJob>;
   } = {},
 ) {
   return withTempCronHome(async (home) => {
@@ -47,7 +48,7 @@ async function announce(
       job: {
         ...makeJob({ kind: "agentTurn", message: "do it" }),
         delivery: options.delivery ?? { mode: "announce", channel: "telegram", to: "123" },
-        state: { runningAtMs: options.runningAtMs },
+        ...options.job,
       },
       message: "do it",
       sessionKey: "cron:job-1",
@@ -73,6 +74,15 @@ const CONTROL_UI_GATEWAY = {
   controlUi: { basePath: "/console" },
 };
 
+function claimedRun(runningAtMs: number): Partial<CronJob> {
+  return { state: { runningAtMs } };
+}
+
+function sessionLink(sessionKey: unknown) {
+  assert(typeof sessionKey === "string", "expected a cron run session key");
+  return `https://control.example/console/chat/main/${sessionKey.replace(/^agent:main:/, "").replaceAll(":", "/")}`;
+}
+
 function lastTelegramText(deps: ReturnType<typeof createCliDeps>) {
   return String((deps.telegram as unknown as Mock).mock.lastCall?.[1]);
 }
@@ -83,7 +93,7 @@ it("links the final visible payload to the recorded automation run", async () =>
       { text: "first cron update", mediaUrl: "https://example.com/report.png" },
       { text: "final cron summary" },
     ],
-    { gateway: CONTROL_UI_GATEWAY, runningAtMs: RUN_STARTED_AT_MS },
+    { gateway: CONTROL_UI_GATEWAY, job: claimedRun(RUN_STARTED_AT_MS) },
   );
   expect(result).toMatchObject({ status: "ok", delivered: true });
   expect(result.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
@@ -102,7 +112,7 @@ it("links each execution of a job to its own recorded run, not its transient ses
   for (const runningAtMs of runs) {
     const { result, deps } = await announce([{ text: "digest" }], {
       gateway: CONTROL_UI_GATEWAY,
-      runningAtMs,
+      job: claimedRun(runningAtMs),
     });
     const link = /\]\((.+)\)$/.exec(lastTelegramText(deps))?.[1];
     assert(link, "expected an inspection link");
@@ -120,12 +130,28 @@ it("links each execution of a job to its own recorded run, not its transient ses
   expect(new Set(links).size).toBe(runs.length);
 });
 
-it("links to the automation without selecting a run when no start time is recorded", async () => {
-  const { deps } = await announce([{ text: "digest" }], { gateway: CONTROL_UI_GATEWAY });
-  expect(lastTelegramText(deps)).toBe(
-    "digest\n[Inspect run](https://control.example/console/automations?job=job-1)",
-  );
-});
+it.each([
+  // Hook, plugin and channel-join jobs are never persisted and are never claimed by the scheduler.
+  [
+    "a synthetic hook job",
+    {
+      schedule: { kind: "at", at: new Date().toISOString() },
+      state: { nextRunAtMs: Date.now() },
+    },
+  ],
+  ["a job without state", { state: undefined } as unknown as Partial<CronJob>],
+  ["a deleteAfterRun job", { ...claimedRun(RUN_STARTED_AT_MS), deleteAfterRun: true }],
+] satisfies [string, Partial<CronJob>][])(
+  "keeps the run session link for %s",
+  async (_name, job) => {
+    const { result, deps } = await announce([{ text: "digest" }], {
+      gateway: CONTROL_UI_GATEWAY,
+      job,
+    });
+    expect(result).toMatchObject({ status: "ok", delivered: true });
+    expect(lastTelegramText(deps)).toBe(`digest\n[Inspect run](${sessionLink(result.sessionKey)})`);
+  },
+);
 
 it.each([
   ["no public origin", {}],
@@ -136,7 +162,7 @@ it.each([
 ])("omits the inspection link when %s", async (_name, gateway) => {
   const { deps } = await announce([{ text: "digest" }], {
     gateway,
-    runningAtMs: RUN_STARTED_AT_MS,
+    job: claimedRun(RUN_STARTED_AT_MS),
   });
   expect(lastTelegramText(deps)).toBe("digest");
 });
