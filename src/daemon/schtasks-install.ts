@@ -544,8 +544,7 @@ export async function installScheduledTask(
           hookFailure = { error };
         });
       },
-      // An incomplete inventory cannot prove which Gateway predates the run.
-      preLaunch?.complete ? preLaunch.pids : undefined,
+      preLaunch,
     );
     if (hookFailure) {
       throw hookFailure.error;

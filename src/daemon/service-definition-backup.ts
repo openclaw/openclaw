@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { DOMParser } from "linkedom";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { createNullWriter } from "../shared/null-writer.js";
@@ -23,6 +22,7 @@ import {
 import { resolveTaskLauncherScriptPath, resolveTaskScriptPath } from "./schtasks-layout.js";
 import { auditScheduledTaskDefinition } from "./service-audit-schtasks.js";
 import type { ServiceDefinitionDrift } from "./service-audit-types.js";
+import { omitNativeScheduledTaskEnabled } from "./service-policy-xml.js";
 import {
   GatewayServiceDefinitionBackupReceiptSchema,
   matchesServiceFilePublication,
@@ -61,36 +61,9 @@ function matchesTaskPolicy(xml: string, expected: string): boolean {
   if (taskPolicy(xml) === expected) {
     return true;
   }
-  // Scheduler omits Enabled=true, then inserts Enabled=false in native schema
-  // order on disable. Keep persisted receipt hashes compatible: try omitting
-  // only that plain, direct mutable field, without canonicalizing other XML.
-  const document = new DOMParser().parseFromString(xml, "text/xml");
-  if (document.documentElement?.tagName !== "Task" || document.doctype) {
-    return false;
-  }
-  const settings = [...document.documentElement.children].filter(
-    (node) => node.tagName === "Settings",
-  );
-  const enabled =
-    settings.length === 1
-      ? [...settings[0]!.children].filter((node) => node.tagName === "Enabled")
-      : [];
-  if (
-    enabled.length !== 1 ||
-    enabled[0]!.children.length !== 0 ||
-    enabled[0]!.getAttributeNames().length !== 0 ||
-    !/^(true|false)$/u.test(enabled[0]!.textContent.trim())
-  ) {
-    return false;
-  }
-  const omitted = xml.replace(
-    /(<Settings(?:\s[^>]*)?>)([\s\S]*?)(<\/Settings>)/u,
-    (match, open: string, body: string, close: string) => {
-      const fields = [...body.matchAll(/[\t \r\n]*<Enabled>\s*(true|false)\s*<\/Enabled>/gu)];
-      return fields.length === 1 ? `${open}${body.replace(fields[0]![0], "")}${close}` : match;
-    },
-  );
-  return omitted !== xml && taskPolicy(omitted) === expected;
+  // Keep persisted receipt hashes compatible with Task Scheduler's native Enabled rewrite.
+  const omitted = omitNativeScheduledTaskEnabled(xml);
+  return omitted !== null && taskPolicy(omitted) === expected;
 }
 
 const receiptPath = (receipt: GatewayServiceDefinitionBackupReceipt) =>
