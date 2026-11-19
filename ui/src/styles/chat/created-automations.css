@@ -1,3 +1,9 @@
+/* The message column aligns bubbles at the start. Size this bubble from the column,
+   not the intrinsic width of a pending name or a newly loaded schedule. */
+.chat-group.assistant .chat-bubble:has(.chat-created-automations) {
+  width: min(100%, 384px);
+}
+
 /* A plan reserves the reading and action columns before the scheduler has any jobs. */
 .chat-created-automations {
   width: min(100%, 360px);
