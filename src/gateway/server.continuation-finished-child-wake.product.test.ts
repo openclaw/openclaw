@@ -241,6 +241,7 @@ async function readWorkRows(sessionKey: string) {
       recordId: record.recordId,
       status: record.status,
       failureReason: record.failureReason,
+      terminalNoticePending: record.terminalNoticePending,
       operatorAuthorityRequired: decodeWorkState(record)?.operatorAuthorityRequired === true,
     }),
   );
@@ -501,11 +502,13 @@ it("returns a bare CONTINUE_WORK child's next-turn answer to its parent, running
 
 // The fix schedules post-turn continue_work outside the tool caller and operator tool
 // frames. An operator's own agent RPC turn keeps its request-scope custody (#1489).
+// The chained gates arm hop 3 from hop 2's wake turn; "chained-revoked" revokes between them.
 it("keeps a restricted operator's agent-RPC continue_work custody through its wake", async () => {
   const id = randomUUID().slice(0, 8);
   const scopes: OperatorScope[] = ["operator.read", "operator.write"];
   const roleError = 'Your operator role cannot create sessions for agent "forbidden"';
-  const scenarios = (["retained", "revoked", "reassigned"] as const).map((gate, index) => ({
+  const gates = ["retained", "revoked", "reassigned", "chained", "chained-revoked"] as const;
+  const scenarios = gates.map((gate, index) => ({
     gate,
     email: `wake-operator-${gate}-${id}@example.test`,
     sessionKey: `agent:main:wake-operator-${gate}-${id}`,
@@ -517,7 +520,11 @@ it("keeps a restricted operator's agent-RPC continue_work custody through its wa
       "x-forwarded-proto": "https",
     },
     profileId: "",
+    chained: gate.startsWith("chained"),
     hopTwoTurns: 0,
+    hopThreeTurns: 0,
+    requests: 0,
+    requestsAtRevocation: undefined as number | undefined,
     spawnResult: undefined as unknown,
   }));
   const forbiddenRequests: string[] = [];
@@ -536,7 +543,24 @@ it("keeps a restricted operator's agent-RPC continue_work custody through its wa
         });
       };
       const scenario = scenarios.find((entry) => body.includes(entry.prompt));
-      if (!scenario) {
+      const wakeCount = body.split(WAKE_MARKER).length - 1;
+      const hopThreeReason = `arm the third part of ${scenario?.gate}`;
+      if (scenario) {
+        scenario.requests++;
+      }
+      if (scenario?.chained && wakeCount > 1) {
+        scenario.hopThreeTurns++;
+        reply(`${scenario.gate}_THIRD_PART_DONE`);
+      } else if (scenario?.chained && wakeCount === 1 && !body.includes(hopThreeReason)) {
+        scenario.hopTwoTurns++;
+        // Hop 2 runs under hop 1's retained custody and arms hop 3 from it.
+        writeToolCall(response, "continue_work", {
+          reason: hopThreeReason,
+          delaySeconds: WAKE_DELAY_SECONDS,
+        });
+      } else if (scenario?.chained && wakeCount === 1) {
+        reply(`${scenario.gate}_SECOND_PART_DONE`);
+      } else if (!scenario) {
         // Only a broader-than-role wake could start the forbidden agent's turn.
         const forbidden = scenarios.find((entry) => body.includes(entry.forbiddenTask));
         if (forbidden) {
@@ -675,24 +699,32 @@ it("keeps a restricted operator's agent-RPC continue_work custody through its wa
       const scheduled = await readWorkRows(scenario.sessionKey);
       const custody = retained.filter((entry) => entry.sessionKey === scenario.sessionKey);
       const pendingWakes = wakes.filter((wake) => wake.sessionKey === scenario.sessionKey).length;
-      if (scenario.gate === "revoked") {
+      if (scenario.chained) {
+        // Hop 2 has run and its turn has elected hop 3, which waits in the custody store.
+        await waitFor(async () => {
+          const rows = await readWorkRows(scenario.sessionKey);
+          return rows[0]?.status === "succeeded" && rows[1]?.status === "queued";
+        }, WAKE_TURN_BOUND_MS);
+      }
+      if (scenario.gate === "revoked" || scenario.gate === "chained-revoked") {
+        scenario.requestsAtRevocation = scenario.requests;
         setUserProfileRole(scenario.profileId, "revoked");
       } else if (scenario.gate === "reassigned") {
         const replacement = ensureProfileForEmail(`wake-operator-replacement-${id}@example.test`);
         setUserProfileRole(replacement.id, "scoped");
         linkEmail(scenario.email, replacement.id);
       }
-      const settled = async () =>
-        (await readWorkRows(scenario.sessionKey)).every(
-          (row) => row.status !== "queued" && row.status !== "running",
-        ) &&
-        (scenario.gate !== "retained" || scenario.spawnResult !== undefined);
+      const settled = async () => {
+        const rows = await readWorkRows(scenario.sessionKey);
+        return (
+          rows.length === (scenario.chained ? 2 : 1) &&
+          rows.every((row) => row.status !== "queued" && row.status !== "running") &&
+          (scenario.gate !== "retained" || scenario.spawnResult !== undefined)
+        );
+      };
       await waitFor(settled, WAKE_TURN_BOUND_MS);
-      results.push({
-        gate: scenario.gate,
-        profileId: scenario.profileId,
-        scheduled,
-        retainedCustody: custody.map((entry) => {
+      const describeCustody = (entries: typeof retained) =>
+        entries.map((entry) => {
           assertAdmittedRunOperatorAuthority(entry.authority);
           return {
             flowId: entry.flowId,
@@ -700,10 +732,33 @@ it("keeps a restricted operator's agent-RPC continue_work custody through its wa
             scopes: [...entry.authority.scopes],
             agents: entry.authority.rolePolicy?.agents,
           };
-        }),
+        });
+      results.push({
+        gate: scenario.gate,
+        profileId: scenario.profileId,
+        scheduled,
+        retainedCustody: describeCustody(custody),
+        chainedCustody: describeCustody(
+          retained.filter((entry) => entry.sessionKey === scenario.sessionKey),
+        ),
+        // Evidence only: which producer built each custody (a saved source sets no reauthorize).
+        custodyProducers: retained
+          .filter((entry) => entry.sessionKey === scenario.sessionKey)
+          .map((entry) => {
+            assertAdmittedRunOperatorAuthority(entry.authority);
+            return {
+              reauthorize: entry.authority.reauthorize !== undefined,
+              savedSource: entry.authority.recoverySnapshot !== undefined,
+            };
+          }),
         wakesBeforeRevocation: pendingWakes,
         order: order.sequence(scenario.sessionKey, turn.runId),
         hopTwoTurns: scenario.hopTwoTurns,
+        hopThreeTurns: scenario.hopThreeTurns,
+        requestsAfterRevocation:
+          scenario.requestsAtRevocation === undefined
+            ? undefined
+            : scenario.requests - scenario.requestsAtRevocation,
         wakes: wakes.filter((wake) => wake.sessionKey === scenario.sessionKey),
         settledRows: await readWorkRows(scenario.sessionKey),
         spawnResult: scenario.spawnResult,
@@ -720,7 +775,44 @@ it("keeps a restricted operator's agent-RPC continue_work custody through its wa
         { flowId: result.scheduled[0]?.recordId, ...restricted },
       ]);
       expect(result.wakesBeforeRevocation).toBe(0);
-      if (result.gate === "retained") {
+      const hopWake = { preparedRunStarted: true, operatorAuthority: restricted };
+      if (result.gate === "chained") {
+        // Hop 2 armed hop 3 under the same operator, and hop 3 ran under it.
+        expect(result).toMatchObject({
+          order: ["run-ended", "wake-prepared", "wake-prepared"],
+          hopTwoTurns: 1,
+          hopThreeTurns: 1,
+          wakes: [hopWake, hopWake],
+        });
+        expect(result.settledRows).toEqual([
+          expect.objectContaining({ status: "succeeded" }),
+          expect.objectContaining({ status: "succeeded", operatorAuthorityRequired: true }),
+        ]);
+        expect(result.chainedCustody).toEqual(
+          result.settledRows.map((row) => ({ flowId: row.recordId, ...restricted })),
+        );
+      } else if (result.gate === "chained-revoked") {
+        // Revoked after hop 2: hop 3 refuses before a turn or a notice reaches the model.
+        expect(result).toMatchObject({
+          order: ["run-ended", "wake-prepared"],
+          hopTwoTurns: 1,
+          hopThreeTurns: 0,
+          requestsAfterRevocation: 0,
+          wakes: [hopWake],
+        });
+        expect(result.settledRows).toEqual([
+          expect.objectContaining({ status: "succeeded" }),
+          expect.objectContaining({
+            status: "failed",
+            failureReason: expect.stringContaining("Retained operator authority revoked"),
+            operatorAuthorityRequired: true,
+          }),
+        ]);
+        expect(result.settledRows[1]?.terminalNoticePending).toBeUndefined();
+        expect(result.chainedCustody).toEqual(
+          result.settledRows.map((row) => ({ flowId: row.recordId, ...restricted })),
+        );
+      } else if (result.gate === "retained") {
         // The wake ran under the operator's own role, which refused the forbidden agent.
         expect(result).toMatchObject({
           order: ["run-ended", "wake-prepared"],

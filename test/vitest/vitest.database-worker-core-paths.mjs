@@ -810,6 +810,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/continuation/continuation-return.refused.test.ts",
   "src/auto-reply/continuation/work-recipient-authority.reset.test.ts",
   "src/auto-reply/continuation/work-recipient-authority.incognito.test.ts",
+  // Operator wakes over the real channel ingress and scheduled source custody.
+  "src/auto-reply/continuation/work-operator-continuation.producers.test.ts",
   "src/auto-reply/reply/session-system-events.ack-formatted.test.ts",
   "src/auto-reply/reply/session-system-events.managed-delivery.proof.test.ts",
   "src/auto-reply/continuation/custody-conjecture.scenario.test.ts",
