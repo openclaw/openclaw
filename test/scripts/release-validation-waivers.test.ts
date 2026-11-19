@@ -113,6 +113,74 @@ const stableCauses = [
   "macos-swift finished with failure (selected=true)",
 ];
 const failedJob = { status: "completed", conclusion: "failure" };
+describe("2026.11.6 observed OpenCode Go availability failure", () => {
+  const candidateSha = "06afb10d3272cc9deaf38ca6a3b7b839d5935638";
+  const leaf = {
+    ...failedJob,
+    id: 135459584818,
+    name: "Run repo/live E2E validation / Native live suites (Native live gateway profiles OpenCode Go smoke)",
+  };
+  const aggregate = {
+    ...failedJob,
+    id: 2,
+    name: "Verify release checks",
+    steps: [{ name: "Verify release check results", conclusion: "failure" }],
+  };
+  const observed = {
+    ...failedJob,
+    key: "releaseChecksIndependent",
+    runId: "44494417449",
+    runAttempt: 1,
+    jobs: [leaf, aggregate],
+  };
+
+  it("accepts only the exact candidate across runs and attempts without rewriting failure", () => {
+    for (const execution of [
+      observed,
+      { ...observed, runAttempt: 2 },
+      { ...observed, runId: "44494417450" },
+    ]) {
+      expect(terminalPolicyPass(execution, "2026.11.6", candidateSha)).toBe(true);
+    }
+    expect(observed.conclusion).toBe("failure");
+    expect(observed.jobs.every((job) => job.conclusion === "failure")).toBe(true);
+    for (const rejected of [
+      { ...observed, key: "releaseChecksCandidate" },
+      { ...observed, jobs: [] },
+      { ...observed, jobs: [aggregate] },
+      { ...observed, jobs: [...observed.jobs, { ...leaf, name: "Unrelated live failure" }] },
+      ...["cancelled", "timed_out", null].map((conclusion) =>
+        Object.assign({}, observed, { jobs: [{ ...leaf, conclusion }, aggregate] }),
+      ),
+      { ...observed, jobs: [{ ...leaf, status: "in_progress" }, aggregate] },
+    ]) {
+      expect(terminalPolicyPass(rejected, "2026.11.6", candidateSha)).toBe(false);
+    }
+    expect(terminalPolicyPass(observed, "2026.11.7", candidateSha)).toBe(false);
+    expect(terminalPolicyPass(observed, "2026.11.6", "a".repeat(40))).toBe(false);
+  });
+
+  it("retains exact aggregate cause and complete evidence requirements", async () => {
+    const policy = evaluateReleaseChildPolicy({
+      child: observed,
+      targetVersion: "2026.11.6",
+      targetSha: candidateSha,
+    });
+    const cause = "##[error]live_repo_e2e_release_checks ended with failure";
+    await expect(
+      validateReleaseWaiverAggregates({ policy, jobs: observed.jobs, getJobLog: () => cause }),
+    ).resolves.toBeUndefined();
+    for (const log of ["", cause + "\n##[error]artifact integrity failed"]) {
+      await expect(
+        validateReleaseWaiverAggregates({ policy, jobs: observed.jobs, getJobLog: () => log }),
+      ).rejects.toThrow("unwaived failure");
+    }
+    await expect(
+      validateReleaseWaiverAggregates({ policy, jobs: [leaf], getJobLog: () => cause }),
+    ).rejects.toThrow("missing or incomplete");
+  });
+});
+
 const stableJobs = stableNames.map((name, id) => ({ ...failedJob, id, name }));
 const gate = {
   id: 10,
