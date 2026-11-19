@@ -237,6 +237,12 @@ internal fun SidebarSessionPresentation.attentionRows(
   childrenExpanded: Boolean,
 ): List<ChatSessionEntry> = if (childrenExpanded) listOf(session) else withDescendants(listOf(session))
 
+/** Whether the open session is nested under one of [roots], so their section should reveal it. */
+internal fun SidebarSessionPresentation.holdsNestedSession(
+  roots: List<ChatSessionEntry>,
+  activeSessionKey: String,
+): Boolean = activeSessionKey in parentByKey && roots.any { it.key == rootKeyOf(activeSessionKey) }
+
 /** Every nested descendant of [key], depth first. */
 internal fun SidebarSessionPresentation.descendantsOf(key: String): List<ChatSessionEntry> = childrenByParent[key].orEmpty().flatMap { child -> listOf(child) + descendantsOf(child.key) }
 
@@ -246,8 +252,10 @@ internal fun SidebarSessionPresentation.descendantsOf(key: String): List<ChatSes
  */
 internal fun SidebarSessionPresentation.collapsedChildActivity(key: String): SidebarSessionActivity? {
   val descendants = descendantsOf(key)
+  val activeChildren = descendants.filter { isSessionRunActive(it.hasActiveRun, it.status?.trim()?.lowercase()) }
   return when {
-    descendants.any { isSessionRunActive(it.hasActiveRun, it.status?.trim()?.lowercase()) } -> SidebarSessionActivity.Running
+    activeChildren.any { it.status?.trim()?.lowercase() != "queued" } -> SidebarSessionActivity.Running
+    activeChildren.isNotEmpty() -> SidebarSessionActivity.Queued
     descendants.any { it.unread == true } -> SidebarSessionActivity.Unread
     else -> null
   }
@@ -610,7 +618,8 @@ internal fun OpenClawSidebar(
   var collapsedParentKeys by rememberSaveable(gatewayStableId, selectedAgentId) { mutableStateOf(emptyList<String>()) }
   var chatGroupsExpanded by rememberSaveable(gatewayStableId, selectedAgentId) { mutableStateOf(true) }
   var expandedCatalogIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
-  var pinnedExpanded by rememberSaveable { mutableStateOf(false) }
+  // Null until the user toggles Pinned; until then it opens only to reveal an open nested child.
+  var pinnedExpandedChoice by rememberSaveable { mutableStateOf<Boolean?>(null) }
   var recentExpanded by rememberSaveable { mutableStateOf(false) }
   var collapsedCatalogHostIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
   var collapsedCatalogWorkspaceIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
@@ -635,6 +644,7 @@ internal fun OpenClawSidebar(
       nowMs = sessionNowMs,
     )
   val pinnedSessions = recentPresentation.pinned
+  val pinnedExpanded = pinnedExpandedChoice ?: recentPresentation.holdsNestedSession(pinnedSessions, activeSessionKey)
   val recentRows = recentPresentation.recent
   val groupsByName = recentPresentation.groups.associateBy { it.name }
   val sectionOrder =
@@ -680,8 +690,9 @@ internal fun OpenClawSidebar(
     session: ChatSessionEntry,
     depth: Int,
     dragSource: SidebarSessionDragSource?,
+    nested: Boolean,
   ) {
-    val children = recentPresentation.childrenByParent[session.key].orEmpty()
+    val children = if (nested) recentPresentation.childrenByParent[session.key].orEmpty() else emptyList()
     val expanded =
       children.isNotEmpty() &&
         recentPresentation.childrenExpanded(session.key, activeSessionKey, expandedParentKeys, collapsedParentKeys)
@@ -723,11 +734,17 @@ internal fun OpenClawSidebar(
         },
     )
     // Child rows are reached through their parent; pinning by drag stays a top-level gesture.
-    if (expanded) children.forEach { child -> SessionNode(child, depth + 1, dragSource = null) }
+    if (expanded) children.forEach { child -> SessionNode(child, depth + 1, dragSource = null, nested = true) }
   }
-  val sessionRows: @Composable (List<ChatSessionEntry>, SidebarSessionDragSource?) -> Unit = { entries, dragSource ->
+
+  @Composable
+  fun SessionRows(
+    entries: List<ChatSessionEntry>,
+    dragSource: SidebarSessionDragSource?,
+    nested: Boolean = true,
+  ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-      entries.forEach { session -> SessionNode(session, depth = 0, dragSource = dragSource) }
+      entries.forEach { session -> SessionNode(session, depth = 0, dragSource = dragSource, nested = nested) }
     }
   }
   LaunchedEffect(connection.isConnected, gatewayStableId, selectedAgentId, visible) {
@@ -738,7 +755,7 @@ internal fun OpenClawSidebar(
   }
   val sectionRows: @Composable (String, List<ChatSessionEntry>) -> Unit = { token, entries ->
     val window = sidebarSectionWindow(entries, visibleLimits[token] ?: SIDEBAR_SESSION_PAGE_SIZE, recentPresentation.rootKeyOf(activeSessionKey))
-    sessionRows(window.rows, SidebarSessionDragSource.Recent)
+    SessionRows(window.rows, SidebarSessionDragSource.Recent)
     if (window.canShowMore) {
       SidebarActionRow(nativeString("Show more"), Icons.Default.KeyboardArrowDown, palette, onClick = {
         visibleLimits[token] = (visibleLimits[token] ?: SIDEBAR_SESSION_PAGE_SIZE) + SIDEBAR_SESSION_PAGE_SIZE
@@ -918,7 +935,8 @@ internal fun OpenClawSidebar(
               modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
             )
           } else {
-            sessionRows(searchResults, null)
+            // Search lists each match once, without pulling in children that did not match.
+            SessionRows(searchResults, dragSource = null, nested = false)
           }
         } else {
           SidebarPagesHeader(
@@ -968,7 +986,7 @@ internal fun OpenClawSidebar(
             attention = if (pinnedExpanded) null else attentionFor(recentPresentation.withDescendants(pinnedSessions).map { sidebarAttentionSessionKey(it.key, it.ownerAgentId ?: selectedAgentId ?: defaultAgentId) }),
             expanded = pinnedExpanded,
             palette = palette,
-            onClick = { pinnedExpanded = !pinnedExpanded },
+            onClick = { pinnedExpandedChoice = !pinnedExpanded },
             modifier = Modifier.padding(top = 10.dp),
           )
           if (pinnedExpanded) {
@@ -980,7 +998,7 @@ internal fun OpenClawSidebar(
                 modifier = Modifier.padding(horizontal = 40.dp, vertical = 10.dp),
               )
             } else {
-              sessionRows(pinnedSessions, SidebarSessionDragSource.Pinned)
+              SessionRows(pinnedSessions, SidebarSessionDragSource.Pinned)
             }
           }
 

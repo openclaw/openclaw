@@ -442,6 +442,20 @@ class SidebarShellLogicTest {
   }
 
   @Test
+  fun aCollapsedSectionOpensForAnOpenChildOfOneOfItsSessions() {
+    val pinnedParent = session("agent:main:dashboard:pinned", 30, pinned = true)
+    val child = session("agent:main:subagent:child", 20).copy(parentSessionKey = pinnedParent.key)
+    val other = session("agent:main:dashboard:other", 10)
+    val presentation = sidebarSessionPresentation(listOf(pinnedParent, child, other), emptyList())
+
+    assertEquals(listOf(pinnedParent.key), presentation.pinned.map { it.key })
+    assertTrue(presentation.holdsNestedSession(presentation.pinned, activeSessionKey = child.key))
+    assertFalse(presentation.holdsNestedSession(presentation.pinned, activeSessionKey = pinnedParent.key))
+    assertFalse(presentation.holdsNestedSession(presentation.recent, activeSessionKey = child.key))
+    assertFalse(presentation.holdsNestedSession(presentation.pinned, activeSessionKey = other.key))
+  }
+
+  @Test
   fun aCollapsedParentReportsItsHiddenChildrensRequests() {
     val parent = session("agent:main:dashboard:parent", 30)
     val child = session("agent:main:subagent:child", 20).copy(parentSessionKey = parent.key)
@@ -477,9 +491,11 @@ class SidebarShellLogicTest {
     assertNull(activityFor(idle))
     assertNull(activityFor(idle.copy(status = "failed", lastRunError = "boom")))
     assertEquals(SidebarSessionActivity.Unread, activityFor(idle.copy(unread = true)))
+    val queued = session("agent:main:subagent:queued", 30).copy(status = "queued", hasActiveRun = true)
+    assertEquals(SidebarSessionActivity.Queued, activityFor(idle.copy(unread = true), queued))
     assertEquals(
       SidebarSessionActivity.Running,
-      activityFor(idle.copy(unread = true), session("agent:main:subagent:busy", 20).copy(status = "running")),
+      activityFor(queued, session("agent:main:subagent:busy", 20).copy(status = "running")),
     )
   }
 
