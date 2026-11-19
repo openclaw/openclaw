@@ -5,7 +5,6 @@ import type { CustodianTurnAdmission } from "../../components/custodian-alert-co
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { initialWizardValue } from "../model-setup/state.ts";
-import { CustodianAutoSetup } from "./custodian-auto-setup.ts";
 import { CustodianInputDrafts } from "./custodian-input-drafts.ts";
 import {
   navigateFromCustodianSetup,
@@ -18,6 +17,7 @@ import {
 } from "./custodian-session-identity.ts";
 import { CustodianSessionOwner } from "./custodian-session-owner.ts";
 import type { CustodianConfiguredInferenceState } from "./custodian-session-variant.ts";
+import { configuredCustodianInference } from "./custodian-session-variant.ts";
 import {
   custodianWizardSubmission,
   isCustodianWizardCancelAvailable,
@@ -68,11 +68,6 @@ export class CustodianSessionStore {
   channelOnboardingNudgeClosed = false;
   earlierBoundaryAfterId: number | null = null;
   abandonedTurnOutcomeUnknown = false;
-
-  readonly autoSetup = new CustodianAutoSetup(() => {
-    this.synchronizeClient();
-    this.emit();
-  });
 
   private inferenceState: "unverified" | "ready" = "unverified";
   private inputDrafts = new CustodianInputDrafts();
@@ -509,8 +504,7 @@ export class CustodianSessionStore {
         requireAdvertisement: false,
       });
     const ownershipKey = this.sessionOwner.key(context.gateway);
-    this.autoSetup.synchronize(context, this.variant === "onboarding", ownershipKey);
-    const configuredInferenceState = this.autoSetup.configuredInferenceState;
+    const configuredInferenceState = configuredCustodianInference(context);
     const inferenceStateChanged = configuredInferenceState !== this.configuredInferenceState;
     this.configuredInferenceState = configuredInferenceState;
     const variantChanged = this.sessionStarted && this.sessionVariant !== this.variant;

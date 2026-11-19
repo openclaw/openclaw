@@ -11,6 +11,7 @@ import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { createModelProviderLogin } from "../model-providers/login-controller.ts";
+import { AutomaticModelSetup } from "./automatic-setup.ts";
 import {
   captureModelSetupConnection,
   modelSetupAgentSelection,
@@ -33,6 +34,7 @@ import {
   createModelSetupState,
   updateModelSetupWizardDraft,
   type ModelSetupActivationState,
+  type ModelSetupActivationPreferences,
 } from "./state.ts";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
 
@@ -59,7 +61,11 @@ export function createModelSetup(
       projection.invalidate();
     }
   };
+  const autoSetup = new AutomaticModelSetup(notify);
   const actionsDisabled = (): boolean =>
+    autoSetup.pending ||
+    autoSetup.wizard.state.phase === "starting" ||
+    autoSetup.wizard.state.phase === "step" ||
     login.busy ||
     nativeModels.active ||
     state.activationState.phase === "testing" ||
@@ -92,6 +98,7 @@ export function createModelSetup(
     routeData,
     pageState: () => state.pageState,
     activationState: () => state.activationState,
+    verifyState: () => state.verifyState,
     actionsDisabled: () => actionsDisabled() || state.detectionRequest !== null,
     canUseSetup,
     canVerify,
@@ -115,6 +122,7 @@ export function createModelSetup(
       return activationBlocked();
     },
     onSelected: () => (props.embedded ? props.onClose?.() : context.navigate("chat")),
+    activateFirstRun: (params, targetId) => void activate(params, targetId),
     onChange: notify,
   });
   const iconLoader = createModelSetupIconLoader(
@@ -237,6 +245,11 @@ export function createModelSetup(
       return;
     }
     const snapshot = context.gateway.snapshot;
+    autoSetup.synchronize(
+      context,
+      currentRoute.automatic === true && hasOperatorAdminAccess(snapshot.hello?.auth ?? null),
+      `${context.gateway.connectionRevision}:${snapshot.hello?.auth?.recoveryScope ?? ""}`,
+    );
     const previous = observedConnection;
     const observation = reconcileModelSetupConnection(
       previous,
@@ -361,7 +374,12 @@ export function createModelSetup(
       return undefined;
     }
     state.verifyState = { phase: "checking" };
-    return runVerification([client, agentSelection().state.selectedId, modelTarget]);
+    return runVerification([
+      client,
+      agentSelection().state.selectedId,
+      modelTarget,
+      routeData()?.firstRun,
+    ]);
   }
 
   function activationBlocked(): boolean {
@@ -382,11 +400,14 @@ export function createModelSetup(
     );
   }
 
-  function nativeSessionCatalogPreference(): { nativeSessionCatalogsEnabled?: boolean } {
-    return state.pageState.phase === "ready" &&
+  function nativeSessionCatalogPreference(): ModelSetupActivationPreferences {
+    return {
+      ...(routeData()?.firstRun ? { completeFirstAgent: true } : {}),
+      ...(state.pageState.phase === "ready" &&
       state.pageState.result.nativeSessionCatalogPreferenceRequired === true
-      ? { nativeSessionCatalogsEnabled: state.nativeSessionCatalogsEnabled }
-      : {};
+        ? { nativeSessionCatalogsEnabled: state.nativeSessionCatalogsEnabled }
+        : {}),
+    };
   }
 
   function connectManual(): void {
@@ -644,7 +665,8 @@ export function createModelSetup(
       },
       onIconError: iconLoader.invalidate,
       onOpenChat: () => (props.embedded ? props.onClose?.() : firstRun.continueSetup()),
-      onOpenSetupAssistant: () => firstRun.continueSetup("utility"),
+      onOpenSetupAssistant: () =>
+        props.embedded ? props.onClose?.() : firstRun.continueSetup("utility"),
       onSuccessClose: () => {
         if (props.embedded) {
           props.onClose?.();
@@ -663,7 +685,8 @@ export function createModelSetup(
     };
   };
   const synchronizeCurrentGateway = () => {
-    synchronizeGateway(routeData());
+    const currentRoute = routeData();
+    synchronizeGateway(currentRoute);
     login.synchronizePresentation();
     notify();
   };
@@ -671,7 +694,9 @@ export function createModelSetup(
     () => {
       const currentRoute = routeData();
       return [
-        currentRoute ? { firstRun: currentRoute.firstRun } : undefined,
+        currentRoute
+          ? { firstRun: currentRoute.firstRun, automatic: currentRoute.automatic }
+          : undefined,
         agentSelection(currentRoute),
       ] as const;
     },
@@ -698,12 +723,14 @@ export function createModelSetup(
       stopGateway();
       stopFirstRun();
       firstRun.dispose();
+      autoSetup.dispose();
       retireWizardMutation();
       iconLoader.reset();
       void wizard.cancel();
     };
   });
   return {
+    autoSetup,
     view,
     login,
     wizardSaving: wizardSaving.saving,

@@ -19,9 +19,12 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./test-helpers/page.test-support.ts";
 import type { TestModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
-const onboarding = { search: "?onboarding=1" };
+const onboarding = {
+  pathname: "/openclaw/chat/main",
+  search: "?draft=Wake%20up%2C%20my%20friend!",
+};
 export const waitForOnboarding = (context: Pick<ApplicationContext, "navigate">) =>
-  waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("custodian", onboarding));
+  waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("chat", onboarding));
 
 export const missingWizardError = () =>
   new GatewayRequestError({
@@ -59,7 +62,15 @@ export function activated(
   modelRef: string,
   details: Partial<NonNullable<WizardNextResult["modelActivation"]>> = {},
 ) {
-  return { done: true, status: "done" as const, modelActivation: { modelRef, ...details } };
+  return {
+    done: true,
+    status: "done" as const,
+    modelActivation: {
+      modelRef,
+      firstAgent: { agentId: "main", sessionKey: "agent:main:main", bootstrapPending: true },
+      ...details,
+    },
+  };
 }
 
 export const runningStep = (step: NonNullable<WizardNextResult["step"]>) => ({
@@ -114,7 +125,21 @@ export function mockRequests(
     if (!Object.hasOwn(handlers, method) || !handler) {
       throw new Error(`Unexpected method ${method}`);
     }
-    return handler(params);
+    const result = await handler(params);
+    if (
+      method === "openclaw.setup.verify" &&
+      result &&
+      typeof result === "object" &&
+      "ok" in result &&
+      result.ok &&
+      !("modelTarget" in result)
+    ) {
+      return {
+        ...result,
+        firstAgent: { agentId: "main", sessionKey: "agent:main:main", bootstrapPending: true },
+      };
+    }
+    return result;
   });
 }
 

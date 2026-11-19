@@ -11,7 +11,9 @@ export function canonicalModelSetupLocation(
 ): RouteLocation {
   // First-run activation owns its consent/recovery receipt. Existing settings
   // bookmarks instead open the one connection entry point on Models.
-  return ["1", "explicit"].includes(new URLSearchParams(location.search).get("firstRun") ?? "")
+  return ["1", "explicit", "auto"].includes(
+    new URLSearchParams(location.search).get("firstRun") ?? "",
+  )
     ? location
     : { pathname: pathForRoute("model-providers", basePath), search: "?connect=1", hash: "" };
 }
@@ -26,7 +28,10 @@ export const page = defineSolidPage<"model-setup", ApplicationContext, ModelSetu
     loader: (context: ApplicationContext, { location }) => {
       const canonical = canonicalModelSetupLocation(location, context.basePath);
       return canonical === location
-        ? ({ firstRun: true } satisfies ModelSetupRouteData)
+        ? ({
+            firstRun: true,
+            automatic: new URLSearchParams(location.search).get("firstRun") === "auto",
+          } satisfies ModelSetupRouteData)
         : redirect(canonical);
     },
   },

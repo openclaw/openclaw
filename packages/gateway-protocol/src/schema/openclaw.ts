@@ -13,6 +13,7 @@ import { NonEmptyString } from "./primitives.js";
 import {
   SetupInferenceActivationRejectionSchema,
   SetupInferenceFailureStatusSchema,
+  SetupFirstAgentSchema,
 } from "./setup-inference.js";
 import { withSince } from "./since.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
@@ -378,6 +379,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
 
 /** Live verification of the Gateway's current default-agent inference route. */
 export const SystemAgentSetupVerifyParamsSchema = closedObject({
+  /** Finish canonical first-agent provisioning after verified primary recovery. */
+  completeFirstAgent: Type.Optional(Type.Literal(true)),
   /** Primary verification must not fall back to setup-only utility inference. */
   modelTarget: Type.Optional(Type.Union([Type.Literal("primary"), Type.Literal("utility")])),
   /** Agent whose configured inference route is being verified. */
@@ -390,6 +393,7 @@ export const SystemAgentSetupVerifyResultSchema = Type.Union([
     modelRef: NonEmptyString,
     modelTarget: Type.Optional(Type.Literal("utility")),
     latencyMs: Type.Number(),
+    firstAgent: Type.Optional(SetupFirstAgentSchema),
   }),
   closedObject({
     ok: Type.Literal(false),
@@ -399,10 +403,17 @@ export const SystemAgentSetupVerifyResultSchema = Type.Union([
 ]);
 
 export const SystemAgentSetupActivateParamsSchema = closedObject({
+  completeFirstAgent: Type.Optional(Type.Literal(true)),
   modelTarget: Type.Optional(Type.Literal("utility")),
   /** Agent that owns the verified and persisted inference route. */
   agentId: Type.Optional(NonEmptyString),
-  kind: Type.Union([...SetupInferenceKind.anyOf, Type.Literal("api-key")]),
+  kind: Type.Union([
+    ...SetupInferenceKind.anyOf,
+    Type.Literal("api-key"),
+    Type.Literal("native-model"),
+  ]),
+  /** Published native runtime choice, verified before first-run model selection. */
+  agentRuntime: Type.Optional(NonEmptyString),
   /** Exact detected model for this route; prevents detect/activate drift. */
   modelRef: Type.Optional(NonEmptyString),
   /** Manual step only: opaque provider-auth choice returned by detection. */
@@ -423,6 +434,7 @@ export const SystemAgentSetupActivateStartParamsSchema = closedObject({
 export const SystemAgentSetupActivateStartResultSchema = WizardStartResultSchema;
 
 export const SystemAgentSetupActivateResultSchema = closedObject({
+  firstAgent: Type.Optional(SetupFirstAgentSchema),
   ok: Type.Boolean(),
   /** Present on success: the model ref that answered the live test. */
   modelRef: Type.Optional(Type.String()),
@@ -441,6 +453,7 @@ export const SystemAgentSetupActivateResultSchema = closedObject({
 
 /** Starts one provider-owned interactive login as a gateway wizard session. */
 export const SystemAgentSetupAuthStartParamsSchema = closedObject({
+  completeFirstAgent: Type.Optional(Type.Literal(true)),
   expectedOwnerId: Type.Optional(withSince("2026.9.9", Type.String({ minLength: 1 }))),
   modelTarget: Type.Optional(Type.Literal("utility")),
   /** Client-generated so cancellation remains possible if the start reply is lost. */

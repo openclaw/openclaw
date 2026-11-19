@@ -48,7 +48,6 @@ import { CustodianAlertCard } from "./custodian-alert-card.tsx";
 import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { CustodianEventNudgeView } from "./custodian-nudge.tsx";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
-import { CustodianSetupCard } from "./custodian-setup-card.tsx";
 import {
   createPluginHelpRequest,
   currentPluginHelpReference,
@@ -351,11 +350,6 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
       )}
     </Show>
   );
-  const setupCard = () => (
-    <Show when={props.onboarding}>
-      <CustodianSetupCard store={store()} actions={actions().setup} />
-    </Show>
-  );
   const transcriptNotice = (status: CustodianSessionStore["transcript"]["status"]) => (
     <PanelRefreshStatus
       status={status}
@@ -365,7 +359,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
   );
   return (
     <Show
-      when={!store().setupRequired && !store().autoSetup.blocksGreeting}
+      when={!store().setupRequired}
       fallback={
         <section
           class={[
@@ -373,24 +367,21 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
             { "custodian-surface--panel": props.compact },
           ]}
         >
-          {setupCard()}
           {alertCard()}
-          <Show when={!store().autoSetup.blocksGreeting || store().autoSetup.dismissed}>
-            <div class="custodian__setup-state" role="alert">
-              <openclaw-mascot mood="idle" prop:size={props.compact ? 72 : 96} />
-              <h2>{t("modelSetup.required.title")}</h2>
-              <p>{t("modelSetup.required.body")}</p>
-              <div class="custodian__setup-actions">
-                <button
-                  class="btn primary"
-                  type="button"
-                  onClick={() => store().exitSetup("model-setup")}
-                >
-                  {t("modelSetup.required.action")}
-                </button>
-              </div>
+          <div class="custodian__setup-state" role="alert">
+            <openclaw-mascot mood="idle" prop:size={props.compact ? 72 : 96} />
+            <h2>{t("modelSetup.required.title")}</h2>
+            <p>{t("modelSetup.required.body")}</p>
+            <div class="custodian__setup-actions">
+              <button
+                class="btn primary"
+                type="button"
+                onClick={() => store().exitSetup("model-setup")}
+              >
+                {t("modelSetup.required.action")}
+              </button>
             </div>
-          </Show>
+          </div>
         </section>
       }
     >
@@ -413,7 +404,6 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
             handleMarkdownTableInteraction(event);
           }}
         >
-          {setupCard()}
           {alertCard()}
           {props.channelOnboardingContent}
           {/* Independent health events stay visible while a user turn is pending. */}

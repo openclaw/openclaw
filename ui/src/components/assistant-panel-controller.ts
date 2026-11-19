@@ -74,7 +74,6 @@ export function createAssistantPanel(
   let builtInDestination: "home" | "custodian" = "custodian";
   let pendingPrimaryPane: { pane: ChatPaneElement } | null = null;
   let publishedSessionKey: string | null = null;
-  let handledMinimizeRequestId = 0;
   let targetScope = "";
   let refreshing = false;
   let homeDefaults: {
@@ -109,9 +108,14 @@ export function createAssistantPanel(
             JSON.parse(getSafeLocalStorage()?.getItem(targetStorageKey()) ?? "null"),
           );
         } catch {
-          // Missing or invalid saved presentation preferences use the default destination.
+          // Invalid presentation preferences use the default destination.
         }
         destination = saved?.destination === "home" ? "home" : "custodian";
+        // Ask is explicit help, not a second conversation restored after onboarding.
+        // Home and activation-owned plugin docks retain their normal behavior.
+        if (destination === "custodian") {
+          dockLayout.setOpen(false);
+        }
         builtInDestination = destination;
       }
       const context = getContext();
@@ -126,17 +130,6 @@ export function createAssistantPanel(
         };
       }
       dockLayout.setSuppressed(restoreSuppressed());
-      if (
-        props.minimizeRequestId > 0 &&
-        props.minimizeRequestId !== handledMinimizeRequestId &&
-        props.custodianAvailable &&
-        props.store
-      ) {
-        handledMinimizeRequestId = props.minimizeRequestId;
-        if (typeof destination === "string" && props.store.hasRealUserTurn()) {
-          openDestination("custodian");
-        }
-      }
       if (!available()) {
         dockLayout.hideWithoutPersisting();
       } else {
@@ -514,9 +507,7 @@ export function createAssistantPanel(
     homeTarget,
     available,
     contentDefined: () => customElements.get("openclaw-assistant-panel-content") !== undefined,
-    shouldLoadContent: () =>
-      (dockLayout.open && (destination !== "home" || homeStarted)) ||
-      (props.custodianAvailable && props.minimizeRequestId > handledMinimizeRequestId),
+    shouldLoadContent: () => dockLayout.open && (destination !== "home" || homeStarted),
     get openSessionKey() {
       return openSessionKey();
     },

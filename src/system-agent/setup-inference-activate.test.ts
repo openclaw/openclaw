@@ -538,6 +538,25 @@ describe("setup activation credentials and configuration", () => {
     expect(created.config.agents?.defaults?.model).toBe(`${modelRef}@${setup.readProfile()?.[0]}`);
   });
 
+  it("provisions implicit main canonically when first-run UI completes activation", async () => {
+    const setup = await fixture({ fresh: true });
+    expect(
+      await setup.activate("provider-auth", undefined, {
+        agentId: "main",
+        completeFirstAgent: true,
+      }),
+    ).toMatchObject({ ok: true });
+    const activated = await readSnapshot();
+    expect(hasResolvedRosterBeforeMigrations(activated)).toBe(true);
+    expect(activated.sourceConfig.agents?.entries?.main).toMatchObject({
+      name: "main",
+      workspace: setup.workspace,
+    });
+    expect(activated.sourceConfig.agents?.defaults?.models?.[modelRef]?.agentRuntime?.id).toBe(
+      "openclaw",
+    );
+  });
+
   it("saves credentials before the probe and commits after success", async () => {
     const setup = await fixture({ localService: true, addProviderDuringLogin: false });
     setup.run.mockImplementation(async (params) => {

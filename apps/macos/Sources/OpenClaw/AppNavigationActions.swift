@@ -63,8 +63,8 @@ enum AppNavigationActions {
     /// Gateway-owned onboarding has no native equivalent.
     static func openDashboardOnboarding() {
         self.openPrimaryWebRoute(
-            DashboardRouteMap.custodianPagePath,
-            search: DashboardRouteMap.custodianOnboardingSearch)
+            DashboardRouteMap.modelSetupPagePath,
+            search: DashboardRouteMap.modelSetupOnboardingSearch)
     }
 
     static func openChat(sessionKey: String? = nil, agentID: String? = nil, draft: String? = nil) {

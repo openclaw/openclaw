@@ -362,15 +362,15 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/custodian/custodian-setup-card.tsx",
-      "text": "openclaw onboard"
+      "path": "ui/src/pages/debug/debug-page.tsx",
+      "text": "openclaw security audit --deep"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/debug/debug-page.tsx",
-      "text": "openclaw security audit --deep"
+      "path": "ui/src/pages/model-setup/automatic-setup-card.tsx",
+      "text": "openclaw onboard"
     },
     {
       "count": 1,

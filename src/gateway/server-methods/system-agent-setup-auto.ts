@@ -5,6 +5,7 @@ import type { SystemAgentSetupAutoResult } from "../../../packages/gateway-proto
 import { resolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { resolveModelRuntimePolicy } from "../../agents/model-runtime-policy.js";
 import { resolveConfiguredPrimaryModelForAgent } from "../../agents/utility-model.js";
+import { hasResolvedRosterBeforeMigrations } from "../../config/agent-roster-provenance.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { applyMergePatch, createMergePatch } from "../../config/merge-patch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -85,6 +86,7 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
   let codexFailed = false;
   let shared = false;
   let authOptions = detection.authOptions;
+  let firstAgent: SystemAgentSetupAutoResult["firstAgent"];
   const result = (
     status: SystemAgentSetupAutoResult["status"],
     selected?: SetupInferenceCandidate,
@@ -99,6 +101,7 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
       : undefined;
     return {
       status,
+      ...(firstAgent ? { firstAgent } : {}),
       ...(selected
         ? { selected: { ...present(selected), ...(shared ? { shared: true } : {}) } }
         : {}),
@@ -117,6 +120,27 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
     const config = initialSnapshot.runtimeConfig ?? initialSnapshot.config;
     const agentId = resolveAmbientOwnerAgentId(config);
     const modelRef = resolveConfiguredPrimaryModelForAgent({ cfg: config, agentId });
+    if (!hasResolvedRosterBeforeMigrations(initialSnapshot)) {
+      const activation = await activateGatewaySetupInference({
+        kind: "existing-model",
+        modelRef,
+        surface: "gateway",
+        runtime,
+        automaticSetup: true,
+        completeFirstAgent: true,
+      });
+      if (!activation.ok) {
+        throw new Error(activation.error);
+      }
+      firstAgent = activation.firstAgent;
+    } else {
+      const { completeSetupFirstAgent } = await import("../../system-agent/setup-first-agent.js");
+      const selected = ranked.find((candidate) => candidate.kind === "existing-model");
+      firstAgent = await completeSetupFirstAgent({
+        agentId,
+        modelRef: selected?.modelRef ?? detection.configuredModel ?? modelRef ?? "",
+      });
+    }
     const ref = modelRef ? parseProviderModelRef(modelRef) : undefined;
     const appServer = config.plugins?.entries?.codex?.config?.appServer;
     shared = Boolean(
@@ -161,6 +185,7 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
       runtime,
       signal,
       automaticSetup: true,
+      completeFirstAgent: true,
       activationConfirmed: true,
       nativeSessionCatalogsEnabled: false,
       beforePersistentEffect: assertCurrent,
@@ -187,6 +212,7 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
       };
     });
     if (activation.ok) {
+      firstAgent = activation.firstAgent;
       candidate.modelRef = activation.modelRef;
       if (candidate.kind === "codex-cli") {
         shared = true;

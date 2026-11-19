@@ -579,39 +579,30 @@ describe("assistant panel", () => {
     },
   );
 
-  it("minimizes the existing onboarding conversation when available", async () => {
-    const userText = "Continue setup";
-    const { context, panel, request, store, dom } = await mountPanel({
+  it("does not reopen Ask when leaving onboarding after a real user turn", async () => {
+    const { context, panel, request, store } = await mountPanel({
       history: {
         turns: [
           { role: "assistant", text: "Set up your system", at: 1 },
-          { role: "user", text: userText, at: 2 },
+          { role: "user", text: "Continue setup", at: 2 },
         ],
       },
     });
     store.connect(context, "onboarding");
-    const chatRequests = () => request.mock.calls.filter(([method]) => method === "openclaw.chat");
-    await vi.waitFor(() => expect(chatRequests()).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(request.mock.calls.filter(([method]) => method === "openclaw.chat")).toHaveLength(1),
+    );
     await update(panel, {
       custodianAvailable: true,
       custodianSuppressed: false,
       minimizeRequestId: 1,
     });
-    expect(panel.assistantPanelOpen).toBe(true);
-    const surface = dom.query<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-custodian-surface",
-    );
-    await surface?.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(false);
+    expect(reserveRight()).toBe("0px");
+    await toggle(panel, CUSTODIAN_PANEL_TOGGLE_EVENT);
     expect(panel.assistantPanelOpen).toBe(true);
     expect(store.activeVariant).toBe("onboarding");
-    expect(chatRequests()).toHaveLength(1);
-    expect(panel.textContent).toContain(userText);
-    expect(reserveRight()).toBe("440px");
-    await click(panel, ".assistant-panel-actions .assistant-panel-icon:last-child");
-    expect(panel.assistantPanelOpen).toBe(false);
-    await update(panel, { custodianSuppressed: true });
-    await update(panel, { custodianSuppressed: false, minimizeRequestId: 2 });
-    expect(panel.assistantPanelOpen).toBe(true);
+    expect(panel.textContent).toContain("Continue setup");
   });
 
   it("opens installed plugin help on desktop only when requested", async () => {

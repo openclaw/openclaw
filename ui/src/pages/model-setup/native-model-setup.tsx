@@ -11,7 +11,11 @@ import {
   Show,
 } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
+import type {
+  ModelCatalogEntry,
+  ModelCatalogResult,
+  SystemAgentSetupActivateParams,
+} from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
@@ -31,6 +35,7 @@ import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import type { captureModelSetupConnection } from "./first-run-setup.ts";
 import { createModelSetupSaving } from "./model-setup-saving.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
+import { activationTargetId } from "./state.ts";
 
 export type NativeModelSetup = ReturnType<typeof createNativeModelSetup>;
 
@@ -45,6 +50,7 @@ export function createNativeModelSetup(options: {
   getConnection: () => ReturnType<typeof captureModelSetupConnection> | null;
   canUseSetup: (client: GatewayBrowserClient | null) => boolean;
   blocked: () => boolean;
+  activateFirstRun: (params: SystemAgentSetupActivateParams, targetId: string) => void;
   onSelected: () => void;
   onChange: () => void;
 }) {
@@ -113,9 +119,16 @@ export function createNativeModelSetup(options: {
     ) {
       return;
     }
+    const modelRef = `${model.provider}/${model.id}`;
+    if (connection?.firstRun && model.agentRuntime) {
+      options.activateFirstRun(
+        { kind: "native-model", modelRef, agentRuntime: model.agentRuntime.id },
+        activationTargetId("native-model", modelRef),
+      );
+      return;
+    }
     mutationActive = true;
     options.onChange();
-    const modelRef = `${model.provider}/${model.id}`;
     const pending = (async () => {
       try {
         const mutation = await context.runtimeConfig.runExternalMutation(

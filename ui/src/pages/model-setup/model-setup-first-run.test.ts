@@ -37,8 +37,47 @@ import { unmountModelSetupPage } from "./test-helpers/solid-page.test-support.ts
 
 describe("ModelSetupPage first-run inference", () => {
   useFirstRunFixtures("durable-device-private-key-for-testing", true);
+  it("verifies a first-run native selection before provisioning and handing off", async () => {
+    const { context, client, request } = createFirstRunContext();
+    const release = createDeferred<ReturnType<typeof activated>>();
+    mockRequests(request, {
+      "models.list": () => ({ models: [nativeModel()] }),
+      "openclaw.setup.activate.start": () => release.promise,
+    });
+    const { page } = await mountDetection(context, client);
+    pageButton(page, "[data-native-model-setup] .picker-select__trigger")!.click();
+    const option = '[role="option"][data-value="acp-opencode/fixture-model"]';
+    await waitForElement(page, option);
+    page.querySelector<HTMLElement>(option)!.click();
+    await page.updateComplete;
+    pageButton(page, "[data-native-model-setup] button.primary")!.click();
+    try {
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith(
+          "openclaw.setup.activate.start",
+          {
+            sessionId: expect.any(String),
+            agentId: "main",
+            kind: "native-model",
+            modelRef: "acp-opencode/fixture-model",
+            agentRuntime: "acp-opencode",
+            completeFirstAgent: true,
+          },
+          expect.any(Object),
+        ),
+      );
+      expect(request.mock.calls.some(([method]) => method === "agents.update")).toBe(false);
+      expect(context.navigate).not.toHaveBeenCalled();
+      release.resolve(activated("acp-opencode/fixture-model"));
+      await waitForOnboarding(context);
+      expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    } finally {
+      release.resolve(activated("acp-opencode/fixture-model"));
+    }
+  });
+
   it.each(["current", "reconnect", "rejected"])(
-    "finishes native Use only while its page is current (%s)",
+    "finishes Settings native Use only while its page is current (%s)",
     async (owner) => {
       const entered = createDeferred();
       const release = createDeferred();
@@ -68,7 +107,7 @@ describe("ModelSetupPage first-run inference", () => {
           agents: [{ id: "main", model: "acp-opencode/fixture-model" }],
         }),
       });
-      const { page } = await mountDetection(context, client, detection);
+      const { page } = await mountDetection(context, client, detection, false);
       try {
         pageButton(page, "[data-native-model-setup] .picker-select__trigger")!.click();
         const option = '[role="option"][data-value="acp-opencode/fixture-model"]';
@@ -178,18 +217,22 @@ describe("ModelSetupPage first-run inference", () => {
 
     await waitForFast(() => {
       expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
-        ["openclaw.setup.verify", { agentId: "main" }],
+        ["openclaw.setup.verify", { agentId: "main", completeFirstAgent: true }],
         [
           "openclaw.setup.activate.start",
           {
             sessionId: expect.any(String),
             agentId: "main",
+            completeFirstAgent: true,
             kind: "anthropic-api-key",
             modelRef: "anthropic/replacement",
           },
         ],
       ]);
-      expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" });
+      expect(context.navigate).toHaveBeenCalledWith("chat", {
+        pathname: "/openclaw/chat/main",
+        search: "?draft=Wake%20up%2C%20my%20friend!",
+      });
     });
   });
 
@@ -220,14 +263,22 @@ describe("ModelSetupPage first-run inference", () => {
       expect(context.navigate).not.toHaveBeenCalled();
       const retry = pageButton(page, ".model-setup__current button")!;
       expect(retry.disabled).toBe(false);
-      request.mockResolvedValueOnce({ ok: true, modelRef: "openai/existing", latencyMs: 31 });
+      request.mockResolvedValueOnce({
+        ok: true,
+        modelRef: "openai/existing",
+        latencyMs: 31,
+        firstAgent: { agentId: "main", sessionKey: "agent:main:main", bootstrapPending: true },
+      });
       retry.click();
       await waitForElement(page, ".model-setup__verified");
       const continueSetup = [...page.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
-        button.textContent?.includes("Continue setup"),
+        button.textContent?.includes("Start talking to your agent"),
       )!;
       continueSetup.click();
-      expect(context.navigate).toHaveBeenCalledWith("chat");
+      expect(context.navigate).toHaveBeenCalledWith("chat", {
+        pathname: "/openclaw/chat/main",
+        search: "?draft=Wake%20up%2C%20my%20friend!",
+      });
       expect(request.mock.calls.map(([method]) => method)).toEqual([
         "openclaw.setup.verify",
         "openclaw.setup.verify",
@@ -296,7 +347,10 @@ describe("ModelSetupPage first-run inference", () => {
             "openclaw.setup.detect",
             "openclaw.setup.verify",
           ]);
-          expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" });
+          expect(context.navigate).toHaveBeenCalledWith("chat", {
+            pathname: "/openclaw/chat/main",
+            search: "?draft=Wake%20up%2C%20my%20friend!",
+          });
         });
         expect(context.navigate).not.toHaveBeenCalledWith("chat");
         activation.resolve(activated(expected, { gatewayRestartRequired: true }));
@@ -356,10 +410,10 @@ describe("ModelSetupPage first-run inference", () => {
       }),
       "openclaw.setup.activate.start": (params) => {
         const parameters = requestParameters(params);
-        if (!("modelRef" in parameters)) {
+        if (!("modelRef" in parameters) || typeof parameters.modelRef !== "string") {
           throw new Error("Model activation is missing its model reference.");
         }
-        return { done: true, status: "done", modelActivation: { modelRef: parameters.modelRef } };
+        return activated(parameters.modelRef);
       },
     });
     const { page } = await mountDetection(
@@ -383,6 +437,7 @@ describe("ModelSetupPage first-run inference", () => {
           {
             sessionId: expect.any(String),
             agentId: "main",
+            completeFirstAgent: true,
             kind: "anthropic-api-key",
             modelRef: "anthropic/fresh",
           },
@@ -514,7 +569,7 @@ describe("ModelSetupPage first-run application recovery", () => {
     expect(relaunched.request).toHaveBeenCalledOnce();
     expect(relaunched.request).toHaveBeenCalledWith(
       "openclaw.setup.verify",
-      { agentId: "main" },
+      { agentId: "main", completeFirstAgent: true },
       { timeoutMs: MODEL_SETUP_VERIFY_TIMEOUT_MS, signal: expect.any(AbortSignal) },
     );
   });
@@ -559,8 +614,9 @@ describe("ModelSetupPage first-run application recovery", () => {
         "openclaw.setup.detect",
         "openclaw.setup.activate.start",
       ]);
-      expect(relaunched.context.navigate).toHaveBeenCalledWith("custodian", {
-        search: "?onboarding=1",
+      expect(relaunched.context.navigate).toHaveBeenCalledWith("chat", {
+        pathname: "/openclaw/chat/main",
+        search: "?draft=Wake%20up%2C%20my%20friend!",
       });
     });
     expect(original.request).toHaveBeenCalledOnce();
@@ -620,7 +676,10 @@ describe("ModelSetupPage first-run application recovery", () => {
 
     await waitForFast(() => {
       expect(activationCount).toBe(2);
-      expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" });
+      expect(context.navigate).toHaveBeenCalledWith("chat", {
+        pathname: "/openclaw/chat/main",
+        search: "?draft=Wake%20up%2C%20my%20friend!",
+      });
     });
     resolveFirstActivation?.(activated("openai/new", { gatewayRestartRequired: true }));
   });

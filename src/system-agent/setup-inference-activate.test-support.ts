@@ -158,6 +158,7 @@ export async function fixture(
     profiles?: ProviderAuthResult["profiles"];
     addProviderDuringLogin?: boolean;
     fresh?: boolean;
+    skipBootstrap?: boolean;
     surface?: "cli" | "gateway";
     secretRef?: boolean;
     signal?: AbortSignal;
@@ -208,7 +209,7 @@ export async function fixture(
         ...(options.primaryModel
           ? { model: { primary: options.primaryModel, fallbacks: ["stable/fallback"] } }
           : {}),
-        skipBootstrap: true,
+        skipBootstrap: options.skipBootstrap ?? true,
         models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
       },
     },
@@ -448,7 +449,9 @@ export async function fixture(
       | "onActivationCompletion"
       | "modelTarget"
       | "modelRef"
+      | "agentRuntime"
       | "automaticSetup"
+      | "completeFirstAgent"
       | "assertCurrent"
     > = {},
   ) =>

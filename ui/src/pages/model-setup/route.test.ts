@@ -16,6 +16,7 @@ describe("model setup route", () => {
   it.each([
     ["?firstRun=1", true],
     ["?firstRun=explicit", true],
+    ["?firstRun=auto", true],
     ["?firstRun=0&firstRun=explicit", false],
     ["", false],
   ])("preserves onboarding but redirects settings link %s to Models", async (search, firstRun) => {
@@ -24,7 +25,7 @@ describe("model setup route", () => {
     const options: RouteLoaderOptions = createRouteLoaderOptions(target, search);
     expect(await page.loader?.(context, options)).toEqual(
       firstRun
-        ? { firstRun: true }
+        ? { firstRun: true, automatic: search === "?firstRun=auto" }
         : {
             type: "redirect",
             location: { pathname: "/ui/settings/model-providers", search: "?connect=1", hash: "" },

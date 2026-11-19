@@ -1,0 +1,5 @@
+# Fresh native setup must prove consent rejection, verification/cancellation, real config
+# application/rollback, canonical workspace bootstrap, and existing-agent preservation.
+# Keep these production-owner regressions rather than replace them with mock-only checks.
+# Measured net test growth over the PR base: 411; allocation covers only the 11-line excess.
+11

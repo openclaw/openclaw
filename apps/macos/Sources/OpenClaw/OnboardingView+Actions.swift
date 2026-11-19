@@ -106,11 +106,10 @@ extension OnboardingView {
         OnboardingController.shared.close()
         guard openPrimaryDashboard, finishState.connectionCompletion == nil,
               state.connectionMode != .unconfigured else { return true }
-        // Fresh activation hands off to the dashboard's custodian onboarding, which
-        // owns the remaining first-run steps (memory import, channels, permissions,
-        // hatch). A live-verified pre-existing setup reopens the normal dashboard.
+        // Model Setup completes first-agent provisioning and opens its regular Home.
+        // Existing configured connections keep their normal dashboard.
         dashboardHandoffOpener(
-            aiSetup.verifiedExistingInference || primaryIsJoinedClaw ? .dashboard : .custodianOnboarding)
+            aiSetup.verifiedExistingInference || primaryIsJoinedClaw ? .dashboard : .modelSetup)
         return true
     }
 }

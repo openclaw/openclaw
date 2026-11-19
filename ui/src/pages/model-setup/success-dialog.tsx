@@ -33,7 +33,11 @@ export function ModelSetupSuccessDialog(
     });
   const actionLabel = () =>
     utility()
-      ? t("modelSetup.utility.openAssistant")
+      ? t(
+          props.embedded
+            ? "modelSetup.discovery.returnToModels"
+            : "modelSetup.utility.openAssistant",
+        )
       : props.embedded
         ? t("modelSetup.discovery.returnToModels")
         : props.firstRun

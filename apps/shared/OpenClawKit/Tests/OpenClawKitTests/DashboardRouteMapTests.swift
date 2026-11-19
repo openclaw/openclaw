@@ -92,6 +92,15 @@ struct DashboardRouteMapTests {
             to: #require(URL(string: "http://127.0.0.1:18789/control/"))) == nil)
     }
 
+    @Test func `first run opens model setup without losing the Gateway base or token`() throws {
+        let base = try #require(URL(string: "https://gateway.example.test/control/#token=test-token"))
+        let url = try #require(DashboardRouteMap.dashboardURL(
+            byAppendingSameAppPath: DashboardRouteMap.modelSetupPagePath,
+            search: DashboardRouteMap.modelSetupOnboardingSearch,
+            to: base))
+        #expect(url.absoluteString == "https://gateway.example.test/control/settings/model-setup?firstRun=auto#token=test-token")
+    }
+
     @Test(arguments: ["?onboarding=1", "?session=%E2%9C%93%2Ffoo%25"])
     func `same-app search validation accepts a plain query`(_ search: String) {
         #expect(DashboardRouteMap.isValidSameAppSearch(search))

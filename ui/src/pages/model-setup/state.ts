@@ -1,5 +1,6 @@
 import type {
   ProviderLoginOption,
+  SystemAgentSetupActivateParams,
   SystemAgentSetupActivateResult,
   SystemAgentSetupDetectResult,
   SystemAgentSetupVerifyResult,
@@ -14,6 +15,11 @@ export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 150_000;
 const MODEL_SETUP_ACTIVATE_TIMEOUT_MS = 480_000;
 export const MODEL_SETUP_AUTH_START_TIMEOUT_MS = 30_000;
 export const MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS = null;
+
+export type ModelSetupActivationPreferences = Pick<
+  SystemAgentSetupActivateParams,
+  "nativeSessionCatalogsEnabled" | "completeFirstAgent"
+> & { selectModel?: true };
 
 export type ModelSetupPageState =
   | { phase: "loading" }
@@ -56,7 +62,13 @@ type ModelSetupVerifyFailure = Extract<SystemAgentSetupVerifyResult, { ok: false
 export type ModelSetupVerifyState =
   | { phase: "idle" }
   | { phase: "checking" }
-  | { phase: "ok"; modelRef: string; modelTarget?: "utility"; latencyMs?: number }
+  | {
+      phase: "ok";
+      modelRef: string;
+      modelTarget?: "utility";
+      latencyMs?: number;
+      firstAgent?: Extract<SystemAgentSetupVerifyResult, { ok: true }>["firstAgent"];
+    }
   | { phase: "failed"; status: ModelSetupVerifyFailure["status"]; error: string };
 
 export type ModelSetupWizardResult =
@@ -190,6 +202,7 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
     return {
       phase: "ok",
       modelRef: result.modelRef,
+      ...(result.firstAgent ? { firstAgent: result.firstAgent } : {}),
       ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
       ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
     };

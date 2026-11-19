@@ -119,5 +119,21 @@ export async function activateGatewaySetupInference(
       activationProgress?.stop();
     }
   }
+  if (
+    result.ok &&
+    !restartRequired &&
+    params.completeFirstAgent &&
+    result.modelTarget !== "utility" &&
+    params.selectModel !== false
+  ) {
+    const { completeSetupFirstAgent } = await import("../../system-agent/setup-first-agent.js");
+    result = {
+      ...result,
+      firstAgent: await completeSetupFirstAgent({
+        agentId: params.agentId,
+        modelRef: result.modelRef,
+      }),
+    };
+  }
   return result.ok && restartRequired ? { ...result, gatewayRestartRequired: true } : result;
 }

@@ -24,7 +24,7 @@ On a fresh install, open the app and follow **Setting up OpenClaw on this Mac**:
 
 1. The app prepares its runtime and starts a local Gateway.
 2. The dashboard opens and connects available AI access.
-3. A live AI test verifies the connection before guided setup continues.
+3. A live AI test verifies the connection before opening your own agent's first conversation.
 
 An already configured model is kept. You can then set up optional features
 and start chatting. To choose the connection yourself, select **Set up manually**.
@@ -134,11 +134,15 @@ See [AI connection options](/start/onboarding#ai-connection-options) below for l
 local models, and custom endpoints.
 </Step>
 <Step title="Continue in the dashboard">
-A newly verified model opens guided setup for your workspace, Gateway,
-channels, and optional features, then agent chat. An already configured model
-opens the normal dashboard.
+A newly verified primary model finishes creating your first regular agent and
+opens its persistent Home conversation. The "Wake up, my friend!" starter is
+an editable draft, not an automatically sent message. Send it to get acquainted,
+or replace it with real work: your request takes priority over naming and avatars.
+Keep talking to that same agent for tools, integrations, setup, and everyday work.
+Existing agents are reused. A utility-only connection stays in Model Setup until
+you connect a primary model.
 
-- **Import memory (optional):** choose files during guided setup or later in
+- **Import memory (optional):** choose files in
   **Settings → Import Memory**. Local Gateways can import Claude Code, Codex,
   and Hermes memories into `memory/imports/`; previously imported files are skipped.
 - **Grant macOS access as needed:** open **Settings → This Mac → Permissions** for features

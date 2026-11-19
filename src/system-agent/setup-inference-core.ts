@@ -178,6 +178,7 @@ export class SetupInferenceOwnerDriftError extends Error {
 export type VerifySetupInferenceResult =
   | {
       ok: true;
+      firstAgent?: import("../../packages/gateway-protocol/src/schema/setup-inference.js").SetupFirstAgent;
       modelTarget?: "utility";
       modelRef: string;
       latencyMs: number;
@@ -203,7 +204,10 @@ export type BoundVerifySetupInferenceResult =
   | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type ActivateSetupInferenceParams = {
-  kind: SetupInferenceKind | "api-key" | "provider-auth";
+  completeFirstAgent?: true;
+  kind: SetupInferenceKind | "api-key" | "provider-auth" | "native-model";
+  /** Published native runtime choice for native-model activation. */
+  agentRuntime?: string;
   /** Gateway first-run policy; never inherited by the manual picker. */
   automaticSetup?: true;
   /** Enable and verify access without changing the agent's selected model. */
@@ -516,6 +520,7 @@ export type StagedCandidate = {
   modelRef: string;
   modelTarget?: "utility";
   agentRuntimeId?: string;
+  validateSelection?: () => string | undefined;
   authProfileId?: string;
   pluginId?: string;
   config: OpenClawConfig;

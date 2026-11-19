@@ -19,6 +19,8 @@ public enum DashboardRouteMap {
     public static let custodianPagePath = "/custodian"
     /// Control UI query that renders /custodian with onboarding chrome.
     public static let custodianOnboardingSearch = "?onboarding=1"
+    public static let modelSetupPagePath = "/settings/model-setup"
+    public static let modelSetupOnboardingSearch = "?firstRun=auto"
 
     public static func isValidSameAppPath(_ path: String) -> Bool {
         guard path.hasPrefix("/"), !path.hasPrefix("//"),

@@ -2,7 +2,10 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { SetupInferenceActivationRejectionSchema } from "./setup-inference.js";
+import {
+  SetupInferenceActivationRejectionSchema,
+  SetupFirstAgentSchema,
+} from "./setup-inference.js";
 
 const WizardRunStatusSchema = Type.Union([
   Type.Literal("running"),
@@ -133,6 +136,7 @@ const WizardResultFields = {
   // provider sign-in or model preparation alone does not establish readiness.
   modelActivation: Type.Optional(
     closedObject({
+      firstAgent: Type.Optional(SetupFirstAgentSchema),
       modelRef: NonEmptyString,
       modelName: Type.Optional(NonEmptyString),
       modelTarget: Type.Optional(Type.Literal("utility")),

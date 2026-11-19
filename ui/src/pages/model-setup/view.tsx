@@ -445,7 +445,7 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
           {/* An embedded view gets its title and description from the dialog. */}
           <Show when={!props.embedded}>
             <h1>{t("modelSetup.heading")}</h1>
-            <p>{t("modelSetup.intro")}</p>
+            <p>{t(props.automaticVisible ? "modelSetup.automaticIntro" : "modelSetup.intro")}</p>
           </Show>
         </div>
         <Show when={Boolean(props.connection)}>
@@ -532,7 +532,10 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
           </Errored>
         </Show>
       </Show>
-      <ModelSetupBody {...props} detection={detection} />
+      {props.automaticSetup}
+      <Show when={!props.automaticVisible}>
+        <ModelSetupBody {...props} detection={detection} />
+      </Show>
     </div>
   );
   const dialogs = (

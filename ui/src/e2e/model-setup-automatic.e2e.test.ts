@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { NativeSetupCapability } from "../app/native-setup.ts";
-import type { SetupAutoResult } from "../pages/custodian/custodian-auto-setup.ts";
+import type { SetupAutoResult } from "../pages/model-setup/automatic-setup.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -13,7 +13,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Custodian automatic AI setup" });
+const suite = createControlUiE2eSuite({ name: "Automatic Model Setup" });
 const options = {
   locale: "en-US",
   colorScheme: "light" as const,
@@ -36,6 +36,7 @@ const local = {
 const configured: SetupAutoResult = {
   status: "configured",
   selected: codex,
+  firstAgent: { agentId: "main", sessionKey: "agent:main:main", bootstrapPending: true },
   alternatives: [local],
   attempts: [],
   installedPlugins: [],
@@ -69,6 +70,7 @@ function install(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
       ...defaultControlUiFeatureMethods,
       "openclaw.chat",
       "openclaw.setup.auto",
+      "openclaw.setup.detect",
       "openclaw.setup.activate",
       "openclaw.setup.auth.start",
       "wizard.next",
@@ -76,6 +78,16 @@ function install(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
     ],
     methodResponses: {
       "openclaw.setup.auto": configured,
+      "openclaw.setup.detect": {
+        candidates: [],
+        unavailableCandidates: [],
+        manualProviders: [],
+        authOptions: [],
+        prepareOptions: [],
+        recommendedInstalls: [],
+        workspace: "/fixture/workspace",
+        setupComplete: false,
+      },
       "openclaw.chat": {
         sessionId: "setup-proof",
         reply: "Your AI is ready. Let’s get to know each other.",
@@ -106,7 +118,7 @@ async function capture(page: Page, name: string, surface: Locator, content: Loca
   if (!parent) {
     return;
   }
-  await page.mouse.click(0, 0);
+  await page.mouse.move(0, 0);
   const artifacts = createControlUiE2eArtifactDir(name, parent);
   const frame = await takeControlUiScreenshotFrame(page, surface, content, {
     elements: [surface],
@@ -141,7 +153,7 @@ suite.define(() => {
     await suite.withPage(options, async ({ page }) => {
       await nativeSetup(page);
       const gateway = await install(page, { deferredMethods: ["openclaw.setup.auto"] });
-      await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
+      await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=auto`);
       const card = page.locator(".custodian-setup");
       const connecting = card.getByRole("heading", { name: "Connecting your AI…" });
       await connecting.waitFor();
@@ -152,9 +164,7 @@ suite.define(() => {
         name: "Using Codex (openai/default) on This Mac",
       });
       await selected.waitFor();
-      await page
-        .getByText("Your AI is ready. Let’s get to know each other.", { exact: true })
-        .waitFor();
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
       expect(await gateway.getRequests("openclaw.setup.auto")).toHaveLength(1);
       await capture(page, "configured-automatic-setup", card, [selected]);
       await card.getByRole("button", { name: "Use a different Gateway" }).click();
@@ -171,6 +181,8 @@ suite.define(() => {
       await card.getByRole("button", { name: "Local model", exact: true }).click();
       expect((await gateway.waitForRequest("openclaw.setup.activate")).params).toEqual({
         kind: "ollama",
+        modelRef: "ollama/local-model",
+        completeFirstAgent: true,
       });
       await card.getByText("The local model stopped.", { exact: true }).waitFor();
       await selected.waitFor();
@@ -223,7 +235,7 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
+      await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=auto`);
       const card = page.locator(".custodian-setup");
       const signIn = card.getByRole("button", {
         name: reuse ? "Sign in separately" : "Sign in with ChatGPT",
@@ -263,9 +275,123 @@ suite.define(() => {
       if (reuse) {
         await capture(page, "separate-codex-login", card, [selected]);
       }
-      await page
-        .getByText("Your AI is ready. Let’s get to know each other.", { exact: true })
-        .waitFor();
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+    });
+  });
+
+  it("confirms utility setup visibly and stays available for primary setup", async () => {
+    await suite.withPage(options, async ({ page }) => {
+      const gateway = await install(page, {
+        featureMethods: ["openclaw.setup.activate.start"],
+        methodResponses: {
+          "openclaw.setup.detect": {
+            candidates: [
+              {
+                kind: "provider-auto:local",
+                label: "Local utility",
+                detail: "Lightweight tasks",
+                modelRef: "local/utility",
+                modelTarget: "utility",
+                credentials: true,
+                recommended: false,
+              },
+            ],
+            unavailableCandidates: [],
+            manualProviders: [],
+            authOptions: [],
+            prepareOptions: [],
+            recommendedInstalls: [],
+            workspace: "/fixture/workspace",
+            setupComplete: false,
+          },
+          "openclaw.setup.activate.start": {
+            done: true,
+            status: "done",
+            modelActivation: { modelRef: "local/utility", modelTarget: "utility" },
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+      await page.locator('[data-candidate-kind="provider-auto:local"] button').click();
+      const success = page.locator(".model-setup-success");
+      await success.getByRole("heading", { name: "Setup & utility model ready" }).waitFor();
+      await capture(page, "utility-only-confirmed", success, [
+        success.getByRole("button", { name: "Connect a primary model" }),
+      ]);
+      await success.getByRole("button", { name: "Connect a primary model" }).click();
+      await success.waitFor({ state: "detached" });
+      expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+    });
+  });
+
+  it("hatches in regular Home and sends only the user's chosen first message", async () => {
+    await suite.withPage(options, async ({ page }) => {
+      const gateway = await install(page, { historyMessages: [] });
+      await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=auto`);
+      await page.getByRole("button", { name: "Start talking to your agent" }).click();
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor();
+      expect(new URL(page.url()).pathname).toBe("/chat/main");
+      expect(await composer.inputValue()).toBe("Wake up, my friend!");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+      await capture(page, "first-agent-home", page.locator("openclaw-chat-page"), [composer]);
+      await composer.fill("Help me draft a short launch checklist.");
+      await page.getByRole("button", { name: "Send message" }).click();
+      expect((await gateway.waitForRequest("chat.send")).params).toMatchObject({
+        sessionKey: "agent:main:main",
+        message: "Help me draft a short launch checklist.",
+      });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+    });
+  });
+
+  it("verifies a native model choice before first-agent handoff", async () => {
+    await suite.withPage(options, async ({ page }) => {
+      const gateway = await install(page, {
+        historyMessages: [],
+        deferredMethods: ["openclaw.setup.activate.start"],
+        featureMethods: ["openclaw.setup.activate.start"],
+        methodResponses: {
+          "models.list": {
+            models: [
+              {
+                provider: "fixture",
+                id: "native",
+                name: "Native fixture",
+                available: true,
+                agentRuntime: { id: "fixture-native", source: "implicit" },
+              },
+            ],
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+      const native = page.locator("[data-native-model-setup]");
+      await native.locator(".picker-select__trigger").click();
+      await native.locator('[role="option"][data-value="fixture/native"]').click();
+      await native.locator("button.primary").click();
+      expect((await gateway.waitForRequest("openclaw.setup.activate.start")).params).toMatchObject({
+        agentId: "main",
+        kind: "native-model",
+        modelRef: "fixture/native",
+        agentRuntime: "fixture-native",
+        completeFirstAgent: true,
+      });
+      expect(await gateway.getRequests("agents.update")).toHaveLength(0);
+      expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await gateway.resolveDeferred("openclaw.setup.activate.start", {
+        done: true,
+        status: "done",
+        modelActivation: { modelRef: "fixture/native", firstAgent: configured.firstAgent },
+      });
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor();
+      expect(new URL(page.url()).pathname).toBe("/chat/main");
+      expect(await composer.inputValue()).toBe("Wake up, my friend!");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
 
@@ -277,7 +403,7 @@ suite.define(() => {
           await nativeSetup(page);
         }
         await install(page, { methodResponses: { "openclaw.setup.auto": unavailable } });
-        await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
+        await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=auto`);
         const card = page.locator(".custodian-setup");
         const failure = card.getByText("The download could not be completed.", { exact: false });
         await failure.waitFor();
