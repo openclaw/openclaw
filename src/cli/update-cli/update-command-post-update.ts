@@ -538,10 +538,13 @@ async function finishSettledUpdate(
       }
       let verificationFailure = "restart-unhealthy";
       // The new build's boot upgrade may replace the shared state database file.
+      // Without a restart nothing replaces it during this update; keep the open handles.
       const restartService = (restartParams: Parameters<typeof maybeRestartService>[0]) =>
-        withUpdateStateReleasedAcrossRestart(params.opts.run, () =>
-          maybeRestartService(restartParams),
-        );
+        restartParams.shouldRestart
+          ? withUpdateStateReleasedAcrossRestart(params.opts.run, () =>
+              maybeRestartService(restartParams),
+            )
+          : maybeRestartService(restartParams);
       const restart = async () => {
         const restarted = await forward(() =>
           restartService({
