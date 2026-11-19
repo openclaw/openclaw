@@ -1315,11 +1315,11 @@ merge_run() {
     [ "$(printf '%s\n' "$acceptance_bytes" | jq -jr . | pr_git hash-object --stdin)" = "$acceptance_oid" ] || {
       merge_outcome_stop "pending proof acceptance changed before intent"; return 1;
     }
-    intent=$(printf '%s\n%s\n' "$intent" "$acceptance_bytes" | jq -cse '
+    intent=$(printf '%s\n%s\n' "$intent" "$acceptance_bytes" | jq -cse "$(merge_outcome_jq_definitions)"'
       (.[1] | fromjson) as $acceptance | .[0] |
-      select(.head == $acceptance.headSha and .localHead == $acceptance.headSha) |
-      .pendingProofAcceptance = $acceptance
-    ') || { merge_outcome_stop "pending proof acceptance does not match the exact landing head"; return 1; }
+      .pendingProofAcceptance = $acceptance |
+      select(valid_pending_proof_acceptance)
+    ') || { merge_outcome_stop "invalid pending proof acceptance for the exact landing head"; return 1; }
   fi
   if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
     intent=$(printf '%s\n%s\n' "$intent" "$MERGE_PRIOR_CI_PROOF" | jq -cse '

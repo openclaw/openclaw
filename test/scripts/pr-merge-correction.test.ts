@@ -218,6 +218,7 @@ describePosix("correction authority through native merge admission", () => {
     const f = correctionFixture();
     f.save({ ...f.state(), mode: "applied-merged" });
     expectExit(f.run());
+    expect(f.record()).not.toHaveProperty("pendingProofAcceptance");
     for (const name of ["correction-review.json", "review.json", "review.md"]) {
       rmSync(localPath(f, name), { force: true });
     }
@@ -237,7 +238,13 @@ describePosix("correction authority through native merge admission", () => {
       reason: "Runner unavailable \ud800",
       valid: false,
     },
-  ])("pending proof: $label", ({ reason, valid }) => {
+    {
+      label: "precision-mismatched version is refused before dispatch",
+      reason: "The exact package runner was unavailable.",
+      rawVersion: "1.0000000000000001",
+      valid: false,
+    },
+  ])("pending proof: $label", ({ reason, rawVersion, valid }) => {
     const f = configureCorrection(
       fixture(undefined, [["incoming package\n"], ["corrected package\n"]]),
       "proof",
@@ -297,7 +304,15 @@ describePosix("correction authority through native merge admission", () => {
       reviewOid,
       findings: [{ id: "I1", reason }],
     };
-    writeLocal(f, "pending-proof-acceptance.json", `${JSON.stringify(acceptance, null, 2)}\n`);
+    const acceptanceBytes = `${JSON.stringify(acceptance, null, 2)}\n`;
+    // Keep the number token intact instead of rounding it through JavaScript.
+    writeLocal(
+      f,
+      "pending-proof-acceptance.json",
+      rawVersion
+        ? acceptanceBytes.replace('"version": 1,', `"version": ${rawVersion},`)
+        : acceptanceBytes,
+    );
     pendingGates(f, f.head);
     const state = f.state();
     Object.assign(state, {
@@ -309,9 +324,13 @@ describePosix("correction authority through native merge admission", () => {
     f.save(state);
     const result = f.run(true);
     if (!valid) {
-      expect(result.output).toContain("Pending proof acceptance must bind");
-      expect(result.status).toBe(1);
-      expect(f.state().mutations).toBe(0);
+      expect(f.state().mutations, result.output).toBe(0);
+      expect(result.status, result.output).toBe(1);
+      expect(result.output).toContain(
+        rawVersion
+          ? "Merge outcome: invalid pending proof acceptance for the exact landing head"
+          : "Pending proof acceptance must bind",
+      );
       expect(() => f.record()).toThrow();
       return;
     }
@@ -322,9 +341,11 @@ describePosix("correction authority through native merge admission", () => {
       head: f.head,
       pendingProofAcceptance: acceptance,
     });
+    const retainedOid = f.git(["rev-parse", outcomeRef]);
     expect(readLocal(f, "correction-review.json")).toBe(reviewBytes);
     rmSync(localPath(f, "pending-proof-acceptance.json"));
     expectExit(f.run(true));
+    expect(f.git(["rev-parse", outcomeRef])).toBe(retainedOid);
     expect(f.record().pendingProofAcceptance).toEqual(acceptance);
     expect(f.state().mutations).toBe(1);
   });
