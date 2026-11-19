@@ -65,7 +65,7 @@ it("sends message-action callbacks with the agent mark on the send and edit path
       channels: { telegram: { botToken: "123456:agent-controls", apiRoot: botApi.url } },
     } satisfies OpenClawConfig;
     await withStateDirEnv("openclaw-telegram-agent-controls-", async () => {
-      // The queue-persistence path skips Telegram's prepareSendPayload hook.
+      // Core-forced delivery (the queue-persistence path) skips Telegram's prepareSendPayload hook.
       await runMessageAction({
         cfg,
         action: "send",
@@ -76,7 +76,7 @@ it("sends message-action callbacks with the agent mark on the send and edit path
           presentation: presentation("/pick a|1"),
         },
         forceCoreDelivery: true,
-        requireQueuePersistence: true,
+        skipQueue: true,
       });
       await runMessageAction({
         cfg,

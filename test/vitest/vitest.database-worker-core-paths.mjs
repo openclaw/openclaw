@@ -653,7 +653,6 @@ export const databaseWorkerCoreTestFiles = [
   "test/loopback-ask-user-telegram-channel.test.ts",
   "test/slack-outbound-permanent-rejection-loopback.test.ts",
   "test/telegram-outbound-permanent-rejection-loopback.test.ts",
-  "test/telegram-agent-control-taps.integration.test.ts",
   "src/agents/bash-tools.exec-cron-grant.test.ts",
   "src/agents/bash-tools.exec-host-gateway.test.ts",
   "src/agents/tools/gateway.hosted-routing.test.ts",

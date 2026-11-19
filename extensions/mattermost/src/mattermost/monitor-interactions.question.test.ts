@@ -21,14 +21,16 @@ vi.mock("./interactions.js", async (importOriginal) => ({
   createMattermostInteractionHandler: createInteractionHandlerMock,
 }));
 const dispatchReplyMock = vi.hoisted(() => vi.fn());
-vi.mock("./monitor-event-plan.js", () => ({
+vi.mock("./monitor-event-plan.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor-event-plan.js")>()),
   buildMattermostEventPlan: async () => ({
     channelDisplay: "town-square",
     kind: "channel",
     finalizeContext: (ctx: Record<string, unknown>) => ctx,
   }),
 }));
-vi.mock("./monitor-interaction-dispatch.js", () => ({
+vi.mock("./monitor-interaction-dispatch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor-interaction-dispatch.js")>()),
   dispatchMattermostInteractionReply: dispatchReplyMock,
 }));
 vi.mock("./runtime-api.js", async (importOriginal) => ({
