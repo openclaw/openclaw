@@ -106,6 +106,23 @@ describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
       }),
   );
 
+  it("skips a non-regular `openclaw` on PATH instead of blocking on it", async () =>
+    withTestDir({ prefix: "launcher-repair-fifo-" }, async (base) => {
+      const { home, packageRoot, launcher } = await pnpmHome(base);
+      const other = path.join(base, "fifo-bin");
+      await fs.mkdir(other);
+      // A FIFO with no writer blocks any reader forever.
+      await runFile("mkfifo", [path.join(other, "openclaw")]);
+
+      const { repaired, failed } = await repairPublishedPnpmLaunchers({
+        root: packageRoot,
+        env: { PNPM_HOME: home, PATH: other },
+      });
+
+      expect(failed).toEqual([]);
+      expect(repaired).toEqual([expect.objectContaining({ file: launcher })]);
+    }));
+
   it.each([
     "stage still present",
     "recorded target missing",
