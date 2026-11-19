@@ -101,6 +101,10 @@ export async function prepareSessionsSendFollowup(params: {
       assertInvocation?.();
       captured.assertCurrent();
     }
+    // The same predicate admits the initial followup and watches for later changes.
+    // Only a post-admission denial is a revocation; the first denial is the real
+    // policy refusal and must keep its own reason.
+    let admitted = false;
     const assertCurrent = () => {
       signal.throwIfAborted();
       if (released) {
@@ -112,7 +116,7 @@ export async function prepareSessionsSendFollowup(params: {
       }
       const currentConfig = getRuntimeConfig();
       // The prepared reader owns canonical routing, physical store and incarnation fencing.
-      for (const read of facts) {
+      for (const [index, read] of facts.entries()) {
         const currentFacts = read.readCurrent(currentConfig);
         const current = currentFacts.target;
         if (!current?.entry || current.entry.archivedAt !== undefined) {
@@ -140,11 +144,16 @@ export async function prepareSessionsSendFollowup(params: {
           },
         );
         if (denied) {
-          throw new FollowupAccessChangedError("Followup session access was revoked.");
+          const endpoint = index === 0 ? "requester" : index === 1 ? "target" : "session";
+          const reason = denied.message?.trim() || denied.code;
+          throw new FollowupAccessChangedError(
+            `${admitted ? "Followup session access was revoked" : "Followup session access denied"} for the ${endpoint} session (${denied.code}): ${reason}`,
+          );
         }
       }
     };
     assertCurrent();
+    admitted = true;
     const watchedKeys = new Set(
       facts.flatMap((read) => {
         const target = read.readCurrent(cfg).target;

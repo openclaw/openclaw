@@ -285,6 +285,26 @@ describe("followup retained session authorization", () => {
       assertRevoked();
     },
   );
+  it("reports the initial policy denial with its reason instead of a revocation", async () => {
+    mocks.profile.mockResolvedValue({
+      profileId: "requester",
+      role: "none",
+      aliases: ["requester"],
+      isCurrent: () => true,
+    });
+    target().membership = new Set();
+
+    const error = await prepareSessionsSendFollowup(input).then(
+      () => undefined,
+      (thrown: Error) => thrown,
+    );
+
+    expect(error?.message).toContain("Followup session access denied");
+    expect(error?.message).toContain("target session");
+    expect(error?.message).not.toContain("revoked");
+    expect(error?.message).toMatch(/\([A-Z0-9_]+\): /u);
+  });
+
   it("refuses missing captured authority rather than selecting a System caller", async () => {
     mocks.capture.mockReturnValue(undefined);
     await expect(prepareSessionsSendFollowup(input)).rejects.toThrow("in-process caller custody");
