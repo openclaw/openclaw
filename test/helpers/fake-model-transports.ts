@@ -30,9 +30,10 @@ const MODEL_IDS: Record<FakeTransport, string> = {
   "bedrock-converse-stream": "anthropic.claude-opus-5",
 };
 
-// Cache markers move to the newest message on every request, and a newest message may carry its
-// text as a block to hold one. Providers cache the processed prompt, where a string and a single
-// text block are the same content, so neither difference is a prefix change.
+// Cache markers move between requests, and a message carries its text as a block while it holds
+// one. Anthropic documents string content as shorthand for a single text block, and the markers
+// sit on several of the newest user messages, so either form can appear on any of them. Neither
+// difference is a prefix change.
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value

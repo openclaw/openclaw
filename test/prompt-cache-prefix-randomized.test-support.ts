@@ -5,8 +5,7 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { afterEach, beforeEach, expect } from "vitest";
-import type { ToolsConfig } from "../src/config/types.tools.js";
+import { afterAll, afterEach, beforeEach, expect } from "vitest";
 import { startGatewayWithClient } from "../src/gateway/test-helpers.e2e.js";
 import { waitForGatewayActiveWork } from "../src/infra/gateway-active-work.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
@@ -86,34 +85,6 @@ export function randomJourney(seed: number, length = TURN_KINDS.length + 6): Tur
   return ["user", ...kinds, "user"];
 }
 
-// The Advisor plugin forks the running session after each tool call (Peanutto runs it). A fork's
-// request ends with fork-only items (a placeholder for a running tool, the review question), and
-// everything before them is the parent's own history.
-const ADVISOR_REVIEW = "You are an advisor reading this conversation";
-const FORK_ONLY = new RegExp(`${ADVISOR_REVIEW}|This tool call is still running`);
-
-/** First difference between a fork and the parent's next request, over what the fork shares. */
-function forkChange(fork: WireRequest, parent: WireRequest): string | undefined {
-  if (fork.system !== parent.system || fork.tools !== parent.tools) {
-    return `fork ${prefixChange(parent, { ...fork, messages: parent.messages })}`;
-  }
-  const shared = fork.messages.findIndex((message) => FORK_ONLY.test(message));
-  const end = shared < 0 ? fork.messages.length : shared;
-  for (let index = 0; index < end; index++) {
-    const own = fork.messages[index]!;
-    const theirs = parent.messages[index] ?? "(missing)";
-    if (own !== theirs) {
-      let at = 0;
-      while (own[at] === theirs[at]) {
-        at++;
-      }
-      const around = (text: string) => text.slice(Math.max(0, at - 120), at + 160);
-      return `fork message ${index} @${at}: ${around(own)} -> parent ${around(theirs)}`;
-    }
-  }
-  return undefined;
-}
-
 /** First change of `current` against `previous`, or undefined when it extends it. */
 function prefixChange(previous: WireRequest, current: WireRequest): string | undefined {
   if (previous.system !== current.system) {
@@ -170,14 +141,14 @@ const KNOWN_TOOL_ADDITIONS: ReadonlyArray<{
   tools: readonly string[];
   owner: string;
 }> = [
-  // Designed exception: with Tool Search off, each turn lists the tools it builds
-  // (docs/reference/prompt-caching.md#stable-tools-between-turns). After a switch to a second
+  // Designed exception: with Tool Search off, each turn lists the tools it builds (#201710's opt-out
+  // note in docs/reference/prompt-caching.md#stable-tools-between-turns). After a switch to a second
   // provider, turns started by a subagent completion or an inter-session message list two more
   // tools than user turns do.
   {
     toolSearch: false,
     tools: ["skills_read", "skills_search"],
-    owner: "docs/reference/prompt-caching.md#stable-tools-between-turns",
+    owner: "https://github.com/openclaw/openclaw/pull/201710",
   },
 ];
 
@@ -186,6 +157,7 @@ export function unknownChange(
   previous: WireRequest,
   current: WireRequest,
   toolSearch: boolean,
+  matched?: Set<string>,
 ): string | undefined {
   let change = prefixChange(previous, current);
   for (const known of KNOWN_TOOL_ADDITIONS.filter((entry) => entry.toolSearch === toolSearch)) {
@@ -193,6 +165,7 @@ export function unknownChange(
     if (change?.startsWith("tools ") && !rest?.startsWith("tools ")) {
       // Only the known tools changed the list; any other change still fails.
       change = rest;
+      matched?.add(known.owner);
     }
   }
   return change;
@@ -206,6 +179,8 @@ export function unknownChange(
 // - Bedrock merges every adjacent user pair. Accepted gap (closed
 //   https://github.com/openclaw/openclaw/pull/201654: no production impact on our hosts).
 const SILENT_MERGE_APIS = new Set<Api>(["bedrock-converse-stream", "openai-completions"]);
+// The known-break name for that merge.
+const SILENT_MERGE = "silent-merge";
 
 /**
  * True when `current` differs from `previous` only by that merge: the first changed message is a
@@ -274,6 +249,21 @@ const STEP_EVIDENCE: Partial<Record<TurnKind, (requests: WireRequest[], api: Api
 
 export function usePrefixRandomizedJourney() {
   const createFixture = useRuntimeProofFixture(afterEach);
+  // Known breaks matched across this file's seeds. A known break that no seed hits any more has
+  // landed: remove its entry.
+  const matched = new Set<string>();
+  let surface: { api: Api; toolSearch: boolean } | undefined;
+  afterAll(() => {
+    if (surface) {
+      const known = [
+        ...KNOWN_TOOL_ADDITIONS.filter((entry) => entry.toolSearch === surface!.toolSearch).map(
+          (entry) => entry.owner,
+        ),
+        ...(SILENT_MERGE_APIS.has(surface.api) ? [SILENT_MERGE] : []),
+      ];
+      expect(known.filter((owner) => !matched.has(owner))).toEqual([]);
+    }
+  });
   let assertSetting: string | undefined;
   beforeEach(() => {
     // The wire check reports every break; the in-process assertion would stop at the first.
@@ -285,6 +275,7 @@ export function usePrefixRandomizedJourney() {
   });
   /** `toolSearch: false` runs the opt-out surface; the default surface lists tools through it. */
   return async (api: Api, seed: number, { toolSearch = true } = {}) => {
+    surface = { api, toolSearch };
     const journey = process.env.OPENCLAW_PREFIX_RANDOM_JOURNEY
       ? (process.env.OPENCLAW_PREFIX_RANDOM_JOURNEY.split(",") as TurnKind[])
       : randomJourney(seed);
@@ -296,25 +287,21 @@ export function usePrefixRandomizedJourney() {
     const TARGET = `agent:main:prefix-randomized-target-${seed}`;
     const SENDER = `agent:main:prefix-randomized-sender-${seed}`;
     // Target requests in order, each tagged with the step that sent it.
-    const target: Array<{ step: number; kind: TurnKind; request: WireRequest; fork?: boolean }> =
-      [];
+    const target: Array<{ step: number; kind: TurnKind; request: WireRequest }> = [];
     const seen: string[] = [];
-    const children = new Map<string, Array<{ step: number; request: WireRequest }>>();
+    // Sessions the journey does not expect; every request must belong to a known lineage.
+    const unclassified: string[] = [];
     let step = -1;
     let ordinal = 0;
     const script = (request: WireRequest, thinkingEnabled: boolean): Reply => {
       const latest = lastMessage(request);
       const toolResult = hasToolResult(latest);
-      if (latest.includes(ADVISOR_REVIEW)) {
-        if (request.text.includes(`session=${TARGET}`)) {
-          target.push({ step, kind: journey[step] ?? "user", request, fork: true });
-        }
-        return { text: "NO_CHANGE" };
-      }
-      if (request.tools === "[]") {
+      // The request's own session leads its system prompt; only a compaction summary has none.
+      const session = /session=([^\s"\\|]+)/.exec(request.text)?.[1];
+      if (!session) {
         return { text: "Summary: the session ran a randomized journey." };
       }
-      if (request.text.includes(`session=${SENDER}`)) {
+      if (session === SENDER) {
         return toolResult || !latest.includes("forward a ping")
           ? { text: "REPLY_SKIP" }
           : {
@@ -322,11 +309,10 @@ export function usePrefixRandomizedJourney() {
               args: { sessionKey: TARGET, message: "INTER-SESSION ping", timeoutSeconds: 0 },
             };
       }
-      if (!request.text.includes(`session=${TARGET}`)) {
-        // A spawned child: each of its requests must extend the child's previous one.
-        const child = /session=(agent:\S+?)[\s"\\]/.exec(request.text)?.[1];
-        if (child) {
-          children.set(child, [...(children.get(child) ?? []), { step, request }]);
+      if (session !== TARGET) {
+        // A spawned child answers its task once; the journey checks only that it settles back.
+        if (!session.startsWith("agent:main:subagent:")) {
+          unclassified.push(session);
         }
         return { text: "child-done" };
       }
@@ -401,7 +387,7 @@ export function usePrefixRandomizedJourney() {
       for (const [key, value] of Object.entries(runtime.env)) {
         setTestEnvValue(key, value);
       }
-      // Bundled plugins load for the transport plugin and the Advisor.
+      // Bundled plugins load for the transport plugin.
       deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
       deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
       await fs.writeFile(path.join(fixture.workspaceDir, "AGENTS.md"), "# Rules\n- Be brief.\n");
@@ -410,13 +396,6 @@ export function usePrefixRandomizedJourney() {
         path.join(fixture.workspaceDir, "pixel.png"),
         Buffer.from(PNG_BASE64, "base64"),
       );
-      const tools = (webFetch: boolean): ToolsConfig => ({
-        codeMode: { enabled: false },
-        // The default surface leaves Tool Search on.
-        ...(toolSearch ? {} : { toolSearch: false }),
-        exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: true },
-        ...(webFetch ? {} : { deny: ["web_fetch"] }),
-      });
       const cfg = fixture.config(
         provider,
         {
@@ -430,27 +409,20 @@ export function usePrefixRandomizedJourney() {
         },
         {
           plugins: {
-            allow: ["advisor", ...(runtime.pluginId ? [runtime.pluginId] : [])],
-            entries: {
-              advisor: { enabled: true, config: { everyToolCalls: 1, everyMinutes: 0 } },
-              ...(runtime.pluginId ? { [runtime.pluginId]: { enabled: true } } : {}),
-            },
+            allow: runtime.pluginId ? [runtime.pluginId] : [],
+            entries: runtime.pluginId ? { [runtime.pluginId]: { enabled: true } } : {},
             slots: { memory: "none" },
           },
-          tools: tools(false),
+          tools: {
+            codeMode: { enabled: false },
+            // The default surface leaves Tool Search on.
+            ...(toolSearch ? {} : { toolSearch: false }),
+            exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: true },
+            deny: ["web_fetch"],
+          },
         },
       );
       cfg.models!.providers![alternate.providerId] = alternate.config;
-      const writeTools = async (webFetch: boolean) => {
-        const current = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as Record<
-          string,
-          unknown
-        >;
-        await fs.writeFile(
-          fixture.configPath,
-          JSON.stringify({ ...current, tools: tools(webFetch) }, null, 2),
-        );
-      };
       gateway = await startGatewayWithClient({
         cfg,
         configPath: fixture.configPath,
@@ -560,17 +532,17 @@ export function usePrefixRandomizedJourney() {
               break;
             case "toolsChanged":
               toolsWidened = !toolsWidened;
-              await writeTools(toolsWidened);
-              // The Gateway reloads config from disk.
-              await new Promise((resolve) => {
-                setTimeout(resolve, 3_000);
+              // config.patch answers once the active Gateway has applied the change.
+              await client.request("config.patch", {
+                baseHash: (await client.request<{ hash: string }>("config.get", {})).hash,
+                raw: JSON.stringify({ tools: { deny: toolsWidened ? [] : ["web_fetch"] } }),
+                replacePaths: ["tools.deny"],
               });
               await send(TARGET, `TARGET after tools change ${step}`);
               // The new tool policy reaches the provider.
               expect(
                 target
                   .slice(before)
-                  .filter((entry) => !entry.fork)
                   // Tool Search lists a deferred tool in its directory; a later directory arrives
                   // as a prompt update, so the newest one counts.
                   .map(({ request }) => {
@@ -616,50 +588,32 @@ export function usePrefixRandomizedJourney() {
         // Each request is compared with the previous request of the same session; the first
         // request of each rebuild step may start a new prefix.
         const unexpected: Array<{ step: number; kind: TurnKind; change: string }> = [];
-        // A fork is a side lineage: the parent chain skips it, and the fork must share the
-        // parent's bytes up to its own items.
-        const parents = target.filter((entry) => !entry.fork);
-        for (let index = 1; index < parents.length; index++) {
-          const previous = parents[index - 1]!;
-          const current = parents[index]!;
-          const firstOfStep = parents.findIndex((entry) => entry.step === current.step) === index;
+        for (let index = 1; index < target.length; index++) {
+          const previous = target[index - 1]!;
+          const current = target[index]!;
+          const firstOfStep = target.findIndex((entry) => entry.step === current.step) === index;
           const change =
-            current.kind === "toolsChanged" && firstOfStep
+            // On the opt-out surface a policy change rewrites the tool list; with Tool Search on,
+            // the change arrives as an appended directory and the prefix must still only grow.
+            !toolSearch && current.kind === "toolsChanged" && firstOfStep
               ? historyChange(previous.request, current.request)
-              : unknownChange(previous.request, current.request, toolSearch);
+              : unknownChange(previous.request, current.request, toolSearch, matched);
           const rebuild = REBUILD_KINDS.has(current.kind) && firstOfStep;
           const silentMerge =
             SILENT_MERGE_APIS.has(api) &&
             journey.slice(0, current.step).includes("silent") &&
             isSilentTurnMerge(previous.request, current.request);
+          if (change && !rebuild && silentMerge) {
+            matched.add(SILENT_MERGE);
+          }
           if (change && !rebuild && !silentMerge) {
             unexpected.push({ step: current.step, kind: current.kind, change });
           }
         }
-        for (const [child, requests] of children) {
-          for (let index = 1; index < requests.length; index++) {
-            const change = prefixChange(requests[index - 1]!.request, requests[index]!.request);
-            if (change) {
-              unexpected.push({
-                step: requests[index]!.step,
-                kind: "subagent",
-                change: `child ${child}: ${change}`,
-              });
-            }
-          }
-        }
-        for (const [index, fork] of target.entries()) {
-          const parent = fork.fork
-            ? target.slice(index + 1).find((entry) => !entry.fork)
-            : undefined;
-          const change = parent ? forkChange(fork.request, parent.request) : undefined;
-          if (change) {
-            unexpected.push({ step: fork.step, kind: fork.kind, change });
-          }
-        }
         process.stdout.write(
-          `[prefix-random] ${api} seed=${seed} requests=${target.length} forks=${target.filter((entry) => entry.fork).length} children=${[...children.values()].map((requests) => requests.length).join(",")}\n`,
+          `[prefix-random] ${api} seed=${seed} requests=${target.length} matched=${[...matched].join(",")}\n`,
         );
+        expect(unclassified).toEqual([]);
         expect(
           JSON.stringify(unexpected, null, 1),
           `seed=${seed} journey=${journey.join(",")} breaks=${JSON.stringify(unexpected)}`,
