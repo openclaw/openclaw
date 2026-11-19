@@ -14,6 +14,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../../state/openclaw-state-db.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   blockSubagentCompletionDelivery,
   mutateRequesterCompletionBatch,
@@ -22,6 +23,7 @@ import {
   records,
   seedSubagentCompletionDelivery,
 } from "../completion/subagent-completion-admission.test-helpers.js";
+import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
@@ -157,6 +159,40 @@ it.each([false, true])(
     }
   },
 );
+
+const SUBAGENT_RESTART_INTERRUPTED_ERROR =
+  "The Gateway stopped before this subagent finished. Its run did not survive the restart; inspect its saved work before retrying.";
+
+it("settles a running child restored from an earlier Gateway as interrupted", async () => {
+  using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+  const startedBeforeThisProcess = performance.timeOrigin - 60_000;
+  const subagent = createSubagentRunRecord({
+    runId: "restored-running-child",
+    requesterAgentId: "main",
+    createdAt: startedBeforeThisProcess,
+    startedAt: startedBeforeThisProcess,
+    expectsCompletionMessage: true,
+  });
+  publishCommittedRecords(subagent);
+  await resetSubagentRegistryForTests({ persist: false });
+  await closeOpenClawStateDatabaseAsync();
+  await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+  const restored = expectDefined(subagentRuns.get(subagent.runId), "restored running child");
+  expect(subagentRuns.isCompletionAuthorityRetired(restored)).toBe(true);
+
+  await testing.sweepOnceForTests();
+
+  const settled = loadSubagentRegistryFromSqlite().get(subagent.runId);
+  expect(warning).toHaveBeenCalledWith(
+    "Settling subagent interrupted by Gateway restart",
+    expect.objectContaining({ runId: subagent.runId }),
+  );
+  expect(settled?.execution).toMatchObject({
+    status: "terminal",
+    outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
+  });
+  expect(settled?.endedReason).toBe(SUBAGENT_ENDED_REASON_ERROR);
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let settleRootWork: ReturnType<typeof observeRootWork>;

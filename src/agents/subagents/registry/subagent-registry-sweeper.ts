@@ -48,7 +48,10 @@ import {
   reconcileProvisionalSubagentKill,
 } from "./subagent-registry-sweep-kill.js";
 import { orderSubagentSweepEntries } from "./subagent-registry-sweep-order.js";
-import { settleUnreachableYieldedSubagentRun } from "./subagent-registry-sweep-settle.js";
+import {
+  settleRestartInterruptedSubagentRun,
+  settleUnreachableYieldedSubagentRun,
+} from "./subagent-registry-sweep-settle.js";
 import { SUBAGENT_SESSION_RUN_TTL_MS } from "./subagent-registry-work-index.js";
 import type {
   ContextEngineSubagentEndedParams,
@@ -344,7 +347,17 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         if (typeof entry.execution.endedAt !== "number") {
-          // A row without a live execution is retained history, not a restart obligation.
+          // A running row from an earlier process never resumes; its requester still
+          // needs a terminal outcome. Any other unended row is retained history.
+          if (executionRetired) {
+            await settleRestartInterruptedSubagentRun({
+              runId,
+              entry,
+              readScope,
+              complete: params.completeSubagentRunWithRecovery,
+              now,
+            });
+          }
           continue;
         }
 
