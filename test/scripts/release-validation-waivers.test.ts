@@ -678,7 +678,7 @@ describe("beta.1 exact FRV11 test failures", () => {
       steps: [{ name: "Run Node test shard", conclusion: "failure" }],
     };
     const policy = evaluateReleaseChildPolicy({
-      child: { ...child, jobs: [leaf, gate] },
+      child: { ...child, runId: "44290065577", runAttempt: 1, jobs: [leaf, gate] },
       targetVersion: "2026.11.10-beta.1",
     });
     const log = frv11Log(row);
@@ -728,5 +728,191 @@ describe("beta.1 exact FRV11 test failures", () => {
         targetVersion: "2026.11.10-beta.2",
       }).waivers,
     ).toEqual([]);
+  });
+});
+
+// FRV16 accepts original failed jobs, not replacement tests or future attempts.
+describe("beta.1 exact FRV16 execution grants", () => {
+  const targetVersion = "2026.11.10-beta.1";
+  const candidateSha = "995f9059b6e6fe3ba0865a3354924fd2bcbfceea";
+  const ciNames = [
+    "checks-ui-e2e (2/13)",
+    "checks-node-compact-small-38 (node)",
+    ...[15, 23, 3, 32, 11, 41, 18, 30].map((n) => "checks-node-compact-large-" + n + " (node)"),
+  ];
+  const ci = {
+    ...child,
+    runId: "44465881623",
+    runAttempt: 1,
+    jobs: [
+      ...ciNames.map((name, id) => ({ status: "completed", conclusion: "failure", id, name })),
+      gate,
+    ],
+  };
+  const qaGate = {
+    ...gate,
+    id: 20,
+    name: "Verify QA Lab runtime-pair lanes",
+    steps: [{ name: "Verify runtime-pair lane statuses", conclusion: "failure" }],
+  };
+  const releaseGate = {
+    ...gate,
+    id: 21,
+    name: "Verify release checks",
+    steps: [{ name: "Verify release check results", conclusion: "failure" }],
+  };
+  const qa = {
+    ...child,
+    key: "releaseChecksIndependent",
+    runId: "44465878180",
+    runAttempt: 1,
+    jobs: [
+      { ...failedJob, id: 19, name: "Run QA Lab runtime-pair lane (core)" },
+      qaGate,
+      releaseGate,
+    ],
+  };
+
+  it.each([ci, qa])("accepts only original $key jobs and retains raw conclusions", (selected) => {
+    expect(terminalPolicyPass(selected, targetVersion, candidateSha)).toBe(true);
+    expect(() =>
+      validateReleaseManifestAdvisoryJobs({
+        targetSha: candidateSha,
+        validationInputs: { targetVersion },
+        childEvidence: { [selected.key]: selected },
+      }),
+    ).not.toThrow();
+    expect(selected.jobs.every((job) => job.conclusion === "failure")).toBe(true);
+    expect(releaseQualificationExemptions(targetVersion, "beta")).toEqual([]);
+    for (const changed of [
+      { targetVersion: "2026.11.10-beta.2", targetSha: candidateSha, child: selected },
+      { targetVersion, targetSha: "a".repeat(40), child: selected },
+      { targetVersion, targetSha: candidateSha, child: { ...selected, runId: "44465881624" } },
+      { targetVersion, targetSha: candidateSha, child: { ...selected, runAttempt: 2 } },
+      { targetVersion, targetSha: candidateSha, child: { ...selected, runAttempt: undefined } },
+    ]) {
+      expect(evaluateReleaseChildPolicy(changed).waivers).toEqual([]);
+      expect(terminalPolicyPass(changed.child, changed.targetVersion, changed.targetSha)).toBe(
+        false,
+      );
+    }
+    for (const conclusion of ["cancelled", "timed_out", null]) {
+      expect(
+        terminalPolicyPass(
+          { ...selected, jobs: [{ ...selected.jobs[0], conclusion }] },
+          targetVersion,
+          candidateSha,
+        ),
+      ).toBe(false);
+    }
+    expect(
+      terminalPolicyPass({ ...selected, status: "in_progress" }, targetVersion, candidateSha),
+    ).toBe(false);
+    expect(terminalPolicyPass({ ...selected, jobs: [] }, targetVersion, candidateSha)).toBe(false);
+    expect(
+      terminalPolicyPass(
+        {
+          ...selected,
+          jobs: [
+            ...selected.jobs,
+            { ...failedJob, id: 99, name: "Seal artifact producer receipt" },
+          ],
+        },
+        targetVersion,
+        candidateSha,
+      ),
+    ).toBe(false);
+  });
+
+  it("requires exact CI cause union and rejects missing or non-policy aggregate steps", async () => {
+    const policy = evaluateReleaseChildPolicy({
+      child: ci,
+      targetVersion,
+      targetSha: candidateSha,
+    });
+    const log = [
+      "##[error]checks-ui-e2e finished with failure (selected=true)",
+      "##[error]checks-node-core-test-nondist-shard finished with failure (selected=true)",
+    ].join("\n");
+    await expect(
+      validateReleaseWaiverAggregates({ policy, jobs: ci.jobs, getJobLog: () => log }),
+    ).resolves.toBeUndefined();
+    for (const invalid of ["", log.split("\n")[0], log + "\n##[error]artifact digest mismatch"]) {
+      await expect(
+        validateReleaseWaiverAggregates({ policy, jobs: ci.jobs, getJobLog: () => invalid }),
+      ).rejects.toThrow("unwaived failure");
+    }
+    for (const aggregateJobs of [
+      ci.jobs.filter((job) => job !== gate),
+      [...ci.jobs.slice(0, -1), { ...gate, status: "in_progress" }],
+      [...ci.jobs.slice(0, -1), { ...gate, conclusion: "cancelled" }],
+      [...ci.jobs.slice(0, -1), { ...gate, steps: [{ name: "Checkout", conclusion: "failure" }] }],
+    ]) {
+      await expect(
+        validateReleaseWaiverAggregates({ policy, jobs: aggregateJobs, getJobLog: () => log }),
+      ).rejects.toThrow();
+    }
+  });
+
+  it("never treats a silent QA status-check failure as an unrestricted aggregate", async () => {
+    const policy = evaluateReleaseChildPolicy({
+      child: qa,
+      targetVersion,
+      targetSha: candidateSha,
+    });
+    const releaseLog = "##[error]qa_lab_runtime_parity_release_checks ended with failure";
+    for (const log of [
+      "",
+      "##[error]Process completed with exit code 1.",
+      "##[error]artifact digest mismatch",
+    ]) {
+      await expect(
+        validateReleaseWaiverAggregates({
+          policy,
+          jobs: qa.jobs,
+          getJobLog: (id) => (id === 20 ? log : releaseLog),
+        }),
+      ).rejects.toThrow("differs from reviewed evidence");
+    }
+    // Exercise digest validation with synthetic bytes; live original-log proof is separate.
+    const { createHash } = await import("node:crypto");
+    const reviewedLog = "synthetic exact original aggregate log";
+    const exactPolicy = {
+      ...policy,
+      aggregates: policy.aggregates.map((row) =>
+        row.jobName === qaGate.name
+          ? Object.assign({}, row, {
+              logSha256: createHash("sha256").update(reviewedLog).digest("hex"),
+            })
+          : row,
+      ),
+    };
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy: exactPolicy,
+        jobs: qa.jobs,
+        getJobLog: (id) => (id === 20 ? reviewedLog : releaseLog),
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy: exactPolicy,
+        jobs: qa.jobs,
+        getJobLog: (id) => (id === 20 ? reviewedLog : releaseLog + "\n##[error]unknown cause"),
+      }),
+    ).rejects.toThrow("unwaived failure");
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy: exactPolicy,
+        jobs: qa.jobs.map((job) =>
+          job.id === 20
+            ? Object.assign({}, job, {
+                steps: [...qaGate.steps, { name: "Download artifacts", conclusion: "failure" }],
+              })
+            : job,
+        ),
+        getJobLog: () => reviewedLog,
+      }),
+    ).rejects.toThrow("non-policy failure");
   });
 });
