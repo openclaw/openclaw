@@ -437,12 +437,15 @@ profile assignment. The membership role is a display label: Discovery and Access
 publish the current profile role, not a separate permission ceiling.
 
 On upgrade, the Gateway imports each existing member's membership role into an
-unassigned profile once. Existing explicit assignments are preserved. A persisted
+unassigned profile once. Existing explicit assignments are preserved. The import
+also updates saved automation and recovery sources whose captured membership policy
+matches the imported definition, without widening their captured grants. A persisted
 per-member migration marker prevents later starts or admissions from restoring a
 cleared assignment. Removing and inviting a member again assigns the new invite's
 role. Role changes immediately disconnect the person's connections, including
-tunnels, and revoke their in-flight, queued, child, and recovered work. Automations
-recheck the saved source before running. Owner-device authority is unchanged.
+tunnels, and revoke their active runs, queued input, child runs, and resumed runs.
+An individual request already admitted may finish. Automations and other fresh
+starts recheck their saved source before running. Owner-device authority is unchanged.
 
 Enabling OpenClaw ID, or starting a Gateway with it enabled, installs missing
 `operator`, `viewer`, and `guest` presets. Existing definitions, defaults, and assignments

@@ -1,3 +1,4 @@
+import { runtimeConfigPublication } from "../../config/runtime-config-publication.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { linkCanonicalOpenClawIdUserProfile } from "../../state/user-profile-openclaw-id.js";
 import {
@@ -58,12 +59,33 @@ export const canonicalMemberProfiles: OpenClawIdMemberProfiles = {
       throw new Error("Member profile is unavailable; retry the role assignment.");
     }
     if (!onlyIfUnassigned || !target.role) {
+      const publication = runtimeConfigPublication.current;
+      const config = getRuntimeConfigSnapshot() ?? {};
+      const policy = config.gateway?.roles?.definitions[role];
+      const importingSources = onlyIfUnassigned && !target.role && policy !== undefined;
+      const assertCurrent = () => {
+        if (
+          !target.isCurrent() ||
+          (importingSources && runtimeConfigPublication.current !== publication)
+        ) {
+          throw new Error(
+            "Member profile changed or role policy changed; retry the role assignment.",
+          );
+        }
+      };
+      if (importingSources) {
+        const { migrateLegacyMemberSessionSources } =
+          await import("./member-source-role-import-sessions.js");
+        const { migrateSharedOpenClawIdMemberSources } =
+          await import("./member-source-role-import-shared.js");
+        const input = { profileId: profile.id, accountId, role, policy };
+        // A partial import remains unassigned and can be retried: rewritten sources
+        // cannot pass recovery's assignment check before this final profile commit.
+        await migrateLegacyMemberSessionSources(input, config, assertCurrent);
+        await migrateSharedOpenClawIdMemberSources(input, assertCurrent);
+      }
       await setCanonicalUserProfileRole(profile.id, role, {
-        assertCurrent: () => {
-          if (!target.isCurrent()) {
-            throw new Error("Member profile changed; retry the role assignment.");
-          }
-        },
+        assertCurrent,
         onCommitted: (id) => invalidateOperatorRolePolicy(id, { roleOnly: true }),
       });
     }

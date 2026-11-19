@@ -163,8 +163,9 @@ assign the role to their linked profile; owners and administrators can also use
 `guest` definitions without setting a default. Members with no resolvable role or
 no granted scopes cannot connect. Clearing an assignment exposes any configured
 mapping or default rather than disabling that fallback. Role changes disconnect
-the person's connections and stop their active and queued work; owner devices
-retain owner authority.
+the person's connections and stop their active runs, queued input, and child runs.
+An individual request already admitted may finish; fresh starts use current authority.
+Owner devices retain owner authority.
 
 Use `sessions.others: "invited"` when a person should see only shared sessions they
 are explicitly invited into. A session creator or administrator can select that

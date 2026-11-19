@@ -528,8 +528,9 @@ it.each([
         sideEffect();
       });
       const allowed =
-        ["policy restored", "unrelated policy", "target alias"].includes(revocation) ||
-        revocation.startsWith("model policy");
+        ["role restored", "policy restored", "unrelated policy", "target alias"].includes(
+          revocation,
+        ) || revocation.startsWith("model policy");
       const checked = allowed
         ? expect(pending).resolves.toBeUndefined()
         : expect(pending).rejects.toThrow();

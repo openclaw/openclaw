@@ -535,7 +535,15 @@ it("recovers a current owner certificate independently of the linked profile's r
         setUserProfileRole(person.id, null);
         restored.authority.assertCurrent();
         setOpenClawIdTunnelPrincipalLookup(() => undefined);
-        expect(() => restored.authority.assertCurrent()).toThrow();
+        expect(restored.authority.assertCurrent).not.toThrow();
+        expect(restored.authority.reauthorize).toThrow();
+        await expect(
+          prepareSessionSystemTurnAuthority({
+            context: fixture.context,
+            ...fixture.target,
+            operatorSource: { kind: "gateway", snapshot: fixture.snapshot },
+          }),
+        ).rejects.toThrow();
       } finally {
         restored.release();
       }

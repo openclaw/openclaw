@@ -10,5 +10,8 @@
 # canonical member roles retain sandbox, history and mention nondisclosure coverage.
 # Identified MCP callers cannot acquire owner grants without owner authority.
 # Admitted profile-policy recovery retains work across definition edits until release.
-# Measured against the merged PR base: 1482 net test lines; 400 ordinary + 1082 allocated.
-1082
+# Persisted pre-upgrade cron, stream, queued, restart, environment and standing-grant
+# sources retain only matching captured policy; mismatches and stale commits refuse.
+# Individual admitted requests finish while retained runs, queues and children stop.
+# Measured against the merged PR base: 2206 net test lines; 400 ordinary + 1806 allocated.
+1806

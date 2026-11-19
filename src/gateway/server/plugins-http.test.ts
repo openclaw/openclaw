@@ -536,7 +536,7 @@ describe("plugin HTTP authenticated session reads", () => {
   );
 
   it.each(["merge", "revoke"] as const)(
-    "refreshes %s identity and revokes captured dispatch on role changes",
+    "keeps admitted dispatch while refreshing %s identity and next-request authority",
     async (change) => {
       await withCookieSessionReader(
         true,
@@ -562,8 +562,8 @@ describe("plugin HTTP authenticated session reads", () => {
               expectSessionKeys(response.result!, ["own-draft", "foreign-draft", "shared"]);
               await expectSession(dispatch, "foreign-draft", { sharingRole: "owner" });
             } else {
-              expect(response.statusCode).toBe(500);
-              expect(response.result).toBeUndefined();
+              expect(response.statusCode).toBe(200);
+              expect(response.result).toMatchObject({ ok: true });
               expectSessionKeys(await dispatch("sessions.list"), ["own-draft"]);
               expect(await dispatch("sessions.describe")).toMatchObject({ ok: false });
             }
