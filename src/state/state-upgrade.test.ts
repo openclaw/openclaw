@@ -782,7 +782,7 @@ describe("startup pre-images", () => {
       runChain: async ({ stateDir: dir }) => {
         for (const [file, version] of databases(dir)) {
           using db = new DatabaseSync(file);
-          if (userVersion(file) < version) {
+          if (Number(userVersion(file)) < version) {
             db.exec(`PRAGMA user_version = ${version}`);
           }
         }
