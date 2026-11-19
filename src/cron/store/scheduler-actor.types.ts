@@ -19,8 +19,10 @@ export type CronSchedulerConfig = {
   preparingAgentIds?: string[];
   /** See `cron.drainQueue`. */
   busyConversationJobIds?: string[];
-  /** Run slots automation may hold now; the host sizes them from the agent limit and memory. */
-  maxConcurrentRuns?: number;
+  /** See `cron.drainQueue`. */
+  memoryAllowsExtraRun?: boolean;
+  /** See `cron.drainQueue`. */
+  runCeilingAfterPushback?: number;
   cronConfig?: CronConfig;
   defaultAgentId?: string;
   configuredChannels?: string[];

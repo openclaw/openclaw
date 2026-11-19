@@ -1,9 +1,8 @@
 export const DEFAULT_CRON_ENABLED = true;
-/**
- * Automation runs that conversations never take away: automation may use more of the agent
- * concurrency limit that conversations leave free. Low free memory can still hold it below this.
- */
+/** Cron jobs that may run at once whatever the free memory. */
 export const DEFAULT_CRON_MAX_CONCURRENT_RUNS = 8;
+/** Most cron jobs that may run at once; runs past the default need free memory to start. */
+export const MAX_CRON_CONCURRENT_RUNS = 16;
 const DEFAULT_CRON_TRIGGER_MIN_INTERVAL_MS = 30_000;
 
 /** Resolves the minimum cadence for trigger-bearing cron jobs. */

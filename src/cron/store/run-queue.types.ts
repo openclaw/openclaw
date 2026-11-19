@@ -52,6 +52,13 @@ export type CronRunQueueOperations = {
       nowMs: number;
       defaultAgentId?: string;
       maxConcurrentRuns: number;
+      /** At least 1 GiB was free when the host read memory: see `cronMemoryAllowsExtraRun`. */
+      memoryAllowsExtraRun?: boolean;
+      /**
+       * The most runs automation may hold after provider pushback, when it has pushed back: see
+       * `cronRunCeilingAfterPushback`. It only limits runs past the default slots.
+       */
+      runCeilingAfterPushback?: number;
       requests: CronRunRequestContext[];
       schedulingPaused?: boolean;
       preparingAgentIds?: string[];

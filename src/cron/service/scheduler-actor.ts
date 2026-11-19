@@ -22,6 +22,7 @@ import type {
   CronSchedulerResult,
 } from "../store/scheduler-actor.types.js";
 import { locked } from "./locked.js";
+import { watchCronProviderPushback } from "./provider-backoff.js";
 import { registerCronSchedulerRefresh } from "./run-queue-wake.js";
 import {
   adoptCronRunRequests,
@@ -29,7 +30,6 @@ import {
   getCronRunQueueRequests,
   launchCronRunQueueResult,
 } from "./run-queue.js";
-import { watchCronRunSlotPushback } from "./run-slots.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { captureCronSchedulerSnapshot } from "./scheduler-config.js";
 import { runCronSchedulerMaintenance } from "./scheduler-maintenance.js";
@@ -189,7 +189,7 @@ export async function startCronScheduler(
       state.deps.log.warn({ err: String(error) }, "cron: scheduling delayed; worker will retry");
     });
   });
-  const stopPushbackWatch = watchCronRunSlotPushback();
+  const stopPushbackWatch = watchCronProviderPushback();
   const stopConfigWatch = sessionChanges.subscribe((change) => {
     if (
       !("all" in change) ||

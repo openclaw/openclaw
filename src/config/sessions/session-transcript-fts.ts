@@ -1,7 +1,8 @@
-import { sql, type RawBuilder } from "kysely";
+import { sql, type Kysely, type RawBuilder } from "kysely";
 import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
 import {
   executeSqliteQuerySync,
+  getCompileOnlyPostgresKysely,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
   sqliteStringSet,
@@ -43,7 +44,42 @@ export function withPostgresSessionTranscriptFtsRows(
   sessionId: string,
   source: RawBuilder<SessionTranscriptFtsSourceRow>,
 ) {
-  return getNodeSqliteKysely<TranscriptFtsDatabase>(db)
+  return buildPostgresSessionTranscriptFtsRows(
+    getNodeSqliteKysely<TranscriptFtsDatabase>(db),
+    sessionId,
+    source,
+  );
+}
+
+/**
+ * One statement writes a bounded batch for callers that run on an asynchronous PostgreSQL
+ * connection (the offline port). Identities and content share the transcript owner's allocation.
+ */
+export function compilePostgresSessionTranscriptFtsBatch(
+  sessionId: string,
+  entries: readonly TranscriptFtsEntry[],
+) {
+  return buildPostgresSessionTranscriptFtsRows(
+    getCompileOnlyPostgresKysely<TranscriptFtsDatabase>(),
+    sessionId,
+    /* kysely-allow-raw: A bounded VALUES relation carries entry order with the content. */
+    sql<SessionTranscriptFtsSourceRow>`(values ${sql.join(
+      entries.map(
+        (entry, index) =>
+          sql`(${sql.lit(index)}, ${entry.messageId}, ${entry.text}, ${entry.role}, ${entry.timestamp})`,
+      ),
+    )})`,
+  )
+    .selectNoFrom(sql.lit(1).as("written"))
+    .compile();
+}
+
+function buildPostgresSessionTranscriptFtsRows(
+  kysely: Kysely<TranscriptFtsDatabase>,
+  sessionId: string,
+  source: RawBuilder<SessionTranscriptFtsSourceRow>,
+) {
+  return kysely
     .with("entries(position, message_id, text, role, timestamp)", () => source)
     .with(
       (cte) => cte("ids").materialized(),

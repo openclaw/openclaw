@@ -344,14 +344,6 @@ ends it without running the payload. Freed slots go to waiting payloads and queu
 order, so a run due before the condition's check still starts first. A check started by a manual or stream
 run, and the check of a job with a script payload, takes a run slot first.
 
-Run slots come from the agent concurrency limit
-([`agents.defaults.maxConcurrent`](/gateway/config-agents/models)), which automation shares
-with conversations, and from free memory: it uses the slots that conversation turns leave
-free, always keeps at least eight of those, and takes fewer when memory is short. After a
-provider rate limit it runs fewer jobs at once and adds one back each minute without
-pushback. See
-[how automation works](/automation/cron-jobs/how-it-works).
-
 Cold runtime preparation can continue after an evaluation times out, so a later
 tick can reuse it. Preparation is limited to two minutes, or the script payload's
 budget when longer; cancelling the evaluation that started it still cancels preparation.

@@ -1,11 +1,10 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, Errored, For, Show, useContext } from "solid-js";
-import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerModelProviderAuthEnglish } from "../../../i18n/locales/en-model-provider-auth.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { i18nRevision, t } from "../../../lib/reactive/i18n.ts";
 import {
   ChatModelAccountOptions,
   ChatModelAccountSectionView,
@@ -45,7 +44,10 @@ import {
 } from "./chat-model-picker-search.ts";
 import { createModelPickerWindow } from "./chat-model-picker-window.tsx";
 import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
-import { ChatModelProviderHeading } from "./chat-model-provider-heading.tsx";
+import {
+  ChatModelProviderHeading,
+  prepareChatModelProviderAuth,
+} from "./chat-model-provider-heading.tsx";
 import { ChatModelProviderRail } from "./chat-model-provider-rail.tsx";
 import {
   ChatModelSettings,
@@ -61,6 +63,13 @@ type ChatModelPickerPanelProps = {
 };
 
 export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
+  const modelAuthStatus = createMemo(() => panel.params.modelAuthStatusResult);
+  const authProfileId = createMemo(() => panel.params.authProfileId);
+  // Account headings are only needed inside the lazily mounted picker, not at Chat boot.
+  const providerAuth = createMemo(() => {
+    i18nRevision();
+    return prepareChatModelProviderAuth(modelAuthStatus(), authProfileId());
+  });
   const owner = createChatModelFavoritesScope(() => panel.params.sessionKey);
   const favorites = createChatModelFavorites(owner);
   const search = useContext(ChatModelSearchContext);
@@ -416,14 +425,6 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
         options().length > 0 &&
         options().every((option) => option.disabled && option.unavailableReason === "cooldown"),
     );
-    const auth = createMemo(() => {
-      const authProvider =
-        resolveModelRuntimeRoute(props.provider, providerRuntime(props.provider) ?? undefined) ===
-        "claudeCli"
-          ? "claude-cli"
-          : props.provider;
-      return panel.params.providerAuth?.get(authProvider);
-    });
     return (
       <section
         class="chat-controls__provider-model-group"
@@ -437,7 +438,8 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
             favorites={props.provider === FAVORITES_GROUP}
             options={options()}
             cooldown={providerCooldown()}
-            auth={auth()}
+            providerAuth={providerAuth()}
+            runtime={providerRuntime(props.provider)}
             accounts={props.provider === state().activeProvider ? accounts() : undefined}
             onSettings={panel.params.onProviderSettings}
           />

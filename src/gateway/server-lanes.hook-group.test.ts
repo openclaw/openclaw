@@ -92,8 +92,3 @@ it.each([false, true])(
     }
   },
 );
-
-it("widens only the automation lane to the agent limit", () => {
-  const cfg = { hooks: { enabled: true }, agents: { defaults: { maxConcurrent: 12 } } };
-  expect(resolveGatewayLaneConcurrency(cfg)).toMatchObject({ cron: 12, hookDispatch: 8 });
-});

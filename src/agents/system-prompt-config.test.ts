@@ -196,7 +196,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     { toolNames: ["exec", "gateway", "openclaw"] },
     { toolNames: ["gateway", "openclaw"] },
   ])(
-    "distinguishes component work from supervised maintenance with tools $toolNames",
+    "describes maintenance without forcing an update method with tools $toolNames",
     async ({ toolNames }) => {
       const config: OpenClawConfig = { commands: { restart: false } };
       const prompts = [
@@ -204,27 +204,18 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         buildAgentHarnessBasePrompt({ config, toolNames }),
       ];
       for (const prompt of prompts) {
-        expect(prompt).toContain(
-          "maintenance tools, not exec or detached jobs, for updates, installation replacement, or service stop/restart",
-        );
-        expect(prompt).not.toContain("for installation changes or service control");
-        expect(prompt).toContain("the Gateway must retain a working restart path before it stops");
+        expect(prompt).not.toContain("maintenance tools, not exec or detached jobs");
+        expect(prompt).not.toContain("perform the work with `gateway`");
+        expect(prompt).not.toContain("restart, config, channels");
+        expect(prompt).not.toContain("For an update request, use the Control UI");
+        expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
+        expect(prompt).toContain("The Gateway must retain a working restart path before it stops");
         expect(prompt).toContain(
           "If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization or retry the denied operation through exec",
         );
-        expect(prompt.includes("perform the work with `gateway`: update.run")).toBe(
+        expect(prompt.includes("`gateway`: update.run updates with supervised restart")).toBe(
           toolNames.includes("gateway"),
         );
-        if (toolNames.includes("exec")) {
-          expect(prompt).toContain(
-            "For explicitly authorized non-disruptive component builds (such as `pnpm build:iroh`), dependency work, or repairs with no dedicated maintenance action, use exec under normal permissions and approvals",
-          );
-          expect(prompt).toContain(
-            "Do not refuse solely because the work is on the Gateway host or no maintenance action exists",
-          );
-        } else {
-          expect(prompt).not.toContain("use exec under normal permissions and approvals");
-        }
       }
     },
   );
@@ -272,7 +263,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       });
       expect(disabled).not.toContain("`/update`");
       expect(disabled).not.toContain("`/restart`");
-      expect(disabled).toContain("maintenance tools, not exec or detached jobs");
+      expect(disabled).toContain("The Gateway must retain a working restart path before it stops");
       expect(disabled).toContain("Toggle /reasoning; /status shows when enabled.");
       const enabled = await buildPrompt({ toolNames, config: {} });
       expect(enabled).toContain("`/update`");

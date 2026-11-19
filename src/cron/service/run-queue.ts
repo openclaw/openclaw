@@ -1,3 +1,4 @@
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
@@ -27,6 +28,7 @@ import { CRON_ADMISSION_DEFERRED_RECEIPT_ERROR } from "./admission-deferred.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { locked } from "./locked.js";
 import { resolveCurrentDefaultAgentId } from "./ops-shared.js";
+import { cronRunCeilingAfterPushback } from "./provider-backoff.js";
 import type { ManualRunOptions } from "./run-options.js";
 import { skipCronJobsWithoutOwners } from "./run-owner.js";
 import { launchCronRun, type CronLaunchContext } from "./run-queue-execution.js";
@@ -42,11 +44,11 @@ import {
   releaseCronRunQueue,
   wakeCronRunQueues,
 } from "./run-queue-wake.js";
-import { resolveCronRunSlots } from "./run-slots.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import {
   busyConversationCronJobIds,
   busyCronConversation,
+  cronMemoryAllowsExtraRun,
   preparingCronAgentIds,
 } from "./scheduler-config.js";
 import {
@@ -360,12 +362,14 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
             storeKey: state.deps.storeKey,
             nowMs: state.deps.nowMs(),
             defaultAgentId: resolveCurrentDefaultAgentId(state),
-            maxConcurrentRuns: resolveCronRunSlots(),
+            maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
             // Worker ticks wait for open Gateway admission; this drain must not activate timed
             // occurrences that a draining Gateway can only refuse.
             schedulingPaused: state.schedulingPaused || isGatewayRestartDraining(),
             preparingAgentIds: preparingCronAgentIds(state.deps.env),
             busyConversationJobIds: busyConversationCronJobIds(state),
+            memoryAllowsExtraRun: cronMemoryAllowsExtraRun(),
+            runCeilingAfterPushback: cronRunCeilingAfterPushback(),
             requests: getCronRunQueueRequests(state, { includePendingEvents: true }),
             hostProcessId: currentPluginCommandHostProcessId(),
             pluginCommandHosts: state.deps.resolvePluginCommandScheduleHosts?.(),

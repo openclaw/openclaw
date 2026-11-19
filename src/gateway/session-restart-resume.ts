@@ -73,13 +73,11 @@ import {
   recordRestartYieldFailure,
 } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
+import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
 import {
   captureSessionRestartOperatorSource,
   prepareSessionSystemTurnAuthority,
 } from "./session-system-turn-authority.js";
-
-const GATEWAY_RESTART_RESUME_TEXT =
-  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue. Child runs do not resume independently. Inspect their saved work; send a fresh instruction to the same retained child session when appropriate. A stopped execution is not a yielded pause, and restarting it does not transfer workspace or publication ownership.";
 
 type SessionIdentity = {
   agentId: string;
@@ -501,12 +499,16 @@ async function resumeRestartStore(
             if (!selected) {
               return { result: undefined };
             }
-            const parked = (await hasInterruptedCommittedRequesterSettleInput(
-              { ...target, agentId, sessionKey, sessionId: selected.sessionId },
-              selected,
-            ))
-              ? undefined
-              : resolveSessionYieldWait(sessionKey, selected, agentId);
+            let parked = resolveSessionYieldWait(sessionKey, selected, agentId);
+            if (
+              parked &&
+              (await hasInterruptedCommittedRequesterSettleInput(
+                { ...target, agentId, sessionKey, sessionId: selected.sessionId },
+                selected,
+              ))
+            ) {
+              parked = undefined;
+            }
             const skip = restartResumeSkipReason(sessionKey, selected);
             const sameRun = selected.lifecycleRunId === snapshotEntry.lifecycleRunId;
             const resolved = resolveStartupRestartMarker(selected, sameRun, {

@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store-writer-state.js";
 import { stop } from "../../../src/cron/service/ops-lifecycle.js";
-import { resetCronRunSlots } from "../../../src/cron/service/run-slots.js";
+import { resetCronProviderBackoff } from "../../../src/cron/service/provider-backoff.js";
 import {
   createCronServiceState,
   type CronServiceDeps,
@@ -89,7 +89,7 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
     useRealTime();
     await waitForCommandQueueIdle(250);
     resetCommandQueueStateForTest();
-    resetCronRunSlots();
+    resetCronProviderBackoff();
     clearSessionStoreCacheForTest();
     resetAgentEventsForTest();
   });

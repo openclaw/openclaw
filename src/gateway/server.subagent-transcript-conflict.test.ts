@@ -38,7 +38,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextLifetime,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   activateTestChannelRegistry,
@@ -47,8 +50,7 @@ import {
 } from "../test-utils/channel-plugins.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
-import { closeGatewayDeviceRevocation } from "./device-revocation.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import { captureOperatorToolGatewayContinuationContext } from "./server-plugin-in-process-authority.js";
 import { subagentToolCallEvents } from "./server.subagent-stop-settlement.product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -84,7 +86,7 @@ for (const scenario of [
       let started = createDeferred(),
         release = createDeferred();
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      let gatewayContext: GatewayRequestContext | undefined;
+      let resolveGatewayContext: GatewayContextResolver | undefined;
       let execution: Awaited<ReturnType<typeof observeGatewayRunExecution>> | undefined;
       let wake: Promise<boolean> | undefined;
       let originalSource: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
@@ -172,7 +174,7 @@ for (const scenario of [
           .spyOn(kernelModule, "createGatewayKernel")
           .mockImplementation(async (...args) => {
             const kernel = await createKernel(...args);
-            gatewayContext = kernel.gatewayRequestContext;
+            resolveGatewayContext = kernel.resolvePluginGatewayContext;
             return kernel;
           });
         try {
@@ -258,7 +260,7 @@ for (const scenario of [
         };
         await registry.resetSubagentRegistryForTests({ persist: false });
         const parent = loadSessionEntryReadOnly(scope);
-        if (!parent || !gatewayContext) {
+        if (!parent || !resolveGatewayContext) {
           throw new Error("Missing requester");
         }
         const child = createSubagentRunRecord({
@@ -325,7 +327,7 @@ for (const scenario of [
         if (!saved) {
           throw new Error("Missing durable child");
         }
-        bindGatewayContextResolver(saved, () => gatewayContext);
+        bindGatewayContextResolver(saved, resolveGatewayContext);
         if (!originalSource) {
           throw new Error("Original requester authority was not captured");
         }
@@ -467,8 +469,8 @@ for (const scenario of [
           return;
         }
         if (scenario === "revoked") {
-          // Retire the actual Gateway source owner, including grants retained by the run.
-          closeGatewayDeviceRevocation(gatewayContext);
+          // Retire the Gateway lifetime that owns the retained continuation.
+          getGatewayContextLifetime(resolveGatewayContext).abort(new Error("Gateway closed"));
           release.resolve();
           expect(await wake).toBe(false);
           expect(transcriptText()).not.toContain("Requester synthesis ");

@@ -10,6 +10,7 @@ import {
   listFirstHopSourceVersions as listSources,
   markFutureUpdateFixture as markFuture,
   packFirstHopUpdateFixture as packFirstHop,
+  packFuturePluginFixture as packFuturePlugin,
   packFutureUpdateFixture as packFuture,
   packUnsupportedAdmissionFixture as packWithoutAdmission,
   removeLegacyUpdateCompatChunks as removeBridges,
@@ -429,6 +430,33 @@ function transitionEvidence(root: string, ...args: string[]) {
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout);
 }
+
+it.each([
+  { target: undefined, expected: "2026.11.6-first-hop.0" },
+  { target: "2026.11.7-first-hop.0", expected: "2026.11.7-first-hop.0" },
+])(
+  "stamps a future plugin with the core target it is served beside: $target",
+  ({ target, expected }) => {
+    // A plugin released with 2026.11.5 beside a core cut from a newer candidate.
+    const root = tempDirs.make("openclaw-future-plugin-");
+    writeJson(path.join(root, "package/package.json"), {
+      name: "@openclaw/zalo",
+      version: "2026.11.5",
+      openclaw: { build: { openclawVersion: "2026.11.5" } },
+    });
+    const output = path.join(root, "future.tgz");
+    const receipt = packFuturePlugin(archive(root), output, 0, "@openclaw/zalo", target);
+    const pkg = JSON.parse(member(output, "package.json").toString());
+    expect({ version: pkg.version, cohort: pkg.openclaw.build.openclawVersion }).toEqual({
+      version: expected,
+      cohort: expected,
+    });
+    expect(receipt.targetVersion).toBe(expected);
+    expect(() =>
+      packFuturePlugin(archive(root), path.join(root, "other.tgz"), 0, "@openclaw/other"),
+    ).toThrow("future plugin fixture requires @openclaw/other");
+  },
+);
 
 it("accepts applied content while schema publication is deferred", () => {
   const root = tempDirs.make("openclaw-external-transition-");
