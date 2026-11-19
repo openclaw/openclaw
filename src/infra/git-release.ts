@@ -24,7 +24,11 @@ import {
   sweepPackageReleaseTemporaryLinks,
   switchPackageReleaseLink,
 } from "./package-release-slot.js";
-import { readBuiltGatewayBuildId, verifyGitUpdateRecovery } from "./update-git-runtime.js";
+import {
+  readBuiltGatewayBuildId,
+  readBuiltRuntimeCommit,
+  verifyGitUpdateRecovery,
+} from "./update-git-runtime.js";
 
 /**
  * A new release directory. The worktree is built at `buildDir`, outside
@@ -183,6 +187,32 @@ async function readReleaseHead(root: string): Promise<string | null> {
   return /^[0-9a-f]{40,64}$/u.test(head) ? head : null;
 }
 
+/**
+ * Evidence that a fallback served: a Gateway took a release lease on it (the lease
+ * directory outlives the lease), or it is the first release, built from the commit the
+ * checkout's own build serves. A publisher before this change recorded whatever the link
+ * named, which can be a release that never started.
+ */
+async function servedBefore(prefix: string, root: string): Promise<boolean> {
+  const leases = path.join(prefix, PACKAGE_RELEASES_DIR, ".leases", gitReleaseId(root));
+  if (
+    await fs.stat(leases).then(
+      () => true,
+      () => false,
+    )
+  ) {
+    return true;
+  }
+  const dotGit = await fs.readFile(path.join(root, ".git"), "utf8").catch(() => "");
+  const gitDir = /^gitdir: (.+)$/mu.exec(dotGit)?.[1]?.trim();
+  const commonDir = gitDir
+    ? (await fs.readFile(path.resolve(root, gitDir, "commondir"), "utf8").catch(() => "")).trim()
+    : "";
+  const checkout = commonDir ? path.dirname(path.resolve(root, gitDir!, commonDir)) : null;
+  const head = await readReleaseHead(root);
+  return Boolean(checkout && head && (await readBuiltRuntimeCommit(checkout)) === head);
+}
+
 /** Present and intact: its runtime artifacts verify against the commit it was built from. */
 export async function verifiesAsGitRelease(root: string): Promise<boolean> {
   return (await verifyGitUpdateRecovery({ root, sha: await readReleaseHead(root) }))
@@ -257,7 +287,10 @@ export async function readGitReleasePlacement(
   }
   const unserved = { root: slot.releaseRoot, selected: true };
   if (previous && (await verifiesAsGitRelease(previous))) {
-    return { serving: previous, fallback: previous, unserved };
+    // Without evidence that it served, the record is left as it is, as before this change.
+    return (await servedBefore(slot.prefix, previous))
+      ? { serving: previous, fallback: previous, unserved }
+      : current;
   }
   const commit = previous ? await readReleaseHead(previous) : null;
   // Without its commit the old fallback cannot even be read as a Git release.
@@ -330,9 +363,11 @@ export async function collectGitReleases(params: {
   keep: readonly string[];
   prune: () => Promise<unknown>;
 }): Promise<{ removed: string[]; warnings: string[] }> {
+  const slot = gitReleaseSlot(params.prefix);
+  // The shared collector works in the link's resolved prefix (a state dir can be a symlink).
   const collected = await collectPackageReleases({
-    slot: gitReleaseSlot(params.prefix),
-    prefix: params.prefix,
+    slot,
+    prefix: readPackageReleaseSlotSync(slot)?.prefix ?? params.prefix,
     keep: params.keep,
   });
   if (collected.removed.length > 0) {

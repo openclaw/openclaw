@@ -67,8 +67,12 @@ export async function updateGitRelease(params: {
   const converting = !selected;
   let placement = selected ? await readGitReleasePlacement(selected) : null;
   // Repair moves the link, which a launcher-backed Gateway follows by restarting, so an
-  // update with --no-restart leaves a placed release to the next update that restarts.
+  // update with --no-restart leaves a placed release, its trial and the link exactly as an
+  // earlier updater would, for the next update that restarts.
   const deferredLeftover = opts.deferReleaseActivation ? placement?.unserved : undefined;
+  if (deferredLeftover && selected) {
+    placement = { serving: selected.releaseRoot, fallback: selected.releaseRoot };
+  }
   const unserved = opts.deferReleaseActivation ? undefined : placement?.unserved;
   let stepIndex = 0;
   const forRunner =
@@ -366,10 +370,10 @@ export async function updateGitRelease(params: {
   }
   // F: only a placed release whose build verifies is reused.
   // Only a placed release whose build verifies and whose tracked files are unchanged is reused.
-  const placedClean =
-    unserved &&
-    (await git(unserved.root, "status", "--porcelain", "--untracked-files=no")).stdout.trim() ===
-      "";
+  const status = unserved
+    ? await git(unserved.root, "status", "--porcelain", "--untracked-files=no")
+    : null;
+  const placedClean = status?.code === 0 && status.stdout.trim() === "";
   placedSha =
     unserved && placedClean && (await verifiesAsGitRelease(unserved.root))
       ? (await git(unserved.root, "rev-parse", "HEAD")).stdout.trim()
