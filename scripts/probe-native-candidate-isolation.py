@@ -124,7 +124,7 @@ def main():
 (allow file-read-metadata (literal "/") (literal "/private") (literal "/private/tmp"))
 (allow file-read* file-write* (subpath CANDIDATE))
 (allow file-write-data (literal "/dev/null"))
-(allow network-outbound (remote tcp "127.0.0.1:PORT"))
+(allow network-outbound (remote tcp "localhost:PORT"))
 '''.replace('CANDIDATE', json.dumps(str(root / 'candidate'))).replace('PORT', allowed)
         result = subprocess.run(['sudo', '-n', '/usr/bin/python3', '-I', str(Path(__file__).resolve()),
                                  '--child', str(uid), profile, str(root), allowed, denied, str(os.getpid())],
