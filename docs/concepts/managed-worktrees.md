@@ -33,9 +33,18 @@ workspace filesystem instead of a host `/tmp` tmpfs. Keep workspaces on disk and
 use the provided variables (for example, `mktemp -d "$TMPDIR/validation.XXXXXXXX"`).
 Explicit command or sandbox environment overrides remain supported.
 
+Unix-domain sockets have much shorter path limits than ordinary files. A deeply
+nested workspace can therefore fail socket creation with `AF_UNIX path too long`.
+For those tools, select a short workspace path or explicitly override the temp
+variables with a short directory and remove it when the command finishes. Such
+overrides do not gain workspace scratch retention automatically. OpenClaw's test
+runner already owns a short, process-scoped temp directory for native socket tests.
+
 Docker and Podman have private `/tmp`, `/var/tmp`, and `/run` tmpfs mounts by
 default; they do not bind the host's `/tmp`. Their agent commands instead default
-to `.openclaw/tmp/` in the writable workspace mount. Maintenance expires scratch
+to `.openclaw/tmp/` in the writable workspace mount. Read-only workspaces retain
+the container's writable `/tmp`; that scratch stays in private tmpfs until the
+container lifecycle releases it. Maintenance expires workspace scratch
 in registered local sandbox workspaces, with the same live/queued-session guard.
 Container retirement also releases the private tmpfs mounts. Remote execution
 uses the remote host's environment and lifecycle; Gateway-local paths are never

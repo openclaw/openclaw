@@ -123,7 +123,11 @@ async function createContainerSandboxBackend(
       assertCurrent();
       phases.mark("attempt.setup.sandbox.backend.handle");
       const { workdir: defaultWorkdir, env: configuredEnv, image } = params.cfg.docker;
-      const tempDir = path.posix.join(defaultWorkdir, ".openclaw", "tmp");
+      // Read-only workspaces retain writable temp owned by the container lifecycle.
+      const tempDir =
+        params.cfg.workspaceAccess === "ro"
+          ? "/tmp"
+          : path.posix.join(defaultWorkdir, ".openclaw", "tmp");
       const scratchEnv = { TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir, ...configuredEnv };
       const gitBinDir = params.readOnlyResourceMounts?.some(
         (mount) => mount.containerPath === AGENT_GIT_SANDBOX_BIN,

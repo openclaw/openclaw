@@ -472,6 +472,41 @@ it("admits explicit piped input without enabling a PTY", async () => {
   await finalize(backend, spec.finalizeToken);
 });
 
+it.skipIf(process.platform === "win32").each(["docker", "podman"] as const)(
+  "%s keeps temporary files writable with read-only workspace access",
+  async (engine) => {
+    provision();
+    const cfg = resolveSandboxConfigForAgent(createConfig(engine, false));
+    cfg.workspaceAccess = "ro";
+    cfg.docker.workdir = tempDirs.make("sandbox-readonly-workspace-");
+    fs.chmodSync(cfg.docker.workdir, 0o555);
+    const backend = await (
+      engine === "docker" ? createDockerSandboxBackend : createPodmanSandboxBackend
+    )(backendParams({ cfg }));
+    const spec = await backend.buildExecSpec({
+      command: 'temporary=$(mktemp -d "$TMPDIR/proof.XXXXXXXX") && rmdir "$temporary"',
+      env: {},
+      usePty: false,
+    });
+    try {
+      const child = spawnSync("/bin/sh", ["-c", spec.argv.at(-1)!], {
+        env: { PATH: "/usr/bin:/bin", ...backend.env },
+        encoding: "utf8",
+      });
+      expect(child.stderr).toBe("");
+      expect(child.status).toBe(0);
+      assertStaged(fs.readFileSync(envFile(spec), "utf8"), {
+        TMPDIR: "/tmp",
+        TMP: "/tmp",
+        TEMP: "/tmp",
+      });
+    } finally {
+      fs.chmodSync(cfg.docker.workdir, 0o755);
+      await finalize(backend, spec.finalizeToken);
+    }
+  },
+);
+
 it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
   "prepends the mounted Git shim after shell startup (requested PATH=%s)",
   async (requestedPath) => {

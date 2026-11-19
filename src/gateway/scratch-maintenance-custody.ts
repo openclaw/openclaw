@@ -10,6 +10,7 @@ import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { hasActiveContainerUsage } from "../agents/sandbox/container-usage.js";
 import { readRegistry as readSandboxRegistry } from "../agents/sandbox/registry.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
+import { resolveSandboxSession } from "../agents/sandbox/session-selection.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { readWorktreeCleanupState } from "../agents/worktrees/registry-read.js";
@@ -294,15 +295,20 @@ export async function prepareScratchMaintenanceTargets(
             agentId: target.agentId,
             preparedSessionEntry: entry ?? null,
           });
-          const sandboxConfig = resolveSandboxConfigForAgent(cfg, target.agentId);
-          if (runtime.sandboxed) {
+          const selected = await resolveSandboxSession({
+            config: cfg,
+            sessionKey: target.canonicalKey,
+            preparedRuntimeStatus: runtime,
+            skillsSnapshot: { librarySelections: entry?.skillLibrarySelections },
+          });
+          if (selected) {
             for (const workspaceDir of [...paths, ...(current.sourcePaths.get(key) ?? [])]) {
               paths.push(
                 resolveSandboxWorkspaceLayoutPaths({
-                  cfg: sandboxConfig,
-                  rawSessionKey: target.canonicalKey,
+                  cfg: selected.cfg,
+                  rawSessionKey: selected.rawSessionKey,
                   agentId: target.agentId,
-                  isolationSubject: runtime.isolationSubject,
+                  isolationSubject: selected.runtime.isolationSubject,
                   workspaceDir,
                 }).workspaceDir,
               );
