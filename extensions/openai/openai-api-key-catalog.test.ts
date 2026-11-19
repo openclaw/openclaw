@@ -48,6 +48,24 @@ afterEach(() => {
 });
 const modelRows = (ids: string[]) => ids.map((id) => ({ id, object: "model" }));
 
+it("scopes the API-key instructions cache workaround to GPT-6.2", async () => {
+  const affected = ["gpt-6.2-sol", "gpt-6.2-astra"];
+  const unaffected = ["gpt-6-astra", "gpt-6.1-sol"];
+  const { provider } = await runCatalog(
+    Response.json({ data: modelRows([...affected, ...unaffected]) }),
+  );
+  for (const id of affected) {
+    expect(provider.models.find((model) => model.id === id)?.compat).toMatchObject({
+      cachesInstructions: false,
+    });
+  }
+  for (const id of unaffected) {
+    const model = provider.models.find((model) => model.id === id);
+    expect(model).toBeDefined();
+    expect(model?.compat?.cachesInstructions).toBeUndefined();
+  }
+});
+
 it("lists configured API-key models without loading profile auth runtimes", async () => {
   // mock-isolation: Prepared credentials must not load either broad auth owner.
   vi.doMock("openclaw/plugin-sdk/provider-auth", () => {
