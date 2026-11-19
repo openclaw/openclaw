@@ -141,14 +141,6 @@ before the effect to reject intervening owner writes without SQL. Keep caller
 authorization and cancellation checks there too; a prepared store alone does not
 authorize disclosure. The reader expires when the callback returns.
 
-Bundled harness catalogs use the host's `api.runtime.modelAuth` for profile
-selection. Native credential operations use the private
-`openclaw/plugin-sdk/provider-auth-runtime` surface for persisted-profile reads,
-refresh, and refresh-generation fences. Pure credential eligibility and OpenAI
-account identity helpers live in `openclaw/plugin-sdk/provider-oauth-runtime`.
-These routes keep catalog discovery separate from onboarding and agent tool
-construction; they retain the same credential owners and effect-time checks.
-
 ## Loopback OAuth callbacks
 
 Bundled providers use `startProviderOAuthLoopbackCallbackServer` from
