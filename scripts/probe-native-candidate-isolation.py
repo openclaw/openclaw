@@ -79,7 +79,8 @@ const detached = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {})
 detached.unref();
 async function request(port, host = "127.0.0.1") {
   return await new Promise((resolve, reject) => {
-    const req = http.get({ host, port, path: "/v1/probe", timeout: 2500 }, response => {
+    // Bypass Node's build proxy agent: this assertion tests direct socket denial.
+    const req = http.get({ host, port, path: "/v1/probe", timeout: 2500, agent: false }, response => {
       let text = "";
       response.on("data", chunk => text += chunk);
       response.on("end", () => resolve(text));
