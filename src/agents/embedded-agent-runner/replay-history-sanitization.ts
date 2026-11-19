@@ -272,8 +272,11 @@ export function* normalizeReplaySequence<T, B>(
     // transports merge the later turn into an already-sent one. It is dropped only before
     // another assistant turn, which never merges into it (#99620).
     if (normalized && role === "assistant" && adapter.silentReply(message)) {
-      const next = messages.slice(index + 1).find((later) => adapter.role(later) !== "custom");
-      if (next !== undefined && adapter.role(next) === "assistant") {
+      let next = index + 1;
+      while (next < messages.length && adapter.role(messages[next]!) === "custom") {
+        next++;
+      }
+      if (next < messages.length && adapter.role(messages[next]!) === "assistant") {
         normalized = null;
       }
     }
