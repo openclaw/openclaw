@@ -5,16 +5,13 @@ import { installDirectoryWatchPort, watchDirectory } from "./directory-watch-hos
 
 const { directory, port } = workerData as { directory: string; port: MessagePort };
 const parent = parentPort!;
+const send = parent.postMessage.bind(parent);
 childProcess.spawn = () => {
   throw new Error("Unexpected second directory watch helper");
 };
 syncBuiltinESMExports();
 installDirectoryWatchPort(port);
-watchDirectory(directory, (_event, filename) => {
-  // Node worker ports do not have a target origin.
-  // oxlint-disable-next-line unicorn/require-post-message-target-origin
-  parent.postMessage(filename);
-}).on("error", (error) => {
+watchDirectory(directory, (_event, filename) => send(filename)).on("error", (error) => {
   throw error;
 });
 parent.on("message", () => {});
