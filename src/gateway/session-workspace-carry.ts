@@ -113,6 +113,27 @@ async function bundleInSandbox(
 }
 
 /**
+ * On the host a checkout's Git data must be the conversation's own: a `.git` file or
+ * alternates could otherwise point Git at any repository the Gateway user can read.
+ */
+async function ownsGitData(directory: string, root: string, guard: { signal?: AbortSignal }) {
+  const [gitDir, commonDir] = await Promise.all([
+    requireGit(directory, ["rev-parse", "--absolute-git-dir"], guard),
+    requireGit(directory, ["rev-parse", "--path-format=absolute", "--git-common-dir"], guard),
+  ]);
+  for (const dir of [gitDir, commonDir]) {
+    const relative = path.relative(root, await fs.realpath(dir));
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      return false;
+    }
+  }
+  const alternates = await fs
+    .stat(path.join(commonDir, "objects", "info", "alternates"))
+    .catch(() => undefined);
+  return !alternates;
+}
+
+/**
  * The host variant of the sandbox script. withWorktreeGitConfig replaces the checkout's
  * repository, global and system config with a trusted layout-only config for content
  * commands; runGit pins hooks and fsmonitor off for every command, including the
@@ -136,6 +157,11 @@ async function bundleOnHost(
   const topLevel = await runGit(directory, ["rev-parse", "--show-toplevel"], guard);
   if (topLevel.code !== 0 || (await fs.realpath(topLevel.stdout.trim())) !== directory) {
     throw notCheckout(checkout);
+  }
+  if (!(await ownsGitData(directory, root, guard))) {
+    throw new Error(
+      `${checkout} keeps Git data outside this conversation's workspace; nothing was moved.`,
+    );
   }
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-carry-index-"));
   try {
