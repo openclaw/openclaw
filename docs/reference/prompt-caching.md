@@ -66,18 +66,22 @@ With Tool Search on (`tools.toolSearch` enabled in `mode: "tools"` without
   child-session turns. A turn whose reply delivery or tool policy does not allow
   the message tool refuses the call with a visible message. The turn's own
   delivery rules still decide whether a send is allowed.
-- A scheduled run's `toolsAllow` keeps the session's tools listed and refuses
-  each call outside the allowlist with a visible message. It refuses the same
-  calls as when it removed those tools from the list.
+- A run's `toolsAllow` (scheduled runs, queued follow-ups, and cross-session
+  events) and group `tools` / `toolsBySender` policy keep the session's tools
+  listed and refuse each call they do not allow with a visible message, including
+  calls made through `dispatch_action`. They refuse the same calls as when they
+  removed those tools from the list, so every sender in a group chat sends one list.
 - The deferred MCP tool directory is part of the system prompt's deferred-tool
   section, not the `tool_search` definition. An MCP server that connects,
   disconnects, or changes its tools later reaches the model as an appended
   prompt update.
 
-These exceptions keep the earlier behavior, where `message` and a scheduled
-`toolsAllow` filter the list: Tool Search off (`tools.toolSearch: false`) or
+These exceptions keep the earlier behavior, where `message`, `toolsAllow`, and
+sender policy filter the list: Tool Search off (`tools.toolSearch: false`) or
 disabled for a run (Code Mode, memory flush, and runs that disable Tool Search),
-`include` or `exclude` selections, and `mode: "directory"`.
+`include` or `exclude` selections, and `mode: "directory"`. On these opt-out
+surfaces a later turn can still add a tool to the pinned list mid-session, for
+example `skills_read` or `skills_search`, by design.
 
 Within an embedded run, bounded transcript reloads retain the admitted history
 boundary even when its compaction summary falls outside the loaded window.
