@@ -73,6 +73,22 @@ it("preserves a pin while its generation exists, even if the executable is missi
   expect(normalizeCompatibilityConfig({ cfg })).toEqual({ config: cfg, changes: [] });
 });
 
+it.skipIf(process.platform === "win32")("keeps a working symlink-parent command", () => {
+  const projectsDir = path.dirname(project);
+  const sharedDir = path.join(root, "shared");
+  const activeDir = path.join(sharedDir, "active");
+  const executable = path.join(sharedDir, generation, "bin", "codex");
+  fs.mkdirSync(projectsDir, { recursive: true });
+  fs.mkdirSync(activeDir, { recursive: true });
+  fs.mkdirSync(path.dirname(executable), { recursive: true });
+  fs.writeFileSync(executable, "working codex", { mode: 0o700 });
+  fs.symlinkSync(activeDir, path.join(projectsDir, "current"), "dir");
+  const command = [projectsDir, "current", "..", generation, "bin", "codex"].join(path.sep);
+  expect(fs.readFileSync(command, "utf8")).toBe("working codex");
+  const cfg = config(command);
+  expect(normalizeCompatibilityConfig({ cfg })).toEqual({ config: cfg, changes: [] });
+});
+
 it.each([true, false])("follows generation symlinks (target exists: %s)", (exists) => {
   const target = path.join(root, "target");
   if (exists) {

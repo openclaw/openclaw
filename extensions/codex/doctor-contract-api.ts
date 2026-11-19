@@ -20,6 +20,10 @@ function isStaleManagedCodexGenerationCommand(command: unknown): boolean {
   if (!path.isAbsolute(trimmed) && !/^~[/\\]/u.test(trimmed)) {
     return false;
   }
+  // The POSIX launcher follows symlinks before resolving '..'; a lexical match can be wrong.
+  if (trimmed.split(path.sep === "\\" ? /[/\\]/u : "/").includes("..")) {
+    return false;
+  }
   try {
     const projectsDir = path.join(resolveConfigDir(process.env), "npm", "projects");
     const [name, child] = path.relative(projectsDir, resolveUserPath(trimmed)).split(path.sep);
