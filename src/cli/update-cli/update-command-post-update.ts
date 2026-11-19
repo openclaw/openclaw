@@ -86,7 +86,6 @@ async function finishSettledUpdate(
   const { fence, assertCurrent, originalRun, compensate, forward, recordPhase, sentinelOptions } =
     captured;
   let gatewayStartAttempted: "install" | "restart" | undefined;
-  let candidateOwnsMigratedState = false;
   const onGatewayStartAttempted = (action: "install" | "restart" = "restart") => {
     gatewayStartAttempted = gatewayStartAttempted === "restart" ? gatewayStartAttempted : action;
     observeGatewayStartAttempted?.();
@@ -225,9 +224,8 @@ async function finishSettledUpdate(
           step: "package rollback",
           status: "skipped",
           endedAtMs: Date.now(),
-          detail: candidateOwnsMigratedState
-            ? "The started candidate owns the migrated state; automatic package restoration was not attempted."
-            : "No retained previous package transaction is available; automatic package restoration was not attempted.",
+          detail:
+            "No retained previous package transaction is available; automatic package restoration was not attempted.",
         },
         params.opts.run,
       );
@@ -588,7 +586,6 @@ async function finishSettledUpdate(
           // readiness failure concerns that runtime, not the refused rollback; only owners
           // that observe a data risk may record one. A start that never launched keeps it.
           params.rollbackBlockedReason = undefined;
-          candidateOwnsMigratedState = true;
         }
         if (restarted !== "failed" && restarted !== "restart-health-failed") {
           return restarted === "ok";
