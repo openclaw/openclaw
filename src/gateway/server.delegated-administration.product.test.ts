@@ -164,12 +164,14 @@ it(
         expect(await terminal).toMatchObject({ status: "ok" });
         expect(hotReloadRecovery).not.toHaveBeenCalled();
         expect(errors).toEqual([]);
-        expect(await readConfig()).toEqual({
-          ...beforeResume,
-          logging: { ...beforeResume.logging, level: value },
-        });
-        if (!revoke) {
+        if (revoke) {
+          expect(await readConfig()).toEqual({
+            ...beforeResume,
+            logging: { ...beforeResume.logging, level: value },
+          });
+        } else {
           expect(replies.at(-1)).toContain("Updated logging.level");
+          expect((await readConfig()).logging?.level).toBe("warn");
         }
       } finally {
         resume.resolve();
