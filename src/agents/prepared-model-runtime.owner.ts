@@ -450,6 +450,20 @@ export function hasSameLifecycleInput(
   );
 }
 
+// Catalog callbacks retain this guard. Capture only its generation, not the batch's
+// previous catalog, candidates or transient publication callbacks.
+function createPreparedModelRuntimeGenerationGuard(
+  owner: PreparedModelRuntimeOwner,
+  generation: number,
+  key: string,
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  isOwnerRegistered?: (key: string, owner: PreparedModelRuntimeOwner) => boolean,
+): () => boolean {
+  return () =>
+    owner.generation === generation &&
+    (isOwnerRegistered?.(key, owner) ?? owners.get(key) === owner);
+}
+
 export async function publishPreparedModelRuntimeOwnerBatch(
   params: {
     ownersToPublish: readonly PreparedModelRuntimeOwner[];
@@ -491,9 +505,13 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     let registered = params.owners.get(key) === owner;
     // Scoped reloads retain unaffected generations beyond their creating publication epoch.
     // Persistent catalog/auth callbacks must retire only with this exact registered generation.
-    const isGenerationCurrent = () =>
-      owner.generation === generation &&
-      (params.isOwnerRegistered?.(key, owner) ?? params.owners.get(key) === owner);
+    const isGenerationCurrent = createPreparedModelRuntimeGenerationGuard(
+      owner,
+      generation,
+      key,
+      params.owners,
+      params.isOwnerRegistered,
+    );
     const isCurrent = () => (params.isPublicationCurrent?.() ?? true) && isGenerationCurrent();
     return {
       catalogMode: owner.catalogMode,
