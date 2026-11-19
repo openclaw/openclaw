@@ -247,7 +247,7 @@ type EnglishCatalog = TranslationMap & {
     failureGuidance: TranslationMap;
   };
   newSession: TranslationMap &
-    Record<"title" | "hint" | "placementReloadBlocked" | "discardUnsavedAndReload", string>;
+    Record<"title" | "placementReloadBlocked" | "discardUnsavedAndReload", string>;
   commandPalette: TranslationMap;
   palette: TranslationMap & {
     placeholder: string;
@@ -682,7 +682,6 @@ const startupEnglish = {
   agentScope: agentEn.agentScope,
   newSession: {
     title: "New session",
-    hint: "Pick where this session works.",
     placementReloadBlocked: "Recovery needs a reload. Unsaved starts will be lost.",
     discardUnsavedAndReload: "Discard unsaved starts and reload",
   },
@@ -947,6 +946,7 @@ const startupEnglish = {
     pin: "Pin",
     unpin: "Unpin",
     customize: "Edit pinned items",
+    installedPlugins: "Installed",
   },
   terminal: {
     title: "Terminal",
@@ -1506,6 +1506,25 @@ const startupEnglish = {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
+    inlineSwarm: {
+      title: "Swarm",
+      progress: "{done} of {total} settled",
+      childStatus: "{name}: {status}",
+      overflow: "+{count}",
+      moreWorkers: "{count} more workers",
+      status: {
+        queued: "Queued",
+        running: "Running",
+        done: "Completed",
+        failed: "Failed or stopped",
+      },
+      count: {
+        queued: "{count} queued",
+        running: "{count} running",
+        done: "{count} completed",
+        failed: "{count} failed or stopped",
+      },
+    },
     sessionAutomation: {},
     activityPills: {},
     mobileDetails: {

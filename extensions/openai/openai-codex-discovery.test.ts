@@ -4,7 +4,7 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
-import { OPENAI_CODEX_CLIENT_VERSION_FLOOR } from "./codex-client-version.js";
+import { BUNDLED_CODEX_VERSION } from "./test-support/codex-version.test-support.js";
 import { runCatalogWithFetchGuard } from "./test-support/live-catalog.test-support.js";
 
 // The npm registry read for the newest published Codex; the model list keeps the real guard.
@@ -74,7 +74,7 @@ describe("OpenAI discovered subscription models", () => {
     const { fetch } = await discoverCodexModels([{ slug: "gpt-5.5", visibility: "list" }]);
 
     expect(fetch.mock.calls.map(([{ url }]) => url)).toEqual([
-      `https://chatgpt.com/backend-api/codex/models?client_version=${OPENAI_CODEX_CLIENT_VERSION_FLOOR}`,
+      `https://chatgpt.com/backend-api/codex/models?client_version=${BUNDLED_CODEX_VERSION}`,
     ]);
   });
   it.each([128_000, undefined])(

@@ -176,8 +176,10 @@ available from the magnifying-glass button on shorter lists and stays visible
 while you scroll.
 
 For a new worktree, type part of a branch name in **From** to filter the loaded
-repository branches. The menu shows up to eight matches; you can still enter a
-custom branch, tag, or commit, or leave it blank for the Gateway default.
+repository branches. The menu lists the default and current branches first,
+then the most recently committed ones, and shows up to eight matches; names
+that start with your text come first. You can still enter a custom branch, tag,
+or commit, or leave it blank for the Gateway default.
 
 Saved repositories show a repository icon and their `org/repo` identity when the
 Gateway provides it. Search matches both that identity and the project display

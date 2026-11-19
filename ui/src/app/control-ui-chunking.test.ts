@@ -971,6 +971,8 @@ describe("Control UI build chunking", () => {
     expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar-session-narration.ts`)).toBe(
       true,
     );
+    // Provider account labels belong to the opened picker, not either route's boot.
+    expect(bootGroup.test(`${repoRoot}/ui/src/lib/model-provider-auth-label.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.tsx`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/cron/cron-page.tsx`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/plugins/plugins-page.tsx`)).toBe(false);
