@@ -63,6 +63,7 @@ import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
+import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 const BACKGROUND_EXEC_STOPPED_TEXT =
@@ -274,7 +275,7 @@ export async function persistRunningSessionsForRestart(params: {
   }
 }
 
-type RestartResumeParams = {
+export type RestartResumeParams = {
   context: GatewayRequestContext;
   signal: AbortSignal;
   log: { warn: (message: string) => void };
@@ -359,6 +360,7 @@ async function resumeAgentSessions(
       log.warn(`Skipped restart resume for agent ${target.agentId}: ${String(error)}`);
       continue;
     }
+    const completion = await prepareRestartCompletionCustody(params, { target, entries });
     try {
       const orphaned = await listOrphanedSessionPendingInputTargets(
         target,
@@ -556,5 +558,6 @@ async function resumeAgentSessions(
         authority?.release();
       }
     }
+    completion.resume();
   }
 }

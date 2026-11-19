@@ -6,6 +6,7 @@ import {
   projectPublicSessionEntry,
 } from "../config/sessions/session-entry-projection.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
@@ -71,4 +72,54 @@ it("never exposes persisted operator sources in public or execution projections"
     expect(stored).toMatchObject({ operatorSources: entry.operatorSources });
     expect(projectPublicSessionEntry(entry)).not.toHaveProperty("operatorSources");
     expect(projectExecutionSessionEntry(entry)).not.toHaveProperty("operatorSources");
+  }));
+
+it("preserves recorded permission ceilings and revocation when restart restores a configured role", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+    setRuntimeConfigSnapshot({});
+    const profile = ensureProfileForEmail("restart-source@example.test");
+    const config: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "admin",
+          definitions: {
+            admin: {
+              scopes: ["operator.admin"],
+              agents: "*",
+              sessions: { others: "write" },
+            },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+    const fixture = await recoveryFixture(stateDir, profile.id, {
+      config,
+      device: pairedOperator(),
+      scopes: ["operator.write"],
+    });
+    await replaceSessionEntry(fixture.target, {
+      ...fixture.entry,
+      operatorSources: { [profile.id]: fixture.snapshot },
+    });
+
+    const admit = () =>
+      prepareSessionPrincipalRunAuthority({
+        context: fixture.context,
+        profileId: profile.id,
+        ...fixture.target,
+        sessionPrincipal: true,
+        preserveRecordedSource: true,
+      });
+    const admitted = await admit();
+    try {
+      expect(admitted.authority.scopes).toEqual(["operator.write"]);
+      expect(admitted.authority.assertCurrent).not.toThrow();
+      invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
+      persistDevices(stateDir, [], "both");
+      expect(admitted.authority.assertCurrent).toThrow();
+    } finally {
+      admitted.release();
+    }
+    await expect(admit()).rejects.toThrow();
   }));

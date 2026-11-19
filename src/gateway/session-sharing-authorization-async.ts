@@ -1,7 +1,10 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import {
@@ -16,7 +19,10 @@ import {
 import { sameSessionTranscriptStorePath } from "../config/sessions/transcript-store-identity.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  resolveMissingOperatorScope,
+} from "../shared/operator-scope-compat.js";
 import { waitForAgentDatabaseWriteAdmission } from "../state/agent-database-preparation-context.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -27,7 +33,10 @@ import { sanitizeChatSendMessageInput } from "./chat-input-sanitize.js";
 import { errorShapeFromError } from "./error-shape.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import {
+  captureGatewayOperatorRunAuthority,
+  intersectOperatorRunModelPolicy,
+} from "./operator-run-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -77,8 +86,9 @@ export async function prepareSessionPrincipalRunAuthority(
   params: Parameters<typeof prepareSessionPrincipalRunAccess>[0],
 ): Promise<{ authority: AdmittedRunOperatorAuthority; release: () => void }> {
   const source = await prepareSessionPrincipalRunAccess(params);
+  let admitted: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
   try {
-    const admitted = await captureGatewayOperatorRunAuthority({
+    admitted = await captureGatewayOperatorRunAuthority({
       client: source.client,
       context: params.context,
       sourceAuthority: source,
@@ -86,9 +96,26 @@ export async function prepareSessionPrincipalRunAuthority(
     if (!admitted) {
       throw new Error("Session principal has no current run authority.");
     }
+    const original = source.recordedOperatorAuthority;
+    if (original) {
+      const current = admitted.authority;
+      admitted.authority = createAdmittedRunOperatorAuthority({
+        ...current,
+        scopes: intersectOperatorScopes(current.scopes, original.scopes),
+        gatewayAccessGrant: original.gatewayAccessGrant,
+        recoverySnapshot: original.recoverySnapshot,
+        get modelPolicy() {
+          return intersectOperatorRunModelPolicy(original.modelPolicy, current.modelPolicy);
+        },
+      });
+    }
     return admitted;
   } catch (error) {
-    source.release();
+    if (admitted) {
+      admitted.release();
+    } else {
+      source.release();
+    }
     throw error;
   }
 }
@@ -103,6 +130,8 @@ async function prepareSessionPrincipalRunAccess(params: {
   storePath?: string;
   /** System turns retain the session's principal, rather than an explicit input sender. */
   sessionPrincipal?: true;
+  /** Restart completion preserves the original authenticated permission ceiling. */
+  preserveRecordedSource?: true;
   assertCurrent?: () => void;
 }) {
   params.assertCurrent?.();
@@ -147,7 +176,10 @@ async function prepareSessionPrincipalRunAccess(params: {
     return scopes;
   };
   try {
-    if (params.profileId !== GATEWAY_OWNER_PROFILE_ID && !getConfig().gateway?.roles) {
+    if (
+      params.profileId !== GATEWAY_OWNER_PROFILE_ID &&
+      (params.preserveRecordedSource || !getConfig().gateway?.roles)
+    ) {
       recorded = await restoreSessionOperatorSource({
         ...params,
         assertCurrent: () => params.assertCurrent?.(),
@@ -175,6 +207,9 @@ async function prepareSessionPrincipalRunAccess(params: {
       params.assertCurrent?.();
       access?.signal.throwIfAborted();
       access?.assertCurrent();
+      if (params.preserveRecordedSource) {
+        recorded?.authority.assertCurrent();
+      }
       identity.readCurrentFacts();
       if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
         throw new Error("Session principal has no current run authority.");
@@ -224,6 +259,7 @@ async function prepareSessionPrincipalRunAccess(params: {
       assertCurrent,
       signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
       gatewayAccessGrant: access ? access.gatewayAccessGrant : null,
+      recordedOperatorAuthority: params.preserveRecordedSource ? recorded?.authority : undefined,
       release,
     };
   } catch (error) {

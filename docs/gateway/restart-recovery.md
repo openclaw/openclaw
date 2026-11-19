@@ -503,7 +503,12 @@ to continue and inspect uncertain effects before repeating them.
 ## Automatic peer results
 
 Ordinary live `sessions_send` communication and its current authorization remain
-unchanged. Restart does not restore a peer sender, replay a requester-settle input,
-or launch a new model turn from a saved completion. Already-produced outbound
-messages and media retain their delivery owner. A running root session's resume
-input is responsible for inspecting pending child or peer work.
+unchanged. Startup can admit retained child-result delivery against the requester's
+current principal, exact session ID, and lifecycle revision. It does not reuse the
+previous process's authority or revive stopped, suppressed, archived, replaced, or
+reset work. Restored human authority remains bounded by its recorded permissions
+and current device, role, and access policy. Delivered receipts prevent a second
+restart from delivering the same result again.
+
+Already-produced outbound messages and media retain their delivery owner. Other
+pending peer work remains the responsibility of the root session's resume input.
