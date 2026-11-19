@@ -1,4 +1,7 @@
+import { sleepWithAbort } from "@openclaw/retry";
 import { createMemo, Errored, Loading, Match, onCleanup, refresh, Show, Switch } from "solid-js";
+import { ARTIFACT_DOWNLOAD_TTL_MS } from "../../../../../packages/gateway-protocol/src/artifact-download.ts";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
@@ -24,10 +27,15 @@ import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileSessionAttachment } from "./chat-file-session-attachment.ts";
 import { FileSessionMenu } from "./chat-file-session-menu.tsx";
 import { openResolvedImage } from "./chat-image-presentation.ts";
+import {
+  ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
+  ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS,
+} from "./chat-message-attachment-availability.ts";
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { ChatPdfPreview, isPdfAttachment } from "./chat-pdf-preview.tsx";
 import type {
   AttachmentSidebarRuntime,
+  FilePreviewSource,
   SidebarContent,
   MobileFileBack,
 } from "./chat-sidebar-content-types.ts";
@@ -172,6 +180,54 @@ export function SidebarAttachment(props: SidebarAttachmentProps) {
   );
 }
 
+async function* workspaceAudioUrls(file: FilePreviewSource, signal: AbortSignal) {
+  let hasSource = false;
+  let retryDelay = ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS;
+  while (!signal.aborted) {
+    const requestedAt = performance.now();
+    let grant;
+    let retryAfterMs = 0;
+    try {
+      grant = await file.download(signal);
+    } catch (error) {
+      if (!hasSource) {
+        throw error;
+      }
+      if (error instanceof GatewayRequestError) {
+        if (!error.retryable) {
+          return;
+        }
+        retryAfterMs = error.retryAfterMs ?? 0;
+      }
+    }
+    if (grant && "url" in grant) {
+      // Measure this freshly minted grant from the request, independently of wall-clock skew.
+      const remainingMs = ARTIFACT_DOWNLOAD_TTL_MS - (performance.now() - requestedAt);
+      const url = safeMediaAttachmentHref(grant.url);
+      if (remainingMs > 0 && url) {
+        hasSource = true;
+        retryDelay = ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS;
+        yield url;
+        await sleepWithAbort(
+          Math.max(
+            remainingMs / 2,
+            remainingMs - ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
+          ),
+          signal,
+        );
+        continue;
+      }
+    }
+    if (!hasSource) {
+      yield undefined;
+      return;
+    }
+    // A failed refresh must not discard buffered audio or reset the playhead.
+    await sleepWithAbort(Math.max(retryDelay, retryAfterMs), signal);
+    retryDelay = Math.min(retryDelay * 2, ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS);
+  }
+}
+
 function AttachmentPreview(props: SidebarAttachmentProps) {
   const sourceKey = createMemo(
     () => ({
@@ -201,16 +257,18 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
     "prop:sizeBytes": model().source?.sizeBytes ?? props.content.sizeBytes,
   });
   // Workspace links retain their scoped download callback, not an expiring URL in the tab.
-  const audioSource = createMemo(() => {
+  const workspaceAudioFile = createMemo(() => {
     const { file, src, resolveSource } = props.content;
-    if (model().kind !== "audio" || src || resolveSource || !file) {
+    return model().kind === "audio" && !src && !resolveSource ? file : undefined;
+  });
+  const audioSource = createMemo(() => {
+    const file = workspaceAudioFile();
+    if (!file) {
       return model().src;
     }
     const controller = new AbortController();
     onCleanup(() => controller.abort());
-    return file
-      .download(controller.signal)
-      .then((grant) => (grant && "url" in grant ? safeMediaAttachmentHref(grant.url) : undefined));
+    return workspaceAudioUrls(file, controller.signal);
   });
   const preview = (
     <Switch

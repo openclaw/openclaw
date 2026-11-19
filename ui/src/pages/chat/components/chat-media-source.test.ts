@@ -149,6 +149,9 @@ describe("ChatMediaSourceOwner", () => {
       if (paused) {
         expect(controller.handleError(media)).toBe(true);
       } else {
+        Object.defineProperty(media, "buffered", {
+          value: { length: 1, start: () => 0, end: () => duration },
+        });
         vi.spyOn(media, "currentTime", "set").mockImplementationOnce(() => {
           throw new DOMException("media range unavailable", "InvalidStateError");
         });
@@ -164,6 +167,33 @@ describe("ChatMediaSourceOwner", () => {
       media.remove();
     },
   );
+
+  it("uses the renewed ticket before seeking beyond buffered media", () => {
+    const { media, controller, update, state } = playback(10, false, 120);
+    const play = vi.spyOn(media, "play").mockResolvedValue(undefined);
+    Object.defineProperty(media, "buffered", {
+      value: { length: 1, start: () => 0, end: () => 30 },
+    });
+    document.body.append(media);
+    update("old");
+    update("fresh");
+    controller.seek(media, 20);
+    expect(media.getAttribute("src")).toBe("/media?mediaTicket=old");
+    controller.seek(media, 90);
+    expect(media.getAttribute("src")).toBe("/media?mediaTicket=fresh");
+    state.paused = true;
+    state.currentTime = 0;
+    update("next");
+    expect(media.getAttribute("src")).toBe("/media?mediaTicket=fresh");
+    expect(controller.playbackTime(media)).toBe(90);
+    controller.seek(media, controller.playbackTime(media) + 5);
+    controller.applyPendingSource(media);
+    expect(media.getAttribute("src")).toBe("/media?mediaTicket=next");
+    controller.handleLoadedMetadata(media);
+    expect(media.currentTime).toBe(95);
+    expect(play).toHaveBeenCalledOnce();
+    media.remove();
+  });
 
   it("applies a queued ticket once playback is idle at the end", () => {
     const { media, controller, update, state } = playback(80);

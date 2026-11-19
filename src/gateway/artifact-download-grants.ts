@@ -1,5 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
+import {
+  ARTIFACT_DOWNLOAD_PATH,
+  ARTIFACT_DOWNLOAD_TTL_MS,
+} from "../../packages/gateway-protocol/src/artifact-download.js";
 import type { SessionsFilesGetParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type {
   ArtifactDownloadResponse,
@@ -8,7 +11,6 @@ import type {
 } from "./artifact-download-projection.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
-const DOWNLOAD_TTL_MS = 5 * 60_000;
 const MAX_DOWNLOADS_PER_CONNECTION = 128;
 export const SESSION_FILE_PREVIEW_RESOURCE_PATH = "/__openclaw__/file-preview/";
 
@@ -136,7 +138,7 @@ function createDownloadGrant(params: DownloadAuthority & { source: DownloadSourc
     removeDownload(grants, ticket);
   }
   const ticket = randomBytes(32).toString("base64url");
-  const expiresAt = now + DOWNLOAD_TTL_MS;
+  const expiresAt = now + ARTIFACT_DOWNLOAD_TTL_MS;
   grants.set(ticket, {
     expiresAt,
     source: params.source,
