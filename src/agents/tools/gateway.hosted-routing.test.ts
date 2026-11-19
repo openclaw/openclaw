@@ -704,7 +704,7 @@ describe("Gateway tool identity and hosted routing", () => {
     { owner: "run", pending: false },
     { owner: "caller", pending: false },
     { owner: "gateway", pending: true },
-  ])("rejects retired $owner authority (pending=$pending)", async ({ owner, pending }) => {
+  ])("handles retired $owner authority (pending=$pending)", async ({ owner, pending }) => {
     const deferred = pending ? deferHostedResponse({ ok: true }) : undefined;
     await runHosted(async (_caller, authority) => {
       const request = deferred ? callGatewayTool("node.list", {}, {}) : undefined;
@@ -716,13 +716,14 @@ describe("Gateway tool identity and hosted routing", () => {
       } else {
         currentContext = { ...context };
       }
-      const rejected = expect(request ?? callGatewayTool("cron.list", {}, {})).rejects.toThrow(
-        pending
-          ? /authority.*no longer active|Gateway instance unavailable/
-          : /authority.*no longer active|active delegated run authority/,
-      );
-      deferred?.release.resolve();
-      await rejected;
+      if (request) {
+        deferred?.release.resolve();
+        await expect(request).resolves.toEqual({ ok: true });
+      } else {
+        await expect(callGatewayTool("cron.list", {}, {})).rejects.toThrow(
+          /authority.*no longer active|active delegated run authority/,
+        );
+      }
     });
     expect(mocks.callGateway).not.toHaveBeenCalled();
     if (!pending) {

@@ -189,11 +189,7 @@ async function runBoundInProcessGatewayCall<T>(
 ): Promise<T> {
   boundGateway?.assertCurrent();
   assertCallerCurrent?.();
-  try {
-    return await run(boundGateway?.resolve);
-  } finally {
-    boundGateway?.assertCurrent();
-  }
+  return await run(boundGateway?.resolve);
 }
 
 export function hasInProcessGatewayToolContext(): boolean {

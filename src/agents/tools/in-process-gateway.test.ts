@@ -441,11 +441,12 @@ describe("request-shaped in-process Gateway dispatch", () => {
   );
 
   it.each(["dispatch", "resolve", "reject"] as const)(
-    "keeps an operation on its admitted Gateway through %s",
+    "checks Gateway retirement at routing, not after %s",
     async (boundary) => {
       const gateway = gatewayBinding();
       const request = bindAgentToolGatewayRequest({ resolveGatewayContext: gateway.resolve });
-      const settled = createDeferred();
+      const settled = createDeferred<{ ok: true }>();
+      const dispatchError = new Error("inner dispatch failed");
       mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
         expect(options.resolveGatewayContext()).toBe(gateway.admitted);
         return await settled.promise;
@@ -458,12 +459,18 @@ describe("request-shaped in-process Gateway dispatch", () => {
         await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledOnce());
         gateway.replace();
         if (boundary === "resolve") {
-          settled.resolve();
+          settled.resolve({ ok: true });
         } else {
-          settled.reject(new Error("inner dispatch failed"));
+          settled.reject(dispatchError);
         }
       }
-      await expect(pending).rejects.toThrow("Gateway instance unavailable");
+      if (boundary === "dispatch") {
+        await expect(pending).rejects.toThrow("Gateway instance unavailable");
+      } else if (boundary === "resolve") {
+        await expect(pending).resolves.toEqual({ ok: true });
+      } else {
+        await expect(pending).rejects.toBe(dispatchError);
+      }
       expect(mocks.dispatch).toHaveBeenCalledTimes(boundary === "dispatch" ? 0 : 1);
       expectNoTransport();
     },
