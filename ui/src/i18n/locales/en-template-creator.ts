@@ -83,7 +83,6 @@ const enTemplateCreator = {
     published: "Published",
     unpublished: "Unpublished",
     pending: "Pending",
-    pendingNotice: "We’ll email you when your Template is published.",
     statusDelayed: "Status is temporarily unavailable. We’ll check again.",
     viewSubmission: "View submission",
     copyLink: "Copy link",

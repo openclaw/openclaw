@@ -86,12 +86,6 @@ export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: 
         <Show when={review()?.description}>
           {(description) => <p class="template-summary">{description()}</p>}
         </Show>
-        <Show when={status() === "pending"}>
-          <div class="callout callout--action" role="status">
-            <Icon name="mail" class="muted" />
-            {t("templatesDraft.pendingNotice")}
-          </div>
-        </Show>
         <Show when={hint()}>{(message) => <p role="status">{message()}</p>}</Show>
         <Show when={state().error && status() !== "pending" && !busyAction()}>
           <InlineAlert tone="danger">{state().error}</InlineAlert>
