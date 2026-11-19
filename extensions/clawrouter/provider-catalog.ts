@@ -216,6 +216,8 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
 // Older router catalogs omit input. Match exact native OpenAI identities, not a
 // GPT generation prefix: unknown siblings can have different modality contracts.
 const OPENAI_NATIVE_IMAGE_MODEL_IDS = new Set([
+  "gpt-6.2-sol",
+  "gpt-6.2-astra",
   "gpt-6.1-sol",
   "gpt-6-sol",
   "gpt-6-astra",

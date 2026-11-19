@@ -75,7 +75,6 @@ export const WORKBOARD_LINK_TYPES = [
   "relates_to",
 ] as const;
 export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown"] as const;
-export const WORKBOARD_OBSERVATION_OUTCOMES = ["succeeded", "failed"] as const;
 export const WORKBOARD_VERIFICATION_OUTCOMES = ["confirmed", "disputed", "inconclusive"] as const;
 export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
 export const WORKBOARD_DIAGNOSTIC_KINDS = [
@@ -109,7 +108,6 @@ export type WorkboardEventKind = (typeof WORKBOARD_EVENT_KINDS)[number];
 export type WorkboardAttemptStatus = (typeof WORKBOARD_ATTEMPT_STATUSES)[number];
 export type WorkboardLinkType = (typeof WORKBOARD_LINK_TYPES)[number];
 export type WorkboardProofStatus = (typeof WORKBOARD_PROOF_STATUSES)[number];
-export type WorkboardObservationOutcome = (typeof WORKBOARD_OBSERVATION_OUTCOMES)[number];
 export type WorkboardVerificationOutcome = (typeof WORKBOARD_VERIFICATION_OUTCOMES)[number];
 export type WorkboardTemplateId = (typeof WORKBOARD_TEMPLATE_IDS)[number];
 export type WorkboardDiagnosticKind = (typeof WORKBOARD_DIAGNOSTIC_KINDS)[number];
@@ -179,59 +177,29 @@ export type WorkboardProof = {
 };
 
 /**
- * Optional result evidence, kept apart by who produced it. None of these records gate
- * completion, change proof statuses, or affect dependency scheduling.
+ * A checker's optional verdict on a card's result. It never gates completion, changes
+ * proof statuses, or affects dependency scheduling.
  */
-export type WorkboardResultClaim = {
-  kind: "claim";
-  id: string;
-  recordedAt: number;
-  /** Caller identity Workboard stamped when the worker completed the card. */
-  claimedBy: string;
-  statement: string;
-  proofId?: string;
-  runId?: string;
-};
-
-/** What the execution owner observed. Only Workboard's session lifecycle sync writes these. */
-export type WorkboardResultObservation = {
-  kind: "observation";
-  id: string;
-  recordedAt: number;
-  observedAt: number;
-  source: "session-lifecycle";
-  outcome: WorkboardObservationOutcome;
-  sessionKey: string;
-  runId?: string;
-};
-
-export type WorkboardResultVerification = {
-  kind: "verification";
+export type WorkboardVerification = {
   id: string;
   recordedAt: number;
   /** Caller identity Workboard stamped; never taken from the request. */
   checkerId: string;
   /**
-   * True when the checker matches the card's assignee, claim owner, or a claim author.
+   * True when the checker matches the card's assignee, session, or claim owner.
    * False only means no match was found; it does not establish independence.
    */
   checkedOwnWork: boolean;
   /** What was checked, in the checker's words. */
   scope: string;
   outcome: WorkboardVerificationOutcome;
-  /** The claim, proof, artifact, or run this check covered, when it named one. */
-  claimId?: string;
+  /** The worker's proof, an artifact, or a run attempt this check covered, when it named one. */
   proofId?: string;
   artifactId?: string;
   runId?: string;
   note?: string;
   url?: string;
 };
-
-export type WorkboardResultEvidence =
-  | WorkboardResultClaim
-  | WorkboardResultObservation
-  | WorkboardResultVerification;
 
 export type WorkboardArtifact = {
   id: string;
@@ -376,8 +344,8 @@ export type WorkboardAutomation = {
   maxRetries?: number;
   scheduledAt?: number;
   summary?: string;
-  /** Owned by Workboard's evidence writers; raw metadata patches cannot add entries. */
-  evidence?: WorkboardResultEvidence[];
+  /** Written only by workboard_verify; raw metadata patches cannot add entries. */
+  verifications?: WorkboardVerification[];
   createdCardIds?: string[];
   dispatchCount?: number;
   lastDispatchAt?: number;

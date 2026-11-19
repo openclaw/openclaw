@@ -26,6 +26,7 @@ import {
   needsAuthAttention,
   renderMutationMessage,
   renderProviderStatus,
+  probeStatus,
 } from "./view-status.tsx";
 import type { ModelProvidersViewProps } from "./view-types.ts";
 
@@ -156,20 +157,10 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
   if (!result) {
     return undefined;
   }
-  const hasWarnings =
-    result.status === "ok" && result.results.some((target) => target.status !== "ok");
-  const kind = hasWarnings ? "warn" : result.status === "ok" ? "ok" : "danger";
   return (
     <div class="model-providers__probe" role="status">
       <div class="model-providers__probe-summary">
-        <SettingsStatus
-          kind={kind}
-          label={
-            hasWarnings
-              ? t("modelProviders.probe.status.partial")
-              : t(`modelProviders.probe.status.${result.status}`)
-          }
-        />
+        <SettingsStatus {...probeStatus(result)} />
       </div>
       {result.error ? <div>{formatUiExternalText(result.error)}</div> : undefined}
       <For each={result.results}>
@@ -342,7 +333,7 @@ function defaultModelsUsing(props: ProviderRowProps): string | undefined {
   return names.length ? [...new Set(names)].join(", ") : undefined;
 }
 
-/** What "Remove provider" can delete, and the credential it has to leave behind. */
+/** What credential removal can delete, and the credentials it has to leave behind. */
 function removalPlan(card: ModelProviderCard): {
   removeTargets: ModelProviderRemovalTarget[];
   keptSource?: string;
@@ -383,6 +374,11 @@ function removalPlan(card: ModelProviderCard): {
 function ProviderActions(props: ProviderRowProps) {
   const removal = () => removalPlan(props.card);
   const defaultModels = () => defaultModelsUsing(props);
+  const removalLabel = (key: string) =>
+    t("modelProviders.actionNamed", {
+      action: t("modelProviders.remove.action"),
+      name: props.card.configKeys.length > 1 ? key : providerName(props.card),
+    });
   const connected = () => isProviderUsable(props.card) || props.card.profiles.length > 0;
   const connectName = () =>
     t(connected() ? "modelProviders.profiles.addAccount" : "modelProviders.login.action");
@@ -396,13 +392,37 @@ function ProviderActions(props: ProviderRowProps) {
     );
   return (
     <div class="model-providers__card-actions provider-row__footer">
+      <For each={props.card.configKeys}>
+        {(configKey) => (
+          <button
+            class="btn btn--sm btn--ghost danger"
+            disabled={
+              configMutationDisabled(props) || Boolean(props.busy["logout:" + props.card.id])
+            }
+            title={props.mutationBlockedReason ?? ""}
+            aria-label={removalLabel(configKey)}
+            onClick={() =>
+              props.onRequestLogout({
+                cardId: props.card.id,
+                label: providerName(props.card),
+                removeConfigKey: configKey,
+                defaultModels: defaultModels(),
+              })
+            }
+          >
+            {props.card.configKeys.length > 1
+              ? removalLabel(configKey)
+              : t("modelProviders.remove.action")}
+          </button>
+        )}
+      </For>
       <Show when={removal().removeTargets.length > 0}>
         <button
           class="btn btn--sm btn--ghost danger provider-row__remove"
           disabled={configMutationDisabled(props) || Boolean(props.busy[`logout:${props.card.id}`])}
           title={props.mutationBlockedReason ?? ""}
           aria-label={t("modelProviders.actionNamed", {
-            action: t("modelProviders.remove.action"),
+            action: t("modelProviders.remove.accessAction"),
             name: providerName(props.card),
           })}
           onClick={() =>
@@ -414,7 +434,7 @@ function ProviderActions(props: ProviderRowProps) {
             })
           }
         >
-          {t("modelProviders.remove.action")}
+          {t("modelProviders.remove.accessAction")}
         </button>
       </Show>
       <Show when={isProviderUsable(props.card)}>
@@ -549,7 +569,9 @@ export function ProviderRow(props: ProviderRowProps) {
             <span class="provider-row__meta-part">{modelsText(card())}</span>
           </span>
         </span>
-        <span class="provider-row__status">{renderProviderStatus(card())}</span>
+        <span class="provider-row__status">
+          {renderProviderStatus(card(), props.probeResults[card().id])}
+        </span>
         <Icon name="chevronDown" class="provider-row__chevron" />
       </button>
       <Show when={open()}>

@@ -9,7 +9,13 @@ import { persistAuthProfileBatch } from "../src/agents/auth-profiles/upsert-with
 import { refreshPreparedModelRuntimeSnapshots } from "../src/agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../src/agents/prepared-model-runtime.test-support.js";
 import { AUTOMATIONS_TOOL_NAME } from "../src/agents/tools/automations-tool-name.js";
+import { getCommandOwnerAuthority } from "../src/auto-reply/command-owner-authority.js";
 import { getReplyFromConfig } from "../src/auto-reply/reply/get-reply.js";
+import {
+  createHostIngressFixture,
+  ingressInput,
+  ingressMessage,
+} from "../src/channels/message-access/host-ingress.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
@@ -655,27 +661,52 @@ describe("scheduled message actions", () => {
         } satisfies CronJobCreate;
         let created: { id: string };
         if (nativeCreator) {
+          // Native requester authority comes from host ingress, not plain sender fields.
+          const host = createHostIngressFixture("discord", runtimeConfig);
+          cleanup.push(() => host.retire());
+          const message = ingressMessage("discord", creatorSessionKey, nativeRequesterId, {
+            accountId: creatorAccountId,
+            messageId: "100000000000000021",
+            from: `discord:channel:${channelId}`,
+            conversation: {
+              kind: "channel",
+              id: channelId,
+              nativeChannelId: channelId,
+              spaceId: guildId,
+            },
+            reply: { to: `channel:${channelId}` },
+            message: { rawBody: "Schedule these Discord channel topic changes for later." },
+            access: { mentions: { canDetectMention: true, wasMentioned: true } },
+          });
+          const channelIngress = await host.ingress.resolveStable(
+            ingressInput(message, {
+              identity: { authentication: "verified" },
+              dmPolicy: "disabled",
+              groupPolicy: "allowlist",
+              allowFrom: [],
+              groupAllowFrom: [nativeRequesterId],
+              mentionFacts: { canDetectMention: true, wasMentioned: true },
+              contextBinding: {
+                agentId: "main",
+                sessionKey: creatorSessionKey,
+                nativeChannelId: channelId,
+                messageId: message.messageId,
+                inboundEventKind: "user_request",
+              },
+            }),
+          );
+          expect(channelIngress.ingress.admission).toBe("dispatch");
+          const creatorContext = host.buildContext({ ...message, channelIngress });
+          const authority = getCommandOwnerAuthority(creatorContext);
+          expect(authority?.isCurrent()).toBe(true);
+          expect(authority?.channelPrincipal).toEqual({
+            channelId: "discord",
+            accountId: creatorAccountId,
+            senderId: nativeRequesterId,
+          });
           const producerReply = await withEnvAsync(
             { OPENCLAW_SCHEDULED_CREATE_JOB: JSON.stringify(params) },
-            () =>
-              getReplyFromConfig(
-                {
-                  Body: "Schedule these Discord channel topic changes for later.",
-                  From: `discord:channel:${channelId}`,
-                  To: `channel:${channelId}`,
-                  Provider: "discord",
-                  Surface: "discord",
-                  AccountId: creatorAccountId,
-                  SessionKey: creatorSessionKey,
-                  ChatType: "channel",
-                  NativeChannelId: channelId,
-                  GroupSpace: guildId,
-                  SenderId: nativeRequesterId,
-                  MessageSid: "100000000000000021",
-                  WasMentioned: true,
-                },
-                { runId: "native-cron-creator" },
-              ),
+            () => getReplyFromConfig(creatorContext, { runId: "native-cron-creator" }),
           );
           for (const payload of Array.isArray(producerReply) ? producerReply : [producerReply]) {
             expect(payload?.isError).not.toBe(true);

@@ -220,6 +220,14 @@ export async function prepareAgentRequestPreflight(params: {
   if (isExecCompletionInputProvenance(inputProvenance) && !canUseInternalRuntimeHandoff) {
     return rejectInvalidRequest("Exec completion input is reserved for background exec owners.");
   }
+  // Restart input may wait for a surviving turn or a reconnecting node; only recovery stamps it.
+  if (
+    inputProvenance?.kind === "internal_system" &&
+    inputProvenance.sourceTool === "restart" &&
+    !canUseInternalRuntimeHandoff
+  ) {
+    return rejectInvalidRequest("Restart input is reserved for restart recovery.");
+  }
   if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {
     const sourceSessionKey = inputProvenance.sourceSessionKey;
     const sourceAgentId = parseAgentSessionKey(sourceSessionKey)?.agentId;

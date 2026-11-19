@@ -1,3 +1,4 @@
+import { buildOpenAIClientHeaders } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -112,6 +113,30 @@ it.each([
       expect(payload).toMatchObject({ tools: [], store: true });
     }
     expect(payload).toMatchObject(controls);
+  },
+);
+
+it.each([undefined, false])(
+  "sends the session_id affinity header on SIWC requests unless the model states %s",
+  async (configured) => {
+    let selected: Parameters<StreamFn>[0] | undefined;
+    const streamFn: StreamFn = (requested) => {
+      selected = requested;
+      return createAssistantMessageEventStream();
+    };
+    const siwcModel =
+      configured === undefined ? model : { ...model, compat: { sendSessionIdHeader: configured } };
+    const wrapped = wrapOpenAIResponsesStream({ ...baseContext, model: siwcModel, streamFn });
+    await wrapped!(siwcModel, { messages: [] }, {});
+    const headers = buildOpenAIClientHeaders(
+      selected!,
+      { messages: [] },
+      {},
+      undefined,
+      "siwc-session",
+      "short",
+    );
+    expect(headers.session_id).toBe(configured === false ? undefined : "siwc-session");
   },
 );
 

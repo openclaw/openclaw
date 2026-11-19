@@ -379,6 +379,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       observed.map((entry) => this.currentValue(entry)),
       this.currentValue(anchor),
       this.completionAuthorities,
+      this.retiredCompletionEntries,
     );
   }
 
