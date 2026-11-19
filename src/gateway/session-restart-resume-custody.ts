@@ -133,7 +133,10 @@ export async function settleUnresumableChildren(
           ? await readSessionEntryReadOnlyInWorker({ agentId, sessionKey, storePath })
           : undefined;
       // A requester from another restart scope is never woken; its child still ends.
-      const deliver = entry !== undefined && !isRestartResumeEntryOutOfScope(entry);
+      const deliver =
+        entry !== undefined &&
+        entry.archivedAt === undefined &&
+        !isRestartResumeEntryOutOfScope(entry);
       if (deliver) {
         await recoverRequesterCompletionCustody({
           context,

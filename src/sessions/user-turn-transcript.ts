@@ -623,10 +623,7 @@ export function createUserTurnTranscriptRecorder(
       confirmedSteerTargetRunId = normalizedTargetRunId;
       message = applyMessageOverrides(message);
       resolvedMessagePromise = undefined;
-
-      const pendingSelfPersistence = selfPersistencePromise;
-      await waitForRuntimePersistence();
-      await pendingSelfPersistence?.catch(() => undefined);
+      // Before the commit, the runtime commit chain stamps the row; acceptance never waits.
       await stampPersistedSteerTargetRunId(normalizedTargetRunId);
     },
     getPersistedMessage: () =>
@@ -668,9 +665,9 @@ export function createUserTurnTranscriptRecorder(
         const targetRunId = confirmedSteerTargetRunId;
         if (targetRunId && persistedMessage["__openclaw"]?.steerTargetRunId !== targetRunId) {
           // The stamp joins the admission write that the turn owner already awaits.
-          admissionWrite = admission.then(async () => {
-            await stampPersistedSteerTargetRunId(targetRunId);
-          });
+          admissionWrite = admission.then(() =>
+            runInDetachedAsyncContext(() => stampPersistedSteerTargetRunId(targetRunId)),
+          );
           admissionWrite.catch(() => undefined);
         }
       }

@@ -55,7 +55,14 @@ export async function reactivateCompletedSubagentSession(params: {
   const existing = paused ?? (await getLatestSubagentRunByChildSessionKey(params.sessionKey));
   // A restart stops the execution without ending its row; the next turn continues that task.
   const interrupted = existing && typeof existing.execution.endedAt !== "number";
-  if (!existing || (interrupted && isSubagentRunLive(existing))) {
+  if (
+    !existing ||
+    (interrupted &&
+      (isSubagentRunLive(existing) ||
+        existing.execution.status !== "running" ||
+        existing.killIntent ||
+        existing.killReconciliation))
+  ) {
     return false;
   }
   if (params.gatewayContextResolver && !params.gatewayContextResolver()) {

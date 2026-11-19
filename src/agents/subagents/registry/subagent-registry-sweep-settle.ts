@@ -1,5 +1,9 @@
+import { getRuntimeConfig } from "../../../config/config.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { isTerminalSessionStatus } from "../../../config/sessions/types.js";
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import {
@@ -25,6 +29,21 @@ type CompleteRun = ReturnType<
   typeof createSubagentRegistryCompletionRuntime
 >["completeSubagentRunWithRecovery"];
 type SweepReadScope = ReturnType<typeof createSubagentSweepReadScope>;
+
+/** Restart resume, not the sweeper, decides a child whose session still carries its marker. */
+async function childAwaitsRestartResume(entry: SubagentRunRecord): Promise<boolean> {
+  const agentId = entry.childAgentId ?? parseAgentSessionKey(entry.childSessionKey)?.agentId;
+  if (!agentId) {
+    return false;
+  }
+  const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
+  const child = await readSessionEntryReadOnlyInWorker({
+    agentId,
+    sessionKey: entry.childSessionKey,
+    storePath,
+  });
+  return child?.resumeAfterRestart !== undefined;
+}
 
 /**
  * Settles a yielded run that no continuation can reach (see
@@ -69,7 +88,7 @@ export async function settleUnreachableYieldedSubagentRun(params: {
       error: "Descendant completion can no longer continue this yielded requester.",
     };
   }
-  if (continuation?.state !== "unreachable") {
+  if (continuation?.state !== "unreachable" || (await childAwaitsRestartResume(entry))) {
     return false;
   }
   subagentRegistryLog.warn("Settling unreachable yielded subagent", {
@@ -154,7 +173,8 @@ export async function settleRestartInterruptedSubagentRun(params: {
     // Only an earlier process could have owned this execution; this process never did.
     !(entry.createdAt < processStartedAt) ||
     isSubagentRunLive(entry) ||
-    isSubagentRunQueued(entry)
+    isSubagentRunQueued(entry) ||
+    (await childAwaitsRestartResume(entry))
   ) {
     return false;
   }

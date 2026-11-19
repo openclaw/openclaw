@@ -1,5 +1,10 @@
 import { normalizeOptionalString as normalizeLifecycleRunId } from "@openclaw/normalization-core/string-coerce";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { getLatestLiveSubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
+import {
+  hasSubagentRunEnded,
+  isYieldedSubagentRun,
+} from "../agents/subagents/registry/subagent-run-liveness.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { applySessionEntryTargetOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
@@ -54,7 +59,10 @@ export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecy
   if (!phase) {
     return async () => {};
   }
-  const gatewayShutdown = getGatewayRestartDrainSignal().aborted ? true : undefined;
+  const child = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
+  // Shutdown already settled this child's row; its aborted run gets no fallback resume marker.
+  const settled = child !== null && hasSubagentRunEnded(child) && !isYieldedSubagentRun(child);
+  const gatewayShutdown = getGatewayRestartDrainSignal().aborted && !settled ? true : undefined;
   const prepared = loadGatewaySessionEntryReadOnlyInWorker({
     cfg: getRuntimeConfig(),
     key: params.sessionKey,

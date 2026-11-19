@@ -211,7 +211,8 @@ heartbeat observer works independently of the optional V8 flight recorder.
 A session counts as running when its own agent loop is active, a descendant
 sub-agent is running, or it owns a running background process. The Gateway reads
 these facts from their live in-memory owners during shutdown. A child contributes
-to its top-level requester; the child does not receive an independent resume input.
+to its top-level requester and gets its own marker, so it resumes its task after
+the restart and reports to its requester once.
 Idle and finished sessions are not marked. Cron occurrence sessions and
 ACP/external-harness sessions are excluded.
 

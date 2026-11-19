@@ -104,7 +104,11 @@ type GatewaySessionLifecycleSnapshot = Partial<
   Pick<SessionEntry, keyof LifecycleSessionShape | "status">
 >;
 
-export function restartResumeSkipReason(sessionKey: string, entry?: SessionEntry) {
+export function restartResumeSkipReason(
+  sessionKey: string,
+  entry?: SessionEntry,
+  settledSubagent?: boolean,
+) {
   if (isCronSessionKey(sessionKey)) {
     return "cron";
   }
@@ -113,6 +117,10 @@ export function restartResumeSkipReason(sessionKey: string, entry?: SessionEntry
   }
   if (entry?.archivedAt !== undefined) {
     return "archived";
+  }
+  if (settledSubagent) {
+    // Its outcome already reached the requester; a restart must not run the task again.
+    return "subagent-settled";
   }
   return entry?.incognito ? "incognito" : undefined;
 }
