@@ -231,6 +231,9 @@ describe("unlink", () => {
 
   it("still sends the unlink and restarts remote access when removing someone fails", async () => {
     const { claw, service, effects } = await clawWithMember();
+    if (!effects.cancelRuns) {
+      throw new Error("serviceFor provides cancelRuns");
+    }
     vi.mocked(effects.cancelRuns).mockRejectedValue(new Error("runs stuck"));
     const { received } = discovery(confirmed);
     try {
