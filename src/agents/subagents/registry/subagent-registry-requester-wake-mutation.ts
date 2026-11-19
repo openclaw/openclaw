@@ -1,3 +1,4 @@
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
@@ -12,6 +13,7 @@ import type {
 } from "../completion/subagent-completion-mutation.types.js";
 import { captureSubagentControllerInputRetirement } from "./subagent-controller-inputs.js";
 import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -48,6 +50,7 @@ export function assertRequesterSettleWakeBatchCurrent(
   batch: readonly SubagentRunRecord[],
   rearmGeneration: number | undefined,
   visibleFinalDelivered: boolean,
+  retiredFailure = false,
 ): void {
   for (const entry of batch) {
     const current = context.options.runs.get(entry.runId);
@@ -61,7 +64,12 @@ export function assertRequesterSettleWakeBatchCurrent(
       throw new Error("Requester wake batch changed before its outcome was recorded");
     }
     const resolve = getGatewayContextResolver(entry);
-    if (!visibleFinalDelivered && resolve && !resolve()) {
+    if (
+      !visibleFinalDelivered &&
+      !(retiredFailure && subagentRuns.isCompletionAuthorityRetired(current)) &&
+      resolve &&
+      !resolve()
+    ) {
       throw new Error("Requester wake Gateway owner is closed");
     }
   }
@@ -85,7 +93,15 @@ export async function mutateRequesterSettleWakeBatch(
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     // An acknowledged write must reconcile its own postimages rather than replaying it.
     if (!receipt.committed) {
-      assertRequesterSettleWakeBatchCurrent(context, batch, rearmGeneration, visibleFinalDelivered);
+      assertRequesterSettleWakeBatchCurrent(
+        context,
+        batch,
+        rearmGeneration,
+        visibleFinalDelivered,
+        operation.kind === "settle" &&
+          !operation.outcome.delivered &&
+          operation.outcome.disposition === "permanent_failure",
+      );
     }
   };
   try {
@@ -247,13 +263,18 @@ export function createRequesterWakeSettlement(params: {
                 data: { phase: "error", error, errorNotice: notice },
               },
             });
-          } else {
-            // Stable batches lost their original run id. Report the batch failure,
-            // never assign whichever writer now occupies this session to that batch.
+          }
+          // The failed partition belongs in the current chat, but never terminates its new writer.
+          const current = await readSessionEntryReadOnlyInWorker({
+            sessionKey: requester.requesterSessionKey,
+            agentId: requester.requesterAgentId,
+            storePath: requester.requesterStorePath,
+          });
+          if (current?.sessionId && current.status !== "killed") {
             const { batchKey } = buildRequesterSettleWakeIdentity({
               requesterSessionKey: requester.requesterSessionKey,
               requesterAgentId: requester.requesterAgentId,
-              batchRunIds: admittedWake.batchRunIds ?? batch.map((entry) => entry.runId),
+              batchRunIds: members.map((entry) => entry.runId),
               rearmGeneration,
             });
             await recordGatewaySessionRunFailure({
@@ -261,10 +282,10 @@ export function createRequesterWakeSettlement(params: {
                 sessionKey: requester.requesterSessionKey,
                 agentId: requester.requesterAgentId,
                 storePath: requester.requesterStorePath,
-                sessionId: requester.completionRequesterSessionId,
-                expectedLifecycleRevision: requester.completionRequesterLifecycleRevision,
+                sessionId: current.sessionId,
+                expectedLifecycleRevision: current.lifecycleRevision,
               },
-              runId: buildAnnounceIdempotencyKey(`${batchKey}:delivery-failure`),
+              runId: buildAnnounceIdempotencyKey(batchKey + ":delivery-failure"),
               error,
               notice,
               assertCommitAllowed: () => assertSubagentRegistryWriteSourceCurrent(stateContext),

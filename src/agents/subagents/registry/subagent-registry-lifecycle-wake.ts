@@ -19,7 +19,7 @@ import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.
 import { SubagentAnnouncePreparationConflictError } from "../announce/subagent-announce-result.js";
 import { SubagentCompletionSourceChangedError } from "../completion/subagent-completion-admission.store.js";
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
-import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
+import { finalizeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
 import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
@@ -175,10 +175,13 @@ export async function retireSubagentObligationsInContext(
           published,
         );
         if (requesterAgentId && wake.requesterYieldBatch && wake.rearmGeneration !== undefined) {
-          revokeRequesterFinalAttachment({
+          finalizeRequesterFinalAttachment({
             requesterAgentId,
             requesterSessionKey: published.requesterSessionKey,
-            batchRunIds: wake.batchRunIds ?? [published.runId],
+            batchRunIds: [published.runId],
+            requesterYieldBatch: true,
+            pause: false,
+            delivered: false,
             rearmGeneration: wake.rearmGeneration,
           });
         }
