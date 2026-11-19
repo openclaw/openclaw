@@ -128,7 +128,7 @@ export async function runGatewayPostReadyStartupMaintenance(params: {
         }
         for (const { file, error } of failed) {
           params.log.warn(
-            `The openclaw launcher ${file} still points at a removed update stage and could not be repaired: ${formatErrorMessageWithCode(error)}. Recreate it with pnpm add -g openclaw@<installed-version>.`,
+            `The openclaw launcher ${file} still points at a removed update stage and could not be repaired: ${formatErrorMessageWithCode(error)}. Recreate it with pnpm add -g --allow-build=openclaw openclaw@<installed-version>.`,
           );
         }
       },
