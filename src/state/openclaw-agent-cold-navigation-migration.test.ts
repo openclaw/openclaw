@@ -18,6 +18,7 @@ import {
   assertOpenClawAgentSchemaContains,
   getOpenClawAgentMigrationSchema,
 } from "./openclaw-agent-db-schema-helpers.js";
+import { AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION } from "./openclaw-agent-pending-input-endings-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { assertOpenClawMigrationWitnessPreserved } from "./openclaw-migration-witness.js";
 import {
@@ -229,7 +230,7 @@ it("checks pending-input mutation integrity before crossing from v38 to the curr
     const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     try {
       // Continuation (karmaterminal): the startup gate's crossing to the current schema also
-      // includes recipient authority (41), so this checks the v39 crossing's own gate.
+      // includes recipient authority (44), so this checks the crossing to upstream's own 43.
       for (const check of sqliteIntegrityCheckSteps(
         database,
         database.location()!,
@@ -237,7 +238,7 @@ it("checks pending-input mutation integrity before crossing from v38 to the curr
         resolveSchemaMigrationIntegrityCheck({
           kind: "agent",
           foundVersion: predecessor,
-          supportedVersion: target,
+          supportedVersion: AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION,
         }),
       )) {
         runSqliteIntegrityCheckSync(check);

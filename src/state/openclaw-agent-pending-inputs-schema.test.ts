@@ -113,7 +113,9 @@ describe("pending input additive schema", () => {
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const filename = openOpenClawAgentDatabase(options).path;
     const database = await previousDatabase(filename);
+    // Continuation (karmaterminal): upstream's 42 has no recipient-authority table (44).
     database.exec(`
+      DROP TABLE session_recipient_authority;
       ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
       ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
       PRAGMA user_version = 42;
@@ -157,9 +159,9 @@ describe("pending input additive schema", () => {
     database.close();
     await migratePreviousDatabase(options, filename);
     const admitted = openOpenClawAgentDatabase(options).db;
-    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 44 });
     expectRow(admitted, "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'", {
-      schema_version: 43,
+      schema_version: 44,
     });
     expect(
       admitted
@@ -198,7 +200,9 @@ describe("pending input additive schema", () => {
     const filename = openOpenClawAgentDatabase(options).path;
     {
       using old = await previousDatabase(filename);
+      // Continuation (karmaterminal): upstream's 42 has no recipient-authority table (44).
       old.exec(`
+        DROP TABLE session_recipient_authority;
         DROP TABLE session_pending_inputs;
         PRAGMA user_version = 42;
         UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
@@ -206,9 +210,9 @@ describe("pending input additive schema", () => {
     }
     await migratePreviousDatabase(options, filename);
     const admitted = openOpenClawAgentDatabase(options).db;
-    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 44 });
     expectRow(admitted, "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'", {
-      schema_version: 43,
+      schema_version: 44,
     });
     expect(tableExists(admitted, "session_pending_inputs")).toBe(false);
   });
@@ -413,7 +417,9 @@ describe("pending input additive schema", () => {
     const legacyMessage = JSON.stringify({ ...sourceTurn, ...marker });
     {
       using old = await previousDatabase(filename);
+      // Continuation (karmaterminal): upstream's 42 has no recipient-authority table (44).
       old.exec(`
+        DROP TABLE session_recipient_authority;
         ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
         ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
         PRAGMA user_version = 42;

@@ -455,7 +455,9 @@ describe("pending input read boundary", () => {
       fs.renameSync(`${filename}.previous`, filename);
       {
         using old = new DatabaseSync(filename);
+        // Continuation (karmaterminal): upstream's 42 has no recipient-authority table (44).
         old.exec(`
+          DROP TABLE session_recipient_authority;
           ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
           ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
           PRAGMA user_version = 42;
@@ -478,10 +480,10 @@ describe("pending input read boundary", () => {
         log: { info: vi.fn(), warn: vi.fn() },
       });
       const admitted = openOpenClawAgentDatabase(options).db;
-      expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+      expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 44 });
       expect(
         admitted.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-      ).toEqual({ schema_version: 43 });
+      ).toEqual({ schema_version: 44 });
       expect(
         admitted
           .prepare("SELECT message_json FROM session_pending_inputs WHERE input_id = ?")
