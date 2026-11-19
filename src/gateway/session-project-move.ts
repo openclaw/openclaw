@@ -10,6 +10,7 @@ import {
   type ProjectRequester,
 } from "./project-access.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
+import { prepareSessionWorkspaceForRun } from "./server-methods/session-create-project.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionFileWorkspace } from "./session-file-workspace.js";
 import { resolveSessionProjectRootForRecord } from "./session-project-source.js";
@@ -211,4 +212,44 @@ export async function moveSessionIntoProject(params: {
     projectId: project.id,
     ...(carried ? { carried: { commit: carried.commit, unsavedFiles: carried.unsavedFiles } } : {}),
   };
+}
+
+/**
+ * Open a recorded move now, through the same preparation a session's next chat turn
+ * runs, for callers whose next turn does not prepare workspaces. Returns the new branch.
+ */
+export async function openMovedSession(params: {
+  context: GatewayRequestContext;
+  session: { agentId: string; sessionKey: string; sessionId: string };
+  runId: string;
+  runSetupScript: boolean;
+  assertCurrent: () => void;
+  signal?: AbortSignal;
+}): Promise<string | undefined> {
+  const cfg = params.context.getRuntimeConfig();
+  const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg,
+    agentId: params.session.agentId,
+    key: params.session.sessionKey,
+    projection: "full",
+  });
+  const entry = loaded.entry;
+  if (!entry || entry.sessionId !== params.session.sessionId) {
+    throw new Error("The conversation changed before its project opened.");
+  }
+  if (entry.pendingWorktree) {
+    await prepareSessionWorkspaceForRun({
+      entry,
+      cfg,
+      agentId: loaded.agentId,
+      runId: params.runId,
+      sessionKey: loaded.canonicalKey,
+      storePath: loaded.storePath,
+      context: params.context,
+      signal: params.signal ?? new AbortController().signal,
+      assertCurrent: params.assertCurrent,
+      runSetupScript: params.runSetupScript,
+    });
+  }
+  return entry.worktree?.branch;
 }

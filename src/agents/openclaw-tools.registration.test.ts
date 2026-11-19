@@ -464,6 +464,18 @@ describe("gateway client capability tool filtering", () => {
     ).toBe(true);
   });
 
+  it("builds session_project only when tool policy names it", () => {
+    const built = (tools: NonNullable<OpenClawConfig["tools"]>) =>
+      hasTool(
+        createTestOpenClawTools({ agentSessionKey: "agent:main:main", config: { tools } }),
+        "session_project",
+      );
+    expect(built({})).toBe(false);
+    expect(built({ allow: ["group:sessions", "group:openclaw"] })).toBe(false);
+    expect(built({ alsoAllow: ["session_project"] })).toBe(true);
+    expect(built({ alsoAllow: ["session_project"], deny: ["session_project"] })).toBe(false);
+  });
+
   it("negotiates GitHub reconnect guidance with the requesting Control UI", () => {
     const olderTools = createOpenClawTools({
       githubPublicationAvailable: false,
