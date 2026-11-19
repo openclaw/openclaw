@@ -61,7 +61,7 @@ def inspect(kind, name):
     result = docker(kind, "inspect", name, check=False)
     if result.returncode:
         docker("info", "--format", "{{.OSType}}")
-        if b"No such" not in result.stderr and b"not found" not in result.stderr:
+        if b"no such" not in result.stderr.lower() and b"not found" not in result.stderr.lower():
             raise RuntimeError(result.stderr.decode("utf-8", "replace"))
         return None
     return json.loads(result.stdout)[0]
