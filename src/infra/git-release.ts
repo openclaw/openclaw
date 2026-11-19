@@ -199,7 +199,7 @@ export async function findVerifiedGitRelease(params: {
   const excluded = new Set(
     await Promise.all(params.exclude.map((root) => fs.realpath(root).catch(() => root))),
   );
-  for (const id of await fs.readdir(releasesDir).catch(() => [] as string[])) {
+  for (const id of await fs.readdir(releasesDir).catch((): string[] => [])) {
     if (id.startsWith(".")) {
       continue;
     }

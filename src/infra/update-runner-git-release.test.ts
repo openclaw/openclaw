@@ -8,7 +8,6 @@ import { GIT_RELEASE_LAUNCHER, GIT_RELEASE_TRIAL, gitReleaseSlot } from "./git-r
 import { createGitReleaseDirs, publishGitRelease } from "./git-release.js";
 import { acquirePackageReleaseLease } from "./package-release-lease.js";
 import { PACKAGE_RELEASES_DIR } from "./package-release-slot-path.js";
-import type { CommandRunner } from "./update-runner-types.js";
 
 const target = vi.hoisted(() => ({
   beforeRuntimeVerified: [] as boolean[],
@@ -148,7 +147,8 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform === "win32")("Git release updates", () => {
-  it("rebuilds a same-commit release whose runtime artifacts do not verify", async () => {
+  /** One release at the checkout's only commit, selected by the link. */
+  async function singleReleaseInstall() {
     const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "git-release-run-")));
     roots.push(dir);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(dir, "state"));
@@ -167,15 +167,16 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     const running = (await createGitReleaseDirs(prefix)).releaseRoot;
     await git(checkout, "worktree", "add", "--detach", running, "HEAD");
     await publishGitRelease({ prefix, releaseRoot: running, trial: false });
-    target.runningRoot = await fs.realpath(gitReleaseSlot(prefix));
-    const runCommand: CommandRunner = (argv, options) =>
-      argv[1]?.endsWith("openclaw.mjs")
-        ? Promise.resolve({ code: 0, stdout: "1.0.0\n", stderr: "" })
-        : runCommandWithTimeout(argv, options);
+    return { slot: gitReleaseSlot(prefix), running: await fs.realpath(running) };
+  }
 
-    const result = await updateGitRelease({
-      gitRoot: gitReleaseSlot(prefix),
-      runCommand,
+  const convert = (gitRoot: string) =>
+    updateGitRelease({
+      gitRoot,
+      runCommand: (argv, options) =>
+        argv[1]?.endsWith("openclaw.mjs")
+          ? Promise.resolve({ code: 0, stdout: "1.0.0\n", stderr: "" })
+          : runCommandWithTimeout(argv, options),
       defaultCommandEnv: undefined,
       timeoutMs: 10_000,
       startedAt: Date.now(),
@@ -187,53 +188,25 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
         runGitDoctor: async () => null,
       },
     });
+
+  it("rebuilds a same-commit release whose runtime artifacts do not verify", async () => {
+    const { slot, running } = await singleReleaseInstall();
+    target.runningRoot = running;
+
+    const result = await convert(slot);
 
     expect(target.beforeRuntimeVerified).toEqual([false]);
     expect(result.status, JSON.stringify(result.steps)).toBe("ok");
     // The successful result carries the new release's verdict, not the incomplete one's.
     expect(result.recovery).toMatchObject({ serviceRestartSafe: true });
-    expect(await fs.realpath(gitReleaseSlot(prefix))).not.toBe(await fs.realpath(running));
+    expect(await fs.realpath(slot)).not.toBe(running);
   });
 
   it("reports a current release as prepared so finalization never regenerates it", async () => {
     target.runtimeVerified = true;
-    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "git-release-current-")));
-    roots.push(dir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(dir, "state"));
-    const checkout = path.join(dir, "checkout");
-    await fs.mkdir(checkout);
-    await git(checkout, "init", "-q", "--initial-branch=main");
-    await git(checkout, "config", "user.email", "test@example.com");
-    await git(checkout, "config", "user.name", "Test");
-    await fs.writeFile(
-      path.join(checkout, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-    );
-    await git(checkout, "add", ".");
-    await git(checkout, "commit", "-qm", "base");
-    const prefix = path.join(dir, "state", "git-install");
-    const running = (await createGitReleaseDirs(prefix)).releaseRoot;
-    await git(checkout, "worktree", "add", "--detach", running, "HEAD");
-    await publishGitRelease({ prefix, releaseRoot: running, trial: false });
-    const runCommand: CommandRunner = (argv, options) =>
-      argv[1]?.endsWith("openclaw.mjs")
-        ? Promise.resolve({ code: 0, stdout: "1.0.0\n", stderr: "" })
-        : runCommandWithTimeout(argv, options);
+    const { slot } = await singleReleaseInstall();
 
-    const result = await updateGitRelease({
-      gitRoot: gitReleaseSlot(prefix),
-      runCommand,
-      defaultCommandEnv: undefined,
-      timeoutMs: 10_000,
-      startedAt: Date.now(),
-      opts: {
-        channel: "dev",
-        inspectGitTarget: async () => {},
-        validateCandidate: async () => [],
-        beforeGitMutation: async () => {},
-        runGitDoctor: async () => null,
-      },
-    });
+    const result = await convert(slot);
 
     expect(target.beforeRuntimeVerified).toEqual([true]);
     // Post-core finalization would otherwise run build scripts inside the release.
@@ -263,25 +236,6 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     const serving = await commit("1.0.0");
     return { dir, checkout, serving, pulled: () => commit("2.0.0") };
   }
-
-  const convert = (gitRoot: string) =>
-    updateGitRelease({
-      gitRoot,
-      runCommand: (argv, options) =>
-        argv[1]?.endsWith("openclaw.mjs")
-          ? Promise.resolve({ code: 0, stdout: "1.0.0\n", stderr: "" })
-          : runCommandWithTimeout(argv, options),
-      defaultCommandEnv: undefined,
-      timeoutMs: 10_000,
-      startedAt: Date.now(),
-      opts: {
-        channel: "dev",
-        inspectGitTarget: async () => {},
-        validateCandidate: async () => [],
-        beforeGitMutation: async () => {},
-        runGitDoctor: async () => null,
-      },
-    });
 
   it("builds the first release from the serving worktree's commit, not the checkout's HEAD", async () => {
     const { dir, checkout, serving, pulled } = await checkoutWithTwoCommits();
@@ -516,21 +470,23 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     await expect(fs.access(install.unserved)).resolves.toBeUndefined();
   });
 
-  it("builds instead of reusing when local replay changes the target", async () => {
+  it.each([
+    [
+      "local replay changes the target",
+      (install: HalfSwitchedInstall) => {
+        // The upstream target is the placed tree; replaying local commits gives another one.
+        target.replayed = install.commits["3.0.0"];
+      },
+    ],
+    [
+      "the placed build does not verify",
+      (install: HalfSwitchedInstall) => {
+        target.broken.push(install.unserved);
+      },
+    ],
+  ])("builds instead of reusing when %s", async (_label, arrange) => {
     const install = await halfSwitchedInstall();
-    // The upstream target is the placed tree, but replaying local commits gives another one.
-    target.replayed = install.commits["3.0.0"];
-
-    const result = await install.update(install.commits["2.0.0"]!);
-
-    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
-    expect(target.builds).toBe(1);
-    expect(result.after).toMatchObject({ sha: install.commits["3.0.0"] });
-  });
-
-  it("builds instead of reusing a placed release whose build does not verify", async () => {
-    const install = await halfSwitchedInstall();
-    target.broken.push(install.unserved);
+    arrange(install);
 
     const result = await install.update(install.commits["2.0.0"]!);
 
@@ -539,49 +495,49 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     expect(await fs.realpath(install.slot)).not.toBe(install.unserved);
   });
 
-  it("reuses a release a --no-restart update left when it is the target", async () => {
+  it.each([
+    ["reuses it when it is the target", "2.0.0", 0],
+    ["discards it once superseded", "3.0.0", 1],
+  ])("a release a --no-restart update left: %s", async (_label, version, builds) => {
     const install = await halfSwitchedInstall({ pending: true });
 
-    const result = await install.update(install.commits["2.0.0"]!);
+    const result = await install.update(install.commits[version]!);
 
     expect(result.status, JSON.stringify(result.steps)).toBe("ok");
-    expect(target.builds).toBe(0);
-    expect(await fs.realpath(install.slot)).toBe(install.unserved);
-    expect(await install.readTrial()).toEqual({
-      target: install.unserved,
-      previous: install.serving,
-    });
-  });
-
-  it("discards a release a --no-restart update left for the next start once superseded", async () => {
-    const install = await halfSwitchedInstall({ pending: true });
-
-    const result = await install.update(install.commits["3.0.0"]!);
-
-    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
-    expect(await install.readTrial()).toEqual({
-      target: await fs.realpath(install.slot),
-      previous: install.serving,
-    });
-    await expect(fs.access(install.unserved)).rejects.toThrow();
-  });
-
-  it("rebuilds the serving commit as the fallback when the trial's fallback does not verify", async () => {
-    const install = await halfSwitchedInstall();
-    target.broken.push(install.serving);
-
-    const result = await install.update(install.commits["3.0.0"]!);
-
-    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
-    // A back-out must land on a complete build of what serves, never on the placed release.
-    expect(target.conversionTargets).toEqual([install.commits["1.0.0"]]);
-    const { previous } = await install.readTrial();
-    expect([install.serving, install.unserved]).not.toContain(previous);
+    expect(target.builds).toBe(builds);
+    const linked = await fs.realpath(install.slot);
+    expect(await install.readTrial()).toEqual({ target: linked, previous: install.serving });
+    // Reused when it is the target, removed once superseded.
     expect(
-      JSON.parse(await fs.readFile(path.join(previous, "package.json"), "utf8")),
-    ).toMatchObject({ version: "1.0.0" });
-    await expect(fs.access(install.unserved)).rejects.toThrow();
+      await fs.access(install.unserved).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(builds === 0);
   });
+
+  it.each([
+    ["", false],
+    [" under a linked state directory", true],
+  ])(
+    "rebuilds the serving commit as the fallback when it does not verify%s",
+    async (_l, linkedState) => {
+      const install = await halfSwitchedInstall({ linkedState });
+      target.broken.push(install.serving);
+
+      const result = await install.update(install.commits["3.0.0"]!);
+
+      expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+      // A back-out must land on a complete build of what serves, never on the placed release.
+      expect(target.conversionTargets).toEqual([install.commits["1.0.0"]]);
+      const { previous } = await install.readTrial();
+      expect([install.serving, install.unserved]).not.toContain(previous);
+      expect(
+        JSON.parse(await fs.readFile(path.join(previous, "package.json"), "utf8")),
+      ).toMatchObject({ version: "1.0.0" });
+      await expect(fs.access(install.unserved)).rejects.toThrow();
+    },
+  );
 
   it("keeps the fallback when the launcher starts the reused release during validation", async () => {
     const install = await halfSwitchedInstall();
@@ -614,19 +570,6 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     await expect(fs.access(install.unserved)).resolves.toBeUndefined();
   });
 
-  it("reuses an earlier rebuild of the serving commit when the target keeps failing", async () => {
-    const install = await halfSwitchedInstall();
-    target.broken.push(install.serving);
-    target.targetFails = true;
-
-    await install.update(install.commits["3.0.0"]!);
-    await install.update(install.commits["3.0.0"]!);
-
-    // One rebuild of the serving commit across both attempts, beside the two releases.
-    expect(target.conversionTargets).toEqual([install.commits["1.0.0"]]);
-    expect(await install.releaseCount()).toBe(3);
-  });
-
   it.each([
     ["a newer target", "3.0.0", (install: HalfSwitchedInstall) => fs.realpath(install.slot)],
     ["the placed target", "2.0.0", async (install: HalfSwitchedInstall) => install.unserved],
@@ -648,30 +591,19 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     },
   );
 
-  it("writes a resolving link to a rebuilt fallback under a linked state directory", async () => {
-    const install = await halfSwitchedInstall({ linkedState: true });
-    target.broken.push(install.serving);
-
-    const result = await install.update(install.commits["3.0.0"]!);
-
-    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
-    const { previous } = await install.readTrial();
-    expect(
-      JSON.parse(await fs.readFile(path.join(previous, "package.json"), "utf8")),
-    ).toMatchObject({ version: "1.0.0" });
-  });
-
-  it("keeps the link and trial when the target fails after the fallback was rebuilt", async () => {
+  it("keeps the link and trial, and one rebuild, while the target keeps failing", async () => {
     const install = await halfSwitchedInstall();
     target.broken.push(install.serving);
     target.targetFails = true;
     const trial = await fs.readFile(install.trialFile, "utf8");
 
     const result = await install.update(install.commits["3.0.0"]!);
+    await install.update(install.commits["3.0.0"]!);
 
     expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
-    // The serving commit was rebuilt, but nothing switches before the target passes.
+    // The serving commit was rebuilt once, and nothing switches before the target passes.
     expect(target.conversionTargets).toEqual([install.commits["1.0.0"]]);
+    expect(await install.releaseCount()).toBe(3);
     expect(await fs.realpath(install.slot)).toBe(install.unserved);
     expect(await fs.readFile(install.trialFile, "utf8")).toBe(trial);
   });
