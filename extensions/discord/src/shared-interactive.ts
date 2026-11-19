@@ -1,4 +1,5 @@
 import {
+  agentControlText,
   legacyInteractiveReplyToPresentation,
   resolveMessagePresentationActionValue,
   resolveMessagePresentationButtonAction,
@@ -17,6 +18,8 @@ import {
 import { buildDiscordApprovalCustomId } from "./approval-custom-id.js";
 import {
   buildDiscordActivityCustomId,
+  buildDiscordAgentButtonCustomId,
+  buildDiscordAgentSelectCustomId,
   isValidDiscordActivityWidgetId,
 } from "./component-custom-id.js";
 import type {
@@ -30,6 +33,7 @@ const DISCORD_INTERACTIVE_BUTTON_ROW_SIZE = 5;
 function buildDiscordButtonComponent(
   button: MessagePresentationButton,
   options: DiscordPresentationBuildOptions,
+  nextAgentIndex: () => number,
 ): DiscordComponentButtonSpec | undefined {
   const action = resolveMessagePresentationButtonAction(button);
   if (!action) {
@@ -74,6 +78,14 @@ function buildDiscordButtonComponent(
     }
     component.style = "link";
     component.url = action.url;
+  } else if (action.type === "callback" && agentControlText(action.value)) {
+    // Agent controls are stateless and single-use; a value too long for the id keeps the
+    // registry path below.
+    const internalCustomId = buildDiscordAgentButtonCustomId(nextAgentIndex(), action.value);
+    if (internalCustomId) {
+      return { ...component, internalCustomId };
+    }
+    component.callbackData = action.value;
   } else {
     component.callbackData = action.type === "command" ? action.command : action.value;
     if (button.action?.type === "command" || button.action?.type === "callback") {
@@ -89,6 +101,7 @@ function buildDiscordButtonComponent(
 function appendDiscordSelectBlock(
   blocks: NonNullable<DiscordComponentMessageSpec["blocks"]>,
   block: MessagePresentationSelectBlock,
+  nextAgentIndex: () => number,
 ): void {
   const options: Array<{ label: string; value: string }> = [];
   let callbackDataKind: "command" | "callback" | undefined;
@@ -112,13 +125,17 @@ function appendDiscordSelectBlock(
   if (options.length === 0) {
     return;
   }
+  const agentOwned =
+    callbackDataKind !== "command" && options.every((option) => agentControlText(option.value));
   blocks.push({
     type: "actions",
     select: {
       type: "string",
       placeholder: block.placeholder,
       options,
-      callbackDataKind,
+      ...(agentOwned
+        ? { internalCustomId: buildDiscordAgentSelectCustomId(nextAgentIndex()) }
+        : { callbackDataKind }),
     },
   });
 }
@@ -148,6 +165,8 @@ export function buildDiscordPresentationComponents(
     return undefined;
   }
   const blocks: NonNullable<DiscordComponentMessageSpec["blocks"]> = [];
+  let agentIndex = 0;
+  const nextAgentIndex = () => agentIndex++;
   if (presentation.title) {
     blocks.push({ type: "text", text: presentation.title });
   }
@@ -168,7 +187,7 @@ export function buildDiscordPresentationComponents(
     }
     if (block.type === "buttons") {
       const components = block.buttons.flatMap((button) => {
-        const component = buildDiscordButtonComponent(button, options);
+        const component = buildDiscordButtonComponent(button, options, nextAgentIndex);
         return component ? [component] : [];
       });
       for (let index = 0; index < components.length; index += DISCORD_INTERACTIVE_BUTTON_ROW_SIZE) {
@@ -180,7 +199,7 @@ export function buildDiscordPresentationComponents(
       continue;
     }
     if (block.type === "select") {
-      appendDiscordSelectBlock(blocks, block);
+      appendDiscordSelectBlock(blocks, block, nextAgentIndex);
     }
   }
   return blocks.length ? { blocks } : undefined;

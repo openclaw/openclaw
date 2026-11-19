@@ -1,20 +1,16 @@
-import { ComponentType } from "discord-api-types/v10";
-import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
-import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { ComponentType, type APIMessageTopLevelComponent } from "discord-api-types/v10";
+import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
+import { logError } from "openclaw/plugin-sdk/logging-core";
+import { parseDiscordAgentButtonValue } from "../component-custom-id.js";
 import type {
   BaseMessageInteractiveComponent,
   BaseComponentInteraction,
-  ComponentData,
 } from "../internal/discord.js";
-import {
-  ackComponentInteraction,
-  replyUnavailableComponentInteraction,
-  resolveAgentComponentRoute,
-} from "./agent-components-context.js";
-import { parseAgentComponentData } from "./agent-components-data.js";
-import { resolveInteractionContextWithDmAuth } from "./agent-components-dm-auth.js";
-import { ensureAgentComponentInteractionAllowed } from "./agent-components-guild-auth.js";
-import { resolveAgentComponentPolicyContext } from "./agent-components-live-policy.js";
+import { replyUnavailableComponentInteraction } from "./agent-components-context.js";
+import { resolveInteractionCustomId } from "./agent-components-data.js";
+import { resolveAuthorizedComponentInteraction } from "./agent-components-guild-auth.js";
+import { dispatchDiscordComponentEvent } from "./agent-components.dispatch.js";
+import { dispatchPluginDiscordInteractiveEvent } from "./agent-components.plugin-interactive.js";
 import type {
   AgentComponentContext,
   AgentComponentMessageInteraction,
@@ -23,72 +19,75 @@ import type {
 const AGENT_BUTTON_KEY = "agent";
 const AGENT_SELECT_KEY = "agentsel";
 
-async function runAgentSystemControlInteraction(params: {
+// The tap consumes the controls; text and media stay on the message.
+function withoutActionRows(components: unknown[]): APIMessageTopLevelComponent[] {
+  return components.flatMap((component) => {
+    const record = component as { type?: number; components?: unknown[] };
+    if (record.type === ComponentType.ActionRow) {
+      return [];
+    }
+    return [
+      (Array.isArray(record.components)
+        ? { ...record, components: withoutActionRows(record.components) }
+        : record) as APIMessageTopLevelComponent,
+    ];
+  });
+}
+
+/** A stateless agent control: the marked value travels with the tap, so it never expires. */
+async function runAgentControlInteraction(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentMessageInteraction;
-  data: ComponentData;
   kind: "button" | "select";
-  formatEventText: (params: { componentId: string; username: string; userId: string }) => string;
+  value: string | undefined;
 }): Promise<void> {
-  const label = `agent ${params.kind}`;
-  const componentLabel = params.kind === "button" ? "button" : "select menu";
-  const parsed = parseAgentComponentData(params.data);
-  if (!parsed) {
+  const { interaction, kind, value } = params;
+  const label = `discord agent ${kind}`;
+  const componentLabel = kind === "button" ? "button" : "select menu";
+  const eventText = agentControlText(value);
+  if (!value || !eventText) {
     logError(`${label}: failed to parse component data`);
     await replyUnavailableComponentInteraction(
-      params.interaction,
+      interaction,
       `This ${componentLabel} is no longer valid.`,
     );
     return;
   }
-
-  const { componentId } = parsed;
-  const ctx = await resolveAgentComponentPolicyContext(params);
-  if (!ctx) {
-    return;
-  }
-  const interactionCtx = await resolveInteractionContextWithDmAuth({
-    ctx,
-    interaction: params.interaction,
+  const authorized = await resolveAuthorizedComponentInteraction({
+    ctx: params.ctx,
+    interaction,
     label,
     componentLabel,
-  });
-  if (!interactionCtx) {
-    return;
-  }
-  const { channelId, username, userId } = interactionCtx;
-
-  const allowed = await ensureAgentComponentInteractionAllowed({
-    ...params,
-    ...interactionCtx,
-    ctx,
-    componentLabel: params.kind,
     unauthorizedReply: `You are not authorized to use this ${componentLabel}.`,
   });
-  if (!allowed) {
+  if (!authorized) {
     return;
   }
-
-  const route = resolveAgentComponentRoute({
-    ctx,
-    ...interactionCtx,
-    parentId: allowed.parentId,
+  const messageId = interaction.message?.id;
+  const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
+    ...authorized,
+    interaction,
+    isAuthorizedSender: authorized.commandAuthorized,
+    data: value,
+    kind,
+    messageId,
   });
-
-  const eventText = params.formatEventText({ componentId, username, userId });
-  logDebug(
-    `${label}: enqueuing event for channel ${channelId} interaction=${params.interaction.id}`,
-  );
-
-  enqueueRoutedSystemEvent(eventText, route, {
-    // The immutable interaction ID identifies one occurrence, preserving repeat clicks while
-    // deduplicating gateway replays of that same occurrence.
-    contextKey: `discord:agent-${params.kind}:${channelId}:${componentId}:${userId}:${params.interaction.id}`,
-  });
-
-  await ackComponentInteraction({
-    interaction: params.interaction,
-    label,
+  if (pluginDispatch === "handled") {
+    return;
+  }
+  try {
+    await interaction.update({
+      components: withoutActionRows(interaction.rawData.message?.components ?? []),
+    });
+  } catch (err) {
+    logError(`${label}: failed to consume the controls: ${String(err)}`);
+  }
+  // The conversation's session owns the tap, as if the user had typed the value.
+  await dispatchDiscordComponentEvent({
+    ...authorized,
+    interaction,
+    eventText,
+    replyToId: messageId,
   });
 }
 
@@ -99,14 +98,12 @@ export function createAgentComponentButton(
     type: ComponentType.Button,
     customId: `${AGENT_BUTTON_KEY}:seed=1`,
 
-    async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
-      await runAgentSystemControlInteraction({
+    async run(interaction: BaseComponentInteraction): Promise<void> {
+      await runAgentControlInteraction({
         ctx,
         interaction,
-        data,
         kind: "button",
-        formatEventText: ({ componentId, username, userId }) =>
-          `[Discord component: ${componentId} clicked by ${username} (${userId})]`,
+        value: parseDiscordAgentButtonValue(resolveInteractionCustomId(interaction)),
       });
     },
   };
@@ -117,16 +114,12 @@ export function createAgentSelectMenu(ctx: AgentComponentContext): BaseMessageIn
     type: ComponentType.StringSelect,
     customId: `${AGENT_SELECT_KEY}:seed=1`,
 
-    async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
-      const values = interaction.values ?? [];
-      const valuesText = values.length > 0 ? ` (selected: ${values.join(", ")})` : "";
-      await runAgentSystemControlInteraction({
+    async run(interaction: BaseComponentInteraction): Promise<void> {
+      await runAgentControlInteraction({
         ctx,
         interaction,
-        data,
         kind: "select",
-        formatEventText: ({ componentId, username, userId }) =>
-          `[Discord select menu: ${componentId} interacted by ${username} (${userId})${valuesText}]`,
+        value: interaction.values.length === 1 ? interaction.values[0] : undefined,
       });
     },
   };
