@@ -39,7 +39,7 @@ it("offers exact schema recovery when a wide input hint elides nested fields", a
   const controls = createToolSearchTools({ config, catalogRef });
   const dispatch = (id: string, args: unknown) =>
     expectDefined(
-      controls.find((tool) => tool.name === "dispatch_action"),
+      controls.find((control) => control.name === "dispatch_action"),
       "dispatch_action",
     ).execute("dispatch", { id, args });
   const id = "openclaw:core:wide_search";
