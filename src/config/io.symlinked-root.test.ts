@@ -87,6 +87,27 @@ describe("config writes through a symlinked state root", () => {
     },
   );
 
+  it("allows planning through a final-file symlink but refuses publication", async () => {
+    const { io, configPath, physicalPath, target, raw } = await fixture();
+    const authoredPath = path.join(target, "authored.json");
+    await fs.rename(physicalPath, authoredPath);
+    await fs.symlink("authored.json", configPath);
+
+    const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+    expect(snapshot.path).toBe(configPath);
+    expect(snapshot.raw).toBe(raw);
+    await expect(
+      io.writeConfigFile(
+        { gateway: { mode: "local", port: 19001 } },
+        { ...writeOptions, baseSnapshot: snapshot },
+      ),
+    ).rejects.toMatchObject({ name: "ConfigMutationConflictError" });
+
+    expect(await fs.readlink(configPath)).toBe("authored.json");
+    expect(await fs.readFile(authoredPath, "utf8")).toBe(raw);
+    await expect(fs.stat(`${physicalPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("creates a missing state directory through the public writer", async () => {
     const home = await roots.make();
     const stateDir = path.join(home, "fresh", "state");

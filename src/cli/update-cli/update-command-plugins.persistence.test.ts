@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { recoverInstalledPluginConfigIds } from "../../commands/doctor/shared/installed-plugin-id-recovery.js";
 import { seedRecoveryOwner } from "../../commands/doctor/shared/installed-plugin-id-recovery.test-support.js";
 import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
+import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   recordDeferredPluginMigrations,
@@ -67,6 +68,7 @@ it.each([
         await fs.symlink(managed + "/openclaw.json", state.configPath);
       }
       const original = await fs.readFile(state.configPath, "utf8");
+      const originalLink = config === "symlinked" ? await fs.readlink(state.configPath) : undefined;
       const next = { next: { source: "archive" as const } };
       mocks.convergence.mockImplementationOnce(async ({ cfg }) => ({
         ...convergenceResult(cfg),
@@ -88,17 +90,25 @@ it.each([
         configWriteOptions: pendingMigration ? { deferredPluginMigrations: [pending] } : {},
       });
       const refused = change && config !== "writable";
-      if (refused) await expect(update).rejects.toThrow("is a symlink");
-      else expect(await update).toMatchObject({ status: "ok", changed: true });
+      if (refused) {
+        await expect(update).rejects.toBeInstanceOf(ConfigMutationConflictError);
+        await expect(update).rejects.toMatchObject({ retryable: false });
+      } else {
+        expect(await update).toMatchObject({ status: "ok", changed: true });
+      }
       expect(
         await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
       ).toEqual(refused ? {} : next);
       const saved = await fs.readFile(state.configPath, "utf8");
-      if (change && !refused)
+      if (change && !refused) {
         expect(JSON.parse(saved).plugins.entries).toEqual({ next: { enabled: false } });
-      else expect(saved).toBe(original);
-      if (config === "symlinked")
+      } else {
+        expect(saved).toBe(original);
+      }
+      if (config === "symlinked") {
         expect((await fs.lstat(state.configPath)).isSymbolicLink()).toBe(true);
+        expect(await fs.readlink(state.configPath)).toBe(originalLink);
+      }
     });
   },
 );
