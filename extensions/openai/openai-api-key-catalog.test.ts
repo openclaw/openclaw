@@ -60,7 +60,7 @@ it("scopes the API-key instructions cache workaround to GPT-6.2", async () => {
     });
   }
   for (const id of unaffected) {
-    const model = provider.models.find((model) => model.id === id);
+    const model = provider.models.find((entry) => entry.id === id);
     expect(model).toBeDefined();
     expect(model?.compat?.cachesInstructions).toBeUndefined();
   }

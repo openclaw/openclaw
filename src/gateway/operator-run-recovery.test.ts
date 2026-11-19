@@ -345,7 +345,7 @@ describe("scheduled authenticated operator source", () => {
                       await releaseWrite.promise;
                     }
                   },
-                  readFile,
+                  readFile: (file, signal) => readFile(file, { signal }),
                   statFile: (file) => readPersistedFileStat(file, isMissingPathError),
                   writeFile: async (file, content) => {
                     writes += 1;
