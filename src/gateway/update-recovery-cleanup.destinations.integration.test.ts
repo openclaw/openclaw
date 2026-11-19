@@ -58,6 +58,8 @@ it.each(["write", "replace"] as const)(
   { timeout: 90_000 },
   async (change) => {
     const fixture = await createVerifiedRecoveryStore();
+    // Gateway temp workspaces require private ancestors even with a permissive host umask.
+    fs.chmodSync(fixture.store.stateDir, 0o700);
     const originals = new Map(
       fixture.target.completedMoves
         .filter((move) => move.artifact?.classification !== "protected")
