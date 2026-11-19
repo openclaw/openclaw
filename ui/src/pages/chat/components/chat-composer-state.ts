@@ -52,7 +52,7 @@ function createChatComposerState(): ChatComposerState {
     loadTasks: () =>
       loadComposerTasksRuntime().then(({ createComposerTasks }) => {
         if (!owner) {
-          const created = createComposerTasks(() => state.taskPresenters > 0);
+          const created = createComposerTasks(state);
           owner = created;
           setTasks(() => created);
         }

@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
   validateCronAddParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { captureCronStreamSandboxTarget } from "../../agents/sandbox/stream-context.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
@@ -15,6 +17,7 @@ import { cronCreateRequiresStreamExecAuthority } from "../../cron/stream-exec-au
 import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronDeliveryPreview, CronJobCreate } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   applyCronCreateCallerScopeDefault,
@@ -40,6 +43,9 @@ import { withCronStreamExecApproval } from "./cron-stream-approval.js";
 import type { GatewayRequestHandler } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
+// A title is optional. Share one short budget across setup and both model attempts.
+const CRON_ADD_NAMING_TIMEOUT_MS = 5_000;
+
 export const cronAddHandler: GatewayRequestHandler = async ({
   params: rawParams,
   respond,
@@ -55,6 +61,9 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   }
   const commandCreation = readPluginCommandCreation(rawParams);
   const params = commandCreation.params;
+  // Normalization fills a missing name from the prompt's first line; a model name replaces it below.
+  const rawName = asOptionalObjectRecord(params)?.name;
+  const nameProvided = typeof rawName === "string" && rawName.trim().length > 0;
   let candidate: unknown;
   let enabledExplicit: boolean;
   try {
@@ -147,6 +156,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     return;
   }
   let creatorOptions: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
+  let namingAuthority: AdmittedRunOperatorAuthority | undefined;
   const commitGuard = () => {
     commandCreation.creation?.assertCurrent();
     assertMutationCurrent?.();
@@ -164,7 +174,15 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     creatorOptions = await captureCronCreatorSession(
       jobCreate,
       callerScope,
-      { client, context, signal, hasCurrentClientAuthority },
+      {
+        client,
+        context,
+        signal,
+        hasCurrentClientAuthority,
+        onOperatorAuthority: (authority) => {
+          namingAuthority = authority;
+        },
+      },
       cfg,
       runtimeAuthority !== undefined,
     );
@@ -179,6 +197,52 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     creatorOptions?.disposeInferenceAuthorization?.();
     respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
     return;
+  }
+  const namingAgentId = tryResolveCronJobEffectiveAgentId(
+    jobCreate,
+    context.cron.getDefaultAgentId(),
+  );
+  const namingSource =
+    jobCreate.payload.kind === "agentTurn"
+      ? jobCreate.payload.message
+      : jobCreate.payload.kind === "systemEvent"
+        ? jobCreate.payload.text
+        : undefined;
+  // Only the interactive editor requests model naming. Other callers keep the
+  // deterministic name without disclosing the prompt to a title provider.
+  if (
+    !nameProvided &&
+    client?.internal?.authenticatedControlUi &&
+    !callerScope &&
+    !jobCreate.declarationKey &&
+    namingAgentId &&
+    namingSource &&
+    namingAuthority
+  ) {
+    const operatorAuthority = namingAuthority;
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), CRON_ADD_NAMING_TIMEOUT_MS);
+    const namingSignal = signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal;
+    try {
+      const name = await racePromiseWithAbortSignal(async () => {
+        const { generateAutomationName } = await import("../dashboard-session-title.js");
+        namingSignal.throwIfAborted();
+        return generateAutomationName({
+          cfg,
+          agentId: namingAgentId,
+          message: namingSource,
+          abortSignal: namingSignal,
+          operatorAuthority,
+        });
+      }, namingSignal);
+      if (name) {
+        jobCreate.name = name;
+      }
+    } catch {
+      // Naming is best effort: keep the prompt-derived name.
+    } finally {
+      clearTimeout(timer);
+    }
   }
   // Resolve the preview before durable add so a preview failure cannot duplicate a retry.
   const previewContext = { cfg, defaultAgentId: context.cron.getDefaultAgentId() };

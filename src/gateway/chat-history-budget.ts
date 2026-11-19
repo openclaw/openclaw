@@ -173,19 +173,18 @@ export function replaceOversizedChatHistoryMessages(params: {
 
 export function reportOmittedChatHistory(params: {
   omittedCount: number;
-  normalizedBytes: number;
   maxHistoryBytes: number;
   logDebug: (message: string) => void;
 }): number {
-  const { omittedCount, normalizedBytes, maxHistoryBytes, logDebug } = params;
+  const { omittedCount, maxHistoryBytes, logDebug } = params;
   if (omittedCount === 0) {
     return 0;
   }
   chatHistoryOmittedEmitCount += omittedCount;
+  // Sizing discarded input here would undo bounded page selection.
   logLargePayload({
     surface: "gateway.chat.history",
     action: "truncated",
-    bytes: normalizedBytes,
     limitBytes: maxHistoryBytes,
     count: omittedCount,
     reason: "chat_history_budget",
