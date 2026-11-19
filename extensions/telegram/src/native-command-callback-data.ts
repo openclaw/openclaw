@@ -1,5 +1,8 @@
 const TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX = "tgcmd:";
 const TELEGRAM_OPAQUE_CALLBACK_PREFIX = "tgcb1:";
+// Agent buttons already delivered by v2026.11.5. Read-only; remove once those messages
+// have aged out of chats.
+const TELEGRAM_AGENT_CALLBACK_PREFIX = "tgac1:";
 
 export function buildTelegramNativeCommandCallbackData(commandText: string): string {
   return `${TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX}${commandText}`;
@@ -23,10 +26,18 @@ export function hasTelegramOpaqueCallbackPrefix(data?: string | null): boolean {
 }
 
 export function parseTelegramOpaqueCallbackData(data?: string | null): string | null {
-  if (!data?.startsWith(TELEGRAM_OPAQUE_CALLBACK_PREFIX)) {
+  return parseTelegramTypedCallbackEnvelope(TELEGRAM_OPAQUE_CALLBACK_PREFIX, data);
+}
+
+export function parseTelegramAgentCallbackData(data?: string | null): string | null {
+  return parseTelegramTypedCallbackEnvelope(TELEGRAM_AGENT_CALLBACK_PREFIX, data);
+}
+
+function parseTelegramTypedCallbackEnvelope(prefix: string, data?: string | null): string | null {
+  if (!data?.startsWith(prefix)) {
     return null;
   }
-  const encoded = data.slice(TELEGRAM_OPAQUE_CALLBACK_PREFIX.length);
+  const encoded = data.slice(prefix.length);
   const separatorIndex = encoded.indexOf(":");
   const value = encoded.slice(separatorIndex + 1);
   return separatorIndex > 0 &&

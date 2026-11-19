@@ -73,6 +73,7 @@ import {
 } from "./model-buttons.js";
 import {
   hasTelegramOpaqueCallbackPrefix,
+  parseTelegramAgentCallbackData,
   parseTelegramNativeCommandCallbackData,
   parseTelegramOpaqueCallbackData,
 } from "./native-command-callback-data.js";
@@ -139,7 +140,10 @@ export function createTelegramCallbackRouter({
       const hasReservedOpaquePrefix = hasTelegramOpaqueCallbackPrefix(data);
       const opaqueCallbackData = parseTelegramOpaqueCallbackData(callback.data?.trimStart());
       // Agent-authored values stay data even when slash-prefixed; commands use action.type "command".
-      const agentCallbackText = agentControlText(data);
+      const legacyAgentCallbackData = parseTelegramAgentCallbackData(data);
+      const agentCallbackText =
+        agentControlText(data) ??
+        (legacyAgentCallbackData ? `callback_data: ${legacyAgentCallbackData}` : undefined);
       const hasReservedTypedPrefix = hasReservedOpaquePrefix || agentCallbackText !== undefined;
       const genericCallbackText = data.startsWith("/") ? data : `callback_data: ${data}`;
       const callbackCommandText =
@@ -316,7 +320,7 @@ export function createTelegramCallbackRouter({
           ctx,
           callbackMessage,
           data,
-          pluginCallbackData: opaqueCallbackData ?? data,
+          pluginCallbackData: opaqueCallbackData ?? legacyAgentCallbackData ?? data,
           callbackConversationId,
           callbackThreadId,
           senderId,

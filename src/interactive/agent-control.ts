@@ -16,7 +16,7 @@ function stampAgentControl(control: unknown): unknown {
       ? undefined
       : (action ?? record);
   const value = normalizeOptionalString(target?.value);
-  if (!value || value.startsWith(AGENT_CONTROL_MARK)) {
+  if (!value) {
     return control;
   }
   const stamped = { ...target, value: `${AGENT_CONTROL_MARK}${value}` };
@@ -30,7 +30,7 @@ function stampAgentControlBlock(block: unknown): unknown {
   return Array.isArray(controls) ? { ...record, [key]: controls.map(stampAgentControl) } : block;
 }
 
-/** Marks message-action callback values as the conversation agent's, once even on re-entry. */
+/** Marks message-action callback values as the conversation agent's. Call once per action. */
 export function stampAgentControls(payload: Record<string, unknown>): Record<string, unknown> {
   const stamped = { ...payload };
   for (const key of ["presentation", "interactive"] as const) {

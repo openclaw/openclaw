@@ -481,7 +481,12 @@ describe("runMessageAction plugin dispatch", () => {
     );
   });
 
-  it.each([true, false])("validates presentation JSON (valid=%s)", async (valid) => {
+  it.each([
+    { valid: true, hop: false },
+    { valid: false, hop: false },
+    // The Gateway hop carries params its delegating runner already marked.
+    { valid: true, hop: true },
+  ])("validates and marks presentation JSON (%j)", async ({ valid, hop }) => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
       jsonResult({ ok: true, presentation: params.presentation ?? null }),
     );
@@ -497,7 +502,10 @@ describe("runMessageAction plugin dispatch", () => {
       },
     };
     setTestPlugin(componentsPlugin, "componentchat");
-    const presentation = { blocks: [{ type: "buttons", buttons: [{ label: "A", value: "a" }] }] };
+    const buttons = (value: string) => ({
+      blocks: [{ type: "buttons", buttons: [{ label: "A", value }] }],
+    });
+    const presentation = buttons(hop ? ":a" : "a");
     const pending = runMessageAction({
       cfg: {},
       action: "send",
@@ -508,12 +516,14 @@ describe("runMessageAction plugin dispatch", () => {
         message: "hi",
         presentation: valid ? JSON.stringify(presentation) : "{not-json}",
       },
+      ...(hop ? { callerRecordsDestinationHistory: true } : {}),
     });
     if (valid) {
       const result = await pending;
-      // Message-action callbacks reach the channel marked as the conversation agent's.
-      const stamped = { blocks: [{ type: "buttons", buttons: [{ label: "A", value: ":a" }] }] };
-      expect(result.payload).toEqual(expect.objectContaining({ ok: true, presentation: stamped }));
+      // Message-action callbacks reach the channel marked once as the conversation agent's.
+      expect(result.payload).toEqual(
+        expect.objectContaining({ ok: true, presentation: buttons(":a") }),
+      );
     } else {
       await expect(pending).rejects.toThrow(/--presentation must be valid JSON/);
       expect(handleAction).not.toHaveBeenCalled();

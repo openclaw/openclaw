@@ -59,6 +59,13 @@ it("delivers an unclaimed agent tap to the agent as data without the mark", asyn
   expect(sendMessageSpy).not.toHaveBeenCalled();
 });
 
+it("delivers an agent button already sent by v2026.11.5", async () => {
+  await tap("tgac1:17dsn:pick:beta");
+
+  expect(replySpy.mock.calls[0]?.[0].Body).toContain("callback_data: pick:beta");
+  expect(replySpy.mock.calls[0]?.[0].Body).not.toContain("tgac1");
+});
+
 it("offers an agent tap to the plugin that owns its value first", async () => {
   const handler = vi.fn(async (_ctx: unknown) => ({ handled: true }));
   registerPluginInteractiveHandler("pick-owner", {

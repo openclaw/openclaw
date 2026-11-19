@@ -285,6 +285,8 @@ describe("plugin interactive handlers", () => {
     });
     expect(agentControlText(":other:resume")).toBe("callback_data: other:resume");
     expect(agentControlText("other:resume")).toBeUndefined();
+    // Exactly one mark is removed, so an authored leading colon survives.
+    expect(agentControlText("::other")).toBe("callback_data: :other");
   });
 
   it.each(["telegram", "discord", "slack"] as const)(
