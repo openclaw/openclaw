@@ -3,13 +3,19 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+} from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { hasActiveGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { readUpdateDatabaseGenerationsIsolated } from "../../infra/update-candidate-state.inspection.js";
+import { findUpdateCaptureSpaceError } from "../../infra/update-capture-space.js";
+import { formatUpdateDatabaseImageSkip } from "../../infra/update-database-backup-space.js";
 import {
   createUpdateDatabaseBackup,
   type UpdateDatabaseBackup,
@@ -105,6 +111,59 @@ export async function assertUpdatePostgresOwnerReleasable(params: {
   await assertUpdatePostgresCaptureOwnership({ config: params.config, env: params.env });
 }
 
+function isDiskFull(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, (current) => [current.cause]).some(
+    (candidate) =>
+      extractErrorCode(candidate) === "ENOSPC" ||
+      /\bENOSPC\b|No space left on device|database or disk is full/u.test(
+        formatErrorMessage(candidate),
+      ),
+  );
+}
+
+/**
+ * Owner decision: an image that does not fit is skipped and the update continues.
+ * Migrations commit in one SQLite transaction each, so nothing is lost; what is
+ * given up is restoring the previous version once a migration commits.
+ */
+async function skipUpdateDatabaseImageForSpace(
+  error: unknown,
+  directory: string | undefined,
+  env: NodeJS.ProcessEnv,
+): Promise<UpdateStepResult | undefined> {
+  const space = findUpdateCaptureSpaceError(error)?.capacity;
+  if (!space && !isDiskFull(error)) {
+    return undefined;
+  }
+  let retained = "";
+  if (directory) {
+    try {
+      // This run created the directory and nothing refers to a partial image.
+      await fs.rm(directory, { recursive: true, force: true });
+    } catch (cleanupError) {
+      retained = ` Its partial files remain at ${directory} (${formatErrorMessage(cleanupError)}).`;
+    }
+  }
+  return {
+    name: "database snapshot",
+    command: "snapshot databases before migrations",
+    cwd: resolveStateDir(env),
+    durationMs: 0,
+    exitCode: 0,
+    warnings: [
+      `${
+        space
+          ? formatUpdateDatabaseImageSkip(
+              space.requiredBytes,
+              space.availableBytes,
+              directory ?? resolveStateDir(env),
+            )
+          : "No pre-migration database image: the disk filled while it was written. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward."
+      }${retained} The update continues.`,
+    ],
+  };
+}
+
 export async function captureUpdateDatabases(params: {
   transaction: PackageUpdateTransaction;
   execution: MutableUpdateExecutionParams;
@@ -131,6 +190,7 @@ export async function captureUpdateDatabases(params: {
   const maintenance = ownership.maintenance;
   let unavailable = ownership.unavailable;
   let outcome: { value: UpdateDatabaseBackup } | { error: unknown };
+  let backupDirectory: string | undefined;
   try {
     const capture = async () => {
       params.assertCurrent();
@@ -171,6 +231,7 @@ export async function captureUpdateDatabases(params: {
         params.assertCurrent();
         backupRoot = path.join(physicalArtifactRoot, path.basename(backupRoot));
       }
+      backupDirectory = `${backupRoot}.databases`;
       const captured = await createUpdateDatabaseBackup({
         backupRoot,
         stateDir: resolveStateDir(env),
@@ -220,7 +281,18 @@ export async function captureUpdateDatabases(params: {
     throw cleanupError;
   }
   if ("error" in outcome) {
-    throw outcome.error;
+    const skipped = await skipUpdateDatabaseImageForSpace(outcome.error, backupDirectory, env);
+    if (!skipped) {
+      throw outcome.error;
+    }
+    await reportUpdateStepCompletion(execution.progress, {
+      ...skipped,
+      durationMs: Date.now() - startedAt,
+      index: 0,
+      total: 0,
+    });
+    assertCurrent();
+    return { backup: undefined, step: { ...skipped, durationMs: Date.now() - startedAt } };
   }
   const backup = outcome.value;
   transaction.discardDatabaseCaptures = async () => {

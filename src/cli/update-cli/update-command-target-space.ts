@@ -16,7 +16,10 @@ import {
 
 type PackageInstallTarget = Parameters<typeof resolveNativePackageProjectRoot>[0];
 
-/** Returns the refused package step; Git staging keeps its own later refusal. */
+/**
+ * Returns the refused package step. The only refusal is no room for the migration
+ * itself; a pre-migration image that does not fit is reported and skipped later.
+ */
 export async function checkUpdateTargetSnapshotSpace(params: {
   opts: UpdateCommandOptions;
   updateInstallKind: string;
@@ -69,8 +72,9 @@ export async function checkUpdateTargetSnapshotSpace(params: {
       params.warn(warning);
     }
   }
-  // Git staging refuses a shortfall mid-update; offer cleanup while nothing has changed.
+  // Git staging checks again mid-update; offer cleanup while nothing has changed.
   // That later check still decides, so a declined or insufficient cleanup changes nothing.
+  // A Git release takes no database image, so its staging checks nothing.
   if (params.updateInstallKind === "git" && canPromptForSpaceCleanup(opts)) {
     await offer(path.join(params.root, ".artifacts"));
     opts.run?.executorFence?.assertCurrent();

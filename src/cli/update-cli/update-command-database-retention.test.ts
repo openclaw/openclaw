@@ -7,6 +7,7 @@ import { createNpmTarget } from "../../infra/package-update-steps.test-support.j
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
+import { UpdateCaptureSpaceError } from "../../infra/update-capture-space.js";
 import * as databaseBackup from "../../infra/update-database-backup.js";
 import { createGitRuntimeTransaction } from "../../infra/update-runner-git-runtime.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -118,6 +119,93 @@ it.runIf(process.platform !== "win32").each([false, true])(
     expect(snapshot.prepare("SELECT value FROM payload").all()).toEqual([{ value: "synthetic" }]);
   },
 );
+
+it.each([
+  {
+    cause: "measured shortfall",
+    error: () =>
+      new UpdateCaptureSpaceError("short", {
+        requiredBytes: 3 * 1024 ** 3,
+        availableBytes: 1024 ** 3,
+        volume: "backup" as const,
+      }),
+  },
+  {
+    cause: "disk filled",
+    error: () =>
+      Object.assign(new Error("write copy stage: No space left on device"), { code: "ENOSPC" }),
+  },
+])(
+  "skips the pre-migration image and continues when it does not fit ($cause)",
+  async ({ cause, error }) => {
+    const base = await fs.realpath(dirs.make("update-database-skip-"));
+    const root = path.join(base, "install");
+    await fs.mkdir(root);
+    const env = await captureEnvironment(path.join(base, "state"));
+    const directory = path.join(base, "runtime.backup.databases");
+    vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockImplementation(async () => {
+      await fs.mkdir(directory);
+      await fs.writeFile(path.join(directory, "partial.sqlite"), "partial");
+      // The backup owner wraps its worker's failure and names the retained directory.
+      throw new Error(`Capture failed. Database backup files retained at ${directory}.`, {
+        cause: error(),
+      });
+    });
+
+    const capture = await captureUpdateDatabases({
+      transaction: {
+        backupRoot: path.join(base, "runtime.backup"),
+        rollback: async () => {
+          throw new Error("Unexpected rollback");
+        },
+        complete: async () => {
+          throw new Error("Unexpected completion");
+        },
+      },
+      execution: captureExecution(root, env, "package"),
+      context: undefined,
+      assertCurrent: () => {},
+    });
+
+    expect(capture.backup).toBeUndefined();
+    expect(capture.step).toMatchObject({ name: "database snapshot", exitCode: 0 });
+    const givenUp =
+      "Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward. The update continues.";
+    expect(capture.step.warnings).toEqual([
+      cause === "measured shortfall"
+        ? `No pre-migration database image: it needs 3.0 GiB near ${directory} and 1.0 GiB is free. ${givenUp}`
+        : `No pre-migration database image: the disk filled while it was written. ${givenUp}`,
+    ]);
+    // The partial image belonged to this run and nothing refers to it.
+    await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
+it("still fails the update when the image fails for a reason other than space", async () => {
+  const base = await fs.realpath(dirs.make("update-database-skip-"));
+  const root = path.join(base, "install");
+  await fs.mkdir(root);
+  const env = await captureEnvironment(path.join(base, "state"));
+  const failure = new Error("synthetic integrity failure");
+  vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockRejectedValue(failure);
+
+  await expect(
+    captureUpdateDatabases({
+      transaction: {
+        backupRoot: path.join(base, "runtime.backup"),
+        rollback: async () => {
+          throw new Error("Unexpected rollback");
+        },
+        complete: async () => {
+          throw new Error("Unexpected completion");
+        },
+      },
+      execution: captureExecution(root, env, "package"),
+      context: undefined,
+      assertCurrent: () => {},
+    }),
+  ).rejects.toBe(failure);
+});
 
 it.each(
   (["git", "package"] as const).flatMap((kind) =>
