@@ -5,10 +5,10 @@
 // person is waiting on this command.
 
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { isAbsolute, join, normalize, sep } from "node:path";
+import { readFile, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import validVersion from "semver/functions/valid.js";
 
 const CLI = fileURLToPath(new URL("./cli.mjs", import.meta.url));
 // The person is waiting: a lookup that has not answered by now is reported as a warning instead.
@@ -86,32 +86,21 @@ function cliJson(args) {
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, COMMAND_TIMEOUT_MS);
+    // Output from an unsuccessful lookup can contain local paths or configuration.
+    // Return only availability; never put that output into the proposal context.
+    const timer = setTimeout(() => child.kill("SIGKILL"), COMMAND_TIMEOUT_MS);
     child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.on("error", (error) => {
+    child.stderr.resume();
+    child.on("error", () => {
       clearTimeout(timer);
-      resolve({ ok: false, error: error.message });
+      resolve({ ok: false });
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (timedOut) {
-        resolve({ ok: false, error: "timed out" });
-        return;
-      }
       try {
-        resolve({
-          ok: code === 0,
-          value: JSON.parse(stdout),
-          error: code === 0 ? undefined : stderr.trim(),
-        });
+        resolve(code === 0 ? { ok: true, value: JSON.parse(stdout) } : { ok: false });
       } catch {
-        resolve({ ok: false, error: (stderr || stdout).trim().slice(0, 300) || `exit ${code}` });
+        resolve({ ok: false });
       }
     });
   });
@@ -131,32 +120,27 @@ async function fileSize(path) {
   }
 }
 
-/**
- * Starts this request's private proposal. Same location, id shape, and empty document
- * as `openclaw templates draft`, without paying for a CLI start on the waiting path.
- */
-async function createDraft(workspace) {
-  const directory = join(workspace, ".openclaw", "template-drafts");
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  for (const path of [join(workspace, ".openclaw"), directory]) {
-    if (!(await lstat(path)).isDirectory()) {
-      throw new Error("The workspace draft folder is not a plain directory.");
-    }
+/** The same CLI owner initializes ordinary chat drafts and returns their actual path. */
+async function requestDraft(workspace, existingId) {
+  if (existingId) {
+    return {
+      draftId: existingId,
+      path: join(workspace, ".openclaw", "template-drafts", existingId + ".json"),
+    };
   }
-  const draftId = randomUUID();
-  const document = {
-    name: "my-template",
-    description: "",
-    version: "0.1.0",
-    scope: { input: "", job: "", output: "", authority: "" },
-    manifest: "---\nschemaVersion: 1\nagent:\n  id: my-template\n---\n",
-    files: [],
-  };
-  await writeFile(join(directory, `${draftId}.json`), `${JSON.stringify(document, null, 2)}\n`, {
-    flag: "wx",
-    mode: 0o600,
-  });
-  return draftId;
+  const result = await cliJson(["templates", "draft", workspace, "--json"]);
+  const draft = result.value;
+  if (
+    !result.ok ||
+    !draft?.ok ||
+    !DRAFT_ID.test(draft.draftId) ||
+    draft.path !== join(workspace, ".openclaw", "template-drafts", draft.draftId + ".json")
+  ) {
+    throw new Error(
+      "Draft initialization did not return a confirmed result. Inspect this request before starting another draft.",
+    );
+  }
+  return draft;
 }
 
 async function listInstructionFiles(workspace) {
@@ -219,92 +203,59 @@ async function resolveAvatar(workspace, identity, draftId) {
   return (await fileSize(join(workspace, relative))) ? relative : undefined;
 }
 
-async function readClawHubSkillLock(workspace) {
-  try {
-    const lock = JSON.parse(await readFile(join(workspace, ".clawhub", "lock.json"), "utf8"));
-    return lock && typeof lock.skills === "object" && lock.skills ? lock.skills : {};
-  } catch {
-    return {};
-  }
+function exactRelease(version) {
+  return typeof version === "string" && validVersion(version) !== null && /^[0-9]/.test(version);
 }
 
-function frontmatterValue(frontmatter, key) {
-  const lines = frontmatter.split("\n");
-  const index = lines.findIndex((line) => line.startsWith(`${key}:`));
-  if (index < 0) {
-    return "";
-  }
-  const inline = lines[index].slice(key.length + 1).trim();
-  if (inline && !/^[|>][+-]?$/.test(inline)) {
-    return inline.replace(/^(["'])(.*)\1$/, "$2");
-  }
-  const block = [];
-  for (const line of lines.slice(index + 1)) {
-    if (line.trim() && !/^\s/.test(line)) {
-      break;
-    }
-    block.push(line.trim());
-  }
-  return block.join(" ");
-}
-
-/**
- * Only skills in this agent's own workspace can travel with a Template: ClawHub
- * installs by exact release, and the rest as folders the agent re-authors.
- */
-async function listWorkspaceSkills(workspace) {
-  const lock = await readClawHubSkillLock(workspace);
+function summarizeSkills(report, workspace) {
   const skills = { workspace: [], clawhub: [] };
-  let entries = [];
-  try {
-    entries = await readdir(join(workspace, "skills"), { withFileTypes: true });
-  } catch {
-    return skills;
-  }
-  for (const entry of entries
-    .filter((item) => item.isDirectory())
-    .sort((a, b) => a.name.localeCompare(b.name))) {
-    // A workspace override of this skill is tooling, not part of the role being shared.
-    if (entry.name === "create-template") {
+  for (const skill of report?.skills ?? []) {
+    if (
+      !skill.eligible ||
+      skill.blockedByAgentFilter ||
+      skill.bundled ||
+      skill.name === "create-template"
+    ) {
       continue;
     }
-    let text;
-    try {
-      text = await readFile(join(workspace, "skills", entry.name, "SKILL.md"), "utf8");
-    } catch {
-      continue;
-    }
-    const frontmatter = text.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1]?.replace(/\r/g, "") ?? "";
-    const name = frontmatterValue(frontmatter, "name") || entry.name;
-    const locked = lock[entry.name] ?? lock[name];
-    if (locked?.version) {
-      const ref = locked.ownerHandle ? `@${locked.ownerHandle}/${entry.name}` : entry.name;
-      skills.clawhub.push({ name, ref, version: locked.version });
-    } else {
+    const release = skill.clawhub;
+    if (release?.valid && release.slug && exactRelease(release.installedVersion)) {
+      skills.clawhub.push({
+        name: skill.name,
+        ref:
+          release.ownerHandle && !release.slug.startsWith("@")
+            ? `@${release.ownerHandle}/${release.slug}`
+            : release.slug,
+        version: release.installedVersion,
+      });
+    } else if (
+      !release &&
+      skill.source === "openclaw-workspace" &&
+      typeof skill.baseDir === "string" &&
+      dirname(resolve(skill.baseDir)) === resolve(workspace, "skills")
+    ) {
       skills.workspace.push({
-        name,
-        path: `skills/${entry.name}`,
-        description: oneLine(frontmatterValue(frontmatter, "description"), 110),
+        name: skill.name,
+        path: `skills/${basename(skill.baseDir)}`,
+        description: oneLine(skill.description, 110),
       });
     }
   }
   return skills;
 }
 
-function summarizePlugins(result) {
-  // Only ClawHub releases can be declared; locally installed plugins are counted, not listed.
+function summarizePlugins(inspections) {
   const plugins = { clawhub: [], notPortable: 0 };
-  for (const plugin of result?.plugins ?? []) {
-    if (!plugin?.id || plugin.origin === "bundled" || plugin.enabled === false) {
+  for (const { plugin, install } of inspections ?? []) {
+    if (!plugin?.id || !plugin.enabled || plugin.origin === "bundled") {
       continue;
     }
-    const spec = typeof plugin.trust?.installSpec === "string" ? plugin.trust.installSpec : "";
-    const clawhub = spec.match(/^clawhub:(.+)@([^@]+)$/);
-    if (clawhub) {
+    const version = install?.version ?? install?.resolvedVersion;
+    if (install?.source === "clawhub" && install.clawhubPackage && exactRelease(version)) {
       plugins.clawhub.push({
         id: plugin.id,
-        ref: clawhub[1],
-        version: clawhub[2],
+        ref: install.clawhubPackage,
+        version,
         description: oneLine(plugin.description, 90),
       });
     } else {
@@ -321,6 +272,7 @@ function summarizeAutomations(result, agentId) {
     // Heartbeats and plugin-managed jobs belong to the host, not to the role being shared.
     if (
       !message ||
+      job.enabled === false ||
       job.agentId !== agentId ||
       /^heartbeat-/.test(job.name ?? "") ||
       /^[a-z0-9-]+:/.test(job.declarationKey ?? "") ||
@@ -334,7 +286,7 @@ function summarizeAutomations(result, agentId) {
     }
     automations.push({
       name: job.name,
-      enabled: job.enabled !== false,
+      enabled: true,
       schedule: { cron: job.schedule.expr, timezone: job.schedule.tz ?? "UTC" },
       session: job.sessionTarget === "isolated" ? "isolated" : "main",
       message: oneLine(message, 240),
@@ -344,26 +296,35 @@ function summarizeAutomations(result, agentId) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-let draftId = options.draft;
-try {
-  draftId ??= await createDraft(options.workspace);
-} catch (error) {
-  process.stderr.write(`Could not start the private Template draft: ${error.message}\n`);
-  process.exit(1);
-}
-
-const [plugins, automations, identity, instructions, skills] = await Promise.all([
-  cliJson(["plugins", "list", "--enabled", "--json"]),
+const [draft, plugins, automations, identity, instructions, skillReport] = await Promise.all([
+  requestDraft(options.workspace, options.draft),
+  cliJson(["plugins", "inspect", "--all", "--json"]),
   // Use the active-only list: a paused routine must not become a new owner’s running job.
   cliJson(["cron", "list", "--agent", options.agent, "--json"]),
   cliJson(["config", "get", `agents.entries.${options.agent}.identity`, "--json"]),
   listInstructionFiles(options.workspace),
-  listWorkspaceSkills(options.workspace),
+  cliJson([
+    "gateway",
+    "call",
+    "skills.status",
+    "--params",
+    JSON.stringify({ agentId: options.agent }),
+    "--json",
+  ]),
 ]);
-
+const { draftId } = draft;
 const warnings = [];
-if (!plugins.ok) warnings.push(`plugins unavailable: ${plugins.error}`);
-if (!automations.ok) warnings.push(`automations unavailable: ${automations.error}`);
+const report = skillReport.value;
+const hasSkills =
+  skillReport.ok &&
+  Array.isArray(report?.skills) &&
+  typeof report.workspaceDir === "string" &&
+  resolve(report.workspaceDir) === resolve(options.workspace) &&
+  (!report.agentId || report.agentId === options.agent);
+if (!hasSkills) warnings.push("skills unavailable for this agent workspace");
+if (!plugins.ok || !Array.isArray(plugins.value)) warnings.push("plugin inspection unavailable");
+if (!automations.ok) warnings.push("automation inventory unavailable");
+const skills = summarizeSkills(hasSkills ? report : undefined, options.workspace);
 
 const avatar = await resolveAvatar(
   options.workspace,
@@ -372,7 +333,7 @@ const avatar = await resolveAvatar(
 );
 const output = {
   draftId,
-  draftPath: join(options.workspace, ".openclaw", "template-drafts", `${draftId}.json`),
+  draftPath: draft.path,
   agent: {
     id: options.agent,
     ...(identity.ok && identity.value?.name ? { name: identity.value.name } : {}),
@@ -382,7 +343,7 @@ const output = {
   instructionFiles: instructions.present,
   privateFiles: instructions.privateFiles,
   skills,
-  plugins: summarizePlugins(plugins.value),
+  plugins: summarizePlugins(plugins.ok && Array.isArray(plugins.value) ? plugins.value : []),
   automations: summarizeAutomations(automations.value, options.agent),
   ...(warnings.length ? { warnings } : {}),
 };

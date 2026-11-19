@@ -8,6 +8,8 @@ user-invocable: true
 
 ## While the person waits
 
+[PR #202077](https://github.com/openclaw/openclaw/pull/202077) records the silent creation run that prompted the separate progress messages and single proposal write.
+
 Stay with this agent in this conversation. A request to create a Template means prepare a private copy for review, not publish it.
 
 1. **Start in chat.** Say “I'm drafting the Template now. I'll check what goes with it.” Then run one inventory command using this skill's absolute directory:
