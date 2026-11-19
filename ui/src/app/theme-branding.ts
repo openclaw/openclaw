@@ -1,7 +1,5 @@
-import {
-  resolveThemeBranding,
-  type ThemeBranding,
-} from "../../../packages/gateway-protocol/src/theme.ts";
+import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme-builtin-branding.ts";
+import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createChangeListeners } from "../../../src/shared/listeners.js";
 
 let branding = resolveThemeBranding(undefined);
