@@ -279,7 +279,7 @@ export { buildAgentHookContextChannelFields } from "../plugins/hook-agent-contex
 export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
 export {
-  isGatewayShutdownAbortReason,
+  isAgentRunResumableRestartAbortReason,
   resolveAgentRunAbortLifecycleFields,
 } from "../agents/run-termination.js";
 export { isHostScopedAgentToolActive } from "../agents/agent-tools.ring-zero-context.js";

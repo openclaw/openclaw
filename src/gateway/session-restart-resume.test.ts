@@ -632,7 +632,11 @@ it("marks ordinary conversations without inheriting cron or external execution o
           ),
         ]);
       }
-      await persistRunningSessionsForRestart({ cfg: {} });
+      const marked: string[] = [];
+      await persistRunningSessionsForRestart({ cfg: {}, onMarked: (key) => marked.push(key) });
+      expect(marked.toSorted()).toEqual(
+        cases.flatMap(({ sessionKey, resumable }) => (resumable ? [sessionKey] : [])).toSorted(),
+      );
       for (const { sessionKey, resumable } of cases) {
         const entry = loadExactSessionEntry({
           agentId: resumable ? "other" : "main",

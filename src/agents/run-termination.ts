@@ -10,10 +10,7 @@ import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAbortError } from "../infra/abort-signal.js";
 import { hasLifecycleErrorCode as hasAgentRunAbortCode } from "../infra/agent-lifecycle-error.js";
-import {
-  isGatewayRestartDrainError,
-  isGatewayRestartDraining,
-} from "../process/gateway-work-admission.js";
+import { isGatewayRestartDrainError } from "../process/gateway-work-admission.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import {
   type FailoverError,
@@ -86,9 +83,16 @@ export function isAgentRunRestartAbortReason(value: unknown): boolean {
   return hasAgentRunAbortCode(value, AGENT_RUN_RESTART_ABORT_ERROR_CODE);
 }
 
-/** A restart abort from this Gateway's stop or restart; session resets reuse the code without draining. */
-export function isGatewayShutdownAbortReason(value: unknown): boolean {
-  return isAgentRunRestartAbortReason(value) && isGatewayRestartDraining();
+/** Shutdown abort of a session whose restart marker is written; the next Gateway resumes it. */
+export function createAgentRunResumableRestartAbortError(): Error {
+  return Object.assign(createAgentRunRestartAbortError(), { resumesAfterRestart: true });
+}
+
+/** Resets, evictions and unmarked shutdown sessions keep the plain restart abort. */
+export function isAgentRunResumableRestartAbortReason(value: unknown): boolean {
+  return (
+    isAgentRunRestartAbortReason(value) && asOptionalRecord(value)?.resumesAfterRestart === true
+  );
 }
 
 export function isAgentRunSupersededAbortReason(value: unknown): boolean {

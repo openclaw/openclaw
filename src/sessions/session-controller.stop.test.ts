@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { expect, it, onTestFinished, vi } from "vitest";
 import {
   createAgentRunDirectAbortError,
+  createAgentRunResumableRestartAbortError,
   isAgentRunDirectAbortReason,
+  isAgentRunRestartAbortReason,
+  isAgentRunResumableRestartAbortReason,
 } from "../agents/run-termination.js";
 import {
   registerInternalHook,
@@ -238,6 +241,35 @@ it("still stops an operation through an incarnation it owns after rollover", asy
   expect(outcome).toMatchObject({ aborted: true, activeCancelled: 1 });
   expect(operation.abortSignal.aborted).toBe(true);
 });
+
+it.each([
+  ["operation", true],
+  ["operation", false],
+  ["input", true],
+  ["input", false],
+] as const)(
+  "gives a restart Stop of an %s the per-session reason only for its session (%s)",
+  async (kind, matched) => {
+    const f = fixture();
+    const input = kind === "input" ? f.reserve() : undefined;
+    if (input) {
+      await f.start(input, true);
+    }
+    // The run reads its operation's signal; an input Stop aborts it through the claim.
+    const signal = (input ? input.claim!.operation! : f.operation()).abortSignal;
+    const resumable = createAgentRunResumableRestartAbortError();
+    await stopSession({
+      source: "restart",
+      capture: captureSessionControllerStop({ targets: [f.target] }),
+      reasonForSession: (sessionKey) =>
+        matched && sessionKey === f.sessionKey ? resumable : undefined,
+    }).completed;
+    const reason = signal.reason;
+    expect(reason === resumable).toBe(matched);
+    expect(isAgentRunRestartAbortReason(reason)).toBe(true);
+    expect(isAgentRunResumableRestartAbortReason(reason)).toBe(matched);
+  },
+);
 
 it("cancels scoped runless effects without waiting for their producer release", async () => {
   const f = fixture();

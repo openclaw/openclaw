@@ -10,7 +10,8 @@ import { FailoverError } from "./failover/error.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
-  isGatewayShutdownAbortReason,
+  createAgentRunResumableRestartAbortError,
+  isAgentRunResumableRestartAbortReason,
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
   resolveCliToolTerminalReason,
@@ -86,15 +87,16 @@ it("only turns live restart refusals into recovery and preserves explicit stop o
   }
   expectLifecycle(error, {});
 });
-it("treats a restart abort as a Gateway shutdown only while admission drains", () => {
-  expect(isGatewayShutdownAbortReason(createAgentRunRestartAbortError())).toBe(false);
-  markGatewayRestartDraining();
-  try {
-    expect(isGatewayShutdownAbortReason(createAgentRunRestartAbortError())).toBe(true);
-    expect(isGatewayShutdownAbortReason(createAgentRunDirectAbortError(true))).toBe(false);
-    expect(isGatewayShutdownAbortReason(new GatewayDrainingError())).toBe(false);
-  } finally {
-    resetGatewayWorkAdmission();
+it("keeps a resumable shutdown abort a restart abort and every other abort unmarked", () => {
+  const resumable = createAgentRunResumableRestartAbortError();
+  expect(isAgentRunResumableRestartAbortReason(resumable)).toBe(true);
+  expectLifecycle(undefined, { aborted: true, stopReason: "restart" }, abortedSignal(resumable));
+  for (const reason of [
+    createAgentRunRestartAbortError(),
+    createAgentRunDirectAbortError(true),
+    new GatewayDrainingError(),
+  ]) {
+    expect(isAgentRunResumableRestartAbortReason(reason)).toBe(false);
   }
 });
 it("keeps a retryable connection reset as a failure for run and tool terminals", () => {

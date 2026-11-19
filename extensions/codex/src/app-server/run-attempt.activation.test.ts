@@ -19,29 +19,15 @@ import {
   setupRunAttemptTestHooks,
 } from "./run-attempt-test-harness.js";
 
-// Core owns the draining fact; this file only decides what the harness does with it.
-const gateway = vi.hoisted(() => ({ draining: false }));
-vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
-  return {
-    ...actual,
-    isGatewayShutdownAbortReason: (reason: unknown) =>
-      gateway.draining &&
-      actual.resolveAgentRunAbortLifecycleFields(AbortSignal.abort(reason)).stopReason ===
-        "restart",
-  };
-});
-
 setupRunAttemptTestHooks();
-afterEach(() => {
-  gateway.draining = false;
-  clearRuntimeConfigSnapshot();
-});
+afterEach(() => clearRuntimeConfigSnapshot());
 
-const restartAbort = () =>
+// Core marks the shutdown abort of a session whose restart marker is written.
+const restartAbort = (resumesAfterRestart = false) =>
   Object.assign(new Error("agent run aborted for restart"), {
     name: "AbortError",
     code: "OPENCLAW_RESTART_ABORT",
+    ...(resumesAfterRestart ? { resumesAfterRestart } : {}),
   });
 const remoteAppServer = {
   pluginConfig: { appServer: { transport: "websocket" as const, url: "ws://127.0.0.1:47123" } },
@@ -125,26 +111,22 @@ describe("runCodexAppServerAttempt Gateway shutdown", () => {
     return { harness, run, controller };
   }
 
-  it("leaves a remote turn running when the Gateway stops", async () => {
+  it("leaves a resumable remote turn running when the Gateway stops", async () => {
     const { harness, run, controller } = await startTurn(remoteAppServer);
-    gateway.draining = true;
-    controller.abort(restartAbort());
+    controller.abort(restartAbort(true));
 
-    expect(readAttemptTerminal(await run)).toMatchObject({
-      aborted: true,
-      externalAbort: true,
-      promptError: null,
-    });
+    const terminal = readAttemptTerminal(await run);
     expect(cancellationRequests(harness)).toEqual([]);
+    expect(terminal).toMatchObject({ aborted: true, promptError: null });
   });
 
   it.each([
-    ["an app-server the Gateway started", undefined, true, restartAbort],
-    ["a remote turn stopped by the user", remoteAppServer, true, () => new Error("Stopped")],
-    ["a remote turn reset while the Gateway runs", remoteAppServer, false, restartAbort],
-  ])("interrupts %s", async (_name, options, draining, reason) => {
+    ["an app-server the Gateway started", undefined, () => restartAbort(true)],
+    ["a remote turn stopped by the user", remoteAppServer, () => new Error("Stopped")],
+    // A session reset, or a shutdown of a session the next Gateway will not resume.
+    ["a remote turn with a plain restart abort", remoteAppServer, () => restartAbort()],
+  ])("interrupts %s", async (_name, options, reason) => {
     const { harness, run, controller } = await startTurn(options);
-    gateway.draining = draining;
     controller.abort(reason());
 
     expect(readAttemptTerminal(await run).aborted).toBe(true);
@@ -172,8 +154,7 @@ describe("runCodexAppServerAttempt Gateway shutdown", () => {
       params: createDynamicToolCall("wait_here", {}, "call-1"),
     });
     await started.promise;
-    gateway.draining = true;
-    controller.abort(restartAbort());
+    controller.abort(restartAbort(true));
 
     await call;
     expect(readAttemptTerminal(await run).aborted).toBe(true);
