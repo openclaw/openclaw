@@ -373,7 +373,7 @@ export function createRestoredCompletionIndex(isReady: () => boolean) {
     if (page.newestContiguousEventCount !== page.totalMessages) {
       return undefined;
     }
-    // A legacy row may have trimmed the wire ID. Only its initiating user input owns the run.
+    // Only the initiating user input identifies the exact wire ID of a normalized row.
     let inputKey: string | undefined;
     for (const { event } of page.events) {
       const message = asOptionalRecord(asOptionalRecord(event)?.message);

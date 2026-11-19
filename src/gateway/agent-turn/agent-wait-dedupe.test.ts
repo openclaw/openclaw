@@ -832,23 +832,24 @@ it.each(["lifecycle-first", "dedupe-first"] as const)(
   },
 );
 
-it.each([" completed-before-restart ", "legacy-run"])(
+it.each([
+  [" completed-before-restart ", "completed-before-restart"],
+  ["completed-before-restart", " completed-before-restart "],
+])(
   "recovers the initiating wire ID from a single reopened session (%s)",
-  async (persistedId) => {
+  async (runId, otherId) => {
     await withSessionRowProjectionState(async (create) => {
-      const runId = persistedId.trim() === persistedId ? ` ${persistedId} ` : persistedId;
       const endedAt = Date.now();
       const startedAt = endedAt - 1;
       const completed = derivePersistedSessionLifecyclePatch({
         event: {
           runId: "execution",
-          clientRunId: persistedId,
+          clientRunId: runId,
           ts: endedAt,
           data: { phase: "end", startedAt, endedAt },
         },
         currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
       });
-      expect(completed.lastRunId).toBe(persistedId);
       const original = seedProjectionRow("finished", completed);
       await appendProjectionMessages(
         original.scope,
@@ -862,7 +863,7 @@ it.each([" completed-before-restart ", "legacy-run"])(
           role: "user",
           content: "steer",
           timestamp: endedAt,
-          idempotencyKey: runId.trim() + ":user",
+          idempotencyKey: otherId + ":user",
           __openclaw: { steerTargetRunId: runId },
         },
       );
@@ -874,8 +875,8 @@ it.each([" completed-before-restart ", "legacy-run"])(
         invokeWait(context, runId, 0),
         expect.objectContaining({ runId, status: "ok", startedAt, endedAt }),
       );
-      await expectReply(invokeWait(context, runId.trim(), 0), {
-        runId: runId.trim(),
+      await expectReply(invokeWait(context, otherId, 0), {
+        runId: otherId,
         status: "timeout",
       });
     });

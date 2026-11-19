@@ -23,7 +23,7 @@ export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): 
   };
 }
 
-/** Older session writers trimmed the client run ID; newer writers preserve the exact bytes. */
+/** The row narrows candidates; the initiating transcript key confirms the exact wire ID. */
 export function matchesPersistedClientRunId(stored: string, wire: string): boolean {
   return stored === wire || stored === wire.trim();
 }
