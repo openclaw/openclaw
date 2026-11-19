@@ -6,11 +6,17 @@ import {
   UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV,
   UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE,
 } from "../../commands/doctor/shared/update-phase.js";
-import { resolveStateDir } from "../../config/paths.js";
+import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { GitReleaseTrial } from "../../infra/git-release-launcher.js";
+import { GIT_RELEASE_TRIAL } from "../../infra/git-release-paths.js";
 import { resolveUserPath } from "../../infra/home-dir.js";
-import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
+import {
+  PACKAGE_RELEASES_DIR,
+  readPackageReleaseSlotSync,
+} from "../../infra/package-release-slot-path.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -248,8 +254,6 @@ export async function reinspectInconclusiveGitReleaseState(
     // Under --no-restart the link stays on the previous release until the next start.
     !params.shouldRestart ||
     params.rollbackBlockedReason !== "rollback-state-unverified" ||
-    params.databaseBackup ||
-    params.packageTransaction ||
     params.preManagedServiceStop?.stopped ||
     result.status !== "error" ||
     result.reason !== "rollback-state-unverified" ||
@@ -278,18 +282,28 @@ export async function reinspectInconclusiveGitReleaseState(
       steps,
     };
     const recordedSteps = steps.length;
+    const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env ?? process.env;
     const blocked = await inspectActivatedUpdateState({
       ...params,
       result: retried,
       candidateOpenedState: false,
       config: params.configSnapshot.config,
-      env: params.ownedManagedUpdateEnv ?? params.opts.run?.env ?? process.env,
+      env,
       timeoutMs: params.updateStepTimeoutMs,
     });
     // Reversing a recorded hold needs a complete reread that matches the baseline;
     // an inconclusive reread only appends its warning.
     if (blocked || retried.status !== "ok" || retried.steps.length !== recordedSteps) {
       return params;
+    }
+    // The restart below may fail its trial; the launcher must then return to a
+    // build that boots on the state the serving Gateway uses now.
+    const backout = await secureGitReleaseTrialBackout(params, result.root, env);
+    if (backout.kind === "unverified") {
+      return params;
+    }
+    if (backout.kind === "no-fallback") {
+      return backout.params;
     }
     retried.steps.splice(
       failedIndex,
@@ -298,12 +312,134 @@ export async function reinspectInconclusiveGitReleaseState(
         failed.cwd,
         `The installed updater's copy of the live stores did not stabilize while the previous Gateway kept writing (${oneLine(failed.stderrTail)}). The new release reread them directly: no schema moved and no data was changed. The update continues.`,
       ),
+      ...(backout.step ? [backout.step] : []),
     );
     return { ...params, result: retried, rollbackBlockedReason: undefined };
   } catch {
     // The recheck is best effort; the recorded outcome still stands.
     return params;
   }
+}
+
+type GitReleaseTrialBackout =
+  | { kind: "continue"; step?: UpdateStepResult }
+  | { kind: "unverified" }
+  | { kind: "no-fallback"; params: FinishUpdateParams };
+
+/**
+ * Before a recovered run restarts into its release, make the trial's fallback a release of
+ * the build the Gateway reports serving now. A shipped updater recorded the link's previous
+ * target, which after an earlier failed run is a build that never served. Without such a
+ * release nothing restarts: the half-switched link is undone and the run fails retryably.
+ */
+async function secureGitReleaseTrialBackout(
+  params: FinishUpdateParams,
+  slotRoot: string,
+  env: NodeJS.ProcessEnv,
+): Promise<GitReleaseTrialBackout> {
+  const slot = readPackageReleaseSlotSync(slotRoot);
+  if (!slot) {
+    return { kind: "unverified" };
+  }
+  const trialFile = path.join(slot.prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL);
+  const raw = await fs.readFile(trialFile, "utf8").catch(ignoreMissingPath);
+  // SAFETY: publishGitRelease and the launcher are the only writers of the trial record.
+  const trial = raw ? (JSON.parse(raw) as GitReleaseTrial) : undefined;
+  if (!trial || trial.pending || trial.target !== slot.target) {
+    return { kind: "unverified" };
+  }
+  const [{ confirmGatewayReachable, resolveGatewayRestartProbeContext }, backout] =
+    await Promise.all([
+      import("../daemon-cli/restart-health-probe.js"),
+      import("../../infra/git-release-backout.js"),
+    ]);
+  const context = await resolveGatewayRestartProbeContext(env);
+  const port = params.preManagedServiceStop?.servicePort ?? resolveGatewayPort(context.config, env);
+  const gateway = await confirmGatewayReachable({ port, ...context, env });
+  if (!gateway.reachable || !gateway.gatewayBuildId) {
+    return { kind: "unverified" };
+  }
+  const verdict = params.preManagedServiceStop?.serviceUpdateVerdict;
+  const roots = [
+    ...new Set([
+      ...(verdict && "root" in verdict ? [verdict.root] : []),
+      params.root,
+      ...(await backout.listGitReleaseRoots(slot.prefix)),
+    ]),
+  ];
+  const serving = await backout.locateServingGitBuild(gateway.gatewayBuildId, roots);
+  if (!serving) {
+    return { kind: "unverified" };
+  }
+  const decision = await backout.selectGitReleaseBackout({
+    prefix: slot.prefix,
+    previous: trial.previous,
+    serving,
+  });
+  const servingName = `${serving.version} (${serving.commit.slice(0, 12)})`;
+  if (decision.kind === "keep") {
+    return { kind: "continue" };
+  }
+  if (decision.kind === "replace") {
+    const temporary = `${trialFile}.${process.pid}`;
+    await fs.writeFile(temporary, JSON.stringify({ ...trial, previous: decision.previous }));
+    await fs.rename(temporary, trialFile);
+    return {
+      kind: "continue",
+      step: {
+        name: "git-release-trial-fallback",
+        command: "openclaw update",
+        cwd: slot.prefix,
+        durationMs: 0,
+        exitCode: 0,
+        advisory: {
+          kind: "recoverable-maintenance",
+          message: `The new release's trial would have fallen back to ${trial.previous}, a build that is not the one serving. It now falls back to ${decision.previous}, a release of the serving Gateway's build ${servingName}.`,
+        },
+      },
+    };
+  }
+  // Undo the half switch: the link names the serving release, or no release when the
+  // service still runs the checkout, so the next update starts from what serves.
+  await fs.rm(trialFile, { force: true });
+  if (serving.root.startsWith(path.join(slot.prefix, PACKAGE_RELEASES_DIR) + path.sep)) {
+    const temporary = `${slot.slot}.${process.pid}`;
+    await fs.symlink(path.relative(path.dirname(slot.slot), serving.root), temporary);
+    await fs.rename(temporary, slot.slot);
+  } else {
+    await fs.unlink(slot.slot);
+  }
+  const { result } = params;
+  const detail = `No installed release matches the build the Gateway serves, ${servingName}, so a failed start of the new release would have nothing safe to return to. The update did not restart: the Gateway keeps serving ${serving.version} and no data was changed. The release link was reset to what serves, so the next \`openclaw update\` starts clean.`;
+  return {
+    kind: "no-fallback",
+    params: {
+      ...params,
+      rollbackBlockedReason: undefined,
+      result: {
+        ...result,
+        status: "error",
+        reason: "git-release-fallback-unavailable",
+        root: serving.root,
+        recovery: {
+          serviceRestartSafe: true,
+          version: serving.version,
+          buildId: gateway.gatewayBuildId,
+        },
+        steps: [
+          ...result.steps.filter((step) => step.name !== "state-schema-verification"),
+          {
+            name: "git-release-trial-fallback",
+            command: "openclaw update",
+            cwd: slot.prefix,
+            durationMs: 0,
+            exitCode: 1,
+            stderrTail: detail,
+          },
+        ],
+      },
+    },
+  };
 }
 
 /** After migration, only candidate code may reopen state or finish the run. */
