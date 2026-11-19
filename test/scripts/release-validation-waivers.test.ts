@@ -1062,3 +1062,42 @@ it("binds the repaired 2026.11.6 trajectory exception to its exact candidate and
     }).waivers,
   ).toEqual([]);
 });
+
+it("accepts only the authorized Node23 cleanup failure on its exact candidate", async () => {
+  const leaf = {
+    id: 23,
+    name: "checks-node-compact-large-23 (node)",
+    status: "completed",
+    conclusion: "failure",
+    steps: [{ name: "Run Node test shard", conclusion: "failure" }],
+  };
+  const input = {
+    targetVersion: "2026.11.6",
+    targetSha: "06afb10d3272cc9deaf38ca6a3b7b839d5935638",
+    child: { ...child, jobs: [leaf] },
+  };
+  const policy = evaluateReleaseChildPolicy(input);
+  const log = frv11Log({
+    jobName: leaf.name,
+    file: "src/gateway/worker-environments/live-events-settlement.test.ts",
+    title: "worker live event settlement joins writes before RPC acknowledgment (revoked)",
+    assertion:
+      "Error: ENOTEMPTY: directory not empty, rmdir '/tmp/oc-vt-qFaVWf/oc-vt-0XBHte/openclaw-worker-service-2laeTn'",
+  });
+  const verify = (text: string) =>
+    validateReleaseWaiverAggregates({
+      policy,
+      jobs: [
+        leaf,
+        { id: 24, name: "openclaw/ci-gate", status: "completed", conclusion: "success" },
+      ],
+      getJobLog: () => text,
+    });
+  await expect(verify(log)).resolves.toBeUndefined();
+  await expect(verify(log.replace("ENOTEMPTY", "EACCES"))).rejects.toThrow("unwaived");
+  await expect(
+    verify(log + " FAIL other.test.ts > unexpected\nError: unexpected\n"),
+  ).rejects.toThrow("unwaived");
+  await expect(verify(log.slice(0, log.indexOf("[shard:completion]")))).rejects.toThrow("unwaived");
+  expect(evaluateReleaseChildPolicy({ ...input, targetSha: "0".repeat(40) }).waivers).toEqual([]);
+});
