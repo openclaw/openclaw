@@ -41,6 +41,7 @@ import { recordDoctorMigrationBackups } from "./doctor-migration-backup-artifact
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
+import { collectRecoveryDiskUsage } from "./recovery-disk-usage.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -383,13 +384,20 @@ it.each([
       { outcome: "failed", pending: false, copies: [c, d] },
     ] as RunSpec[],
   })),
+  // The agent's live database is gone; even a verified update releases none of its copies.
+  ...(["displaced:intact", "doctor:intact"] as const).map((copy) => ({
+    name: `live database missing (${copy})`,
+    runs: [{ outcome: "verified", pending: false, copies: ["none", copy] }] as RunSpec[],
+    liveMissing: true,
+  })),
   ...Array.from({ length: 20 }, (_, index) => ({
     name: `seed ${index + 1}`,
     runs: scenario(index + 1),
+    liveMissing: index % 4 === 3,
   })),
 ])(
   "keeps an intact backup of every database no verified update superseded ($name)",
-  async ({ runs }) => {
+  async ({ runs, liveMissing }: { runs: RunSpec[]; liveMissing?: boolean }) => {
     await withState(async (state) => {
       const now = Date.now();
       const databases = [resolveOpenClawStateSqlitePath(state.env), agentPath(state)];
@@ -423,6 +431,12 @@ it.each([
           );
         }
       }
+      if (liveMissing) {
+        await closeOpenClawAgentDatabasesAsync(state.stateDir);
+        for (const suffix of ["", "-wal", "-shm"]) {
+          fs.rmSync(`${databases[1]}${suffix}`, { force: true });
+        }
+      }
       for (const { file, copy } of made) {
         if (copy.endsWith(":changed")) {
           fs.appendFileSync(file, Buffer.alloc(4096));
@@ -431,7 +445,7 @@ it.each([
         }
       }
       // Invariant: a database with an intact backup and no verified update from that run on
-      // keeps at least one intact backup.
+      // keeps at least one intact backup; one whose live database is missing keeps them all.
       const verifiedFrom = (run: number) =>
         runs.some((spec, later) => later >= run && spec.outcome === "verified");
       const intact = (database: number) =>
@@ -450,6 +464,9 @@ it.each([
           intact(database).some((b) => fs.existsSync(b.file)),
           `database ${database} lost its last intact backup: ${JSON.stringify(runs)}`,
         ).toBe(true);
+      }
+      if (liveMissing) {
+        expect(intact(1).filter((b) => !fs.existsSync(b.file))).toEqual([]);
       }
     });
   },
@@ -547,5 +564,26 @@ it("keeps an older backup when the newer one no longer matches its recorded cont
     }
     await cleanUpWith(state);
     expect(fs.existsSync(older)).toBe(true);
+  });
+});
+
+it("leaves content-dependent eligibility unverified in the bounded status scan", async () => {
+  await withState(async (state) => {
+    const now = Date.now();
+    for (const at of [now, now + 60_000]) {
+      const runId = startRun(state, at);
+      await doctorBackup(state, agentPath(state), runId);
+      finishUpdateRun(runId, { status: "failed" }, { env: state.env });
+    }
+    await closeOpenClawAgentDatabasesAsync(state.stateDir);
+    await closeOpenClawStateDatabaseAsync();
+    // Releasing the older backup would need the newer one's content hashed; status never does.
+    // A frozen clock keeps the scan inside its time budget so only that rule decides.
+    using clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    const usage = await collectRecoveryDiskUsage({ cfg: {}, env: state.env });
+    clock.mockRestore();
+    expect(usage.incomplete).toBe(false);
+    expect(usage.byKind.migrationOriginals.retirable.count).toBe(0);
+    expect(usage.byKind.migrationOriginals.protected.count).toBe(2);
   });
 });

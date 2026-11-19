@@ -215,7 +215,12 @@ export function collectRecoveryInventory(params: {
             (key) => String(current[key]) === String(identity[key]),
           );
         // Releasing an older backup re-proves this one's recorded content first.
+        // Bounded status and read-only Doctor scans never hash a backup; eligibility that
+        // depends on content stays unverified there and is decided when cleanup runs.
         const verify = () => {
+          if (params.scan) {
+            return false;
+          }
           try {
             return sameMigrationArtifact(readMigrationArtifactIdentity(archivePath), identity!);
           } catch {

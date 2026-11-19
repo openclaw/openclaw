@@ -279,10 +279,6 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
   for (const finding of step.doctorLintFindings ?? []) {
     defaultRuntime.log(`    ${formatUpdateDoctorLintFinding(finding)}`);
   }
-  // Cleanup states what it removed and kept even when nothing needs attention.
-  if (step.name === AUTOMATIC_RECOVERY_CLEANUP_STEP && step.diagnostics?.[0]) {
-    defaultRuntime.log(`    ${theme.muted(step.diagnostics[0])}`);
-  }
   if (step.advisory === undefined && !isFailedUpdateStep(step)) {
     return;
   }
@@ -405,6 +401,12 @@ export async function prepareResult(
     }
     for (const line of outputReport.lines) {
       defaultRuntime.log(line);
+    }
+    // Cleanup states what it removed and kept even when nothing needs attention.
+    for (const step of additionalSteps) {
+      if (step.name === AUTOMATIC_RECOVERY_CLEANUP_STEP && step.diagnostics?.[0]) {
+        defaultRuntime.log(step.diagnostics[0]);
+      }
     }
   };
 }

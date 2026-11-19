@@ -1,6 +1,6 @@
+import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 /** What automatic update cleanup removed and kept, in the update result's own words. */
 import { formatDiskSpaceBytes } from "../infra/disk-space.js";
-import { shellEscape } from "../shared/shell-quote.js";
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 import { NOT_PROVABLY_UPDATER_OWNED_REASONS } from "./update-run-artifact-ownership.js";
 
@@ -71,7 +71,7 @@ export function describeAutomaticCleanup(artifacts: readonly RecoveryCleanupArti
       (item) =>
         `Kept: not provably ours: ${item.path} (${sizeOf(item.bytes)}). Ask your agent with openclaw triage${
           item.reason === "unmanifested-recovery-original"
-            ? `, or remove it yourself with openclaw update cleanup --include-unmanifested ${shellEscape(item.path)}`
+            ? `, or remove it yourself with openclaw update cleanup --include-unmanifested ${(process.platform === "win32" ? quotePowerShellArg : quoteCliArg)(item.path)}`
             : ""
         }.`,
     ),

@@ -801,6 +801,12 @@ it("keeps the triggering update's capture when the wall clock moves backward", a
   const result = await complete(runId, now);
   expect(fs.existsSync(current)).toBe(true);
   expect(result.steps.at(-1)?.advisory?.message).toContain("triggering update");
+  // A warning-only attempt records no stale summary beside its warning.
+  expect(
+    getUpdateRun(runId, { env })?.steps.find(
+      (step) => step.step === "diagnostic:recovery-artifact-cleanup",
+    )?.detail,
+  ).toBe("Update backup cleanup did not finish on its latest attempt; see its warning.");
 });
 
 it.each([true, false])(
@@ -914,15 +920,19 @@ it("retires an already-current run's own capture when that run ends", async () =
   const { runId, directory } = capturedRun(now);
   using clock = vi.spyOn(Date, "now");
   clock.mockReturnValue(now + 1_000);
+  vi.mocked(defaultRuntime.log).mockClear();
   const emit = await prepareUpdateCommandTerminalResult(
-    { opts: { json: true, run: { runId, env } } },
+    { opts: { json: false, run: { runId, env } } },
     { status: "skipped", mode: "git", reason: "already-current", steps: [], durationMs: 1 },
     { rolledBack: false },
   );
   const result = await emit();
   expect(getUpdateRun(runId, { env })?.status).toBe("skipped");
   expect(fs.existsSync(directory)).toBe(false);
-  expect(result.steps.at(-1)?.diagnostics?.[0]).toContain("removed 1 item");
+  // The plain-text report says what the cleanup removed.
+  const summary = result.steps.at(-1)?.diagnostics?.[0];
+  expect(summary).toContain("removed 1 item");
+  expect(vi.mocked(defaultRuntime.log).mock.calls.flat()).toContain(summary);
 });
 
 it("retires a failed run's capture after a later verified update, and reruns cleanup once verification lands", async () => {

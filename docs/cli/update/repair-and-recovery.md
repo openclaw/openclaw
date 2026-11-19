@@ -1202,12 +1202,14 @@ A cleanup that ran before the update's health verification was recorded runs aga
 at the next cleanup point once verification lands.
 
 Without a later verified update, cleanup decides per database, not per run: an older
-backup of a database is deleted only when a newer run left an intact backup of that
-same database (present and unchanged since it was recorded), and only while no update
-recovery is pending and no update run is unfinished. A newer run whose backup of a
-database is damaged, missing, or only partly present (for example a moved-aside WAL
-without its main file) stands in for nothing, so every database with an intact backup
-and no verified update after it keeps at least one intact backup.
+backup of a database is deleted only when a newer run left a Doctor backup of that same
+database whose recorded content still verifies, and only while no update recovery is
+pending and no update run is unfinished. A newer run whose backup of a database is
+damaged or missing stands in for nothing, and moved-aside `.migrated-<runId>` files never
+stand in for an older backup (their receipt records no checksum). Backups taken by one
+Doctor run are kept or deleted together. So every database with an intact backup and no
+verified update after it keeps at least one intact backup. No backup is deleted while
+the live database it belongs to is missing.
 
 Cleanup never deletes:
 

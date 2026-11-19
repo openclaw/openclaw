@@ -235,6 +235,16 @@ export async function retireDisplacedDatabases(params: {
       ) {
         throw new Error("displaced database receipt changed after selection");
       }
+      // As for Doctor backups: never remove a copy while its live database is missing.
+      const live = fs.lstatSync(owned.receipt.databasePath, {
+        bigint: true,
+        throwIfNoEntry: false,
+      });
+      if (!live?.isFile() || live.nlink !== 1n) {
+        throw new Error(
+          `live database ${owned.receipt.databasePath} is missing or aliased; the copy is kept`,
+        );
+      }
       for (const file of owned.receipt.files) {
         params.assertCurrent();
         const stat = fs.lstatSync(file.path, { bigint: true, throwIfNoEntry: false });

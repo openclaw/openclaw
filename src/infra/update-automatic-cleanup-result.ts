@@ -68,6 +68,14 @@ export async function recordAutomaticRecoveryCleanup(
       (step) =>
         step.step === warningStep || step.step === `diagnostic:${AUTOMATIC_RECOVERY_CLEANUP_STEP}`,
     );
+    if (!details.some((step) => step.step === `diagnostic:${AUTOMATIC_RECOVERY_CLEANUP_STEP}`)) {
+      // A warning-only attempt replaces the earlier summary instead of pairing with it.
+      details.push({
+        step: `diagnostic:${AUTOMATIC_RECOVERY_CLEANUP_STEP}`,
+        status: "completed",
+        detail: "Update backup cleanup did not finish on its latest attempt; see its warning.",
+      });
+    }
     if (result.warnings?.length === 0 && !result.advisory) {
       // A settled rerun clears the earlier warning instead of leaving it to count.
       details.push({ step: warningStep, status: "skipped", detail: undefined });
