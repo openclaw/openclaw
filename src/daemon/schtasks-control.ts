@@ -77,6 +77,8 @@ export type PreLaunchTaskPids = { pids: ReadonlySet<number>; complete: boolean }
 export async function readPreLaunchTaskPids(
   env: GatewayServiceEnv,
   scriptPath: string,
+  // A mere script-path mention (an open editor) is preservation evidence, never termination authority.
+  options?: { executionOnly?: boolean },
 ): Promise<PreLaunchTaskPids> {
   const pids = new Set<number>();
   try {
@@ -105,7 +107,7 @@ export async function readPreLaunchTaskPids(
     }
     const entries = snapshot ?? [];
     const scriptPathNeedle = normalizeLowercaseStringOrEmpty(scriptPath.replaceAll("/", "\\"));
-    for (const entry of entries) {
+    for (const entry of options?.executionOnly ? [] : entries) {
       const pid = entry.ProcessId;
       if (
         typeof pid === "number" &&

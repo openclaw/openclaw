@@ -166,7 +166,7 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
           // refuses instead of terminating a process that may predate the run.
           const preserved = preLaunch.complete ? preLaunch.pids : new Set<number>();
           const replacements = async () => {
-            const current = await readPreLaunchTaskPids(env, scriptPath);
+            const current = await readPreLaunchTaskPids(env, scriptPath, { executionOnly: true });
             return current.complete ? [...current.pids].filter((pid) => !preserved.has(pid)) : null;
           };
           for (const pid of preLaunch.complete ? ((await replacements()) ?? []) : []) {

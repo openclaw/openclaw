@@ -378,73 +378,74 @@ describe("Scheduled Task activation provenance", () => {
     },
   );
 
-  it.for(["no replacement", "surviving replacement", "incomplete inventory"] as const)(
-    "keeps a Gateway that predates a refused install (%s)",
-    async (mode, { env }) => {
-      const commandLine = "node gateway.js --port 18789";
-      const ran = () => schtasksCalls.some(([action]) => action === "/Run");
-      let replacementAlive = mode === "surviving replacement";
-      mockProcesses(
-        () =>
-          // CIM output that lacks PowerShell itself is an unreadable snapshot.
-          mode === "incomplete inventory" && !ran()
-            ? []
-            : [
-                processEntry(4242, commandLine),
-                ...(replacementAlive && ran() ? [processEntry(5353, commandLine)] : []),
-                POWERSHELL_PROCESS,
-              ],
-        () => {
-          replacementAlive = false;
-          return makeSpawnSyncResult();
-        },
-      );
-      verifiedGatewayPids.mockReturnValue([4242]);
-      // Task Scheduler omits Settings.Enabled=true on export and inserts Enabled=false in schema order.
-      schtasksRegistration.onCommand = (argv) => {
-        const registration = schtasksRegistration.response;
-        if (registration?.stdout && (argv[0] === "/Create" || argv.includes("/DISABLE"))) {
-          schtasksRegistration.response = {
-            ...registration,
-            stdout:
-              argv[0] === "/Create"
-                ? registration.stdout.replace(
-                    /(<Settings>[\s\S]*?)\s*<Enabled>true<\/Enabled>/u,
-                    "$1",
-                  )
-                : registration.stdout.replace(
-                    "</StopIfGoingOnBatteries>",
-                    "</StopIfGoingOnBatteries>\n    <Enabled>false</Enabled>",
-                  ),
-          };
-        }
-      };
-      inspectPortUsageMock.mockImplementation(async (port) => ({
-        port,
-        status: "busy",
-        listeners: [{ pid: 4242, command: "node.exe", commandLine }],
-        hints: [],
-      }));
-      fastForwardTaskStartWait();
-      addAcceptedRunNeverStartsResponses();
+  it.for([
+    "no replacement",
+    "surviving replacement",
+    "incomplete inventory",
+    "unrelated script viewer",
+  ] as const)("keeps a Gateway that predates a refused install (%s)", async (mode, { env }) => {
+    const commandLine = "node gateway.js --port 18789";
+    const ran = () => schtasksCalls.some(([action]) => action === "/Run");
+    let replacementAlive = mode === "surviving replacement";
+    mockProcesses(
+      () =>
+        // CIM output that lacks PowerShell itself is an unreadable snapshot.
+        mode === "incomplete inventory" && !ran()
+          ? []
+          : [
+              processEntry(4242, commandLine),
+              ...(replacementAlive && ran() ? [processEntry(5353, commandLine)] : []),
+              ...(mode === "unrelated script viewer" && ran()
+                ? [processEntry(6464, `notepad.exe "${resolveTaskScriptPath(env)}"`)]
+                : []),
+              POWERSHELL_PROCESS,
+            ],
+      () => {
+        replacementAlive = false;
+        return makeSpawnSyncResult();
+      },
+    );
+    verifiedGatewayPids.mockReturnValue([4242]);
+    // Task Scheduler omits Settings.Enabled=true on export and inserts Enabled=false in schema order.
+    schtasksRegistration.onCommand = (argv) => {
+      const registration = schtasksRegistration.response;
+      if (registration?.stdout && (argv[0] === "/Create" || argv.includes("/DISABLE"))) {
+        schtasksRegistration.response = {
+          ...registration,
+          stdout:
+            argv[0] === "/Create"
+              ? registration.stdout.replace(
+                  /(<Settings>[\s\S]*?)\s*<Enabled>true<\/Enabled>/u,
+                  "$1",
+                )
+              : registration.stdout.replace(
+                  "</StopIfGoingOnBatteries>",
+                  "</StopIfGoingOnBatteries>\n    <Enabled>false</Enabled>",
+                ),
+        };
+      }
+    };
+    inspectPortUsageMock.mockImplementation(async (port) => ({
+      port,
+      status: "busy",
+      listeners: [{ pid: 4242, command: "node.exe", commandLine }],
+      hints: [],
+    }));
+    fastForwardTaskStartWait();
+    addAcceptedRunNeverStartsResponses();
 
-      const install = installGateway(env);
+    const install = installGateway(env);
 
-      await expect(install).rejects.toThrow("refusing a direct fallback");
-      const taskkills = spawnSync.mock.calls.filter(([command]) =>
-        command.endsWith("taskkill.exe"),
-      );
-      expect(taskkills.map(([, args]) => args?.at(-1))).toEqual(
-        mode === "surviving replacement" ? ["5353"] : [],
-      );
-      // Without a complete baseline, recovery refuses and leaves the disabled task for inspection.
-      const refused = mode === "incomplete inventory";
-      await expect(install).rejects.toSatisfy(
-        (error) => error instanceof AggregateError === refused,
-      );
-      expect(schtasksCalls.some(([action]) => action === "/Delete")).toBe(!refused);
-    },
-  );
+    await expect(install).rejects.toThrow("refusing a direct fallback");
+    const taskkills = spawnSync.mock.calls.filter(([command]) => command.endsWith("taskkill.exe"));
+    expect(taskkills.map(([, args]) => args?.at(-1))).toEqual(
+      mode === "surviving replacement" ? ["5353"] : [],
+    );
+    // Without a complete baseline, recovery refuses and leaves the disabled task for inspection.
+    const refused = mode === "incomplete inventory";
+    await expect(install).rejects.toSatisfy((error) => error instanceof AggregateError === refused);
+    expect(schtasksCalls.some(([action]) => action === "/Delete")).toBe(!refused);
+  });
 
   it.for(["running", "supervised", "stopped"] as const)(
     "migrates a %s Startup fallback to the Scheduled Task",
