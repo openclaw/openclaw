@@ -369,8 +369,8 @@ extension GatewayProcessManager {
                 return
             case .unknown:
                 // An unreadable port may still be held; attach before starting a child.
-                // A re-inspection that confirms the port is free settles the uncertainty,
-                // so only an inconclusive attachment stops this start.
+                // Attachment re-inspects the port, so only a start that finds it free
+                // continues. A port that is still unreadable must never get a child.
                 guard await self.attachExistingGatewayIfAvailable(
                     port: port,
                     startGeneration: startGeneration)

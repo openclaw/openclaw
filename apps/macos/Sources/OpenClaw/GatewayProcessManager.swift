@@ -848,9 +848,11 @@ final class GatewayProcessManager {
             guard self.isCurrentGatewayReadiness(context) else { return true }
             // A responsive Gateway rejects attachment for reasons a retry cannot fix
             // (token mismatch, protocol mismatch) and names them. Publish that reason
-            // instead of flattening it into the inconclusive-port message.
-            let published = await self.publishGatewayReadinessTerminal(terminal, context: context)
-            return published || !self.isCurrentGatewayStart(startGeneration)
+            // instead of flattening it into the inconclusive-port message. A health probe
+            // that never answers lands here too, from the same unreadable port, and the
+            // specific diagnostic must not be retracted by a competing child start.
+            _ = await self.publishGatewayReadinessTerminal(terminal, context: context)
+            return true
         }
         if case .unknown = inspection, case .failed = terminal {
             guard self.isCurrentGatewayReadiness(context) else { return true }
