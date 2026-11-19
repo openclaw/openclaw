@@ -16,6 +16,9 @@ export class ChainStepError extends Error {
   }
 }
 
+/** Doctor was stopped before it finished; the record stays and the next start reruns it. */
+export class StateUpgradeInterruptedError extends Error {}
+
 function openReadOnly(pathname: string): DatabaseSync {
   return openNodeSqliteDatabase(pathname, { readOnly: true });
 }

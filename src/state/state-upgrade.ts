@@ -1,14 +1,17 @@
-// Copy-and-swap state upgrade. Gateway startup is the only owner.
+// In-place state upgrade. Gateway startup is the only owner and holds exclusive custody.
 //
-// When a shared or agent database is older than this build, the migration-owned state
-// inputs are copied into a private shadow. The shipped migration chain (this
-// build's Doctor) runs on the shadow only. The result is validated, written to a
-// durable plan, and renamed into place; every replaced or retired live file stays
-// as `<name>.pre-<generation>`. The live files are never written before the plan is
-// durable. If the chain fails, the generic name-matched rebuild produces the
-// databases instead and the previous generation is pinned. Data never blocks the
-// upgrade; only machine failures (disk full, I/O, crash) stop it, and a crash
-// before the plan leaves the live tree untouched.
+// When a shared or agent database is older than this build, each outdated database
+// first gets one pre-migration image, `<name>.pre-<generation>`: a copy-on-write clone
+// where the filesystem supports it, a byte copy only when that still leaves the
+// migration its room, otherwise none (recorded; the previous release then cannot be
+// restored, and a failed start is fixed forward). The config gets one too. The
+// shipped migration chain (this build's Doctor) then runs on the live state. Every
+// schema step commits in one SQLite transaction with its version bump, so an
+// interrupted or failed run leaves each database at its old or new version and the
+// next start resumes. Nothing else is copied. If the chain fails validation, the
+// generic name-matched rebuild produces the outdated databases from their images
+// (or from the databases as left) through a durable plan, and the generation is
+// pinned. Snapshot space never stops the upgrade; only the migration itself can.
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -46,19 +49,18 @@ import {
 import {
   applyPlan,
   companionRemovals,
-  changedShadowFiles,
-  copyTree,
-  copySqliteFamily,
-  countSqlitePrefix,
-  diffTree,
   fsyncPath,
+  isMachineFailure,
   isSqliteFile,
-  listTreeFiles,
   normalizeSqliteText,
   pruneGenerations,
   readPlan,
-  rewriteFilePrefix,
-  rewriteSqlitePrefix,
+  INVENTORY_FILE,
+  readInventory,
+  type Inventory,
+  checkpointShadowDatabases,
+  foldLiveWal,
+  takeStateUpgradePreImage,
   withRecoveredSource,
   writePlan,
   type UpgradeOp,
@@ -66,6 +68,7 @@ import {
 } from "./state-upgrade-tree.js";
 import {
   ChainStepError,
+  StateUpgradeInterruptedError,
   conservationMismatches,
   validateShadow,
 } from "./state-upgrade-validate.js";
@@ -78,13 +81,17 @@ const UPGRADE_PIN_SCOPE = "upgrade.pin";
 // exactly what its build replaced. A build without a build ID names them by version, as
 // every build did before; those files stay readable and prunable by the same rules.
 const generation = () => resolveRuntimeServiceBuildId() ?? VERSION;
+const suffixOf = () => `.pre-${generation()}`;
 // An applied plan is kept as `.upgraded-<generation>.json` until a later upgrade: a failed
-// Git release trial reads it to remove the files that upgrade added (no `.pre-*` to restore).
+// Git release trial reads it to know that upgrade finished.
 
 function retainAppliedPlan(stateDir: string, plan: UpgradePlan): void {
   const file = path.join(stateDir, `${APPLIED_PREFIX}${plan.appVersion}.json`);
   fs.writeFileSync(`${file}.tmp`, JSON.stringify(plan), { mode: 0o600 });
+  fsyncPath(`${file}.tmp`);
   fs.renameSync(`${file}.tmp`, file);
+  // Durable before the work record it outlives is removed.
+  fsyncPath(stateDir, true);
 }
 
 type DatabaseTarget = { kind: "state" | "agent"; agentId?: string; path: string; version: number };
@@ -238,25 +245,6 @@ function buildFallback(
   return { reports, foldInFailures };
 }
 
-function checkpointShadowDatabases(files: readonly string[]): void {
-  for (const file of files) {
-    if (!isSqliteFile(file)) {
-      continue;
-    }
-    const db = openNodeSqliteDatabase(file);
-    try {
-      // A rollback-journal file needs no WAL or SHM companion, so read-only openers
-      // can admit it before the first writer switches it back to WAL.
-      db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode = DELETE;");
-    } finally {
-      db.close();
-    }
-    for (const suffix of ["-wal", "-shm", "-journal", ".seal"]) {
-      fs.rmSync(`${file}${suffix}`, { force: true });
-    }
-  }
-}
-
 function recordDiagnostics(
   shadowStatePath: string,
   report: Record<string, unknown>,
@@ -341,8 +329,8 @@ function finish(
 }
 
 /**
- * Bring every database in the state directory to this build's schema by copy
- * and swap. The caller holds exclusive state ownership.
+ * Bring every database in the state directory to this build's schema in place.
+ * The caller holds exclusive state ownership.
  */
 export async function upgradeStateDirectory(params: {
   env: NodeJS.ProcessEnv;
@@ -351,10 +339,21 @@ export async function upgradeStateDirectory(params: {
   /** Release this process's handles on the live files before they are renamed. */
   beforeSwap?: () => Promise<void>;
   /**
-   * Whether this build would start on the upgraded config. A refusal leaves the live
-   * tree untouched, so the start's own refusal keeps the previous package's state.
+   * The start's exclusive custody: `run` writes the live state under it; `handOff`
+   * lends it to the in-place chain, which takes its own, and takes it back after.
    */
-  admitConfig?: (shadow: { configPath: string; stateDir: string }) => Promise<string | undefined>;
+  custody?: {
+    run: <T>(operation: () => Promise<T>) => Promise<T>;
+    handOff: <T>(operation: () => Promise<T>) => Promise<T>;
+  };
+  /**
+   * Whether this build would start on the upgraded config. On a refusal the
+   * pre-images are restored when every outdated database has one, so the start's own
+   * refusal keeps the previous package's state; otherwise the state stays migrated.
+   */
+  /** Ends a Git release trial before Doctor changes the state in place. */
+  endTrial?: (reason: string) => Promise<void>;
+  admitConfig?: (live: { configPath: string; stateDir: string }) => Promise<string | undefined>;
 }): Promise<StateUpgradeResult> {
   const env = params.env;
   const stateDir = path.resolve(resolveStateDir(env));
@@ -401,6 +400,11 @@ export async function upgradeStateDirectory(params: {
   const resumedGenerations = new Set<string>();
   // A durable plan from an interrupted swap is finished before anything else.
   let resumed = false;
+  let interruptedChain = false;
+  // An interrupted in-place run's record: kept until this run has written its own.
+  const interruptedDirs: string[] = [];
+  const priorOutdated = new Set<string>();
+  const priorImages = new Set<string>();
   for (const entry of fs.readdirSync(stateDir)) {
     if (!entry.startsWith(WORK_PREFIX)) {
       continue;
@@ -420,274 +424,332 @@ export async function upgradeStateDirectory(params: {
       }
       params.log.info(`Finished an interrupted state upgrade to ${plan.appVersion}.`);
       resumed = true;
+    } else {
+      // An interrupted in-place chain, of this build or another: its databases may already
+      // be current while the rest of its Doctor work (config, legacy files) is not.
+      const record = readInventory(dir);
+      if (record || entry.startsWith(`${WORK_PREFIX}${generation()}-`)) {
+        interruptedChain = true;
+        interruptedDirs.push(dir);
+        record?.outdated.forEach((file) => priorOutdated.add(file));
+        record?.images.forEach((file) => priorImages.add(file));
+        continue;
+      }
     }
     fs.rmSync(dir, { recursive: true, force: true });
   }
   const { targets, retainedAgentDirectories } = discoverDatabases(stateDir);
   excludedRoots.push(...retainedAgentDirectories);
-  const outdated = outdatedDatabases(targets);
+  let outdated = outdatedDatabases(targets);
+  // Finish an interrupted chain on every database it started on, current or not, imaged or
+  // not: the images stay the baseline, and a refusal or fallback covers all of them together.
+  if (interruptedChain) {
+    // A database newer than this build is left to the normal admission, which refuses it;
+    // it is never resumed here or rebuilt down to this build's schema.
+    const started = targets.filter(
+      (target) =>
+        target.version > 0 &&
+        target.version <= expectedVersion(target) &&
+        (priorOutdated.has(target.path) || fs.existsSync(`${target.path}${suffixOf()}`)),
+    );
+    outdated = [...outdated, ...started.filter((target) => !outdated.includes(target))];
+    if (outdated.length === 0) {
+      outdated = targets.filter(
+        (target) => target.version > 0 && target.version <= expectedVersion(target),
+      );
+    }
+  }
   if (outdated.length === 0) {
+    for (const dir of interruptedDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
     if (resumed) {
       finish(stateDir, undefined, resumedFiles, resumedGenerations);
     }
     return resumed ? { status: "resumed" } : { status: "current" };
   }
-  // A per-attempt name keeps a shadow Doctor orphaned by a crash out of the next attempt.
+  // Logs and fallback builds only; a per-attempt name keeps an orphan out of the next start.
   const workDir = path.join(stateDir, `${WORK_PREFIX}${generation()}-${process.pid}-${Date.now()}`);
-  const shadowRoot = path.join(workDir, "state");
-  const configInside = !path.relative(stateDir, configPath).startsWith("..");
-  const shadowConfig = configInside
-    ? path.join(shadowRoot, path.relative(stateDir, configPath))
-    : path.join(workDir, "config", path.basename(configPath));
-  const toShadow = (live: string) => path.join(shadowRoot, path.relative(stateDir, live));
   const runChain = params.runChain ?? createDoctorChain();
   const chainLog = path.join(workDir, "chain.log");
+  const suffix = `.pre-${generation()}`;
+  const liveState = path.join(stateDir, "state", "openclaw.sqlite");
+  const warnings: string[] = [];
+  const warn = (message: string) => {
+    warnings.push(message);
+    params.log.warn(message);
+  };
   let planWritten = false;
+  let migrationStarted = false;
+  const inCustody = params.custody?.run ?? (<T>(operation: () => Promise<T>) => operation());
+  // The chain's own output stays next to the other logs for diagnosis, whatever the outcome.
+  const keepChainLog = () => {
+    if (fs.existsSync(chainLog)) {
+      fs.mkdirSync(path.join(stateDir, "logs"), { recursive: true });
+      fs.copyFileSync(chainLog, path.join(stateDir, "logs", `state-upgrade-${VERSION}.log`));
+    }
+  };
+  const handOff = params.custody?.handOff ?? (<T>(operation: () => Promise<T>) => operation());
   try {
     fs.mkdirSync(workDir, { recursive: true, mode: 0o700 });
+    fsyncPath(stateDir, true);
     params.log.info(
-      `Upgrading state to ${VERSION}: ${outdated.map((t) => `${path.relative(stateDir, t.path)} v${t.version}`).join(", ")}`,
+      `Upgrading state to ${VERSION} in place: ${outdated.map((t) => `${path.relative(stateDir, t.path)} v${t.version}`).join(", ")}`,
     );
-    const baseline = new Map<string, string | undefined>();
-    const liveState = path.join(stateDir, "state", "openclaw.sqlite");
-    const requiredSqlite = new Set([...outdated.map((target) => target.path), liveState]);
-    const copyScope = await copyTree(stateDir, shadowRoot, skip, baseline, {
-      requiredSqlite,
-      log: params.log,
-      additionalCopyBytes: configInside
-        ? 0
-        : (fs.statSync(configPath, { throwIfNoEntry: false })?.size ?? 0),
-    });
-    if (!configInside && fs.existsSync(configPath)) {
-      fs.mkdirSync(path.dirname(shadowConfig), { recursive: true });
-      fs.copyFileSync(configPath, shadowConfig);
-    }
-    for (const target of outdated) {
-      const db = openNodeSqliteDatabase(toShadow(target.path));
+    // The one pre-migration image: of each outdated database, taken before it changes.
+    const images = new Map<string, string>();
+    let configImage: string | undefined;
+    const takeConfigImage = (): { path: string } | { skipped: string } => {
+      const partial = `${configPath}${suffix}.partial-${process.pid}`;
       try {
-        normalizeSqliteText(db);
-      } finally {
-        db.close();
+        // Private like the config; it replaces a leftover only by rename once complete.
+        fs.rmSync(partial, { force: true });
+        fs.writeFileSync(partial, fs.readFileSync(configPath), { mode: 0o600, flag: "wx" });
+        fsyncPath(partial);
+        fs.renameSync(partial, `${configPath}${suffix}`);
+        fsyncPath(path.dirname(configPath), true);
+        return { path: `${configPath}${suffix}` };
+      } catch (error) {
+        fs.rmSync(partial, { force: true });
+        if (!isMachineFailure(error)) {
+          throw error;
+        }
+        // SAFETY: node:fs throws Error instances; only the message is read.
+        return { skipped: (error as Error).message };
       }
-    }
-    // Absolute paths into the live tree must resolve to the shadow during the run.
-    if (fs.existsSync(shadowConfig)) {
-      rewriteFilePrefix(shadowConfig, stateDir, shadowRoot);
-    }
+    };
+    await inCustody(async () => {
+      // A database the interrupted run started on may have changed since: it keeps the
+      // image that run published (whichever build took it), or none. Any other same-named
+      // file is a leftover.
+      const resumedImage = (file: string) => {
+        const image = [...priorImages].find(
+          (entry) => entry.startsWith(`${file}.pre-`) && fs.existsSync(entry),
+        );
+        return image
+          ? { path: image, method: "kept" as const }
+          : { skipped: "the interrupted start had not imaged it before it could change" };
+      };
+      for (const target of outdated) {
+        const image = priorOutdated.has(target.path)
+          ? resumedImage(target.path)
+          : await takeStateUpgradePreImage(target.path, suffix);
+        if ("skipped" in image) {
+          warn(
+            `No pre-migration image of ${path.relative(stateDir, target.path)}: ${image.skipped}. It is migrated in place; once its migration commits, the previous release cannot open it, so a failed start stays on this release and is fixed forward.`,
+          );
+        } else {
+          images.set(target.path, image.path);
+          params.log.info(
+            `Kept ${path.relative(stateDir, target.path)} as ${path.basename(image.path)} (${image.method}).`,
+          );
+        }
+      }
+      // The config is small; its pre-image lets a failed trial restore it with the databases.
+      // A linked config is never rewritten (the config writer does not follow a final link).
+      if (fs.lstatSync(configPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        params.log.info("The config is a link; the upgrade does not write through it.");
+      } else if (fs.existsSync(configPath)) {
+        const taken = priorOutdated.size > 0 ? resumedImage(configPath) : takeConfigImage();
+        if ("skipped" in taken) {
+          warn(`No pre-migration image of the config: ${taken.skipped}.`);
+        } else {
+          configImage = taken.path;
+        }
+      }
+      // Doctor now changes state in place, also outside these images (legacy sources it
+      // moves, stores it writes, configured paths beyond this directory), and a run can stop
+      // before anything checks what it changed. No revert can be shown safe from here on, so
+      // the Git release trial ends before Doctor runs: no launcher, an older one included,
+      // can return to the previous release after this point.
+      await params.endTrial?.(
+        images.size < outdated.length
+          ? "a database migrates without a pre-migration image"
+          : "the state is migrated in place",
+      );
+      // Durable before the interrupted records it replaces are removed.
+      const inventory = path.join(workDir, INVENTORY_FILE);
+      fs.writeFileSync(
+        `${inventory}.tmp`,
+        JSON.stringify({
+          outdated: outdated.map((target) => target.path),
+          images: [...images.values(), ...(configImage ? [configImage] : [])],
+        } satisfies Inventory),
+        { mode: 0o600 },
+      );
+      fsyncPath(`${inventory}.tmp`);
+      fs.renameSync(`${inventory}.tmp`, inventory);
+      fsyncPath(workDir, true);
+      // This run's record holds the inventory now; the interrupted ones it replaces can go.
+      for (const dir of interruptedDirs) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+      migrationStarted = true;
+      for (const target of outdated) {
+        const db = openNodeSqliteDatabase(target.path);
+        try {
+          normalizeSqliteText(db);
+        } finally {
+          db.close();
+        }
+      }
+    });
     let mode: "chain" | "fallback" = "chain";
     let failedStep: string | undefined;
-    const warnings: string[] = [];
     const setAside: Array<{ report: SqliteSwapReport; rows: readonly SetAsideRow[] }> = [];
     let mismatches: string[] = [];
-    const fallbackAdds: UpgradeOp[] = [];
+    let ops: UpgradeOp[] = [];
     try {
-      const chain = await runChain({
-        stateDir: shadowRoot,
-        configPath: shadowConfig,
-        env,
-        logPath: chainLog,
-      });
+      // Each schema step commits in one SQLite transaction with its version bump, so
+      // an interrupted or failed run leaves every database at its old or new version.
+      const chain = await handOff(() => runChain({ stateDir, configPath, env, logPath: chainLog }));
       warnings.push(...chain.warnings);
-      validateShadow(outdated, toShadow, readVersion, expectedVersion);
-      mismatches = conservationMismatches(outdated, toShadow);
+      await inCustody(async () => {
+        validateShadow(outdated, (live) => live, readVersion, expectedVersion);
+        // Row conservation compares against the pre-image; a skipped image has no baseline.
+        const imaged = outdated.filter((target) => images.has(target.path));
+        mismatches = conservationMismatches(
+          imaged.map((target) => ({ ...target, path: images.get(target.path)! })),
+          (image) => imaged.find((target) => images.get(target.path) === image)!.path,
+        );
+      });
     } catch (error) {
-      if (!(error instanceof ChainStepError) && isMachineFailure(error)) {
+      if (
+        error instanceof StateUpgradeInterruptedError ||
+        error instanceof StateUpgradeCustodyLostError ||
+        (!(error instanceof ChainStepError) && isMachineFailure(error))
+      ) {
         throw error;
       }
       mode = "fallback";
       failedStep = error instanceof ChainStepError ? error.step : "chain";
       params.log.warn(
         // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
-        `State upgrade chain failed at ${failedStep}: ${(error as Error).message}. Rebuilding the databases with the generic copy; the previous files are kept and pinned.`,
+        `State upgrade chain failed at ${failedStep}: ${(error as Error).message}. Rebuilding the outdated databases with the generic copy; the previous files are kept and pinned.`,
       );
-      // The fallback swaps only the rebuilt databases plus what the chain finished
-      // outside them: the migrated config and new stores it moved data into (client
-      // credentials, services). Those stay in the shadow, in directories with the
-      // chain's modes; the rest of the shadow is never swapped.
-      for (const file of listTreeFiles(shadowRoot)) {
-        if (
-          isSqliteFile(file) &&
-          !fs.existsSync(path.join(stateDir, path.relative(shadowRoot, file)))
-        ) {
-          fallbackAdds.push({
-            kind: "add",
-            live: path.join(stateDir, path.relative(shadowRoot, file)),
-            next: file,
-          });
+      // The rebuild reads each outdated database as the chain left it (each at its old or
+      // new version, with whatever Doctor already imported), never its image: nothing
+      // Doctor committed is dropped, and the image stays the rollback baseline.
+      await inCustody(async () => {
+        // The swap preserves a live WAL beside the database's preserved name, where the
+        // standalone image already sits: fold it in first, or stop with nothing deleted.
+        for (const live of images.keys()) {
+          foldLiveWal(live);
         }
-      }
-      const fallback = buildFallback(outdated, toShadow, workDir);
-      // The upgrade report, set-aside rows and pin live in the shared database, so a
-      // current one is copied too and swapped with them.
-      if (
-        !outdated.some((t) => t.kind === "state") &&
-        baseline.has(toShadow(liveState)) &&
-        isSqliteFile(liveState)
-      ) {
-        for (const suffix of ["-wal", "-shm", "-journal"]) {
-          fs.rmSync(`${toShadow(liveState)}${suffix}`, { force: true });
+        const out = (live: string) => path.join(workDir, "fallback", path.relative(stateDir, live));
+        const fallback = buildFallback(outdated, out, workDir);
+        warnings.push(...fallback.foldInFailures);
+        for (const report of fallback.reports) {
+          setAside.push({ report, rows: report.setAside });
+          mismatches.push(...report.conservationMismatches.map((t) => `${report.label}:${t}`));
         }
-        await copySqliteFamily(liveState, toShadow(liveState), params.log);
-        fallbackAdds.push({ kind: "replace", live: liveState, next: toShadow(liveState) });
+        checkpointShadowDatabases(outdated.map((target) => out(target.path)));
+        ops = outdated.map((target) => ({
+          kind: "replace" as const,
+          live: target.path,
+          next: out(target.path),
+        }));
+      });
+    }
+    return await inCustody(async (): Promise<StateUpgradeResult> => {
+      const pinned = mode === "fallback" || mismatches.length > 0;
+      const setAsideCount = setAside.reduce((sum, entry) => sum + entry.rows.length, 0);
+      let refusal: string | undefined;
+      try {
+        refusal = await params.admitConfig?.({ configPath, stateDir });
+      } finally {
+        await closeOpenClawStateDatabaseByPathAsync(liveState);
       }
-      warnings.push(...fallback.foldInFailures);
-      for (const report of fallback.reports) {
-        setAside.push({ report, rows: report.setAside });
-        mismatches.push(...report.conservationMismatches.map((t) => `${report.label}:${t}`));
-      }
-    }
-    // Paths the run wrote into the shadow point at the live tree again. Only files the
-    // run wrote can hold them; the rest of the copy is never read again.
-    const written = changedShadowFiles(shadowRoot, baseline);
-    for (const file of written) {
-      if (isSqliteFile(file)) {
-        const db = openNodeSqliteDatabase(file);
-        try {
-          rewriteSqlitePrefix(db, shadowRoot, stateDir);
-          if (countSqlitePrefix(db, shadowRoot) > 0) {
-            warnings.push(`${path.relative(shadowRoot, file)} still names the private copy`);
-          }
-        } finally {
-          db.close();
-        }
-      } else {
-        rewriteFilePrefix(file, shadowRoot, stateDir);
-      }
-    }
-    if (fs.existsSync(shadowConfig) && !configInside) {
-      rewriteFilePrefix(shadowConfig, shadowRoot, stateDir);
-    }
-    const pinned = mode === "fallback" || mismatches.length > 0;
-    const setAsideCount = setAside.reduce((sum, entry) => sum + entry.rows.length, 0);
-    const warn = (message: string) => {
-      warnings.push(message);
-      params.log.warn(message);
-    };
-    checkpointShadowDatabases(changedShadowFiles(shadowRoot, baseline));
-    // Decide before recording diagnostics so uncopied-file warnings survive restart.
-    const ops: UpgradeOp[] =
-      mode === "chain"
-        ? diffTree(stateDir, shadowRoot, baseline, warn)
-        : [
-            ...outdated.map((t) => ({
-              kind: "replace" as const,
-              live: t.path,
-              next: toShadow(t.path),
-            })),
-            ...fallbackAdds,
-          ];
-    if (
-      mode === "chain" &&
-      baseline.has(toShadow(liveState)) &&
-      !ops.some((op) => op.live === liveState)
-    ) {
-      ops.push({ kind: "replace", live: liveState, next: toShadow(liveState) });
-    }
-    if (mode === "fallback" && configInside && fs.existsSync(shadowConfig)) {
-      const original = fs.existsSync(configPath) ? fs.readFileSync(configPath) : undefined;
-      if (!original?.equals(fs.readFileSync(shadowConfig))) {
-        ops.push({ kind: original ? "replace" : "add", live: configPath, next: shadowConfig });
-      }
-    }
-    // A config outside the state directory may be on another filesystem; its new
-    // bytes are staged beside it so the plan's rename stays on one filesystem.
-    let stagedConfig: string | undefined;
-    if (!configInside && fs.existsSync(shadowConfig)) {
-      const original = fs.existsSync(configPath) ? fs.readFileSync(configPath) : undefined;
-      if (!original?.equals(fs.readFileSync(shadowConfig))) {
-        stagedConfig = path.join(
-          path.dirname(configPath),
-          `.${path.basename(configPath)}.upgrade-${VERSION}`,
+      if (refusal !== undefined) {
+        // Doctor already changed the state in place, so it is not put back; the images stay
+        // for an operator's recovery and the start reports the refusal.
+        keepChainLog();
+        fs.rmSync(workDir, { recursive: true, force: true });
+        params.log.warn(
+          `State upgrade to ${VERSION} applied, but the start is refused: ${refusal} The databases stay migrated, with their pre-migration images kept as *${suffix}. Fix the config (openclaw doctor --fix) and start again.`,
         );
-        ops.push({ kind: original ? "replace" : "add", live: configPath, next: stagedConfig });
+        return { status: "refused", reason: refusal };
       }
-    }
-    for (let index = ops.length - 1; index >= 0; index--) {
-      const op = ops[index]!;
-      if (op.live === configPath && !configInside) {
-        continue;
+      recordDiagnostics(
+        mode === "fallback" && outdated.some((t) => t.path === liveState)
+          ? ops.find((op) => op.live === liveState)!.next!
+          : liveState,
+        {
+          appVersion: VERSION,
+          mode,
+          failedStep,
+          from: Object.fromEntries(
+            outdated.map((t) => [path.relative(stateDir, t.path), t.version]),
+          ),
+          conservationMismatches: mismatches,
+          setAside: setAsideCount,
+          warnings,
+          preserved: suffix,
+          imagesSkipped: outdated
+            .filter((target) => !images.has(target.path))
+            .map((target) => path.relative(stateDir, target.path)),
+          pinned,
+        },
+        setAside,
+        pinned,
+      );
+      if (ops.length > 0) {
+        ops.push(...companionRemovals(ops));
+        for (const op of ops) {
+          if (op.next && fs.statSync(op.next, { throwIfNoEntry: false })?.isFile()) {
+            fsyncPath(op.next);
+          }
+        }
+        await params.beforeSwap?.();
+        writePlan(workDir, { appVersion: generation(), ops });
+        planWritten = true;
+        applyPlan({ appVersion: generation(), ops });
       }
-      if (fs.lstatSync(op.live, { throwIfNoEntry: false }) && !baseline.has(toShadow(op.live))) {
-        warn(`Left uncopied live file unchanged: ${path.relative(stateDir, op.live)}`);
-        ops.splice(index, 1);
+      retainAppliedPlan(stateDir, { appVersion: generation(), ops });
+      keepChainLog();
+      // An image another build took, which this run resumed on, keeps its generation.
+      const reused = new Set(
+        [...images.values(), ...(configImage ? [configImage] : [])]
+          .map((image) => /\.pre-([^/]+)$/u.exec(image)?.[1])
+          .filter((value): value is string => value !== undefined && value !== generation()),
+      );
+      finish(
+        stateDir,
+        workDir,
+        new Set([...outdated.map((t) => t.path), configPath].filter((file) => !skip(file))),
+        reused,
+      );
+      const unimaged = outdated.filter((target) => !images.has(target.path)).length;
+      const summary = `State upgraded to ${VERSION} in place by ${mode === "chain" ? "migration chain" : "generic copy"}; ${unimaged === 0 ? `previous databases kept as *${suffix}` : `${unimaged} database(s) without a pre-migration image`}.`;
+      if (pinned) {
+        params.log.warn(
+          `${summary} ${failedStep ? `Chain step ${failedStep} failed. ` : ""}${setAsideCount} row(s) set aside in diagnostic_events (${UPGRADE_SET_ASIDE_SCOPE}); conservation: ${mismatches.join("; ") || "ok"}. The previous generation is pinned; run openclaw doctor to review.`,
+        );
+      } else {
+        params.log.info(summary);
       }
-    }
-    const retired = copyScope.retiredBackups;
-    params.log.info(
-      `State upgrade retained ${retired.count} retired backup file(s), ${retired.bytes} bytes; cleanup remains with the operator or Doctor.`,
-    );
-    recordDiagnostics(
-      toShadow(path.join(stateDir, "state", "openclaw.sqlite")),
-      {
-        appVersion: VERSION,
+      return {
+        status: "upgraded",
         mode,
         failedStep,
-        from: Object.fromEntries(outdated.map((t) => [path.relative(stateDir, t.path), t.version])),
+        pinned,
         conservationMismatches: mismatches,
         setAside: setAsideCount,
         warnings,
-        retiredBackups: retired,
-        preserved: `.pre-${generation()}`,
-        pinned,
-      },
-      setAside,
-      pinned,
-    );
-    checkpointShadowDatabases([toShadow(liveState)]);
-    ops.push(...companionRemovals(ops));
-    for (const op of ops) {
-      if (op.next && fs.statSync(op.next, { throwIfNoEntry: false })?.isFile()) {
-        fsyncPath(op.next);
-      }
-    }
-    let refusal: string | undefined;
-    try {
-      refusal = await params.admitConfig?.({ configPath: shadowConfig, stateDir: shadowRoot });
-    } finally {
-      // Config admission can retain a reader on the successor inode. Retire it before
-      // rename: its old shadow pathname cannot find the first live writer's WAL/SHM.
-      await closeOpenClawStateDatabaseByPathAsync(toShadow(liveState));
-    }
-    if (refusal !== undefined) {
-      fs.rmSync(workDir, { recursive: true, force: true });
-      params.log.warn(`State upgrade to ${VERSION} not applied: ${refusal}`);
-      return { status: "refused", reason: refusal };
-    }
-    if (stagedConfig) {
-      fs.copyFileSync(shadowConfig, stagedConfig);
-      fsyncPath(stagedConfig);
-    }
-    await params.beforeSwap?.();
-    writePlan(workDir, { appVersion: generation(), ops });
-    planWritten = true;
-    applyPlan({ appVersion: generation(), ops });
-    retainAppliedPlan(stateDir, { appVersion: generation(), ops });
-    if (fs.existsSync(chainLog)) {
-      // The chain's own output stays next to the other logs for diagnosis.
-      fs.mkdirSync(path.join(stateDir, "logs"), { recursive: true });
-      fs.copyFileSync(chainLog, path.join(stateDir, "logs", `state-upgrade-${VERSION}.log`));
-    }
-    finish(stateDir, workDir, new Set(ops.map((op) => op.live).filter((file) => !skip(file))));
-    const summary = `State upgraded to ${VERSION} by ${mode === "chain" ? "migration chain" : "generic copy"}; previous files kept as *.pre-${generation()}.`;
-    if (pinned) {
-      params.log.warn(
-        `${summary} ${failedStep ? `Chain step ${failedStep} failed. ` : ""}${setAsideCount} row(s) set aside in diagnostic_events (${UPGRADE_SET_ASIDE_SCOPE}); conservation: ${mismatches.join("; ") || "ok"}. The previous generation is pinned; run openclaw doctor to review.`,
-      );
-    } else {
-      params.log.info(summary);
-    }
-    return {
-      status: "upgraded",
-      mode,
-      failedStep,
-      pinned,
-      conservationMismatches: mismatches,
-      setAside: setAsideCount,
-      warnings,
-    };
+      };
+    });
   } catch (error) {
     if (!planWritten) {
-      // Nothing live changed; the next start retries from scratch.
+      try {
+        keepChainLog();
+      } catch {
+        // A full disk can refuse the log too; the failure itself is what matters.
+      }
+      if (migrationStarted) {
+        // Each database is at its old or new version; this record makes the next start
+        // finish the chain on the same images instead of serving a half-done upgrade.
+        throw error;
+      }
       fs.rmSync(workDir, { recursive: true, force: true });
       throw explainMachineFailure(error, stateDir);
     }
@@ -695,27 +757,16 @@ export async function upgradeStateDirectory(params: {
   }
 }
 
-/** A full disk or I/O failure before any live change: name the fix instead of the raw error. */
+/** A full disk or I/O failure before any database migrated: name the fix instead of the raw error. */
 export function explainMachineFailure(error: unknown, stateDir: string): unknown {
   return isMachineFailure(error)
     ? new Error(
         // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
-        `State upgrade to ${VERSION} stopped: ${(error as Error).message}. Nothing in ${stateDir} was changed. Free disk space for the migration inputs and scratch margin and start the Gateway again.`,
+        `State upgrade to ${VERSION} stopped: ${(error as Error).message}. No database in ${stateDir} was migrated. Free disk space for the migration and start the Gateway again.`,
         { cause: error },
       )
     : error;
 }
 
-function isMachineFailure(error: unknown): boolean {
-  // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
-  const message = (error as Error | undefined)?.message ?? "";
-  return (
-    code === "ENOSPC" ||
-    code === "EIO" ||
-    code === "EDQUOT" ||
-    code === "EROFS" ||
-    /SQLITE_FULL|database or disk is full|disk I\/O error/iu.test(message)
-  );
-}
+/** Another process holds the state when the chain hands custody back; it continues. */
+export class StateUpgradeCustodyLostError extends Error {}

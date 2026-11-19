@@ -6,13 +6,16 @@ import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js"
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import type { preserveDoctorOriginalState } from "./doctor-original-capture.js";
+import { isStateUpgradeImageOwner } from "./doctor-state-upgrade-owner.js";
+import type { DoctorOptions } from "./doctor.types.js";
 
 /** The admitted owner checks deferred schemas before original capture or repair effects. */
 export function createDoctorOriginalCaptureHook(
   params: Pick<
     Parameters<typeof preserveDoctorOriginalState>[0],
-    "root" | "runtime" | "writeAuthority" | "fullIntegrityCheck"
+    "root" | "runtime" | "writeAuthority"
   > & {
+    options?: Pick<DoctorOptions, "fullIntegrityCheck" | "stateUpgradeLiveStateDir">;
     rehearsalRoot?: string;
     json?: boolean;
     reportFindings: (findings: readonly HealthFinding[], warnings?: readonly string[]) => void;
@@ -69,6 +72,9 @@ export function createDoctorOriginalCaptureHook(
     // Restore remount-broadened stores only after repair admission, but before
     // recovery capture reads them. Diagnostic startup must not change modes.
     restorePrivateStateStoreModes(env);
+    if (isStateUpgradeImageOwner(params.options ?? {}, env)) {
+      return;
+    }
     const { findings, warnings } = await withDoctorProgress(
       formatDoctorProgressPhase("Preserve original state"),
       () =>
@@ -80,7 +86,7 @@ export function createDoctorOriginalCaptureHook(
             signal,
             assertCurrent: () => scope.assertOwnerCurrent(),
             writeAuthority: params.writeAuthority,
-            fullIntegrityCheck: params.fullIntegrityCheck,
+            fullIntegrityCheck: params.options?.fullIntegrityCheck,
           }),
         ),
       params.json !== true,

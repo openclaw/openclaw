@@ -1,14 +1,16 @@
-// Gateway startup entry for the copy-and-swap state upgrade.
+// Gateway startup entry for the in-place state upgrade.
 import fs from "node:fs";
 import path from "node:path";
 import { parseConfigJson5 } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withLiveStateReads } from "./artifact-preserving-state-reads.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
 import {
   explainMachineFailure,
   isStateUpgradePending,
+  StateUpgradeCustodyLostError,
   upgradeStateDirectory,
 } from "./state-upgrade.js";
 
@@ -42,16 +44,59 @@ export async function upgradeStateOnGatewayStart(
     if (!isStateUpgradePending(env)) {
       return;
     }
-    // File-only ownership: the old databases are not opened for writing.
-    lock = await acquireGatewayLock({ env, databaseAccess: "none", allowInTests: true });
+    // Schema-maintenance ownership admits old schemas: the start writes the pre-images.
+    lock = await withLiveStateReads(() =>
+      acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true }),
+    );
   } catch (error) {
     throw explainMachineFailure(error, resolveStateDir(env));
   }
   try {
     const statePath = path.join(resolveStateDir(env), "state", "openclaw.sqlite");
+    // Custody admits no other writer, so its owner-lease check reads the live database and
+    // stages no private copy that a small scratch volume could refuse.
+    const acquire = () =>
+      withLiveStateReads(() =>
+        acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true }),
+      );
     await upgradeStateDirectory({
       env,
       log,
+      custody: {
+        run: (operation) => {
+          if (!lock) {
+            throw new StateUpgradeCustodyLostError("The state upgrade lost its custody.");
+          }
+          return lock.run(operation);
+        },
+        // The in-place Doctor takes this state's maintenance custody itself; hand it
+        // over and take it back before anything else here touches the state.
+        handOff: async (operation) => {
+          await closeOpenClawStateDatabaseByPathAsync(statePath);
+          await lock?.release();
+          lock = null;
+          try {
+            return await operation();
+          } finally {
+            lock = await acquire().catch((error: unknown) => {
+              throw new StateUpgradeCustodyLostError(
+                "Another OpenClaw process took state ownership during the upgrade; this start stops and leaves the upgrade to it.",
+                { cause: error },
+              );
+            });
+          }
+        },
+      },
+      // On a Git release trial, a migration without an image makes the previous release
+      // unreachable: end the trial before it commits, so no launcher (including one an
+      // older updater wrote) switches back onto a release that refuses this state.
+      endTrial: async (reason) => {
+        const { settleRunningGitReleaseTrial } = await import("../infra/git-release.js");
+        await settleRunningGitReleaseTrial();
+        log.info(
+          `A Git release trial, if any, has ended because ${reason}: a failed start of this release stays on it and is fixed forward (openclaw triage).`,
+        );
+      },
       // Selecting the environment read the config, which can leave a worker on a
       // current shared database; it must reopen the swapped file, not the old one.
       beforeSwap: async () => {
@@ -62,6 +107,7 @@ export async function upgradeStateOnGatewayStart(
       // Accepted edge case: plugin-owned config is validated later, at admission,
       // because its metadata lives in the upgraded state; a rollback is a rename.
       admitConfig: async (shadow) => {
+        // The live config and state, migrated in place.
         if (!fs.existsSync(shadow.configPath)) {
           return undefined;
         }

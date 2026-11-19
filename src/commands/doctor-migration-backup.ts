@@ -159,6 +159,8 @@ export async function backupDoctorMigrationDatabases(params: {
   versionMigrationsOnly?: boolean;
   check?: "quick" | "full";
   repair?: { key: string; validate?: (database: DatabaseSync) => void };
+  /** Set in code by the Gateway-start state upgrade, which owns the pre-image decision. */
+  preImageOwner?: "state-upgrade";
 }): Promise<
   MigrationMessages & {
     versionMigrations?: NonNullable<OpenClawDatabaseSchemaPreflight["pendingMigrations"]>;
@@ -190,6 +192,50 @@ export async function backupDoctorMigrationDatabases(params: {
         migration.kind === "state" &&
         migration.foundVersion < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
     );
+  // The start covers exactly the stores its own record names, resolved; a store Doctor finds
+  // elsewhere (a configured agent directory, or one behind a link) gets Doctor's normal set.
+  const covered =
+    params.preImageOwner === "state-upgrade"
+      ? ((await import("./doctor-state-upgrade-owner.js")).readStateUpgradeCoveredStores(
+          params.env,
+        ) ?? new Set<string>())
+      : new Set<string>();
+  const coveredByStart = (pathname: string) =>
+    existsSync(pathname) && covered.has(realpathSync.native(pathname));
+  // A credential cutover below v29 needs Doctor's own shared image (see above), so the
+  // start's image does not stand in for it there.
+  if (
+    params.preImageOwner === "state-upgrade" &&
+    !retainSharedImage &&
+    [...pending].every(coveredByStart)
+  ) {
+    // Gateway start already took (or, without room, skipped) the one pre-migration
+    // image of each of these databases; a second full set protects nothing more.
+    // The version phase runs only where a bounded migration exists, as with backups.
+    const bounded =
+      params.versionMigrationsOnly &&
+      !isStatePostgres() &&
+      !isUpdateDoctorLintPass(params.env) &&
+      [...pending].every((pathname) => {
+        const migration = params.pendingMigrations?.find((entry) => entry.path === pathname);
+        return (
+          migration !== undefined && resolveSchemaMigrationBackupTables(migration) !== undefined
+        );
+      });
+    return {
+      changes: [],
+      warnings: [],
+      ...(bounded
+        ? {
+            versionMigrations: params.pendingMigrations?.filter((migration) =>
+              migration.kind === "state"
+                ? migration.path === sharedPath
+                : params.agentDatabaseTargets?.some((target) => target.path === migration.path),
+            ),
+          }
+        : {}),
+    };
+  }
   const verifiedSnapshots = retainSharedImage
     ? params.verifiedSnapshots?.filter((snapshot) => snapshot.role !== "global")
     : params.verifiedSnapshots;

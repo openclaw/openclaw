@@ -7,6 +7,10 @@ import { ignoreMissingPath } from "./errno.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { writeGitReleaseLauncher, type GitReleaseTrial } from "./git-release-launcher.js";
 import { GIT_RELEASE_TRIAL, gitReleaseSlot } from "./git-release-paths.js";
+import {
+  resolveOpenClawInstallationRootSync,
+  resolveOpenClawPackageRootSync,
+} from "./openclaw-root.js";
 import { readPackageVersion } from "./package-json.js";
 import { collectPackageReleases } from "./package-release-retention.js";
 import { PACKAGE_RELEASES_DIR, readPackageReleaseSlotSync } from "./package-release-slot-path.js";
@@ -101,7 +105,21 @@ export async function settleGitReleaseTrial(runningRoot: string | null): Promise
   const trial = raw ? (JSON.parse(raw) as GitReleaseTrial) : null;
   if (trial?.target === slot.target) {
     await fs.rm(trialFile, { force: true });
+    // Durable before the caller changes state an older launcher could not undo.
+    await syncDirectoryIfSupported(path.dirname(trialFile));
   }
+}
+
+/**
+ * End the trial of the Git release this process runs, if any. A migration that leaves no
+ * way back (a database without a pre-migration image) makes any revert unsafe, so no
+ * launcher, including one an older updater wrote, may count failed starts toward one.
+ */
+export async function settleRunningGitReleaseTrial(): Promise<void> {
+  const packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+  await settleGitReleaseTrial(
+    packageRoot ? resolveOpenClawInstallationRootSync(packageRoot, process.argv[1]) : null,
+  );
 }
 
 /**

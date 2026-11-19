@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveUserPath } from "../infra/home-dir.js";
-import { ChainStepError } from "./state-upgrade-validate.js";
+import { ChainStepError, StateUpgradeInterruptedError } from "./state-upgrade-validate.js";
 
 const CHAIN_TIMEOUT_MS = 30 * 60_000;
 
@@ -14,7 +14,11 @@ export type StateUpgradeChain = (params: {
   logPath: string;
 }) => Promise<{ warnings: string[] }>;
 
-/** This build's Doctor, run against the shadow only, from the given CLI entry. */
+/**
+ * This build's Doctor on the live state, from the given CLI entry. Naming the live
+ * state directory as its own tells Doctor the caller took the pre-migration images,
+ * so it takes no original-state capture and no migration backup set of its own.
+ */
 export const createDoctorChain =
   (entry = process.argv[1], execArgv = process.execArgv): StateUpgradeChain =>
   async ({ stateDir, configPath, env, logPath }) => {
@@ -69,6 +73,13 @@ export const createDoctorChain =
           resolve(exitCode);
         });
       });
+      if (code === null) {
+        // A signal stopped Doctor; its schema steps may be done while config or legacy work
+        // is not, so the run stays pending and the next start finishes it.
+        throw new StateUpgradeInterruptedError(
+          `Doctor was stopped before it finished; see ${logPath}. The next start finishes the upgrade.`,
+        );
+      }
       // Doctor also reports unrelated repairs; the schema check below decides success.
       return {
         warnings: code === 0 ? [] : [`Doctor exited ${code ?? "by signal"}; see ${logPath}`],

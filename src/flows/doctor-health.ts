@@ -245,7 +245,7 @@ async function runDoctorHealthFlowWithResult(
           rehearsalRoot: preCaptureRehearsalRoot,
           json: options.json,
           reportFindings,
-          fullIntegrityCheck: options.fullIntegrityCheck,
+          options,
         }),
       }),
     );
@@ -346,7 +346,7 @@ async function runDoctorHealthFlowWithResult(
         await prepareDoctorMigrationBackups({
           schemas,
           env: process.env,
-          check: options.fullIntegrityCheck ? "full" : "quick",
+          options,
           verifiedSnapshots,
           automaticRepair: Boolean(automaticHeartbeatRepair),
           runtime: effectiveRuntime,

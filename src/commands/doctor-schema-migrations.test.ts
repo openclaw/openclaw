@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-database-admission.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
@@ -32,6 +33,7 @@ import { restorePreTemplateStateIdentifiersForTest } from "../state/openclaw-sta
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
 import { assertSqliteMigrationScopePreserved } from "../state/sqlite-migration-scope.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { assertDoctorMaintenanceReady } from "./doctor-maintenance-inspection.js";
 import { restoreDoctorMigrationBackup } from "./doctor-migration-backup-restore.js";
 import { prepareDoctorDatabaseMigrations } from "./doctor-schema-migrations.js";
@@ -697,6 +699,64 @@ it.each([
           expect(capture.receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
         }
       }
+    });
+  },
+);
+
+it.each([
+  [undefined, false],
+  ["state-upgrade", false],
+  ["state-upgrade", true],
+] as const)(
+  "commits the version migration and copies only when Doctor owns the image (owner=%s, outside the start's discovery=%s)",
+  async (preImageOwner, external) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      openOpenClawStateDatabase({ env: state.env });
+      await closeOpenClawStateDatabaseAsync();
+      // The start's record names the stores it imaged. One behind a linked agent directory
+      // has the same lexical path but is not one of them.
+      const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+      fs.mkdirSync(path.dirname(path.dirname(pathname)), { recursive: true });
+      if (external) {
+        fs.mkdirSync(state.statePath("custom-agents", "main"), { recursive: true });
+        fs.symlinkSync(state.statePath("custom-agents", "main"), path.dirname(pathname));
+      } else {
+        fs.mkdirSync(path.dirname(pathname));
+      }
+      openLegacyDatabase(pathname).close();
+      const record = state.statePath(`.upgrade-${resolveRuntimeServiceBuildId() ?? VERSION}-1-1`);
+      fs.mkdirSync(record);
+      fs.writeFileSync(
+        path.join(record, "inventory.json"),
+        JSON.stringify({ outdated: external ? [] : [pathname], images: [] }),
+      );
+      const backups = () =>
+        listDirectoryTreeStrictSync(state.stateDir)
+          .map(({ relativePath }) => relativePath)
+          .filter((name) => name.endsWith(".bak"));
+
+      const result = await withMaintenance(() =>
+        prepareDoctorDatabaseMigrations({
+          ...migrationParams(state.env, [
+            {
+              kind: "agent",
+              agentId: "main",
+              path: pathname,
+              foundVersion: 26,
+              supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+            },
+          ]),
+          ...(preImageOwner ? { preImageOwner } : {}),
+        }),
+      );
+
+      expect(result.warnings).toEqual([]);
+      using agent = new DatabaseSync(pathname, { readOnly: true });
+      expect(agent.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
+      // Gateway start took the one image itself; a Doctor set would be a second copy.
+      expect(backups().length > 0).toBe(preImageOwner === undefined || external);
     });
   },
 );

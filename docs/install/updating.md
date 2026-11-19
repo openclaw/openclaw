@@ -96,17 +96,66 @@ state directory and configuration parent without changing sealed capture bytes
 or following the final configuration entry. A different selected state directory
 or configuration entry remains rejected.
 
-On Gateway startup, an older supported SQLite schema is upgraded by copy and
-swap: Doctor runs on a private copy, then a durable plan publishes the changed
-files. Chain failure retains the generic rebuild and pins the previous files;
-invalid upgraded config still refuses publication. No live file is replaced or
-removed unless the upgrade copied it. If Doctor creates a template over an
-uncopied workspace file, startup leaves the original alone and reports a warning.
+On Gateway startup, an older supported SQLite schema is upgraded in place, under
+the start's exclusive ownership of the state. Nothing is copied except one
+pre-migration image of each outdated database and of the config:
 
-During copy-and-swap upgrades, Doctor records carried-over scheduled jobs against
-credential databases at their eventual live paths. Reads and repairs remain on
-the private copy. The updater passes this destination directly to Doctor; no
-additional environment variable or operator configuration is needed.
+- Each outdated database is checkpointed and kept as `<file>.pre-<buildId>` by a
+  copy-on-write clone where the filesystem supports one (APFS, and reflink-capable
+  Linux filesystems such as btrfs and XFS), which takes about no space.
+- Where the filesystem cannot clone, a byte copy is made only when it still leaves
+  the migration its own room (about one more database for its write-ahead log).
+- Otherwise the image is skipped and a warning names the database and why. The
+  start continues. Without that image, the previous release cannot be restored once
+  the migration commits: a Git release trial that fails twice stays on the new
+  release and asks you to fix forward (`openclaw triage`).
+
+Snapshot space never stops a start; only a disk too full for the migration itself
+can. Doctor then runs on the live state. Every schema step commits in one SQLite
+transaction with its version bump, so a killed or failed start leaves each database
+at its old or new version, and the next start finishes the same run on the same images, also when another build of the same schemas started it.
+In this run Doctor takes no original-state capture and no pre-migration `.bak` set for the
+databases the start imaged. It still takes its normal set for a store the start does not
+discover (a configured agent directory) and the scoped images some legacy repairs take
+inside their own transaction. A standalone `openclaw doctor --fix` keeps its own backups.
+
+If Doctor fails validation, the generic rebuild produces the outdated databases from the
+databases as Doctor left them, so rows Doctor already imported stay, and replaces them
+through a durable plan; the images stay the rollback baseline and the generation is
+pinned. A database's write-ahead log is folded in through SQLite first; if SQLite cannot
+fold it, the start stops with every file in place and the next start retries.
+
+Doctor then changes state in place, also outside the images: legacy sources it moves into
+SQLite (such as `cron/jobs.json`, archived under a `.migrated` name, including at paths the
+config places outside the state directory), stores it writes, and workspace files. A run can
+also stop before anything checks what it changed. So no revert after a migration can be
+shown safe, and the start ends the Git release trial before Doctor runs: from then on a
+failed start stays on the new release and is fixed forward (`openclaw triage`), whichever
+launcher the installed updater wrote. The images stay for an operator's recovery.
+
+If the upgraded config is invalid, the start is refused and the state stays migrated, with
+its images; fix the config (`openclaw doctor --fix`) and start again. A linked config is
+never imaged or written through.
+
+A Git release trial therefore reverts only when the new release fails before its start
+migrated anything. The launcher still checks positive evidence that the previous release
+opens the state it leaves:
+
+- that release declares its schemas;
+- every remaining database (the image it would restore, read with any WAL preserved beside
+  it, else the live file) reads at or below them, including the shared state's content
+  version;
+- an upgraded, unlinked config has its image;
+- no upgrade of the trial is unfinished.
+
+Otherwise it stays forward. Files Doctor changes are not restored by any revert; the earlier
+copy-and-swap upgrade restored them. Only the fallback rebuild still replaces a database
+file; a successful start migrates `state/openclaw.sqlite` in place, so a process holding it
+open keeps the same file.
+
+During startup upgrades, Doctor records carried-over scheduled jobs against
+credential databases at their live paths. No environment variable or operator
+configuration is needed.
 
 If an earlier upgrade already broke a scheduled job, run `openclaw doctor --fix`.
 While the applied upgrade receipt remains, Doctor can verify the saved account at
@@ -116,35 +165,16 @@ receipt remains, Doctor names the affected job and shows how to choose its
 account. It leaves the job unchanged. To explicitly choose an account, use
 `openclaw automations edit <id> --model <provider/model>@<profileId>`.
 
-The copy excludes managed worktrees, configured agent workspaces, nested mounts
-and btrfs subvolumes, Knowledge stores, browser profiles, backups, and caches.
 Completed agent deletions whose journal retains files are excluded from startup
-upgrade discovery and copying; their retained files remain unchanged. Pending
-deletions keep their existing deletion-owner behavior.
-Media payloads are excluded; legacy `media/outgoing/records` JSON remains a
-migration input. Legacy session JSON/JSONL, identity, devices, credentials, push,
-exec approvals, audit logs, config, and installed extensions remain available.
-SQLite files above 64 MiB are copied only when their schema needs upgrading or
-they are the shared state database; smaller ancillary stores remain available for
-legacy imports. SQLite and retained WAL/journal content use byte copies, with
-NOCOW directories on btrfs, so the new database does not share extents with its
-preserved original. Committed WAL is recovered in the private copy.
+upgrade discovery; their retained files remain unchanged. Pending deletions keep
+their existing deletion-owner behavior.
 
-Before copying, startup checks free space against the selected file bytes plus
-an equal-sized scratch margin (at least 256 MiB). Ordinary files are included in
-that budget because a filesystem can decline reflinking. Insufficient space
-reports the exact required, available, and missing bytes. Copies of at least
-256 MiB log their byte count, file count, elapsed time, and throughput.
-
-Replaced files remain as `<file>.pre-<buildId>`, named after the build that replaced
-them, so two builds of one version each keep their own predecessor. Builds without a
-build ID, and earlier releases, wrote `<file>.pre-<version>`. Startup prunes older unpinned
+Images are named `<file>.pre-<buildId>`, after the build that took them, so two
+builds of one version each keep their own predecessor. Builds without a build ID,
+and earlier releases, wrote `<file>.pre-<version>`. Startup prunes older unpinned
 generations only for files it owns. It leaves retired startup-migration backups,
-SQLite `.bak` files, and media-persistence recovery images in place, reporting
-file counts and bytes within the inspected copy scope. These are operator or
-Doctor retention decisions: deleting large shared clones during startup can
-stall a copy-on-write filesystem. Skipped bulk trees are never walked to count
-or prune their contents.
+SQLite `.bak` files, and media-persistence recovery images in place. These are
+operator or Doctor retention decisions.
 
 Offline Doctor prepares no extra inspection image when its existing maintenance
 owner proves custody and the database has no WAL frames or rollback journal.
@@ -1867,7 +1897,15 @@ cannot read after a new-version Doctor or boot check may have written it. When n
 new-version process has opened state yet, an unreadable store is a recorded warning
 (`state-schema-verification`), not data at risk, and the update continues or fails for its
 own recorded reason. On a Git release the new release migrates state when it starts, and its
-trial switches back if it fails to start. The Git release inspection also does not
+trial switches back after two failed starts only on positive evidence that the previous
+release opens the state the revert leaves: the schemas its `package.json` declares, each
+remaining database's header and the shared state's content version, and the config's image
+after an upgrade. Otherwise the service stays on the new release, the launcher says why,
+and the failure is fixed forward (`openclaw triage`). The launcher is written by the
+installed updater, so this rule applies from the first update after the updater that ships
+it. On the first hop the earlier launcher, which the installed updater wrote, runs, but the
+start has already ended the trial before Doctor changed anything, so it never counts the
+failed starts or reverts past the migration. The Git release inspection also does not
 require the new schema before that start: "migration did not finish" applies only to
 installs whose updater runs Doctor before restarting. Installed updaters that run Git
 releases without this change (main builds since the release layout landed) fail

@@ -80,43 +80,168 @@ function writeTrial(record) {
   fs.renameSync(temporary, trialFile);
 }
 
-// The trial's upgrade plans (owned by src/state/state-upgrade.ts): an interrupted one
-// ("<stateDir>/.upgrade-<generation>-*/plan.json") would be finished by the previous release,
-// and an applied one (".upgraded-<generation>.json") names files it added with no
-// predecessor. Undo those additions and retire both; the suffix restore covers the rest.
-function retirePlans(stateDir, generation) {
-  const applied = path.join(stateDir, ".upgraded-" + generation + ".json");
-  let record;
-  try {
-    record = JSON.parse(fs.readFileSync(applied, "utf8"));
-  } catch (error) {
-    if (error?.code !== "ENOENT") {
+// The trial's upgrade records (owned by src/state/state-upgrade.ts): an interrupted one
+// ("<stateDir>/.upgrade-<generation>-*", with plan.json once its swap is durable) would be
+// finished by the previous release, and an applied one (".upgraded-<generation>.json") names
+// files it added with no predecessor. A revert removes those additions and retires both;
+// the suffix restore covers the rest.
+function plannedAdditions(stateDir, generation) {
+  const added = [];
+  const readJson = (file) => {
+    try {
+      return JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch (error) {
+      // A missing record is a run that had not reached it.
+      if (error?.code === "ENOENT") {
+        return undefined;
+      }
       throw error;
     }
-  }
-  // A failed removal propagates and keeps the record, so the next start retries.
+  };
+  const applied = path.join(stateDir, ".upgraded-" + generation + ".json");
+  const record = readJson(applied);
   for (const op of record?.ops ?? []) {
     if (op.kind === "add") {
-      fs.rmSync(op.live, { force: true });
+      added.push(op.live);
     }
   }
-  fs.rmSync(applied, { force: true });
-  for (const entry of fs.readdirSync(stateDir)) {
-    if (!entry.startsWith(".upgrade-" + generation + "-")) {
-      continue;
+  const interrupted = fs
+    .readdirSync(stateDir)
+    .filter((entry) => entry.startsWith(".upgrade-" + generation + "-"))
+    .map((entry) => path.join(stateDir, entry));
+  return { added, applied: record ? applied : undefined, interrupted };
+}
+
+function retirePlans(stateDir, generation) {
+  const { added, applied, interrupted } = plannedAdditions(stateDir, generation);
+  // A failed removal propagates and keeps the records, so the next start retries.
+  for (const file of added) {
+    for (const companion of ["", "-wal", "-shm", "-journal"]) {
+      fs.rmSync(file + companion, { force: true });
     }
-    const dir = path.join(stateDir, entry);
-    let plan;
-    try {
-      plan = JSON.parse(fs.readFileSync(path.join(dir, "plan.json"), "utf8"));
-    } catch {}
-    for (const op of plan?.ops ?? []) {
-      if (op.kind === "add" && op.next && !fs.existsSync(op.next)) {
-        fs.rmSync(op.live, { force: true });
-      }
-    }
+  }
+  if (applied) {
+    fs.rmSync(applied, { force: true });
+  }
+  for (const dir of interrupted) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// A revert must land only on a build that opens the state it leaves, and only on positive
+// evidence: the previous release names the schemas it opens in its own package.json, and
+// each database the revert leaves (the image it restores, else the live file) is read the way that release admits it: the header, and for shared
+// state also its content version. Anything that cannot be read keeps the service forward.
+async function revertBlockers(stateDir, previous, restoring, generations, config) {
+  const restoredFrom = new Map();
+  for (const { suffix, files } of restoring) {
+    for (const file of files) {
+      if (fs.existsSync(file + suffix)) {
+        restoredFrom.set(file, file + suffix);
+      }
+    }
+  }
+  let supported;
+  try {
+    supported = JSON.parse(fs.readFileSync(path.join(path.resolve(path.dirname(slot), previous), "package.json"), "utf8"))?.openclaw?.schemaVersions;
+  } catch {}
+  if (!Number.isInteger(supported?.state) || !Number.isInteger(supported?.agent)) {
+    return [previous + " declares no schema versions"];
+  }
+  let DatabaseSync;
+  try {
+    ({ DatabaseSync } = await import("node:sqlite"));
+  } catch {
+    return ["node:sqlite is unavailable to read the state"];
+  }
+  let upgraded = restoredFrom.size > 0;
+  try {
+    for (const generation of generations) {
+      const planned = plannedAdditions(stateDir, generation);
+      upgraded ||= Boolean(planned.applied);
+      // A run that stopped before its record was complete never decided what it covered.
+      if (planned.interrupted.length > 0) {
+        return ["the upgrade to " + generation + " did not finish"];
+      }
+    }
+  } catch {
+    return ["could not read the upgrade records"];
+  }
+  const databases = [[path.join(stateDir, "state", "openclaw.sqlite"), supported.state, true]];
+  try {
+    for (const agent of fs.readdirSync(path.join(stateDir, "agents"))) {
+      databases.push([path.join(stateDir, "agents", agent, "agent", "openclaw-agent.sqlite"), supported.agent, false]);
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      return ["could not list the agent databases"];
+    }
+  }
+  // A restored database comes back with the WAL preserved beside it, if any; read the two
+  // together in a private copy so a version committed only in that WAL counts.
+  const restoredWal = (live) =>
+    restoring.find(({ suffix, files }) => files.includes(live + "-wal") && fs.existsSync(live + "-wal" + suffix));
+  const readCopy = (image, wal, read) => {
+    const scratch = fs.mkdtempSync(path.join(stateDir, ".openclaw-revert-read-"));
+    try {
+      fs.copyFileSync(image, path.join(scratch, "db"), fs.constants.COPYFILE_FICLONE);
+      fs.copyFileSync(wal, path.join(scratch, "db-wal"), fs.constants.COPYFILE_FICLONE);
+      const db = new DatabaseSync(path.join(scratch, "db"));
+      try {
+        return read(db);
+      } finally {
+        db.close();
+      }
+    } finally {
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  };
+  const blockers = [];
+  for (const [live, limit, shared] of databases) {
+    const file = restoredFrom.get(live) ?? live;
+    if (!fs.existsSync(file)) {
+      continue;
+    }
+    const name = path.relative(stateDir, live);
+    const read = (db) => {
+      let version = db.prepare("PRAGMA user_version").get()?.user_version;
+      // Shared-state admission also refuses a newer content version behind an older header.
+      if (shared && db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'config_machine_state'").get()) {
+        const row = db.prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'").get();
+        if (row) {
+          const content = JSON.parse(row.value_json);
+          version = Number.isSafeInteger(content) && content >= 0 ? Math.max(version, content) : undefined;
+        }
+      }
+      return version;
+    };
+    let version;
+    try {
+      const wal = file !== live ? restoredWal(live) : undefined;
+      if (wal) {
+        version = readCopy(file, live + "-wal" + wal.suffix, read);
+      } else {
+        const db = new DatabaseSync(file, { readOnly: true });
+        try {
+          version = read(db);
+        } finally {
+          db.close();
+        }
+      }
+    } catch {
+      version = undefined;
+    }
+    if (!Number.isSafeInteger(version)) {
+      blockers.push("could not read the schema of " + name);
+    } else if (version > limit) {
+      blockers.push(name + " schema " + version + " (" + previous + " supports " + limit + ")");
+    }
+  }
+  // An upgrade may have rewritten the config; without its image the revert cannot prove it.
+  if (upgraded && config && fs.existsSync(config) && !fs.lstatSync(config).isSymbolicLink() && !restoring.some(({ files }) => files.includes(config))) {
+    blockers.push("the config has no pre-migration image");
+  }
+  return blockers;
 }
 
 function switchLink(target) {
@@ -151,8 +276,8 @@ if (trial && counts) {
       trial.restoring = [];
       // File timestamps come from a coarse kernel clock that can trail Date.now() by a tick.
       const since = trial.createdAt - 1000;
-      for (const generation of [trial.buildId, trial.version].filter(Boolean)) {
-        retirePlans(path.dirname(prefix), generation);
+      const generations = [trial.buildId, trial.version].filter(Boolean);
+      for (const generation of generations) {
         const suffix = ".pre-" + generation;
         const files = collectPreserved(path.dirname(prefix), suffix, since, 4, []);
         const config = trial.config;
@@ -161,14 +286,30 @@ if (trial && counts) {
         }
         trial.restoring.push({ suffix, files });
       }
-      writeTrial(trial);
+
+      const blockers = await revertBlockers(path.dirname(prefix), trial.previous, trial.restoring, generations, trial.config);
+      if (blockers.length > 0) {
+        trial.forward = blockers;
+      } else {
+        // Decided before anything changes: staying forward keeps what the upgrade added.
+        for (const generation of generations) {
+          retirePlans(path.dirname(prefix), generation);
+        }
+        writeTrial(trial);
+      }
     }
-    for (const { suffix, files } of trial.restoring) {
-      restoreState(files, suffix);
+    if (trial.forward) {
+      // Nothing proves the previous release opens what a revert would leave: stay forward.
+      fs.rmSync(trialFile, { force: true });
+      console.error("openclaw: release " + trial.target + " failed to start twice, but switching back is not proven safe: " + trial.forward.join("; ") + ". The service stays on " + trial.target + " rather than revert onto " + trial.previous + ", which may refuse this state. Fix forward: run openclaw triage, or openclaw update once a fixed release is available.");
+    } else {
+      for (const { suffix, files } of trial.restoring) {
+        restoreState(files, suffix);
+      }
+      switchLink(trial.previous);
+      fs.rmSync(trialFile, { force: true });
+      console.error("openclaw: release " + trial.target + " failed to start twice; switched back to " + trial.previous);
     }
-    switchLink(trial.previous);
-    fs.rmSync(trialFile, { force: true });
-    console.error("openclaw: release " + trial.target + " failed to start twice; switched back to " + trial.previous);
   } else {
     writeTrial({ ...trial, attempts: trial.attempts + 1 });
   }
