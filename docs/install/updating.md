@@ -53,6 +53,12 @@ backup.
 
 ## Update implementation contract
 
+A newer Doctor recognizes retained update captures whose state directory used
+an older alias or Windows short-path spelling. Scope comparison resolves the
+recorded state directory and configuration parent without changing sealed capture
+bytes or following the final configuration entry. A different selected state
+directory or configuration entry remains rejected.
+
 The candidate CLI and Matrix plugin keep explicit `matrix doctor inspect` and
 `matrix doctor recover --account <id> --accept-snapshot-rollback` available through
 the separate Doctor contract when an unfinished migration withholds normal Matrix
