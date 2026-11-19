@@ -684,7 +684,7 @@ describe("original publication admission reader", () => {
       expect(verified.children).toHaveLength(5);
       expect(verified.current.manifest.publicationAdmission).toEqual(fixture.admission);
       expect(client.loadExecutionPlanEvidence).toHaveBeenCalledTimes(1);
-      expect(client.getWorkflowSource).toHaveBeenCalledTimes(1);
+      expect(client.getWorkflowSource).toHaveBeenCalledTimes(2);
     } else {
       await expect(result).rejects.toThrow(
         /publication|consumer|targetSha mismatch|differently selected|attempt differs/iu,
