@@ -70,35 +70,33 @@ export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: 
     <Show when={review() || state().error || state().busy === "reviewing"}>
       <section class="template-publish-card" aria-label={t("templatesDraft.publishTitle")}>
         <header>
-          <Icon name="blobster" />
+          <span class="template-art">
+            <Icon name="blobster" />
+          </span>
           <div>
             <h2>{review()?.displayName ?? t("templatesDraft.draftTitle")}</h2>
-            <Show when={review()?.publisher}>{(publisher) => <p>{byline(publisher())}</p>}</Show>
+            <Show when={review()?.publisher}>
+              {(publisher) => <p class="muted">{byline(publisher())}</p>}
+            </Show>
           </div>
           <span class="template-creator__status" data-state={status()} role="status">
             {t("templatesDraft." + status())}
           </span>
         </header>
         <Show when={review()?.description}>
-          {(description) => <p class="template-publish-card__description">{description()}</p>}
+          {(description) => <p class="template-summary">{description()}</p>}
         </Show>
         <Show when={status() === "pending"}>
-          <div class="callout template-publish-card__notice" role="status">
-            <Icon name="mail" />
+          <div class="callout callout--action" role="status">
+            <Icon name="mail" class="muted" />
             {t("templatesDraft.pendingNotice")}
           </div>
         </Show>
-        <Show when={hint()}>
-          {(message) => (
-            <p class="template-publish-card__hint" role="status">
-              {message()}
-            </p>
-          )}
-        </Show>
+        <Show when={hint()}>{(message) => <p role="status">{message()}</p>}</Show>
         <Show when={state().error && status() !== "pending" && !busyAction()}>
           <InlineAlert tone="danger">{state().error}</InlineAlert>
         </Show>
-        <div class="template-publish-card__actions">
+        <footer class="template-actions">
           <Switch>
             <Match when={readyReview()} keyed>
               {(draft) => {
@@ -138,10 +136,8 @@ export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: 
                             review={draft}
                             byline={byline(draft.publisher)}
                             status={
-                              <span class="template-creator__status-anchor">
-                                <span class="template-creator__status">
-                                  {t("templatesDraft.unpublished")}
-                                </span>
+                              <span class="template-creator__status">
+                                {t("templatesDraft.unpublished")}
                               </span>
                             }
                             readPackagePreview={(item) => props.flow.readPackagePreview(item)}
@@ -213,7 +209,7 @@ export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: 
               </button>
             </Match>
           </Switch>
-        </div>
+        </footer>
       </section>
     </Show>
   );
