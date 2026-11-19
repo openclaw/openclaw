@@ -69,6 +69,8 @@ export class AcpTranslatorPromptStream {
   private readonly pendingPrompts = new Map<string, AcpPendingPrompt>();
   private readonly pendingPromptAdmissions = new Map<string, AcpPendingPromptAdmission>();
   private readonly settlingPromptKeys = new Set<string>();
+  /** Session key each ACP session subscribed on the current Gateway connection. */
+  private readonly messageSubscriptions = new Map<string, string>();
   private readonly agentEvents: AcpTranslatorAgentEvents;
   private readonly disconnects: AcpTranslatorDisconnects;
   private stopped = false;
@@ -132,6 +134,8 @@ export class AcpTranslatorPromptStream {
   }
 
   handleGatewayDisconnect(reason: string): void {
+    // The Gateway drops a connection's subscriptions when it closes.
+    this.messageSubscriptions.clear();
     this.disconnects.handleGatewayDisconnect(reason);
   }
 
@@ -303,6 +307,22 @@ export class AcpTranslatorPromptStream {
         throw new Error(`Prompt exceeds maximum allowed size of ${MAX_PROMPT_BYTES} bytes`);
       }
 
+      const deliver = readBool(params["_meta"], ["deliver"]);
+      if (deliver && this.messageSubscriptions.get(session.sessionId) !== session.sessionKey) {
+        // Runs that deliver to an external channel are hidden from operator
+        // broadcasts; the Gateway streams them only to session message
+        // subscribers. A run in flight across a reconnect still settles
+        // through disconnect recovery but loses its live text.
+        await this.gateway.request("sessions.messages.subscribe", {
+          key: session.sessionKey,
+          subscriptionId: `acp:${session.sessionId}`,
+        });
+        this.messageSubscriptions.set(session.sessionId, session.sessionKey);
+        if (!this.ownsPromptAdmission(admission)) {
+          return { stopReason: "cancelled" };
+        }
+      }
+
       const abortController = new AbortController();
       const runId = randomUUID();
       this.sessionStore.setActiveRun(params.sessionId, runId, abortController);
@@ -312,7 +332,7 @@ export class AcpTranslatorPromptStream {
         attachments: attachments.length > 0 ? attachments : undefined,
         idempotencyKey: runId,
         thinking: readMetadataString(params["_meta"], ["thinking", "thinkingLevel"]),
-        deliver: readBool(params["_meta"], ["deliver"]),
+        deliver,
         timeoutMs: readNonNegativeInteger(params["_meta"], ["timeoutMs"]),
       };
 
@@ -425,6 +445,23 @@ export class AcpTranslatorPromptStream {
       if (this.pendingPromptAdmissions.get(params.sessionId) === admission) {
         this.pendingPromptAdmissions.delete(params.sessionId);
       }
+    }
+  }
+
+  async releaseSessionMessages(sessionId: string): Promise<void> {
+    const sessionKey = this.messageSubscriptions.get(sessionId);
+    if (sessionKey === undefined) {
+      return;
+    }
+    this.messageSubscriptions.delete(sessionId);
+    try {
+      await this.gateway.request("sessions.messages.unsubscribe", {
+        key: sessionKey,
+        subscriptionId: `acp:${sessionId}`,
+      });
+    } catch (err) {
+      // A closed Gateway connection already dropped its subscriptions.
+      this.log(`sessions.messages.unsubscribe failed for ${sessionId}: ${String(err)}`);
     }
   }
 
