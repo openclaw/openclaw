@@ -9,10 +9,12 @@ import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
+  appendTranscriptMessage,
   loadSessionEntry,
   readLatestSessionTranscriptReport,
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
+  rewindSessionToMessage,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
@@ -666,25 +668,38 @@ test.for(["edit", "rewind"] as const)(
   async (change, { signal }) => {
     const sessionKey = "agent:main:dashboard:background-" + change;
     await seedOrigin(sessionKey);
+    const scope = { agentId: "main", sessionKey, sessionId: sessionKey.replaceAll(":", "-") };
+    if (change === "rewind") {
+      await appendTranscriptMessage(scope, {
+        eventId: "rewind-user",
+        parentId: null,
+        message: { role: "user", content: "Rewind here." },
+      });
+    }
     const release = path.join(state.workspaceDir, "release-background-" + change);
     const script = waitForRelease(release);
     try {
       runningSession(
         (await backgroundExec(sessionKey, { agentId: "main" })(change, script)).details,
       );
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "edited-" + change,
-          ...(change === "rewind" ? { lifecycleRevision: "rewound-revision" } : {}),
-        },
-      );
+      let expectedSessionId = "edited-" + change;
+      if (change === "rewind") {
+        const rewound = await rewindSessionToMessage({ ...scope, entryId: "rewind-user" });
+        expect(rewound.status).toBe("created");
+        if (rewound.status !== "created") {
+          throw new Error("Expected committed rewind");
+        }
+        expect(rewound.entry.lifecycleRevision).toBe("original");
+        expectedSessionId = rewound.entry.sessionId;
+      } else {
+        await upsertSessionEntryCore(scope, { sessionId: expectedSessionId });
+      }
       await fs.writeFile(release, "release");
       await withinTest(waitForExecScope(sessionKey), signal);
       await completion(signal);
       expect(model).toHaveBeenCalledOnce();
       expect(model.mock.calls[0]?.[0].prompt).toContain("ATTACHED_RESULT");
-      expect(model.mock.calls[0]?.[0].sessionId).toBe("edited-" + change);
+      expect(model.mock.calls[0]?.[0].sessionId).toBe(expectedSessionId);
     } finally {
       await fs.writeFile(release, "release");
       await withinTest(waitForExecScope(sessionKey), signal);
