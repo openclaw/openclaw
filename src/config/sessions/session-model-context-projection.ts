@@ -173,7 +173,7 @@ export function projectTranscriptNavigationSql(
   db: EngineConnection,
   event: Expression<string>,
 ): RawBuilder<string> {
-  return /* kysely-allow-raw: Let the JS tree reader decode deep or malformed identity rows. */ sql<string>`CASE WHEN ${jsonValid(db, event)}
+  return /* kysely-allow-raw: Let the JS tree reader decode deep or malformed identity rows. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(db, event)}
     THEN ${jsonPickObject(db, event, TRANSCRIPT_NAVIGATION_KEYS)} ELSE ${event} END`;
 }
 
@@ -190,7 +190,7 @@ export function projectResetBoundaryNavigationSql(
     "display",
   ]);
   // Malformed rows must reach JSON.parse unchanged; CASE guards the native projection.
-  return /* kysely-allow-raw: reset planning uses navigation metadata, never durable transcript payloads. */ sql<string>`CASE WHEN ${jsonValid(db, event)} THEN
+  return /* kysely-allow-raw: reset planning uses navigation metadata, never durable transcript payloads. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(db, event)} THEN
     CASE WHEN ${jsonType(db, event)} = 'object' THEN
       ${jsonSetPath(
         db,
@@ -240,11 +240,12 @@ export function projectModelContextNavigationSql(
     const type =
       entryType ??
       /* kysely-allow-raw: Discriminant lookup from the once-parsed event. */ sql`${source} ->> 'type'`;
-    return /* kysely-allow-raw: Parse the event once and keep navigation intermediates native. */ sql<string>`(
-      WITH nav_input AS MATERIALIZED (SELECT ${event}::jsonb AS event),
+    const native = jsonNativeFieldsValid(db, event);
+    return /* kysely-allow-raw: Guard the cast itself because bound writer values may be plan-time constants. */ sql<string>`CASE WHEN ${native} THEN (
+      WITH nav_input AS MATERIALIZED (SELECT (CASE WHEN ${native} THEN ${event} END)::jsonb AS event),
       nav_parts AS MATERIALIZED (SELECT event, event -> 'message' AS message,
         event #> '{message,content}' AS content FROM nav_input)
-      SELECT ${postgresModelNavigationSql(source, message, content, type)}::text FROM nav_parts)`;
+      SELECT ${postgresModelNavigationSql(source, message, content, type)}::text FROM nav_parts) ELSE ${event} END`;
   }
   const sqliteEntryType = entryType ?? jsonPathValue(db, event, sql.lit("$.type"));
   const entry = jsonPickObject(db, event, MODEL_CONTEXT_NAVIGATION_KEYS);
