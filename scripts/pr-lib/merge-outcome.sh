@@ -823,13 +823,18 @@ merge_outcome_read_remote() {
 
 merge_outcome_require_commit() {
   local oid="$1" role="$2"
+  # Older Git ignores GIT_NO_LAZY_FETCH; reject it before any object lookup.
+  if ! pr_run_bounded pr_git --no-lazy-fetch --version >/dev/null 2>&1; then
+    echo "Merge outcome: commit acquisition requires Git with --no-lazy-fetch support (Git 2.45+); check OPENCLAW_PR_GIT." >&2
+    return 1
+  fi
   # Fetch immutable objects only. Do not replace a pinned observation with the
   # moving origin/main tracking ref or FETCH_HEAD. The URL is the repository the
   # observation names, which origin need not be; blobs stay lazily fetched from origin.
-  if ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$oid^{commit}" 2>/dev/null; then
+  if ! GIT_NO_LAZY_FETCH=1 pr_git --no-lazy-fetch cat-file -e "$oid^{commit}" 2>/dev/null; then
     fetch_source_with_canonical_promisor "$MERGE_REPO_URL" "$oid" --no-write-fetch-head || { merge_outcome_stop "cannot fetch authoritative $role $oid"; return 1; }
   fi
-  GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$oid^{commit}"
+  GIT_NO_LAZY_FETCH=1 pr_git --no-lazy-fetch cat-file -e "$oid^{commit}"
 }
 
 merge_outcome_require_main() {

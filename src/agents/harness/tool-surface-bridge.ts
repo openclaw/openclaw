@@ -206,6 +206,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
       projectedTools: projectedCompactedTools,
       diagnostics: schemaProjection.diagnostics,
       promptToolPolicy: createAgentHarnessPromptToolPolicy({
+        diagnosticIdentity: params,
         tools: effectiveTools,
         catalogRef: toolSearchCatalogRef,
         codeModeControlsEnabled,

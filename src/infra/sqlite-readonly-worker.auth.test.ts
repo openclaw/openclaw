@@ -14,6 +14,7 @@ import {
   authProfileFileChanges,
 } from "../agents/auth-profiles/file-state.js";
 import { watchAuthProfileNativeCommits } from "../agents/auth-profiles/store-update-commit.js";
+import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
@@ -23,9 +24,11 @@ import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { SpawnBrokerError } from "../process/spawn-broker/protocol.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { revokeAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db-schema.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import * as directoryWatch from "./directory-watch-host.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
@@ -42,7 +45,8 @@ import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: vi.fn(actual.spawn) };
+  const mocked = { ...actual, spawn: vi.fn(actual.spawn) };
+  return { ...mocked, default: mocked };
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -113,7 +117,7 @@ it.skipIf(skipBroker)(
       ]);
       expect(brokerSpawn).toHaveBeenCalledTimes(1);
       expect(spawn).not.toHaveBeenCalled();
-      publication = watchAuthProfileNativeCommits(source);
+      publication = watchAuthProfileNativeCommits(source, readAuthProfileDatabaseIdentity(source));
       pendingRefresh = runInDetachedAsyncContext(refreshAuthProfileFileState);
       await scope.close();
       expect(brokerSpawn.mock.results[0]?.value.exitCode).toBeNull();
@@ -274,37 +278,126 @@ function read(
   });
 }
 
-it("rejects stale auth identity before transferring credentials from a replaced database", async () => {
-  const { source } = createAuthDatabase("original");
-  const replacement = createAuthDatabase("replacement");
-  const expectedIdentity = readDatabasePathIdentitySync(source).key;
-  await withSqliteReadOnlyWorkerScope(async () => {
-    await read(source, "canonical");
-    const child: ChildProcess = vi.mocked(spawn).mock.results[0]?.value;
-    const replies: unknown[] = [];
-    child.on("message", (message: unknown) => replies.push(message));
-    fs.renameSync(source, `${source}.retired`);
-    fs.renameSync(replacement.source, source);
-    await expect(
-      runSqliteReadOnlyWorker(source, {
-        mode: "auth-profile-rows",
-        source: "canonical",
-        expectedIdentity,
-        env: { ...process.env },
-      }),
-    ).rejects.toThrow("identity changed");
-    expect(replies).toEqual([
-      {
-        id: expect.any(Number),
-        result: { ok: false, message: expect.stringContaining("identity changed") },
-      },
-    ]);
-    expect((await read(source, "canonical")).store).toEqual({
-      status: "readable",
-      raw: replacement.store,
+it.each(["delete", "drained-wal", "journal"])(
+  "reads custodied auth rows without bypassing journal recovery (%s)",
+  async (kind) => {
+    const { source, rows } = createAuthDatabase();
+    const journal = kind === "journal";
+    if (kind === "drained-wal") {
+      const database = openNodeSqliteDatabase(source);
+      database.exec(
+        `PRAGMA journal_mode=WAL; PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION}; PRAGMA wal_checkpoint(TRUNCATE)`,
+      );
+      const sidecars = ["-wal", "-shm"].map((suffix) => ({
+        file: source + suffix,
+        bytes: fs.readFileSync(source + suffix),
+      }));
+      database.close();
+      for (const { file, bytes } of sidecars) {
+        fs.writeFileSync(file, bytes);
+      }
+    }
+    if (journal) {
+      fs.writeFileSync(`${source}-journal`, Buffer.alloc(512));
+    }
+    const family = ["", "-wal", "-shm", "-journal"].map((suffix) => ({
+      file: source + suffix,
+      bytes: fs.existsSync(source + suffix) ? fs.readFileSync(source + suffix) : undefined,
+      mtimeNs: fs.existsSync(source + suffix)
+        ? fs.statSync(source + suffix, { bigint: true }).mtimeNs
+        : undefined,
+    }));
+    const requests: unknown[] = [];
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    vi.mocked(spawn).mockImplementation((...args) => {
+      const child = actual.spawn(...args);
+      const send = child.send.bind(child);
+      vi.spyOn(child, "send").mockImplementation((...message) => {
+        requests.push(message[0]);
+        return send(...message);
+      });
+      return child;
     });
-  });
-});
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.dirname(source) };
+    await withDoctorSqliteMaintenanceLock({
+      env,
+      operation: "synthetic stopped auth read",
+      run: async (authority) => {
+        const scope = createOpenClawDatabaseMaintenanceScope({
+          schemaMaintenance: true,
+          assertOwnerCurrent: () => authority.assertCurrent(),
+          assertDatabaseAccess: () => authority.assertCurrent(),
+        });
+        try {
+          expect(
+            await scope.run(() =>
+              withArtifactPreservingStateReads(() => read(source, "canonical", undefined, env), {
+                agentDatabases: true,
+              }),
+            ),
+          ).toEqual({ ...rows, cacheable: false });
+        } finally {
+          await scope.close();
+        }
+      },
+    });
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          artifactPreserving: true,
+          immutable: journal ? undefined : true,
+          retainReader: false,
+        }),
+      }),
+    );
+    for (const { file, bytes, mtimeNs } of family) {
+      expect(fs.existsSync(file)).toBe(bytes !== undefined);
+      if (bytes) {
+        expect(fs.readFileSync(file)).toEqual(bytes);
+        expect(fs.statSync(file, { bigint: true }).mtimeNs).toBe(mtimeNs);
+      }
+    }
+  },
+);
+
+it.each(["file", "birthtime"] as const)(
+  "rejects stale auth %s identity before transferring credentials",
+  async (changed) => {
+    const { source, store } = createAuthDatabase("original");
+    const replacement = createAuthDatabase("replacement");
+    const identity = readDatabasePathIdentitySync(source);
+    await withSqliteReadOnlyWorkerScope(async () => {
+      await read(source, "canonical");
+      const child: ChildProcess = vi.mocked(spawn).mock.results[0]?.value;
+      const replies: unknown[] = [];
+      child.on("message", (message: unknown) => replies.push(message));
+      if (changed === "file") {
+        fs.renameSync(source, `${source}.retired`);
+        fs.renameSync(replacement.source, source);
+      }
+      await expect(
+        runSqliteReadOnlyWorker(source, {
+          mode: "auth-profile-rows",
+          source: "canonical",
+          expectedIdentity: identity.key,
+          expectedBirthtime:
+            changed === "birthtime" ? String(BigInt(identity.birthtime!) + 1n) : identity.birthtime,
+          env: { ...process.env },
+        }),
+      ).rejects.toThrow("identity changed");
+      expect(replies).toEqual([
+        {
+          id: expect.any(Number),
+          result: { ok: false, message: expect.stringContaining("identity changed") },
+        },
+      ]);
+      expect((await read(source, "canonical")).store).toEqual({
+        status: "readable",
+        raw: changed === "file" ? replacement.store : store,
+      });
+    });
+  },
+);
 
 it("observes agent initialization after a cold auth read in the same worker", async () => {
   const root = tempDirs.make("openclaw-auth-bootstrap-");

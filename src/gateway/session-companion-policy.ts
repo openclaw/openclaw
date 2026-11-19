@@ -14,7 +14,7 @@ import {
 } from "../agents/model-runtime-aliases.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { resolveAllowedModelRefCore } from "../agents/model-selection-resolve.js";
-import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
 import type { AgentSimpleCompletionSelection } from "../agents/simple-completion.types.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";

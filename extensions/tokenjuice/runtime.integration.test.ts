@@ -76,7 +76,12 @@ it("runs the packaged reducer while preserving exact reads and Code Mode results
     args: { command, workdir: "/workspace/tokenjuice" },
     result: {
       content: [{ type: "text", text: raw }],
-      details: { status: "completed", exitCode: 0 },
+      details: {
+        status: "completed",
+        exitCode: 0,
+        aggregated: raw,
+        fullOutputPath: "/workspace/tokenjuice/full-output.txt",
+      },
     },
     isError: false,
   });
@@ -87,8 +92,16 @@ it("runs the packaged reducer while preserving exact reads and Code Mode results
       text: "Changes not staged:\nM: src/alpha.ts\nM: src/beta.ts\n\n[tokenjuice compacted bash output]",
     },
   ]);
-  const preserved = await runner.applyToolResultMiddleware(event("cat README.md"));
-  expect(preserved.content).toEqual([{ type: "text", text: raw }]);
+  expect(compacted.details).toMatchObject({
+    status: "completed",
+    exitCode: 0,
+    aggregated:
+      "Changes not staged:\nM: src/alpha.ts\nM: src/beta.ts\n\n[tokenjuice compacted bash output]",
+    fullOutputPath: "/workspace/tokenjuice/full-output.txt",
+    tokenjuice: { compacted: true },
+  });
+  const exactRead = event("cat README.md");
+  expect(await runner.applyToolResultMiddleware(exactRead)).toEqual(exactRead.result);
 
   const code = 'return { records: await catalog.search("schema") };';
   const codeMode = event(code);

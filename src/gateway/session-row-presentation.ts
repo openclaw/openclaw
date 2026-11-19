@@ -159,6 +159,7 @@ export function prepareSessionRowPublication(
 ) {
   const view = prepareSessionRowPublicationView(projection);
   let activeRuns: Map<VisibleActiveSessionRunProjector, ActiveRunStates> | undefined;
+  let subagentRuns: SessionRowReadView["state"]["rowContext"]["subagentRuns"] | undefined;
   return (client?: GatewayClient | null, projectRun?: VisibleActiveSessionRunProjector) => {
     const recipient = prepareSessionRowRecipient(read, client, view);
     let presentation: ReturnType<typeof prepareProjectedSessionPresentation> | undefined;
@@ -169,6 +170,9 @@ export function prepareSessionRowPublication(
       },
       // Event fanout needs display structures only on an audience miss, after live authority.
       getPresentation() {
+        if (subagentRuns?.revision !== recipient.rowContext.subagentRuns.revision) {
+          subagentRuns = recipient.rowContext.subagentRuns.atTime(now);
+        }
         let runStates = projectRun && activeRuns?.get(projectRun);
         if (projectRun && !runStates) {
           runStates = new Map();
@@ -181,6 +185,7 @@ export function prepareSessionRowPublication(
           projectRun,
           recipient,
           runStates,
+          subagentRuns,
         ));
       },
     };
@@ -218,6 +223,7 @@ export function prepareProjectedSessionPresentation(
   projectRun?: VisibleActiveSessionRunProjector,
   recipient = prepareSessionRowRecipient(projection, client),
   sharedActiveRuns?: ActiveRunStates,
+  subagentRuns = recipient.rowContext.subagentRuns.atTime(now),
 ) {
   let activeRuns = sharedActiveRuns;
   const { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing } = recipient;
@@ -227,7 +233,6 @@ export function prepareProjectedSessionPresentation(
       ? undefined
       : prepareOperatorModelPresentation({ cfg, policyConfig, client });
   const publicationRows = publicationState?.rows;
-  const subagentRuns = rowContext.subagentRuns.atTime(now);
   const countBackgroundProcesses = prepareRunningBackgroundProcessCount();
   const preparedRowContext = { ...rowContext, subagentRuns };
   const runState = (

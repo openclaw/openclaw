@@ -324,17 +324,9 @@ it.each([
   ["qualified full publication", "full", "latest", "full-release-validation", true],
   ["beta publication", "beta", "beta", "full-release-validation", false],
   ["focused beta evidence", "beta", "latest", "authorized-beta-focused-v1", false],
-  [
-    "retired waiver cannot qualify stable publication",
-    "beta",
-    "latest",
-    "full-release-validation",
-    false,
-    "Operator approved soak waiver",
-  ],
 ])(
   "creates bootstrap approval only with qualified evidence: %s",
-  (_name, profile, distTag, evidenceMode, expected, waiver = "") => {
+  (_name, profile, distTag, evidenceMode, expected) => {
     const parent = parse(
       readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"),
     ) as Workflow;
@@ -357,7 +349,7 @@ it.each([
           },
           needs: {
             resolve_release_target: {
-              outputs: { release_profile: profile, stable_soak_waiver: JSON.stringify(waiver) },
+              outputs: { release_profile: profile },
             },
           },
         }),
@@ -392,16 +384,6 @@ it.skipIf(process.platform === "win32").each([
     { approval: { releaseTag: "v2026.9.33" }, env: { PACKAGE_VERSION: "2026.9.33" } },
   ],
   ["profile", { approval: { releaseProfile: "beta" } }],
-  [
-    "retired waiver",
-    {
-      approval: {
-        releaseProfile: "beta",
-        stableSoakWaiver: "2026.9.3 approved",
-        stableSoakWaiverSource: "explicit",
-      },
-    },
-  ],
   ["attestation", { attestationExit: 1 }],
   ["tag moved", { tagSha: "c".repeat(40) }],
   ["target", { approval: { targetSha: "c".repeat(40) } }],
@@ -700,12 +682,13 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
 );
 
 it.each([
-  ["main-pinned transport", `refs/heads/release-ci/${"b".repeat(12)}-123`, true, true],
-  ["mismatched transport", `refs/heads/release-ci/${"c".repeat(12)}-123`, true, false],
-  ["untrusted tooling", `refs/heads/release-ci/${"b".repeat(12)}-123`, false, false],
+  ["main-pinned transport", `refs/heads/release-ci/${"b".repeat(12)}-123`, true, true, "a"],
+  ["candidate-owned transport", `refs/heads/release-ci/${"b".repeat(12)}-123`, false, true, "b"],
+  ["mismatched transport", `refs/heads/release-ci/${"c".repeat(12)}-123`, true, false, "a"],
+  ["untrusted tooling", `refs/heads/release-ci/${"b".repeat(12)}-123`, false, false, "a"],
 ])(
   "admits extended-stable FRV preflight through %s",
-  (_label, workflowRef, toolingReachable, admitted) => {
+  (_label, workflowRef, toolingReachable, admitted, sourcePrefix) => {
     const root = tempDirs.make("plugin-extended-stable-preflight-");
 
     writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2026.8.33" }));
@@ -718,7 +701,7 @@ class GitFailure(Exception):
 target = os.environ["SOURCE_REF"]
 def git_output(_workspace, *args):
     if args[0] == "rev-parse":
-        return target
+        return args[1] if args[1] == os.environ["WORKFLOW_SHA"] else target
     raise RuntimeError("unexpected git_output call")
 def run_git(_workspace, *args, **_kwargs):
     if args[0] == "merge-base":
@@ -740,6 +723,7 @@ sys.modules["ci_git_owner"] = types.SimpleNamespace(
       {
         REQUIRE_NPM_PUBLISH_ENVIRONMENT: "false",
         WORKFLOW_REF: workflowRef,
+        SOURCE_REF: sourcePrefix.repeat(40),
         TOOLING_REACHABLE: String(toolingReachable),
         PREFLIGHT_ONLY: "true",
         NPM_DIST_TAG: "extended-stable",

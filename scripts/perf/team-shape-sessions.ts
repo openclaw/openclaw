@@ -298,7 +298,7 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
         () => {},
       );
       mutatePendingInput(
-        { ...identity, kind: "finish", disposition: "interrupted" },
+        { ...identity, kind: "finish", disposition: "interrupted", endCause: "failed" },
         owner,
         () => {},
       );

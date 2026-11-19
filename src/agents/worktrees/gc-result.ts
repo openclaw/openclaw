@@ -19,7 +19,8 @@ export function formatWorktreeGcResult(
       `pruned ${result.snapshotsPruned} snapshots`,
       result.scratch &&
         `scratch (24 h): removed ${result.scratch.entriesRemoved} entries / ${result.scratch.bytesRemoved} bytes, skipped-live ${result.scratch.skippedLive}, deferred ${result.scratch.deferred}`,
-      ...(result.scratch?.errors ?? []),
+      ...(result.scratch?.errors ?? []).map((error) => `scratch cleanup deferred: ${error}`),
+      result.scratchDeferred === "io-pressure" && "scratch cleanup deferred: host IO pressure",
       result.gitMaintenance &&
         `Git ${result.gitMaintenance.stage}: ${result.gitMaintenance.repoRoot}`,
       result.gitMaintenance?.packsBefore !== undefined &&

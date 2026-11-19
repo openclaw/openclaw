@@ -6,6 +6,7 @@ import {
   sendDurableMessageBatch,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -501,14 +502,16 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
             if (!payload.text?.trim() && !payload.mediaUrl && !payload.mediaUrls?.length) {
               return { visibleReplySent: false };
             }
+            const deliveryCfg = readConfig();
             const sent = await sendXDelivery({
-              cfg: readConfig(),
+              cfg: deliveryCfg,
               accountId: account.accountId,
               to: `x:${post.id}`,
               text: payload.text ?? "",
               mediaUrl: payload.mediaUrl,
               mediaUrls: payload.mediaUrls,
               mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, route.agentId),
+              mediaAccess: resolveOutboundMediaAccessForConfig(deliveryCfg),
               mention: post,
               visibleWorkSessions: guest ? undefined : sessions,
               senderTier: authorization.tier,

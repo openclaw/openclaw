@@ -59,7 +59,11 @@ it("reveals identity and following settings before preferences finish, then enab
     identity.resolve({ profile: modelAccountProfile });
     await waitForSolid(() => {
       expect(request).toHaveBeenCalledWith("users.prefs.get", {
-        keys: [GIT_COAUTHOR_PREFERENCE_KEY, "github.prAttribution.enabled"],
+        keys: [
+          GIT_COAUTHOR_PREFERENCE_KEY,
+          "github.prAttribution.enabled",
+          "git.coauthor.organization",
+        ],
       });
       expect(page.textContent).toContain("ada@example.test");
       expect(page.querySelector("openclaw-model-accounts")).not.toBeNull();

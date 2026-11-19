@@ -1,2 +1,0 @@
-# Cover prepared Bun in lint entry points, failed setup, and nonconsumer exclusion.
-67

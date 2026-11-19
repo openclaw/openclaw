@@ -1,2 +1,0 @@
-16
-# Preserve kernel-only evidence for unsupported/failed CPU capture; reuse native Linux proof on Node 24.

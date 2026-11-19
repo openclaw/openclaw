@@ -120,7 +120,7 @@ it("does not let sandbox-written files in the sandbox root refuse the Gateway", 
   closeOpenClawAgentDatabasesForTest();
   await expect(state.ready()).resolves.toBeUndefined();
   // The copy's first preparation in this process still refuses it.
-  expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: copy })).toThrow(
+  await expect(assertNoUnmigratedWorkspaceState({ workspaceDir: copy })).rejects.toThrow(
     "Legacy workspace setup state requires migration",
   );
 });

@@ -4,7 +4,7 @@ import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-c
 import { applyGatewaySessionStoreAdmission } from "../config/sessions/combined-store-gateway.js";
 import type { CombinedSessionStoreScopeTargets } from "../config/sessions/combined-store.types.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
-import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -80,7 +80,7 @@ export async function readSessionRowLookup(
           ),
       );
     },
-    projectionLane,
+    sessionStoreLane,
   );
 }
 
@@ -314,6 +314,7 @@ export function prepareSessionRowScopes(
         ),
       );
       return {
+        targets: resolved.durableTargets,
         paths: new Map(paths.map((pathname, index) => [pathname, index])),
         path: paths.length === 1 ? (filenames.get(paths[0]!) ?? paths[0]!) : "(multiple)",
         configuredAgentIds: resolved.configuredAgentIds,
@@ -352,6 +353,7 @@ export function prepareSessionRowScopes(
       : undefined;
     const scope = requestedAgentId
       ? (agents.get(requestedAgentId) ?? {
+          targets: [],
           paths: new Map<string, number>(),
           path: "(multiple)",
           agentId: requestedAgentId,

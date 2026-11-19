@@ -5,6 +5,10 @@ import { createMockCronStateForJobs } from "../cron/service.test-harness.js";
 import { listPage } from "../cron/service/ops-read.js";
 import type { CronJob } from "../cron/types.js";
 import {
+  getGatewayServiceInstallation,
+  withGatewayServiceInstallation,
+} from "../infra/gateway-service-installation-context.js";
+import {
   createSqliteReadOnlyWorkerScope,
   isSqliteInspectionDeadlineOwnedByCaller,
 } from "../infra/sqlite-readonly-worker.js";
@@ -44,9 +48,23 @@ describe("createLazyGatewayCronState", () => {
     const broker = await createBroker();
     let observedBroker: unknown = "not-built";
     let observedReadOnlyScope = false;
+    let observedInstallation: unknown;
+    let observedOperationInstallation: unknown;
+    const originalStatus = cron.status;
+    cron.status = vi.fn(async () => {
+      observedOperationInstallation = getGatewayServiceInstallation();
+      return await originalStatus();
+    });
+    const installation = {
+      root: "/fixture/service",
+      version: "1",
+      cliVersion: "1",
+      databasePath: "/fixture/state.sqlite",
+    };
     buildGatewayCronService.mockImplementationOnce(() => {
       observedBroker = getSpawnBroker();
       observedReadOnlyScope = isSqliteInspectionDeadlineOwnedByCaller();
+      observedInstallation = getGatewayServiceInstallation();
       return state;
     });
     const readers = createSqliteReadOnlyWorkerScope({
@@ -54,7 +72,11 @@ describe("createLazyGatewayCronState", () => {
       deadlineOwnedByCaller: true,
     });
     lazy = readers.run(() =>
-      runWithSpawnBroker(broker, () => createLazyGatewayCronState(createParams())),
+      runWithSpawnBroker(broker, () =>
+        withGatewayServiceInstallation({ installation }, () =>
+          createLazyGatewayCronState(createParams()),
+        ),
+      ),
     );
     state.readHeartbeatSummary = vi.fn(async () => []);
     expect(lazy.readHeartbeatSummary).toBeUndefined();
@@ -76,6 +98,8 @@ describe("createLazyGatewayCronState", () => {
     expect(lazy.readHeartbeatSummary).toBe(state.readHeartbeatSummary);
     expect(observedBroker === broker).toBe(true);
     expect(observedReadOnlyScope).toBe(true);
+    expect(observedInstallation).toEqual(installation);
+    expect(observedOperationInstallation).toEqual(installation);
   });
 
   it("keeps visibility filtering inside the loaded service's page snapshot", async () => {

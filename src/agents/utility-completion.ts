@@ -22,7 +22,7 @@ import {
   getPreparedModelRuntimeAuthMaterializations,
 } from "./prepared-model-runtime-auth.js";
 import { acquirePreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
-import { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-runtime.js";
+import { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-selection.js";
 import { readUtilityModelSetting } from "./utility-model-setting.js";
 import { resolveAutomaticUtilityRuntimeOverride } from "./utility-model.js";
 

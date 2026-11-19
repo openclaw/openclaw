@@ -262,6 +262,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await expect.poll(loadStoredSidebarSessionSortMode).toBe("created");
       await tabTo("button", "Hide empty groups: When filtering");
       await tabTo("switch", "Show message preview");
+      await tabTo("link", "View all sessions");
       await tabTo("link", "Session sources");
       await userEvent.keyboard("{Escape}");
       await expect.element(trigger).toHaveFocus();

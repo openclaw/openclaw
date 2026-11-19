@@ -1,3 +1,0 @@
-# Exact net growth: main-thread lock I/O regression, worker-owned root/projection loss,
-# and asynchronous expiry/cleanup recovery while preserving real-process mutual exclusion.
-63

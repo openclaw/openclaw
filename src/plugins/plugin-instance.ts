@@ -27,7 +27,7 @@ import type {
   PluginInstanceDisposalResult,
   PluginInstanceDisposalCleanup as DisposalCleanup,
   PluginInstanceLifecycle,
-  PluginModuleLoaderRecovery,
+  PluginModuleLoaderRecovery as ModuleRecovery,
   PluginRetentionSnapshot,
   PluginRetentionReason,
   PluginRetentionOwner,
@@ -61,7 +61,7 @@ export class PluginInstance {
   sourceDigest?: string;
   private moduleLoader?: (source: string) => unknown;
   private setupCache?: PluginCache;
-  private captureModuleRecovery?: () => PluginModuleLoaderRecovery;
+  private captureModuleRecovery?: Parameters<PluginInstance["bindModuleLoaderRecovery"]>[0];
   private moduleSourceExists?: false | ((source: string) => boolean);
   private accepting = true;
   private readonly retainedWork = new Set<object>();
@@ -555,11 +555,11 @@ export class PluginInstance {
     return this.moduleSourceExists && this.moduleSourceExists(source);
   }
 
-  bindModuleLoaderRecovery(capture: () => PluginModuleLoaderRecovery): void {
+  bindModuleLoaderRecovery(capture: () => ModuleRecovery | Promise<ModuleRecovery>): void {
     this.captureModuleRecovery = capture;
   }
 
-  captureModuleLoaderRecovery(): PluginModuleLoaderRecovery {
+  async captureModuleLoaderRecovery(): Promise<ModuleRecovery> {
     if (this.disposing || this.owner?.revoked || this.controller.signal.aborted) {
       throw new PluginInstanceUnavailableError(this.pluginId);
     }

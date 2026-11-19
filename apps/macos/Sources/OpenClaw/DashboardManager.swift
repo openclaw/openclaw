@@ -47,6 +47,8 @@ final class DashboardManager {
     @ObservationIgnored private let endpointStateProvider: @Sendable () async -> GatewayEndpointState
     @ObservationIgnored let mainWindowAutosaveName: String
     @ObservationIgnored private let websiteDataStore: WKWebsiteDataStore
+    /// In-memory store for the OpenClaw ID operator dashboard, separate from every other page.
+    @ObservationIgnored private(set) lazy var operatorDashboardStore = WKWebsiteDataStore.nonPersistent()
     @ObservationIgnored private var profileBrowserStores: [String: DashboardBrowserSessionStore] = [:]
     @ObservationIgnored private(set) var profileCredentialRevisions: [String: UInt64] = [:]
     @ObservationIgnored private(set) var unavailableProfileIDs: Set<String> = []
@@ -334,9 +336,9 @@ final class DashboardManager {
             guard self.endpointGeneration == generation else { return }
             for controller in currentControllers() {
                 controller.showFailure(
-                    title: "Dashboard unavailable",
+                    title: "OpenClaw unavailable",
                     message: error.localizedDescription,
-                    detail: "Reconnect to the Gateway to verify its dashboard sign-in address.",
+                    detail: "Reconnect to the Gateway to verify its sign-in address.",
                     present: false)
             }
             return
@@ -380,6 +382,7 @@ final class DashboardManager {
     }
 
     private func replaceWithRouteFailure(_ current: DashboardWindowController) {
+        if self.showRemovalIfNeeded(in: current, present: false) { return }
         guard current.currentURL != Self.failureURL || current.auth.hasCredential else { return }
         let replacement = self.replaceWindowController(
             current,
@@ -392,7 +395,7 @@ final class DashboardManager {
             target: .primary,
             present: false)
         replacement?.showFailure(
-            title: "Dashboard reconnecting",
+            title: "Reconnecting",
             message: "The selected Gateway changed.",
             detail: "Waiting for a fresh authenticated connection.",
             present: false,
@@ -628,7 +631,7 @@ final class DashboardManager {
             return .success(())
         } catch {
             if reportErrors, isCurrent(), !(error is CancellationError) {
-                self.presentGatewayError(error, title: "Could Not Open Dashboard", over: currentSource()?.window)
+                self.presentGatewayError(error, title: "Could Not Open OpenClaw", over: currentSource()?.window)
             }
             return .failure(error)
         }
@@ -637,6 +640,7 @@ final class DashboardManager {
     func showFailure(_ error: Error) {
         let message = (error as NSError).localizedDescription
         dashboardManagerLogger.error("dashboard setup failed error=\(message, privacy: .public)")
+        let copy = self.failureCopy(for: error)
         let controller = self.controller ?? makeController(
             configuration: WindowConfiguration(
                 url: Self.failureURL,
@@ -652,10 +656,8 @@ final class DashboardManager {
         // Keep observing while the failure page is up so a recovered tunnel
         // swaps the window back to the live dashboard.
         self.observeEndpointChanges()
-        controller.showFailure(
-            title: "Dashboard unavailable",
-            message: message,
-            detail: "Open Connection or use Debug → Reset Remote Tunnel, then try again.")
+        if self.showRemovalIfNeeded(in: controller, present: true) { return }
+        controller.showFailure(title: copy.title, message: copy.message, detail: copy.detail)
     }
 
     private func retireWindowPresentation() {
@@ -1185,12 +1187,13 @@ extension DashboardManager {
         return ControlUIDocumentHost(
             url: configuration.url,
             auth: configuration.auth,
-            websiteDataStore: store?.dataStore ?? self.websiteDataStore,
+            websiteDataStore: configuration.operatorDataStore ?? store?.dataStore ?? self.websiteDataStore,
             tlsParams: configuration.tlsParams,
             browserSessionLease: store?.lease(for: configuration.browserSession),
             nativeAuthProvider: configuration.nativeAuthProvider,
             legacyNativeCredentials: configuration.legacyNativeCredentials)
         {
+            if let rule = configuration.operatorCookieRule { $0.add(rule) }
             installCapabilities($0, configuration.url)
         }
     }
@@ -1207,7 +1210,9 @@ extension DashboardManager {
         let controller = DashboardWindowController(
             url: configuration.url,
             auth: configuration.auth,
-            websiteDataStore: browserStore?.dataStore ?? self.websiteDataStore,
+            websiteDataStore: configuration.operatorDataStore ?? browserStore?.dataStore ?? self.websiteDataStore,
+            isolatesReadingTabs: configuration.operatorDataStore != nil,
+            cookieRule: configuration.operatorCookieRule,
             updater: self.updater,
             updateBridgeEnabled: primaryLocal && Self.updateBridgeEnabled(mode: configuration.mode),
             tlsParams: configuration.tlsParams,

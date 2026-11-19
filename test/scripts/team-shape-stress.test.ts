@@ -285,41 +285,44 @@ it("loads each built entry's own package exports despite controller source alias
   }
 });
 
-it("counts built policy preparation only inside the diagnostic measurement window", async () => {
-  const root = temporary.make("team-stress-policy-counts-");
-  fs.writeFileSync(
-    path.join(root, "operator-model-policy-fixture.mjs"),
-    `export function prepareOperatorModelPolicy(value) { prepareRefs(); return value; }
-     export function restoreOperatorModelPolicySnapshot(value) { return value; }
-     function prepareRefs() {}`,
-  );
-  const entry = path.join(root, "entry.mjs");
-  fs.writeFileSync(
-    entry,
-    `import {prepareOperatorModelPolicy, restoreOperatorModelPolicySnapshot} from "./operator-model-policy-fixture.mjs";
+it.each([" {", "{"])(
+  "counts built policy preparation inside its measurement window (%s)",
+  async (brace) => {
+    const root = temporary.make("team-stress-policy-counts-");
+    fs.writeFileSync(
+      path.join(root, "operator-model-policy-fixture.mjs"),
+      `export function prepareOperatorModelPolicy(value)${brace} prepareRefs(); return value; }
+     export function restoreOperatorModelPolicySnapshot(value)${brace} return value; }
+     function prepareRefs()${brace}}`,
+    );
+    const entry = path.join(root, "entry.mjs");
+    fs.writeFileSync(
+      entry,
+      `import {prepareOperatorModelPolicy, restoreOperatorModelPolicySnapshot} from "./operator-model-policy-fixture.mjs";
      prepareOperatorModelPolicy("outside");
      process.emit("message", {channel: "team-shape-stress", action: "start"});
      if (prepareOperatorModelPolicy("inside") !== "inside") throw new Error("changed output");
      restoreOperatorModelPolicySnapshot({});
      process.emit("message", {channel: "team-shape-stress", action: "stop", output: ${JSON.stringify(root)}});`,
-  );
-  const loader = new URL("../../scripts/perf/team-shape-stress-loader.mjs", import.meta.url);
-  await executeFile(resolveTestNodeExecPath(), ["--import", loader.href, entry], {
-    cwd: root,
-    env: { ...process.env, OPENCLAW_BENCH_OPERATOR_MODEL_POLICY_COUNTS: "1" },
-    timeout: 15_000,
-  });
-  const result = JSON.parse(
-    fs.readFileSync(path.join(root, "operator-model-policy-counts.json"), "utf8"),
-  );
-  expect(result.counts).toEqual({
-    prepareOperatorModelPolicy: 1,
-    restoreOperatorModelPolicySnapshot: 1,
-    prepareRefs: 1,
-    prepareSessionRowRecipient: 0,
-  });
-  expect(result.installed).toHaveLength(3);
-});
+    );
+    const loader = new URL("../../scripts/perf/team-shape-stress-loader.mjs", import.meta.url);
+    await executeFile(resolveTestNodeExecPath(), ["--import", loader.href, entry], {
+      cwd: root,
+      env: { ...process.env, OPENCLAW_BENCH_OPERATOR_MODEL_POLICY_COUNTS: "1" },
+      timeout: 15_000,
+    });
+    const result = JSON.parse(
+      fs.readFileSync(path.join(root, "operator-model-policy-counts.json"), "utf8"),
+    );
+    expect(result.counts).toEqual({
+      prepareOperatorModelPolicy: 1,
+      restoreOperatorModelPolicySnapshot: 1,
+      prepareRefs: 1,
+      prepareSessionRowRecipient: 0,
+    });
+    expect(result.installed).toHaveLength(3);
+  },
+);
 
 it.each([false, true])(
   "counts main-isolate receipt restoration only when guarded assignment succeeds (candidate: %s)",
@@ -776,7 +779,7 @@ it.each([false, true])("keeps partial worker evidence (%s)", (worktreeToolChurn)
   }
 });
 
-it.each(["//#region", "//"])(
+it.each(["//#region ", "// ", "//!"])(
   "ranks allocating self bytes across stacks and preserves source-mapping uncertainty (%s)",
   async (label) => {
     const root = temporary.make("survivor-leaf-rank-");
@@ -789,7 +792,7 @@ it.each(["//#region", "//"])(
     const built = path.join(root, "dist/owner.js");
     fs.writeFileSync(
       built,
-      `${label} src/owner.ts\nfunction allocate() {}\n${label === "//#region" ? "//#endregion" : "// src/other.ts"}\n`,
+      `${label}src/owner.ts\nfunction allocate() {}\n${label.startsWith("//#region") ? "//#endregion" : `${label}src/other.ts`}\n`,
     );
     const mapped = path.join(root, "dist/mapped.js");
     fs.writeFileSync(mapped, "function mapped() {}\n//# sourceMappingURL=mapped.js.map\n");

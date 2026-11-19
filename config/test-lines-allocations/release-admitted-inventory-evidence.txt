@@ -1,2 +1,0 @@
-# Exact publication-admission subprocess proof for historical exemption ZIP capture and post-acquisition authority; reuses the exemption fixture.
-122

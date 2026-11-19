@@ -601,11 +601,11 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
-  it.each(["//#region", "//"])(
+  it.each(["//#region ", "// ", "//!"])(
     "does not treat source-owned implementations as runtime wrappers (%s)",
     async (label) => {
       const f = await runtimeFixture({
-        "owner.runtime-Impl123.mjs": `import { value } from "./owner.runtime-Other456.mjs";\n${label} src/infra/owner.ts\nexport const current = value;\n`,
+        "owner.runtime-Impl123.mjs": `import { value } from "./owner.runtime-Other456.mjs";\n${label}src/infra/owner.ts\nexport const current = value;\n`,
         "owner.runtime-Other456.mjs": "export const value = true;\n",
         "owner.runtime.js": 'export * from "./owner.runtime-Stale.js";\n',
       });
@@ -743,7 +743,13 @@ describe("runtime postbuild static assets", () => {
         const loaded = await load(rootDir, `dist/${chunk.path}`);
         for (const { exported, origin } of chunk.exports) {
           expect(await loaded[exported](), `${release.version}: ${chunk.path}:${exported}`).toBe(
-            origin.symbol,
+            // 2026.9.37 deliberately denied leased-handoff authority; its implementation
+            // is inline rather than one of the fixture's named runtime exports.
+            release.version === "2026.9.37" &&
+              chunk.path === "update-managed-service-handoff-current-E5XsvJxw.mjs" &&
+              exported === "isCurrentManagedServiceUpdateHandoffProcess"
+              ? false
+              : origin.symbol,
           );
         }
       }

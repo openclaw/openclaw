@@ -6,7 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import {
@@ -32,9 +32,9 @@ const ROOT_FOLLOWUP = "ROOT-FOLLOWUP: send the runner a follow-up.";
 const RUNNER = "RUNNER-TASK: delegate the leaf check, wait for it, then report.";
 const RUNNER_FOLLOWUP = "RUNNER-FOLLOWUP-WHILE-YIELDED";
 const LEAF = "LEAF-TASK: answer with the leaf marker.";
-const LEAF_ANSWER = "LEAF-ANSWER-5e8";
+const LEAF_ANSWERS = Array.from({ length: 4 }, (_, index) => `LEAF-ANSWER-${index}-5e8`);
 
-type Revocation = "none" | "requester reset" | "explicit stop";
+type Revocation = "none" | "requester reset" | "explicit stop" | "model error";
 
 type Item = { type?: unknown; role?: unknown; name?: unknown; call_id?: unknown; output?: unknown };
 
@@ -75,9 +75,10 @@ function newestInput(body: unknown): string {
   return strings(all.slice(last + 1)).join("\n");
 }
 
-async function startModel(markerPath: string) {
+async function startModel(markerPath: string, ending: Revocation) {
   const runnerSpawned = createDeferred<SpawnReceipt>();
-  const leafSpawned = createDeferred<SpawnReceipt>();
+  const leafSpawned = createDeferred<SpawnReceipt[]>();
+  const leaves: SpawnReceipt[] = [];
   const followupStarted = createDeferred();
   const allowFollowupReply = createDeferred();
   const releaseLeaf = createDeferred();
@@ -116,10 +117,19 @@ async function startModel(markerPath: string) {
       return;
     }
     if (raw.includes(RUNNER)) {
-      if (newest.includes(LEAF_ANSWER)) {
+      if (LEAF_ANSWERS.every((answer) => newest.includes(answer))) {
         settleWakes += 1;
         settleAccepted.resolve();
         await control.beforeEffect?.();
+        if (ending === "model error") {
+          response.writeHead(400, { "Content-Type": "application/json" });
+          response.end(
+            JSON.stringify({
+              error: { message: "Synthetic requester failure", type: "invalid_request_error" },
+            }),
+          );
+          return;
+        }
         writeToolCall(response, "write", { path: markerPath, content: "settle effect\n" });
         return;
       }
@@ -129,15 +139,19 @@ async function startModel(markerPath: string) {
         reply("Follow-up noted.");
         return;
       }
-      if (calls(body, "sessions_spawn") === 0) {
-        writeToolCall(response, "sessions_spawn", { task: LEAF, context: "isolated" });
+      const leaf = findSubagentSpawnReceipt(toolOutput(body, "sessions_spawn"));
+      if (leaf && !leaves.some((entry) => entry.runId === leaf.runId)) {
+        leaves.push(leaf);
+      }
+      if (leaves.length < LEAF_ANSWERS.length) {
+        writeToolCall(response, "sessions_spawn", {
+          task: `${LEAF} ${leaves.length}`,
+          context: "isolated",
+        });
         return;
       }
       if (calls(body, "sessions_yield") === 0) {
-        const leaf = findSubagentSpawnReceipt(toolOutput(body, "sessions_spawn"));
-        if (leaf) {
-          leafSpawned.resolve(leaf);
-        }
+        leafSpawned.resolve(leaves);
         writeToolCall(response, "sessions_yield", {});
         return;
       }
@@ -146,7 +160,8 @@ async function startModel(markerPath: string) {
     }
     if (raw.includes(LEAF)) {
       await releaseLeaf.promise;
-      reply(LEAF_ANSWER);
+      const index = LEAF_ANSWERS.findIndex((_, i) => raw.includes(`${LEAF} ${i}`));
+      reply(LEAF_ANSWERS[index]!);
       return;
     }
     reply("NO_REPLY");
@@ -176,20 +191,6 @@ async function startModel(markerPath: string) {
   };
 }
 
-async function within<T>(promise: Promise<T>, ms: number, describe: () => string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(describe())), ms);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 /** Resolves once a registry publication makes `find` return a row. */
 function untilRun(find: () => SubagentRunRecord | undefined): Promise<SubagentRunRecord> {
   const found = createDeferred<SubagentRunRecord>();
@@ -206,12 +207,14 @@ function untilRun(find: () => SubagentRunRecord | undefined): Promise<SubagentRu
 
 afterEach(() => resetSubagentRegistryForTests({ persist: false }));
 
-it.each<Revocation>(["none", "requester reset", "explicit stop"])(
+it.for<Revocation>(["none", "requester reset", "explicit stop", "model error"])(
   "a runner's settle wake survives a queued follow-up turnover; revocation after acceptance: %s",
-  async (revocation) => {
+  { timeout: 120_000 },
+  async (revocation, { signal }) => {
+    const within = <T>(work: Promise<T>) => withinTest(work, signal);
     const state = await createOpenClawTestState({ label: "subagent-settle-turnover" });
     const markerPath = path.join(state.workspaceDir, "settle-effect.txt");
-    const model = await startModel(markerPath);
+    const model = await startModel(markerPath, revocation);
     const base = createSubagentModelConfig(state.workspaceDir, {
       baseUrl: model.url,
       modelId: "settle-turnover",
@@ -245,15 +248,13 @@ it.each<Revocation>(["none", "requester reset", "explicit stop"])(
     try {
       await gateway.server.startupSettled;
       await wait((await send(ROOT)).runId);
-      const runner = await within(model.runnerSpawned, 30_000, () => "root never spawned runner");
-      const leaf = await within(model.leafSpawned, 30_000, () => "runner never spawned leaf");
+      const runner = await within(model.runnerSpawned);
+      const leaves = await within(model.leafSpawned);
       await within(
         untilRun(() => {
           const row = getSubagentRunByRunId(runner.runId);
           return row?.pauseReason === "sessions_yield" ? row : undefined;
         }),
-        30_000,
-        () => "runner never yielded for its leaf",
       );
       model.control.beforeEffect = async () => {
         if (revocation === "requester reset") {
@@ -270,7 +271,7 @@ it.each<Revocation>(["none", "requester reset", "explicit stop"])(
       };
 
       const followup = await send(ROOT_FOLLOWUP);
-      await within(model.followupStarted, 30_000, () => "runner follow-up never started");
+      await within(model.followupStarted);
       model.releaseLeaf();
       // The settle wake replaces the yielded run while the follow-up still runs.
       const settleRun = await within(
@@ -281,29 +282,41 @@ it.each<Revocation>(["none", "requester reset", "explicit stop"])(
               run.runId.startsWith("announce:requester-settle:"),
           ),
         ),
-        30_000,
-        () => "runner settle wake never reached its session",
       );
       // A second follow-up queues behind the settle wake as the runner's newest run.
       await wait((await send(ROOT_FOLLOWUP)).runId);
+      await within(
+        untilRun(() => {
+          const rows = leaves.map((leaf) => getSubagentRunByRunId(leaf.runId));
+          return rows.every(
+            (row) =>
+              row?.delivery?.requesterDelivery?.state === "waiting" &&
+              row.delivery.requesterDelivery.blockingRunId,
+          )
+            ? rows[0]
+            : undefined;
+        }),
+      );
       model.allowFollowupReply();
       await wait(followup.runId);
 
-      await within(
-        model.settleAccepted,
-        30_000,
-        () =>
-          `runner never received the leaf answer; leaf delivery ${JSON.stringify(getSubagentRunByRunId(leaf.runId)?.delivery)}`,
-      );
+      await within(model.settleAccepted);
       await wait(settleRun.runId);
-      const leafDelivery = await within(
-        untilRun(() => {
-          const row = getSubagentRunByRunId(leaf.runId);
-          return row?.delivery?.status === "delivered" || revocation !== "none" ? row : undefined;
-        }),
-        30_000,
-        () => `leaf result never recorded: ${JSON.stringify(getSubagentRunByRunId(leaf.runId))}`,
-      ).then((row) => row.delivery?.status);
+      const requiresDelivery = revocation === "none" || revocation === "model error";
+      for (const leaf of leaves) {
+        const row = await within(
+          untilRun(() => {
+            const current = getSubagentRunByRunId(leaf.runId);
+            return current && (!current.requesterSettleWake || !requiresDelivery)
+              ? current
+              : undefined;
+          }),
+        );
+        expect(row.execution.outcome).toMatchObject({ status: "ok" });
+        if (requiresDelivery) {
+          expect(row.delivery).toMatchObject({ status: "delivered" });
+        }
+      }
       const history = await gateway.client.request<{ messages: Array<{ customType?: string }> }>(
         "chat.history",
         { sessionKey: runner.childSessionKey },
@@ -314,12 +327,10 @@ it.each<Revocation>(["none", "requester reset", "explicit stop"])(
         failedReplies: history.messages.filter(
           (message) => message.customType === "run-failed-before-reply",
         ).length,
-        ...(revocation === "none" ? { leafDelivery } : {}),
       }).toEqual({
         settleWakes: 1,
         effectWritten: revocation === "none",
-        failedReplies: 0,
-        ...(revocation === "none" ? { leafDelivery: "delivered" } : {}),
+        failedReplies: revocation === "model error" ? 1 : 0,
       });
     } finally {
       model.allowFollowupReply();
@@ -330,5 +341,4 @@ it.each<Revocation>(["none", "requester reset", "explicit stop"])(
       await state.cleanup();
     }
   },
-  120_000,
 );

@@ -63,6 +63,13 @@ function packageSchedule(
     },
   };
 }
+/** A same-version campaign publishes no target: it restarts to finish an earlier update. */
+function finishingSchedule(
+  campaign: Partial<NonNullable<UpdateScheduleState["campaign"]>>,
+): UpdateScheduleState {
+  const { target: _target, ...schedule } = packageSchedule(campaign);
+  return schedule;
+}
 function succeededRun(patch: Parameters<typeof createUpdateRunFixture>[0] = {}) {
   return createUpdateRunFixture({ status: "succeeded", phase: "finished", ...patch });
 }
@@ -674,9 +681,7 @@ describe("SidebarUpdateCard", () => {
     expect(action?.getAttribute("aria-disabled")).toBe("true");
     expect(action?.getAttribute("aria-describedby")).not.toBeNull();
     expect(tooltip?.hasAttribute("open-on-click")).toBe(true);
-    expect(tooltip?.content).toContain(
-      "You need admin access to change update settings or start an update.",
-    );
+    expect(tooltip?.content).toContain("Admin access required.");
     action?.click();
     expect(onUpdate).not.toHaveBeenCalled();
   });
@@ -710,6 +715,47 @@ describe("SidebarUpdateCard", () => {
     element.dispose();
     expect(clearInterval).toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "a new release",
+      update: stableUpdate,
+      schedule: packageSchedule({ state: "countdown", applyAtMs: 46_000 }),
+      title: "Update available",
+      status: "Updating in 0:45 · v2.0.0",
+      absent: "plugin",
+    },
+    {
+      name: "an owed plugin retry",
+      update: null,
+      schedule: finishingSchedule({ state: "countdown", applyAtMs: 46_000 }),
+      title: "Finishing update",
+      status: "Restarting in 0:45 to finish plugin updates",
+      absent: "Update available",
+    },
+    {
+      // Applying is busy, which otherwise titles the row "Updating Gateway…".
+      name: "an applying owed plugin retry",
+      update: null,
+      schedule: finishingSchedule({ state: "applying" }),
+      title: "Finishing update",
+      status: "Finishing plugin updates…",
+      absent: "Update",
+    },
+  ])(
+    "names the campaign for $name in the compact row and its card",
+    async ({ update, schedule, title, status, absent }) => {
+      vi.useFakeTimers({ now: 1_000 });
+      const element = await mount(update, { compact: true, updateSchedule: schedule });
+
+      expect(element.find(".sidebar-issues-panel__entity")?.textContent).toBe(title);
+      expect(element.find(".sidebar-issues-panel__state")?.textContent).toBe(status);
+      expect(element.text()).not.toContain(absent);
+      await element.update({ compact: false });
+      expect(element.action()?.textContent).toBe(status);
+      expect(element.text()).not.toContain(absent);
+    },
+  );
 
   it("retries a declined hold and keeps a consumed hold hidden across rerenders after expiry", async () => {
     vi.useFakeTimers({ now: 1_000 });

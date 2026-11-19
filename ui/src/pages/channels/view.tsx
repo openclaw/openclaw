@@ -313,6 +313,7 @@ function AvailableRow(params: { channelId: string; props: ChannelsProps }) {
         <button
           type="button"
           class="btn btn--sm"
+          aria-label={t("channels.setup.dialogLabel", { channel: label() })}
           disabled={!params.props.channels.connected}
           onClick={() => params.props.onStartSetup(params.channelId)}
         >

@@ -127,12 +127,12 @@ export function encodeGeminiDecisionRequest(batch: GeminiDecisionBatch, modelId:
 
 export function decodeGeminiDecisionResult(
   batch: GeminiDecisionBatch,
-  payload: Record<string, unknown>,
+  payload: unknown,
   modelId: string,
   capabilities: Parameters<typeof validateDecisionResultV2>[2],
 ): ProviderDecisionOutcomeV2 {
   const invalid = { status: "unavailable", reason: "invalid-response" } as const;
-  const { answers, usage } = payload;
+  const { answers, usage } = isRecord(payload) ? payload : {};
   // Gemini Decision generates no text tokens; nonzero output means a different contract.
   if (!isRecord(answers) || !isRecord(usage) || usage.total_output_tokens !== 0) {
     return invalid;

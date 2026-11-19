@@ -61,6 +61,28 @@ describe("node join link and proof", () => {
     }
   });
 
+  it("carries an explicit Discovery origin only as a strict optional field", () => {
+    const valid = fixture.node_invite.link;
+    const decoded = parseNodeJoinLink(valid)!;
+    expect(decoded.discovery_url).toBeUndefined();
+    const withOrigin = buildNodeJoinLink({
+      ...decoded,
+      discovery_url: "https://discovery.example.test",
+    });
+    expect(parseNodeJoinLink(withOrigin)?.discovery_url).toBe("https://discovery.example.test");
+    for (const origin of [
+      "https://discovery.example.test/path",
+      "https://user@discovery.example.test",
+      "https://discovery.example.test/?q=1",
+      "http://discovery.example.test",
+    ]) {
+      expect(parseNodeJoinLink(`${valid}&d=${encodeURIComponent(origin)}`)).toBeNull();
+    }
+    expect(
+      parseNodeJoinLink(`${withOrigin}&d=${encodeURIComponent("https://other.example.test")}`),
+    ).toBeNull();
+  });
+
   it("rejects ambiguous or secret-leaking links", () => {
     const valid = fixture.node_invite.link;
     for (const value of [

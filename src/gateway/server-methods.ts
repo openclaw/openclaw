@@ -280,6 +280,7 @@ export async function handleGatewayRequest(
     extraHandlers?: GatewayRequestHandlers;
     admission?: "continuation";
     requestEntry?: GatewayRequestEntry;
+    onHandlerStart?: () => void;
   },
   diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
@@ -618,18 +619,22 @@ export async function handleGatewayRequest(
         }
         return GatewayRpcDiagnostics.runHandler(
           req.method,
-          () =>
-            sharing
-              ? dispatchSharedRead(preparedHandler, handlerOptions, sharing, () => {
-                  runtimeAuthority?.assertCurrent();
-                  profileBinding?.assertCurrent();
-                  assertOperatorCurrent();
-                  requestMutationAuthority.assertCurrent();
-                  authorization.sessionAccessAuthority?.assertCurrent();
-                  sessionMutationAuthorization?.assertCurrent();
-                  signal?.throwIfAborted();
-                })
-              : preparedHandler(handlerOptions),
+          () => {
+            if (sharing) {
+              // Shared reads cannot commit a write; their failed delivery stays retryable.
+              return dispatchSharedRead(preparedHandler, handlerOptions, sharing, () => {
+                runtimeAuthority?.assertCurrent();
+                profileBinding?.assertCurrent();
+                assertOperatorCurrent();
+                requestMutationAuthority.assertCurrent();
+                authorization.sessionAccessAuthority?.assertCurrent();
+                sessionMutationAuthorization?.assertCurrent();
+                signal?.throwIfAborted();
+              });
+            }
+            opts.onHandlerStart?.();
+            return preparedHandler(handlerOptions);
+          },
           diagnostics,
         );
       };

@@ -1,8 +1,7 @@
 {
   "id": "perplexity",
   "categories": [
-    "web",
-    "models"
+    "web"
   ],
   "activation": {
     "onStartup": false
@@ -102,9 +101,6 @@
     }
   ],
   "modelCatalog": {
-    "discovery": {
-      "perplexity-decisions": "runtime"
-    },
     "providers": {
       "perplexity-decisions": {
         "baseUrl": "https://api.perplexity.ai/v1",

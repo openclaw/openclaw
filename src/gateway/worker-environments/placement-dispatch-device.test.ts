@@ -577,9 +577,17 @@ describe("device worker placement dispatch", () => {
     });
   });
 
-  it("rejects a replaced node connection", async () => {
+  it.each([
+    ["an unpaired device", undefined, "not a paired node host"],
+    ["a replaced node connection", { connId: "replaced-connection" }, "reconnect"],
+    ["a re-paired device", { pairingGeneration: "generation-2" }, "reconnect"],
+  ])("rejects %s", async (_name, current, error) => {
     const service = {};
-    bindDeviceWorkerAvailability(service, async () => ({ available: true, node: deviceProof() }));
+    bindDeviceWorkerAvailability(service, async () =>
+      current
+        ? { available: true, node: deviceProof() }
+        : { available: false, unavailableReason: "unpaired" },
+    );
 
     const result = await resolveDevicePlacementEligibility({
       environmentService: service,
@@ -587,10 +595,10 @@ describe("device worker placement dispatch", () => {
       requirement: OPENCLAW_DEVICE_REQUIREMENT,
       executionMode: "worker-turn",
       config: {},
-      currentNode: { nodeId: "device-1", connId: "replaced-connection" },
+      currentNode: current && { nodeId: "device-1", ...current },
     });
 
-    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("reconnect") });
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining(error) });
   });
 
   it("adopts an offline paired-device placement without eagerly starting its tunnel", async () => {
