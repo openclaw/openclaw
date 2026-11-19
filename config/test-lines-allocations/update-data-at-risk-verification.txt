@@ -1,0 +1,6 @@
+# Recorded data-at-risk marks: one new verification owner proved against real SQLite
+# (consistent beside a live writer without a copy, newer, behind, unfinished recovery,
+# interrupted restore, unreadable), its three readers (repair, next-update admission
+# including already-current, handoff recovery) and Git release-mode service ownership
+# against real git worktrees, plus exact rendered text per outcome. Exact net growth.
+112

@@ -548,14 +548,12 @@ async function updateFinalizeCommandInternal(
     }
 
     const restoresGateway = interruptedGateway && pluginUpdate.status !== "error" && !retained;
-    // Restoration verifies the stopping run's own mark. A mark on a run that left no
-    // Gateway stop (Git release, refusals before mutation) is verified here too, so
-    // guidance that names repair for it stays true.
+    // The newest unverified mark is checked first, whether or not its run stopped the
+    // Gateway (Git release, refusals before mutation), so guidance naming repair stays
+    // true. Restoration then sees this run's receipt; a refusal both report is one warning.
     const latestMark =
       ownsMaintenance && pluginUpdate.status !== "error" && !retained
-        ? findLatestUnverifiedDataAtRisk(
-            listUpdateRuns({ limit: 100 }).filter((run) => run.runId !== interruptedGateway?.runId),
-          )
+        ? findLatestUnverifiedDataAtRisk(listUpdateRuns({ limit: 100 }))
         : undefined;
     const gateway =
       restoresGateway || latestMark
