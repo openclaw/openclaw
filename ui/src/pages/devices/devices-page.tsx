@@ -88,13 +88,12 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   let execApprovalsTargetNodeId: string | null = null;
   let routeDataInitialized = false;
   let stopGatewayEvents: (() => void) | undefined;
-  let publishData = () => {};
   // Request admission and policy drafts retain their synchronous mutation contract.
   const pageData = projectMutableSource(
     () => dataState,
     (readState) => readState(),
   );
-  publishData = pageData.publish;
+  const publishData = pageData.publish;
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
   const dialogs = createDevicesDialogs({
     canManagePairing: () => gatewayBinding.connected && canManagePairing,
@@ -282,7 +281,6 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     dataState.client = snapshot.client;
     dataState.connected = snapshot.phase === "connected";
     dataState.requestGeneration = gatewayBinding.epoch;
-    const connected = snapshot.phase === "connected";
     if (change.becameConnected) {
       systemInfoUnavailable = false;
     }
@@ -327,11 +325,11 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     if (change.identityChanged) {
       clearInventorySamples();
     }
-    if (connected && !canLoadSystemInfo()) {
+    if (snapshot.phase === "connected" && !canLoadSystemInfo()) {
       systemInfoTask.cancel();
       setGatewaySystemInfo(null);
     }
-    if (connected && !canLoadDesktopEnvironments()) {
+    if (snapshot.phase === "connected" && !canLoadDesktopEnvironments()) {
       environmentsTask.cancel();
       setDesktopEnvironments([]);
     }
@@ -543,8 +541,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     );
     // The first promise includes trailing refreshes; queued callers resolve before that drain.
     if (!queued) {
-      const receipt = { gateway, state, epoch, result };
-      (kind === "nodes" ? setNodesRead : setDevicesRead)(receipt);
+      (kind === "nodes" ? setNodesRead : setDevicesRead)({ gateway, state, epoch, result });
     }
     return result;
   }

@@ -246,7 +246,7 @@ async function cleanUp() {
   await closeOpenClawStateDatabaseAsync();
   const report = await retireSessionSqliteRecovery({
     env,
-    preview: await inspectSessionSqliteRecovery({ cfg: {}, env }),
+    preview: inspectSessionSqliteRecovery({ cfg: {}, env }),
     readConfig: async () => ({}),
     confirm: async () => true,
   });

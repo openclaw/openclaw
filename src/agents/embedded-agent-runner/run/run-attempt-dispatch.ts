@@ -107,11 +107,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
   });
   const attemptFastMode = resolveAttemptFastModeParam();
-  // Each candidate, including fallbacks and live switches, applies Access to its own provider.
-  const attemptAccessProgram = resolveCyberAccessProgramForProvider(
-    params.cyberAccessProgram,
-    provider,
-  ).program;
   const selectedPromptTarget = { ...sessionPromptState.sessionTarget };
   const resolvedSessionTarget = await resolveAttemptDispatchSessionTarget({
     agentId: workspaceResolution.agentId,
@@ -123,7 +118,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     resolvedSessionTarget,
     params.abortSignal,
   );
-  const trajectorySessionFile = resolvedSessionTarget?.sessionKey ?? sessionPromptState.sessionFile;
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
   }
@@ -166,7 +160,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     runtimePlan,
     sessionId: sessionPromptState.sessionId,
     sessionKey: resolvedSessionKey,
-    sessionFile: trajectorySessionFile,
+    sessionFile: resolvedSessionTarget?.sessionKey ?? sessionPromptState.sessionFile,
     sessionTarget: resolvedSessionTarget,
     workspaceDir,
   });
@@ -200,9 +194,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   const { sessionManager } = params;
   const { nativeSessionRuntime } = preparedRuntime;
   const authProfileStore = resolveRunAttemptAuthProfileStore();
-  const toolAuthProfileStore = agentHarnessBuildsOpenClawTools(runtime.agentHarness.id)
-    ? attemptAuthProfileStore
-    : undefined;
   const captureRuntimeArtifact = Boolean(params.onSuccessfulAuthBinding || expectedHarnessArtifact);
   const fallbackActive =
     modelId !== requestedModelId ||
@@ -336,9 +327,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     });
   const attemptControls = createAttemptControls({
     admittedRunContext,
-    onAbort: () => {
-      params.replyOperation?.abortByUser();
-    },
+    onAbort: () => params.replyOperation?.abortByUser(),
   });
   const pluginRefresh = captureAgentPluginRuntimeRefresh();
   const assertTargetCurrent = () => {
@@ -554,12 +543,16 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     initialReplayState: input.replayState,
     authStorage,
     authProfileStore,
-    toolAuthProfileStore,
+    toolAuthProfileStore: agentHarnessBuildsOpenClawTools(runtime.agentHarness.id)
+      ? attemptAuthProfileStore
+      : undefined,
     modelRegistry,
     agentId: workspaceResolution.agentId,
     thinkLevel: runtime.thinkLevel,
     thinkingExplicit: params.thinkingExplicit,
-    cyberAccessProgram: attemptAccessProgram,
+    // Each candidate, including fallbacks and live switches, applies Access to its own provider.
+    cyberAccessProgram: resolveCyberAccessProgramForProvider(params.cyberAccessProgram, provider)
+      .program,
     onToolOutcome: input.observeToolOutcome,
     isTurnTainted: input.isTurnTainted,
     allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,

@@ -162,7 +162,9 @@ export async function prepareLocalSandboxWorkspace(params: {
             });
             break;
           } catch (error) {
-            if (!(error instanceof WorktreeCapacityContentionError)) throw error;
+            if (!(error instanceof WorktreeCapacityContentionError)) {
+              throw error;
+            }
             // Release checkout and projection custody before the disk reservation can settle.
             await waitForWorktreeCapacity(error, custody);
           }

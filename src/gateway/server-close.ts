@@ -418,9 +418,8 @@ async function closeGatewayResources(
   try {
     if (params.drainActiveSessionsForShutdown) {
       await shutdownStep("session-end-drain", async () => {
-        const drainReason: "shutdown" | "restart" = restart ? "restart" : "shutdown";
         const result = await params.drainActiveSessionsForShutdown!({
-          reason: drainReason,
+          reason: restart ? "restart" : "shutdown",
           totalTimeoutMs: ACTIVE_SESSIONS_SHUTDOWN_DRAIN_TIMEOUT_MS,
         });
         if (result.timedOut) {

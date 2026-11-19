@@ -441,11 +441,10 @@ async function createBackupArchiveInScope(
     await assertOutputPathReady(outputPath);
   }
 
-  const createdAt = new Date(nowMs).toISOString();
   const stateAsset = plan.included.find((asset) => asset.kind === "state");
   const stateDir = plan.resources.stateDir;
   const result: BackupCreateResult = {
-    createdAt,
+    createdAt: new Date(nowMs).toISOString(),
     archiveRoot,
     archivePath: outputPath,
     dryRun: Boolean(opts.dryRun),
@@ -492,7 +491,6 @@ async function createBackupArchiveInScope(
     await finishBackupScratch(scratch, opts.log);
     throw formatBackupOutputFailure(error, outputPath, "publication");
   }
-  const tempArchivePath = publication.tempArchivePath;
   let snapshotFacts: readonly BackupSqliteSnapshotFact[] = [];
   try {
     const configRemaps = await stageBackupConfigCapture(plan.configCapture, tempDir);
@@ -587,7 +585,7 @@ async function createBackupArchiveInScope(
       return true;
     };
     const completedArchive = await writeTarArchiveWithRetry({
-      tempArchivePath,
+      tempArchivePath: publication.tempArchivePath,
       log: opts.log,
       runTar: async (attemptTempArchivePath) => {
         const visitedClientDirectories = new Set<string>();

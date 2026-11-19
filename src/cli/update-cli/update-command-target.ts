@@ -121,7 +121,7 @@ export async function resolveUpdateCommandTarget(
           recordUpdateCommandTarget(opts.run, { step });
         }
       };
-      const recordNodeSecurityWarning = (warning: string) => {
+      const recordNodeSecurityWarning = (warning: string) =>
         recordPreflightStep({
           name: "node-security-patch",
           command: "inspect Node.js security patch level",
@@ -130,7 +130,6 @@ export async function resolveUpdateCommandTarget(
           exitCode: 0,
           warnings: [warning],
         });
-      };
       if (prepared.nodeSecurityWarning) {
         recordNodeSecurityWarning(prepared.nodeSecurityWarning);
       }
@@ -320,7 +319,6 @@ export async function resolveUpdateCommandTarget(
       let packageInstallSpec: string | null = null;
       let packageInstallEnv: NodeJS.ProcessEnv | undefined;
       let packageInstallTarget: ResolvedGlobalInstallTarget | undefined;
-      let installedPackageName: string;
       let packageAlreadyCurrent = false;
       let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
       let packageRuntimeTarget: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
@@ -403,7 +401,7 @@ export async function resolveUpdateCommandTarget(
       if (updateInstallKind === "package") {
         recoveryState.triageTarget.root = root;
         recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
-        installedPackageName = (await readPackageName(root)) ?? DEFAULT_PACKAGE_NAME;
+        const installedPackageName = (await readPackageName(root)) ?? DEFAULT_PACKAGE_NAME;
         const manager = await (malformedConfig ? assertGlobalUpdateOwner : resolveGlobalManager)({
           root,
           installKind,
@@ -572,15 +570,11 @@ export async function resolveUpdateCommandTarget(
               ...npmMetadataOptions,
             });
             if (targetMetadata.error || targetMetadata.version !== targetVersion) {
-              const failure = createUpdatePreflightFailure(
+              const { message, failureFacts } = createUpdatePreflightFailure(
                 targetMetadata.error ? "target-registry-metadata" : "target-version-resolution",
                 `Could not inspect exact package target openclaw@${targetVersion}: ${targetMetadata.error ?? `registry returned version ${targetMetadata.version ?? "unknown"}`}.`,
               );
-              await refuseUpdate(
-                "target-metadata-preflight",
-                failure.message,
-                failure.failureFacts,
-              );
+              await refuseUpdate("target-metadata-preflight", message, failureFacts);
               return undefined;
             }
             packageTargetSchemaVersions = targetMetadata.schemaVersions;

@@ -554,35 +554,27 @@ async function prepareReadOnlySourceInProcess(
     try {
       const journalMode = readSourceJournalMode(canonicalPath);
       const sidecars = readSourceSidecars(canonicalPath);
-      let prepared: PreparedSqliteReadOnlyLocation;
       if (journalMode === "empty" || (journalMode === "wal" && (!sidecars.wal || !sidecars.shm))) {
         // Incomplete inactive families need one private recovery copy so opening
         // SQLite cannot create or recover coordination files beside the source.
-        prepared = await createStableReadOnlyCopy(canonicalPath, journalMode, stagingRoot, signal);
-      } else {
-        try {
-          prepared = await createOnlineReadOnlyBackup(
-            canonicalPath,
-            stagingRoot,
-            signal,
-            onProgress,
-          );
-        } catch (error) {
-          signal?.throwIfAborted();
-          if (
-            error instanceof AggregateError ||
-            !isSqliteReadOnlyError(error) ||
-            readSourceJournalMode(canonicalPath) !== "rollback" ||
-            !readSourceSidecars(canonicalPath).journal
-          ) {
-            throw error;
-          }
-          // Hot rollback recovery must operate on private files. A native
-          // read-only open refuses before backup starts, so this is the only copy.
-          prepared = await createStableReadOnlyCopy(canonicalPath, "rollback", stagingRoot, signal);
-        }
+        return await createStableReadOnlyCopy(canonicalPath, journalMode, stagingRoot, signal);
       }
-      return prepared;
+      try {
+        return await createOnlineReadOnlyBackup(canonicalPath, stagingRoot, signal, onProgress);
+      } catch (error) {
+        signal?.throwIfAborted();
+        if (
+          error instanceof AggregateError ||
+          !isSqliteReadOnlyError(error) ||
+          readSourceJournalMode(canonicalPath) !== "rollback" ||
+          !readSourceSidecars(canonicalPath).journal
+        ) {
+          throw error;
+        }
+        // Hot rollback recovery must operate on private files. A native
+        // read-only open refuses before backup starts, so this is the only copy.
+        return await createStableReadOnlyCopy(canonicalPath, "rollback", stagingRoot, signal);
+      }
     } catch (error) {
       if (!(error instanceof SqliteSourceChangedError) || attempt + 1 >= MAX_SNAPSHOT_ATTEMPTS) {
         throw error;

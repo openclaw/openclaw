@@ -276,7 +276,9 @@ export async function prepareSkillResourceDelivery(
   const deliverySlots = Math.max(SKILL_RESOURCE_MAX_SKILLS, required.length);
   let manifests: Awaited<ReturnType<typeof readSkillLibrarySelectionManifests>>;
   for (const skill of [...required, ...discovery]) {
-    if (skills.length === deliverySlots) break;
+    if (skills.length === deliverySlots) {
+      break;
+    }
     const pin = snapshot.librarySelections?.find((selection) => selection.name === skill.name);
     const explicitlySelected = explicitSelections.some((selection) =>
       matchesExplicitSelection(skill, selection),

@@ -39,7 +39,6 @@ import {
   firstMockCall,
 } from "./server-close.test-support.js";
 import { prepareGatewayRunShutdown } from "./server-run-shutdown.js";
-import { isGatewayCleanupRetainedError } from "./server-shutdown.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 const { mocks } = await vi.hoisted(() => import("./server-close.mocks.test-support.js"));
