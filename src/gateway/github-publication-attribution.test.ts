@@ -290,6 +290,7 @@ describe("Gateway GitHub publication attribution", () => {
     people.forEach(({ id }) => participate(id));
     const childKey = "agent:main:subagent:delegated-publication";
     const child = await createInitialSubagentSession({
+      projectRequester: { kind: "internal" },
       cfg: config,
       requesterAgentId: "main",
       targetAgentId: "main",

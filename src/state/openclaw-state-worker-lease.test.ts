@@ -145,7 +145,7 @@ function createLeaseFixture() {
     actor,
     isDraining: () => false,
     isAvailable: () => true,
-    dispatch: async (payload, _signal, _scope, assertCurrent) => {
+    dispatch: async ({ payload }, _signal, _scope, assertCurrent) => {
       physical.beforeDispatch?.();
       assertCurrent?.();
       const command: unknown = deserialize(payload);

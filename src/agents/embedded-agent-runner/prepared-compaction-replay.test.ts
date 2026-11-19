@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { estimateTokens } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import { buildSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
+import type { Message } from "../../llm/types.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
-import type { AgentMessage } from "../runtime/index.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
@@ -17,6 +17,7 @@ const model = makeProviderModelFixture<"openai-completions">({
   id: "synthetic-model",
   api: "openai-completions",
   provider: "synthetic-provider",
+  baseUrl: "https://synthetic-provider.example/v1",
 });
 const policy = resolveTranscriptPolicy({
   model,
@@ -25,7 +26,7 @@ const policy = resolveTranscriptPolicy({
   modelId: model.id,
 });
 
-async function source(messages: AgentMessage[]) {
+async function source(messages: Message[]) {
   const manager = SessionManager.inMemory();
   for (const message of messages) {
     await manager.appendMessageAsync(message);
@@ -36,7 +37,7 @@ async function source(messages: AgentMessage[]) {
 describe("native prepared compaction replay", () => {
   it("matches session replay metrics after cleanup, retry deduplication and history limiting", async () => {
     const prompt = "Preserve the synthetic deployment checklist for this request";
-    const messages: AgentMessage[] = [];
+    const messages: Message[] = [];
     for (let index = 0; index < 4; index++) {
       messages.push({ role: "user", content: prompt + index, timestamp: index * 10000 });
       if (index === 0) {

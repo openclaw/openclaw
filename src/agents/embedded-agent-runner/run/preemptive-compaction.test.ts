@@ -1,6 +1,7 @@
 // Preemptive compaction tests cover token-pressure estimates before prompt
 // submission and the route chosen to compact, truncate, or proceed.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../test-helpers/agent-session-token-mock.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -93,7 +94,7 @@ function makeUnavailableAssistant(params: {
   } as AgentMessage;
 }
 
-function makeToolResultMessage(...texts: string[]): AgentMessage {
+function makeToolResultMessage(...texts: string[]): ToolResultMessage {
   return {
     role: "toolResult",
     toolCallId: `call_${timestamp}`,
@@ -101,7 +102,7 @@ function makeToolResultMessage(...texts: string[]): AgentMessage {
     content: texts.map((text) => ({ type: "text", text })),
     isError: false,
     timestamp: timestamp++,
-  } as AgentMessage;
+  };
 }
 
 function makeJsonToolResultMessage(payload: unknown): AgentMessage {

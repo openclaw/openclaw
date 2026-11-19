@@ -799,7 +799,11 @@ describe("direct compactor through the context-engine delegate", () => {
             storePath: fixture.target.storePath,
           });
           preparedSession = prepared.preparedSession;
-          const branch = preparedSession?.sessionManager.getBranch() ?? [];
+          const sessionManager = preparedSession?.sessionManager;
+          if (!sessionManager) {
+            throw new Error("expected the prepared compaction session manager");
+          }
+          const branch = sessionManager.getBranch();
           expect(branch).toEqual(
             expect.arrayContaining([
               expect.objectContaining({ type: "compaction", summary: previousSummary }),
@@ -808,7 +812,7 @@ describe("direct compactor through the context-engine delegate", () => {
           const messages = branch.filter((event) => event.type === "message");
           expect(messages).toHaveLength(7);
           // Beta.4 hydrates mutable payloads once; repeated branch reads must not copy them.
-          const repeatedMessages = preparedSession?.sessionManager
+          const repeatedMessages = sessionManager
             .getBranch()
             .filter((event) => event.type === "message");
           for (const [index, { message }] of messages.entries()) {

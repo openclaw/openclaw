@@ -1,10 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createFileOps } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import {
   requireActivePluginRegistry,
   resetPluginRuntimeStateForTest,
 } from "../../plugins/runtime.js";
 import type { summarizeCompactionHistory } from "../compaction.js";
-import type { CompactionSafeguardContext } from "./compaction-safeguard-execution.types.js";
+import { AuthStorage } from "../sessions/auth-storage.js";
+import { ModelRegistry } from "../sessions/model-registry.js";
 import {
   prepareCompactionSafeguardHistory,
   prepareCompactionSafeguardMessages,
@@ -59,7 +61,7 @@ it.each([undefined, "unregistered-provider"])(
         hasRealConversation: history.hasRealConversation,
         usedPreparationRange: history.usedPreparationRange,
       },
-      sections: prepareCompactionSafeguardSections({ fileOps: event.preparation.fileOps, history }),
+      sections: prepareCompactionSafeguardSections({ fileOps: createFileOps(), history }),
       summary: {
         latestUserAsk: summary.latestUserAsk,
         latestAskInRetainedTurn: summary.latestAskInRetainedTurn,
@@ -100,13 +102,17 @@ it.each([undefined, "unregistered-provider"])(
       ...metadata
     } = event.preparation;
     const preparedResult = await executeCompactionSafeguard(
-      { ...event, type: "session_before_compact", preparation: metadata },
+      {
+        ...event,
+        type: "session_before_compact",
+        preparation: { ...metadata, fileOps: createFileOps() },
+      },
       {
         identity: createQualityGuardSessionManager({ provider }),
         model: undefined,
-        modelRegistry: {
-          getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
-        } as CompactionSafeguardContext["modelRegistry"],
+        modelRegistry: ModelRegistry.inMemory(
+          AuthStorage.inMemory({ anthropic: { type: "api_key", key: "test-key" } }),
+        ),
       },
       { facts, summarize: lazy },
     );
@@ -143,19 +149,23 @@ it("rejects registered custom providers in prepared execution before summarizing
     ...preparation
   } = event.preparation;
   const result = await executeCompactionSafeguard(
-    { ...event, type: "session_before_compact", preparation },
+    {
+      ...event,
+      type: "session_before_compact",
+      preparation: { ...preparation, fileOps: createFileOps() },
+    },
     {
       identity,
       model: undefined,
-      modelRegistry: {
-        getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
-      } as CompactionSafeguardContext["modelRegistry"],
+      modelRegistry: ModelRegistry.inMemory(
+        AuthStorage.inMemory({ anthropic: { type: "api_key", key: "test-key" } }),
+      ),
     },
     {
       facts: {
         previousSummary: history.previousSummary,
         history,
-        sections: prepareCompactionSafeguardSections({ fileOps: preparation.fileOps, history }),
+        sections: prepareCompactionSafeguardSections({ fileOps: createFileOps(), history }),
         summary,
         reconciliationCount: summary.reconciliationMessages.length,
         turnPrefixCount: history.turnPrefixMessages.length,

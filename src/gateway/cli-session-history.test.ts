@@ -26,12 +26,12 @@ import {
 } from "./cli-session-history.test-support.js";
 import { requireGatewayRecord } from "./test-helpers.assertions.js";
 
-async function readChatHistory(homeDir: string, entry: SessionEntry, localMessages: unknown[]) {
+async function readChatHistory(projectsDir: string, entry: SessionEntry, localMessages: unknown[]) {
   const binding = getCliSessionBinding(entry, "claude-cli");
   const importedMessages = binding?.sessionId
     ? await readClaudeCliSessionMessagesAsync({
         cliSessionId: binding.sessionId,
-        homeDir,
+        projectsDir,
         localSessionId: entry.sessionId,
         reseedReceipt: binding.reseedReceipt,
       })
@@ -51,11 +51,11 @@ function readBoundHistory(
   localMessages: unknown[],
   reseedReceipt?: ReturnType<typeof receipt>,
 ) {
-  return withClaudeProjectsDir(async ({ filePath, homeDir, sessionId }) => {
+  return withClaudeProjectsDir(async ({ filePath, projectsDir, sessionId }) => {
     await writeClaudeEntries(filePath, entries);
     const entry = boundEntry(sessionId);
     entry.cliSessionBindings = { "claude-cli": { sessionId, reseedReceipt } };
-    return { messages: await readChatHistory(homeDir, entry, localMessages), sessionId };
+    return { messages: await readChatHistory(projectsDir, entry, localMessages), sessionId };
   });
 }
 
