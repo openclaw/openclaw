@@ -4599,7 +4599,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 /* A locked account is a label, not a control; this follows the hover rule to win. */
-.chat-controls__account-trigger:disabled {
+.chat-controls__account-trigger.chat-controls__account-trigger--locked {
   min-width: 0;
   padding: 0;
   background: none;

@@ -34,6 +34,7 @@ import {
 } from "./doctor-health-contribution.js";
 import { memberRolesCheck, runMemberRolesHealth } from "./doctor-member-roles.js";
 import { appContainerSpawnCheck, nativeStatusCheck } from "./doctor-native-status-check.js";
+import { openClawIdAccessCheck, runOpenClawIdAccessHealth } from "./doctor-openclaw-id-access.js";
 
 function coreHealthRunner(checkId: string): DoctorHealthContribution["run"] {
   return async (ctx) => {
@@ -637,8 +638,10 @@ export function resolveInitialDoctorHealthContributions(params: {
           }, "legacy doctor sandbox contribution owns registry migration"),
         },
         memberRolesCheck,
+        openClawIdAccessCheck,
       ],
       async run(ctx) {
+        await runOpenClawIdAccessHealth(ctx);
         await runMemberRolesHealth(ctx);
         const {
           maybeRepairSandboxImages,
