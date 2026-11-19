@@ -635,6 +635,28 @@ describe("session tool surface", () => {
     expect(JSON.stringify((await read.execute("x", {})).content)).toContain("read ran");
   });
 
+  it("admits a newly built tool once on a surface that still filters per turn", async () => {
+    const entries: SessionEntry[] = [];
+    surface([tool("read")]);
+    await persist(entries);
+    const admit = (tools: AnyAgentTool[]) =>
+      prepareSessionToolSurface({
+        state: fixture.state,
+        routeKey,
+        toolPolicy: "policy-a",
+        entries,
+        tools,
+        admitNewTools: true,
+      });
+    const changedRead = tool("read", "read v2", { type: "object", properties: {} });
+    const replyTurn = admit([changedRead, tool("message")]);
+    expect(names(replyTurn)).toEqual(["message", "read"]);
+    // The pinned definition stays frozen; only the missing tool joins the pin.
+    expect(replyTurn.find((entry) => entry.name === "read")?.description).not.toBe("read v2");
+    await persist(entries);
+    expect(names(admit([tool("read")]))).toEqual(["message", "read"]);
+  });
+
   it("starts a pin when neither the session state nor the checkpoint has one", async () => {
     const entries: SessionEntry[] = [];
     await persist(entries);

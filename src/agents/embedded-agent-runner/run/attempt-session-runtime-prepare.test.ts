@@ -490,7 +490,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     },
   );
   it.each([false, true])(
-    "ranks the MCP directory from learned MCP usage only with the lab on (%s)",
+    "reads learned MCP usage only with the lab on and keeps tool_search fixed (%s)",
     async (enabled) => {
       const fixture = createFixture();
       const config = { tools: { toolSearch: { mode: "tools" as const } } };
@@ -506,8 +506,9 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       });
       const searchDescription = (list: { name: string; description: string }[]) =>
         list.find((tool) => tool.name === "tool_search")!.description;
-      const description = searchDescription(tools);
-      expect(description).toContain("- granola server: 400 tools, names omitted");
+      // The MCP directory lives in the system prompt; tool_search stays the bare definition.
+      const description = searchDescription(controls);
+      expect(searchDescription(tools)).toBe(description);
       const usage = (tool: string) => [{ toolId: `mcp:granola:${tool}`, score: 4, updatedAt: 1 }];
       mocks.readToolUsage.mockReset().mockResolvedValueOnce(usage("granola__op_321"));
       fixture.input.attempt.config = {
@@ -525,7 +526,8 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
         expect(sent).toBe(description);
         return;
       }
-      expect(sent).toContain("- mcp:granola:granola__op_321\n");
+      expect(mocks.readToolUsage).toHaveBeenCalledOnce();
+      expect(sent).toBe(description);
       Object.assign(fixture.sessionManager, {
         getSessionTarget: () => undefined,
         getSessionId: () => "history-session",
@@ -542,9 +544,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       mocks.readToolUsage.mockResolvedValueOnce(usage("granola__op_399"));
       await runtime.prepareSystemPromptUpdate!("unchanged");
       expect(refreshTools).toHaveBeenCalledOnce();
-      const repinned = searchDescription(pinTools(tools));
-      expect(repinned).toContain("- mcp:granola:granola__op_399\n");
-      expect(repinned).not.toContain("- mcp:granola:granola__op_321\n");
+      expect(searchDescription(pinTools(tools))).toBe(description);
     },
   );
 
