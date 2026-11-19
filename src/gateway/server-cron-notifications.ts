@@ -490,6 +490,8 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           agentId,
           {
             channel: params.channel,
+            target: params.target,
+            directPolicy: params.directPolicy,
             to: params.to,
             accountId: params.accountId,
             threadId: params.threadId,

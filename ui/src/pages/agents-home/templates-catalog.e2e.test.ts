@@ -1,28 +1,29 @@
 import { writeFile } from "node:fs/promises";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
-import type {
-  ClawHubTemplateCatalogDetail,
-  ClawHubTemplateCatalogEntry,
-} from "../../../../src/templates/clawhub-source.ts";
+import type { ClawHubTemplateCatalogEntry } from "../../../../src/templates/clawhub-source.ts";
 import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
-import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { iconData } from "../../components/icon-data.ts";
 import { LINK_READER_HOVERCARD_OPEN_DELAY_MS } from "../../components/link-reader-target.ts";
 import { inspection } from "../../e2e/plugins-settings-admin.test-support.ts";
-import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
-import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
-  createControlUiMockSameOriginGatewayScript,
-  installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
+import {
+  agentsList,
+  auditUrl,
+  installTemplateCatalogGateway,
+  publishedAtMs,
+  skillExcerpt,
+  soulExcerpt,
+  workflowOperator,
+} from "./templates-catalog-gateway.test-support.ts";
 
 const proofDir = createControlUiE2eArtifactDir("templates-catalog");
 const capture = async (page: Page, name: string, content: Locator, scrollTo?: Locator) => {
@@ -51,18 +52,6 @@ const viewports = [
   { name: "desktop", width: 1440, height: 900 },
 ] as const;
 
-const workflowOperator = {
-  packageName: "@openclaw/workflow-operator",
-  displayName: "Workflow Operator",
-  summary: "Runs approved work across your tools.",
-  latestVersion: "1.2.0",
-  channel: "official",
-  official: true,
-  ownerHandle: "openclaw",
-  downloads: 1200,
-  installs: 200,
-  updatedAtMs: 1_790_000_000_000,
-} satisfies ClawHubTemplateCatalogEntry;
 const summaryFreeTemplate: ClawHubTemplateCatalogEntry = { ...workflowOperator };
 delete summaryFreeTemplate.summary;
 const researchTemplate = {
@@ -70,13 +59,6 @@ const researchTemplate = {
   packageName: "@maker/release-scout",
   displayName: "Release Scout",
 };
-const auditUrl = "https://clawhub.ai/openclaw/templates/workflow-operator/security-audit";
-const publishedAtMs = 1_780_000_000_000;
-const soulExcerpt = "Keep the owner informed about approved workflows. ".repeat(24);
-const skillExcerpt =
-  "Research trips and compare destinations against the approved itinerary. ".repeat(24);
-const config = { gateway: { controlUi: { experimental: { templates: true } } } };
-const agentsList = makeBootRoster({ agents: [{ id: "main", name: "Main" }] });
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -108,117 +90,12 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     });
     onTestFinished(() => context.close());
     const page = await context.newPage();
-    await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
-    const gateway = await installMockGateway(page, {
-      automaticallyFetchFavicons: linkPreviews,
-      historyMessages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "Try [Workflow Operator](/templates/packages/%40openclaw%2Fworkflow-operator) or [another reference](/templates/packages/%40openclaw%2Fworkflow-operator).",
-            },
-          ],
-        },
-      ],
-      heldMethods: loading ? ["templates.catalog.search"] : [],
-      featureMethods: [
-        "openclaw.chat",
-        "templates.catalog.search",
-        "templates.catalog.detail",
-        "templates.catalog.preview",
-        "templates.add.apply",
-        "plugins.list",
-        "plugins.catalog.get",
-      ],
-      methodResponses: {
-        "plugins.catalog.get": {
-          ...inspection.catalog,
-          plugin: {
-            ...inspection.catalog.plugin,
-            local: {
-              present: false,
-              installed: false,
-              enabled: false,
-              state: "not-installed",
-              action: "install",
-            },
-          },
-        } satisfies PluginDiscoveryDetailResult,
-        "config.get": sourceConfigSnapshot(config),
-        "agents.list": agentsList,
-        "templates.catalog.search": {
-          entries: [entry],
-          overview: {
-            featured: catalogEntries,
-            sections: [{ category: "research", entries: catalogEntries }],
-          },
-        },
-        "templates.catalog.detail": {
-          detail: {
-            ...entry,
-            ...detailPublisher,
-            version: "1.2.0",
-            agentId: "workflow-operator",
-            agentName: "Workflow Operator",
-            workspaceFiles: 2,
-            skills: 1,
-            plugins: 1,
-            mcpServers: 0,
-            scheduledJobs: 0,
-            createdAtMs: publishedAtMs,
-            categories: ["research", "productivity"],
-            security: { verdict: "benign", auditUrl },
-            contents: {
-              instructions: [
-                { name: "SOUL.md", source: "workspace/SOUL.md", excerpt: soulExcerpt },
-                { name: "AGENTS.md", source: "workspace/AGENTS.md" },
-              ],
-              skills: [
-                {
-                  name: "Trip research",
-                  source: "clawhub",
-                  ref: "@openclaw/trip-research",
-                  version: "2.0.0",
-                  excerpt: skillExcerpt,
-                },
-              ],
-              integrations: [
-                {
-                  name: "@openclaw/workflow-tools",
-                  kind: "plugin",
-                  source: "clawhub",
-                  ref: "@openclaw/workflow-tools",
-                  version: "1.2.0",
-                },
-              ],
-              automations: [],
-            },
-          } satisfies ClawHubTemplateCatalogDetail,
-        },
-        "plugins.list": {
-          plugins: [
-            {
-              id: "workflow-tools",
-              name: "Workflow Tools",
-              packageName: "@openclaw/workflow-tools",
-              clawhubPackage: "@openclaw/workflow-tools",
-              version: "1.2.0",
-              installed: true,
-              enabled: true,
-              state: "enabled",
-            },
-          ],
-          diagnostics: [],
-          mutationAllowed: true,
-        },
-        "templates.add.apply": {
-          agentId: "workflow-operator",
-          status: "complete",
-          readiness: { ready: false, requirements: [{ kind: "oauth", owner: "workflows" }] },
-        },
-      },
+    const gateway = await installTemplateCatalogGateway(page, {
+      entry,
+      detailPublisher,
+      loading,
+      linkPreviews,
+      catalogEntries,
     });
     await page.goto(`${server.baseUrl}templates`);
     return { page, gateway };
@@ -798,8 +675,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     },
   );
 
-  it("shows disabled automation declarations in details and the inline preview", async () => {
-    const { page, gateway } = await fixture();
+  it("opens automation instructions from the template row and describes the schedule in both views", async () => {
+    const { page, gateway } = await fixture(undefined, undefined, undefined, false, "dark");
     await gateway.setMethodResponse("templates.catalog.detail", {
       detail: {
         ...workflowOperator,
@@ -810,24 +687,50 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
           skills: [],
           integrations: [],
           automations: [
-            { name: "Weekly brief", schedule: "0 9 * * 1", timezone: "UTC", enabled: false },
+            {
+              name: "Weekly brief",
+              schedule: "0 9 * * 1",
+              timezone: "UTC",
+              enabled: false,
+              message: "Summarize last week's work.\n\nList anything still waiting on a decision.",
+            },
+            {
+              name: "Midweek nudge",
+              schedule: "0 21 * * 3",
+              timezone: "UTC",
+              enabled: false,
+              message: "Remind me of anything due before Friday.",
+            },
           ],
         },
       },
     });
     const detail = await openDetail(page);
-    const automation = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
-    await capture(page, "paused-automation-detail", automation);
-    expect.soft(await automation.textContent()).toContain("Disabled");
+    const automations = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
+    const row = automations.getByRole("button", { name: /Weekly brief/ });
+    await row.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await capture(page, "paused-automation-detail", automations);
+    await row.click();
+    const dialog = page.getByRole("dialog", { name: "Weekly brief", exact: true });
+    await dialog.getByText("List anything still waiting on a decision.").waitFor();
+    await dialog.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await capture(page, "paused-automation-dialog", dialog);
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await dialog.waitFor({ state: "hidden" });
+    await automations.getByRole("button", { name: /Midweek nudge/ }).click();
+    await page
+      .getByRole("dialog", { name: "Midweek nudge", exact: true })
+      .getByText("Wednesday at 9:00 PM · UTC · Disabled", { exact: true })
+      .waitFor();
     await page.goto(`${server.baseUrl}chat/main`);
     await page.locator("a.markdown-template-link").first().click();
     const shell = page.getByRole("dialog", { name: "Template details", exact: true });
     await shell.getByRole("button", { name: /Automations/ }).click();
-    const row = shell.getByRole("button", { name: /Weekly brief/ });
-    expect.soft(await row.textContent()).toContain("Disabled");
-    await row.click();
+    const previewRow = shell.getByRole("button", { name: /Weekly brief/ });
+    await previewRow.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await previewRow.click();
+    await shell.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
     await capture(page, "paused-automation-preview", shell);
-    expect.soft(await shell.textContent()).toContain("Disabled");
     expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
   });
 

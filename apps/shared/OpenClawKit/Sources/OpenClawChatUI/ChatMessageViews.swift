@@ -423,16 +423,22 @@ struct ChatMessageBubble: View, @MainActor Equatable {
                         .padding(.top, 1)
                 }
 
-                self.messageBody
-                    .frame(
-                        maxWidth: self.usesReadingColumn ? .infinity : ChatUIConstants.bubbleMaxWidth,
-                        alignment: .leading)
-                    .contentShape(.accessibility, Rectangle())
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("chat-assistant-message-body")
-                    .assistantSpeakerLabel(
-                        self.assistantName,
-                        avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
+                Group {
+                    let content = self.messageBody
+                        .frame(
+                            maxWidth: self.usesReadingColumn ? .infinity : ChatUIConstants.bubbleMaxWidth,
+                            alignment: .leading)
+                    if self.message.isNestedToolActivity {
+                        content
+                    } else {
+                        content.contentShape(.accessibility, Rectangle())
+                    }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("chat-assistant-message-body")
+                .assistantSpeakerLabel(
+                    self.assistantName,
+                    avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 2)
@@ -514,7 +520,7 @@ extension ChatMessageBubble {
             }
 
             if !toolActivityItems.isEmpty {
-                ChatToolActivityList(items: toolActivityItems)
+                ChatToolActivityList(items: toolActivityItems, isNestedToolActivity: self.message.isNestedToolActivity)
                     .padding(.horizontal, 4)
             }
 
