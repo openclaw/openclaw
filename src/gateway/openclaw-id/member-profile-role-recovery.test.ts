@@ -82,7 +82,6 @@ it.for<Change>([
         if (change === "demote-live") {
           setUserProfileRole(profile.id, null);
           invalidateOperatorRolePolicy(profile.id, { roleOnly: true });
-          expect(retained.authority.signal?.aborted).toBe(true);
         } else if (change === "demote-while-down") {
           // A role written while the Gateway is down publishes no live invalidation.
           setUserProfileRole(profile.id, null);
@@ -108,6 +107,12 @@ it.for<Change>([
           expect(
             expectDefined(previouslyRestored.authority.reauthorize, "fresh member admission"),
           ).toThrow("Restart recovery operator source policy changed.");
+        }
+        // Bare captured/restored requests may finish; fresh admission uses the changed source.
+        for (const authority of [retained.authority, previouslyRestored.authority]) {
+          expect(authority.signal?.aborted).toBe(false);
+          expect(authority.assertCurrent).not.toThrow();
+          expect(authority.reauthorize).toThrow();
         }
         const restored = await fixture.restore().then(
           (value) => {
