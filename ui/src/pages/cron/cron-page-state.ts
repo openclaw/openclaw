@@ -5,7 +5,8 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
-import { watchAgentScope, watchSelectedAgent } from "../../lib/agents/index.ts";
+import { watchAgentScope } from "../../lib/agents/index.ts";
+import { watchSelectedAgent } from "../../lib/agents/watch-selected-agent.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import {
   hasCronFormErrors,
