@@ -3372,8 +3372,13 @@ EOF
       set -euo pipefail
       source "${SCRIPT_PATH}"
       npm() {
-        if [[ "$1" == "view" && "$2" == "openclaw" && "$3" == "dist-tags.latest" ]]; then
-          printf '2026.5.12\\n'
+        if [[ "$1" == "view" && "$2" == "openclaw" ]]; then
+          case "$3" in
+            # Real npm exits 0 with an undefined/empty beta slot when no beta
+            # is published; only latest resolves.
+            dist-tags.beta) printf 'undefined\\n' ;;
+            dist-tags.latest) printf '2026.5.12\\n' ;;
+          esac
           return 0
         fi
         return 1
@@ -3426,25 +3431,22 @@ EOF
     {
       name: "warm host --beta selects the beta tag and checks it out",
       scenario: "warm-beta",
-      env: {},
       expectRef: "v2026.5.12-beta.3",
       expectKind: "immutable",
     },
     {
       name: "cold host without npm falls back to main with a warning",
       scenario: "cold-host",
-      env: {},
       expectRef: "main",
       expectKind: "moving",
     },
     {
       name: "explicit version pin wins over --beta on an existing checkout",
       scenario: "explicit-pin",
-      env: {},
       expectRef: "v2026.5.12",
       expectKind: "immutable",
     },
-  ])("installer entry: $name", ({ scenario, env, expectRef, expectKind }) => {
+  ])("installer entry: $name", ({ scenario, expectRef, expectKind }) => {
     const result = runInstallShell(
       `
       set -euo pipefail
@@ -3528,7 +3530,6 @@ EOF
       cat "$tmp/resolve.err"
     `,
       {
-        ...env,
         SCENARIO: scenario,
         GIT_CONFIG_NOSYSTEM: "1",
         GIT_CONFIG_GLOBAL: "/dev/null",

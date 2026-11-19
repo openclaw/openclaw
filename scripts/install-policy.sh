@@ -323,12 +323,20 @@ resolve_git_openclaw_ref() {
     case "$requested" in
         ""|latest|next|beta)
             resolved_version="$(installer_npm view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
+            # Some npm variants print "undefined"/"null" for a missing dist-tag
+            # (resolve_beta_version guards the same); treat those as unresolved.
+            if [[ "$resolved_version" == "undefined" || "$resolved_version" == "null" ]]; then
+                resolved_version=""
+            fi
             if [[ -z "$resolved_version" && "$requested" == "beta" ]]; then
                 # Documented channel contract: --beta is "beta if available,
                 # else latest" — the same fallback the npm and Bun engine
                 # channels apply. Never hand checkout the literal "beta": no
                 # such git ref exists, so the install would fail outright.
                 resolved_version="$(installer_npm view "openclaw" "dist-tags.latest" 2>/dev/null || true)"
+                if [[ "$resolved_version" == "undefined" || "$resolved_version" == "null" ]]; then
+                    resolved_version=""
+                fi
                 if [[ -n "$resolved_version" ]]; then
                     printf 'Warning: could not resolve the beta release tag; falling back to the latest stable release.\n' >&2
                 fi
