@@ -269,7 +269,17 @@ async function runWithRetainedUpdateRuntime<T>(
           bind(resolve);
           // Workers and the parent must use the same generation after activation
           // replaces dist; preserving URLs also preserves already-loaded singletons.
-          retainUpdateRuntimeImports(relocations.rules, files);
+          // Inventory uses physical paths; imports retain the running updater spelling.
+          const importIdentities = prepareRuntimeRelocations([
+            { sourceRoot, destinationRoot: root },
+          ]);
+          retainUpdateRuntimeImports(
+            relocations.rules,
+            files.map((sourcePath) => ({
+              sourcePath,
+              identityPath: relocateRuntimePath(sourcePath, importIdentities),
+            })),
+          );
           prepared = true;
           return metrics;
         })().catch((error: unknown) => {
