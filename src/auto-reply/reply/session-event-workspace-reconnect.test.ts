@@ -57,12 +57,11 @@ async function runRestartEvent(
       permissionMode: "full",
       updatedAt: Date.now(),
     });
-    let discoveries = 0;
     const discover = sessionUpdates.ensureSkillSnapshot;
-    using _skills = vi
+    using skills = vi
       .spyOn(sessionUpdates, "ensureSkillSnapshot")
       .mockImplementation(async (params) => {
-        node(++discoveries);
+        node(skills.mock.calls.length);
         return await discover(params);
       });
     runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
@@ -81,6 +80,7 @@ async function runRestartEvent(
         Promise.all([receipt.settled, receipt.accepted]),
         signal,
       );
+      const discoveries = skills.mock.calls.length;
       return { outcome, accepted, discoveries, runs: runEmbeddedAgentMock.mock.calls.length };
     } finally {
       await drainGlobalSingletonLifecycleState("restart");
@@ -125,7 +125,7 @@ it("stops retrying an undispatched restart input after the reconnect window", as
 }) => {
   const now = Date.now.bind(Date);
   let skewMs = 0;
-  using _clock = vi.spyOn(Date, "now").mockImplementation(() => now() + skewMs);
+  using clock = vi.spyOn(Date, "now").mockImplementation(() => now() + skewMs);
   const result = await runRestartEvent("workspace-deadline", signal, (attempt) => {
     // The window opens at the first attempt: one retry inside it, none after it.
     skewMs += attempt === 1 ? 30_000 : 31_000;
@@ -134,4 +134,5 @@ it("stops retrying an undispatched restart input after the reconnect window", as
   expect(result.outcome).toMatchObject({ status: "failed", executionStarted: false });
   expect(result.outcome.error).toContain("Remote workspace skill discovery failed");
   expect(result).toMatchObject({ discoveries: 2, runs: 0 });
+  expect(clock).toHaveBeenCalled();
 });

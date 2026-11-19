@@ -86,12 +86,12 @@ const loadGenerationReadmission = createLazyRuntimeNamedExport(
 
 /**
  * Producer-owned occurrence; passive notices continue to use enqueueSystemEvent.
- * Producers omit `readmission`; only re-admission of the same occurrence passes it.
+ * Producers omit `retry`; only re-admission of the same occurrence passes it.
  */
 export function enqueueSessionEventForHost(
   text: string,
   { assertAcceptanceCurrent, ...options }: SessionEventOptions,
-  readmission: SessionEventReadmission = createSessionEventReadmission(),
+  retry: SessionEventReadmission = createSessionEventReadmission(),
 ): SessionEventReceipt {
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
@@ -325,7 +325,7 @@ export function enqueueSessionEventForHost(
       acceptanceAssertion = undefined;
       // Producers never retry; re-admit the same unstarted occurrence when policy or the
       // workspace node changed under it. Stop, abort and abandonment settle terminally.
-      const nextReadmission = await prepareSessionEventReadmission(readmission, signal, () => ({
+      const nextReadmission = await prepareSessionEventReadmission(retry, signal, () => ({
         source: options.source,
         failure,
         configPolicy,
@@ -487,7 +487,7 @@ export function enqueueSessionEventForHost(
       sessionKey,
       text: promptText,
       options,
-      readmissionAttempt: readmission.attempt,
+      readmissionAttempt: retry.attempt,
       occurrenceId,
       deliveryContext: route,
       target,
@@ -546,7 +546,7 @@ export function enqueueSessionEventForHost(
             options.source === "restart" && operatorAuthority ? true : undefined,
           prepareInput: async (recorder) => {
             inputRecorder = recorder;
-            await stageSessionEventInput(recorder, occurrenceId, assertCurrent, readmission.attempt);
+            await stageSessionEventInput(recorder, occurrenceId, assertCurrent, retry.attempt);
           },
           execRequestOwners,
           deliver: options.deliver === false || target.deliver === false ? false : undefined,
