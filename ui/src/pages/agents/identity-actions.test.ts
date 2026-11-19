@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
@@ -217,6 +217,75 @@ describe("agent identity actions", () => {
     });
     runtimeConfig.dispose();
   });
+
+  it.each([
+    { waiting: "this save", earlierEditWaiting: false },
+    { waiting: "an earlier edit", earlierEditWaiting: true },
+  ])(
+    "shows a save held behind a busy plugin reload as waiting to apply until it applies ($waiting)",
+    async ({ earlierEditWaiting }) => {
+      vi.useFakeTimers();
+      const message =
+        "Agent configuration saved but deferred: Plugin discord reload is waiting for retained work. After the retained plugin work finishes, or after a Gateway restart.";
+      let saved = false;
+      let applied = false;
+      const request = vi.fn(async (method: string) => {
+        if (method === "config.get") {
+          const revision = saved ? "saved" : "initial";
+          return {
+            ...sourceConfigSnapshot({}, revision),
+            configRevisionHash: revision,
+            appliedConfigHash: applied ? revision : "initial",
+          };
+        }
+        if (method === "agents.update") {
+          saved = true;
+          throw new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message,
+            details: { application: { status: "deferred" } },
+          });
+        }
+        throw new Error(`Unexpected method ${method}`);
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const runtimeConfig = createRuntimeConfigCapability({
+        snapshot: {
+          client,
+          phase: "connected",
+          sessionKey: "main",
+          hello: gatewayHelloForMethods(["config.set"]),
+        },
+        subscribe: () => () => undefined,
+      });
+      await runtimeConfig.ensureLoaded();
+      if (earlierEditWaiting) {
+        runtimeConfig.state.configAutoSaveStatus = "deferred";
+        runtimeConfig.state.lastError = "An earlier edit is waiting.";
+      }
+      const state = host();
+      state.identityDraft.name = "Agent Smith";
+
+      await saveIdentityDraft({ ...saveOptions(state, client), runtimeConfig });
+
+      // The shared status reports it; the identity block raises no error of its own.
+      expect(await state.identityOutcome).toBeNull();
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("deferred");
+      expect(runtimeConfig.state.lastError).toBe(
+        earlierEditWaiting ? "An earlier edit is waiting." : message,
+      );
+      expect(state.identityDraft.name).toBe("Agent Smith");
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("deferred");
+
+      applied = true;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
+      expect(runtimeConfig.state.lastError).toBeNull();
+      runtimeConfig.dispose();
+    },
+  );
 
   it.each(["Connection", "Access"])("does not dispatch after %s changes", async (changed) => {
     const expectedClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
