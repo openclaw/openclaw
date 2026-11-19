@@ -1,6 +1,13 @@
+import { parse as parseSemver } from "semver";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 
 export type CodexTierFallback = "priority" | "default";
+
+/** Older supported app-servers do not understand a turn-only tier override. */
+export function supportsCodexTurnTierOverride(version: string | undefined): boolean {
+  const parsed = version ? parseSemver(version) : null;
+  return parsed !== null && parsed.compare("0.151.0") >= 0;
+}
 type CodexTierOutcome = Pick<
   EmbeddedRunAttemptResult,
   | "terminal"

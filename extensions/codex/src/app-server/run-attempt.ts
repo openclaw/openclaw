@@ -51,7 +51,10 @@ export async function runCodexAppServerAttempt(
       throw error;
     }
     const next =
-      !params.providerReviewAcknowledgment && !params.abortSignal?.aborted && remaining > 0
+      tierAttempt.supportsTurnOverride &&
+      !params.providerReviewAcknowledgment &&
+      !params.abortSignal?.aborted &&
+      remaining > 0
         ? nextCodexServiceTier(tierAttempt.requested, result, tierAttempt.turnStartRejected)
         : undefined;
     if (!next || Date.now() - startedAt >= params.timeoutMs) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextCodexServiceTier } from "./service-tier-fallback.js";
+import { nextCodexServiceTier, supportsCodexTurnTierOverride } from "./service-tier-fallback.js";
 
 function failure(status = 429): Parameters<typeof nextCodexServiceTier>[1] {
   return {
@@ -17,6 +17,13 @@ function failure(status = 429): Parameters<typeof nextCodexServiceTier>[1] {
 }
 
 describe("same-model speed recovery", () => {
+  it("does not send a turn-only override to an older supported server", () => {
+    expect(supportsCodexTurnTierOverride("0.149.0")).toBe(false);
+    expect(supportsCodexTurnTierOverride("0.151.0-alpha.1")).toBe(false);
+    expect(supportsCodexTurnTierOverride("0.151.0")).toBe(true);
+    expect(supportsCodexTurnTierOverride("0.153.4")).toBe(true);
+    expect(supportsCodexTurnTierOverride(undefined)).toBe(false);
+  });
   it("tries lower tiers before exhausting the selected model", () => {
     expect(nextCodexServiceTier("ultrafast", failure())).toBe("priority");
     expect(nextCodexServiceTier("priority", failure(503))).toBe("default");

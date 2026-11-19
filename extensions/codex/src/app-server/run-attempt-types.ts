@@ -10,6 +10,7 @@ import type { CodexAppServerClientFactory } from "./shared-client.js";
 export type CodexTierAttemptState = {
   override?: "priority" | "default";
   requested?: string | null;
+  supportsTurnOverride?: boolean;
   /** A native rejection, not a lost acknowledgement or local timeout. */
   turnStartRejected?: boolean;
   commitUsageLimit?: () => Promise<void>;

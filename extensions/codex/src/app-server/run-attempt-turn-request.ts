@@ -28,6 +28,7 @@ import {
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { supportsCodexTurnTierOverride } from "./service-tier-fallback.js";
 import { resolveCodexUltrafastServiceTier } from "./service-tier.js";
 import { buildTurnStartParams } from "./thread-lifecycle.js";
 import { recordCodexAcceptedTurn } from "./thread-orphan-recovery.js";
@@ -335,6 +336,9 @@ export async function prepareCodexAttemptTurnRequest(
       if (connection.options.tierAttempt) {
         connection.options.tierAttempt.requested =
           turnStartParams.serviceTierForTurn ?? turnStartParams.serviceTier;
+        connection.options.tierAttempt.supportsTurnOverride = supportsCodexTurnTierOverride(
+          turnClient.getServerVersion(),
+        );
       }
       const startedTurn = assertCodexTurnStartResponse(
         await turnClient.request("turn/start", turnStartParams, {
