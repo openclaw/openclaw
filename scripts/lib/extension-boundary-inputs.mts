@@ -224,12 +224,7 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     );
     // Match byte/topology snapshot lifetime; a new snapshot probes again.
     if (pending.length) {
-      const observed = replayDeclarationLookups(
-        this.rootDir,
-        (file) => this.boundary.assert(file),
-        pending,
-        this.readText,
-      );
+      const observed = replayDeclarationLookups(this.rootDir, pending, this.readText);
       for (const lookup of observed) {
         this.lookupFacts.set(`${lookup.kind}\0${lookup.path}`, lookup);
       }

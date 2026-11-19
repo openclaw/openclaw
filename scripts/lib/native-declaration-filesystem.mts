@@ -242,11 +242,11 @@ export function createDeclarationFileSystem(
 /** Replay the same bounded operations, including negative resolution candidates. */
 export function replayDeclarationLookups(
   cwd: string,
-  admit: (file: string) => string,
   lookups: readonly DeclarationLookup[],
   readText: (file: string) => string,
 ) {
-  const view = createDeclarationFileSystem(cwd, admit, new Map(), readText);
+  // Enable the bounded view; the filesystem already owns physical admission.
+  const view = createDeclarationFileSystem(cwd, (file) => file, new Map(), readText);
   for (const lookup of lookups) {
     view.filesystem[lookup.kind](lookup.path);
   }
