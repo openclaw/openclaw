@@ -2,7 +2,7 @@ import { createMemo, onSettled } from "solid-js";
 import type { AgentIdentityResult } from "../../api/types.ts";
 import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
-import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
+import { createIdentityAvatars } from "../../lib/identity-avatar-leases.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { AgentSelectOption } from "../agent-select-types.ts";

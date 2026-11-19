@@ -7,7 +7,6 @@ import {
   type NavigationRouteId,
 } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
-import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
@@ -120,7 +119,6 @@ export function createSidebarMenus(deps: {
   const triggers = new Map<MenuTrigger, HTMLElement | null>();
   const menuHandles = new Map<"catalogView" | "agent", MenuHandle>();
   let focusAgentRoster: (() => void) | undefined;
-  const agentMenuAvatars = createIdentityAvatars();
   let sessionMenuWork: ReturnType<SidebarMenusRenderer["createSessionMenuWork"]> | undefined;
   let agentMenuHoverOpenTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let agentMenuHoverCloseTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -293,7 +291,6 @@ export function createSidebarMenus(deps: {
       return pluginActionLifetime;
     },
     connect(): void {
-      agentMenuAvatars.connect();
       if (pluginActionLifetime.signal.aborted) {
         pluginActionLifetime = new AbortController();
         if (state.sessionMenu) {
@@ -303,7 +300,6 @@ export function createSidebarMenus(deps: {
     },
 
     disconnect(): void {
-      agentMenuAvatars.disconnect();
       pluginActionLifetime.abort();
       menuRendererImport.dispose();
       sessionMenuWork?.release();
@@ -620,12 +616,7 @@ export function createSidebarMenus(deps: {
           }
         >
           <Boundary>
-            <MenuRenderer
-              menus={menus}
-              host={view}
-              avatars={agentMenuAvatars}
-              revision={projection.revision}
-            />
+            <MenuRenderer menus={menus} host={view} revision={projection.revision} />
           </Boundary>
         </Show>,
         menus.catalogMenuView.render(CatalogMenu),

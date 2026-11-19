@@ -2,7 +2,6 @@ import { createRoot, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { de } from "../i18n/locales/de.ts";
-import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import {
@@ -280,14 +279,7 @@ it("keeps personal pinning and navigation usable in an offline session menu", as
       setPersonalSessionPin: pin,
     },
   } as unknown as SidebarMenusOwner;
-  const view = render(() => (
-    <SidebarMenusRenderer
-      menus={menus}
-      host={host}
-      avatars={createIdentityAvatars()}
-      revision={() => 0}
-    />
-  ));
+  const view = render(() => <SidebarMenusRenderer menus={menus} host={host} revision={() => 0} />);
   const action = (value: string) =>
     view.container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)!;
   await waitForSolid(() => expect(action("rename")).not.toBeNull());
@@ -470,14 +462,7 @@ describe("sidebar rail pin menu", () => {
       const view = render(
         () => {
           const projection = projectOwner(menus, (owner) => owner);
-          return (
-            <SidebarMenusRenderer
-              menus={menus}
-              host={host}
-              avatars={createIdentityAvatars()}
-              revision={projection.revision}
-            />
-          );
+          return <SidebarMenusRenderer menus={menus} host={host} revision={projection.revision} />;
         },
         { container: pins },
       );

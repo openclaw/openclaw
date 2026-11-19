@@ -1,6 +1,6 @@
 import { getObserver } from "@solidjs/signals";
 import { dynamic, type JSX } from "@solidjs/web";
-import { createMemo, lazy, Loading, Show } from "solid-js";
+import { createMemo, lazy, Loading, onSettled, Show } from "solid-js";
 import { isRailSectionPin } from "../app-navigation.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
@@ -9,7 +9,7 @@ import { registerAgentCreationEnglish } from "../i18n/locales/en-agent-creation.
 import { openEditor } from "../lib/editor-links.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
-import type { IdentityAvatars } from "../lib/identity-avatar-loader.ts";
+import { createIdentityAvatars, type IdentityAvatars } from "../lib/identity-avatar-leases.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import {
   projectApplicationConfig,
@@ -85,10 +85,11 @@ registerAgentCreationEnglish();
 export function SidebarMenusRenderer(props: {
   menus: SidebarMenus;
   host: SidebarMenusOwner;
-  avatars: IdentityAvatars;
   revision: () => number;
 }) {
-  return <>{renderSidebarMenus(props.menus, props.host, props.avatars, props.revision)}</>;
+  const avatars = createIdentityAvatars();
+  onSettled(() => avatars.connect());
+  return <>{renderSidebarMenus(props.menus, props.host, avatars, props.revision)}</>;
 }
 
 function renderSidebarMenus(
