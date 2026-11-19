@@ -25,7 +25,7 @@ import {
 } from "./templates-catalog-client.ts";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplatesCatalogView } from "./templates-catalog-view.tsx";
-import { TemplatesExplore } from "./templates-explore.tsx";
+import { TemplatesExplore, type TemplatesExploreSelection } from "./templates-explore.tsx";
 
 registerEnglishCatalog(registerTemplatesEnglish);
 
@@ -34,6 +34,9 @@ type TemplatesDialogProps = {
   initialPackageName?: string;
   initialVersion?: string;
   modal?: boolean;
+  /** Explore's search and category, kept by the page while a Template detail replaces it. */
+  exploreSelection?: TemplatesExploreSelection;
+  onExploreSelectionChange?: (change: Partial<TemplatesExploreSelection>) => void;
 };
 
 class TemplatesCatalogModel {
@@ -450,6 +453,8 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
             addingPackageName={view().applying ? (view().selected?.packageName ?? null) : null}
             addDisabled={!view().canAdd || view().applying}
             addFailure={view().addFailure}
+            selection={props.exploreSelection}
+            onSelectionChange={props.onExploreSelectionChange}
           />
         }
       >

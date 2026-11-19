@@ -1,6 +1,6 @@
 import { createComponent, createSignal } from "solid-js";
 import { onTestFinished } from "vitest";
-import { pathForTemplateCatalogEntry } from "../../app-route-paths.ts";
+import { pathForRoute, pathForTemplateCatalogEntry } from "../../app-route-paths.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { TemplatesPage } from "../templates/page.tsx";
 import { createPage, workflowOperator } from "./agents-home-page.test-helpers.ts";
@@ -29,6 +29,11 @@ export function createDetail(options: Parameters<typeof createPage>[0], version?
     ...fixture,
     detail: view.container,
     find: (selector: string) => view.container.querySelector<HTMLElement>(selector),
+    showExplore: () => {
+      const nextLocation = { pathname: pathForRoute("templates", ""), search: "", hash: "" };
+      void fixture.context.router.navigate("templates", fixture.context, {}, nextLocation);
+      setLocation(nextLocation);
+    },
     setPackageName: (packageName: string) => {
       const nextLocation = {
         pathname: pathForTemplateCatalogEntry(packageName, ""),
