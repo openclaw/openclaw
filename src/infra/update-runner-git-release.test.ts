@@ -325,8 +325,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       trialFile,
       readTrial: async () => {
         const t = JSON.parse(await fs.readFile(trialFile, "utf8")) as Trial;
-        const [linked, previous] = await Promise.all([t.target, t.previous].map(resolveLink));
-        return { target: linked, previous };
+        return { target: await resolveLink(t.target), previous: await resolveLink(t.previous) };
       },
       releaseCount: async () =>
         (await fs.readdir(path.join(prefix, PACKAGE_RELEASES_DIR))).filter(

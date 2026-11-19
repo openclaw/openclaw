@@ -1592,7 +1592,7 @@ the sentinel.
 On macOS and Linux, a Git checkout whose Gateway service the update owns runs from
 releases instead of being rebuilt in place. Each release is a detached worktree of the
 checkout under `<stateDir>/git-install/releases/`, and the link
-`<stateDir>/git-install/lib/node_modules/openclaw` names the selected one. An update
+`<stateDir>/git-install/openclaw` names the selected one. An update
 builds the target as a new release, switches the link, and arms a trial in
 `releases/.trial`. The service starts through `<stateDir>/git-install/openclaw-launcher.mjs`,
 which switches the link back to the trial's previous release after two failed starts.
