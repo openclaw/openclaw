@@ -133,7 +133,7 @@ it.each(["src/gateway/config-reload.telegram-policy.test.ts", "src/gateway"])(
     const selected = gatewayProjectFiles([], env);
     expect(selected).toEqual(selectProjects(canonicalGatewayFiles, filters));
     expect(selected["gateway-database-workers"]).toEqual(
-      select(gatewayDatabaseWorkerTestFiles, filters),
+      select(gatewayDatabaseWorkerTestFiles, filters).toSorted(),
     );
     expect(selected["gateway-core"]).toContain("src/gateway/config-reload.telegram-policy.test.ts");
     const workerFiles: string[] = [];
@@ -172,7 +172,7 @@ it.each(
   ].map((filters) => ({ filters })),
 )("preserves canonical project ownership for $filters", ({ filters }) => {
   const canonical = canonicalGatewayFiles;
-  expect(canonical["gateway-database-workers"]).toEqual(gatewayDatabaseWorkerTestFiles);
+  expect(canonical["gateway-database-workers"]).toEqual(gatewayDatabaseWorkerTestFiles.toSorted());
   const expected = selectProjects(canonical, filters);
 
   expect(gatewayProjectFiles(filters)).toEqual(expected);
