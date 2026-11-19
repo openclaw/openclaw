@@ -45,19 +45,19 @@ registerEnglishCatalog(registerTemplatesEnglish);
 // ClawHub's current Template taxonomy. The "other" bucket is assigned by ClawHub.
 const templateCategories = [
   ["", "templatesCatalog.categoryAll", "layoutGrid"],
-  ["personal", "templatesCatalog.categoryPersonal", "users"],
-  ["health", "templatesCatalog.categoryHealth", "activity"],
-  ["travel", "templatesCatalog.categoryTravel", "globe"],
-  ["productivity", "templatesCatalog.categoryProductivity", "listChecks"],
+  ["personal", "templatesCatalog.categoryPersonal", "home"],
+  ["health", "templatesCatalog.categoryHealth", "heartPulse"],
+  ["travel", "templatesCatalog.categoryTravel", "plane"],
+  ["productivity", "templatesCatalog.categoryProductivity", "listTodo"],
   ["research", "templatesCatalog.categoryResearch", "search"],
-  ["engineering", "templatesCatalog.categoryEngineering", "braces"],
-  ["governance", "templatesCatalog.categoryGovernance", "shield"],
-  ["operations", "templatesCatalog.categoryOperations", "settings"],
+  ["engineering", "templatesCatalog.categoryEngineering", "codeXml"],
+  ["governance", "templatesCatalog.categoryGovernance", "scale"],
+  ["operations", "templatesCatalog.categoryOperations", "workflow"],
   ["finance", "templatesCatalog.categoryFinance", "coins"],
-  ["sales", "templatesCatalog.categorySales", "barChart"],
-  ["product", "templatesCatalog.categoryProduct", "box"],
+  ["sales", "templatesCatalog.categorySales", "handshake"],
+  ["product", "templatesCatalog.categoryProduct", "lightbulb"],
   ["people", "templatesCatalog.categoryPeople", "users"],
-  ["other", "templatesCatalog.categoryOther", "layers"],
+  ["other", "templatesCatalog.categoryOther", "shapes"],
 ] as const satisfies readonly (readonly [string, string, IconName])[];
 const SECTION_SIZE = 4;
 // Enough placeholders and decoded artwork to cover a tall first screen.

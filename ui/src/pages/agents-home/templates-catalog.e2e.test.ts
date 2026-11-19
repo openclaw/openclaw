@@ -581,6 +581,12 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         .locator(".plugin-catalog-chips")
         .evaluate((element) => getComputedStyle(element).flexWrap),
     ).toBe("wrap");
+    // Each category chip needs its own glyph; Personal and People once shared one.
+    const chipIcons = await page
+      .locator(".plugin-catalog-chips .plugin-catalog-chip svg")
+      .evaluateAll((icons) => icons.map((icon) => icon.innerHTML));
+    expect(chipIcons).toHaveLength(14);
+    expect(new Set(chipIcons).size).toBe(chipIcons.length);
     const searchWidth = await page
       .locator(".plugin-catalog-search")
       .evaluate((element) => element.getBoundingClientRect().width);
