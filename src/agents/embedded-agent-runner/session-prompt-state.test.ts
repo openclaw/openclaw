@@ -446,6 +446,73 @@ describe("system prompt series", () => {
   });
 });
 
+describe("prompt history identity across bounded windows", () => {
+  const routeKey = "openai/gpt-6-sol/openai-responses";
+  const fixture = promptFixture("history-identity", routeKey);
+  const prepare = (
+    systemPrompt: string,
+    entries: SessionEntry[],
+    historyBoundaryCount?: number,
+  ) => {
+    const result = prepareSessionSystemPrompt({
+      state: fixture.state,
+      routeKey,
+      systemPrompt,
+      entries,
+      historyBoundaryCount,
+    });
+    result.commit();
+    return result;
+  };
+  const refreshed = "Base.\n## AGENTS.md\nNew rule.";
+
+  it("restarts when the window's checkpoint predates a compaction outside it", async () => {
+    const entries: SessionEntry[] = [];
+    prepare("Base.", entries, 0);
+    await fixture.persist(entries);
+    // A compaction committed after this checkpoint, and its summary did not fit the next window.
+    fixture.reload();
+    const next = prepare(refreshed, entries, 1);
+    expect(next).toMatchObject({
+      restart: true,
+      seriesStatus: "restarted:history",
+      systemPrompt: refreshed,
+    });
+    expect(next.update).toBeUndefined();
+  });
+
+  it("does not pin when neither window names the history of a compacted session", async () => {
+    // A checkpoint written before the boundary count was recorded names no count.
+    const entries: SessionEntry[] = [];
+    prepare("Base.", entries);
+    await fixture.persist(entries);
+    expect(entries.at(-1)).toMatchObject({ data: { historyId: null } });
+    expect(JSON.stringify(entries.at(-1))).not.toContain("boundaryCount");
+    fixture.reload();
+    expect(prepare(refreshed, entries, 1)).toMatchObject({
+      restart: true,
+      systemPrompt: refreshed,
+    });
+    await fixture.persist(entries);
+    // The restarted checkpoint records the count, so later runs on the same history keep it.
+    fixture.reload();
+    expect(prepare("Base.", entries, 1)).toMatchObject({ restart: false, systemPrompt: refreshed });
+  });
+
+  it.each([0, undefined])(
+    "keeps a never-compacted session pinned (checkpoint boundary count %s)",
+    async (writtenCount) => {
+      const entries: SessionEntry[] = [];
+      prepare("Base.", entries, writtenCount);
+      await fixture.persist(entries);
+      fixture.reload();
+      const next = prepare(refreshed, entries, 0);
+      expect(next).toMatchObject({ restart: false, seriesStatus: "pinned", systemPrompt: "Base." });
+      expect(next.update?.content).toContain("New rule.");
+    },
+  );
+});
+
 describe("session tool surface", () => {
   const routeKey = "openai/gpt-6-sol/openai-responses";
   const fixture = promptFixture("tool-surface", routeKey);

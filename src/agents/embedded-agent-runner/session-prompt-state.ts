@@ -64,6 +64,8 @@ type SystemPromptSeries = {
   renderedPrefix: string;
   routeKey: string;
   historyId: string | null;
+  /** The transcript's boundary count when this series was written; see resolvePromptHistoryId. */
+  boundaryCount?: number;
   permissionNotice?: string;
   usageRanking?: ToolUsageRankingSnapshot;
   restart: boolean;
@@ -421,6 +423,7 @@ export function prepareSessionSystemPrompt(params: {
         renderedPrefix: shareSystemPromptPrefix(data.renderedPrefix),
         routeKey: params.routeKey,
         historyId,
+        boundaryCount: params.historyBoundaryCount,
         permissionNotice:
           typeof data.permissionNotice === "string" ? data.permissionNotice : undefined,
         usageRanking: params.state.persistedUsageRanking,
@@ -460,12 +463,14 @@ export function prepareSessionSystemPrompt(params: {
         renderedPrefix,
         routeKey: params.routeKey,
         historyId,
+        boundaryCount: params.historyBoundaryCount,
         permissionNotice,
         usageRanking: params.state.usageRanking?.snapshot,
         restart: true,
       }
     : {
         ...series!,
+        boundaryCount: params.historyBoundaryCount,
         renderedPrefix,
         permissionNotice,
         usageRanking: params.state.usageRanking?.snapshot,
