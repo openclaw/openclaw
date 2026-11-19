@@ -356,15 +356,22 @@ function captureQualificationIdentity(
       throw new Error("Invalid admission run");
     }
     const runFields = new Map<string, unknown>(Object.entries(run));
+    const capturedOperators = new Set<string>();
     for (const actor of [runFields.get("actor"), runFields.get("triggering_actor")]) {
       if (actor === null || typeof actor !== "object" || Array.isArray(actor)) {
         throw new Error("Invalid admission actor");
       }
-      const login = new Map<string, unknown>(Object.entries(actor)).get("login");
+      const actorFields = new Map<string, unknown>(Object.entries(actor));
+      const login = actorFields.get("login");
       if (typeof login !== "string" || !/^[A-Za-z0-9-]{1,39}$/u.test(login)) {
         throw new Error("Invalid admission actor");
       }
-      api("collaborators/" + login + "/permission");
+      // Match the verified operator owner: an identical actor/trigger needs one response.
+      const identity = JSON.stringify([actorFields.get("id"), login]);
+      if (!capturedOperators.has(identity)) {
+        api("collaborators/" + login + "/permission");
+        capturedOperators.add(identity);
+      }
     }
   };
   api("contents/.github/workflows/openclaw-release-prepare.yml?ref=" + workflowSha);

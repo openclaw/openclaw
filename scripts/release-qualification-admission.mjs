@@ -283,6 +283,17 @@ function verifyActor(repository, actor, runGh) {
   return identity;
 }
 
+export function verifyReleaseQualificationOperators(repository, actor, triggeringActor, runGh) {
+  const operator = verifyActor(repository, actor, runGh);
+  const triggeringIdentity = actorIdentity(triggeringActor);
+  return {
+    operator,
+    triggeringOperator: isDeepStrictEqual(operator, triggeringIdentity)
+      ? operator
+      : verifyActor(repository, triggeringActor, runGh),
+  };
+}
+
 function readSource(repository, sha, path, runGh) {
   const file = api(repository, "contents/" + path + "?ref=" + sha, runGh);
   requireValue(
@@ -395,8 +406,12 @@ function verifyProducer(producer, runGh, completed) {
   );
   return {
     run,
-    operator: verifyActor(producer.repository, run.actor, runGh),
-    triggeringOperator: verifyActor(producer.repository, run.triggering_actor, runGh),
+    ...verifyReleaseQualificationOperators(
+      producer.repository,
+      run.actor,
+      run.triggering_actor,
+      runGh,
+    ),
   };
 }
 
@@ -523,7 +538,7 @@ function validateArtifact(descriptor, metadata, run, jobs) {
   requireValue(
     Number.isFinite(Date.parse(metadata.expires_at)) &&
       Date.parse(metadata.expires_at) > Date.now(),
-    "Qualification admission expired; obtain a new admission and fresh qualification for the same candidate, never substitute another run",
+    "Qualification admission expired; recover retained original evidence or obtain a new admission, never substitute another run",
   );
   const job = jobs.jobs.find((item) => item.name === QUALIFICATION_ADMISSION_JOB);
   const steps = Array.isArray(job?.steps) ? job.steps : [];

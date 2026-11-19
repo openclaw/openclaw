@@ -39,6 +39,7 @@ const workflowPath = (name: string) => `.github/workflows/${name}.yml`;
 export function candidatePublicationFixture(
   options: {
     candidateSha?: string;
+    releaseProfile?: "beta" | "stable";
     candidateVersion?: string;
     qualificationSha?: string;
     transportRef?: string;
@@ -71,7 +72,7 @@ export function candidatePublicationFixture(
   const laneInputs = { qualification_baselines_json: qualificationBaselinesJson };
   const selection: PublicationSelection = {
     route: "normal",
-    npmDistTag: "beta",
+    npmDistTag: options.releaseProfile === "stable" ? "latest" : "beta",
     publishOpenclawNpm: true,
     pluginPublishScope: "all-publishable",
     plugins: [],
@@ -84,10 +85,10 @@ export function candidatePublicationFixture(
     ref: c,
     expected_sha: c,
     target_context_ref: "release/2026.8.28",
-    release_profile: "beta",
+    release_profile: options.releaseProfile ?? "beta",
     rerun_group: "all",
     mode: "both",
-    run_release_soak: "false",
+    run_release_soak: options.releaseProfile === "stable" ? "true" : "false",
     trusted_workflow_json: publicationDispatchEnvelope(tooling, intent, laneInputs),
   });
   const admission = admissionFixture(options.protectedTag ?? true, {
@@ -122,8 +123,9 @@ export function candidatePublicationFixture(
       PUBLICATION_TOOLING_JSON: JSON.stringify(tooling),
       PUBLICATION_TARGET_CONTEXT: inputs.target_context_ref,
       PUBLICATION_TARGET_SHA: c,
-      PUBLICATION_COVERAGE_POLICY: "npm-beta-v1",
-      PUBLICATION_SKIP_TELEGRAM: "true",
+      PUBLICATION_COVERAGE_POLICY:
+        options.releaseProfile === "stable" ? "npm-stable-v1" : "npm-beta-v1",
+      PUBLICATION_SKIP_TELEGRAM: options.releaseProfile === "stable" ? "false" : "true",
       GITHUB_REPOSITORY: repository,
       GITHUB_REF: tooling.fullRef,
       GITHUB_SHA: q,
@@ -219,6 +221,17 @@ export function candidatePublicationFixture(
     );
   };
   const manifest = Object.assign(mapped(fixture.manifest), {
+    ...(options.releaseProfile === "stable"
+      ? {
+          releaseProfile: "stable",
+          runReleaseSoak: "true",
+          controls: {
+            ...fixture.manifest.controls,
+            performanceBlocking: true,
+            stableSoakRequired: true,
+          },
+        }
+      : {}),
     // Fresh qualification has no reused evidence or shared candidate artifact.
     candidateBinding: undefined,
     evidenceReuse: undefined,

@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
+import { verifyRetainedPublicationArtifacts } from "./full-release-artifacts.mjs";
 import { validateFullReleaseCandidateBinding } from "./full-release-candidate-contract.mjs";
 import {
   decodePublicationDispatchEnvelope,
@@ -44,7 +45,10 @@ import {
   validateReleaseChildRunProvenance,
   validateReleaseStateArtifact,
 } from "./full-release-validation-policy.mjs";
-import { inspectActionsArtifactZip } from "./lib/actions-artifact-archive.mjs";
+import {
+  downloadExactActionsArtifactArchive,
+  inspectActionsArtifactZip,
+} from "./lib/actions-artifact-archive.mjs";
 import { compareAscii, sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { releaseChildReuseSha256 } from "./lib/full-release-child-request.mjs";
 import { validateReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
@@ -63,6 +67,7 @@ import {
   resolveTrustedWorkflowIdentity,
   resolveVerifierIdentity,
   validateTrustedProducerIdentity,
+  verifyReceiptRecoveryAuthority,
 } from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
@@ -662,12 +667,17 @@ function rate() {
   }
 }
 
-export function validateParentRunBinding(parentView, parentRest, expectedRunId) {
+export function validateParentRunBinding(
+  parentView,
+  parentRest,
+  expectedRunId,
+  expectedWorkflowPath = ".github/workflows/full-release-validation.yml",
+) {
   const boundWorkflowPath = String(parentRest.path ?? "").split("@", 1)[0];
   if (
     String(parentRest.id) !== String(expectedRunId) ||
     parentRest.event !== "workflow_dispatch" ||
-    boundWorkflowPath !== ".github/workflows/full-release-validation.yml" ||
+    boundWorkflowPath !== expectedWorkflowPath ||
     Number(parentRest.run_attempt) !== Number(parentView.attempt) ||
     parentRest.head_branch !== parentView.headBranch ||
     parentRest.head_sha !== parentView.headSha
@@ -1124,11 +1134,6 @@ function manifestEvidenceIdentity(manifest) {
 export function validateParentManifest(value, expected) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("release validation manifest must be an object");
-  }
-  if (Object.hasOwn(value, "receiptRecovery")) {
-    throw new Error(
-      "Receipt-backed recovery is retired; run fresh Full Release Validation with an authenticated qualification admission.",
-    );
   }
   validateRetiredReleaseRetryFields(value);
   if (![2, 3, 4].includes(value.version) || value.workflowName !== "Full Release Validation") {
@@ -2063,8 +2068,14 @@ function validateManifestArtifactBinding(artifact, manifest, parentRun, runId) {
   }
 }
 
-function validateCompletedParentRun(parentView, parentRest, repository, runId) {
-  validateParentRunBinding(parentView, parentRest, runId);
+function validateCompletedParentRun(
+  parentView,
+  parentRest,
+  repository,
+  runId,
+  expectedWorkflowPath,
+) {
+  validateParentRunBinding(parentView, parentRest, runId, expectedWorkflowPath);
   if (
     parentView.status !== "completed" ||
     parentView.conclusion !== "success" ||
@@ -2079,8 +2090,8 @@ function validateCompletedParentRun(parentView, parentRest, repository, runId) {
 export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
   const normalizedRepository = normalizeRepository(repository);
   return {
-    validateChildReuse(selection, request) {
-      return validateReusableReleaseChild(selection, request);
+    validateChildReuse(selection, request, options) {
+      return validateReusableReleaseChild(selection, request, options);
     },
     getWorkflowSource(sha, sourceWorkflowPath = ".github/workflows/full-release-validation.yml") {
       if (
@@ -2088,6 +2099,8 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
           ".github/workflows/full-release-validation.yml",
           ".github/workflows/plugin-npm-release.yml",
           ".github/workflows/ci.yml",
+          ".github/workflows/full-release-receipt-recovery.yml",
+          ".github/workflows/openclaw-performance.yml",
           ".github/workflows/plugin-prerelease.yml",
           RELEASE_VALIDATION_WAIVERS_PATH,
           "scripts/lib/release-validation-waivers.mjs",
@@ -2145,8 +2158,33 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
     verifyQualificationAdmission(options) {
       return verifyQualificationAdmission(options);
     },
+    verifyReceiptRecoveryAuthority(producer) {
+      return verifyReceiptRecoveryAuthority(normalizedRepository, producer);
+    },
     revalidateQualificationAdmissionAuthority(options) {
       return revalidateQualificationAdmissionAuthority(options);
+    },
+    verifyRetainedPublicationArtifacts(root, env, options) {
+      return verifyRetainedPublicationArtifacts(root, env, options);
+    },
+    downloadArtifactArchive(options) {
+      return downloadExactActionsArtifactArchive(options);
+    },
+    getRunArtifacts(runId) {
+      const artifacts = [];
+      for (let page = 1; ; page += 1) {
+        const result = githubRestJson(
+          "actions/runs/" + runId + "/artifacts?per_page=100&page=" + page,
+          normalizedRepository,
+        );
+        artifacts.push(...result.artifacts);
+        if (artifacts.length >= result.total_count) {
+          return artifacts;
+        }
+        if (!result.artifacts.length) {
+          throw new Error("Incomplete run artifact inventory");
+        }
+      }
     },
     getArtifact(artifactId, { freshlyUploaded = false } = {}) {
       if (!/^[1-9][0-9]{0,19}$/u.test(String(artifactId))) {
@@ -2203,21 +2241,30 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
   };
 }
 
-async function loadValidatedParentEvidence({
+export async function loadPublicationParentEvidence({
   client,
+  parentRun: observedParentRun,
   expectedRunAttempts,
   manifestPath,
   repository,
   runId,
 }) {
-  const parentView = client.getRunView(runId);
-  const parentRun = await client.getRun(runId);
+  const parentView = await client.getRunView(runId);
+  const parentRun = observedParentRun ?? (await client.getRun(runId));
   const parentRunAttempt = normalizePositiveInteger(
     parentRun.run_attempt,
     `full release parent ${runId} run attempt`,
   );
   consumeExpectedRunAttempt(expectedRunAttempts, runId, parentRunAttempt, "parent");
-  validateCompletedParentRun(parentView, parentRun, repository, runId);
+  const recovery =
+    workflowPath(parentRun) === ".github/workflows/full-release-receipt-recovery.yml";
+  validateCompletedParentRun(
+    parentView,
+    parentRun,
+    repository,
+    runId,
+    recovery ? ".github/workflows/full-release-receipt-recovery.yml" : undefined,
+  );
 
   const manifestEvidence = client.loadManifest(runId, parentRunAttempt, manifestPath);
   if (!manifestEvidence) {
@@ -2225,13 +2272,17 @@ async function loadValidatedParentEvidence({
       `successful parent run is missing its release validation manifest: ${runId}`,
     );
   }
-  const manifest = validateParentManifest(manifestEvidence.manifest, {
-    runAttempt: parentRun.run_attempt,
-    runId,
-    deferWaiverPolicy: true,
-    workflowRef: parentRun.head_branch,
-    workflowSha: parentRun.head_sha,
-  });
+  // Acquisition checks the carrier only; the recovery owner authenticates the
+  // aggregate before any consumer can treat it as qualification evidence.
+  const manifest = recovery
+    ? manifestEvidence.manifest
+    : validateParentManifest(manifestEvidence.manifest, {
+        runAttempt: parentRun.run_attempt,
+        runId,
+        deferWaiverPolicy: true,
+        workflowRef: parentRun.head_branch,
+        workflowSha: parentRun.head_sha,
+      });
   validateManifestArtifactBinding(manifestEvidence.artifact, manifest, parentRun, runId);
 
   return {
@@ -2590,8 +2641,65 @@ export async function validateReleaseRunEvidence(
   );
   const evidenceClient = client ?? createReleaseEvidenceClient(normalizedRepository);
   const verifier = resolveVerifierIdentity(verifierSourceSha, verifierSourceContent);
-  const currentEvidence = await loadValidatedParentEvidence({
+  const selectedRun = await evidenceClient.getRun(normalizedRunId);
+  if (workflowPath(selectedRun) === ".github/workflows/full-release-receipt-recovery.yml") {
+    if (
+      qualificationReuse ||
+      reuseRequest ||
+      hasRequestedEvidenceReuse({
+        expectedChangedPaths,
+        expectedEvidencePolicy,
+        expectedEvidenceSha,
+        expectedRootRunId,
+        expectedSelectedRunId,
+      })
+    ) {
+      throw new Error("Receipt recovery is an explicit aggregate, not historical parent reuse");
+    }
+    const retained = evidenceClient.loadManifest(
+      normalizedRunId,
+      selectedRun.run_attempt,
+      manifestPath,
+    );
+    if (!retained) {
+      throw new Error("Receipt recovery aggregate artifact is missing");
+    }
+    validateManifestArtifactBinding(
+      retained.artifact,
+      retained.manifest,
+      selectedRun,
+      normalizedRunId,
+    );
+    if (expectedTargetSha !== undefined && retained.manifest.targetSha !== expectedTargetSha) {
+      throw new Error("Receipt recovery target differs from the consumer");
+    }
+    const lineage = evidenceClient.compareCommitLineage(selectedRun.head_sha, verifier.sourceSha);
+    if (
+      !["ahead", "identical"].includes(lineage.status) ||
+      lineage.merge_base_commit?.sha !== selectedRun.head_sha
+    ) {
+      throw new Error("Receipt recovery producer is not on the selected verifier lineage");
+    }
+    if (
+      trustedIdentity.type === "tag" &&
+      evidenceClient.getRef(trustedIdentity.fullRef)?.object?.sha !== trustedIdentity.sha
+    ) {
+      throw new Error("Protected publication tooling tag changed");
+    }
+    const { authenticateReceiptRecovery } = await import("./full-release-receipt-recovery.mjs");
+    const evidence = await authenticateReceiptRecovery({
+      manifest: retained.manifest,
+      artifact: retained.artifact,
+      run: selectedRun,
+      client: evidenceClient,
+      verifier,
+      expectedRunAttempts: remainingExpectedRunAttempts,
+    });
+    return { ...evidence, qualification: qualificationFacts(evidence) };
+  }
+  const currentEvidence = await loadPublicationParentEvidence({
     client: evidenceClient,
+    parentRun: selectedRun,
     expectedRunAttempts: remainingExpectedRunAttempts,
     manifestPath,
     repository: normalizedRepository,
@@ -2795,7 +2903,7 @@ export async function validateReleaseRunEvidence(
   let selectedEvidence = currentEvidence;
   const reuse = currentEvidence.manifest.evidenceReuse;
   if (reuse) {
-    rootEvidence = await loadValidatedParentEvidence({
+    rootEvidence = await loadPublicationParentEvidence({
       client: evidenceClient,
       expectedRunAttempts: remainingExpectedRunAttempts,
       repository: normalizedRepository,
@@ -2804,7 +2912,7 @@ export async function validateReleaseRunEvidence(
     selectedEvidence =
       reuse.selectedRunId === reuse.runId
         ? rootEvidence
-        : await loadValidatedParentEvidence({
+        : await loadPublicationParentEvidence({
             client: evidenceClient,
             expectedRunAttempts: remainingExpectedRunAttempts,
             repository: normalizedRepository,
@@ -3198,11 +3306,11 @@ export async function validateReleaseRunEvidence(
 }
 
 // Normalize only after the owner has authenticated the complete evidence graph.
+// Recovery retains its original admission here, never in the aggregate source field.
 function qualificationFacts(evidence) {
   const admission = evidence.qualificationAdmission ?? null;
   const manifest = evidence.current.manifest;
-  /** @type {"direct" | "historical"} */
-  const kind = admission ? "direct" : "historical";
+  const kind = manifest.receiptRecovery ? "recovery" : admission ? "direct" : "historical";
   return {
     kind,
     candidateSha: evidence.current.targetSha,

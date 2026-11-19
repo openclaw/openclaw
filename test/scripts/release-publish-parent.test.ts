@@ -231,6 +231,7 @@ else: fail('Unexpected call: ' + json.dumps(args))
           PLUGIN_PUBLISH_SCOPE: "all-publishable",
           PLUGINS: "",
           PREPARED_PLUGINS: "",
+          QUALIFIED_PLUGIN_NPM: "",
           GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-100",
           GITHUB_REPOSITORY: repo,
           GITHUB_RUN_ID: "100",

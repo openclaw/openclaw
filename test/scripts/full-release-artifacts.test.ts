@@ -169,11 +169,18 @@ if (process.env.FIXTURE_STOP_ON_WAIT === "true") {
   Date.now = () => now;
   globalThis.setTimeout = (callback, delay) => { now += delay; queueMicrotask(callback); };
 }
-globalThis.fetch = async (input) => {
+const timeoutMs = new WeakMap();
+const originalTimeout = AbortSignal.timeout;
+AbortSignal.timeout = (ms) => {
+  const signal = originalTimeout(ms);
+  timeoutMs.set(signal, ms);
+  return signal;
+};
+globalThis.fetch = async (input, init) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   if (url.origin !== "https://api.github.com") throw new Error("Unexpected fetch origin");
   const endpoint = url.pathname.slice(1) + url.search;
-  appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify(["fetch", endpoint]) + "\\n");
+  appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify(["fetch", endpoint, String(timeoutMs.get(init?.signal))]) + "\\n");
   const statuses = responses[endpoint]?.fixtureHttpStatuses;
   const status = statuses?.shift();
   if (status && status !== 200) {
