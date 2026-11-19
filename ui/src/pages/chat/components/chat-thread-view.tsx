@@ -260,7 +260,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
     const projection = projectChatTranscript(input.props, session, searchState);
     expansionVersions();
     // Empty shells establish the baseline for first-submission animation.
-    if (projection.isEmpty || projection.showLoadingSkeleton) {
+    if (projection.isEmpty || projection.isLoading) {
       session.entryAnimations.sync(
         EMPTY_ENTRY_KEYS,
         input.props.announceTranscript !== false && !projection.searchOpen && !input.props.loading,
@@ -281,6 +281,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
     }
   });
   const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);
+  const isLoading = createMemo(() => current().projection.isLoading);
   const isEmpty = createMemo(() => current().projection.isEmpty);
   const searchOpen = createMemo(() => current().projection.searchOpen);
   const routeLoading = createMemo(() => input.props.routeLoadingSkeleton && showLoadingSkeleton());
@@ -326,7 +327,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
         </div>
       );
     }
-    if (showLoadingSkeleton() || isEmpty()) {
+    if (isLoading() || isEmpty()) {
       return (
         <div class="chat-thread-inner">
           {sentinel()}

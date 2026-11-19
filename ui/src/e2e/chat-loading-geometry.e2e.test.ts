@@ -82,7 +82,7 @@ suite.define(() => {
           await gateway.resolveDeferred("connect");
           await gateway.waitForRequest("chat.startup");
           await gateway.resolveDeferred("chat.startup");
-          await page.locator(".chat-text").getByText(readyText, { exact: true }).waitFor();
+          await page.getByText(readyText, { exact: true }).waitFor();
           const composer = page
             .locator(".agent-chat__input--chat")
             .filter({ visible: true })
@@ -170,9 +170,7 @@ suite.define(() => {
             );
             route.release();
             await gateway.waitForRequest("chat.startup");
-            expect(
-              await page.locator(".chat-text").getByText(readyText, { exact: true }).count(),
-            ).toBe(0);
+            expect(await page.getByText(readyText, { exact: true }).count()).toBe(0);
             const pending = await capture(page, composer, directory, "history-pending");
             expect
               .soft(await page.locator(".chat-thread .loading-skeleton__composer").count())
@@ -183,7 +181,7 @@ suite.define(() => {
               expect.soft(await history.locator("openclaw-panel-loading-skeleton").count()).toBe(0);
             }
             await gateway.resolveDeferred("chat.startup");
-            await page.locator(".chat-text").getByText(readyText, { exact: true }).waitFor();
+            await page.getByText(readyText, { exact: true }).waitFor();
             const ready = await capture(page, composer, directory, "ready");
             await writeFile(
               path.join(directory, "geometry.json"),

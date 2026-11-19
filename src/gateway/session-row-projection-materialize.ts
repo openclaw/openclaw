@@ -375,7 +375,7 @@ export function readResidentSessionRow(
         lastAssistantMessage: row.lastAssistantMessage,
       },
       skipTranscriptUsageFallback: true,
-      hasMessages: prepared?.databaseFacts.transcriptHasMessages ?? row.hasMessages,
+      hasMessages: databaseFacts.transcriptHasMessages ?? row.hasMessages,
       includeSwarmChildren: true,
       childLinks: prepared ? undefined : params.links,
     });

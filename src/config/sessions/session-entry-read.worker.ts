@@ -668,15 +668,16 @@ export function readSessionRowDatabaseFacts(
                 return [];
               }
               const { entry } = selected;
-              const storedTranscript =
-                selected.row.row_transcript_window_id === null
-                  ? EMPTY_SESSION_ROW_TRANSCRIPT_PROJECTION
-                  : readStoredSessionRowTranscriptProjection({
-                      json: selected.row.row_transcript_json,
-                      updatedAt: selected.row.row_transcript_updated_at,
-                      transcriptUpdatedAt: selected.row.row_transcript_source_updated_at,
-                      indexedSeq: selected.row.row_transcript_indexed_seq,
-                    });
+              // Metadata creates a window before any transcript exists. Its missing
+              // preview cache is not an unknown history requiring optional backfill.
+              const storedTranscript = !selected.row.row_transcript_present
+                ? EMPTY_SESSION_ROW_TRANSCRIPT_PROJECTION
+                : readStoredSessionRowTranscriptProjection({
+                    json: selected.row.row_transcript_json,
+                    updatedAt: selected.row.row_transcript_updated_at,
+                    transcriptUpdatedAt: selected.row.row_transcript_source_updated_at,
+                    indexedSeq: selected.row.row_transcript_indexed_seq,
+                  });
               const facts: SessionRowDatabaseFacts = {
                 sessionKey,
                 entry,

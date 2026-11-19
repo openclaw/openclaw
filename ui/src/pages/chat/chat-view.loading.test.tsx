@@ -111,3 +111,25 @@ it.each([false, undefined])(
     expect(container.querySelector(selector)).toBeNull();
   },
 );
+
+it("does not announce saved history as a new reply after a neutral loading frame", async () => {
+  const container = createComposerContainer();
+  const props = createChatProps({ loading: true, messages: [] });
+  renderChatPropsInto(container, props);
+  await waitForSolid(() => expect(container.querySelector(".chat-thread-inner")).not.toBeNull());
+  const messages = [{ role: "assistant", content: "Saved conversation", timestamp: 1 }];
+  renderChatPropsInto(container, { ...props, loading: false, messages });
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-text")?.textContent).toContain("Saved conversation"),
+  );
+  expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe("");
+
+  renderChatPropsInto(container, {
+    ...props,
+    loading: false,
+    messages: [...messages, { role: "assistant", content: "New reply", timestamp: 2 }],
+  });
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe("New reply"),
+  );
+});

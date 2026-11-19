@@ -100,8 +100,10 @@ function applyObservedChatSessionRow(
 ): void {
   const selectedAgentId = resolveChatAgentId(state);
   if (!row) {
-    // The row owner retired this target even if a list already projected its successor.
-    retireSessionMutations();
+    // Retire a known incarnation, not a never-observed session's replacement creation.
+    if (observedSessionId !== null) {
+      retireSessionMutations();
+    }
     const result = state.sessionsResult;
     if (!result || state.sessionsResultAgentId !== selectedAgentId) {
       return;
@@ -677,11 +679,13 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       const observation = binding.observation;
       const pendingAbort = state.pendingAbort;
       if (
-        pendingAbort &&
-        !observation.hasObserved &&
-        uiConversationMatches(state, pendingAbort.sessionKey, key, agentId, pendingAbort.agentId)
+        (this.presented && observation.row?.hasMessages === undefined) ||
+        (pendingAbort &&
+          !observation.hasObserved &&
+          uiConversationMatches(state, pendingAbort.sessionKey, key, agentId, pendingAbort.agentId))
       ) {
-        // A parked pane skips resource discovery, but its queued Stop needs current ownership.
+        // Mobile has no foreground roster read. Resolve history presence for the selected
+        // pane without waiting for history; a parked pane's queued Stop still needs ownership.
         refreshRunner.refresh();
       }
       const transcriptSessionId = state.currentSessionId ?? retainedTranscriptSessionId;
