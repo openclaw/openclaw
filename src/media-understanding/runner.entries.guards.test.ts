@@ -130,17 +130,17 @@ it.each(["audio", "image"] as const)(
   async (capability) => {
     function receiver() {
       const received: Array<{ auth?: string; provider?: string | string[]; body: Buffer }> = [];
-      const server = createServer(async (request, response) => {
+      const server = createServer((request, response) => {
         const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.from(chunk));
-        }
-        received.push({
-          auth: request.headers.authorization,
-          provider: request.headers["x-fixture-provider"],
-          body: Buffer.concat(chunks),
+        request.on("data", (chunk: Buffer) => chunks.push(chunk));
+        request.once("end", () => {
+          received.push({
+            auth: request.headers.authorization,
+            provider: request.headers["x-fixture-provider"],
+            body: Buffer.concat(chunks),
+          });
+          response.end("transcribed");
         });
-        response.end("transcribed");
       });
       return { received, server };
     }
