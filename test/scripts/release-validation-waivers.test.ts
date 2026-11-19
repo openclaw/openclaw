@@ -932,3 +932,39 @@ describe("beta.1 release-scoped FRV16 grants", () => {
     ).rejects.toThrow("non-policy failure");
   });
 });
+
+it("binds the repaired 2026.11.6 trajectory exception to its exact candidate and completed leaf", () => {
+  const repairedSha = "06afb10d3272cc9deaf38ca6a3b7b839d5935638";
+  const leaf = {
+    id: 11624,
+    name: "checks-node-compact-large-24 (node)",
+    status: "completed",
+    conclusion: "failure",
+  };
+  const input = {
+    targetVersion: "2026.11.6",
+    targetSha: repairedSha,
+    child: { ...child, jobs: [leaf] },
+  };
+  const policy = evaluateReleaseChildPolicy(input);
+  expect(policy.waivers).toHaveLength(1);
+  expect(policy.waivers[0]?.testFailures?.signatures).toMatchObject([
+    {
+      kind: "vitest",
+      file: "src/trajectory/runtime-store-writer.test.ts",
+    },
+  ]);
+  expect(policy.waivers[0]?.testFailures?.signatures[0]?.test).toContain(
+    "Session reader validation does not match its current physical owner",
+  );
+  expect(
+    evaluateReleaseChildPolicy({ ...input, targetSha: "6f6cfa150a7c77a1d94168f7952c136ef7fac6bb" })
+      .waivers,
+  ).toEqual([]);
+  expect(
+    evaluateReleaseChildPolicy({
+      ...input,
+      child: { ...child, jobs: [{ ...leaf, conclusion: "cancelled" }] },
+    }).waivers,
+  ).toEqual([]);
+});

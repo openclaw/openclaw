@@ -170,7 +170,7 @@ function completeInvocations(rows) {
     }
     const failed = state.invocations.filter((invocation) => invocation.tests).length;
     if (state.terminal.kind === "failed") {
-      if (!state.trailer || failed === 0 || state.terminal.count !== failed) {
+      if (!state.trailer || failed === 0 || state.terminal.count !== state.invocations.length) {
         return false;
       }
       failedStreams++;

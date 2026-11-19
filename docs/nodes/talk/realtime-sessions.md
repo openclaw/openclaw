@@ -25,6 +25,10 @@ matching `agents.defaults.voiceModel` take precedence. File transcription produc
 a final transcript after the utterance ends. The catalog marks file transcription
 ready only when a configured provider or CLI command is available.
 
+The catalog checks only the providers named by your media models when reporting
+file-transcription and voice-note readiness. Periodic refreshes still detect
+changes in credentials, provider availability, and installed transcription commands.
+
 Capture pauses during the agent response and speech playback, then resumes for
 the next utterance. Stop cancels the call's own chat run and playback. A Talk
 failure, including the two-minute answer timeout, ends capture and playback but
