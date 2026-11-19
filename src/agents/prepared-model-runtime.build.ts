@@ -20,12 +20,16 @@ import {
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
 import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import {
-  createFullModelCatalogAccess,
+  createPersistentModelCatalogAccess,
   MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS,
 } from "./prepared-model-runtime.catalog-access.js";
+import { prepareInitialModelCatalogAuth } from "./prepared-model-runtime.catalog-auth.js";
 import type {
   PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogAccess,
+  PreparedModelRuntimeCatalogAccessParams,
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
@@ -66,6 +70,37 @@ import type {
 } from "./prepared-model-runtime.types.js";
 
 const MAX_CONCURRENT_MODEL_RUNTIME_AGENT_SOURCE_BUILDS = 2;
+
+async function createFullModelCatalogAccess(
+  params: PreparedModelRuntimeCatalogAccessParams,
+  assertBuildCurrent: () => void,
+): Promise<PreparedModelRuntimeCatalogAccess> {
+  assertBuildCurrent();
+  const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+    params.pluginGeneration.pluginMetadataSnapshot,
+    params.agentFacts.input.config,
+    params.agentFacts.env,
+  );
+  const eligibleProviders = [
+    ...new Set(
+      [...params.agentFacts.providerIds, ...Object.keys(params.agentFacts.credentials)].map(
+        normalizeProvider,
+      ),
+    ),
+  ].toSorted();
+  const currentAuth = await prepareInitialModelCatalogAuth(
+    params,
+    eligibleProviders,
+    assertBuildCurrent,
+  );
+  assertBuildCurrent();
+  return createPersistentModelCatalogAccess(
+    params,
+    normalizeProvider,
+    eligibleProviders,
+    currentAuth,
+  );
+}
 
 export type PreparedModelRuntimeBuildCandidate = Readonly<{
   input: PreparedModelRuntimeInput;
