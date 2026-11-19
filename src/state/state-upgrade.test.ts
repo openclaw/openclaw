@@ -58,12 +58,16 @@ describe("startup reader replacement", () => {
       state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
     }
     // The upgrade's file-only lock itself inspects the old database through a read worker.
-    const lock = await acquireGatewayLock({ env, databaseAccess: "none", allowInTests: true });
+    const lock = await acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true });
     try {
       await expect(
         upgradeStateDirectory({
           env,
           log: { info() {}, warn() {} },
+          custody: {
+            run: (operation) => lock!.run(operation),
+            handOff: (operation) => operation(),
+          },
           runChain: async (chain) => {
             // The chain runs on the live state, not a copy.
             expect(chain.stateDir).toBe(stateDir);
@@ -481,6 +485,86 @@ describe("startup pre-images", () => {
       ),
     );
   });
+
+  it("finishes a chain a kill interrupted after its databases were already current", async () => {
+    const { stateDir } = corpus("openclaw-upgrade-interrupted-");
+    // The killed start imaged each database, committed every migration, then died
+    // before its Doctor finished the config: only its work directory says so.
+    for (const [file] of databases(stateDir)) {
+      fs.copyFileSync(file, preImage(file));
+    }
+    await migrate({ stateDir });
+    fs.mkdirSync(path.join(stateDir, `.upgrade-${preImage("").slice(".pre-".length)}-1-1`));
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json"),
+    };
+    expect(isStateUpgradePending(env)).toBe(true);
+    const chain = vi.fn(migrate);
+
+    const result = await upgradeStateDirectory({
+      env,
+      log: { info: () => {}, warn: () => {} },
+      runChain: chain,
+    });
+
+    expect(chain).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: "upgraded", mode: "chain", pinned: false });
+    for (const [file, version] of databases(stateDir)) {
+      expect(userVersion(file)).toBe(version);
+      // The interrupted start's images stay the baseline; nothing new was imaged.
+      expect(userVersion(preImage(file))).toBeLessThan(version);
+    }
+    expect(isStateUpgradePending(env)).toBe(false);
+  });
+
+  it.each(["chain", "fallback"] as const)(
+    "keeps the update run the updater recorded before the restart (%s)",
+    async (mode) => {
+      const { stateDir } = corpus("openclaw-upgrade-update-run-");
+      const shared = path.join(stateDir, "state/openclaw.sqlite");
+      const runId = "11111111-2222-4333-8444-555555555555";
+      {
+        // The updater's own release wrote this row just before restarting the Gateway.
+        using db = new DatabaseSync(shared);
+        const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf("CREATE TABLE IF NOT EXISTS update_runs (");
+        db.exec(
+          OPENCLAW_STATE_SCHEMA_SQL.slice(
+            start,
+            OPENCLAW_STATE_SCHEMA_SQL.indexOf(") STRICT;", start) + ") STRICT;".length,
+          ),
+        );
+        db.prepare(`INSERT INTO update_runs (run_id, created_at_ms, updated_at_ms, trigger, phase,
+          status, origin_json, target_json, before_json, after_json, steps_json, verification_json,
+          repair_json) VALUES (?, 1, 2, 'cli', 'restarting', 'running', '{}', '{}', '{}', '{}',
+          '[{"step":"git-release-switch"}]', '{}', '[]')`).run(runId);
+      }
+
+      const result = await upgradeStateDirectory({
+        env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json") },
+        log: { info: () => {}, warn: () => {} },
+        runChain:
+          mode === "chain"
+            ? migrate
+            : async () => {
+                throw new ChainStepError("injected", "force the generic rebuild");
+              },
+      });
+
+      expect(result).toMatchObject({ status: "upgraded", mode });
+      using db = new DatabaseSync(shared, { readOnly: true });
+      expect(db.prepare("SELECT run_id, phase, status, steps_json FROM update_runs").all()).toEqual(
+        [
+          {
+            run_id: runId,
+            phase: "restarting",
+            status: "running",
+            steps_json: '[{"step":"git-release-switch"}]',
+          },
+        ],
+      );
+    },
+  );
 
   it("prunes only owned file generations and never descends into unrelated trees", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-prune-"));

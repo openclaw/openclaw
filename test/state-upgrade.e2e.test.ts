@@ -1,6 +1,6 @@
-// Start this build's Gateway on real prior-release state and prove the
-// copy-and-swap upgrade: it starts, user data survives, and the old files keep
-// their exact bytes under `.pre-<buildId>`.
+// Start this build's Gateway on real prior-release state and prove the in-place
+// upgrade: it starts, user data survives, and each outdated database keeps its old
+// data under `.pre-<buildId>`.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -64,6 +64,41 @@ function sqliteFiles(root: string): string[] {
 }
 
 const sha256 = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+
+/**
+ * The schema version and every stored row, independent of the journal mode in the
+ * header: a pre-image is kept in rollback-journal mode so reading it leaves no companion.
+ */
+function contents(file: string): string {
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    const hash = createHash("sha256");
+    hash.update(
+      String((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version),
+    );
+    for (const { name } of db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+      .all() as Array<{ name: string }>) {
+      try {
+        for (const row of db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()) {
+          hash.update(
+            `${name}:${JSON.stringify(Object.values(row), (_key, value) =>
+              value instanceof Uint8Array ? Buffer.from(value).toString("hex") : value,
+            )}`,
+          );
+        }
+      } catch {
+        // Virtual tables need their module; their content tables are read above.
+      }
+    }
+    return hash.digest("hex");
+  } finally {
+    db.close();
+  }
+}
+
+/** The main database files (companions folded in by the read). */
+const databaseFiles = (root: string) => sqliteFiles(root).filter((file) => !file.endsWith("-wal"));
 
 /**
  * Every text value in the upgraded tree, excluding preserved generations, logs and
@@ -154,8 +189,8 @@ function installCorpus(instance: Instance, release: string, gatewayOverride = {}
   );
 }
 
-describe("Gateway start upgrades prior-release state by copy and swap", () => {
-  it("a start refused for invalid config publishes nothing", async () => {
+describe("Gateway start upgrades prior-release state in place", () => {
+  it("a start refused for invalid config restores the previous state", async () => {
     const instance = await createOpenClawTestInstance({
       name: "upgrade-refused",
       startTimeoutMs: 300_000,
@@ -163,10 +198,13 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
     try {
       // An invalid combination Doctor cannot repair, so the start is refused.
       installCorpus(instance, "2026.10.10", { bind: "lan", tailscale: { mode: "serve" } });
-      const files = [instance.configPath, ...sqliteFiles(instance.stateDir)];
-      const before = files.map(sha256);
+      const config = sha256(instance.configPath);
+      const files = databaseFiles(instance.stateDir);
+      const before = files.map(contents);
       await expect(instance.startGateway()).rejects.toThrow();
-      expect(files.map(sha256)).toEqual(before);
+      // The start migrated in place, then put every pre-image and the config back.
+      expect(sha256(instance.configPath)).toBe(config);
+      expect(files.map(contents)).toEqual(before);
       expect(
         listDirectoryTreeStrictSync(instance.stateDir)
           .map(({ relativePath }) => relativePath)
@@ -186,11 +224,13 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
       });
       try {
         installCorpus(instance, release);
-        const before = new Map(sqliteFiles(instance.stateDir).map((file) => [file, sha256(file)]));
+        const before = new Map(
+          databaseFiles(instance.stateDir).map((file) => [file, contents(file)]),
+        );
 
         if (failStep) {
-          // Run this build's Doctor on the private copy, then fail, so the generic
-          // fallback rebuilds the databases; the Gateway then starts on the result.
+          // Run this build's Doctor on the live state, then fail, so the generic
+          // fallback rebuilds the databases from their images; the Gateway then starts.
           const [entry] = await instance.entrypoint();
           const doctor = createDoctorChain(path.resolve(entry ?? ""), []);
           await upgradeStateDirectory({
@@ -239,13 +279,13 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
         }
         await instance.stopGateway();
 
-        // The old bytes survive under the build that upgraded them: this process, or the Gateway's dist.
+        // The old data survives under the build that upgraded it: this process, or the Gateway's dist.
         const builtBy = failStep
           ? resolveRuntimeServiceBuildId()
           : JSON.parse(fs.readFileSync(new URL("../dist/build-info.json", import.meta.url), "utf8"))
               .buildId;
         for (const [file, digest] of before) {
-          expect(sha256(`${file}.pre-${builtBy ?? VERSION}`), file).toBe(digest);
+          expect(contents(`${file}.pre-${builtBy ?? VERSION}`), file).toBe(digest);
         }
         const state = new DatabaseSync(path.join(instance.stateDir, "state", "openclaw.sqlite"), {
           readOnly: true,

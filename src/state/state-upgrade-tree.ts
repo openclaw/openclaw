@@ -334,27 +334,9 @@ export function pruneGenerations(
   return removed;
 }
 
-function textColumns(db: DatabaseSync): Array<{ table: string; column: string }> {
-  const tables = db
-    .prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
-    )
-    // SAFETY: the statement fixes the column names and types of each row.
-    .all() as Array<{ name: string }>;
-  const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
-  return tables.flatMap(({ name }) =>
-    readSqliteRows<{ name: string; type: string; hidden: number }>(
-      db,
-      `PRAGMA table_xinfo(${quote(name)})`,
-    )
-      .filter((column) => column.hidden === 0 && !/INT|REAL|BLOB/iu.test(column.type))
-      .map((column) => ({ table: quote(name), column: quote(column.name) })),
-  );
-}
-
 /**
  * Decode BLOB values stored in TEXT columns (issue #110186) so shipped steps and
- * the copy see text. Runs on private copies only.
+ * the rebuild see text. Runs under the start's custody, after the pre-migration image.
  */
 export function normalizeSqliteText(db: DatabaseSync): void {
   // Keys change type in place; their parents and children are decoded in the same pass.

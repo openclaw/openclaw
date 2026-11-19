@@ -121,9 +121,15 @@ If Doctor fails validation, the generic rebuild produces the outdated databases
 from their images (or, with no image, from the databases as Doctor left them),
 replaces them through a durable plan, and pins the generation. If the upgraded
 config is invalid, the start restores the images when every outdated database has
-one; otherwise the databases stay migrated and the start reports that. Files Doctor
-changes other than the databases and the config are not restored by a later trial
-revert. Files the run adds are recorded so a failed Git release trial removes them.
+one; otherwise the databases stay migrated and the start reports that.
+
+A failed Git release trial now restores less than before. It restores the outdated
+databases and the config from their images, and removes the files the run added.
+It no longer restores other files Doctor changed in place (for example workspace files
+it migrated or legacy files it moved); the earlier copy-and-swap upgrade restored them
+too. Only the fallback rebuild still replaces a database file; a successful start
+migrates `state/openclaw.sqlite` in place, so a process holding it open keeps the same
+file.
 
 During startup upgrades, Doctor records carried-over scheduled jobs against
 credential databases at their live paths. No environment variable or operator
@@ -1835,7 +1841,12 @@ cannot read after a new-version Doctor or boot check may have written it. When n
 new-version process has opened state yet, an unreadable store is a recorded warning
 (`state-schema-verification`), not data at risk, and the update continues or fails for its
 own recorded reason. On a Git release the new release migrates state when it starts, and its
-trial switches back if it fails to start. The Git release inspection also does not
+trial switches back after two failed starts only when the previous release can open the
+state: when no database moved past the schemas the previous release's `package.json`
+declares, or when a pre-migration image restores each one that did. Otherwise the service
+stays on the new release, the launcher says so, and the failure is fixed forward
+(`openclaw triage`). The launcher is written by the installed updater, so this rule applies
+from the first update after the updater that ships it. The Git release inspection also does not
 require the new schema before that start: "migration did not finish" applies only to
 installs whose updater runs Doctor before restarting. Installed updaters that run Git
 releases without this change (main builds since the release layout landed) fail

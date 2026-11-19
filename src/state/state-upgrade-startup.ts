@@ -43,33 +43,42 @@ export async function upgradeStateOnGatewayStart(
     if (!isStateUpgradePending(env)) {
       return;
     }
-    // File-only ownership: the old databases are not opened for writing.
-    lock = await acquireGatewayLock({ env, databaseAccess: "none", allowInTests: true });
+    // Schema-maintenance ownership admits old schemas: the start writes the pre-images.
+    lock = await acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true });
   } catch (error) {
     throw explainMachineFailure(error, resolveStateDir(env));
   }
   try {
     const statePath = path.join(resolveStateDir(env), "state", "openclaw.sqlite");
-    const acquire = () => acquireGatewayLock({ env, databaseAccess: "none", allowInTests: true });
+    const acquire = () =>
+      acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true });
     await upgradeStateDirectory({
       env,
       log,
-      // The in-place Doctor takes this state's maintenance custody itself; hand it over
-      // and take it back before anything else here touches the state.
-      handOffCustody: async (run) => {
-        await closeOpenClawStateDatabaseByPathAsync(statePath);
-        await lock?.release();
-        lock = null;
-        try {
-          return await run();
-        } finally {
-          lock = await acquire().catch((error: unknown) => {
-            throw new StateUpgradeCustodyLostError(
-              "Another OpenClaw process took state ownership during the upgrade; this start stops and leaves the upgrade to it.",
-              { cause: error },
-            );
-          });
-        }
+      custody: {
+        run: (operation) => {
+          if (!lock) {
+            throw new StateUpgradeCustodyLostError("The state upgrade lost its custody.");
+          }
+          return lock.run(operation);
+        },
+        // The in-place Doctor takes this state's maintenance custody itself; hand it
+        // over and take it back before anything else here touches the state.
+        handOff: async (operation) => {
+          await closeOpenClawStateDatabaseByPathAsync(statePath);
+          await lock?.release();
+          lock = null;
+          try {
+            return await operation();
+          } finally {
+            lock = await acquire().catch((error: unknown) => {
+              throw new StateUpgradeCustodyLostError(
+                "Another OpenClaw process took state ownership during the upgrade; this start stops and leaves the upgrade to it.",
+                { cause: error },
+              );
+            });
+          }
+        },
       },
       // Selecting the environment read the config, which can leave a worker on a
       // current shared database; it must reopen the swapped file, not the old one.
