@@ -48,7 +48,13 @@ export interface ReleasePolicyJob {
 }
 export interface ReleaseChildPolicy {
   waivers: ReleaseValidationWaiver[];
-  aggregates: { jobName: string; stepName: string; causes: string[]; exactCauses?: boolean }[];
+  aggregates: {
+    jobName: string;
+    stepName: string;
+    causes: string[];
+    exactCauses?: boolean;
+    logSha256?: string;
+  }[];
   waivedJobNames: Set<string>;
   blockingJobs: ReleasePolicyJob[];
   advisoryJobs: ReleasePolicyJob[];

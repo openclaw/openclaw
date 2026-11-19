@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { compareAscii } from "./canonical-json.mjs";
 import { parseNodeFailureReport } from "./ci-node-test-evidence.mjs";
@@ -43,6 +44,17 @@ const STABLE_116_CI_FAILURES = new Map([
   ["checks-ui-e2e-real-gateway (2/2)", "checks-ui-e2e-real-gateway"],
 ]);
 
+const FRV16_TARGET_SHA = "995f9059b6e6fe3ba0865a3354924fd2bcbfceea";
+const FRV16_CI_FAILURES = new Map([
+  ...[15, 23, 3, 32, 11, 41, 18, 30].map((shard) => [
+    "checks-node-compact-large-" + shard + " (node)",
+    "checks-node-core-test-nondist-shard",
+  ]),
+  ["checks-node-compact-small-38 (node)", "checks-node-core-test-nondist-shard"],
+  ["checks-ui-e2e (2/13)", "checks-ui-e2e"],
+]);
+const FRV16_QA_JOB = "Run QA Lab runtime-pair lane (core)";
+
 // Exact mobile job names and their CI gate keys; no Gateway or desktop jobs.
 const EXTENDED_1033_MOBILE_JOBS = new Map([
   ["ios-screenshots-iphone", "ios-screenshot-shard"],
@@ -69,6 +81,26 @@ const EXTENDED_1033_MOBILE_JOBS = new Map([
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
+  ...[
+    ...[...FRV16_CI_FAILURES.keys()].map((jobName) => ({
+      childRole: "normalCi",
+      jobName,
+      evidence: { runId: "44465881623", runAttempt: 1 },
+    })),
+    {
+      childRole: "releaseChecksIndependent",
+      jobName: FRV16_QA_JOB,
+      evidence: { runId: "44465878180", runAttempt: 1 },
+    },
+  ].map(({ childRole, jobName, evidence }) => ({
+    childRole,
+    jobName,
+    evidence,
+    targetVersion: "2026.11.10-beta.1",
+    targetSha: FRV16_TARGET_SHA,
+    reason:
+      "Dallin Romney authorized tooling-only acceptance on 2026-11-19 at 06:44 UTC, preserving C=Q 995f9059b6e6fe3ba0865a3354924fd2bcbfceea. The lead assessment found no demonstrated high-risk product defect; runtime, worker, UI and cron uncertainty remains accepted, not fixed or proven flaky. This grants only the observed terminal failed job in the original child run/attempt. Preserve raw failures, required execution and complete evidence. Other jobs, runs, attempts, targets, unknown aggregate causes, missing/cancelled/incomplete evidence, integrity, install/update and publication gates remain blocking.",
+  })),
   ...[...STABLE_116_CI_FAILURES.keys()].map((jobName) => ({
     targetVersion: "2026.11.6",
     childRole: "normalCi",
@@ -94,6 +126,7 @@ const RELEASE_VALIDATION_WAIVERS = [
     targetVersion: "2026.11.10-beta.1",
     childRole: "normalCi",
     jobName: "checks-node-compact-large-39 (bun)",
+    evidence: { runId: "44290065577", runAttempt: 1 },
     testFailures: {
       stepName: "Run Node test shard",
       signatures: [
@@ -111,6 +144,7 @@ const RELEASE_VALIDATION_WAIVERS = [
     targetVersion: "2026.11.10-beta.1",
     childRole: "normalCi",
     jobName: "checks-node-compact-large-41 (node)",
+    evidence: { runId: "44290065577", runAttempt: 1 },
     testFailures: {
       stepName: "Run Node test shard",
       signatures: [
@@ -472,6 +506,38 @@ export function releaseChildAdvisories(child) {
 const KOVA_PERFORMANCE_JOB = "Kova mock provider performance";
 
 function aggregateCauses(waiver) {
+  if (waiver.targetSha === FRV16_TARGET_SHA) {
+    if (waiver.childRole === "normalCi" && FRV16_CI_FAILURES.has(waiver.jobName)) {
+      return [
+        {
+          jobName: "openclaw/ci-gate",
+          stepName: "Verify selected CI lanes",
+          causes: [
+            FRV16_CI_FAILURES.get(waiver.jobName) + " finished with failure (selected=true)",
+          ],
+          exactCauses: true,
+        },
+      ];
+    }
+    if (waiver.childRole === "releaseChecksIndependent" && waiver.jobName === FRV16_QA_JOB) {
+      return [
+        {
+          jobName: "Verify QA Lab runtime-pair lanes",
+          stepName: "Verify runtime-pair lane statuses",
+          causes: [],
+          // This exact job silently fails jq after authenticating the sole core
+          // lane status. Pin the original log: absence of errors is not a cause.
+          logSha256: "7531f5b323770bc82908e0dcb6799a9241fbf427417110b6f038f43f9c560d84",
+        },
+        {
+          jobName: "Verify release checks",
+          stepName: "Verify release check results",
+          causes: ["qa_lab_runtime_parity_release_checks ended with failure"],
+          exactCauses: true,
+        },
+      ];
+    }
+  }
   if (waiver.testFailures) {
     return [
       {
@@ -741,6 +807,14 @@ export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog 
       );
     }
     const log = String(await getJobLog(job.id));
+    if (aggregate.logSha256) {
+      if (createHash("sha256").update(log).digest("hex") !== aggregate.logSha256) {
+        throw new ReleaseAggregateValidationError(
+          "Release aggregate differs from reviewed evidence: " + aggregate.jobName,
+        );
+      }
+      continue;
+    }
     const causes = aggregate.exactCauses
       ? exactAggregateCauses(log)
       : log
