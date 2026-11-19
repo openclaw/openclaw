@@ -153,9 +153,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   } = toolSurfaceRuntime.plan;
   // A run's allowlist (any trigger) refuses the calls it does not name instead of narrowing
   // the listing, so every turn of the session sends the same tools.
-  const toolsAllowGated =
-    attempt.toolsAllow !== undefined &&
-    listsFixedToolSet(toolSearchConfig, toolSearchControlsEnabledForRun);
+  const fixedListing = listsFixedToolSet(toolSearchConfig, toolSearchControlsEnabledForRun);
+  const toolsAllowGated = attempt.toolsAllow !== undefined && fixedListing;
   const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
     disableTools: attempt.disableTools,
     isRawModelRun,
@@ -552,6 +551,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       releaseTools,
       toolSearchCatalogRef,
       toolSurfaceRuntime,
+      fixedListing,
       toolSearchConfig,
       toolSearchControlsEnabledForRun,
       toolSearchRuntimeConfig,

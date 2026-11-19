@@ -14,7 +14,7 @@ import {
   sessionManagerReadToolResultProjectionEntries,
   sessionManagerReadTranscriptBranch,
 } from "../../sessions/session-manager-view-types.js";
-import { listsFixedToolSet, resolveToolSearchConfig } from "../../tool-search-config.js";
+import { resolveToolSearchConfig } from "../../tool-search-config.js";
 import {
   readToolUsageRankingSnapshot,
   type ToolUsageRankingSnapshot,
@@ -352,10 +352,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           entries: sessionManager[sessionManagerReadTranscriptBranch](),
           historyBoundaryCount: sessionManager.getBoundaryCount(),
           tools,
-          admitNewTools: !listsFixedToolSet(
-            resolveToolSearchConfig(toolSearchRuntimeConfig),
-            toolBase.toolSearchControlsEnabledForRun,
-          ),
+          admitNewTools: !toolBase.fixedListing,
         });
         if (sessionPromptState.pendingToolSurface !== pending) {
           declarePromptToolPin(attempt);

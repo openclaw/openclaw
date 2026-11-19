@@ -8,8 +8,8 @@ import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import {
   finalizeAgentToolAvailability,
   gateAgentToolExecution,
+  isAgentToolExecutionAvailable,
 } from "../../agent-tool-availability.js";
-import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { isCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../../code-mode.js";

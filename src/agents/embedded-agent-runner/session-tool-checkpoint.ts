@@ -71,8 +71,6 @@ export function resolveSessionToolPolicyDigest(
       config?.mcp,
       config?.desktop,
       readGitHubPublicationToolSelection(config ?? {}),
-      // Pins written before the fixed listing lack tools it now lists; start one new pin.
-      "fixed-listing",
     ]),
   );
 }

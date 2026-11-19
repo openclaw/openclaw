@@ -269,8 +269,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     input.preparedToolBase = {
       ...input.preparedToolBase,
       messageToolAvailable: false,
-      toolSearchControlsEnabledForRun: true,
-      toolSearchConfig: { enabled: true, mode: "tools", searchDefaultLimit: 8, maxSearchLimit: 20 },
+      fixedListing: true,
     } as typeof input.preparedToolBase;
     const result = await prepare(input);
     expect(toolNames(result.uncompactedEffectiveTools)).toContain("message");

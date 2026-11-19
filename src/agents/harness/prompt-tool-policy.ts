@@ -70,6 +70,9 @@ function isAgentTool<T extends NamedTool>(tool: T): tool is T & AnyAgentTool {
   return "execute" in tool && typeof tool.execute === "function";
 }
 
+/** Guidance names only tools this turn can run; a listed tool the turn refuses is not one. */
+const callable = (tool: NamedTool) => !isAgentTool(tool) || isAgentToolExecutionAvailable(tool);
+
 function filterTools<T extends NamedTool>(
   tools: readonly T[],
   toolsAllow?: string[],
@@ -121,7 +124,9 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
         return {
           tools: allowedTools,
           toolSchemaDirectoryPrompt: undefined,
-          callableToolNames: normalizeUniqueStringEntries(allowedTools.map((tool) => tool.name)),
+          callableToolNames: normalizeUniqueStringEntries(
+            allowedTools.filter(callable).map((tool) => tool.name),
+          ),
         };
       }
       const allowedEntries = filterTools(catalog.entries, toolsAllow, (entry) =>
@@ -181,14 +186,9 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
                 )
             : undefined,
         callableToolNames: normalizeUniqueStringEntries([
-          ...tools.map((tool) => tool.name),
-          // A cataloged tool this turn refuses is not callable guidance.
+          ...tools.filter(callable).map((tool) => tool.name),
           ...(catalogReachable
-            ? allowedEntries
-                .filter(
-                  (entry) => !isAgentTool(entry.tool) || isAgentToolExecutionAvailable(entry.tool),
-                )
-                .map((entry) => entry.name)
+            ? allowedEntries.filter((entry) => callable(entry.tool)).map((entry) => entry.name)
             : []),
         ]),
       };

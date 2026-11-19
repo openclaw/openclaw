@@ -21,7 +21,6 @@ import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
-import { listsFixedToolSet } from "../../tool-search-config.js";
 import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool-creator-cap.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { log } from "../logger.js";
@@ -111,8 +110,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     toolOverrides: params.attempt.toolOverrides,
     toolDenylist: runtimeCapabilityProfile.policy.explicitToolDenylist,
   };
-  const { toolSearchConfig, toolSearchControlsEnabledForRun } = params.preparedToolBase;
-  const fixedListing = listsFixedToolSet(toolSearchConfig, toolSearchControlsEnabledForRun);
+  const { fixedListing } = params.preparedToolBase;
   // A fixed listing builds bundled tools whatever the allowlist names; policy gates their calls.
   const listingToolsAllow = fixedListing ? undefined : params.attempt.toolsAllow;
   const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
@@ -252,12 +250,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       });
       const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
       // Listed tools this turn refuses are never delegated or captured as authority.
-      const denied = new Set(
-        [...coreTools, ...filteredBundledTools]
-          .filter((tool) => !isAgentToolExecutionAvailable(tool))
-          .map((tool) => tool.name),
-      );
-      const executable = schemaProjection.tools.filter((tool) => !denied.has(tool.name));
+      const executable = schemaProjection.tools.filter(isAgentToolExecutionAvailable);
       // Cron is constructed before bundled tools; capture only the executable
       // surface that survived provider normalization and schema quarantine.
       captureFinalEffectiveCronCreatorToolAllowlist(

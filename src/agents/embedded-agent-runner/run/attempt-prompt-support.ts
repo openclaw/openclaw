@@ -11,7 +11,6 @@ import {
   type createTrajectoryRuntimeRecorder,
   toTrajectoryToolDefinitions,
 } from "../../../trajectory/runtime.js";
-import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { getToolDefinitionSource } from "../../agent-tool-definition-adapter.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
@@ -171,12 +170,7 @@ export function applyPromptBuildToolsAllow<
 
   return {
     activeToolNames,
-    // Guidance names only tools this turn can run; a listed tool the turn refuses is not one.
-    callableToolNames: promptPolicy.callableToolNames.filter((name) => {
-      const definition = params.session.getToolDefinition(name);
-      const source = definition ? (getToolDefinitionSource(definition) ?? definition) : undefined;
-      return !source || isAgentToolExecutionAvailable(source);
-    }),
+    callableToolNames: promptPolicy.callableToolNames,
     effectiveTools: params.effectiveTools,
     uncompactedEffectiveTools: allowedUncompactedTools,
     tools: allowedTools,
