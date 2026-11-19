@@ -291,20 +291,14 @@ cd "$1" || exit 0
 for marker in */.git */*/.git; do
   dir=$(dirname "$marker")
   test "$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$dir" && pwd -P)" || continue
-  head=$(git -C "$dir" rev-parse --verify -q 'HEAD^{commit}') || continue
+  git -C "$dir" rev-parse --verify -q 'HEAD^{commit}' >/dev/null || continue
   origin=$(git -C "$dir" config --get remote.origin.url || true)
-  subject=$(git -C "$dir" log -1 --format=%s HEAD)
-  count=$(git -C "$dir" status --porcelain=v1 -z --untracked-files=all --no-renames | tr -cd '\000' | wc -c)
-  printf '%s\0%s\0%s\0%s\0%s\0' "$dir" "$head" "$origin" "$subject" $count
+  printf '%s\0%s\0' "$dir" "$origin"
 done
 `;
 
-export type CarryCheckout = {
-  path: string;
-  head: { sha: string; subject: string };
-  originUrl: string;
-  unsavedFiles: number;
-};
+/** A folder with a commit to carry, and the origin that matches it to a project. */
+export type CarryCheckout = { path: string; originUrl: string };
 
 const MAX_LISTED_CHECKOUTS = 32;
 
@@ -328,7 +322,12 @@ async function listOnHost(workspaceDir: string, signal?: AbortSignal): Promise<C
     const marker = await fs.lstat(path.join(directory, ".git")).catch(() => undefined);
     const topLevel =
       marker && (await runGit(directory, ["rev-parse", "--show-toplevel"], { signal }));
-    if (!topLevel || topLevel.code !== 0 || topLevel.stdout.trim() !== directory) {
+    if (
+      !topLevel ||
+      topLevel.code !== 0 ||
+      topLevel.stdout.trim() !== directory ||
+      !(await ownsGitData(directory, root, { signal }))
+    ) {
       continue;
     }
     const gitDir = await requireGit(directory, ["rev-parse", "--absolute-git-dir"], { signal });
@@ -338,31 +337,13 @@ async function listOnHost(workspaceDir: string, signal?: AbortSignal): Promise<C
       ["config", "--file", path.join(gitDir, "config"), "--get", "remote.origin.url"],
       { signal },
     );
-    const facts = await withWorktreeGitConfig(directory, true, { signal }, async (git) => {
-      const head = await git.run(directory, ["rev-parse", "--verify", "-q", "HEAD^{commit}"]);
-      if (head.code !== 0) {
-        return undefined;
-      }
-      const subject = await git.require(directory, ["log", "-1", "--format=%s", "HEAD"]);
-      const status = await git.require(directory, [
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-        "--no-renames",
-      ]);
-      return {
-        sha: head.stdout.trim(),
-        subject,
-        unsavedFiles: status.split("\0").filter(Boolean).length,
-      };
+    const head = await runGit(directory, ["rev-parse", "--verify", "-q", "HEAD^{commit}"], {
+      signal,
     });
-    if (facts && COMMIT_PATTERN.test(facts.sha)) {
+    if (head.code === 0) {
       checkouts.push({
         path: relative.split(path.sep).join("/"),
-        head: { sha: facts.sha, subject: facts.subject.slice(0, 1024) },
         originUrl: origin.code === 0 ? origin.stdout.trim() : "",
-        unsavedFiles: facts.unsavedFiles,
       });
     }
   }
@@ -385,19 +366,8 @@ export async function listCarryCheckouts(
   });
   const fields = listed.code === 0 ? listed.stdout.toString().split("\0") : [];
   const checkouts: CarryCheckout[] = [];
-  for (let index = 0; index + 4 < fields.length; index += 5) {
-    const [dir = "", sha = "", originUrl = "", subject = "", count = ""] = fields.slice(
-      index,
-      index + 5,
-    );
-    if (COMMIT_PATTERN.test(sha) && /^\d+$/u.test(count)) {
-      checkouts.push({
-        path: dir,
-        head: { sha, subject: subject.slice(0, 1024) },
-        originUrl,
-        unsavedFiles: Number(count),
-      });
-    }
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    checkouts.push({ path: fields[index]!, originUrl: fields[index + 1]! });
   }
   return checkouts.slice(0, MAX_LISTED_CHECKOUTS);
 }
