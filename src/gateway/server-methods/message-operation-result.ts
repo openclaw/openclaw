@@ -121,7 +121,7 @@ export function createGatewayInflightAuthorityFailure(params: {
     ...params,
     result: {
       ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "message action authority is no longer active"),
     },
   });
 }
