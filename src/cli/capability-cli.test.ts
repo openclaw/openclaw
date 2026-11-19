@@ -348,6 +348,7 @@ vi.mock("../gateway/call.js", () => ({
   randomIdempotencyKey: () => "run-1",
 }));
 
+// mock-isolation: Media CLI cases use fixture results without provider uploads or credential lookup.
 vi.mock("../media-understanding/runtime.js", () => ({
   describeImageFile: mocks.describeImageFile,
   prepareImageDescriptionInput: mocks.prepareImageDescriptionInput,
