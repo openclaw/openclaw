@@ -220,7 +220,8 @@ it("keeps the original card through a single explicit publication and pending re
     true,
   );
   expect(status()).toBe("Pending");
-  expect(page.getByText("We’ll email you when your Template is published.")).toBeTruthy();
+  expect(page.getAllByRole("status")).toEqual([card.querySelector("header [role=status]")]);
+  expect(card.textContent).not.toMatch(/email/i);
   request.mockRejectedValue(new Error("offline"));
   await flow.checkPublication();
   await waitForSolid(() =>

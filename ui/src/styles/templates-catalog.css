@@ -390,15 +390,6 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
     font-size: 14px;
     line-height: 1.5;
   }
-  & > .callout--action {
-    background: var(--card-highlight);
-    border-color: transparent;
-    & svg {
-      width: 16px;
-      height: 16px;
-      flex: none;
-    }
-  }
   & > p[role="status"] {
     margin: 0;
     padding-top: 12px;
