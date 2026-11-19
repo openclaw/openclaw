@@ -33,6 +33,6 @@ it.each([false, true])(
     button.click();
     expect(initial).toHaveBeenCalledOnce();
     expect(replacement).toHaveBeenCalledOnce();
-    view.unmount();
+    expect(view.container.textContent).not.toContain("No desktop sources yet.");
   },
 );

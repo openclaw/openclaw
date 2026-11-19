@@ -84,6 +84,7 @@ export class GatewayScheduler {
   private readonly pending = new Set<Promise<void>>();
   private cancelTimer?: () => void;
   private dispatching = false;
+  private fenced = false;
   private readonly controller = new AbortController();
 
   constructor(
@@ -167,7 +168,7 @@ export class GatewayScheduler {
     ) {
       throw new Error(`Invalid Gateway schedule: ${params.id}`);
     }
-    const cancelled = this.signal.aborted || owner?.signal.aborted === true;
+    const cancelled = this.fenced || owner?.signal.aborted === true;
     const previous = cancelled ? undefined : this.jobs.get(params.id);
     const job: ScheduledWork = {
       id: params.id,
@@ -233,15 +234,21 @@ export class GatewayScheduler {
     }
   }
 
-  beginClose(): void {
-    this.controller.abort();
-    materializeErrorStack(this.controller.signal.reason);
+  /** Stop wakeups and admission without retiring authority held by accepted work. */
+  fence(): void {
+    this.fenced = true;
     this.cancelTimer?.();
     this.cancelTimer = undefined;
     for (const job of this.jobs.values()) {
       this.cancel(job);
     }
     this.jobs.clear();
+  }
+
+  beginClose(): void {
+    this.fence();
+    this.controller.abort();
+    materializeErrorStack(this.controller.signal.reason);
   }
 
   async stop(): Promise<void> {
@@ -259,7 +266,7 @@ export class GatewayScheduler {
   }
 
   private arm(): void {
-    if (this.signal.aborted || this.dispatching) {
+    if (this.fenced || this.dispatching) {
       return;
     }
     this.cancelTimer?.();
@@ -277,7 +284,7 @@ export class GatewayScheduler {
 
   private wake(expectedAtMs: number): Promise<void> | void {
     this.cancelTimer = undefined;
-    if (this.signal.aborted) {
+    if (this.fenced) {
       return;
     }
     const nowMs = this.now();
@@ -295,7 +302,7 @@ export class GatewayScheduler {
     try {
       for (const job of due) {
         if (
-          this.signal.aborted ||
+          this.fenced ||
           job.cancelled ||
           job.owner?.signal.aborted ||
           this.jobs.get(job.id) !== job
@@ -329,7 +336,7 @@ export class GatewayScheduler {
       job.running = undefined;
       this.pending.delete(done.promise);
       // Coalesce all missed periods, including time spent in the callback, into this one run.
-      if (job.everyMs !== undefined && !job.cancelled && !this.signal.aborted) {
+      if (job.everyMs !== undefined && !job.cancelled && !this.fenced) {
         if (job.phase === "maintenance") {
           // Advance nominal slots, including across sleep and slow async work, without replay.
           // An immediate startup pass joins the shared phase on its next iteration.

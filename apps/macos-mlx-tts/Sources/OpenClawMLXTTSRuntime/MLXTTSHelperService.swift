@@ -38,6 +38,20 @@ public actor MLXTTSHelperService {
 
     public init(eventSink: @Sendable @escaping (MLXTTSEvent) async -> Void) {
         self.loadModel = { repo in
+            try await MLXTTSModelConfigPreflight.prepare(
+                repo: repo,
+                resolveConfig: { repo in
+                    try await ModelUtils.resolveModelConfig(
+                        repoID: .init(rawValue: repo)
+                            ?? { throw TTSModelError.invalidRepositoryID(repo) }())
+                },
+                recoverModel: { repo in
+                    _ = try await ModelUtils.resolveOrDownloadModel(
+                        repoID: .init(rawValue: repo)
+                            ?? { throw TTSModelError.invalidRepositoryID(repo) }(),
+                        requiredExtension: "safetensors",
+                        additionalMatchingPatterns: ["*.model"])
+                })
             let model = try await TTS.loadModel(modelRepo: repo)
             return UncheckedSpeechModel(raw: model)
         }

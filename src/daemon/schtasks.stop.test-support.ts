@@ -269,4 +269,5 @@ export {
   readActiveGatewayLockIdentity,
   readWindowsProcessStartTimeSync,
   spawnSync,
+  timeState,
 };

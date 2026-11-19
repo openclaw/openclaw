@@ -104,7 +104,7 @@ function createGateway(
   registerShortTermPromotionDreaming(api);
 
   const service = services.find((entry) => entry.id === "memory-core-dreaming");
-  if (!service) {
+  if (service?.apiVersion !== 2) {
     throw new Error("memory-core-dreaming service missing");
   }
   const serviceContext = { config, stateDir, logger, getCron: () => cron, scheduler };

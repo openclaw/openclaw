@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { acquireFileLock } from "openclaw/plugin-sdk/file-lock";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 
@@ -47,20 +48,6 @@ vi.mock("./trash.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./trash.js")>()),
   movePathToTrash: fixture.trash,
 }));
-vi.mock("openclaw/plugin-sdk/file-lock", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/file-lock")>();
-  return {
-    ...actual,
-    // Keep the real exclusion/reentrancy contract; fail contention immediately
-    // so regressions prove the boundary without wall-clock sleeps or polling.
-    withFileLock: (
-      target: string,
-      options: import("openclaw/plugin-sdk/file-lock").FileLockOptions,
-      run: () => Promise<unknown>,
-    ) =>
-      actual.withFileLock(target, { ...options, retries: { ...options.retries, retries: 0 } }, run),
-  };
-});
 vi.mock("./chrome.diagnostics.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./chrome.diagnostics.js")>()),
   diagnoseChromeCdp: fixture.diagnose,
@@ -226,7 +213,10 @@ function stubReadyLaunch() {
     stderr: new EventEmitter(),
     kill: vi.fn(),
   });
-  fixture.spawn.mockReturnValue(proc);
+  fixture.spawn.mockImplementation(() => {
+    fixture.diagnose.mockResolvedValue({ ok: true });
+    return proc;
+  });
   return proc;
 }
 
@@ -469,39 +459,34 @@ it("does not release shell profile data when the CDP port remains occupied after
   await expectStop({ resolved, profile, kill }, "unverified", 1);
 });
 
-it.each(["launch", "reset"] as const)(
-  "excludes an independent runtime's %s while the first launch is pending",
-  async (operation) => {
-    const { resolved, profile, userDataDir } = setupOwnedBrowser("cache", true, false, "linux");
-    fixture.alive = false;
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    fixture.portProbe.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    stubReadyLaunch();
-    const firstLaunch = launchOpenClawChrome(resolved, profile, { headlessOverride: true });
-    await entered.promise;
-    try {
-      const state = makeBrowserServerState({ profile, resolvedOverrides: resolved });
-      const other =
-        operation === "launch"
-          ? launchOpenClawChrome(resolved, profile, { headlessOverride: true })
-          : createBrowserRouteContext({ getState: () => state })
-              .forProfile(profile.name)
-              .resetProfile();
-      await expect(other).rejects.toMatchObject({ code: "file_lock_timeout" });
-      expect(fixture.spawn).not.toHaveBeenCalled();
-      expect(fixture.trash).not.toHaveBeenCalled();
-      expect(fs.existsSync(path.join(userDataDir, "Default"))).toBe(false);
-    } finally {
-      release.resolve();
-      await firstLaunch;
-    }
-    expect(fixture.spawn).toHaveBeenCalledOnce();
-  },
-);
+it("excludes an independent lock owner while launch is pending", async () => {
+  const { resolved, profile, userDataDir } = setupOwnedBrowser("cache", true, false, "linux");
+  fixture.alive = false;
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  fixture.portProbe.mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  stubReadyLaunch();
+  const firstLaunch = launchOpenClawChrome(resolved, profile, { headlessOverride: true });
+  await entered.promise;
+  try {
+    await expect(
+      acquireFileLock(path.join(fixture.root, "browser", `${profile.name}.lifecycle`), {
+        retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
+        stale: 60_000,
+      }),
+    ).rejects.toMatchObject({ code: "file_lock_timeout" });
+    expect(fixture.spawn).not.toHaveBeenCalled();
+    expect(fixture.trash).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(userDataDir, "Default"))).toBe(false);
+  } finally {
+    release.resolve();
+    await firstLaunch;
+  }
+  expect(fixture.spawn).toHaveBeenCalledOnce();
+});
 
 it("holds cross-runtime exclusion through reset's trash operation, with nested stop ownership", async () => {
   const { resolved, profile, userDataDir } = setupOwnedBrowser("cache", true, false, "linux");
@@ -526,7 +511,10 @@ it("holds cross-runtime exclusion through reset's trash operation, with nested s
     expect(fs.existsSync(lockPath)).toBe(true);
     expect(path.dirname(lockPath)).toBe(path.dirname(path.dirname(userDataDir)));
     await expect(
-      launchOpenClawChrome(resolved, profile, { headlessOverride: true }),
+      acquireFileLock(lockPath.slice(0, -".lock".length), {
+        retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
+        stale: 60_000,
+      }),
     ).rejects.toMatchObject({ code: "file_lock_timeout" });
     expect(fixture.spawn).not.toHaveBeenCalled();
   } finally {

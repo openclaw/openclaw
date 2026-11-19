@@ -101,7 +101,6 @@ export function projectGitHubPublicationResult(
     | "identity_login"
     | "status"
     | "head_commit"
-    | "source_head_commit"
     | "pull_request_url"
     | "repository"
     | "branch"
@@ -145,12 +144,6 @@ export function projectGitHubPublicationResult(
       repository: row.repository,
       branch: row.branch,
       headCommit: row.head_commit ?? "unknown",
-      // Personal execution records the existing PR lookup as an observation even on reuse.
-      ...(row.source_head_commit &&
-      row.head_commit === row.source_head_commit &&
-      (!row.last_effect || (row.last_effect === "pull_request" && row.effect_state === "observed"))
-        ? { unchanged: true as const }
-        : {}),
     };
   }
   if (row.status === "failed" && row.error_code && row.next_action) {
@@ -179,5 +172,27 @@ export function projectGitHubPublicationResult(
         : row.identity_source === "personal"
           ? "My GitHub publication was accepted for the selected account and workspace."
           : "Publication was accepted. Finish the turn so the Gateway can reconcile and publish the workspace.",
+  };
+}
+
+export function projectWorktreePublicationTranscriptReport(
+  row: Parameters<typeof projectGitHubPublicationResult>[0] &
+    Pick<
+      GitHubPublicationExecutionRow,
+      "session_id" | "session_key" | "agent_id" | "source_head_commit"
+    >,
+) {
+  // A personal receipt can record a PR lookup even when it only reused the original head.
+  const reusedExistingPullRequest =
+    row.status === "published" &&
+    row.source_head_commit &&
+    row.head_commit === row.source_head_commit &&
+    (!row.last_effect || (row.last_effect === "pull_request" && row.effect_state === "observed"));
+  return {
+    sessionId: row.session_id,
+    sessionKey: row.session_key,
+    agentId: row.agent_id,
+    result: projectGitHubPublicationResult(row),
+    ...(reusedExistingPullRequest ? { reusedExistingPullRequest: true as const } : {}),
   };
 }

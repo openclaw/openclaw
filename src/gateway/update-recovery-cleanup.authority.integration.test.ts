@@ -14,6 +14,10 @@ import {
 import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import { createUpdateRunAsync, finishUpdateRunAsync } from "../infra/update-run-write.async.js";
+import {
+  activateSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
+} from "../secrets/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -311,13 +315,18 @@ it(
             path.join(nextCapture, name),
           );
           let ownerRevoked = false;
-          const commands = gatewayContext!.getRuntimeConfig().commands!;
+          expect(Object.isFrozen(gatewayContext!.getRuntimeConfig().commands)).toBe(true);
+          const publishCommandOwners = (owners: string[]) => {
+            const snapshot = getActiveSecretsRuntimeSnapshot()!;
+            snapshot.config.commands!.ownerAllowFrom = owners;
+            snapshot.sourceConfig.commands!.ownerAllowFrom = owners;
+            activateSecretsRuntimeSnapshot(snapshot);
+          };
           observation.beforeAdmission = () => {
             if (!ownerRevoked && nextFiles.some((file) => !fs.existsSync(file))) {
               ownerRevoked = true;
-              // Publish the synthetic config's revocation in place so only the
-              // real command-owner guard, not a config-reference check, can stop it.
-              commands.ownerAllowFrom = [];
+              // Revoke through the runtime owner; published revisions are immutable.
+              publishCommandOwners([]);
             }
           };
           try {
@@ -327,7 +336,7 @@ it(
             expect(captureBytes(latestCapture)).toEqual(latestBytes);
           } finally {
             observation.beforeAdmission = () => {};
-            commands.ownerAllowFrom = ["owner"];
+            publishCommandOwners(["owner"]);
           }
           console.info(
             "cleanup RPC proof: allowed deletion; non-admin and wrong owner denied; real device revocation after one removal prevented subsequent deletion; current capture and successful outcome retained",

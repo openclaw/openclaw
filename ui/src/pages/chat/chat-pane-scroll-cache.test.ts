@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { stubAnimationFrames } from "./chat-view.test-helpers.ts";
@@ -70,6 +70,8 @@ async function mountSession(paneId: string, sessionKey: string) {
 }
 
 it("restores each physical pane's reader after visiting nine retained sessions", async () => {
+  let clock = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => (clock += 20));
   const firstSession = "agent:main:scroll-cache-0";
   const positions = [
     { paneId: "scroll-main", offset: 420 },

@@ -1,2 +1,0 @@
-# Native dependency regression, offset by the two-line cron fixture simplification.
-72

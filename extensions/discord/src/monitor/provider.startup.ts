@@ -240,7 +240,10 @@ export function registerDiscordMonitorListeners(params: {
 
   let presenceListener: DiscordPresenceListener | undefined;
   if (params.discordConfig.intents?.presence) {
-    presenceListener = new DiscordPresenceListener(listenerOptions);
+    presenceListener = new DiscordPresenceListener({
+      ...listenerOptions,
+      allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
+    });
     register(
       presenceListener,
       new DiscordPresenceGuildCreateListener(presenceListener),

@@ -46,20 +46,22 @@ export function ChatSelectionAnnotationRows(props: ChatAttachmentControlsProps) 
                   {(annotation) => (
                     <CommentPreviewRow comment={annotation()}>
                       <span class="chat-comment-preview__actions">
-                        <button
-                          type="button"
-                          aria-label={t("chat.messages.editAnnotation", {
-                            number: String(index() + 1),
-                          })}
-                          disabled={disabled()}
-                          onClick={(event) =>
-                            dispatchChatCommentAction(event, attachment().id, "edit", {
-                              anchor: trigger,
-                            })
-                          }
-                        >
-                          <Icon name="pencil" />
-                        </button>
+                        <Show when={props.commentsEditable !== false}>
+                          <button
+                            type="button"
+                            aria-label={t("chat.messages.editAnnotation", {
+                              number: String(index() + 1),
+                            })}
+                            disabled={disabled()}
+                            onClick={(event) =>
+                              dispatchChatCommentAction(event, attachment().id, "edit", {
+                                anchor: trigger,
+                              })
+                            }
+                          >
+                            <Icon name="pencil" />
+                          </button>
+                        </Show>
                         <button
                           ref={[deleteRef(attachment().id)]}
                           type="button"

@@ -12,6 +12,9 @@ export type ChatSendInternalOptions = {
   transcript?: Parameters<typeof createGatewayChatUserTurnController>[0]["transcript"];
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   toolsAllow?: string[];
+  deferWorkspaceBootstrap?: true;
+  /** Only the Control UI Add owner may admit this tool-enabled setup continuation. */
+  templateSetup?: true;
   beforeDispatch?: (params: {
     runId: string;
     assertCurrent: () => void;

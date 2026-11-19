@@ -65,7 +65,8 @@
 
 .installed-plugins-card__art img,
 .plugins-tile img,
-.plugin-catalog-detail__icon img {
+.plugin-catalog-detail__icon img,
+.plugin-capability__icon img {
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -296,8 +297,7 @@
   contain-intrinsic-block-size: auto 280px;
 }
 
-.plugin-catalog-section__header,
-.plugins-settings-error {
+.plugin-catalog-section__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -673,7 +673,6 @@
 }
 
 .plugins-tile--fallback {
-  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
   color: rgb(255 255 255 / 92%);
   font-family: var(--mono);
   font-size: var(--control-ui-text-sm);
@@ -778,7 +777,7 @@
   padding-block-start: var(--overlay-modal-padding);
 }
 
-.plugins-consent__header > .oc-dialog__close {
+.plugins-consent__header .oc-dialog__close {
   align-self: start;
   margin-block-start: calc(12px - var(--overlay-modal-padding));
 }
@@ -1141,8 +1140,7 @@
 }
 .plugin-metadata__facts,
 .plugin-metadata__section,
-.plugin-metadata__links,
-.plugin-catalog-detail__security {
+.plugin-metadata__links {
   margin: 0;
   padding: 0;
 }
@@ -1213,23 +1211,16 @@
   height: 14px;
   flex: 0 0 14px;
 }
-.plugin-catalog-detail__security {
-  display: block;
-  color: inherit;
-  text-decoration: none;
-}
-.plugin-catalog-detail__security h2 {
+.plugin-catalog-detail__security-heading {
   display: flex;
   align-items: center;
-  gap: 6px;
   margin-bottom: var(--space-1);
 }
-.plugin-catalog-detail__security h2 > span {
-  display: inline-flex;
-}
-.plugin-catalog-detail__security h2 svg {
-  width: 1em;
-  height: 1em;
+/* The shared icon button keeps its 28px target; the margin keeps the heading row's height. */
+.plugin-catalog-detail__security .oc-icon-button {
+  --icon-button-glyph: var(--control-ui-text-xs);
+  --icon-button-color: var(--muted-strong);
+  margin-block: -7px;
 }
 .plugin-catalog-detail__security-score {
   /* The hover fill bleeds past the label and bars so neither sits flush with its edge. */
@@ -1242,6 +1233,8 @@
   margin-inline: calc(-1 * var(--plugin-security-score-bleed));
   padding: 6px var(--plugin-security-score-bleed);
   border-radius: var(--radius-md);
+  color: inherit;
+  text-decoration: none;
 }
 .plugin-catalog-detail__security-score strong {
   font-size: var(--control-ui-text-sm);
@@ -1261,7 +1254,7 @@
 .plugin-catalog-detail__security--danger .is-filled {
   background: var(--danger);
 }
-.plugin-catalog-detail__security[href]:hover .plugin-catalog-detail__security-score {
+.plugin-catalog-detail__security-score[href]:hover {
   background: var(--bg-elevated);
 }
 
@@ -1315,6 +1308,7 @@
   flex: 0 0 36px;
   width: 36px;
   height: 36px;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--accent);
@@ -1336,8 +1330,10 @@
     justify-content: flex-end;
   }
 }
+/* Only action rows (plain div rows) stack; a navigation row keeps its status on the
+   chevron's line. */
 @media (max-width: 560px) {
-  .plugin-capabilities .settings-row:has(> .plugin-capability__icon) > .settings-row__control {
+  .plugin-capabilities div.settings-row:has(> .plugin-capability__icon) > .settings-row__control {
     flex-direction: column;
     align-items: flex-end;
     gap: 6px;
@@ -1499,10 +1495,6 @@
   border-bottom: 0;
 }
 
-.plugin-catalog-detail__empty {
-  color: var(--muted);
-}
-
 .skill-library-import {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1609,8 +1601,8 @@
   }
 
   /* Refresh sits beside the page menu here, not at the end of the row. */
-  openclaw-skills-page .skill-library-search__action .btn.refresh-button {
-    justify-content: center;
+  openclaw-skills-page .skill-library-search__action .refresh-button {
+    justify-items: center;
   }
 
   openclaw-skills-page .skill-library-search__icon > .oc-menu-item__label {

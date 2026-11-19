@@ -1,7 +1,7 @@
 ---
 summary: "Get OpenClaw installed and run your first chat in minutes."
 read_when:
-  - First time setup from zero
+  - First-time setup from zero
   - You want the fastest path to a working chat
 title: "Getting started"
 ---
@@ -34,7 +34,10 @@ usable AI access is already available: OpenClaw
 finds an existing Claude Code or Codex CLI login or API key, verifies it with a
 real completion, saves the config, and opens the web dashboard.
 
-The Gateway runs in this terminal until you press **Ctrl+C**; your config stays
+Quick start then asks **Keep OpenClaw running in the background?** Yes installs
+a copy of the same OpenClaw version under `~/.openclaw` and runs the Gateway as a
+background service from it, so clearing the npx cache does not stop it. No keeps
+the Gateway in this terminal until you press **Ctrl+C**; your config stays
 saved. If no detected route works, onboarding opens manual provider setup.
 Choose **Custom setup** to walk through all guided options instead.
 
@@ -208,6 +211,7 @@ Full reference: [Environment variables](/help/environment).
 - [Channels overview](/channels)
 - [Setup](/start/setup)
 - [Personal assistant setup](/start/openclaw) - end-to-end guide to a dedicated number that behaves like an always-on assistant
+- [Agents and Templates](/concepts/agents-and-templates) - when to give a job its own agent and how to share that agent as a Template
 - [Triage](/cli/triage)
 - [Troubleshooting](/help/troubleshooting)
 - [Get support](/help/support) - official OpenClaw support and reporting routes

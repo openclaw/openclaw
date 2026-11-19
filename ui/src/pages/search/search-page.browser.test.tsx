@@ -286,27 +286,25 @@ describe("Search settings", () => {
   });
 
   it.each(["success", "failure"] as const)(
-    "loads current status after catalog %s",
+    "shows current status while the background catalog ends in %s",
     async (outcome) => {
       const catalog = createDeferred<ModelCatalogResult>();
       const page = await mount({ modelsResponse: catalog.promise, waitReady: false });
-      expect(page.calls("webSearch.status")).toHaveLength(0);
+      await page.statusRequested;
       await waitForSolid(() =>
-        expect(page.element.querySelector(".settings-loading-skeleton")).not.toBeNull(),
+        expect(page.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull(),
       );
+      expect(page.calls("webSearch.status")).toHaveLength(1);
+      expect(page.element.querySelector(".settings-loading-skeleton")).toBeNull();
+      expect(page.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull();
+      page.expectText("Configured");
       if (outcome === "success") {
-        page.setResult({ ...ready, agentId: "scout" });
-        page.setAgent("scout");
         catalog.resolve({ models: [{ id: "local", name: "Local model", provider: "example" }] });
       } else {
         catalog.reject(new Error("Model catalog unavailable"));
       }
-      await page.statusRequested;
       await page.settle();
-      const statuses = page.calls("webSearch.status");
-      expect(statuses).toHaveLength(1);
-      expect(statuses[0]?.[1]).toEqual({ agentId: outcome === "success" ? "scout" : "main" });
-      expect(page.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull();
+      expect(page.calls("webSearch.status")).toHaveLength(1);
       expect(page.element.querySelector(".settings-loading-skeleton")).toBeNull();
       page.expectText("Configured");
     },
@@ -414,6 +412,51 @@ describe("Search settings", () => {
     page.click("Refresh search status");
     await page.settle();
     expect(page.input("Independent request key")).toBeNull();
+  });
+
+  it("offers configured secret providers through Search's credential writer", async () => {
+    const credentialPath = [...providerPath, "apiKey"];
+    const page = await mount({
+      config: {
+        ...atPath(providerPath, {}),
+        secrets: {
+          defaults: { env: "shell-env" },
+          providers: { shell: { source: "env", allowlist: ["SEARCH_API_KEY"] } },
+        },
+      },
+      result: searchStatus("searxng", "SearXNG", {
+        configPath: providerPath,
+        credential: { path: credentialPath, label: "Provider credential", envVars: [] },
+      }),
+    });
+    page.click("SearXNG");
+    await page.settle();
+    page.click("Use a secret reference: Provider credential");
+    await waitForSolid(() =>
+      expect(page.element.querySelector('button[aria-label="Provider: shell-env"]')).not.toBeNull(),
+    );
+    page.element
+      .querySelector<HTMLButtonElement>('button[aria-label="Provider: shell-env"]')!
+      .click();
+    await waitForSolid(() =>
+      expect(document.querySelector('[role="option"][data-value="shell"]')).not.toBeNull(),
+    );
+    document.querySelector<HTMLElement>('[role="option"][data-value="shell"]')!.click();
+    flush();
+    editInput(
+      page.element.querySelector<HTMLInputElement>('input[aria-label="Identifier"]')!,
+      "SEARCH_API_KEY",
+      false,
+    );
+    flush();
+    expect(page.runtime.patchForm).not.toHaveBeenCalled();
+    page.click("Save");
+    await waitForSolid(() => expect(page.runtime.flushFormChanges).toHaveBeenCalledOnce());
+    expect(page.runtime.patchForm).toHaveBeenCalledWith(credentialPath, {
+      source: "env",
+      provider: "shell",
+      id: "SEARCH_API_KEY",
+    });
   });
 
   it.each(["success", "provider error", "request error"] as const)(
@@ -603,12 +646,21 @@ describe("Search configuration lifecycle", () => {
       apiKey: { type: "string", title: "Example API key" },
     });
     if (options.advanced) {
+      const group = (title: string, properties: JsonSchema["properties"]): JsonSchema => ({
+        type: "object",
+        title,
+        additionalProperties: false,
+        properties,
+      });
       Object.assign(
         (schema.properties ??= {}),
         schemaAt(searchPath, {
           enabled: { type: "boolean" },
           provider: { type: "string" },
           maxResults: { type: "integer", title: "Result limit", default: 5 },
+          openaiCodex: group("OpenAI Codex", {
+            userLocation: group("User location", { city: { type: "string", title: "City" } }),
+          }),
         }).properties,
       );
     }
@@ -721,6 +773,23 @@ describe("Search configuration lifecycle", () => {
         ? atPath(endpointPath, value)
         : atPath([...searchPath, "maxResults"], Number(value));
     expect(JSON.parse(submitted.raw)).toMatchObject(expected);
+    page.save.resolve({ config: JSON.parse(submitted.raw), hash: "saved-2" });
+    await page.runtime.flushFormChanges();
+  });
+
+  it("gives nested advanced settings their own rows", async () => {
+    const page = await mount({ advanced: true });
+    page.element.querySelector<HTMLDetailsElement>("details")!.open = true;
+    const label = "OpenAI Codex: User location: City";
+    const row = page.input(label).closest(".settings-row--stacked-on-narrow")!;
+    expect(row.querySelector(".settings-row__title")?.textContent).toBe(label);
+    expect(row.querySelectorAll("input")).toHaveLength(1);
+    expect(row.textContent!.split(label)).toHaveLength(2);
+    page.edit(label, "Bengaluru");
+    const submitted = await page.writeStarted.promise;
+    expect(JSON.parse(submitted.raw)).toMatchObject(
+      atPath([...searchPath, "openaiCodex", "userLocation", "city"], "Bengaluru"),
+    );
     page.save.resolve({ config: JSON.parse(submitted.raw), hash: "saved-2" });
     await page.runtime.flushFormChanges();
   });

@@ -3,9 +3,11 @@
 import { publicationCheckpoint as checkpoint } from "./github-publication-actions.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import {
   loadSessionEntryReadOnly,
+  loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
@@ -14,6 +16,7 @@ import {
   createPublicationRepositories,
   createRequesterPublicationFixture,
 } from "./github-publication-requester.test-support.js";
+import { reportGitHubPublicationTranscript } from "./github-publication-transcript.js";
 import {
   commandResult,
   githubPublicationTestMocks,
@@ -113,6 +116,34 @@ async function fixture(fork = false, linked = true, maintainer = false, sameBran
       return commandResult(`${branchHead}\trefs/heads/${pr.head.ref}\n`);
     }
     if (argv[0] === "gh") {
+      if (argv.includes("graphql")) {
+        return commandResult(
+          JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  headRefOid: pr.head.sha,
+                  commits: {
+                    nodes: [
+                      {
+                        commit: {
+                          id: "commit-node",
+                          authors: {
+                            nodes: [{ user: { databaseId: 42 } }, { user: { databaseId: 101 } }],
+                            pageInfo: { hasNextPage: false, endCursor: null },
+                          },
+                          committer: { user: { databaseId: 42 } },
+                        },
+                      },
+                    ],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+              },
+            },
+          }),
+        );
+      }
       if (argv.includes("POST") || argv.includes("PATCH") || argv.includes("DELETE")) {
         mutations.push(argv);
         throw new Error("An imported publication must not create or edit a PR");
@@ -240,11 +271,49 @@ async function fixture(fork = false, linked = true, maintainer = false, sameBran
   };
 }
 
+async function publicationNotice(f: Awaited<ReturnType<typeof fixture>>, requestId: string) {
+  const report = (await f.coordinator.listUnreportedResultsAsync()).find(
+    ({ result }) => result.requestId === requestId,
+  );
+  if (!report) {
+    throw new Error("Expected an unreported publication receipt");
+  }
+  await reportGitHubPublicationTranscript(
+    () => import("./session-utils.js"),
+    f.coordinator,
+    report,
+  );
+  for (const event of await loadTranscriptEvents(f.publicationSession)) {
+    if (
+      isRecord(event) &&
+      isRecord(event.message) &&
+      event.message.responseId === `github-publication:${requestId}`
+    ) {
+      return event.message;
+    }
+  }
+  throw new Error("Expected a publication message in the transcript");
+}
+
 describe("shared publication to a prepared original PR", () => {
   installGitHubPublicationTestHarness({
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+
+  it("lets a linked coauthor continue a publisher-authored PR from another session", async () => {
+    const f = await fixture();
+    f.pr.user = { id: 42, login: "roboclaw-bot" };
+    const result = await f.publish("coauthor-continuation");
+    expect(result, JSON.stringify(result)).toMatchObject({
+      status: "published",
+      url: f.pr.html_url,
+    });
+    f.expectWrites(1);
+    expect(await f.local.git("show", f.pr.head.sha + ":original.txt")).toBe(
+      "Original contribution",
+    );
   });
 
   it.each([
@@ -371,11 +440,21 @@ describe("shared publication to a prepared original PR", () => {
     expect(await f.local.git("rev-parse", `${revertedHead}^`)).toBe(f.originalHead);
     expect(await f.local.git("rev-parse", `${revertedHead}^{tree}`)).toBe(baseTree);
     expect(await f.publish("full-revert")).toEqual(result);
-    expect(await f.publish("unchanged-full-revert")).toMatchObject({
+    const reused = await f.publish("unchanged-full-revert");
+    expect(reused).toMatchObject({
       status: "published",
       url: f.pr.html_url,
       headCommit: revertedHead,
-      unchanged: true,
+    });
+    expect(await publicationNotice(f, reused.requestId)).toMatchObject({
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining(
+            `${f.pr.html_url}. No new commit was pushed or CI run triggered by this request.`,
+          ),
+        },
+      ],
     });
     expect(await f.local.git("rev-parse", "HEAD")).toBe(revertedHead);
     f.expectWrites(1);
@@ -435,15 +514,23 @@ describe("shared publication to a prepared original PR", () => {
         await f.coordinator.deferOrphanedRequestsAsync();
       }
       await f.coordinator.resumeSessionRequests();
-      const recovered = await f.coordinator.sharedStatus(session, pending.requestId);
-      expect(recovered?.result).not.toHaveProperty("unchanged");
-      expect(recovered).toMatchObject({
+      expect(await f.coordinator.sharedStatus(session, pending.requestId)).toMatchObject({
         result: {
           requestId: pending.requestId,
           status: "published",
           url: f.pr.html_url,
           headCommit: f.pr.head.sha,
         },
+      });
+      expect(await publicationNotice(f, pending.requestId)).toMatchObject({
+        content: [
+          {
+            type: "text",
+            text: expect.stringContaining(
+              `Pull request for openclaw/openclaw branch topic/original: ${f.pr.html_url}`,
+            ),
+          },
+        ],
       });
       f.expectWrites(1);
     },

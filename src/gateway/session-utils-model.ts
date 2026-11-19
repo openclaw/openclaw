@@ -87,6 +87,8 @@ function resolveGatewaySessionThinkingLevel(
 type GatewayModelThinkingParams = {
   cfg: OpenClawConfig;
   agentId: string;
+  /** Resolve the level the agent inherits when its own thinkingDefault is cleared. */
+  withoutAgentThinkingDefault?: boolean;
   provider: string;
   model: string;
   agentRuntime?: string;
@@ -124,7 +126,7 @@ function resolveGatewayModelThinkingFacts(
   const policySource =
     typeof params.providerPolicySource === "object" ? "prepared" : params.providerPolicySource;
   // Config and catalog publications replace the context; partial rows reuse its model facts.
-  const key = `${params.agentId}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${policySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
+  const key = `${params.agentId}${params.withoutAgentThinkingDefault ? "\0inherited" : ""}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${policySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
     params.provider,
     params.model,
   )}`;
@@ -147,6 +149,7 @@ function resolveGatewayModelThinkingFacts(
     const defaultLevel = resolveThinkingDefaultCore({
       cfg: params.cfg,
       agentId: params.agentId,
+      withoutAgentThinkingDefault: params.withoutAgentThinkingDefault,
       provider: params.provider,
       model: params.model,
       catalog: params.modelCatalog,

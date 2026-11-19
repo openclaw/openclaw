@@ -4,12 +4,15 @@ import {
   updateConfiguredMcpServer as updateConfiguredMcpServerLocally,
   updateConfiguredMcpServerTools as updateConfiguredMcpServerToolsLocally,
 } from "../agents/mcp-config-mutation.js";
+import { mcpConfigInternal } from "../config/mcp-config.js";
+import { bindConfigOwner } from "./config-cli-owner-patch.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 
-// Probes can refresh credentials; config edits can clear them and write lifecycle state.
+// Probes launch servers (Docker custody) and can refresh credentials, so they stay offline.
 export function offlineMcpAction<Args extends unknown[], T>(
   command: string,
   action: (owner: { signal: AbortSignal; assertCurrent: () => void }, ...args: Args) => Promise<T>,
+  onlineAlternative?: string,
 ): (...args: Args) => Promise<T> {
   return (...args) =>
     runWithLocalStateOwner({
@@ -17,27 +20,48 @@ export function offlineMcpAction<Args extends unknown[], T>(
       params: {},
       target: "MCP credentials and configuration",
       onForeignOwner: "refuse",
+      ...(onlineAlternative ? { onlineAlternative } : {}),
       runLocal: (owner) => action(owner, ...args),
     });
 }
 
-export const setMcpServerOffline = offlineMcpAction(
+function mcpConfigMutation<
+  Params extends { commit?: Parameters<typeof mcpConfigInternal.set>[0]["commit"] },
+  T,
+>(
+  command: string,
+  runLocal: (params: Params) => Promise<T>,
+  prepare: (params: Params) => Promise<T>,
+): (params: Params) => Promise<T> {
+  return (params) =>
+    runWithLocalStateOwner({
+      method: `mcp.${command}`,
+      params: {},
+      target: "MCP configuration",
+      onForeignOwner: async ({ env, requestOwner }) => {
+        return prepare({ ...params, commit: await bindConfigOwner(requestOwner, env) });
+      },
+      runLocal: () => runLocal(params),
+    });
+}
+
+export const setMcpServer = mcpConfigMutation(
   "set",
-  (_owner, params: Parameters<typeof setConfiguredMcpServerLocally>[0]) =>
-    setConfiguredMcpServerLocally(params),
+  setConfiguredMcpServerLocally,
+  mcpConfigInternal.set,
 );
-export const unsetMcpServerOffline = offlineMcpAction(
+export const unsetMcpServer = mcpConfigMutation(
   "unset",
-  (_owner, params: Parameters<typeof unsetConfiguredMcpServerLocally>[0]) =>
-    unsetConfiguredMcpServerLocally(params),
+  unsetConfiguredMcpServerLocally,
+  mcpConfigInternal.unset,
 );
-export const configureMcpServerOffline = offlineMcpAction(
+export const configureMcpServer = mcpConfigMutation(
   "configure",
-  (_owner, params: Parameters<typeof updateConfiguredMcpServerLocally>[0]) =>
-    updateConfiguredMcpServerLocally(params),
+  updateConfiguredMcpServerLocally,
+  mcpConfigInternal.update,
 );
-export const updateMcpToolsOffline = offlineMcpAction(
+export const updateMcpTools = mcpConfigMutation(
   "tools",
-  (_owner, params: Parameters<typeof updateConfiguredMcpServerToolsLocally>[0]) =>
-    updateConfiguredMcpServerToolsLocally(params),
+  updateConfiguredMcpServerToolsLocally,
+  mcpConfigInternal.updateTools,
 );

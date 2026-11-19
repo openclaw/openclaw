@@ -34,6 +34,7 @@ import {
   type WorkboardProps,
 } from "./view-helpers.tsx";
 import { liveInputValue } from "./view-input-value.ts";
+import { LabelChoices } from "./view-label-choices.tsx";
 
 const workboardCardModalTitleId = "workboard-card-modal-title";
 const workboardCardModalDescriptionId = "workboard-card-modal-description";
@@ -55,8 +56,6 @@ function syncDraftTextInput(
     state.draftTitle = input.value;
   } else if (input.classList.contains("workboard-draft__notes")) {
     state.draftNotes = input.value;
-  } else if (input.classList.contains("workboard-draft__labels")) {
-    state.draftLabels = input.value;
   } else if (input.classList.contains("workboard-comments__input")) {
     state.draftCommentBody = input.value;
   } else {
@@ -69,18 +68,18 @@ function syncDraftTextInput(
 function defineTemplate(
   id: WorkboardTemplateId,
   draftKey: string,
-  labels: string,
+  labels: string[],
   priority: WorkboardPriority,
 ) {
   return { id, draftKey, labels, priority };
 }
 
 const workboardTemplates = [
-  defineTemplate("bugfix", "bugfix", "fix, test", "high"),
-  defineTemplate("docs", "docs", "docs", "normal"),
-  defineTemplate("release", "release", "release", "urgent"),
-  defineTemplate("pr_review", "prReview", "review", "normal"),
-  defineTemplate("plugin", "plugin", "plugin", "normal"),
+  defineTemplate("bugfix", "bugfix", ["fix", "test"], "high"),
+  defineTemplate("docs", "docs", ["docs"], "normal"),
+  defineTemplate("release", "release", ["release"], "urgent"),
+  defineTemplate("pr_review", "prReview", ["review"], "normal"),
+  defineTemplate("plugin", "plugin", ["plugin"], "normal"),
 ];
 
 export function openCreateModal(
@@ -122,7 +121,7 @@ export function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
   state.draftNotes = card.notes ?? "";
   state.draftStatus = card.status;
   state.draftPriority = card.priority;
-  state.draftLabels = card.labels.join(", ");
+  state.draftLabels = [...card.labels];
   state.draftAgentId = card.agentId ?? "";
   state.draftSessionKey = workboardCardSessionKey(card) ?? "";
   state.draftTemplateId = card.metadata?.templateId ?? "";
@@ -137,7 +136,7 @@ function applyTemplate(state: WorkboardUiState, templateId: WorkboardTemplateId)
   state.draftTemplateId = template.id;
   state.draftTitle = t(`workboard.templateDraft.${template.draftKey}Title`);
   state.draftNotes = t(`workboard.templateDraft.${template.draftKey}Notes`);
-  state.draftLabels = template.labels;
+  state.draftLabels = [...template.labels];
   state.draftPriority = template.priority;
 }
 
@@ -171,7 +170,6 @@ function CardModalContent(props: WorkboardProps) {
   };
   const titleValue = liveInputValue(draftTitle);
   const notesValue = liveInputValue(() => state().draftNotes);
-  const labelsValue = liveInputValue(() => state().draftLabels);
   const commentValue = liveInputValue(commentBody);
   const visibleError = () => workboardErrorMessage(state(), props.pageError);
   const sessions = () => props.sessions.filter(isWorkboardSessionChoice);
@@ -398,16 +396,19 @@ function CardModalContent(props: WorkboardProps) {
                   disabled: draftActionsBusy(),
                 }}
               />
-              <label class="workboard-field">
+              <div class="workboard-field">
                 <span>{t("workboard.fieldLabels")}</span>
-                <input
-                  class="settings-input workboard-draft__labels"
-                  spellcheck="false"
-                  placeholder={t("workboard.labelsPlaceholder")}
+                <LabelChoices
+                  owner={props}
+                  value={state().draftLabels}
+                  limit={12}
                   disabled={draftActionsBusy()}
-                  ref={labelsValue}
+                  onChange={(labels) => {
+                    state().draftLabels = labels;
+                    props.onRequestUpdate?.();
+                  }}
                 />
-              </label>
+              </div>
             </div>
             {editing() ? (
               <section

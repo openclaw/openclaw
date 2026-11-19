@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
@@ -233,3 +234,83 @@ it("serves marketplace documents without claiming plugin HTTP routes", () =>
       isStartupPluginRuntimeReady: () => true,
     }),
   ));
+
+it("keeps plugin recovery reachable after core preparation while sidecars are starting", () =>
+  withUiRoot(
+    async (check) => {
+      await check("/settings/plugins", 200, { headers: { accept: "text/html" } });
+    },
+    () => ({
+      getStartup: () => ({
+        ok: false,
+        status: "starting",
+        uptimeMs: 1,
+        pendingReason: "startup-sidecars",
+      }),
+      isRequestRuntimeReady: () => true,
+      isStartupPluginRuntimeReady: () => false,
+    }),
+  ));
+
+it.each(["/api/unknown", "/v1/unknown", "/assets/absent.js"])(
+  "does not replace %s with a maintenance document",
+  (path) =>
+    withUiRoot(
+      async (check) => {
+        await check(path, 404, { headers: { accept: "text/html" } });
+      },
+      () => ({
+        getStartup: () => ({
+          ok: false,
+          status: "starting",
+          uptimeMs: 1,
+          pendingReason: "startup-sidecars",
+        }),
+      }),
+    ),
+);
+
+it("does not expose a maintenance document when Control UI is disabled", () =>
+  withUiServer(
+    async (check) => {
+      await check("/", 404, { headers: { accept: "text/html" } });
+    },
+    {
+      controlUiEnabled: false,
+      getStartup: () => ({
+        ok: false,
+        status: "starting",
+        uptimeMs: 1,
+        pendingReason: "startup-sidecars",
+      }),
+    },
+  ));
+
+it.each([false, true])("retains proxy attribution rejection with core ready=%s", (coreReady) =>
+  withUiRoot(
+    async (check) => {
+      const proxy = {
+        remoteAddress: "127.0.0.1",
+        headers: { accept: "text/html", "x-forwarded-for": "198.51.100.20" },
+      };
+      const denied = await check("/new", 403, proxy);
+      expect(denied.getBody()).toContain('"type":"proxy_attribution_required"');
+      const trusted = { gateway: { trustedProxies: ["127.0.0.1"] } };
+      setRuntimeConfigSnapshot(trusted, trusted);
+      await check("/new", 200, proxy);
+      const revoked = { gateway: { trustedProxies: [] } };
+      setRuntimeConfigSnapshot(revoked, revoked);
+      const revokedResponse = await check("/new", 403, proxy);
+      expect(revokedResponse.getBody()).toContain('"type":"proxy_attribution_required"');
+    },
+    () => ({
+      isRequestRuntimeReady: () => coreReady,
+      getStartup: () => ({
+        ok: false,
+        status: "starting",
+        uptimeMs: 1,
+        pendingReason: "startup-sidecars",
+      }),
+    }),
+  ),
+);

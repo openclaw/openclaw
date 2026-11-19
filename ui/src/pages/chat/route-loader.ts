@@ -10,7 +10,10 @@ import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
 } from "../../lib/sessions/catalog-key.ts";
-import { resolveHomeSession } from "../../lib/sessions/home-session.ts";
+import {
+  homeSessionRequiresConfirmation,
+  resolveHomeSession,
+} from "../../lib/sessions/home-session.ts";
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
@@ -209,6 +212,7 @@ function resolvedSessionRouteData(params: {
   row: SessionRoutePresentation;
   preferenceDerived: boolean;
   isResolutionSourceCurrent: () => boolean;
+  cachedRoster?: boolean;
   shortId?: string;
   mainTarget?: Extract<SessionPathTarget, { kind: "main" }>;
 }): Extract<ChatRouteData, { kind: "session" }> | null {
@@ -227,7 +231,12 @@ function resolvedSessionRouteData(params: {
   if (canonicalLocation === undefined) {
     return null;
   }
-  if (!mainTarget && canonicalLocation && params.isResolutionSourceCurrent()) {
+  if (
+    !params.cachedRoster &&
+    !mainTarget &&
+    canonicalLocation &&
+    params.isResolutionSourceCurrent()
+  ) {
     // A delayed response cannot transfer its key into a replacement connection.
     prepareSessionNavigationHandoff(
       params.context.gateway,
@@ -246,7 +255,11 @@ function resolvedSessionRouteData(params: {
     ...sessionRouteHints(params.location),
     face,
     ...(params.shortId && params.shortId.length > 8 ? { shortId: params.shortId } : {}),
-    ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
+    ...(params.cachedRoster
+      ? { sessionResolutionFromCache: "roster" as const }
+      : canonicalLocation
+        ? { canonicalLocation, canonicalLocationSource: params.location }
+        : {}),
   };
 }
 
@@ -355,7 +368,7 @@ export async function loadChatRoute(
     }
     const sessionKey = mainSessionKey(context, target);
     const homeSnapshot = context.gateway.snapshot;
-    if (homeSnapshot.hello?.auth?.sessionCap === "none") {
+    if (homeSessionRequiresConfirmation(homeSnapshot)) {
       const available = await resolveHomeSession(homeSnapshot, {
         sessionKey,
         agentId: target.agentId,
@@ -431,10 +444,9 @@ export async function loadChatRoute(
         const resolved = resolvedSessionRouteData({
           ...presentation,
           row: resolution.session,
+          cachedRoster: Boolean(cachedRow && context.sessions.state.resultCached),
         });
-        return resolved
-          ? { ...resolved, ...(cachedRow ? { sessionResolutionFromCache: "roster" as const } : {}) }
-          : notFound({ routeId: face });
+        return resolved ?? notFound({ routeId: face });
       }
       if (target.slugCandidate) {
         if (resolution?.kind === "not-found") {
@@ -606,14 +618,15 @@ export async function loadChatRoute(
     // RPC resolution owns the connection acquired after a cold route waited for hello.
     isResolutionSourceCurrent: resolution.isCurrent,
     row: resolution.session,
+    cachedRoster: Boolean(
+      localRow && !cached?.fromCurrentNavigation && context.sessions.state.resultCached,
+    ),
     shortId: target.shortId,
   });
   return resolved
     ? {
         ...resolved,
-        ...(localRow
-          ? { sessionResolutionFromCache: "roster" as const }
-          : { routeLoadingSkeleton: true as const }),
+        ...(!localRow ? { routeLoadingSkeleton: true as const } : {}),
       }
     : notFound({ routeId: face });
 }
@@ -670,7 +683,7 @@ export async function verifyChatSessionRoute(
   }
   const reference = sessionRouteTargetFromLocation(context, target.location)?.target;
   // Warm Home can render before hello reveals that its access needs confirmation.
-  if (reference?.kind === "main" && context.gateway.snapshot.hello?.auth?.sessionCap === "none") {
+  if (reference?.kind === "main" && homeSessionRequiresConfirmation(context.gateway.snapshot)) {
     await revalidate();
     return;
   }
@@ -682,7 +695,7 @@ export async function verifyChatSessionRoute(
   ) {
     return;
   }
-  if (data.sessionResolutionFromCache === "snapshot") {
+  if (data.sessionResolutionFromCache) {
     await revalidate();
     return;
   }

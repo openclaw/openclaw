@@ -1,5 +1,6 @@
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { DEFAULT_BOOTSTRAP_FILENAME, seedWorkspaceBootstrap } from "../agents/workspace.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
@@ -82,6 +83,7 @@ export async function seedTemplatePackageBootstrap(
       return mergeWorkspaceBootstrapSetupStateForAdd(
         workspaceDir,
         next.bootstrapSeededAt,
+        sha256Hex(read.buffer),
         nowMs ?? Date.now(),
         { ...options, assertCurrent: assertForwardCurrent },
       );

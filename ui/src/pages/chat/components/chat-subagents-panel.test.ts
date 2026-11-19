@@ -236,11 +236,13 @@ it.each([undefined, false, true])(
     expect(f.panel.querySelector(openSelector(mobile))).toBeNull();
     initial.resolve(page([first, last]));
     await f.waitForCount(openSelector(mobile), 2);
-    const retained = f.panel.querySelector(openSelector(mobile));
+    const retained = f.find(openSelector(mobile))!;
+    retained.focus();
     phase = "refresh";
     const refresh = f.sessions.refreshList({ ...childSessionListQuery(parentKey), force: true });
     await waitForSolid(() => expect(f.panel.querySelector('[aria-busy="true"]')).not.toBeNull());
     expect(f.panel.querySelector(openSelector(mobile))).toBe(retained);
+    expect(document.activeElement).toBe(retained);
     revalidation.reject(new Error("Child list read denied"));
     await refresh;
     await waitForSolid(() =>
@@ -252,6 +254,50 @@ it.each([undefined, false, true])(
     phase = "ready";
     f.panel.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
     await f.waitForCount(openSelector(mobile), 2);
+  },
+);
+
+it.each([undefined, false, true])(
+  "retains an accepted empty %s list during event refresh",
+  async (mobile) => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const initial = createDeferred<SessionsListResult>();
+    const refreshed = createDeferred<SessionsListResult>();
+    const replacement = createDeferred<SessionsListResult>();
+    let reads = 0;
+    const f = mountRows(() => [], mobile, {
+      list: () =>
+        ++reads === 1 ? initial.promise : reads === 2 ? refreshed.promise : replacement.promise,
+    });
+    onTestFinished(() => {
+      initial.resolve(page([]));
+      refreshed.resolve(page([]));
+      replacement.resolve(page([]));
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.panel.querySelector("[role=status]")).not.toBeNull();
+    expect(f.panel.querySelector(".empty-state")).toBeNull();
+    initial.resolve(page([]));
+    await vi.advanceTimersByTimeAsync(0);
+    const empty = f.panel.querySelector(".empty-state");
+    expect(empty).not.toBeNull();
+    f.connection.publishEvent("sessions.changed", { sessionKey: parentKey, reason: "sharing" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(reads).toBe(2);
+    expect(f.panel.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(f.panel.querySelector(".empty-state")).toBe(empty);
+    expect(f.panel.querySelector('[aria-label="Loading…"]')).toBeNull();
+    refreshed.resolve(page([]));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.panel.querySelector(".empty-state")).toBe(empty);
+    f.panel.sessionKey = "agent:main:replacement";
+    await f.panel.updateComplete;
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForSolid(() => expect(f.panel.querySelector(".empty-state")).toBeNull());
+    expect(f.panel.querySelector('[aria-label="Loading…"]')).not.toBeNull();
   },
 );
 

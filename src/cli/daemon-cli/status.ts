@@ -1,6 +1,7 @@
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { formatCliJsonFailure } from "../failure-output.js";
 import type { gatherDaemonStatus } from "./status.gather.js";
 import type { DaemonStatusOptions } from "./types.js";
@@ -32,7 +33,9 @@ export async function runDaemonStatus(opts: DaemonStatusOptions) {
   }
 
   let status: Awaited<ReturnType<typeof gatherDaemonStatus>>;
+  const signal = getAsyncWorkSignal();
   try {
+    signal?.throwIfAborted();
     if (opts.runtimeIntentOnly) {
       const [{ readDaemonServiceStatus }, { projectDaemonRuntimeStatus }] = await Promise.all([
         import("./status.service.js"),
@@ -40,6 +43,7 @@ export async function runDaemonStatus(opts: DaemonStatusOptions) {
       ]);
       const { service, state } = await readDaemonServiceStatus({ env: process.env });
       const projection = await projectDaemonRuntimeStatus({ deep: true, service, state });
+      signal?.throwIfAborted();
       defaultRuntime.writeJson({ cli: projection.cli, service: projection.runtimeIntent });
       return;
     }
@@ -51,6 +55,7 @@ export async function runDaemonStatus(opts: DaemonStatusOptions) {
       rpc: opts.rpc,
       probe: opts.probe,
       requireRpc: opts.requireRpc,
+      signal,
       deep: opts.deep === true,
     });
     if (opts.deep && status.pluginVersionDrift) {
@@ -58,8 +63,15 @@ export async function runDaemonStatus(opts: DaemonStatusOptions) {
         await import("../../plugins/plugin-version-drift.js");
       status.pluginVersionDrift = await resolvePluginVersionDriftTargets(status.pluginVersionDrift);
     }
+    signal?.throwIfAborted();
     printDaemonStatus(status, { json: opts.json, deep: opts.deep === true });
   } catch (err) {
+    if (
+      signal?.aborted &&
+      (err === signal.reason || (err instanceof Error && err.cause === signal.reason))
+    ) {
+      return;
+    }
     failDaemonStatus(opts, `Gateway status failed: ${formatErrorMessage(err)}`);
     return;
   }

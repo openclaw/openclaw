@@ -20,7 +20,10 @@ const suite = createControlUiE2eSuite({
 });
 const sessionId = "b1c2cd3c-1234-4321-9876-123456789abc";
 const sessionKey = `agent:main:chat:${sessionId}`;
-const row = createControlUiSessionRow(sessionKey, "Loading geometry", 1, { model: "gpt-4.1" });
+const row = createControlUiSessionRow(sessionKey, "Loading geometry", 1, {
+  model: "gpt-4.1",
+  hasMessages: true,
+});
 const readyText = "The conversation history is now available.";
 const viewports = [
   { width: 1105, height: 954 },

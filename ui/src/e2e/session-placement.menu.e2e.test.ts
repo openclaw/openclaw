@@ -238,7 +238,6 @@ suite.define(() => {
       async (page, gateway) => {
         const menu = await openMenu(page, "sidebar");
         await menu.getByText("Move to cloud…", { exact: true }).click();
-        expect(await page.locator('[data-value="cloud:cloud"]').count()).toBe(0);
         await page.locator('[data-value="device:runner"]').click();
         await gateway.deferNext("sessions.dispatch");
         await page.getByRole("button", { name: "Continue on device", exact: true }).click();

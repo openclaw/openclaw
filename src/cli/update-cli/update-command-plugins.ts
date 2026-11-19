@@ -63,10 +63,13 @@ import { formatCliCommand } from "../command-format.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-consent.js";
 import { readPackageVersion } from "./shared.js";
 import { withUpdateConfigWriteAuthority } from "./update-command-config.js";
+import { publishPluginRecordsWithoutConfigWrite } from "./update-command-plugin-records.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,
+  createOwedPluginStepWarning,
   createPostCorePluginUpdateResult,
   createPluginUpdateWarning,
+  pluginConvergenceFailureBlocksUpdate,
   type PluginUpdateWarning,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins-internals.js";
@@ -149,27 +152,42 @@ export async function updatePluginsAfterCoreUpdate(params: {
         )
       : { ...params, assertCurrent };
     let result: PostCorePluginUpdateResult;
+    const stage = { publishing: false };
     try {
-      result = await updatePluginsAfterCoreUpdateWithLease(owned, lease, publication);
+      result = await updatePluginsAfterCoreUpdateWithLease(owned, lease, publication, stage);
     } catch (error) {
       await settlePluginInstallTransactions(transactions, "rollback", { error }, assertCurrent);
-      if (
+      const configConflict =
         error instanceof ConfigMutationConflictError &&
-        (error.retryable || error instanceof PluginFinalizationConfigConflictError)
-      ) {
-        assertCurrent();
-        const warning = {
-          reason: "plugin-config-conflict",
-          message:
-            "Plugin finalization deferred because config changed. Run `openclaw plugins doctor` or `openclaw doctor --fix` to finish plugin repair.",
-          guidance: ["openclaw plugins doctor", "openclaw doctor --fix"],
-        };
-        if (!params.json) {
-          (params.runtime ?? defaultRuntime).log(theme.warn(warning.message));
-        }
-        return createPostCorePluginUpdateResult({ status: "warning", warnings: [warning] });
+        (error.retryable || error instanceof PluginFinalizationConfigConflictError);
+      // Only a cohort defers every package and record change, so only its rollback above
+      // restores the previous plugin set for a later command to retry. Channel config restored
+      // for this update is published with the records; no later run could restore it.
+      const retryable =
+        publication !== undefined &&
+        !stage.publishing &&
+        params.configChanged !== true &&
+        !pluginConvergenceFailureBlocksUpdate(error);
+      if (!configConflict && !retryable) {
+        throw error;
       }
-      throw error;
+      assertCurrent();
+      const warning = configConflict
+        ? {
+            reason: "plugin-config-conflict",
+            message:
+              "Plugin finalization deferred because config changed. Run `openclaw plugins doctor` or `openclaw doctor --fix` to finish plugin repair.",
+            guidance: ["openclaw plugins doctor", "openclaw doctor --fix"],
+          }
+        : createOwedPluginStepWarning("plugin-convergence", error);
+      if (!params.json) {
+        // The caller decides later whether the step is owed; this notice holds either way.
+        const notice = configConflict
+          ? warning.message
+          : `Plugin convergence did not complete: ${warning.message}. Plugins stay on their previous versions; the next \`openclaw update\` or \`openclaw update repair\` retries it.`;
+        (params.runtime ?? defaultRuntime).log(theme.warn(notice));
+      }
+      return createPostCorePluginUpdateResult({ status: "warning", warnings: [warning] });
     }
     // The matching records are published. Cleanup failure must not remove
     // packages underneath those records, including siblings not yet committed.
@@ -181,7 +199,8 @@ export async function updatePluginsAfterCoreUpdate(params: {
 async function updatePluginsAfterCoreUpdateWithLease(
   params: Parameters<typeof updatePluginsAfterCoreUpdate>[0],
   lease: PluginLifecycleLeaseContext,
-  publication?: ReturnType<typeof createPluginCohortPublication>,
+  publication: ReturnType<typeof createPluginCohortPublication> | undefined,
+  stage: { publishing: boolean },
 ): Promise<PostCorePluginUpdateResult> {
   params.assertCurrent?.();
   const runtime = params.runtime ?? defaultRuntime;
@@ -463,6 +482,7 @@ async function updatePluginsAfterCoreUpdateWithLease(
   pluginsChanged ||= convergence.changes.length > 0 || convergence.configChanges.length > 0;
 
   if (pluginsChanged) {
+    stage.publishing = true;
     const nextInstallRecords = pluginConfig.plugins?.installs ?? {};
     // Old npm generations remain discoverable until final commit retires them.
     // Same-run reference moves use updater facts, not durable-recovery absence checks.
@@ -532,73 +552,87 @@ async function updatePluginsAfterCoreUpdateWithLease(
       ? restoreDoctorConfigEnvRefs(baselineSource, baselineReferences)
       : baselineSource;
     const changedPaths = collectChangedConfigPaths(baseline, nextConfig).paths;
-    await transformConfigFileWithRetry({
-      writeOptions: {
-        ...mutationWriteOptions,
-        observe: false,
+    const beforeCommit = async () => {
+      assertCurrent();
+      await params.configWriteOptions.beforeCommit?.();
+      assertCurrent();
+      await assertRecoveryCurrent();
+      assertCurrent();
+    };
+    const recordsOnly =
+      changedPaths.length === 0 &&
+      (await publishPluginRecordsWithoutConfigWrite({
+        previousInstallRecords: pluginInstallRecords,
+        nextInstallRecords,
+        nextConfig,
+        deferredPluginMigrations: params.configWriteOptions.deferredPluginMigrations,
+        assertConfigPathForWrite: params.configWriteOptions.assertConfigPathForWrite,
         assertCurrent,
-        beforeCommit: async () => {
-          assertCurrent();
-          await params.configWriteOptions.beforeCommit?.();
-          assertCurrent();
-          await assertRecoveryCurrent();
-          assertCurrent();
+        beforeCommit,
+      }));
+    if (!recordsOnly) {
+      await transformConfigFileWithRetry({
+        writeOptions: {
+          ...mutationWriteOptions,
+          observe: false,
+          assertCurrent,
+          beforeCommit,
+          inputBase: "source",
+          skipPluginValidation: true,
         },
-        inputBase: "source",
-        skipPluginValidation: true,
-      },
-      transform: (current, { snapshot }) => {
-        const currentReferences = prepareDoctorConfigReferenceSource(snapshot);
-        const currentConfig = currentReferences
-          ? restoreDoctorConfigEnvRefs(current, currentReferences)
-          : current;
-        const candidate = structuredClone(currentConfig);
-        for (const changedPath of changedPaths) {
-          const before = getConfigValueAtPath(baseline, changedPath);
-          const after = getConfigValueAtPath(nextConfig, changedPath);
-          const value = getConfigValueAtPath(currentConfig, changedPath);
-          const parentChanged = changedPath.slice(0, -1).some((_, index) => {
-            const parent = changedPath.slice(0, index + 1);
-            return (
-              isRecord(getConfigValueAtPath(baseline, parent)) &&
-              !isRecord(getConfigValueAtPath(currentConfig, parent))
-            );
+        transform: (current, { snapshot }) => {
+          const currentReferences = prepareDoctorConfigReferenceSource(snapshot);
+          const currentConfig = currentReferences
+            ? restoreDoctorConfigEnvRefs(current, currentReferences)
+            : current;
+          const candidate = structuredClone(currentConfig);
+          for (const changedPath of changedPaths) {
+            const before = getConfigValueAtPath(baseline, changedPath);
+            const after = getConfigValueAtPath(nextConfig, changedPath);
+            const value = getConfigValueAtPath(currentConfig, changedPath);
+            const parentChanged = changedPath.slice(0, -1).some((_, index) => {
+              const parent = changedPath.slice(0, index + 1);
+              return (
+                isRecord(getConfigValueAtPath(baseline, parent)) &&
+                !isRecord(getConfigValueAtPath(currentConfig, parent))
+              );
+            });
+            if (
+              !isDeepStrictEqual(value, after) &&
+              (parentChanged || !isDeepStrictEqual(value, before))
+            ) {
+              throw new PluginFinalizationConfigConflictError(changedPath);
+            }
+            if (after === undefined) {
+              unsetConfigValueAtPath(candidate, [...changedPath]);
+            } else {
+              setConfigValueAtPath(candidate, changedPath, structuredClone(after));
+            }
+          }
+          setDeferredPluginMigrationConfigFacts(
+            candidate,
+            getDeferredPluginMigrationConfigFacts(nextConfig),
+          );
+          return { nextConfig: candidate };
+        },
+        commit: async ({ nextConfig: candidate, baseHash, writeOptions }) => {
+          const { configWrite } = await commitPluginInstallRecordsWithConfig({
+            beforePersistentEffect: assertCurrent,
+            previousInstallRecords: pluginInstallRecords,
+            nextInstallRecords,
+            nextConfig: candidate,
+            baseHash,
+            writeOptions,
           });
-          if (
-            !isDeepStrictEqual(value, after) &&
-            (parentChanged || !isDeepStrictEqual(value, before))
-          ) {
-            throw new PluginFinalizationConfigConflictError(changedPath);
-          }
-          if (after === undefined) {
-            unsetConfigValueAtPath(candidate, [...changedPath]);
-          } else {
-            setConfigValueAtPath(candidate, changedPath, structuredClone(after));
-          }
-        }
-        setDeferredPluginMigrationConfigFacts(
-          candidate,
-          getDeferredPluginMigrationConfigFacts(nextConfig),
-        );
-        return { nextConfig: candidate };
-      },
-      commit: async ({ nextConfig: candidate, baseHash, writeOptions }) => {
-        const { configWrite } = await commitPluginInstallRecordsWithConfig({
-          beforePersistentEffect: assertCurrent,
-          previousInstallRecords: pluginInstallRecords,
-          nextInstallRecords,
-          nextConfig: candidate,
-          baseHash,
-          writeOptions,
-        });
-        return {
-          config: configWrite.nextConfig,
-          persistedHash: configWrite.persistedHash,
-          persistedSourceConfig: configWrite.persistedSourceConfig,
-          afterWrite: configWrite.afterWrite,
-        };
-      },
-    });
+          return {
+            config: configWrite.nextConfig,
+            persistedHash: configWrite.persistedHash,
+            persistedSourceConfig: configWrite.persistedSourceConfig,
+            afterWrite: configWrite.afterWrite,
+          };
+        },
+      });
+    }
     if (!params.json) {
       for (const change of convergence.configChanges) {
         runtime.log(theme.muted(change));

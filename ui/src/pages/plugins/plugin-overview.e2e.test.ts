@@ -1,5 +1,6 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
@@ -53,6 +54,90 @@ async function setup(
 describeControlUiE2e("Plugin overview", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
+
+  it("shows the official publisher for an installed bundled plugin", async () => {
+    const bundled = {
+      ...calendarPlugin,
+      id: "huggingface",
+      name: "Hugging Face",
+      description: "Run models through Hugging Face Inference Providers.",
+      packageName: "@openclaw/huggingface-provider",
+      version: "2026.11.3",
+      catalogId: "local_aHVnZ2luZ2ZhY2U",
+      origin: "bundled" as const,
+      removable: false,
+    };
+    const catalog: PluginDiscoveryDetailResult = {
+      plugin: {
+        id: bundled.catalogId,
+        catalog: { name: bundled.name, official: true, categories: ["models"] },
+        local: {
+          present: true,
+          installed: true,
+          enabled: true,
+          state: "enabled",
+          pluginId: bundled.id,
+          action: "manage",
+        },
+      },
+      detail: {
+        origin: "local",
+        author: { handle: "openclaw", displayName: "OpenClaw", official: true },
+        topics: [],
+        configuration: [],
+        mcpServers: [],
+        skills: [],
+        versions: [],
+      },
+    };
+    const context = await newContext();
+    onTestFinished(() => context.close());
+    const page = await context.newPage();
+    const gateway = await installMockGateway(
+      page,
+      {
+        featureMethods: pluginMethods,
+        methodResponses: {
+          ...pluginMethodResponses(),
+          "plugins.list": inventory([bundled]),
+          "plugins.inspect": {
+            ...calendarInspection,
+            plugin: bundled,
+            source: { kind: "npm", packageName: bundled.packageName },
+            declared: { ...calendarInspection.declared, tools: [] },
+            overview: {
+              readme: "# Hugging Face\n\nUse hosted models through Inference Providers.",
+            },
+          },
+        },
+      },
+      {
+        requestHandlers: {
+          "plugins.catalog.get": (params) =>
+            asNullableRecord(params)?.version
+              ? {
+                  __mockError: {
+                    code: "INVALID_REQUEST",
+                    message: "Local plugin details do not select releases.",
+                  },
+                }
+              : catalog,
+        },
+      },
+    );
+    await page.goto(server.baseUrl + "plugins/" + bundled.catalogId);
+    await role(page, "button", "Disable Hugging Face").waitFor();
+    await gateway.waitForRequest("plugins.catalog.get");
+    await page.locator(".plugin-metadata__loading").waitFor({ state: "hidden" });
+    await captureScreenshot(page, "bundled-publisher.png", "viewport");
+    expect(await role(page, "link", "@openclaw").count()).toBe(1);
+    expect(
+      await page.locator(".plugin-catalog-detail__publisher .plugin-official-badge").count(),
+    ).toBe(1);
+    expect((await gateway.getRequests("plugins.catalog.get"))[0]?.params).toEqual({
+      id: bundled.catalogId,
+    });
+  });
 
   it("gives failed plugin actions shared callout padding and space before capabilities", async () => {
     const message =
@@ -232,10 +317,12 @@ describeControlUiE2e("Plugin overview", () => {
           .getAttribute("disabled"),
       ).not.toBeNull();
       await captureScreenshot(page, `direct-settings-${entry}-permissions.png`, "viewport");
-      expect(new URL(page.url())).toMatchObject({
-        pathname: `/plugins/${plugin.catalogId}`,
-        search: "?view=settings",
-      });
+      // The detail's Settings action opens Settings; an existing inline link still renders.
+      expect(new URL(page.url())).toMatchObject(
+        entry === "refresh"
+          ? { pathname: `/settings/plugins/${plugin.id}`, search: "?view=settings&from=plugins" }
+          : { pathname: `/plugins/${plugin.catalogId}`, search: "?view=settings" },
+      );
     },
   );
 
@@ -245,6 +332,7 @@ describeControlUiE2e("Plugin overview", () => {
     const linear = {
       ...calendarPlugin,
       id: "linear",
+      catalogId: "ch_bGluZWFy",
       name: "Linear",
       packageName: "@openclaw/linear",
       description: summary,
@@ -369,7 +457,7 @@ describeControlUiE2e("Plugin overview", () => {
     };
     const { page } = await setup(
       {
-        "plugins.list": inventory([calendarPlugin]),
+        "plugins.list": inventory([plugin]),
         "plugins.catalog.get": catalog,
         "plugins.inspect": {
           ...calendarInspection,
@@ -427,6 +515,9 @@ describeControlUiE2e("Plugin overview", () => {
       "Tools",
       "MCP server",
     ]);
+    const skills = page.locator(".plugin-skills-section");
+    expect(await skills.textContent()).toContain("Calendar planning");
+    expect(await skills.textContent()).not.toMatch(/ClawHub|Version/);
     await page.getByRole("button", { name: /calendar_search/ }).click();
     await page.getByRole("dialog", { name: "calendar_search" }).waitFor();
     const preview = page.locator(".plugin-tool-preview");
@@ -481,6 +572,8 @@ describeControlUiE2e("Plugin overview", () => {
     }
     await role(page.locator(".plugin-catalog-detail__actions"), "link", "Settings").click();
     await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
-    expect(new URL(page.url()).pathname).toBe("/plugins/ch_Y2FsZW5kYXI");
+    // Settings stay in Settings, which returns to the Plugins workspace.
+    expect(new URL(page.url()).pathname).toBe("/settings/plugins/calendar-plus");
+    expect(new URL(page.url()).searchParams.get("from")).toBe("plugins");
   });
 });

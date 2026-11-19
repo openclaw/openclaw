@@ -7,7 +7,7 @@ import type { TooltipOwner, TooltipPolicyProps } from "../tooltip-owner.ts";
 import { TooltipElement, type TooltipRuntime } from "../tooltip.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
 import kbdStyles from "../kbd.css?inline";
-import overlayStyles from "./overlay.css?inline";
+import overlayStyles from "./overlay-shadow.css?inline";
 import tooltipStyles from "./tooltip.css?inline";
 
 export type { TooltipElement } from "../tooltip.ts";

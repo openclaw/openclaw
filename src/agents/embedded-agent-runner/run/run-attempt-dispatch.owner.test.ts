@@ -335,7 +335,10 @@ it.each(dispatchCases)(
         | undefined;
       let checkRetiredDuringSuccessor: (() => Promise<void>) | undefined;
       const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (params) => {
-        expect(params.cyberAccessProgram).toBe(cyberAccessProgram);
+        // Daybreak is OpenAI-only: the fixture provider dispatches a saved choice as Standard.
+        expect(params.cyberAccessProgram).toBe(
+          cyberAccessProgram === undefined ? undefined : "standard",
+        );
         (checkRetiredDuringSuccessor ? successorSourceTurn : sourceTurn).expectBinding(params);
         if (checkRetiredDuringSuccessor) {
           assert(capturedAttempt);
@@ -645,7 +648,6 @@ it.each(dispatchCases)(
         observeToolOutcome: vi.fn(),
         isTurnTainted: () => false,
         allocateToolOutcomeOrdinal: () => 1,
-        getPostCompactionAbortError: () => undefined,
       } as unknown as Parameters<typeof prepareAndDispatchEmbeddedRunAttempt>[0];
       const remoteWorkspace = state.path("remote-execution-only");
       const remoteBridgeCommand = vi.fn(async () => {

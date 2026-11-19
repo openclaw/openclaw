@@ -1,8 +1,10 @@
-import type { TemplateDraftReviewChoices } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { showToast } from "../../lib/toast.ts";
-import { createContext } from "../skill-workshop/skill-workshop-page.test-support.ts";
+import {
+  createContext,
+  createRuntimeConfigStub,
+} from "../skill-workshop/skill-workshop-page.test-support.ts";
 import { TemplateCreatorFlow } from "./creator-flow.ts";
 
 vi.mock("../../lib/toast.ts", async (importOriginal) => ({
@@ -42,27 +44,26 @@ afterEach(() => {
   vi.mocked(showToast).mockClear();
 });
 
-it("invokes the bundled skill in the existing main session, then reviews and publishes the selected archive", async () => {
-  const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+it("invokes the bundled skill in the existing main session, then reviews and publishes the reviewed archive", async () => {
+  const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
     switch (method) {
       case "templates.drafts.read":
         return { revision: "a".repeat(64), content: JSON.stringify({ scope }) };
       case "templates.drafts.review": {
-        const choices = params.choices as TemplateDraftReviewChoices | undefined;
         return {
           revision: "a".repeat(64),
-          reviewToken: choices?.excluded.length ? "c".repeat(64) : "b".repeat(64),
+          reviewToken: "b".repeat(64),
           publisher: "maker",
-          name: `@maker/${choices?.name ?? "release-brief"}`,
-          displayName: choices?.displayName ?? "Release Brief",
+          name: "@maker/release-brief",
+          displayName: "Release Brief",
           version: "0.1.0",
-          description: choices?.description ?? "Summarizes releases",
+          description: "Summarizes releases",
           items: [
             {
               id: "file:workspace/checklist.md",
               kind: "file",
               label: "workspace/checklist.md",
-              included: !choices?.excluded.includes("file:workspace/checklist.md"),
+              included: true,
             },
           ],
           files: [{ path: "CLAW.md", content: "Portable instructions" }],
@@ -80,7 +81,12 @@ it("invokes the bundled skill in the existing main session, then reviews and pub
         return startResult(method);
     }
   });
-  const context = createContext(request);
+  const context = createContext(request, {
+    methods: ["templates.drafts.create", "chat.send"],
+    runtimeConfig: createRuntimeConfigStub({
+      sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
+    }),
+  });
   const flow = new TemplateCreatorFlow(context);
   await flow.start("research");
   const calls = request.mock.calls;
@@ -97,25 +103,81 @@ it("invokes the bundled skill in the existing main session, then reviews and pub
   expect(context.navigate).toHaveBeenCalledWith("chat", expect.anything());
 
   await vi.advanceTimersByTimeAsync(2500);
-  expect(flow).toMatchObject({ modalOpen: true, reviewCurrent: true });
+  expect(flow.reviewCurrent).toBe(true);
   const choices = {
     name: "release-brief",
-    displayName: "Research Brief",
+    displayName: "Release Brief",
     description: "Summarizes releases",
-    excluded: ["file:workspace/checklist.md"],
+    excluded: [],
   };
-  flow.updateChoices(choices);
-  expect(flow.reviewCurrent).toBe(false);
-  await vi.advanceTimersByTimeAsync(350);
-  expect(flow.reviewCurrent).toBe(true);
   await flow.publish();
-  expect(flow).toMatchObject({ modalOpen: false, publication: { publicationStatus: "pending" } });
-  expectToast("Submitted to ClawHub. Publication pending security review.", "View on ClawHub");
+  expect(flow.publication).toMatchObject({ publicationStatus: "pending" });
+  expect(showToast).not.toHaveBeenCalled();
   expect(request.mock.lastCall).toEqual([
     "templates.drafts.publish",
-    expect.objectContaining({ reviewToken: "c".repeat(64), choices }),
+    expect.objectContaining({ reviewToken: "b".repeat(64), choices }),
   ]);
   expect(calls.some(([method]) => method === "sessions.create")).toBe(false);
+});
+
+it("reviews an agent-authored draft in the requesting conversation without another model turn or publication", async () => {
+  const request = vi.fn(async (method: string) => {
+    if (method === "templates.drafts.read") {
+      return { revision: "a".repeat(64), content: JSON.stringify({ scope }) };
+    }
+    if (method === "templates.drafts.review") {
+      return {
+        revision: "a".repeat(64),
+        reviewToken: "b".repeat(64),
+        name: "@maker/research-brief",
+        displayName: "Research Brief",
+        description: "Research summaries",
+        items: [],
+        files: [],
+        scope,
+      };
+    }
+    throw new Error(`Unexpected RPC ${method}`);
+  });
+  const context = createContext(request);
+  const flow = new TemplateCreatorFlow(context);
+  const sessionKey = "agent:research:dashboard:requesting-conversation";
+  flow.open("research", draftId, sessionKey);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(flow.reviewCurrent).toBe(true);
+  expect(context.navigate).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining({
+      pathname: expect.stringContaining("requesting-conversation"),
+    }),
+  );
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "templates.drafts.read",
+    "templates.drafts.review",
+  ]);
+  expect(request).toHaveBeenCalledWith("templates.drafts.review", { agentId: "research", draftId });
+});
+
+it("does not let an earlier sidebar initiation replace a newer chat review", async () => {
+  const created = Promise.withResolvers<{ draftId: string; prompt: string }>();
+  const request = vi.fn((method: string) => {
+    if (method === "templates.drafts.create") {
+      return created.promise;
+    }
+    throw new Error(`Unexpected RPC ${method}`);
+  });
+  const context = createContext(request);
+  const flow = new TemplateCreatorFlow(context);
+  const starting = flow.start("research");
+  flow.open("research", draftId, "agent:research:dashboard:newer-review");
+  created.resolve({ draftId: "older-draft", prompt: "Older sidebar request" });
+  await starting;
+  expect(context.navigate).toHaveBeenCalledTimes(1);
+  expect(context.navigate).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining({ pathname: expect.stringContaining("newer-review") }),
+  );
+  expect(request.mock.calls.map(([method]) => method)).toEqual(["templates.drafts.create"]);
 });
 
 it("keeps overlapping skill turns bound to their own draft ids", async () => {

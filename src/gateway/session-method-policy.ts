@@ -93,6 +93,8 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
     { fields: ["sessionKey"], profileIndependent: true, runStart: true, mayCreate: true },
   ],
   ["talk.session.steer", { fields: ["sessionKey"], profileIndependent: true }],
+  ["talk.session.appendAudio", { profileIndependent: true }],
+  ["talk.session.close", { profileIndependent: true }],
   ["wake", { fields: ["sessionKey"], profileIndependent: true, runStart: true }],
   ["board.action", { required: true }],
   ["sessions.groups.delete", { required: true }],
@@ -104,6 +106,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
 ]);
 
 const DIRECT_SESSION_READ_METHODS = new Set([
+  "talk.catalog",
   "board.get",
   "chat.history",
   "controlUi.sessionPullRequests.subscribe",

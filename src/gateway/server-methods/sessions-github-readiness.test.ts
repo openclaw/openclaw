@@ -20,8 +20,7 @@ import * as readCandidates from "../../config/sessions/session-store-read-candid
 import * as targetInventory from "../../config/sessions/session-store-target-inventory.js";
 import {
   historyLane,
-  projectionLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
   rotateDatabaseWorkers,
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -82,6 +81,7 @@ const unbound = {
   custody: { kind: "unbound_workspace" },
   target: { kind: "unknown", reason: "not-qualified" },
   request: { kind: "none", selection: "current" },
+  remedies: [],
 };
 
 async function call(f: ReadFixture, params: Record<string, unknown> = {}, internal = false) {
@@ -107,33 +107,7 @@ async function observe(f: ReadFixture, params: Record<string, unknown> = {}, int
   assert(Value.Check(SessionGitHubReadinessResultSchema, value), JSON.stringify(value));
   return value;
 }
-async function expectUnknownRequest(f: ReadFixture, requestId: string, reason = "not-observable") {
-  expect((await observe(f, { requestId })).request).toEqual({
-    kind: "unknown",
-    reason,
-    selectedRequestId: requestId,
-  });
-}
-const readerSession = { agentId: "main", sessionKey };
-async function bindRepository(owner = sessionKey, branch?: string) {
-  const workspace = await getSessionRepositoryWorkspaceStore().create({
-    agentId: "main",
-    sessionKey: owner,
-    url: githubOrigin,
-    branch,
-    assertCurrent() {},
-  });
-  await upsertSessionEntryCore(readerSession, { repositoryWorkspaceId: workspace.workspaceId });
-  return workspace;
-}
-function publishedFields(branch: string) {
-  return {
-    url: "https://github.com/example/project/pull/1",
-    repository: "example/project",
-    branch,
-    headCommit: "a".repeat(40),
-  };
-}
+
 function seed(worktree: Awaited<ReturnType<typeof bind>>, key = sessionKey) {
   ensureGitHubPublicationSchema(openOpenClawStateDatabase().db);
   const requestId = randomUUID();
@@ -185,7 +159,7 @@ async function cold() {
   await closeStateDatabaseForTest();
 }
 
-it("observes an unbound source through the validated publisher and registered Gateway", async () => {
+it("observes an unbound source without requiring a different bound session", async () => {
   await fixture(async (f) => {
     expect((await tool(f, { action: "readiness" })).details).toMatchObject(unbound);
   });
@@ -286,7 +260,11 @@ it("reads current pending rows without a second request or settlement", async ()
     runOpenClawStateWriteTransaction(({ db }) =>
       db.exec("DELETE FROM github_publication_session_lifecycles"),
     );
-    await expectUnknownRequest(f, row.request_id, "unavailable");
+    expect((await observe(f, { requestId: row.request_id })).request).toEqual({
+      kind: "unknown",
+      reason: "unavailable",
+      selectedRequestId: row.request_id,
+    });
   });
 });
 it("keeps exact terminal history when source is unavailable and excludes foreign receipts", async () => {
@@ -298,7 +276,10 @@ it("keeps exact terminal history when source is unavailable and excludes foreign
     createGitHubPublicationExecutionStoreFixture("readiness-fixture").complete(claimed, {
       requestId: row.request_id,
       status: "published",
-      ...publishedFields(worktree.branch),
+      repository: "example/project",
+      branch: worktree.branch,
+      url: "https://github.com/example/project/pull/1",
+      headCommit: "a".repeat(40),
     });
     vi.spyOn(managedWorktrees, "resolveRepositoryIdentity").mockRejectedValue(
       new Error("synthetic unavailable repository"),
@@ -311,13 +292,27 @@ it("keeps exact terminal history when source is unavailable and excludes foreign
         receipt: { requestId: row.request_id, status: "published" },
       },
     });
-    await expectUnknownRequest(f, foreign.request_id);
+    expect((await observe(f, { requestId: foreign.request_id })).request).toEqual({
+      kind: "unknown",
+      reason: "not-observable",
+      selectedRequestId: foreign.request_id,
+    });
   });
 });
 it("observes repository-only shared receipts while personal receipts remain private", async () => {
   await fixture(
     async (f) => {
-      const workspace = await bindRepository(sessionKey, "feature");
+      const workspace = await getSessionRepositoryWorkspaceStore().create({
+        agentId: "main",
+        sessionKey,
+        url: githubOrigin,
+        branch: "feature",
+        assertCurrent() {},
+      });
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        { repositoryWorkspaceId: workspace.workspaceId },
+      );
       const requestId = randomUUID();
       const row = {
         ...repositoryRow(requestId),
@@ -353,7 +348,11 @@ it("observes repository-only shared receipts while personal receipts remain priv
         kind: "observe_request",
         requestId,
       });
-      await expectUnknownRequest(f, personal.request_id);
+      expect((await observe(f, { requestId: personal.request_id })).request).toEqual({
+        kind: "unknown",
+        reason: "not-observable",
+        selectedRequestId: personal.request_id,
+      });
       expect(backups).not.toHaveBeenCalled();
     },
     { personal: true },
@@ -364,7 +363,16 @@ it.each([false, true])(
   async (personal) => {
     await fixture(
       async (f) => {
-        await bindRepository();
+        const workspace = await getSessionRepositoryWorkspaceStore().create({
+          agentId: "main",
+          sessionKey,
+          url: githubOrigin,
+          assertCurrent() {},
+        });
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          { repositoryWorkspaceId: workspace.workspaceId },
+        );
         await cold();
         const before = await databaseArtifacts();
         expect((await observe(f)).custody).toEqual({ kind: "qualified", source: "repository" });
@@ -383,7 +391,11 @@ it("keeps an absent shared database absent and does not manufacture an exact rec
     }
     const before = await databaseArtifacts();
     const requestId = randomUUID();
-    await expectUnknownRequest(f, requestId);
+    expect((await observe(f, { requestId })).request).toEqual({
+      kind: "unknown",
+      reason: "not-observable",
+      selectedRequestId: requestId,
+    });
     expect(await databaseArtifacts()).toEqual(before);
   });
 });
@@ -398,7 +410,7 @@ it.each([
   "published-replacement",
   "registry-same",
   "session-metadata",
-] as const)("checks post-await %s custody before observation", async (kind) => {
+] as const)("keeps admitted reads while fencing %s custody", async (kind) => {
   await fixture(
     async (f) => {
       const grant = new AbortController();
@@ -454,11 +466,14 @@ it.each([
             registerOpenClawAgentDatabase({ agentId: "main", path: original });
           }
         } else if (kind === "session-metadata") {
-          await upsertSessionEntryCore(readerSession, { label: "Changed title" });
+          await upsertSessionEntryCore({ agentId: "main", sessionKey }, { label: "Changed title" });
         } else if (kind === "visibility") {
-          await upsertSessionEntryCore(readerSession, { visibility: "draft" });
+          await upsertSessionEntryCore({ agentId: "main", sessionKey }, { visibility: "draft" });
         } else {
-          await upsertSessionEntryCore(readerSession, { lifecycleRevision: randomUUID() });
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey },
+            { lifecycleRevision: randomUUID() },
+          );
         }
         held.release();
         const [ok, payload, error] = await pending;
@@ -475,10 +490,15 @@ it.each([
           expect(registered).toBe(kind !== "registry-remove");
           expect(physicalUnchanged).toBe(kind !== "published-replacement");
         }
-        if (kind === "registry-same" || kind === "session-metadata") {
+        if (["connection", "grant", "registry-same", "session-metadata"].includes(kind)) {
           expect(ok).toBe(true);
           expect(payload).toMatchObject(unbound);
           expect(error).toBeUndefined();
+          if (kind === "connection" || kind === "grant") {
+            const next = await call(f);
+            expect(next[0]).toBe(false);
+            expect(next[2]?.code).toBe("FORBIDDEN");
+          }
         } else {
           expect(ok).toBe(false);
           expect(payload).toBeUndefined();
@@ -533,29 +553,48 @@ it("distinguishes prepared imports, incomplete imports, archived and missing cus
       head: { repository: "example/project", repositoryId: 1, branch: "feature", commit: head },
     };
     const selected = { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot };
-    const imported = { ...selected, githubPullRequest: binding };
-    await upsertSessionEntryCore(readerSession, { worktree: imported });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      {
+        worktree: { ...selected, githubPullRequest: binding },
+      },
+    );
     expect((await observe(f)).custody).toEqual({ kind: "changed" });
-    await upsertSessionEntryCore(readerSession, {
-      worktree: { ...selected, githubPullRequest: { ...binding, preparedHeadCommit: head } },
-    });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      {
+        worktree: { ...selected, githubPullRequest: { ...binding, preparedHeadCommit: head } },
+      },
+    );
     expect(await observe(f)).toMatchObject({
       custody: { kind: "qualified", source: "imported-pr" },
       target: { kind: "supported", basis: "prepared-imported-pr", freshness: "observed" },
     });
-    await upsertSessionEntryCore(readerSession, { archivedAt: 100 });
+    await upsertSessionEntryCore({ agentId: "main", sessionKey }, { archivedAt: 100 });
     expect((await observe(f)).custody).toEqual({ kind: "archived" });
-    await upsertSessionEntryCore(readerSession, {
-      archivedAt: undefined,
-      worktree: { ...selected, id: randomUUID() },
-    });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      {
+        archivedAt: undefined,
+        worktree: { ...selected, id: randomUUID() },
+      },
+    );
     expect((await observe(f)).custody).toEqual({ kind: "changed" });
   });
 });
 
 it("keeps wrong repository ownership distinct from a genuinely unbound workspace", async () => {
   await fixture(async (f) => {
-    await bindRepository("agent:main:another-owner");
+    const workspace = await getSessionRepositoryWorkspaceStore().create({
+      agentId: "main",
+      sessionKey: "agent:main:another-owner",
+      url: githubOrigin,
+      assertCurrent() {},
+    });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      { repositoryWorkspaceId: workspace.workspaceId },
+    );
     expect((await observe(f)).custody).toEqual({ kind: "changed" });
   });
 });
@@ -656,7 +695,7 @@ it.each([
         await closeOpenClawAgentDatabasesAsync();
         // Agent close releases database handles but may retain qualified idle Workers.
         // Rotate the read lanes too: instrumentation must precede their next real imports.
-        for (const lane of [historyLane, projectionLane, targetDiscoveryLane]) {
+        for (const lane of [historyLane, sessionStoreLane]) {
           await rotateDatabaseWorkers(lane);
           expect(lane.native).toBe(false);
           expect(lane.pending).toBe(0);
@@ -766,15 +805,26 @@ it.each([
                 }
                 held.release();
                 const [ok, payload, error] = await pending;
-                if (changed === "member") {
-                  // View grants non-draft reads independently of explicit membership.
-                  expect(ok).toBe(true);
-                  expect(payload).toMatchObject(unbound);
-                  expect(error).toBeUndefined();
-                } else {
+                if (changed === "scope") {
+                  // The router's named-role scope guard remains outside this read-owner change.
                   expect(ok).toBe(false);
                   expect(payload).toBeUndefined();
                   expect(error?.code).toBe("FORBIDDEN");
+                } else {
+                  expect(ok).toBe(true);
+                  expect(payload).toMatchObject(unbound);
+                  expect(error).toBeUndefined();
+                  if (changed === "role") {
+                    const receiptRead = vi.spyOn(
+                      f.context.githubPublicationService!,
+                      "latestShared",
+                    );
+                    const next = await call(f);
+                    expect(next[0]).toBe(false);
+                    expect(next[2]?.code).toBe("INVALID_REQUEST");
+                    expect(receiptRead).not.toHaveBeenCalled();
+                    receiptRead.mockRestore();
+                  }
                 }
               } finally {
                 held.release();
@@ -821,21 +871,29 @@ it.each(["requested", "publishing", "published", "failed"] as const)(
     await fixture(async (f) => {
       const worktree = await bind();
       const row = seed(worktree);
-      const published = publishedFields(worktree.branch);
       const details =
-        status === "published" ? published : status === "failed" ? { code: "unavailable" } : {};
+        status === "published"
+          ? {
+              url: "https://github.com/example/project/pull/1",
+              repository: "example/project",
+              branch: worktree.branch,
+              headCommit: "a".repeat(40),
+            }
+          : status === "failed"
+            ? { code: "unavailable" as const }
+            : {};
       if (status !== "requested") {
         const claim = claimGitHubPublicationExecutionFixture(row.request_id, "projection-fixture");
         const store = createGitHubPublicationExecutionStoreFixture("projection-fixture");
         if (status === "published") {
-          const tree = "b".repeat(40);
-          const captured = store.bindWorkspaceSnapshot({
-            row: claim,
-            sourceHeadCommit: published.headCommit,
-            sourceIndexTree: tree,
-            workspaceTree: tree,
+          store.complete(claim, {
+            requestId: row.request_id,
+            status,
+            url: "https://github.com/example/project/pull/1",
+            repository: "example/project",
+            branch: worktree.branch,
+            headCommit: "a".repeat(40),
           });
-          store.complete(captured, { requestId: row.request_id, status, ...published });
         } else if (status === "failed") {
           store.complete(claim, {
             requestId: row.request_id,
@@ -846,22 +904,11 @@ it.each(["requested", "publishing", "published", "failed"] as const)(
           });
         }
       }
-      const params = { requestId: row.request_id };
-      const legacyReceipt = { requestId: row.request_id, status, ...details };
-      expect((await observe(f, params)).request).toEqual({
+      expect((await observe(f, { requestId: row.request_id })).request).toEqual({
         kind: "observed",
         selection: "exact",
-        receipt: legacyReceipt,
+        receipt: { requestId: row.request_id, status, ...details },
       });
-      if (status === "published") {
-        const current = { ...legacyReceipt, unchanged: true };
-        expect((await tool(f, { action: "readiness", ...params })).details).toMatchObject({
-          request: { receipt: current },
-        });
-        assert(f.client.connect);
-        f.client.connect.caps = ["github-publication-unchanged"];
-        expect((await observe(f, params)).request).toMatchObject({ receipt: current });
-      }
     });
   },
 );

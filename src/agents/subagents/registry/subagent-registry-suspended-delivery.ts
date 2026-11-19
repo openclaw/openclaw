@@ -1,4 +1,5 @@
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { recordRequiredCompletionFailure } from "../completion/subagent-completion-admission.store.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import {
@@ -119,4 +120,13 @@ export async function discardSuspendedPendingFinalDelivery(params: {
       prepareCurrent: prepareHookCurrent,
     });
   }
+  // Retiring the obligation is the final failure: the requester sees it, not only the log.
+  // The discard is already committed, so the notice is best-effort and cannot undo it.
+  await recordRequiredCompletionFailure(entry, "expired").catch((error: unknown) => {
+    params.warn("subagent expiry notice could not be recorded", {
+      runId: entry.runId,
+      requesterSessionKey: entry.requesterSessionKey,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 }

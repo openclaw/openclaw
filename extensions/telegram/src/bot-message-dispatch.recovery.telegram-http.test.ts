@@ -6,6 +6,7 @@ import type {
   PluginHookReplyPayloadSendingEvent,
   PluginHookReplyPayloadSendingResult,
 } from "openclaw/plugin-sdk/core";
+import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readQueuedDeliveryEntriesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
@@ -220,6 +221,51 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       retryRelease.resolve();
       await delivering.catch(() => undefined);
     }
+  });
+
+  it("keeps a flood-refused final queued for recovery without a resend notice", async () => {
+    const { manager, dispatch } = await transcriptCase("flood-refused-final");
+    http.respondToCall = (call) =>
+      call.method === "sendMessage" && call.fields.text === recoveredAnswer
+        ? {
+            error_code: 429,
+            // Longer than the five-minute flood budget: the limiter gives up at once.
+            description: "Too Many Requests: retry after 600",
+            parameters: { retry_after: 600 },
+          }
+        : undefined;
+    // The existing "final reply failed" log is allowed; only chat text decides the result.
+    await dispatch(
+      async () => {
+        manager.appendMessage(assistant(recoveredAnswer));
+        manager.flushPendingPersistence();
+      },
+      { allowErrors: true },
+    );
+    const notice = /deliver my reply|went wrong|No answer|No response|Please try again/;
+    expect(http.texts().filter((text) => notice.test(text) || text === recoveredAnswer)).toEqual(
+      [],
+    );
+    // Recorded as not sent (fail-before-send clears the send markers), so recovery may replay it.
+    const [entry] = readQueuedDeliveryEntriesForTest(http.state.stateDir);
+    expect(entry).toMatchObject({ attemptCount: 1, lastError: expect.stringContaining("429") });
+    expect(entry?.recoveryState).toBeUndefined();
+    expect(entry?.platformSendAttemptId).toBeUndefined();
+    // Telegram allows sends again after its wait: the existing recovery drain delivers once.
+    http.respondToCall = undefined;
+    await vi.advanceTimersByTimeAsync(601_000);
+    await drainPendingDeliveries({
+      drainKey: "telegram:flood-test",
+      logLabel: "flood test drain",
+      stateDir: http.state.stateDir,
+      cfg: { channels: { telegram: { botToken: http.token, apiRoot: http.apiRoot } } },
+      log: { info: () => {}, warn: () => {}, error: () => {} },
+      selectEntry: () => ({ match: true, bypassBackoff: true }),
+    });
+    expect(http.texts().filter((text) => notice.test(text) || text === recoveredAnswer)).toEqual([
+      recoveredAnswer,
+    ]);
+    expect(readQueuedDeliveryEntriesForTest(http.state.stateDir)).toEqual([]);
   });
 
   it("recovers the latest scoped answer without reopening an accepted first target", async () => {

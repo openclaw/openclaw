@@ -5,7 +5,6 @@ import type {
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { preparePublishingSession } from "./github-publication-action-target.js";
 import { qualifyGitHubPublicationSource } from "./github-publication-availability.js";
-import { presentGitHubPublicationReceipt } from "./github-publication-client.js";
 import {
   GitHubPublicationSessionChangedError,
   GitHubPublicationWorkspaceChangedError,
@@ -28,7 +27,6 @@ function observeReceipt(result: SessionGitHubPublicationResult) {
         repository: result.repository,
         branch: result.branch,
         headCommit: result.headCommit,
-        ...(result.unchanged ? { unchanged: result.unchanged } : {}),
       };
     case "failed":
       return { ...base, status: result.status, code: result.code };
@@ -86,9 +84,7 @@ export async function readGitHubPublicationReadiness(
         ? {
             kind: "observed",
             selection: params.requestId ? "exact" : "current",
-            receipt: observeReceipt(
-              presentGitHubPublicationReceipt(options.client, receipt.result),
-            ),
+            receipt: observeReceipt(receipt.result),
           }
         : params.requestId
           ? { kind: "unknown", reason: "not-observable", selectedRequestId: params.requestId }
@@ -132,9 +128,7 @@ export async function readGitHubPublicationReadiness(
     observation = unavailable(source.cause);
   }
   const remedies: SessionGitHubReadinessResult["remedies"] = [];
-  if (observation.custody.kind === "unbound_workspace") {
-    remedies.push({ kind: "select_bound_session" });
-  } else if (
+  if (
     observation.custody.kind === "changed" ||
     observation.custody.kind === "archived" ||
     observation.target.kind === "unsupported"

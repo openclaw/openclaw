@@ -1,5 +1,8 @@
 import type { Component } from "solid-js";
-import type { ProjectedMessageContent } from "./chat-message-media.ts";
+import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { isInlineChatImage } from "./chat-image-lightbox.ts";
+import type { ImageBlock, ProjectedMessageContent } from "./chat-message-media.ts";
 
 export type PositionedMedia = Exclude<ProjectedMessageContent, { type: "text" }>;
 export type MarkdownMedia = {
@@ -35,4 +38,35 @@ export function prepareMarkdownMediaSource(content: readonly ProjectedMessageCon
     })
     .join("\n");
   return { markdown, prefix, text, items };
+}
+
+export function readMarkdownImageSlots(
+  markdown: string,
+  options: MarkdownRenderOptions,
+  media?: ReturnType<typeof prepareMarkdownMediaSource>,
+) {
+  const template = document.createElement("template");
+  template.innerHTML = toSanitizedMarkdownHtml(markdown, options);
+  const walker = document.createTreeWalker(
+    template.content,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+  );
+  const images: ImageBlock[] = [];
+  const inlineImages: ImageBlock[] = [];
+  const marker = media ? new RegExp(media.prefix + "(\\d+)END", "g") : undefined;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (isInlineChatImage(node)) {
+      const image: ImageBlock = { url: node.src, alt: node.alt };
+      images.push(image);
+      inlineImages.push(image);
+    } else if (node instanceof Text && marker && media) {
+      for (const match of node.data.matchAll(marker)) {
+        const item = media.items[Number(match[1])];
+        if (item?.type === "image") {
+          images.push(item.image);
+        }
+      }
+    }
+  }
+  return { images, inlineImages };
 }

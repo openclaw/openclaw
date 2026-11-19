@@ -4,11 +4,8 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveMemoryAudienceFromEntry } from "./memory-audience.js";
-import type {
-  MemoryAudience,
-  MemoryCallerContext,
-  MemoryProviderHandle,
-} from "./memory-provider-types.js";
+import type { MemoryProviderHandle } from "./memory-provider-runtime-types.js";
+import type { MemoryAudience, MemoryCallerContext } from "./memory-provider-types.js";
 import { createOwnershipRecord } from "./registry-ownership.test-support.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRegistryOwner } from "./runtime.js";

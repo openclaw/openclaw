@@ -109,8 +109,8 @@ export function createGatewayTool(options?: {
     label: "Gateway",
     name: "gateway",
     description: allowConfigReads
-      ? "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup. Use runtime-owned actions."
-      : "Owner request/operator schedule: update.run, restart, update.cleanup. Cleanup permanently retires eligible rollback copies; dryRun previews. Use runtime-owned actions.",
+      ? "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup."
+      : "Owner request/operator schedule: update.run, restart, update.cleanup. Cleanup permanently retires eligible rollback copies; dryRun previews.",
     parameters: allowConfigReads ? GatewayToolSchema : GatewayUpdateToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
@@ -262,7 +262,7 @@ export function createGatewayTool(options?: {
           result = { ...(hash ? { hash } : {}), path, config: value };
         }
         const payload = { ok: true, result };
-        const text = JSON.stringify(payload, null, 2);
+        const text = JSON.stringify(payload);
         if (text.length > MAX_GATEWAY_CONFIG_GET_TEXT_CHARS) {
           throw new ToolInputError(
             "config.get response is too large; use path to request a narrower config subtree",
