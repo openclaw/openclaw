@@ -98,36 +98,49 @@ describe("adopted thread restart wait", () => {
   });
 
   it("refuses a restart input when the earlier turn is still active after the wait", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const h = createClientHarness();
     const params = createThreadRequestAttemptParams({ provider: "openai" });
     params.inputProvenance = { kind: "internal_system", sourceTool: "restart" };
+    const spans: string[] = [];
+    const activeThread = {
+      thread: { ...threadStartResult("root", "/repo").thread, status: { type: "active" } },
+    };
     try {
       const waiting = assertAdoptedCodexThreadResumeAllowed(
         { client: h.client, params },
         "root",
         {
-          lifecycleTiming: { measure: async (_label, run) => await run() },
+          lifecycleTiming: {
+            measure: async (label, run) => {
+              spans.push(label);
+              return await run();
+            },
+          },
           throwIfAborted: () => {},
         },
         () => {},
       );
       void waiting.catch(() => {});
-      const request = JSON.parse(await h.waitForWrite(0));
-      expect(request.method).toBe("thread/read");
-      vi.setSystemTime(Date.now() + 120_000);
-      h.send({
-        id: request.id,
-        result: {
-          thread: { ...threadStartResult("root", "/repo").thread, status: { type: "active" } },
-        },
+      const first = JSON.parse(await h.waitForWrite(0));
+      expect(first.method).toBe("thread/read");
+      h.send({ id: first.id, result: activeThread });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
       });
+      await vi.advanceTimersByTimeAsync(1_000);
+      const second = JSON.parse(await h.waitForWrite(1));
+      expect(second.method).toBe("thread/read");
+      vi.setSystemTime(Date.now() + 120_000);
+      h.send({ id: second.id, result: activeThread });
       await expect(waiting).rejects.toMatchObject({
         name: "CodexAdoptedThreadActiveError",
         message: expect.stringContaining("still active after the restart wait"),
         userMessage: expect.stringContaining("That work is still running"),
       });
-      expect(h.writes).toHaveLength(1);
+      expect(h.writes).toHaveLength(2);
+      // The whole wait is one lifecycle stage, not one per read.
+      expect(spans).toEqual(["thread-read-adoption-status"]);
     } finally {
       await h.client.closeAndWait();
     }
