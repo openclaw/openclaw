@@ -443,3 +443,18 @@ for (const [name, topology, change, accepted] of [
     }
   });
 }
+
+test("native receipt may omit an unchanged held store but not an active one", t => {
+  const f = migrationFixture(t); f.ok(f.create());
+  const original = f.read();
+  nativeReceipt(f, "restored", [f.databasePath]);
+  const project = () => f.run("journal-original-witness", [f.journal, JSON.stringify(original)]);
+  assert.notEqual(project().status, 0, "active stores must remain in the native receipt");
+  const shared = new DatabaseSync(f.databasePath);
+  shared.exec("CREATE TABLE agent_deletion_journal (agent_id TEXT, agent_dir TEXT, database_paths_json TEXT, cleanup_completed INTEGER, delete_files INTEGER)");
+  shared.prepare("INSERT INTO agent_deletion_journal VALUES (?, ?, ?, 1, 0)").run("controller-test-agent", dirname(f.agentDatabasePath), JSON.stringify([f.agentDatabasePath]));
+  shared.close();
+  const projected = f.ok(project());
+  assert.equal(projected, f.witness);
+  f.ok(f.run("session-preservation-verify", [f.initial, f.initial, f.databasePath], projected));
+});
