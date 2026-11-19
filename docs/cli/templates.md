@@ -108,12 +108,11 @@ fork a session. Review requires Templates enabled in Labs, an active administrat
 Control UI connection, and a workspace on the Gateway host. If review is unavailable,
 the proposal stays private.
 
-The agent says that it is drafting the Template as soon as it starts, then takes
-one inventory of its instructions, avatar, workspace skills, ClawHub plugins, and
-scheduled automations. It tells you what the Template will carry and what it is
-leaving out as personal before it writes the proposal, and the review card
-follows. The whole exchange is meant to take about a minute, so the first
-proposal is deliberately compact; ask for additions after you have seen it.
+The agent tells you when it starts, then checks its instructions, avatar, skills,
+plugins, and scheduled automations together. You'll see short messages as it
+chooses which skills and plugins to include and which routines belong in the
+Template. It writes the instructions a new owner needs, then opens the private
+review card. Nothing is published unless you choose **Publish**.
 
 The optional **Create Template** action in the agent's left-sidebar row menu
 still invokes the same skill in that agent's existing main chat. Pinned agents
