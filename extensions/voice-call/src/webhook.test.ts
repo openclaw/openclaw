@@ -645,6 +645,11 @@ describe("VoiceCallWebhookServer replay handling", () => {
       await expectTwilioReplayTwiML(await retry.duplicate);
       await expectTwilioReplayTwiML(await postSignedTwilioWebhook(signedRequest));
       expect(buildTwiMLPayload).toHaveBeenCalledTimes(2);
+      expect(buildTwiMLPayload).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.any(URLSearchParams),
+        "CA-concurrent",
+      );
       expect(processEvent).not.toHaveBeenCalled();
       expectNoTwilioStreamState(twilioProvider);
     } finally {

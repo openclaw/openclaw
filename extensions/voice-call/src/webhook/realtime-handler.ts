@@ -107,8 +107,9 @@ function withFallbackConsultQuestion(args: unknown, fallback: string | undefined
 }
 
 type StreamSessionRequest = {
-  providerName?: "twilio" | "telnyx";
-  callId?: string;
+  providerName: "twilio" | "telnyx";
+  // Twilio binds the signed provider CallSid; Telnyx binds the pre-dial manager call ID.
+  callId: string;
   from?: string;
   to?: string;
   direction?: "inbound" | "outbound";
@@ -255,8 +256,12 @@ export class RealtimeCallHandler {
     return `${this.publicPathPrefix}${normalizeWebhookPath(this.config.streamPath ?? "/voice/stream/realtime")}`;
   }
 
-  buildTwiMLPayload(req: http.IncomingMessage, params?: URLSearchParams): WebhookResponsePayload {
-    const rawDirection = params?.get("Direction");
+  buildTwiMLPayload(
+    req: http.IncomingMessage,
+    params: URLSearchParams,
+    callId: string,
+  ): WebhookResponsePayload {
+    const rawDirection = params.get("Direction");
     const previousOrigin = this.publicOrigin;
     if (!previousOrigin) {
       this.publicOrigin = req.headers.host ?? DEFAULT_HOST;
@@ -264,8 +269,9 @@ export class RealtimeCallHandler {
     try {
       const { streamUrl } = this.issueStreamSession({
         providerName: "twilio",
-        from: params?.get("From") ?? undefined,
-        to: params?.get("To") ?? undefined,
+        callId,
+        from: params.get("From") ?? undefined,
+        to: params.get("To") ?? undefined,
         direction: rawDirection?.startsWith("outbound") ? "outbound" : "inbound",
       });
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -300,7 +306,7 @@ export class RealtimeCallHandler {
       return;
     }
 
-    const providerName = callerMeta.providerName ?? "twilio";
+    const providerName = callerMeta.providerName;
     const adapter = new StreamFrameAdapter(providerName);
 
     const wss = new WebSocketServer({
@@ -340,14 +346,18 @@ export class RealtimeCallHandler {
               return;
             }
             initialized = true;
-            activeCallSid = frame.providerCallId;
+            if (providerName === "twilio" && frame.providerCallId !== callerMeta.callId) {
+              ws.close(1008, "Call identity does not match stream session");
+              return;
+            }
+            activeCallSid = providerName === "twilio" ? callerMeta.callId : frame.providerCallId;
             activeStreamSid = frame.streamId;
             admitting = true;
             // pause() stops socket reads, but ws can still emit frames already in its receiver.
             ws.pause();
             const admission = this.handleCall(
               frame.streamId,
-              frame.providerCallId,
+              activeCallSid,
               ws,
               callerMeta,
               adapter,
@@ -527,19 +537,13 @@ export class RealtimeCallHandler {
     await this.activeTelephonyBindingsByCallId.get(callId)?.close();
   }
 
-  issueStreamSession(request: StreamSessionRequest = {}): StreamSession {
-    const meta: StreamSessionRequest = {
-      providerName: request.providerName ?? "twilio",
-      callId: request.callId,
-      from: request.from,
-      to: request.to,
-      direction: request.direction,
-    };
+  issueStreamSession(request: StreamSessionRequest): StreamSession {
+    const { callId, from, to } = request;
     const token = randomUUID();
     const now = Date.now();
     const expiry = resolveExpiresAtMsFromDurationMs(STREAM_TOKEN_TTL_MS, { nowMs: now });
     if (expiry !== undefined) {
-      this.pendingStreamTokens.set(token, { expiry, ...meta });
+      this.pendingStreamTokens.set(token, { expiry, ...request });
       const host = this.publicOrigin || DEFAULT_HOST;
       const streamPathPattern = this.getStreamPathPattern();
       const timer = setTimeout(() => {
@@ -550,13 +554,12 @@ export class RealtimeCallHandler {
         if (this.closing) {
           return;
         }
-        const call = meta.callId ? ` for call ${meta.callId}` : "";
-        const endpoints = [meta.from ? `from ${meta.from}` : "", meta.to ? `to ${meta.to}` : ""]
+        const endpoints = [from ? `from ${from}` : "", to ? `to ${to}` : ""]
           .filter(Boolean)
           .join(" ");
         const participants = endpoints ? ` (${endpoints})` : "";
         console.warn(
-          `[voice-call] Realtime stream WebSocket never connected within ${STREAM_TOKEN_TTL_MS / 1000}s${call}${participants} — the provider could not reach wss://${host}${streamPathPattern}/<token>. Verify the stream path is exposed (tailscale serve/funnel --set-path).`,
+          `[voice-call] Realtime stream WebSocket never connected within ${STREAM_TOKEN_TTL_MS / 1000}s for call ${callId}${participants} — the provider could not reach wss://${host}${streamPathPattern}/<token>. Verify the stream path is exposed (tailscale serve/funnel --set-path).`,
         );
       }, STREAM_TOKEN_TTL_MS);
       timer.unref?.();
@@ -566,7 +569,7 @@ export class RealtimeCallHandler {
     return { token, streamUrl };
   }
 
-  private consumeStreamToken(token: string): Omit<PendingStreamToken, "expiry"> | null {
+  private consumeStreamToken(token: string): StreamSessionRequest | null {
     const entry = this.pendingStreamTokens.get(token);
     if (!entry) {
       return null;
@@ -583,7 +586,7 @@ export class RealtimeCallHandler {
     streamSid: string,
     callSid: string,
     ws: WebSocket,
-    callerMeta: Omit<PendingStreamToken, "expiry">,
+    callerMeta: StreamSessionRequest,
     adapter: StreamFrameAdapter,
   ): Promise<RealtimeTelephonyBinding | null> {
     const preparedCall = await this.prepareCallInManager(callSid, callerMeta);
@@ -1530,10 +1533,7 @@ export class RealtimeCallHandler {
     }
   }
 
-  private async prepareCallInManager(
-    callSid: string,
-    callerMeta: Omit<PendingStreamToken, "expiry"> = {},
-  ) {
+  private async prepareCallInManager(callSid: string, callerMeta: StreamSessionRequest) {
     const timestamp = Date.now();
     const baseFields = {
       providerCallId: callSid,
@@ -1544,7 +1544,7 @@ export class RealtimeCallHandler {
     };
 
     let callRecord: CallRecord | undefined;
-    if (callerMeta.callId) {
+    if (callerMeta.providerName === "telnyx") {
       const call = await this.manager.getCallForStream(callerMeta.callId);
       callRecord = call?.providerCallId === callSid ? call : undefined;
     } else {

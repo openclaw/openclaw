@@ -11,6 +11,8 @@ import { connectWs, startUpgradeWsServer } from "../websocket-test-support.js";
 import { RealtimeCallHandler, type ResolveRealtimeCallRegistration } from "./realtime-handler.js";
 import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
 
+const FIXTURE_CALL_SID = "CA-startup";
+
 export const updateCallMetadata: CallManager["updateCallMetadata"] = async (call, update) => {
   call.metadata = update(call.metadata);
 };
@@ -81,7 +83,7 @@ export function createCarrierLifecycleHarness(
   const realtimeProvider = makeRealtimeProvider(createBridgeForCall);
   const call: CallRecord = {
     callId: "call-startup",
-    providerCallId: "CA-startup",
+    providerCallId: FIXTURE_CALL_SID,
     provider: "twilio",
     direction: "inbound",
     state: "ringing",
@@ -132,8 +134,11 @@ export function createCarrierLifecycleHarness(
   return { call, endCall, handler, hangupCall, processEvent };
 }
 
-export async function connectCarrierStream(handler: RealtimeCallHandler) {
-  const { streamUrl } = handler.issueStreamSession();
+export async function connectCarrierStream(
+  handler: RealtimeCallHandler,
+  callSid = FIXTURE_CALL_SID,
+) {
+  const { streamUrl } = handler.issueStreamSession({ providerName: "twilio", callId: callSid });
   const server = await startUpgradeWsServer({
     urlPath: new URL(streamUrl).pathname,
     onUpgrade: (request, socket, head) => {

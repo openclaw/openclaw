@@ -143,8 +143,12 @@ function makeHandler(
   return handler;
 }
 
-async function startRealtimeServer(handler: RealtimeCallHandler, params?: URLSearchParams) {
-  const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook"), params);
+async function startRealtimeServer(
+  handler: RealtimeCallHandler,
+  callSid: string,
+  params = new URLSearchParams(),
+) {
+  const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook"), params, callSid);
   const streamUrl = expectDefined(payload.body.match(/wss:\/\/[^" ]+/)?.[0], "realtime stream URL");
   return startStreamSessionServer(handler, streamUrl);
 }
@@ -226,9 +230,12 @@ function makeCallHarness(
       createBridge,
     },
   });
-  async function start(streamId = "MZ-test", providerCallId = call.providerCallId) {
+  async function start(
+    streamId = "MZ-test",
+    providerCallId = expectDefined(call.providerCallId, "provider call ID"),
+  ) {
     const count = callbacks.length;
-    const ws = await connectWs((await startRealtimeServer(handler)).url);
+    const ws = await connectWs((await startRealtimeServer(handler, providerCallId)).url);
     sendCarrierStart(ws, streamId, providerCallId);
     await waitForRealtimeTest(() => expect(callbacks).toHaveLength(count + 1));
     return { ws, callbacks: expectDefined(callbacks[count], "provider callbacks") };
@@ -410,7 +417,11 @@ describe("RealtimeCallHandler path routing", () => {
   it("preserves a public path prefix ahead of serve.path", () => {
     const handler = makeHandler({ streamPath: "/custom/stream/realtime" });
     handler.setPublicUrl("https://public.example:8443/api/voice/webhook");
-    const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook", "127.0.0.1:3334"));
+    const payload = handler.buildTwiMLPayload(
+      makeRequest("/voice/webhook", "127.0.0.1:3334"),
+      new URLSearchParams(),
+      "CA-prefix",
+    );
 
     expect(handler.getStreamPathPattern()).toBe("/api/custom/stream/realtime");
     expect(payload.body).toMatch(
@@ -428,6 +439,7 @@ describe("RealtimeCallHandler path routing", () => {
     );
     const server = await startRealtimeServer(
       handler,
+      "CA-outbound",
       new URLSearchParams({
         Direction: "outbound-dial",
         From: "+15550001234",
@@ -1543,7 +1555,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-oversized");
 
     const ws = await connectWs(server.url);
     ws.send(

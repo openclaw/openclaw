@@ -64,7 +64,7 @@ async function openCall(params: {
 }) {
   const stream = params.handler.issueStreamSession({
     providerName: "twilio",
-    callId: params.call.callId,
+    callId: params.providerCallId,
     direction: params.call.direction,
   });
   const ws = new FakeCarrierSocket();

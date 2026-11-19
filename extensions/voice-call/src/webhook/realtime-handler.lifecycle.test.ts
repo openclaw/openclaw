@@ -109,7 +109,10 @@ describe("RealtimeCallHandler lifecycle", () => {
         settled = true;
       });
       expect(handler.close()).toBe(closing);
-      const session = handler.issueStreamSession();
+      const session = handler.issueStreamSession({
+        providerName: "twilio",
+        callId: "CA-shutdown",
+      });
       await closed;
       await vi.waitFor(() => expect(closeBridge).toHaveBeenCalledOnce());
       expect(endCall).not.toHaveBeenCalled();
@@ -157,6 +160,7 @@ describe("RealtimeCallHandler lifecycle", () => {
 
     try {
       handler.issueStreamSession({
+        providerName: "twilio",
         callId: "call-never-connected",
         from: "+15550001111",
         to: "+15550002222",

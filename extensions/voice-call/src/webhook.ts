@@ -706,6 +706,10 @@ export class VoiceCallWebhookServer {
 
         const realtimeParams = this.getRealtimeTwimlParams(ctx);
         if (realtimeParams) {
+          const callSid = realtimeParams.get("CallSid")?.trim();
+          if (!callSid) {
+            return buildTwilioResponse('<Reject reason="rejected" />');
+          }
           const direction = realtimeParams.get("Direction");
           const isInboundRealtimeRequest = !direction || direction === "inbound";
           if (
@@ -724,9 +728,9 @@ export class VoiceCallWebhookServer {
             return buildTwilioResponse('<Reject reason="rejected" />');
           }
           this.logger.info(
-            `Serving realtime TwiML for Twilio call ${realtimeParams.get("CallSid") ?? "unknown"} (direction=${direction ?? "unknown"})`,
+            `Serving realtime TwiML for Twilio call ${callSid} (direction=${direction ?? "unknown"})`,
           );
-          return this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams);
+          return this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams, callSid);
         }
 
         const parsed = this.provider.parseWebhookEvent(ctx, {
