@@ -165,7 +165,7 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
       reasoning_text: "alternate reasoning",
       reasoning_details: "not replayable here",
     };
-    applyCompletionsReplay([message], { messages: [] }, model, getCompat(model));
+    applyCompletionsReplay([message], model, getCompat(model));
     expect(message).toEqual({ role: "assistant", content: "Answer", reasoning_content: expected });
   });
 

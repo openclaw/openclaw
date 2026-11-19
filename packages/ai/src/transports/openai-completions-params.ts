@@ -303,7 +303,7 @@ export function buildOpenAICompletionsRequest(
       !managedCompat?.requiresStringContent &&
       !compat.cacheControlSystemOnly,
   });
-  applyCompletionsReplay(convertedMessages, context, model, compat);
+  applyCompletionsReplay(convertedMessages, model, compat);
   let messages: unknown[] = convertedMessages;
   if (managedCompat) {
     if (managedCompat.strictMessageKeys) {
