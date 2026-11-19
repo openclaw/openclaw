@@ -4,6 +4,7 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 export {
   chunkMarkdown,
   createMarkdownChunker,
+  estimateMarkdownChunkChars,
   remapChunkLines,
   resolveMarkdownChunkMaxChars,
   type MemoryChunk,

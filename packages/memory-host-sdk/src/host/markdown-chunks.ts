@@ -19,7 +19,7 @@ export type MemoryChunk = {
 };
 
 // Persisted with index metadata so boundary changes rebuild unchanged files.
-export const MEMORY_CHUNKING_VERSION = 6;
+export const MEMORY_CHUNKING_VERSION = 7;
 
 type CuratedMarkdownEntry = {
   startLine: number;
@@ -75,6 +75,11 @@ function takeTailByEstimatedChars(text: string, budget: number): string {
 /** One owner for the textual chunk ceiling shared by the chunker and heading merges. */
 export function resolveMarkdownChunkMaxChars(chunking: { tokens: number }): number {
   return Math.max(32, chunking.tokens * CHARS_PER_TOKEN_ESTIMATE);
+}
+
+/** Weighted character size of a candidate chunk, matching the chunker's budget. */
+export function estimateMarkdownChunkChars(text: string): number {
+  return text.split("\n").reduce((total, line) => total + estimateStringChars(line) + 1, 0);
 }
 
 export function createMarkdownChunker(

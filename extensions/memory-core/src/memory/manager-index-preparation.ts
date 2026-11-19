@@ -4,6 +4,7 @@ import {
   extractCuratedEntryRecallMetadata,
   enforceEmbeddingMaxInputTokens,
   hashText,
+  estimateMarkdownChunkChars,
   remapChunkLines,
   resolveMarkdownChunkMaxChars,
   stripMemoryAnnotationCarriers,
@@ -109,7 +110,7 @@ export function prepareMemoryIndexChunks({
       const nextIsHeadingOnly = chunk.text
         .split("\n")
         .every((line) => !line.trim() || /^ {0,3}#{1,6}(?:\s|$)/u.test(line));
-      if (!nextIsHeadingOnly || merged.length <= maxChunkChars) {
+      if (!nextIsHeadingOnly || estimateMarkdownChunkChars(merged) <= maxChunkChars) {
         chunk.text = merged;
         chunk.startLine = previous.startLine;
         chunk.hash = hashText(chunk.text);
