@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
+import { GatewayLockError } from "./gateway-lock-payload.js";
 import {
-  GatewayLockError,
   readLockPayload,
   resolveGatewayLockPaths,
   resolveGatewayOwnerStatus,

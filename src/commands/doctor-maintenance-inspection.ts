@@ -8,8 +8,7 @@ import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { LegacyGatewayLockError } from "../infra/gateway-lock-legacy.js";
-import { GatewayLockNamespaceError } from "../infra/gateway-lock-payload.js";
-import { GatewayLockError } from "../infra/gateway-lock.js";
+import { GatewayLockError, GatewayLockInspectionError } from "../infra/gateway-lock-payload.js";
 import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
@@ -105,6 +104,20 @@ export async function readDoctorGatewayOwnerLease(
     : undefined;
 }
 
+/**
+ * A coordinated owner holds the state lock, or the lock record could not be checked. Neither
+ * shows a writer the lock cannot exclude; a legacy, foreign-namespace, port-recovery or
+ * live-lease owner does.
+ */
+function isGatewayLockContention(error: GatewayLockError): boolean {
+  return (
+    !(error instanceof LegacyGatewayLockError) &&
+    (error instanceof GatewayLockInspectionError ||
+      error.cause instanceof GatewayLockInspectionError ||
+      error.cause instanceof GatewayStateOwnerContentionError)
+  );
+}
+
 /** Admission has not opened repair writers; deferral cannot authorize any later work. */
 export function classifyDoctorMaintenanceRefusal(error: unknown): DoctorMaintenanceRefusal {
   const causes = collectNestedErrorCandidates(error);
@@ -135,20 +148,14 @@ export function classifyDoctorMaintenanceRefusal(error: unknown): DoctorMaintena
   if (
     causes.some(
       (cause) =>
-        // An uncoordinated legacy owner, or an owner in another process namespace, may
-        // still write: the state lock cannot exclude either.
-        cause instanceof LegacyGatewayLockError ||
-        (cause instanceof GatewayLockError &&
-          collectNestedErrorCandidates(cause.cause).some(
-            (nested) => nested instanceof GatewayLockNamespaceError,
-          )) ||
+        (cause instanceof GatewayLockError && !isGatewayLockContention(cause)) ||
         (cause instanceof ConfigWritePostCommitError && cause.rollbackStatus !== "restored"),
     )
   ) {
     return { kind: "data-at-risk", reason: "gateway-state-unverified" };
   }
-  // Other lock failures (held, timed out or unreadable) refused admission before any
-  // repair writer opened, and the state lock still excludes a second Gateway.
+  // A held, timed-out or unreadable lock refused admission before any repair writer
+  // opened, and the state lock still excludes a second Gateway.
   return {
     kind: "deferred",
     reason: causes.some((cause) => cause instanceof GatewayStateOwnerContentionError)

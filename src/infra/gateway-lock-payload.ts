@@ -89,6 +89,20 @@ export function describeGatewayLockHolder(
   return `holder ${holder.pid ?? "unknown"} at ${location}, last renewed ${ageMs === undefined ? "at an unknown time" : `${Math.max(0, Math.floor(ageMs / 1000))} s ago`}. ${action}.`;
 }
 
+export class GatewayLockError extends Error {
+  constructor(
+    message: string,
+    public override readonly cause?: unknown,
+    public readonly databasePath?: string,
+  ) {
+    super(message);
+    this.name = "GatewayLockError";
+  }
+}
+
+/** The lock record could not be read or checked in time; it proves no other owner. */
+export class GatewayLockInspectionError extends GatewayLockError {}
+
 export class GatewayLockNamespaceError extends Error {
   constructor(holder: GatewayLockHolder, lockPath?: string) {
     super(

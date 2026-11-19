@@ -40,6 +40,33 @@ it("defers a Gateway lock that cannot be inspected instead of marking data at ri
   });
 });
 
+it("keeps a lock owner from another process namespace at risk", async () => {
+  const stateDir = dirs.make("doctor-lock-namespace-");
+  const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: `${stateDir}/openclaw.json` };
+  // A live-looking owner whose process namespace cannot be compared with ours.
+  const { ownerLockPath, configPath } = resolveGatewayLockPaths(env);
+  fs.mkdirSync(path.dirname(ownerLockPath), { recursive: true });
+  fs.writeFileSync(
+    ownerLockPath,
+    JSON.stringify({
+      pid: 2_147_483_647,
+      role: "gateway",
+      createdAt: new Date().toISOString(),
+      configPath,
+      startTime: 1,
+      processNamespace: null,
+    }),
+  );
+  const error = await readActiveGatewayLockIdentity({ env, requireInspection: true }).catch(
+    (cause: unknown) => cause,
+  );
+  expect(error).toMatchObject({ name: "GatewayLockError" });
+  expect(classifyDoctorMaintenanceRefusal(error)).toEqual({
+    kind: "data-at-risk",
+    reason: "gateway-state-unverified",
+  });
+});
+
 it("keeps an unrestored partial config publication at risk", () => {
   const error = new ConfigWritePostCommitError({
     configPath: path.join("/synthetic", "openclaw.json"),
