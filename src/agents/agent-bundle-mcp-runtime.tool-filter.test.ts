@@ -70,6 +70,15 @@ it("admits the same model tools on a node and the Gateway", async () => {
 
 it.each([
   {
+    policy: "exclusions of possible resource utility owners",
+    serverName: "docs",
+    tools: ["resources_list-2"],
+    toolFilter: { exclude: ["docs__resources_list-2"] },
+    expectedTools: [],
+    expectedServer: { toolCount: 0 },
+    expectedMaterialized: [["docs__resources_read", "resources_read"]],
+  },
+  {
     policy: "session denials including synthetic tools",
     serverName: "docs",
     tools: ["search_docs", "read_docs"],
@@ -96,7 +105,7 @@ it.each([
   const tools = row.tools.map((name) => ({ name, inputSchema: { type: "object" } }));
   const capabilities = { tools: {}, resources: {} };
   await writeListToolsMcpServer({ filePath, logPath, capabilities, tools }, receipts.endpoint);
-  const server = { command: process.execPath, args: [filePath] };
+  const server = { command: process.execPath, args: [filePath], toolFilter: row.toolFilter };
   const runtime = createSessionMcpRuntime({
     sessionId: `tool-filter-${row.serverName}`,
     workspaceDir: tempDir,
