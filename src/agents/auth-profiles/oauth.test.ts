@@ -9,6 +9,7 @@ import {
   createOAuthRefreshCredential,
 } from "./credential-fixtures.test-support.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
+import { bindExternalAuthRuntimeRefresh } from "./runtime-file-observation.js";
 import type { AuthProfileCredential, AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 vi.hoisted(() => vi.resetModules());
@@ -31,13 +32,22 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
 }));
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
+let refreshRuntimeAuthProfileStoreAfterLogin: typeof import("./oauth.js").refreshRuntimeAuthProfileStoreAfterLogin;
 let snapshots: typeof import("./runtime-snapshots.js");
 beforeAll(async () => {
-  ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+  ({ resolveApiKeyForProfile, refreshRuntimeAuthProfileStoreAfterLogin } =
+    await import("./oauth.js"));
   snapshots = await import("./runtime-snapshots.js");
 });
 beforeEach(() => {
   prepareSharedAuthStoreOwnershipForNative();
+  // No secrets activation in this unit: the republish hook is the boundary under test.
+  bindExternalAuthRuntimeRefresh(async () => {
+    snapshots.setRuntimeAuthProfileStoreSnapshot(
+      storeOf({ [defaultId]: { ...refToken("GITHUB_TOKEN"), token: "materialized-after-login" } }),
+    );
+    return true;
+  });
   resolveProviderOAuthCredentialWithPlugin.mockClear();
   snapshots.clearRuntimeAuthProfileStoreSnapshots();
   setActiveDegradedSecretOwners([]);
@@ -134,6 +144,18 @@ it("reads published token SecretRefs without an inline source secret", async () 
   await expect(resolveCredential(source)).resolves.toEqual(
     resolvedKey("materialized-secret", source.provider),
   );
+});
+
+it("re-reads the persisted store before reporting a post-login token SecretRef unmaterialized", async () => {
+  publishProfiles({});
+  await expect(refreshRuntimeAuthProfileStoreAfterLogin()).resolves.toBe(true);
+  await expect(
+    resolveCredential({ ...refToken("GITHUB_TOKEN"), createdAt: Date.now() }),
+  ).resolves.toEqual({
+    apiKey: "materialized-after-login",
+    provider: "github-copilot",
+    email: undefined,
+  });
 });
 
 it("hard-fails when oauth mode is combined with token SecretRef input", async () => {

@@ -12,8 +12,6 @@ import {
   resolveSessionAgentId,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/config.js";
@@ -34,6 +32,7 @@ import {
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
+import { adoptAuthChildCredentialStore } from "./auth-refresh/post-login-auth-refresh.js";
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
@@ -1026,10 +1025,7 @@ async function runTuiUnlocked(
             if (result.exitCode === 0 && !result.signal) {
               tuiAuthLog.info(`auth child finished: ${outcome}`);
               if (!codexBin) {
-                await reloadSharedAuthStoreOwnership();
-                // The auth child persisted outside this process. Invalidate the
-                // published generation so retained local runtimes rebuild from it.
-                clearRuntimeAuthProfileStoreSnapshots();
+                await adoptAuthChildCredentialStore();
               }
             } else {
               tuiAuthLog.error(`auth child failed: ${outcome}`);

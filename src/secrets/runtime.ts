@@ -6,6 +6,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../agents/auth-profiles.js";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { bindExternalAuthRuntimeRefresh } from "../agents/auth-profiles/runtime-file-observation.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
@@ -669,6 +670,7 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
 }
 
 registerRuntimeAuthProfileExternalRefresh(async (paths) => {
+  bindExternalAuthRuntimeRefresh(refreshActiveProviderAuthRuntimeSnapshot);
   if (!paths.some(hasActiveSecretsRuntimeAuthStorePath)) {
     return false;
   }

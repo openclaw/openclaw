@@ -16,6 +16,7 @@ import {
   findActiveDegradedSecretOwner,
   SecretSurfaceUnavailableError,
 } from "../../secrets/runtime-degraded-state.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
@@ -25,6 +26,7 @@ import {
   resolveTokenExpiryState,
 } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
+import { refreshAuthProfileFileState } from "./file-state.js";
 import { createOAuthManager } from "./oauth-manager.js";
 import { refreshOAuthCredential } from "./oauth-provider-operations.js";
 import {
@@ -38,6 +40,7 @@ import { withPersonalAuthProfileStore, type PersonalAuthProfileStore } from "./p
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
+import { runBoundExternalAuthRefresh } from "./runtime-file-observation.js";
 import {
   getRuntimeAuthProfileStoreSnapshotCore,
   updateRuntimeAuthProfileStoreSnapshot,
@@ -472,4 +475,25 @@ async function resolveApiKeyForProfileOwned(
     }
     throw failure;
   }
+}
+
+/**
+ * Retry the published-snapshot decision at its owning boundary when a profile
+ * persisted after this process started is not in the runtime generation.
+ *
+ * An in-process login writes the credential behind the runtime's back, and a
+ * same-process write need not produce a file event on every platform, so the
+ * generation can stay pre-login forever. Re-observing the persisted store once
+ * and republishing closes that gap for TUI `/auth` and any later login path;
+ * a Snapshot built before the credential simply regenerates.
+ *
+ * Returns true only when the observer republished from its own refresh, so a
+ * Store with no active runtime snapshot (cold CLI paths) is not rebuilt here.
+ */
+export async function refreshRuntimeAuthProfileStoreAfterLogin(): Promise<boolean> {
+  if (isArtifactPreservingStateRead()) {
+    return false;
+  }
+  await refreshAuthProfileFileState();
+  return runBoundExternalAuthRefresh();
 }

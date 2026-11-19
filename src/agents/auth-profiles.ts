@@ -14,6 +14,7 @@ export {
 } from "./auth-profiles/external-cli-discovery.js";
 export {
   refreshOAuthCredentialForRuntime,
+  refreshRuntimeAuthProfileStoreAfterLogin,
   resolveApiKeyForProfile,
 } from "./auth-profiles/oauth.js";
 export {

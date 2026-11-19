@@ -13,6 +13,19 @@ import type { runtimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
 import type { OwnedRuntimeSnapshot } from "./runtime-snapshot-selection.js";
 import type { AuthProfileStore } from "./types.js";
 
+/** Secrets activation binds its republish hook here; the post-login read calls it. */
+let boundExternalAuthRefresh: (() => Promise<boolean>) | undefined;
+
+export function bindExternalAuthRuntimeRefresh(
+  refresh: (() => Promise<boolean>) | undefined,
+): void {
+  boundExternalAuthRefresh = refresh;
+}
+
+export async function runBoundExternalAuthRefresh(): Promise<boolean> {
+  return (await boundExternalAuthRefresh?.()) ?? false;
+}
+
 /** Observe persisted sources while snapshot publication stays with its existing owner. */
 export function createRuntimeAuthProfileFileObservation({
   snapshots,
