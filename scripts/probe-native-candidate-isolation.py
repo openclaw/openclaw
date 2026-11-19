@@ -12,19 +12,30 @@ import threading
 
 
 def child(uid, profile, root, allowed, denied, parent):
-    # Darwin requires a primary group entry; retain only the isolated, nontrusted GID.
+    # Retain only the isolated, nontrusted GID; no runner groups cross the boundary.
     os.setgroups([uid])
     os.setgid(uid)
     os.setuid(uid)
     assert os.getuid() == os.geteuid() == uid
-    assert os.getgid() == os.getegid() == uid and os.getgroups() == [uid]
+    assert os.getgid() == os.getegid() == uid
     os.chdir(root + "/candidate")
     # Establish the canary after sudo filtering, immediately before the allowlisted exec.
     os.environ["ISOLATION_SECRET_CANARY"] = "must-not-cross"
     code = r'''
-import json, os, pathlib, socket, subprocess, sys
+import ctypes, json, os, pathlib, socket, subprocess, sys
 root, allowed, denied, parent = sys.argv[1:]
-result = {"uid": os.getuid(), "groups": os.getgroups()}
+# Python uses Darwin's account-directory extension, not the process group vector.
+# The unsuffixed libc symbol reads the kernel credentials, including setgroups().
+getgroups = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True).getgroups
+getgroups.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_uint32)]
+getgroups.restype = ctypes.c_int
+count = getgroups(0, None)
+if count < 0:
+    raise OSError(ctypes.get_errno(), "kernel getgroups count failed")
+groups = (ctypes.c_uint32 * count)()
+if getgroups(count, groups) != count:
+    raise OSError(ctypes.get_errno(), "kernel getgroups failed")
+result = {"uid": os.getuid(), "groups": list(groups)}
 for name in ("qualification", "actions"):
     path = pathlib.Path(root) / name / "canary"
     for action in ("read", "write"):
