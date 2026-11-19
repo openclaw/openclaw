@@ -181,6 +181,166 @@ describe("2026.11.6 observed OpenCode Go availability failure", () => {
   });
 });
 
+describe("2026.11.6 desktop APT setup exception", () => {
+  const target = "06afb10d3272cc9deaf38ca6a3b7b839d5935638";
+  const leaf = {
+    ...failedJob,
+    id: 135517996929,
+    run_id: 44494425456,
+    run_attempt: 2,
+    name: "checks-ui-e2e-real-gateway (1/2)",
+    steps: [{ name: "Test Control UI suites with a real Gateway", conclusion: "failure" }],
+  };
+  const aggregate = {
+    ...failedJob,
+    id: 2,
+    name: "openclaw/ci-gate",
+    steps: [{ name: "Verify selected CI lanes", conclusion: "failure" }],
+  };
+  const selected = { ...failedJob, key: "normalCi", jobs: [leaf, aggregate] };
+  const log = [
+    ...[
+      "source-head",
+      "source-identity",
+      "source-files",
+      "source-clean",
+      "sshd-package",
+      "apt-update",
+    ].map((phase) => "[desktop-resize-proof] " + phase),
+    "2026-11-19T11:12:04.4031385Z [desktop-resize-proof] apt-install",
+    "Test Files  3 passed (3)",
+    "Tests  4 passed (4)",
+    "Test Files  3 passed (3)",
+    "Tests  4 passed (4)",
+    '[vitest:run] {"reason":"passed","files":3,"unhandledErrors":0,"elapsedMs":196476}',
+    "2026-11-19T11:17:04.4375291Z Desktop proof incomplete at apt-install",
+    "[desktop-resize-proof] FAILED (exit 1)",
+    "Test Files  22 passed (22)",
+    "Tests  41 passed (41)",
+    "Test Files  22 passed (22)",
+    "Tests  41 passed (41)",
+    '[vitest:run] {"reason":"passed","files":22,"unhandledErrors":0,"elapsedMs":520768}',
+    "##[error]Process completed with exit code 1.",
+  ].join("\n");
+  const policy = () =>
+    evaluateReleaseChildPolicy({ child: selected, targetVersion: "2026.11.6", targetSha: target });
+  const receipt = {
+    complete: false,
+    phase: "apt-install",
+    failureCode: "ETIMEDOUT",
+    source: { head: target },
+    runId: String(leaf.run_id),
+    runAttempt: String(leaf.run_attempt),
+    cleanup: { joined: true },
+    carriers: [],
+    commands: [
+      {
+        label: "apt-install",
+        exitCode: null,
+        timeoutObservation: { elapsedMs: 300015, exit: null },
+      },
+    ],
+  };
+  const validate = (leafLog: string, evidence = selected.jobs, desktopReceipt: unknown = receipt) =>
+    validateReleaseWaiverAggregates({
+      policy: policy(),
+      jobs: evidence,
+      getDesktopReceipt: () => desktopReceipt,
+      getJobLog: (id) =>
+        id === leaf.id
+          ? leafLog
+          : "##[error]checks-ui-e2e-real-gateway finished with failure (selected=true)",
+    });
+
+  it("rejects non-timeout aborts, missing or misbound receipts despite matching 300-second logs", async () => {
+    for (const invalid of [
+      null,
+      {},
+      { ...receipt, failureCode: "ABORT_ERR" },
+      {
+        ...receipt,
+        commands: [{ label: "apt-install", exitCode: null, timeoutObservation: null }],
+      },
+      { ...receipt, runAttempt: "1" },
+      { ...receipt, source: { head: "a".repeat(40) } },
+      { ...receipt, cleanup: { joined: false } },
+    ]) {
+      await expect(validate(log, selected.jobs, invalid)).rejects.toThrow("timeout receipt");
+    }
+  });
+
+  it("accepts only the attempted APT timeout with both sibling suites complete, retaining missing desktop proof", async () => {
+    expect(terminalPolicyPass(selected, "2026.11.6", target)).toBe(true);
+    await expect(validate(log)).resolves.toBeUndefined();
+    expect(selected.conclusion).toBe("failure");
+    expect(leaf.conclusion).toBe("failure");
+    for (const execution of [
+      { ...selected, runId: "44494425456", runAttempt: 2 },
+      { ...selected, runId: "future-run", runAttempt: 3 },
+    ]) {
+      expect(terminalPolicyPass(execution, "2026.11.6", target)).toBe(true);
+    }
+    expect(terminalPolicyPass(selected, "2026.11.7", target)).toBe(false);
+    expect(terminalPolicyPass(selected, "2026.11.6", "a".repeat(40))).toBe(false);
+    expect(
+      terminalPolicyPass({ ...selected, key: "releaseChecksIndependent" }, "2026.11.6", target),
+    ).toBe(false);
+    for (const conclusion of ["cancelled", "timed_out", null]) {
+      expect(
+        terminalPolicyPass(
+          { ...selected, jobs: [{ ...leaf, conclusion }, aggregate] },
+          "2026.11.6",
+          target,
+        ),
+      ).toBe(false);
+    }
+    expect(terminalPolicyPass({ ...selected, jobs: [aggregate] }, "2026.11.6", target)).toBe(false);
+    expect(
+      terminalPolicyPass(
+        { ...selected, jobs: [...selected.jobs, { ...leaf, name: "unrelated failure" }] },
+        "2026.11.6",
+        target,
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects other phases, early errors, failed or incomplete suites, malformed logs and aggregate causes", async () => {
+    // These controls must reach the installed waiver, rather than pass with no grant.
+    expect(policy().waivers).toHaveLength(1);
+    for (const changed of [
+      "",
+      log.replaceAll("apt-install", "sshd-config"),
+      log.replace("11:17:04.437", "11:12:05.437"),
+      log.replace("Tests  41 passed (41)", "Tests  1 failed | 40 passed (41)"),
+      log.replaceAll("Test Files  22 passed (22)", ""),
+      log.replace('"files":22', '"files":21'),
+      log.replace('"reason":"passed"', '"reason":"failed"'),
+      log.replace('"elapsedMs":520768}', '"elapsedMs":520768'),
+      log.replace('"unhandledErrors":0', '"unhandledErrors":1'),
+      log.replace("##[error]Process completed with exit code 1.", ""),
+      log + "\n[desktop-resize-proof] test-node gateway-start",
+      log + "\n##[error]unrelated test failure",
+    ]) {
+      await expect(validate(changed)).rejects.toThrow("desktop APT");
+    }
+    await expect(
+      validate(log, [{ ...leaf, steps: [{ name: "Checkout", conclusion: "failure" }] }, aggregate]),
+    ).rejects.toThrow("non-policy failure");
+    await expect(validate(log, [leaf])).rejects.toThrow("missing or incomplete");
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy: policy(),
+        jobs: selected.jobs,
+        getDesktopReceipt: () => receipt,
+        getJobLog: (id) =>
+          id === leaf.id
+            ? log
+            : "##[error]checks-ui-e2e-real-gateway finished with failure (selected=true)\n##[error]artifact integrity failed",
+      }),
+    ).rejects.toThrow("unwaived failure");
+  });
+});
+
 const stableJobs = stableNames.map((name, id) => ({ ...failedJob, id, name }));
 const gate = {
   id: 10,

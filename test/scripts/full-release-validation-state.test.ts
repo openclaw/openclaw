@@ -1510,6 +1510,39 @@ describe("release decision policy", () => {
     );
   });
 
+  it("binds the desktop timeout receipt to the accepted job attempt, not a later retry", async () => {
+    const targetSha = "06afb10d3272cc9deaf38ca6a3b7b839d5935638";
+    const planned = child("normalCi");
+    const leaf = {
+      id: 50,
+      name: "checks-ui-e2e-real-gateway (1/2)",
+      status: "completed",
+      conclusion: "failure",
+      steps: [{ name: "Test Control UI suites with a real Gateway", conclusion: "failure" }],
+    };
+    const observedBindings: unknown[] = [];
+    const observed = await readChild(planned, undefined, undefined, {
+      targetSha,
+      targetVersion: "2026.11.6",
+      readRun: async () => githubRun(planned, { conclusion: "failure", run_attempt: 2 }),
+      readAttemptJobs: async (_id: string, attempt: number) =>
+        attempt === 1
+          ? [leaf]
+          : [{ id: 51, name: "receipt", status: "completed", conclusion: "success" }],
+      readJobLog: () => "",
+      readDesktopReceipt: (job: unknown) => {
+        observedBindings.push(job);
+        return null;
+      },
+    });
+    expect(observedBindings).toEqual([
+      expect.objectContaining({ id: 50, run_id: 101, run_attempt: 1, head_sha: targetSha }),
+    ]);
+    expect(observed.errors).toContainEqual(
+      expect.objectContaining({ kind: "aggregate_validation" }),
+    );
+  });
+
   it("accepts a targeted runtime child rerun with retained sibling evidence", async () => {
     const runtime = "bun";
     const sibling = "node";

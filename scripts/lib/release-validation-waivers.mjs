@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
+import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { compareAscii } from "./canonical-json.mjs";
 import { parseNodeFailureReport } from "./ci-node-test-evidence.mjs";
 
@@ -84,6 +84,22 @@ const EXTENDED_1033_MOBILE_JOBS = new Map([
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
+  {
+    targetVersion: "2026.11.6",
+    targetSha: "06afb10d3272cc9deaf38ca6a3b7b839d5935638",
+    childRole: "normalCi",
+    jobName: "checks-ui-e2e-real-gateway (1/2)",
+    desktopAptSetupFailure: true,
+    reason:
+      "Dallin Romney authorized only the desktop APT setup timeout on 2026-11-19 at 11:31 UTC. " +
+      "Original job 135458707238 and retry 135517996929 in child 44494425456/2 failed; the retry " +
+      "stalled at apt-install for about 300 seconds. Separate suites passed 4 and 41 tests. " +
+      "Desktop carrier proof never started: its missing coverage is explicitly accepted, not " +
+      "a passing test or a runtime fix. Accept only this setup failure on this candidate across " +
+      "runs and attempts, with the observed desktop phases and both complete passing suites. " +
+      "Preserve raw failures. Other setup/test failures, missing/cancelled evidence, other jobs, " +
+      "candidates, integrity, install/update and publication gates remain blocking.",
+  },
   {
     targetVersion: "2026.11.6",
     targetSha: "06afb10d3272cc9deaf38ca6a3b7b839d5935638",
@@ -591,6 +607,16 @@ function aggregateCauses(waiver) {
       ];
     }
   }
+  if (waiver.desktopAptSetupFailure) {
+    return [
+      {
+        jobName: "openclaw/ci-gate",
+        stepName: "Verify selected CI lanes",
+        causes: ["checks-ui-e2e-real-gateway finished with failure (selected=true)"],
+        exactCauses: true,
+      },
+    ];
+  }
   if (waiver.testFailures) {
     return [
       {
@@ -807,9 +833,14 @@ function exactAggregateCauses(log) {
   });
 }
 
-export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog }) {
+export async function validateReleaseWaiverAggregates({
+  policy,
+  jobs,
+  getJobLog,
+  getDesktopReceipt,
+}) {
   for (const waiver of policy.waivers) {
-    if (!waiver.testFailures) {
+    if (!waiver.testFailures && !waiver.desktopAptSetupFailure) {
       continue;
     }
     const matches = jobs.filter((job) => job.name === waiver.jobName);
@@ -823,13 +854,102 @@ export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog 
       job.conclusion !== "failure" ||
       failedSteps?.length !== 1 ||
       failedSteps[0].conclusion !== "failure" ||
-      failedSteps[0].name !== waiver.testFailures.stepName
+      failedSteps[0].name !==
+        (waiver.testFailures?.stepName ?? "Test Control UI suites with a real Gateway")
     ) {
       throw new ReleaseAggregateValidationError(
         `Release test job has a non-policy failure: ${waiver.jobName}`,
       );
     }
-    const signatures = parseNodeFailureReport(String(await getJobLog(job.id)), true);
+    const log = String(await getJobLog(job.id));
+    if (waiver.desktopAptSetupFailure) {
+      // Deliberately specific to this frozen candidate's two-suite desktop wrapper.
+      // Missing desktop coverage is accepted only at APT setup, never after a carrier starts.
+      const receipt = await getDesktopReceipt?.(job);
+      const apt = receipt?.commands?.at(-1);
+      if (
+        receipt?.complete !== false ||
+        receipt.phase !== "apt-install" ||
+        receipt.failureCode !== "ETIMEDOUT" ||
+        receipt.source?.head !== waiver.targetSha ||
+        receipt.runId !== String(job.run_id) ||
+        receipt.runAttempt !== String(job.run_attempt) ||
+        receipt.cleanup?.joined !== true ||
+        receipt.carriers?.length !== 0 ||
+        apt?.label !== "apt-install" ||
+        apt.exitCode !== null ||
+        !(apt.timeoutObservation?.elapsedMs >= 300_000) ||
+        apt.timeoutObservation.exit !== null
+      ) {
+        throw new ReleaseAggregateValidationError(
+          "Release desktop APT timeout receipt is missing or differs from accepted evidence",
+        );
+      }
+      const setupLog = stripVTControlCharacters(log);
+      const rows = setupLog.split(/\r?\n/u).map((line) => ({
+        time: Date.parse(line.slice(0, line.indexOf(" "))),
+        text: line.replace(/^\d{4}-\d{2}-\d{2}T\S+ /u, "").trim(),
+      }));
+      const desktop = rows.filter(({ text }) =>
+        /^(?:\[desktop-resize-proof\]|Desktop proof incomplete)/u.test(text),
+      );
+      const elapsed = desktop.at(-2)?.time - desktop.at(-3)?.time;
+      const summaries = rows
+        .filter(({ text }) => /^(?:Test Files|Tests)\s/u.test(text))
+        .map(({ text }) => text.replace(/\s+/gu, " "));
+      const runs = rows
+        .filter(({ text }) => text.startsWith("[vitest:run] "))
+        .map(({ text }) => {
+          try {
+            const suite = JSON.parse(text.slice("[vitest:run] ".length));
+            return [suite.reason, suite.files, suite.unhandledErrors];
+          } catch {
+            return null;
+          }
+        });
+      if (
+        !isDeepStrictEqual(
+          desktop.map(({ text }) => text),
+          [
+            ...[
+              "source-head",
+              "source-identity",
+              "source-files",
+              "source-clean",
+              "sshd-package",
+              "apt-update",
+              "apt-install",
+            ].map((phase) => "[desktop-resize-proof] " + phase),
+            "Desktop proof incomplete at apt-install",
+            "[desktop-resize-proof] FAILED (exit 1)",
+          ],
+        ) ||
+        !(elapsed >= 300_000 && elapsed <= 310_000) ||
+        !isDeepStrictEqual(summaries, [
+          "Test Files 3 passed (3)",
+          "Tests 4 passed (4)",
+          "Test Files 3 passed (3)",
+          "Tests 4 passed (4)",
+          "Test Files 22 passed (22)",
+          "Tests 41 passed (41)",
+          "Test Files 22 passed (22)",
+          "Tests 41 passed (41)",
+        ]) ||
+        !isDeepStrictEqual(runs, [
+          ["passed", 3, 0],
+          ["passed", 22, 0],
+        ]) ||
+        rows.filter(({ text }) => text === "##[error]Process completed with exit code 1.")
+          .length !== 1 ||
+        exactAggregateCauses(setupLog).length !== 0
+      ) {
+        throw new ReleaseAggregateValidationError(
+          "Release desktop APT setup differs from accepted evidence: " + waiver.jobName,
+        );
+      }
+      continue;
+    }
+    const signatures = parseNodeFailureReport(log, true);
     if (!isDeepStrictEqual(signatures, waiver.testFailures.signatures)) {
       throw new ReleaseAggregateValidationError(
         `Release test job has an unwaived or incomplete failure: ${waiver.jobName}`,

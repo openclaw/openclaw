@@ -111,6 +111,15 @@ ID is evidence of the original failure, not a reason to restrict an ordinary
 waiver to that attempt. This default does not broaden existing grants or waive
 other jobs, versions, required execution, or evidence-integrity checks.
 
+The candidate-bound 2026.11.6 desktop APT exception accepts only the logged
+300-second setup timeout before any desktop carrier starts. Its dedicated check
+requires a digest-verified desktop receipt bound to the candidate and accepted
+job attempt, with `ETIMEDOUT`, an APT timeout observation, and joined cleanup.
+It also requires the observed desktop phases and both complete passing sibling
+suites (4 and 41 tests), the sole failed test step, and exact CI aggregate causes.
+Desktop coverage remains missing and explicitly accepted, never reported as
+passing. Missing/cancelled jobs, other setup failures, and test failures still block.
+
 A `testFailures` entry additionally requires the sole failed step and the complete
 ordered set of exact test/error signatures from the native test-evidence parser.
 The verifier reads the original leaf log and requires completed invocation

@@ -48,6 +48,10 @@ import {
   validateReleaseExecutionPlanArtifact,
   verifyReleaseStateArtifacts,
 } from "./full-release-validation-policy.mjs";
+import {
+  inspectActionsArtifactZipWithPolicy,
+  sha256Digest,
+} from "./lib/actions-artifact-archive.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { validateReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
 import {
@@ -129,7 +133,7 @@ async function runGh(args, options = {}) {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const result = await promisify(childProcess.execFile)("gh", args, {
-        encoding: "utf8",
+        encoding: options.encoding === null ? null : "utf8",
         env: process.env,
         killSignal: "SIGKILL",
         maxBuffer: 64 * 1024 * 1024,
@@ -177,6 +181,48 @@ async function githubJson(path, signal) {
   return JSON.parse(
     await runGh(["api", `repos/${process.env.GITHUB_REPOSITORY}/${path}`], { signal }),
   );
+}
+
+async function readDesktopReceipt(job, signal) {
+  const name = `desktop-resize-proof-${job.run_id}-${job.run_attempt}`;
+  const inventory = await githubJson(
+    `actions/runs/${job.run_id}/artifacts?name=${name}&per_page=100`,
+    signal,
+  );
+  const artifact = inventory.artifacts?.[0];
+  if (
+    inventory.total_count !== 1 ||
+    inventory.artifacts?.length !== 1 ||
+    artifact.name !== name ||
+    artifact.expired !== false ||
+    artifact.workflow_run?.id !== job.run_id ||
+    artifact.workflow_run?.head_sha !== job.head_sha ||
+    !Number.isSafeInteger(artifact.id) ||
+    artifact.id < 1 ||
+    !Number.isSafeInteger(artifact.size_in_bytes) ||
+    artifact.size_in_bytes < 1 ||
+    artifact.size_in_bytes > 256 * 1024
+  ) {
+    throw new ReleaseAggregateValidationError(
+      "Desktop timeout receipt artifact is missing or misbound",
+    );
+  }
+  const archive = await runGh(
+    ["api", `repos/${process.env.GITHUB_REPOSITORY}/actions/artifacts/${artifact.id}/zip`],
+    { signal, encoding: null },
+  );
+  if (archive.length !== artifact.size_in_bytes || sha256Digest(archive) !== artifact.digest) {
+    throw new ReleaseAggregateValidationError(
+      "Desktop timeout receipt archive differs from metadata",
+    );
+  }
+  const files = inspectActionsArtifactZipWithPolicy(archive, {
+    expectedEntries: ["receipt.json"],
+    maxArchiveBytes: 256 * 1024,
+    maxExpandedBytes: 256 * 1024,
+    maxEntryBytes: () => 256 * 1024,
+  });
+  return JSON.parse(files.get("receipt.json").toString("utf8"));
 }
 
 async function githubAttemptJobs(runId, runAttempt, signal) {
@@ -339,15 +385,24 @@ export async function readChild(child, previous, signal, options = {}) {
         targetSha: options.targetSha,
       });
       const jobs = evidence.jobs.map((job) =>
-        attempts
-          .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
-          .jobs.find((raw) => raw.name === job.name),
+        Object.assign(
+          attempts
+            .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
+            .jobs.find((raw) => raw.name === job.name),
+          {
+            run_id: Number(child.runId),
+            run_attempt: job.acceptedRunAttempt,
+            head_sha: options.targetSha,
+          },
+        ),
       );
       try {
         await validateReleaseWaiverAggregates({
           policy,
           jobs,
           getJobLog: options.readJobLog ?? ((id) => readJobLog(id, signal)),
+          getDesktopReceipt:
+            options.readDesktopReceipt ?? ((job) => readDesktopReceipt(job, signal)),
         });
       } catch (error) {
         if (!(error instanceof ReleaseAggregateValidationError)) {
