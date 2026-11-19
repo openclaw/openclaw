@@ -40,7 +40,7 @@ it.each(["sibling", "same"] as const)(
       );
       if (kind === "same") {
         await expect(reading).rejects.toThrow("Session entry changed during read");
-        expect(read).toHaveBeenCalledTimes(2);
+        expect(read).toHaveBeenCalledTimes(3);
         expect(consume).not.toHaveBeenCalled();
       } else {
         await expect(reading).resolves.toBe("unchanged transcript");

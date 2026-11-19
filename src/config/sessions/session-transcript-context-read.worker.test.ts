@@ -5,7 +5,6 @@ import { expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
-  nextEventLoopTurn,
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -44,7 +43,9 @@ function createTranscriptTarget(sessionId: string, storePath: string) {
   };
 }
 
-it("does not reserve the writer while prepared model context waits", async () => {
+it("lets writers progress and consumes fresh model context after repeated contention", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ label: "model-context-writer-progress" }, async (state) => {
     const target = createTranscriptTarget("context-progress", state.statePath("transcript.sqlite"));
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
@@ -54,19 +55,20 @@ it("does not reserve the writer while prepared model context waits", async () =>
     if (!("kind" in databaseClaim) || databaseClaim.kind !== "worker" || !databaseClaim.reader) {
       throw new Error("Expected admitted durable session reader");
     }
-    const entered = createDeferred();
-    const release = createDeferred();
+    const gates = [0, 1].map(() => ({ entered: createDeferred(), release: createDeferred() }));
+    let reads = 0;
     const read = contextWorker.readSessionTranscriptModelContextInWorker;
     const delayed = vi
       .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
       .mockImplementation(async (...args) => {
         const value = await read(...args);
-        entered.resolve();
-        await release.promise;
+        const gate = gates[reads++];
+        gate?.entered.resolve();
+        await gate?.release.promise;
         return value;
       });
     let reading: Promise<unknown> | undefined;
-    let writer: Promise<void> | undefined;
+    let writer: Promise<unknown> | undefined;
     try {
       await withOwnedSessionTranscriptWrites(
         {
@@ -75,7 +77,7 @@ it("does not reserve the writer while prepared model context waits", async () =>
           withTranscriptWrite: async (write) => write(),
         },
         async () => {
-          const consume = vi.fn((context) => context.events);
+          const consume = vi.fn((context) => JSON.stringify(context.events));
           reading = readSessionTranscriptModelContextAsync(
             target,
             consume,
@@ -85,33 +87,29 @@ it("does not reserve the writer while prepared model context waits", async () =>
             { maxBytes: 4096, maxEvents: 10 },
             true,
           );
-          await awaitGateBeforeSettlement(
-            entered.promise,
-            reading,
-            "Model context bypassed worker",
-          );
-          writer = runOpenClawAgentWriteAdmission(
-            { agentId: target.agentId, path: target.storePath },
-            () => {},
-          );
-          expect(
-            await Promise.race([writer.then(() => true), nextEventLoopTurn().then(() => false)]),
-          ).toBe(true);
-          expect(consume).not.toHaveBeenCalled();
-          release.resolve();
-          await expect(reading).resolves.toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                type: "message",
-                message: expect.objectContaining({ content: "committed" }),
-              }),
-            ]),
-          );
+          for (const [index, gate] of gates.entries()) {
+            await withinTest(
+              awaitGateBeforeSettlement(gate.entered.promise, reading, "Read bypassed worker"),
+              signal,
+            );
+            writer = manager.appendMessageAsync({
+              role: "user",
+              content: `later-${index}`,
+              timestamp: index + 2,
+            });
+            await withinTest(
+              awaitGateBeforeSettlement(writer, reading, "Read settled before writer finished"),
+              signal,
+            );
+            expect(consume).not.toHaveBeenCalled();
+            gate.release.resolve();
+          }
+          await expect(withinTest(reading, signal)).resolves.toContain("later-1");
           expect(consume).toHaveBeenCalledTimes(1);
         },
       );
     } finally {
-      release.resolve();
+      gates.forEach((gate) => gate.release.resolve());
       await Promise.allSettled([reading, writer]);
       delayed.mockRestore();
       await databaseClaim.release();
