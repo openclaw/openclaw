@@ -89,7 +89,7 @@ const controlIds = (components: ReturnType<typeof sendMarked>) =>
 async function tap(params: {
   components: ReturnType<typeof sendMarked>;
   customId: string;
-  type: ComponentType;
+  type: number;
   values?: string[];
   allowFrom?: string[];
 }) {
@@ -107,6 +107,7 @@ async function tap(params: {
     ) ??
     registered.find((entry) => entry.type === params.type && key(entry, entry.customId) === "*");
   const update = vi.fn().mockResolvedValue(undefined);
+  const acknowledge = vi.fn().mockResolvedValue(undefined);
   const fixture = createComponentButtonInteraction({
     rawData: {
       channel_id: "dm-channel",
@@ -116,10 +117,10 @@ async function tap(params: {
     } as unknown as BaseComponentInteraction["rawData"],
     values: params.values ?? [],
     update,
-    acknowledge: vi.fn().mockResolvedValue(undefined),
+    acknowledge,
   } as unknown as Partial<BaseComponentInteraction>);
   await control?.run(fixture.interaction, parseCustomId(params.customId).data as ComponentData);
-  return { ...fixture, update };
+  return { ...fixture, update, acknowledge };
 }
 
 it.each([
@@ -210,13 +211,13 @@ it("never sends an empty message when the controls were all it had", async () =>
   const components = sendMarked([{ type: "buttons", buttons: [{ label: "Pick", value: "pick" }] }]);
   const [customId] = controlIds(components);
 
-  const { update, interaction } = await tap({
+  const { update, acknowledge } = await tap({
     components,
     customId: customId!,
     type: ComponentType.Button,
   });
   expect(update).not.toHaveBeenCalled();
-  expect(interaction.acknowledge).toHaveBeenCalledOnce();
+  expect(acknowledge).toHaveBeenCalledOnce();
   expect(lastBody).toBe("callback_data: pick");
 });
 
