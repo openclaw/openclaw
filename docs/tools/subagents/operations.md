@@ -99,6 +99,10 @@ their requester has already finished its turn. A shutdown interruption does not 
 an intentional cancellation by the requester. Root requesters with interrupted work
 receive the standard resume input; children are not independently resumed.
 
+Startup also repairs pending `Gateway stopped` completions written by older
+Gateways as quiet kills. These interrupted runs retain an error notice for the
+requester; an explicit Stop or an already delivered outcome is not reopened.
+
 Completion turns retain processing receipts so a transient failure before the
 requester consumes the outcome can retry. An intentional Stop or a completed
 receipt still prevents replay.
