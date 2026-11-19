@@ -83,6 +83,22 @@ suite.define(() => {
       };
       const menu = await menuFor(group);
       const archiveItem = menu.getByRole("menuitem", { name: "Archive all", exact: true });
+      const deleteItem = menu.getByRole("menuitem", { name: "Delete group", exact: true });
+      const separator = await menu.getByRole("separator").elementHandle();
+      expect(
+        await archiveItem.evaluate(
+          (item, divider) =>
+            Boolean(item.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_PRECEDING),
+          separator,
+        ),
+      ).toBe(true);
+      await separator.dispose();
+      const color = (item: typeof archiveItem) =>
+        item.evaluate((element) => getComputedStyle(element).color);
+      expect(await color(archiveItem)).toBe(await color(deleteItem));
+      expect(await color(archiveItem)).not.toBe(
+        await color(menu.getByRole("menuitem", { name: "New group", exact: true })),
+      );
       await archiveItem.click({ timeout: 5_000 });
       const modal = await support.waitForConfirmModal(page);
       await modal.getByText("Are you sure you want to archive?", { exact: true }).waitFor();
