@@ -26,6 +26,7 @@ import {
   groupChat,
   groupCommand,
   publishTelegramTestConfig,
+  nextTelegramTestMessageId,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
 import { startTelegramCallbackQueryAnswer } from "./callback-query-answer-state.js";
 import { getTelegramRuntime, setTelegramRuntime } from "./runtime.js";

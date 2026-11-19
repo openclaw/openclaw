@@ -4,7 +4,7 @@ import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
-import { createDeferred, withinTest, type Deferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { createDispatchReplyOperationCoordinator } from "../auto-reply/reply/dispatch-from-config.lifecycle.js";
@@ -19,6 +19,7 @@ import { tryDispatchAcpReplyHook } from "../plugin-sdk/acpx.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import type { Deferred } from "../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { widgetResult } from "./server-chat.agent-events.test-harness.js";
 import {
