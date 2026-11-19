@@ -60,7 +60,7 @@ export async function captureCronJobTurnTarget(params: {
     }
     operator = await restoreGatewayOperatorSource({
       snapshot: source.snapshot,
-      target: { agentId, sessionKey, sessionId: source.sessionId },
+      target: { agentId, sessionKey },
       context,
       assertCurrent: () => {
         if (!isDeepStrictEqual(context.cron.getJob(job.id)?.operatorSource, captured)) {

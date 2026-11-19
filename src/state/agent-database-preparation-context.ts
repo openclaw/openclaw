@@ -1,7 +1,7 @@
 import { AsyncContext } from "../shared/async-context.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
-type AgentDatabasePreparation = {
+export type AgentDatabasePreparation = {
   waitForAgentPreparation(
     agentId: string,
     options?: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; forWrite?: boolean },

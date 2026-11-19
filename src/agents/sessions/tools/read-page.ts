@@ -156,6 +156,7 @@ export function createBoundedReadTextPage(params: {
   // therefore look like a terminator to the complete-text truncator.
   if (
     !truncation.truncated &&
+    params.totalLines !== undefined &&
     params.endLine < params.totalLines &&
     params.endLine - params.startLine >= DEFAULT_MAX_LINES &&
     params.content.endsWith("\n")

@@ -230,7 +230,7 @@ export function repairCanonicalSqliteIndexes(
     if (deferredForeignKeyMismatch) {
       // A missing unique parent index made FK validation impossible before DDL.
       // Complete the original gate before publishing, including real orphan refusal.
-      assertSqliteIntegrity(db, databaseLabel, { ...options.integrity, schemaOnly: undefined });
+      assertSqliteIntegrity(db, databaseLabel, options.integrity);
     }
     db.exec(`RELEASE SAVEPOINT ${savepoint};`);
   } catch (error) {
