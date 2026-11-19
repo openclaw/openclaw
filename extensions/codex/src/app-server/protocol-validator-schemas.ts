@@ -31,6 +31,24 @@ export function createCodexValidationSchemas() {
         $id: sharedDefinitionsId,
         definitions: {
           ...sharedDefinitionsSchema.definitions,
+          // Custom, remote, and desktop runtimes still support pre-0.170 display
+          // payloads. Keep this wire compatibility until the native minimum moves
+          // past those versions; the generated mirror stays exact to the pin.
+          AgentMessageDisplay: {
+            anyOf: [
+              sharedDefinitionsSchema.definitions.AgentMessageDisplay,
+              {
+                type: "object",
+                required: ["action"],
+                properties: {
+                  action: { type: "string" },
+                  blockType: { type: ["string", "null"] },
+                  checkTrustedContacts: { type: ["boolean", "null"] },
+                  cyberTrustedAccess: { type: ["boolean", "null"] },
+                },
+              },
+            ],
+          },
           CodexErrorInfo: {
             ...codexErrorInfoSchema,
             allOf: knownErrorVariantConstraints,

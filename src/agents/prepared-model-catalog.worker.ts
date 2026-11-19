@@ -13,7 +13,6 @@ import {
   captureRemoteModelCatalogStartupSnapshot,
   withRemoteModelCatalogSnapshot,
 } from "../model-catalog/remote-overlay.js";
-import { withHandedOffCodexClientVersion } from "../plugin-sdk/codex-client-version-handoff.internal.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -571,33 +570,30 @@ if (parentPort) {
                     withTemplateInstallSchemaVersionFacts(
                       request.templateInstallSchemaVersions,
                       () =>
-                        // Never select a Codex binary here; report the parent's decision.
-                        withHandedOffCodexClientVersion(request.codexClientVersion, () =>
-                          work.run(() =>
-                            runCatalogRequest(
-                              value,
-                              request,
-                              work,
-                              async () => {
-                                if (previous?.fingerprint === fingerprint) {
-                                  return previous.prepared;
-                                }
-                                replacing = true;
-                                return (attempted = await prepareWorkerGeneration(value));
-                              },
-                              async () => {
-                                // Admission can outlast a refresh on slow filesystems; only completed
-                                // generation preparation starts the provider-discovery deadline.
-                                stopProgress();
-                                const response = await channel?.request(null);
-                                response?.consumed();
-                                if (response && response.input !== true) {
-                                  throw new Error(
-                                    "prepared model catalog request retired before discovery",
-                                  );
-                                }
-                              },
-                            ),
+                        work.run(() =>
+                          runCatalogRequest(
+                            value,
+                            request,
+                            work,
+                            async () => {
+                              if (previous?.fingerprint === fingerprint) {
+                                return previous.prepared;
+                              }
+                              replacing = true;
+                              return (attempted = await prepareWorkerGeneration(value));
+                            },
+                            async () => {
+                              // Admission can outlast a refresh on slow filesystems; only completed
+                              // generation preparation starts the provider-discovery deadline.
+                              stopProgress();
+                              const response = await channel?.request(null);
+                              response?.consumed();
+                              if (response && response.input !== true) {
+                                throw new Error(
+                                  "prepared model catalog request retired before discovery",
+                                );
+                              }
+                            },
                           ),
                         ),
                     ),

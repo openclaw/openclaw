@@ -14,7 +14,10 @@ import { expect, it, vi } from "vitest";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import { nativeCommandItem } from "./codex-app-server.test-fixtures.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
-import { assertCodexTurnStartResponse } from "./protocol-validators.js";
+import {
+  assertCodexTurnStartResponse,
+  prepareCodexServerNotification,
+} from "./protocol-validators.js";
 import type { CodexTurnStartParams, JsonObject } from "./protocol.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
@@ -341,6 +344,76 @@ it("drains bound command output without one macrotask per notification", async (
   const result = await run;
   expect(JSON.stringify(result.messagesSnapshot)).toContain('"toolCallId":"cmd-burst"');
 });
+// Wire examples from rust-v0.170.0 protocol/v2/tests.rs and the supported 0.169.0 schema.
+it.each([
+  {
+    version: "0.170.0",
+    display: {
+      version: 1,
+      mode: "show",
+      trustedContacts: "check",
+      annotation: { kind: "wellbeingHelpline", subject: "prompt" },
+    },
+  },
+  {
+    version: "0.170.0",
+    display: { version: 1, mode: "hide", replacement: { kind: "wellbeingPromptHelpline" } },
+  },
+  {
+    version: "0.170.0",
+    display: {
+      version: 1,
+      mode: "block",
+      reason: { kind: "protection", protectionType: "omnimod" },
+    },
+  },
+  {
+    version: "0.170.0",
+    display: { version: 1, mode: "block", reason: { kind: "cyber", trustedAccess: false } },
+  },
+  {
+    version: "0.169.0",
+    display: {
+      action: "show",
+      blockType: null,
+      cyberTrustedAccess: null,
+      checkTrustedContacts: null,
+    },
+  },
+])("settles a $version display-bearing terminal snapshot: $display", async ({ display }) => {
+  const harness = createStartedThreadHarness();
+  const params = createTestParams();
+  const abort = new AbortController();
+  params.abortSignal = abort.signal;
+  const run = runCodexAppServerAttempt(params);
+  try {
+    await run.waitForTurnAccepted();
+    const notification = turnCompleted({
+      id: "turn-1",
+      status: "completed",
+      items: [
+        {
+          id: "answer-1",
+          type: "agentMessage",
+          phase: "final_answer",
+          text: "Done.",
+          moderation: { moderated: true, display },
+        },
+      ],
+    });
+    // Fail at the real admission boundary instead of waiting for a lost terminal snapshot.
+    expect(prepareCodexServerNotification(notification).completedTurn).toEqual(
+      notification.params.turn,
+    );
+    await harness.notify(notification);
+    // The production validator must retain completedTurn for both projection and settlement.
+    expect(await run).toMatchObject({ terminal: { kind: "ok" }, assistantTexts: ["Done."] });
+  } finally {
+    abort.abort();
+    await run.catch(() => {});
+  }
+});
+
 it.each<{ label: string; turn: JsonObject }>([
   { label: "nonterminal status", turn: { status: "inProgress", items: [] } },
   {

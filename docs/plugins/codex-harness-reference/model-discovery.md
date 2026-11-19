@@ -17,10 +17,20 @@ availability is owned by Codex app-server, so the list can change when
 OpenClaw upgrades the bundled `@openai/codex` version, when OpenClaw selects a
 [newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex),
 or when a deployment points `appServer.command` at a different Codex binary.
-ChatGPT-login model discovery reports the selected binary's version as its
-`client_version`, so the list matches the binary that runs turns. Availability can also
-be account-scoped. Use `/codex models` on a running gateway to see the live
-catalog for that harness and account.
+Availability can also be account-scoped. Use `/codex models` on a running
+gateway to see the live catalog for that harness and account.
+
+The OpenAI provider's ChatGPT subscription list is separate. OpenClaw lists as
+the newest stable `@openai/codex` published on npm, refreshed every six hours
+and never older than the bundled version. If the registry cannot be reached,
+OpenClaw uses the bundled version. This lets newly launched models appear
+without waiting for an OpenClaw release.
+
+A model in that list can require a newer Codex than the binary running a
+Codex-harness turn. A ChatGPT model-version rejection then names the running
+version and the installation to update. Update that Codex and restart the
+Gateway, or choose another model. OpenClaw does not automatically update Codex
+or switch the turn to another harness.
 
 Automatic discovery and hosted-search model selection use visible picker entries.
 Bounded turns with an explicit model selection, including image understanding,

@@ -30,7 +30,7 @@ import { readCodexProviderRefusal, type CodexProviderRefusal } from "./event-pro
 import type { CodexTurn, JsonValue } from "./protocol.js";
 import { CodexTranscriptCheckpoint } from "./transcript-checkpoint.js";
 import { attachCodexAssistantItemIds } from "./upstream-prompt-provenance.js";
-import { resolveCodexPromptError } from "./usage-limit-error.js";
+import { CodexRuntimeUpdateRequiredError, resolveCodexPromptError } from "./usage-limit-error.js";
 
 const TERMINAL_REPLY_SNAPSHOT_MAX_CHARS = 4_096;
 
@@ -97,6 +97,7 @@ export abstract class CodexTurnProjection {
   /** Structured overloads may continue once the exact settled transcript is captured. */
   settledTurnFailureFinalizationAllowed = false;
   protected promptError: unknown;
+  private modelVersionErrorMessage: string | undefined;
   protected promptErrorSource: AttemptFailureSource | null = null;
   protected providerRefusal: CodexProviderRefusal | undefined;
   protected synthesizedMissingToolResultError: string | null = null;
@@ -478,12 +479,24 @@ export abstract class CodexTurnProjection {
     if (this.providerRefusal) {
       return;
     }
+    if (
+      this.promptError instanceof CodexRuntimeUpdateRequiredError &&
+      params.codexErrorInfo == null &&
+      (!params.message || params.message === this.modelVersionErrorMessage)
+    ) {
+      return;
+    }
     this.promptError =
-      resolveCodexPromptError({
-        message: params.message,
-        codexErrorInfo: params.codexErrorInfo,
-        rateLimits: params.rateLimits,
-      }) ?? params.fallbackMessage;
+      resolveCodexPromptError(
+        {
+          message: params.message,
+          codexErrorInfo: params.codexErrorInfo,
+          rateLimits: params.rateLimits,
+        },
+        { model: this.params.modelId, ...this.options.codexRuntime },
+      ) ?? params.fallbackMessage;
+    this.modelVersionErrorMessage =
+      this.promptError instanceof CodexRuntimeUpdateRequiredError ? params.message : undefined;
     this.promptErrorSource = params.promptErrorSource;
   }
 

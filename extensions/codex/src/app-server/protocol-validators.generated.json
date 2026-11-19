@@ -94,18 +94,53 @@
         },
         "AgentMessageDelivery": { "enum": ["async"], "type": "string" },
         "AgentMessageDisplay": {
-          "description": "A presentation instruction for Chat to apply to this answer when recovering history.",
-          "properties": {
-            "action": {
-              "description": "Unknown actions must be left for the producing client to handle.",
-              "type": "string"
+          "anyOf": [
+            {
+              "description": "How Chat should present a recovered answer.",
+              "oneOf": [
+                {
+                  "properties": {
+                    "annotation": {
+                      "anyOf": [{ "$ref": "#/definitions/AnswerAnnotation" }, { "type": "null" }]
+                    },
+                    "mode": { "enum": ["show"], "type": "string" },
+                    "trustedContacts": { "$ref": "#/definitions/TrustedContacts" },
+                    "version": { "enum": [1], "format": "uint8", "minimum": 0, "type": "integer" }
+                  },
+                  "required": ["mode", "trustedContacts", "version"],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "mode": { "enum": ["hide"], "type": "string" },
+                    "replacement": { "$ref": "#/definitions/AnswerReplacement" },
+                    "version": { "enum": [1], "format": "uint8", "minimum": 0, "type": "integer" }
+                  },
+                  "required": ["mode", "replacement", "version"],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "mode": { "enum": ["block"], "type": "string" },
+                    "reason": { "$ref": "#/definitions/BlockReason" },
+                    "version": { "enum": [1], "format": "uint8", "minimum": 0, "type": "integer" }
+                  },
+                  "required": ["mode", "reason", "version"],
+                  "type": "object"
+                }
+              ]
             },
-            "blockType": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
-            "checkTrustedContacts": { "anyOf": [{ "type": "boolean" }, { "type": "null" }] },
-            "cyberTrustedAccess": { "anyOf": [{ "type": "boolean" }, { "type": "null" }] }
-          },
-          "required": ["action"],
-          "type": "object"
+            {
+              "type": "object",
+              "required": ["action"],
+              "properties": {
+                "action": { "type": "string" },
+                "blockType": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                "checkTrustedContacts": { "anyOf": [{ "type": "boolean" }, { "type": "null" }] },
+                "cyberTrustedAccess": { "anyOf": [{ "type": "boolean" }, { "type": "null" }] }
+              }
+            }
+          ]
         },
         "AgentMessageModeration": {
           "properties": {
@@ -118,6 +153,28 @@
           "type": "object"
         },
         "AgentPath": { "type": "string" },
+        "AnswerAnnotation": {
+          "oneOf": [
+            {
+              "properties": {
+                "kind": { "enum": ["wellbeingHelpline"], "type": "string" },
+                "subject": { "$ref": "#/definitions/HelplineSubject" }
+              },
+              "required": ["kind", "subject"],
+              "type": "object"
+            }
+          ]
+        },
+        "AnswerReplacement": {
+          "oneOf": [
+            {
+              "properties": { "kind": { "enum": ["wellbeingPromptHelpline"], "type": "string" } },
+              "required": ["kind"],
+              "title": "WellbeingPromptHelplineAnswerReplacement",
+              "type": "object"
+            }
+          ]
+        },
         "ApprovalsReviewer": {
           "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
           "enum": ["user", "auto_review", "guardian_subagent"],
@@ -160,6 +217,30 @@
           },
           "required": ["title"],
           "type": "object"
+        },
+        "BlockReason": {
+          "oneOf": [
+            {
+              "properties": {
+                "kind": { "enum": ["protection"], "type": "string" },
+                "protectionType": {
+                  "description": "Identifies the same moderation row that Chat writes on the live path.",
+                  "type": "string"
+                }
+              },
+              "required": ["kind", "protectionType"],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": { "enum": ["cyber"], "type": "string" },
+                "trustedAccess": { "anyOf": [{ "type": "boolean" }, { "type": "null" }] }
+              },
+              "required": ["kind"],
+              "title": "KindBlockReason",
+              "type": "object"
+            }
+          ]
         },
         "ByteRange": {
           "properties": {
@@ -687,6 +768,7 @@
           },
           "type": "object"
         },
+        "HelplineSubject": { "enum": ["answer", "prompt"], "type": "string" },
         "HookPromptFragment": {
           "properties": { "hookRunId": { "type": "string" }, "text": { "type": "string" } },
           "required": ["hookRunId", "text"],
@@ -2298,6 +2380,7 @@
             }
           ]
         },
+        "TrustedContacts": { "enum": ["check", "skip"], "type": "string" },
         "Turn": {
           "properties": {
             "completedAt": {
