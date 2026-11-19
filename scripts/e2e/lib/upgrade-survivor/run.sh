@@ -1203,9 +1203,13 @@ for (const { durationMs, diagnostics, ...step } of cleanups) {
   assert.deepEqual(step, {
     name: "recovery-artifact-cleanup", command: "openclaw update cleanup", cwd: "", exitCode: 0,
   }, "second update recovery cleanup did not finish cleanly");
-  assert(Array.isArray(diagnostics) && diagnostics.length === 1 &&
-    typeof diagnostics[0] === "string" &&
-    /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]),
+  // The summary comes first; one line per removed or kept item may follow.
+  // Earlier releases reported one fixed sentence.
+  assert(Array.isArray(diagnostics) && diagnostics.length >= 1 &&
+    diagnostics.every((line) => typeof line === "string") &&
+    (/^Update backup cleanup removed \d+ items? \(\d+ logical bytes, [^)]+\)\./.test(diagnostics[0]) ||
+      (diagnostics.length === 1 &&
+        /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]))),
     "second update omitted its verified recovery cleanup outcome");
 }
 // Advisory guidance is product prose that releases reword; require one, not its text.
