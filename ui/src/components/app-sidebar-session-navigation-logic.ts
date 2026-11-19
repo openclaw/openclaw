@@ -13,7 +13,7 @@ import {
 import { pluginTabKey } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
-import { listSelectableAgents } from "../lib/agents/display.ts";
+import { listChatAgents } from "../lib/agents/display.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { resolveSessionChannelPresentation } from "../lib/session-channel.ts";
 import {
@@ -552,7 +552,7 @@ export function resolveActiveSidebarAgent(input: {
   return {
     activeId: input.activeId,
     agent: input.roster.find((entry) => normalizeAgentId(entry.id) === input.activeId),
-    agents: listSelectableAgents(input.roster),
+    agents: listChatAgents(input.roster),
     identity: identities.get(input.activeId) ?? null,
     identities,
   };

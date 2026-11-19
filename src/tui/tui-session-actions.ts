@@ -139,6 +139,7 @@ export function createSessionActions(context: SessionActionContext) {
       id: normalizeAgentId(agent.id),
       kind: agent.kind,
       name: normalizeOptionalString(agent.name),
+      hidden: agent.hidden,
     }));
     agentNames.clear();
     for (const agent of state.agents) {

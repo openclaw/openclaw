@@ -37,7 +37,7 @@ import { requireValidConfig } from "./config-validation.js";
 
 function formatSummaryHeader(summary: AgentSummary): string {
   const safe = sanitizeTerminalText;
-  const defaultTag = `${summary.isDefault ? " (default)" : ""}${summary.status === "degraded" ? " (degraded)" : ""}`;
+  const defaultTag = `${summary.isDefault ? " (default)" : ""}${summary.hidden ? " (hidden)" : ""}${summary.status === "degraded" ? " (degraded)" : ""}`;
   return summary.name && summary.name !== summary.id
     ? `${safe(summary.id)}${defaultTag} (${safe(summary.name)})`
     : `${safe(summary.id)}${defaultTag}`;

@@ -340,7 +340,8 @@ describe("tui session actions", () => {
           scope: "per-sender",
           agents: [
             { id: " Team Lead ", name: " Lead Agent " },
-            { id: " System Agent ", kind: "system", name: " System Agent " },
+            // hidden rides along on any row here; picker filtering lives in tui-agent-selector.test.ts
+            { id: " System Agent ", kind: "system", name: " System Agent ", hidden: true },
           ],
         }),
       },
@@ -363,7 +364,7 @@ describe("tui session actions", () => {
     });
     expect(state.agents).toEqual([
       { id: "team-lead", kind: undefined, name: "Lead Agent" },
-      { id: "system-agent", kind: "system", name: "System Agent" },
+      { id: "system-agent", kind: "system", name: "System Agent", hidden: true },
     ]);
     expect([...agentNames]).toEqual([
       ["team-lead", "Lead Agent"],

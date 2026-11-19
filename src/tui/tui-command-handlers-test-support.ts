@@ -105,7 +105,7 @@ export function createTuiCommandHandlersHarness(params?: {
   reopenQuestion?: () => void;
   refreshAgents?: RefreshAgentsMock;
   agentDefaultId?: string;
-  agents?: Array<{ id: string; kind?: "agent" | "system"; name?: string }>;
+  agents?: Array<{ id: string; kind?: "agent" | "system"; name?: string; hidden?: boolean }>;
 }) {
   const sendChat =
     params?.sendChat ??
