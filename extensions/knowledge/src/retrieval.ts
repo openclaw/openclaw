@@ -307,8 +307,8 @@ function reconcileKeywordIndex(
   db.exec(
     `CREATE TABLE IF NOT EXISTS ${rows} (id TEXT PRIMARY KEY, hash TEXT NOT NULL, fts_rowid INTEGER NOT NULL) STRICT`,
   );
-  // An index built before row tracking has unknown contents: start it over once,
-  // and forget its recorded snapshot so this call repopulates it.
+  // A missing FTS or tracking table leaves unknown contents: reset both,
+  // and forget the recorded snapshot so this call repopulates them.
   if (!tracked) {
     db.exec(`DELETE FROM ${table}`);
     db.exec(`DELETE FROM ${rows}`);
