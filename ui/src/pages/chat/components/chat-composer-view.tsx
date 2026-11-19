@@ -1,5 +1,5 @@
 import { dynamic } from "@solidjs/web";
-import { createMemo, createSignal, lazy, Show } from "solid-js";
+import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
 import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
 import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
 import { McpAppResources } from "../../../components/mcp-app-resources.tsx";
@@ -36,7 +36,7 @@ import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
-import { ComposerTaskCardView, composerTaskAnnouncement } from "./chat-composer-task-card.tsx";
+import { composerTaskAnnouncement } from "./chat-composer-task.ts";
 import { renderComposerTextarea, type ComposerTextareaProps } from "./chat-composer-textarea.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { ComposerWidthEdge, prepareComposerWidthEdge } from "./chat-composer-width-ref.tsx";
@@ -52,6 +52,10 @@ const HumanMentionMenuView = lazy(() => import("./chat-composer-mention-menu.tsx
   export: "HumanMentionMenuView",
 });
 const EmojiMenu = lazy(() => import("./chat-composer-emoji.tsx"), { export: "EmojiMenu" });
+// Loaded with the first plugin composer task; idle chats never fetch it.
+const ComposerTaskCardView = lazy(() => import("./chat-composer-task-card.tsx"), {
+  export: "ComposerTaskCardView",
+});
 // The reply strip loads with the first reply, outside the chat boot bundle.
 const ReplyPreview = lazy(() => import("./chat-composer-reply-preview.tsx"), {
   export: "ComposerReplyPreview",
@@ -204,6 +208,8 @@ export function renderChatComposerView(
       )}
     </Show>
   );
+  // The built-in composer can show plugin tasks; a replacement composer cannot.
+  onSettled(() => state.tasks.present());
   const application = useOptionalApplication();
   const memberWelcome = createMemberWelcomeSlot(() => application);
   const showComposerInput = createMemo(
@@ -309,13 +315,17 @@ export function renderChatComposerView(
       <div class="agent-chat__composer-float" ref={[elementRef(props.onComposerFloatRef)]}>
         <div class="chat-footer__context" ref={(element) => (state.composerContext = element)}>
           {props.footerContent}
-          <ComposerTaskCardView
-            tasks={state.tasks}
-            draft={context().visibleDraft}
-            canCompose={context().canCompose}
-            keyHints={!props.mobileComposer}
-            textarea={() => state.composerTextarea}
-          />
+          <Show when={state.tasks.card || state.tasks.accepted}>
+            <ChatLazyBoundary>
+              <ComposerTaskCardView
+                tasks={state.tasks}
+                draft={context().visibleDraft}
+                canCompose={context().canCompose}
+                keyHints={!props.mobileComposer}
+                textarea={() => state.composerTextarea}
+              />
+            </ChatLazyBoundary>
+          </Show>
           <div class="agent-chat__composer-notices">
             {props.notices} {composerStatus()} {composerAlerts()} {fallbackStatus()}
             <Show when={context().cancellationCaveat}>

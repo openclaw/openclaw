@@ -694,177 +694,25 @@
   }
 }
 
-/* One slot height for every task state, so working, proposal and failure swap in place. */
-.agent-chat__composer-shell {
-  --chat-composer-task-block-size: calc(var(--chat-stack-header-height, 40px) + 52px);
-}
-
+/* Plugin composer tasks reuse the status band at one height, so every state swaps in place. */
 .agent-chat__composer-task {
-  display: grid;
-  grid-template-rows: var(--chat-stack-header-height, 40px) 1fr;
-  block-size: var(--chat-composer-task-block-size);
-  border: 1px solid var(--chat-composer-hairline);
-  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
-  corner-shape: superellipse(1.5);
-  background: var(--composer-attached-surface, var(--chat-composer-surface));
-  backdrop-filter: blur(8px);
-  overflow: hidden;
-}
-
-.agent-chat__composer-task[data-expanded] {
-  block-size: auto;
-  max-block-size: min(46vh, 420px);
-}
-
-.agent-chat__composer-task--receipt {
-  grid-template-rows: var(--chat-stack-header-height, 40px);
-  block-size: auto;
-}
-
-.agent-chat__composer-task-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 0 8px 0 14px;
-}
-
-.agent-chat__composer-task-glyph {
-  display: inline-flex;
-  flex: none;
-  color: var(--accent);
-}
-
-.agent-chat__composer-task-glyph svg {
-  width: var(--chat-stack-icon-size, 14px);
-  height: var(--chat-stack-icon-size, 14px);
-}
-
-.agent-chat__composer-task-title {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-strong);
-  font-weight: 560;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  block-size: 96px;
 }
 
 .agent-chat__composer-task-meta {
   margin-inline-end: auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.agent-chat__composer-task-head .btn {
-  flex: none;
+.agent-chat__composer-task > :last-child {
+  margin: 0 14px;
 }
 
-.agent-chat__composer-task kbd {
-  margin-inline-start: 4px;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.85em;
-}
-
-.agent-chat__composer-task .btn.primary kbd {
-  color: inherit;
-  opacity: 0.75;
-}
-
-.agent-chat__composer-task-body {
-  display: -webkit-box;
-  margin: 0 14px 10px;
-  overflow: hidden;
-  color: var(--text);
-  line-height: 20px;
-  cursor: pointer;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.agent-chat__composer-task[data-expanded] .agent-chat__composer-task-body {
-  display: block;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  cursor: auto;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .agent-chat__composer-task:not(.agent-chat__composer-task--receipt) {
-    animation: composer-float-card-in var(--duration-normal) var(--ease-out);
-  }
-}
-
-@keyframes composer-float-card-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-}
-
-.agent-chat__composer-task[data-state="failed"] .agent-chat__composer-task-glyph {
-  color: var(--danger);
-}
-
-.agent-chat__composer-task[data-state="failed"] .agent-chat__composer-task-body {
-  color: var(--muted);
-  cursor: auto;
-}
-
-.agent-chat__composer-task-clock {
-  font-variant-numeric: tabular-nums;
-}
-
-/* Two rows of steps, newest first; older steps wrap out of view. */
+/* Two rows of steps, newest first; long labels clip at the card edge. */
 .agent-chat__composer-task-steps {
   display: flex;
   flex-wrap: wrap;
-  align-content: flex-start;
   gap: 4px 12px;
-  min-width: 0;
   max-block-size: 40px;
-  margin: 0 14px 10px;
-  overflow: hidden;
-  color: var(--muted);
-  font: 12px/18px var(--font-mono, ui-monospace, monospace);
-}
-
-.agent-chat__composer-task-summary {
-  color: var(--muted);
-  font-family: var(--font-body);
+  font-size: 12px;
   white-space: nowrap;
-}
-
-.agent-chat__composer-task-step {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 34ch;
-  white-space: nowrap;
-}
-
-.agent-chat__composer-task-step > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.agent-chat__composer-task-step[data-state="running"] {
-  color: var(--text);
-}
-
-.agent-chat__composer-task-step > i {
-  width: 1ch;
-  font-style: normal;
-  text-align: center;
-}
-
-.agent-chat__composer-task-step[data-state="done"] > i {
-  color: var(--ok);
-}
-
-.agent-chat__composer-task-step[data-state="failed"] > i {
-  color: var(--danger);
 }

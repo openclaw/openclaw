@@ -258,9 +258,17 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         }
       },
     }).catch((error: unknown) => {
-      if (!current.signal.aborted) {
-        throw error;
+      if (current.signal.aborted) {
+        return;
       }
+      // A toolbar action has no row of its own: its failure shows in the pane's task card.
+      if (props.kind === "composer-toolbar" && host.composer) {
+        host.composer
+          .tasks()
+          .report(current.state?.label ?? current.entry.value.label, formatUiError(error));
+        return;
+      }
+      throw error;
     });
     // An earlier concurrent invocation can fail after this one starts.
     void promise.catch(() => setActionRead({ promise }));
@@ -294,18 +302,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
             <>
               <For each={actionRead() ? [actionRead()!] : []}>
                 {(read) => (
-                  <Errored
-                    fallback={(error) => (
-                      <span
-                        role="alert"
-                        class={{
-                          "agent-chat__composer-action-error": props.kind === "composer-toolbar",
-                        }}
-                      >
-                        {formatUiError(error())}
-                      </span>
-                    )}
-                  >
+                  <Errored fallback={(error) => <span role="alert">{formatUiError(error())}</span>}>
                     <Loading>
                       <ActionCompletion promise={read.promise} />
                     </Loading>
@@ -338,7 +335,11 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
                         disabled={action().state?.disabled ?? false}
                         onClick={() => runAction(action())}
                       >
-                        <Icon name={actionIcon(action().entry.value.icon)} />
+                        <Icon
+                          name={
+                            runningTask(action()) ? "square" : actionIcon(action().entry.value.icon)
+                          }
+                        />
                       </button>
                     </openclaw-tooltip>
                   </Show>

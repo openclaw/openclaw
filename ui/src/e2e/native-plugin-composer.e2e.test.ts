@@ -159,7 +159,10 @@ suite.define(() => {
         .locator(".agent-chat__composer-lead")
         .getByRole("button", { name: "Broken" })
         .click();
-      await page.getByRole("alert").filter({ hasText: "Fixture action failed" }).waitFor();
+      await page
+        .locator('.agent-chat__composer-task[data-state="failed"]')
+        .getByText("Fixture action failed")
+        .waitFor();
       expect(await input.boundingBox()).toEqual(before);
     });
   });

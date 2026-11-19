@@ -740,7 +740,6 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   min-width: 0;
 }
 
-.chat-subagent-wait__toggle,
 .chat-handoff-resume__rule {
   padding: 0;
   border: 0;
@@ -778,8 +777,7 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   font-size: var(--control-ui-text-xs);
 }
 
-[data-status="attention"] > .chat-handoff-sessions__status,
-.chat-subagent-wait__attention {
+[data-status="attention"] > .chat-handoff-sessions__status {
   color: var(--warn);
 }
 

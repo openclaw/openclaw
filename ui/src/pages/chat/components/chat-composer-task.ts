@@ -42,7 +42,7 @@ export function createComposerTasks() {
   let nextId = 0;
   // The text Use wrote: the receipt retires on the first draft that differs from it.
   let written = "";
-  // Mounted task cards; a replacement composer mounts none and so cannot run tasks.
+  // Mounted built-in composers; a replacement composer mounts none and so cannot run tasks.
   let presenters = 0;
 
   /** Ends the current task: a proposal resolves `outcome`; unfinished work is aborted. */
@@ -173,7 +173,7 @@ export function createComposerTasks() {
   }
 
   return {
-    /** Called by a mounted task card; returns its release. */
+    /** Called by a mounted built-in composer; returns its release. */
     present() {
       presenters += 1;
       return () => {
@@ -201,6 +201,16 @@ export function createComposerTasks() {
       clearAccepted();
     },
     cancel: () => settle(),
+    /** Show a failure that has no task of its own, such as a toolbar action that threw. */
+    report(title: string, message: string) {
+      if (presenters === 0) {
+        return;
+      }
+      settle();
+      setState((draft) => {
+        draft.card = { kind: "failed", title, message, retry: null };
+      });
+    },
     retry() {
       const card = state.card;
       if (card?.kind === "failed" && card.retry) {
@@ -242,3 +252,15 @@ function replaceDraft(target: HTMLTextAreaElement, text: string) {
 }
 
 export type ComposerTasks = ReturnType<typeof createComposerTasks>;
+
+/** For the composer's live region, beside the prediction announcement. */
+export function composerTaskAnnouncement(tasks: ComposerTasks): string {
+  const card = tasks.card;
+  if (card?.kind === "working") {
+    return t("chat.composer.task.working", { title: card.title });
+  }
+  if (card?.kind === "proposal") {
+    return t("chat.composer.proposal.available", { title: card.title });
+  }
+  return card?.kind === "failed" ? t("chat.composer.task.failed", { title: card.title }) : "";
+}
