@@ -86,7 +86,7 @@ export async function resolveControlUiSessionPath(params: {
     result = await resolve({ key });
     // The main session is stored with its first message. Absent and hidden rows give the
     // same answer, so an authenticated reader opens the app for both, as the app at "/" does.
-    if (!params.publicOnly && result.ok && "missing" in result) {
+    if (params.client && !params.publicOnly && result.ok && "missing" in result) {
       return { key, agentId: target.agentId, isCurrent: () => params.isCurrent?.() !== false };
     }
   } else if (target.kind === "short") {

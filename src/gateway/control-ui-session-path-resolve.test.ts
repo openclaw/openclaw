@@ -162,6 +162,7 @@ it("opens the main route before its first message without telling absent from hi
         expect(await resolve(client)).toMatchObject(main);
       }
       expect(await resolve(null, "/chat/main", true)).toBeNull();
+      expect(await resolve(null, "/chat/main", false)).toBeNull();
       expect(await resolve(viewer, "/chat/main/main")).toBeNull();
       expect(await resolve(viewer, "/chat/unknown")).toBeNull();
 
@@ -173,6 +174,10 @@ it("opens the main route before its first message without telling absent from hi
           id: owner.authenticatedUserProfile!.profileId,
         },
       });
+      // The draft is visible to its creator and hidden from the others.
+      expect(await resolve(owner, "/chat/main/main")).toMatchObject(main);
+      expect(await resolve(viewer, "/chat/main/main")).toBeNull();
+      expect(await resolve(denied, "/chat/main/main")).toBeNull();
       // The row appearing keeps a selection that was made without one.
       expect(absent?.isCurrent()).toBe(true);
       for (const client of [owner, viewer, denied]) {
