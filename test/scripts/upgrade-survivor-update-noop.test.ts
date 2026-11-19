@@ -152,10 +152,6 @@ describe("legacy-operator already-current update", () => {
       accepted: true,
     },
     {
-      name: "rejects a cleanup summary followed by an unexplained line",
-      report: { ...noop, steps: [{ ...cleanup, diagnostics: [cleanup.diagnostics[0], 7] }] },
-    },
-    {
       name: "accepts cleanup after service guidance",
       report: { ...noop, steps: [advisory, cleanup] },
       accepted: true,

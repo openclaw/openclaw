@@ -33,13 +33,12 @@ export function createUpdateRunArtifactOwnership(
   ownerRunIds: Iterable<string>,
   env: NodeJS.ProcessEnv,
 ): UpdateRunArtifactOwnership {
-  const runs = new Map<string, UpdateRunRecord | undefined>();
+  const runs = new Map<string, UpdateRunRecord | undefined>(
+    (history?.runs ?? []).map((run) => [run.runId, run]),
+  );
   const lookup = (runId: string) => {
     if (!runs.has(runId)) {
-      runs.set(
-        runId,
-        history?.runs.find((run) => run.runId === runId) ?? getUpdateRun(runId, { env }),
-      );
+      runs.set(runId, getUpdateRun(runId, { env }));
     }
     return runs.get(runId);
   };

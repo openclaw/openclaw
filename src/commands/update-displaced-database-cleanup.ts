@@ -6,6 +6,7 @@ import { isPathInside } from "../infra/path-guards.js";
 import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migration-manifest.js";
 import {
   displacedDatabasePath,
+  displacedDatabaseReceiptPath,
   parseDisplacedDatabaseName,
   readDisplacedDatabaseReceipt,
   type DisplacedDatabaseReceipt,
@@ -78,7 +79,12 @@ export function scanDisplacedDatabases(stateDir: string, scan?: RecoveryInventor
       const receiptPath = path.join(directory, entry.name);
       const receipt = readDisplacedDatabaseReceipt(receiptPath);
       const expectedPath = path.join(directory, parsed.databaseName);
-      if (!receipt || receipt.databasePath !== expectedPath || receipt.runId !== parsed.runId) {
+      // The receipt must sit at the one name its own contents imply.
+      if (
+        !receipt ||
+        receipt.databasePath !== expectedPath ||
+        displacedDatabaseReceiptPath(receipt.databasePath, receipt.runId) !== receiptPath
+      ) {
         // An unreadable or foreign receipt proves nothing; its family stays unproven.
         continue;
       }
