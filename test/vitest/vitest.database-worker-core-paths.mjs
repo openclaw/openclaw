@@ -13,6 +13,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/backup-verify-completeness.test.ts",
   "src/infra/approval-session-audience.sqlite.test.ts",
   "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
+  "src/secrets/runtime-web-provider.postgres.test.ts",
   "src/gateway/server-methods.workshop-contract.test.ts",
   "src/cli/skills-cli.workshop-contract.test.ts",
   "src/auto-reply/reply/commands.workshop-contract.test.ts",
