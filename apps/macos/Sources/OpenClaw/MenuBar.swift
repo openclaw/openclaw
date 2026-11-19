@@ -344,6 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.credentialStartupTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.credentialStartupTask = nil }
+            var replacingAppManagedService = false
             do {
                 let root = DeviceIdentityStore.stateDirectoryURL
                 let executionRoot = OpenClawPaths.stateDirURL
@@ -354,6 +355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             configURL: OpenClawPaths.configURL)
                     }
                     if let replacement = await StaleGatewayServiceReplacement.detect() {
+                        replacingAppManagedService = true
                         self.credentialLogger
                             .info("Replacing the previous build's Gateway service before credential preparation")
                         if let error = try await replacement.run(prepareCredentials: prepare) {
@@ -395,24 +397,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard !Task.isCancelled else { return }
                 self.credentialLogger
                     .error("Credential startup failed: \(error.localizedDescription, privacy: .public)")
-                self.showCredentialStartupFailure(error)
+                self.showCredentialStartupFailure(
+                    Self.credentialStartupRecovery(for: error, replacingAppManagedService: replacingAppManagedService))
             }
         }
     }
 
-    static func credentialStartupFailureAlert(for error: Error) -> NSAlert {
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "OpenClaw could not finish startup"
-        alert.informativeText = error.localizedDescription
-        return alert
+    /// A forward schema migration refused under an older Gateway service (#201468) names its own
+    /// recovery, which Doctor cannot replace: Doctor meets the same refusal. Every other failure keeps
+    /// the generic recovery, as does the previous build's app-managed service, whose refusal names
+    /// `openclaw update`, which an app-owned install cannot run.
+    static func credentialStartupRecovery(for error: Error, replacingAppManagedService: Bool) -> String? {
+        guard !replacingAppManagedService,
+              let preparation = error as? ClientCredentialStartup.PreparationError
+        else { return nil }
+        return preparation.schemaRefusal
     }
 
-    private func showCredentialStartupFailure(_ error: Error) {
+    private func showCredentialStartupFailure(_ schemaRefusal: String?) {
+        let message = schemaRefusal ??
+            "Quit OpenClaw, run openclaw doctor --fix with the matching CLI, then reopen OpenClaw. " +
+            "If you restored a backup, restore its matching client credentials too."
+        if schemaRefusal == nil {
+            self.credentialLogger
+                .error("Client credentials unavailable. Run openclaw doctor --fix before reopening the app.")
+        }
         if AppLaunchRuntimePlan.current.allowsActivation {
-            AppActivation.shared.presentAlert(Self.credentialStartupFailureAlert(for: error))
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "OpenClaw client credentials need recovery"
+            alert.informativeText = message
+            AppActivation.shared.presentAlert(alert)
         } else {
-            fputs("OpenClaw could not finish startup. \(error.localizedDescription)\n", stderr)
+            fputs("OpenClaw client credentials need recovery. \(message)\n", stderr)
         }
         Self.requestTermination()
     }
