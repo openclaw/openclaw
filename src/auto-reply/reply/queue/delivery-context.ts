@@ -303,23 +303,8 @@ function collectReplyDisposition(
   const authoritySource = items.at(-1);
   const groupSources: GroupFollowupRun[] = items;
   const groupParticipation =
-    groupSources.length > 0 && groupSources.every((item) => item.groupParticipation)
-      ? {
-          ...groupSources.at(-1)?.groupParticipation,
-          sources: groupSources.flatMap(
-            (item) =>
-              item.groupParticipation?.sources ??
-              (item.userTurnTranscriptRecorder
-                ? [
-                    {
-                      recorder: item.userTurnTranscriptRecorder,
-                      sourceMessageId: item.messageId,
-                      replyToText: item.groupParticipation?.replyToText,
-                    },
-                  ]
-                : []),
-          ),
-        }
+    items.length > 0 && items.every((item) => item.groupParticipation)
+      ? items.at(-1)?.groupParticipation
       : undefined;
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const explicitSkillSelections = [

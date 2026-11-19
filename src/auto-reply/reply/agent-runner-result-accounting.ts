@@ -28,7 +28,7 @@ import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js"
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-turn-admission.types.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { prepareSessionUsageUpdate } from "./session-usage.js";

@@ -18,10 +18,7 @@ import {
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
 import { canInjectReplyMessageTarget } from "../../sessions/session-controller.message-injection.js";
-import {
-  hasReplySteeringRequesterMismatch,
-  prepareReplyMessageJoin,
-} from "../../sessions/session-controller.message-join.js";
+import { prepareReplyMessageJoin } from "../../sessions/session-controller.message-join.js";
 import {
   getSessionControllerEntryForOperation,
   isCurrentSessionControllerOperation,
@@ -34,7 +31,8 @@ import {
   scheduleFollowupDrainAfterReplyOperationClear,
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
-import { recordGroupParticipationInput } from "./group-participation-inputs.js";
+import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
+import type { MessageInjectionRuntimeReason } from "./message-injection-authority.js";
 import {
   admitFollowupRunLifecycle,
   reserveSteerCandidate,
@@ -43,7 +41,10 @@ import {
   type FollowupRun,
 } from "./queue.js";
 import { refuseCollaborativeSteering } from "./queue/lifecycle.js";
-import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
+import {
+  recordReplyFollowupAdmission,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
@@ -56,8 +57,7 @@ type ActiveReplySteerFallbackReason =
   | "admission-changed"
   | "reply-owner-ended"
   | "model-fallback-changed"
-  | "execution-settings-changed"
-  | "independent-request";
+  | "execution-settings-changed";
 
 type ActiveReplySteerParams = {
   steeringIntent?: RunReplyAgentParams["steeringIntent"];
@@ -102,7 +102,7 @@ function resolveAcceptedSteerRunId(params: ActiveReplySteerParams): string {
 
 export async function runActiveReplySteer(
   params: ActiveReplySteerParams,
-): Promise<"handled" | ReplyPayload> {
+): Promise<"handled" | "followup" | ReplyPayload> {
   const {
     followupRun,
     queueKey,
@@ -146,39 +146,38 @@ export async function runActiveReplySteer(
   if (!parked) {
     return "handled";
   }
-  recordGroupParticipationInput(activeReplyOperation, followupRun);
-  const scheduleParkedFallback = () => {
-    const owner = replyRunRegistry.get(queueKey);
-    if (owner) {
-      scheduleFollowupDrainAfterReplyOperationClear({
-        operation: owner,
-        queueKey,
-        runFollowup,
-      });
-    } else {
-      scheduleFollowupDrain(queueKey, runFollowup);
-    }
-  };
-  scheduleParkedFallback();
-  releaseAdmissionTicket();
-  const fallback = async (reason?: string): Promise<"handled"> => {
+  const mailbox = expectDefined(followupRun.controllerInput, "Parked steer source").mailbox;
+  const owner = mailbox.owner.active;
+  if (owner) {
+    scheduleFollowupDrainAfterReplyOperationClear({
+      operation: owner,
+      queueKey,
+      runFollowup,
+    });
+  } else {
+    scheduleFollowupDrain(queueKey, runFollowup, mailbox.owner);
+  }
+  let custodyFinished = false;
+  const fallback = async (
+    reason: ActiveReplySteerFallbackReason,
+    activeRunId?: string,
+    error?: string,
+    runtimeReason?: MessageInjectionRuntimeReason,
+  ): Promise<"followup"> => {
+    assertReadCurrent();
     parked.fallback();
     custodyFinished = true;
     const queueCapRejected =
       replyOperationRunState?.admission?.status === "skipped" &&
       replyOperationRunState.admission.reason === "queue-cap";
     if (replyOperationRunState && !queueCapRejected) {
-      replyOperationRunState.admission = {
-        status: "accepted",
-        mode: "followup",
-        ...(reason === "collaborative_steering_disabled"
-          ? { reason: "collaborative-steering-disabled" as const }
-          : reason === "requester-mismatch"
-            ? { reason }
-            : isInboundUserMessage
-              ? { reason: "steering-unavailable" as const }
-              : {}),
-      };
+      recordReplyFollowupAdmission(replyOperationRunState, {
+        explicitFollowup: false,
+        requesterMismatch: reason === "requester-mismatch",
+        collaborationBlocked: reason === "collaborative_steering_disabled",
+        unavailableSteer: isInboundUserMessage,
+        followupRun,
+      });
     }
     diagnosticLogger.warn("steering rejected; applying follow-up policy", {
       reason,
@@ -194,7 +193,7 @@ export async function runActiveReplySteer(
       activeRunId,
     });
     await touchActiveSessionEntry();
-    return "handled";
+    return "followup";
   };
   // The native receipt owns settlement after handoff, even if a finalizer fails.
   let nativeOutcome: Promise<ReplyMessageInjectionOutcome> | undefined;
@@ -234,19 +233,6 @@ export async function runActiveReplySteer(
       return await fallback("injection_unavailable");
     }
     assertReadCurrent();
-    // A different participant's ordinary guild message owns a separate task.
-    // Native acceptance consumes steering, so it cannot later be replayed if
-    // the model answers only the newest request. Keep custody in the FIFO queue.
-    if (
-      isInboundUserMessage &&
-      (followupRun.originatingChannel ?? followupRun.run.messageProvider) === "discord" &&
-      params.sessionCtx.ChatType === "channel" &&
-      resolveCommandTurnContext(params.sessionCtx).kind === "normal" &&
-      followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== false &&
-      hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation)
-    ) {
-      return await fallback("independent-request", injectionTarget.runId);
-    }
     delivery = prepareSteeringDelivery({
       agentId: followupRun.run.agentId,
       sessionKey,
@@ -474,12 +460,9 @@ export async function runActiveReplySteer(
         `queue: active session ${steerSessionId} adoption finalizer failed: ${formatErrorMessage(finalization.adoptionError)}`,
       );
     }
-    recordGroupParticipationInput(activeReplyOperation, followupRun, "steer");
-    if (activeReplyOperation) {
-      await refreshReplyOperationTyping(activeReplyOperation, {
-        startIfIdle: typingSignals.shouldStartImmediately,
-      });
-    }
+    await refreshReplyOperationTyping(activeReplyOperation, {
+      startIfIdle: typingSignals.shouldStartImmediately,
+    });
     await touchActiveSessionEntry();
     return "handled";
   } finally {

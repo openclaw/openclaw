@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { vi } from "vitest";
 import {
   closeHttpServer,
   listenLoopback,
@@ -13,8 +13,10 @@ import {
 import { model as createModelFixture } from "../../agents/model-catalog-fixtures.test-support.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/send.js";
+import { createTypingCallbacks } from "../../channels/typing.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { DecisionOutcome } from "../../decisions/host-outcomes.js";
 import { stripNormalizedTargetProviderPrefixes } from "../../infra/outbound/target-normalization.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -24,12 +26,44 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { dispatchLowLevelChannelReplyFromConfig } from "./dispatch-from-config.js";
+import { dispatchInboundMessageWithBufferedDispatcher } from "../dispatch.js";
+import type { TemplateContext } from "../templating.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { getReplyFromConfig } from "./get-reply.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { createReplyDispatcher } from "./reply-dispatcher.js";
+
+type ModelResponse = {
+  delta: unknown;
+  stop?: string;
+  beforeOutput?: () => Promise<void>;
+  status?: number;
+};
+
+const decisionMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../decisions/runtime.js").evaluateDecision>(),
+);
+export const decision = decisionMock;
+vi.mock("../../decisions/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../decisions/runtime.js")>()),
+  evaluateDecision: decisionMock,
+}));
+export function judgment(choice: "reply" | "silent"): DecisionOutcome {
+  return {
+    status: "ok",
+    result: {
+      model: "synthetic-decision",
+      answers: {
+        participation: {
+          type: "choice",
+          choice,
+          probabilities: { reply: choice === "reply" ? 1 : 0, silent: choice === "silent" ? 1 : 0 },
+        },
+      },
+    },
+    provenance: { providerId: "fixture", rubricVersion: "1", runtimeGeneration: "fixture" },
+  };
+}
 
 export async function createGroupReplyFixture() {
   const state = await createOpenClawTestState({
@@ -40,7 +74,7 @@ export async function createGroupReplyFixture() {
   const scheduler = createTestGatewayScheduler();
   await setSessionMcpRuntimeScheduler(scheduler);
   const requests: unknown[] = [];
-  const responses: Array<{ delta: unknown; stop?: string }> = [];
+  const responses: ModelResponse[] = [];
   const server = createServer((request, response) => {
     void (async () => {
       requests.push(JSON.parse(await readRequestText(request)));
@@ -48,6 +82,12 @@ export async function createGroupReplyFixture() {
       if (!next) {
         response.writeHead(400);
         response.end("The synthetic model has no prepared response");
+        return;
+      }
+      await next.beforeOutput?.();
+      if (next.status) {
+        response.writeHead(next.status, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "Synthetic model failure" } }));
         return;
       }
       response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
@@ -98,14 +138,41 @@ export async function createGroupReplyFixture() {
       },
     },
   };
-  const lookupPath = path.join(state.workspaceDir, "port.txt");
   withFullRuntimeReplyConfig(config);
-  await fs.writeFile(lookupPath, "The published TLS port is 443.\n");
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
   const partials: string[] = [];
   const sent: string[] = [];
   let typing = 0;
+  let stopped = 0;
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createOutboundTestPlugin({
+            id: "telegram",
+            capabilities: { chatTypes: ["group"] },
+            messaging: {
+              normalizeTarget: (raw) => stripNormalizedTargetProviderPrefixes(raw, ["telegram"]),
+              targetResolver: {
+                looksLikeId: (raw, normalized) => /^-\d+$/.test(normalized ?? raw),
+              },
+            },
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async ({ text }) => {
+                sent.push(text);
+                return { channel: "telegram", messageId: `sent-${sent.length}` };
+              },
+            },
+          }),
+          config: createChannelTestPluginBase({ id: "telegram" }).config,
+        },
+      },
+    ]),
+  );
   const replyOptions: InternalGetReplyOptions = {
     onPartialReply: (payload) => {
       if (payload.text) {
@@ -121,9 +188,7 @@ export async function createGroupReplyFixture() {
     body: string,
     messageId: string,
     groupId: string,
-    mentioned = false,
-    commandSource?: "native" | "text",
-    inboundEventKind?: "room_event",
+    overrides?: Partial<TemplateContext>,
   ) =>
     finalizeInboundContext({
       Body: body,
@@ -137,9 +202,8 @@ export async function createGroupReplyFixture() {
       SenderId: "1001",
       SenderName: "Alice",
       MessageSid: messageId,
-      WasMentioned: mentioned,
-      InboundEventKind: inboundEventKind,
-      ...(commandSource ? { CommandSource: commandSource, CommandAuthorized: true } : {}),
+      WasMentioned: false,
+      ...overrides,
     });
   return {
     config,
@@ -147,10 +211,10 @@ export async function createGroupReplyFixture() {
     storePath,
     requests,
     partials,
-    lookupPath,
     sent,
     typing: () => typing,
-    respond: (...next: Array<{ delta: unknown; stop?: string }>) => {
+    stopped: () => stopped,
+    respond: (...next: ModelResponse[]) => {
       responses.push(...next);
     },
     reply: async (
@@ -158,14 +222,12 @@ export async function createGroupReplyFixture() {
       messageId: string,
       groupId = "-10001",
       options?: InternalGetReplyOptions,
-      mentioned = false,
-      commandSource?: "native" | "text",
-      inboundEventKind?: "room_event",
+      overrides?: Partial<TemplateContext>,
     ) => {
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
       return getReplyFromConfig(
-        context(body, messageId, groupId, mentioned, commandSource, inboundEventKind),
+        context(body, messageId, groupId, overrides),
         {
           ...replyOptions,
           ...options,
@@ -179,55 +241,31 @@ export async function createGroupReplyFixture() {
       groupId: string,
       options?: InternalGetReplyOptions,
     ) => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "telegram",
-            source: "test",
-            plugin: {
-              ...createOutboundTestPlugin({
-                id: "telegram",
-                capabilities: { chatTypes: ["group"] },
-                messaging: {
-                  normalizeTarget: (raw) =>
-                    stripNormalizedTargetProviderPrefixes(raw, ["telegram"]),
-                  targetResolver: { looksLikeId: (_raw, normalized) => normalized === groupId },
-                },
-                outbound: {
-                  deliveryMode: "direct",
-                  sendText: async ({ text }) => {
-                    sent.push(text);
-                    return { channel: "telegram", messageId: `sent-${sent.length}` };
-                  },
-                },
-              }),
-              config: createChannelTestPluginBase({ id: "telegram" }).config,
+      return dispatchInboundMessageWithBufferedDispatcher({
+        cfg: config,
+        ctx: context(body, messageId, groupId),
+        replyOptions: { ...replyOptions, ...options },
+        dispatcherOptions: {
+          typingCallbacks: createTypingCallbacks({
+            start: async () => {
+              typing++;
             },
-          },
-        ]),
-      );
-      const dispatcher = createReplyDispatcher({
-        deliver: (payload, info) =>
-          sendDurableMessageBatchCore({
-            cfg: config,
-            channel: "telegram",
-            to: groupId,
-            payloads: [payload],
-            onPlatformSendDispatch: info.onPlatformSendDispatch,
-            assertDirectAdapterHandoff: info.assertPlatformSendAuthorized,
+            stop: async () => {
+              stopped++;
+            },
+            onStartError: () => {},
           }),
+          deliver: (payload, info) =>
+            sendDurableMessageBatchCore({
+              cfg: config,
+              channel: "telegram",
+              to: groupId,
+              payloads: [payload],
+              onPlatformSendDispatch: info.onPlatformSendDispatch,
+              assertDirectAdapterHandoff: info.assertPlatformSendAuthorized,
+            }),
+        },
       });
-      try {
-        return await dispatchLowLevelChannelReplyFromConfig({
-          cfg: config,
-          ctx: context(body, messageId, groupId),
-          dispatcher,
-          replyOptions: { ...replyOptions, ...options },
-        });
-      } finally {
-        dispatcher.markComplete();
-        await dispatcher.waitForIdle();
-      }
     },
     close: async () => {
       await waitForSessionMaintenance();

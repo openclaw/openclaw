@@ -3,6 +3,7 @@ import type {
   FollowupRun,
   ReplyOperationRunState,
 } from "../../../sessions/session-controller.contracts.js";
+import type { GroupParticipationContext } from "../group-participation.js";
 
 export type { FollowupRun } from "../../../sessions/session-controller.contracts.js";
 export type {

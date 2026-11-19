@@ -5,9 +5,9 @@ import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReplyPayloadStatusNotice, type ReplyPayload } from "../reply-payload.js";
 import { maybeApplyTtsToReplyPayload } from "./dispatch-from-config.payloads.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-turn-admission.types.js";
 
 export function createFollowupSpeechPreparer({
   turn,

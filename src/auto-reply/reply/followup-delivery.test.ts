@@ -20,7 +20,7 @@ import {
 import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import type { FollowupRun } from "./queue/types.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import type { AdmittedFollowupTurn } from "./reply-turn-admission.types.js";
 import { createMockReplyOperation } from "./test-helpers.js";
 
 const deliveryState = vi.hoisted(() => ({

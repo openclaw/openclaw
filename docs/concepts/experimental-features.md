@@ -191,12 +191,10 @@ still reach the model provider as part of the prompt.
 
 ## Decision assistance
 
-This opt-in enables experimental conversational tool filtering in the built-in
-OpenClaw runtime. Before an eligible user turn, the configured Decision provider
-judges whether the request needs tools. A conversational result can omit optional
-tools for that turn. Other harnesses keep their normal tools and perform no
-automatic prefilter inference. The switch does not select a provider, provision
-credentials, download models, or enable unrelated consumer modes.
+This opt-in enables [group participation](/concepts/decision-models#group-participation)
+and experimental conversational tool filtering in the built-in OpenClaw runtime.
+Other harnesses keep their normal tools. The switch does not select a provider,
+provision credentials, or download models.
 
 The switch and manually authored config use the same global Boolean:
 

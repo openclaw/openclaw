@@ -46,9 +46,6 @@ async function recordAgentTurnExecutionOutcome(
   ) {
     params.opts?.onAgentRunTerminalOutcome?.(executionStatus === "ok" ? "completed" : "failed");
   }
-  if (result?.outcome.kind === "observed") {
-    return;
-  }
   const sourceReplyDeliveryMode =
     params.followupRun.run.sourceReplyDeliveryMode ?? params.opts?.sourceReplyDeliveryMode;
   if (sourceReplyDeliveryMode !== "message_tool_only") {
@@ -166,26 +163,7 @@ export async function runAgentTurnWithOutcome(
             requesterSessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
             report: params.opts?.onVisibleWorkSessions,
           },
-          async (): Promise<AgentTurnExecutionResult> => {
-            const participation = await prepareGroupParticipationObservation(params);
-            const revision = participation?.snapshot?.revision;
-            if (
-              participation?.isObserving &&
-              revision !== undefined &&
-              participation.isCurrent(revision)
-            ) {
-              params.replyOperation?.freezeAbort();
-              await params.completeObservedTurn?.();
-              return { runId, outcome: { kind: "observed" } };
-            }
-            if (participation?.mode === "ordinary") {
-              await params.typingSignals.signalRunStart();
-            } else if (participation) {
-              await (params.typingSignals.signalExecutionActivity?.() ??
-                params.typingSignals.signalRunStart());
-            }
-            return run();
-          },
+          run,
         ),
     );
     const automation = params.followupRun.run.scheduledAutomation;

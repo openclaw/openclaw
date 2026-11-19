@@ -2,10 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import {
-  captureAgentRunLifecycleGeneration,
-  withAgentRunLifecycleGeneration,
-} from "../infra/agent-events.js";
-import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
   withBeforeAgentReplyObserver,
@@ -147,62 +143,20 @@ describe("before_agent_reply runner boundary", () => {
     );
   });
 
-  it.each(["attribution", "hook"] as const)(
-    "keeps a nested run during %s from checkpointing its parent admission",
-    async (stage) => {
-      const beforeDispatch = vi.fn(async () => undefined);
-      const checkpoints: string[] = [];
-      const afterDispatch = vi.fn(async (result) => {
-        checkpoints.push(result?.reply?.text ?? "missing reply");
-        return result;
-      });
-      hookRunner.runBeforeAgentReply.mockImplementation(async (_event, context) => {
-        if (stage === "hook" && context.runId === "parent") {
-          await runHook("child");
-        }
-        return { handled: true, reply: { text: context.runId } };
-      });
-
-      await withBeforeAgentReplyObserver({ beforeDispatch, afterDispatch }, () =>
-        runHook("parent", {
-          awaitSessionDiffBaseline: async () => {
-            if (stage === "attribution") {
-              await runHook("child");
-            }
-          },
-        }),
-      );
-
-      expect(hookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(2);
-      expect(beforeDispatch).toHaveBeenCalledOnce();
-      expect(afterDispatch).toHaveBeenCalledOnce();
-      expect(checkpoints).toEqual(["parent"]);
-    },
-  );
-
-  it("defers its own hook until normal execution resumes without consuming the claim", async () => {
-    let privatePreparation = true;
-    const handled: string[] = [];
+  it("keeps a nested run from checkpointing its parent admission", async () => {
+    const beforeDispatch = vi.fn(async () => undefined);
+    const afterDispatch = vi.fn(async (result) => result);
     hookRunner.runBeforeAgentReply.mockImplementation(async (_event, context) => {
-      handled.push(context.runId);
-      return { handled: true, reply: { text: `handled ${context.runId}` } };
+      if (context.runId === "parent") {
+        await runHook("child");
+      }
+      return undefined;
     });
-    await withAgentRunLifecycleGeneration(
-      captureAgentRunLifecycleGeneration("deferred-parent"),
-      () =>
-        withBeforeAgentReplyObserver({ shouldDispatch: () => !privatePreparation }, async () => {
-          expect(await runHook("deferred-parent")).toBeUndefined();
-          expect(handled).toEqual([]);
-          // A child has independent hook authority even while the parent's hook is deferred.
-          expect(await runHook("independent-child")).toMatchObject({ handled: true });
-          privatePreparation = false;
-          expect(await runHook("deferred-parent")).toMatchObject({
-            handled: true,
-            reply: { text: "handled deferred-parent" },
-          });
-          await runHook("deferred-parent");
-        }),
-    );
-    expect(handled).toEqual(["independent-child", "deferred-parent"]);
+
+    await withBeforeAgentReplyObserver({ beforeDispatch, afterDispatch }, () => runHook("parent"));
+
+    expect(hookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(2);
+    expect(beforeDispatch).toHaveBeenCalledOnce();
+    expect(afterDispatch).toHaveBeenCalledOnce();
   });
 });
