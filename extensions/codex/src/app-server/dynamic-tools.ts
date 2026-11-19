@@ -50,10 +50,6 @@ import {
   isRecord,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
-  resolveLiveToolResultMaxChars,
-} from "openclaw/plugin-sdk/text-utility-runtime";
-import {
   computerFrameImageIdentity,
   invalidateCodexComputerFrame,
   type CodexComputerContextEpoch,
@@ -68,11 +64,7 @@ import {
   type CodexDynamicToolSchemaQuarantine,
   type CodexToolDescriptor,
 } from "./dynamic-tool-catalog.js";
-import {
-  convertToolContents,
-  enforceWholeSkillResult,
-  withoutGatewayOnlySkillLocation,
-} from "./dynamic-tool-content.js";
+import { convertToolContents, createCodexToolResultPresentation } from "./dynamic-tool-content.js";
 import {
   type CodexDynamicToolHookContextBase,
   projectCodexExecutableDynamicToolSurface,
@@ -167,11 +159,9 @@ export function createCodexDynamicToolBridge(params: {
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
-  const contextWindowTokens = params.hookContext?.contextWindowTokens;
-  const toolResultMaxChars =
-    contextWindowTokens !== undefined && contextWindowTokens > 0
-      ? Math.max(1, resolveLiveToolResultMaxChars({ contextWindowTokens }))
-      : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
+  const { maxChars: toolResultMaxChars, presentSkillResult } = createCodexToolResultPresentation(
+    params.hookContext,
+  );
   const availableProjection = projectCodexExecutableDynamicToolSurface(
     params.tools,
     params.hookContext,
@@ -513,15 +503,7 @@ export function createCodexDynamicToolBridge(params: {
             isError: rawIsErrorForPresentation,
             result: event.result,
           });
-          const result = enforceWholeSkillResult(
-            toolName,
-            await withoutGatewayOnlySkillLocation(
-              toolName,
-              middlewareResult,
-              params.hookContext?.gatewayOnlySkillDirs,
-            ),
-            toolResultMaxChars,
-          );
+          const result = await presentSkillResult(toolName, middlewareResult);
           presentationIsError = rawIsErrorForPresentation || isToolResultError(result);
           // A successful spawn is durable before presentation middleware can rewrite details.
           const acceptedSessionSpawn =

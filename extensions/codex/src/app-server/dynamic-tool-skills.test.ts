@@ -106,6 +106,7 @@ it.each([
   { label: "remote with a supporting file", remote: true, companion: true },
   { label: "remote, instructions only", remote: true, companion: false },
   { label: "local", remote: false, companion: true },
+  { label: "remote, another copy recorded", remote: true, companion: true, elsewhere: true },
 ])("keeps Gateway-only library paths out of skill results: $label", async (mode) => {
   const baseDir = path.join(tempDir, "skill-library", "id-1", "revisions", "rev-1");
   await fs.mkdir(baseDir, { recursive: true });
@@ -143,7 +144,10 @@ it.each([
       runId: params.runId,
       workspaceDir: tempDir,
       remoteWorkspaceRoot,
-      gatewayOnlySkillDirs: resolveGatewayOnlySkillDirs([skill], remoteWorkspaceRoot),
+      gatewayOnlySkillDirs: resolveGatewayOnlySkillDirs(
+        [mode.elsewhere ? { ...skill, filePath: path.join(tempDir, "other", "SKILL.md") } : skill],
+        remoteWorkspaceRoot,
+      ),
     },
   });
   const call = (tool: string, arguments_: Record<string, string>) =>
@@ -161,8 +165,9 @@ it.each([
   const location = `Skill location: ${skill.filePath}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n`;
   const note =
     "Its supporting files are stored on the Gateway and cannot be opened from this machine.\n\n";
-  const prefix = mode.remote ? (mode.companion ? note : "") : location;
+  const stripped = mode.remote && !mode.elsewhere;
+  const prefix = stripped ? (mode.companion ? note : "") : location;
   expect(read.contentItems).toEqual([{ type: "inputText", text: prefix + skill.readContent }]);
   expect(search).toContain(skill.name);
-  expect(search.includes(skill.filePath)).toBe(!mode.remote);
+  expect(search.includes(skill.filePath)).toBe(!stripped);
 });
