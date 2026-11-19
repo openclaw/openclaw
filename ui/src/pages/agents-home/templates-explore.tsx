@@ -400,7 +400,12 @@ export function TemplatesExplore(
                   };
                   const result = createMemo(async () => {
                     const catalog = await readCatalog();
-                    await preloadTemplateArtwork(firstScreenArtwork(catalog));
+                    // Category cards reserve their icon space. Reveal the complete list as soon
+                    // as it arrives; the browser loads the visible icons rather than blocking
+                    // every card on a second batch of up to 24 artwork decodes.
+                    if (!current.category || current.query.trim()) {
+                      await preloadTemplateArtwork(firstScreenArtwork(catalog));
+                    }
                     return catalog;
                   });
                   return (

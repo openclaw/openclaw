@@ -198,6 +198,23 @@ describe("Templates discovery", () => {
     });
   });
 
+  it("shows the full category without preloading decorative artwork a second time", async () => {
+    const decode = stubImageDecode(async () => {});
+    const { page, request } = createPage({
+      templatesEnabled: true,
+      templateIconUrl: `https://clawhub.ai/api/v1/skill-icons/${"e".repeat(64)}`,
+    });
+    const shelf = '[data-catalog-section="productivity"]';
+    await waitForSolid(() => expect(page.querySelector(shelf)).not.toBeNull());
+    expect(decode).toHaveBeenCalledOnce();
+    page.querySelector<HTMLButtonElement>(shelf + " .plugin-catalog-section__view-all")!.click();
+    await waitForSolid(() =>
+      expect(page.querySelector(shelf + " [data-templates-results] img")).not.toBeNull(),
+    );
+    expect(request).toHaveBeenCalledWith("templates.catalog.search", { category: "productivity" });
+    expect(decode).toHaveBeenCalledOnce();
+  });
+
   it("updates Explore results when the search changes", async () => {
     const { page, request } = createPage({ templatesEnabled: true });
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
