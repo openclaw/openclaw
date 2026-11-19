@@ -271,6 +271,14 @@ export type CliBackendExecuteContext = {
   requestToolPermission: (
     request: CliBackendToolPermissionRequest,
   ) => Promise<CliBackendToolPermissionResult>;
+  /** Observe an authorized native mutation before execution and after success; grants no authority. */
+  observeToolMutation?: (event: {
+    phase: "before" | "after";
+    toolName: string;
+    toolCallId: string;
+    toolInput: Record<string, unknown>;
+    cwd?: string;
+  }) => Promise<void>;
   /** Closure-bound structured-input capability; retained copies fail after the run closes. */
   requestUserInput: (request: CliBackendUserInputRequest) => Promise<CliBackendUserInputResult>;
 };

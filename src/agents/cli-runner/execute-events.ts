@@ -24,6 +24,7 @@ import type {
   CliToolUseStartDelta,
 } from "../cli-output-contracts.js";
 import { isClaudeForegroundAgentToolName } from "../cli-output-records.js";
+import { getAdmittedRunTurnTaintState } from "../embedded-agent-runner/run/turn-taint-state.js";
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
 import { extractToolErrorMessage, prepareToolResult } from "../embedded-agent-tool-results.js";
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
@@ -256,11 +257,29 @@ export function createCliEventHandlers(params: {
         startedAt: startedCall?.startedAt,
       }).catch(() => {});
     }
-    if (emitLiveEvents) {
-      const strippedName = stripOpenClawMcpToolPrefix(event.name);
-      const resultContentSource = tracked
-        ? context.resultContentSourceByToolName?.get(strippedName)
+    const strippedName = stripOpenClawMcpToolPrefix(event.name);
+    // Native network tools need no projected MCP counterpart. Use the backend's
+    // capability mapping, not a provider-specific spelling or a client result field.
+    const nativeCapabilities =
+      tracked &&
+      startedCall &&
+      startedCall.kind !== "mcp_tool_use" &&
+      !event.name.startsWith("mcp_")
+        ? context.backendResolved.projectNativeToolAuthority?.([event.name])
         : undefined;
+    const resultContentSource = tracked
+      ? nativeCapabilities?.some(
+          (capability) => capability === "web_fetch" || capability === "web_search",
+        )
+        ? "network"
+        : context.resultContentSourceByToolName?.get(strippedName)
+      : undefined;
+    getAdmittedRunTurnTaintState(runParams.admittedRunContext)?.observe({
+      toolName: strippedName,
+      resultContentSource,
+      presentationOnly: !tracked,
+    });
+    if (emitLiveEvents) {
       const startedArgs = startedCall?.args;
       const planUpdate =
         tracked &&

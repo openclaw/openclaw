@@ -277,7 +277,18 @@ matching rules. It is not a certificate that no related information remains.
 
 Root `MEMORY.md` and `USER.md` keep one trust record per file with the file
 hash, origin class, time, and session of the latest tracked write (`write`,
-`edit`, `apply_patch`). A tracked write records `untrusted` when the turn is
+`edit`, `apply_patch`). These records also cover explicitly enabled local native Claude
+`Edit` and `Write`: OpenClaw observes the canonical file before the native tool
+runs and records the successful mutation afterward. This observation does not
+grant native tool access or track arbitrary shell writes, paired-node writes,
+or other harnesses' native tools. For an already tracked file, a missed native
+completion hook leaves the previous hash in place; the next tracked write
+still detects the mismatch. CLI loopback tools share the admitted turn's
+network taint with native-write observation and transcript recording.
+Native network results use the backend's declared capabilities, so Claude
+`WebFetch` and `WebSearch` taint the turn even without matching loopback tools.
+
+A tracked write records `untrusted` when the turn is
 not an owner turn, when the turn is tainted by network-sourced tool results, or
 when the file no longer matches the recorded hash. A shell or external edit does
 not update the record, so the next tracked write after it compares against a

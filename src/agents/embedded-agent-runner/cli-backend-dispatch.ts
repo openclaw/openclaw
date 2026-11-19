@@ -74,6 +74,7 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
       ? undefined
       : createCliDispatchTranscriptRecorder({
           ...params,
+          admittedRunContext,
           storePath,
           sessionFile,
           provider: eligibility.provider,
@@ -141,6 +142,7 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
     );
     const result = await runCliAgent({
       admittedRunContext,
+      senderIsOwner: params.senderIsOwner,
       sessionManager: params.sessionManager,
       disableTrajectory: params.disableTrajectory,
       sessionId: params.sessionId,

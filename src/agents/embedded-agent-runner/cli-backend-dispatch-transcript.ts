@@ -8,8 +8,10 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ToolResultMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { AdmittedRunContext } from "../admitted-run-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
+import { createAgentTurnTaintState, getAdmittedRunTurnTaintState } from "./run/turn-taint-state.js";
 
 const log = createSubsystemLogger("agents/embedded-cli-dispatch");
 
@@ -40,12 +42,14 @@ export function createCliDispatchTranscriptRecorder(params: {
   expectedLifecycleRevision?: string;
   expectedWriterRunId?: string;
   senderIsOwner?: boolean;
+  admittedRunContext?: AdmittedRunContext;
 }) {
   let tail: Promise<void> = Promise.resolve();
   let lastAssistantText = "";
   let lastWrittenAssistantText = "";
   let finalized = false;
-  let turnTainted = false;
+  const turnTaint =
+    getAdmittedRunTurnTaintState(params.admittedRunContext) ?? createAgentTurnTaintState();
   let toolRecordSequence = 0;
 
   const scope = {
@@ -106,7 +110,7 @@ export function createCliDispatchTranscriptRecorder(params: {
   const buildZeroUsageAssistantMessage = (
     content: AssistantBuildParams["content"],
     stopReason: AssistantBuildParams["stopReason"],
-    tainted = turnTainted,
+    tainted = turnTaint.isTainted(),
   ) => {
     const message = buildAssistantMessage({
       model,
@@ -141,7 +145,7 @@ export function createCliDispatchTranscriptRecorder(params: {
       const toolCallId =
         event.toolCallId?.trim() || `${params.runId}-tool-${String(toolRecordSequence)}`;
       if (event.phase === "start") {
-        const taintedAtStart = turnTainted;
+        const taintedAtStart = turnTaint.isTainted();
         enqueue(() =>
           buildZeroUsageAssistantMessage(
             [
@@ -158,7 +162,10 @@ export function createCliDispatchTranscriptRecorder(params: {
         );
         return;
       }
-      turnTainted ||= event.resultContentSource === "network";
+      turnTaint.observe({
+        toolName: event.toolName,
+        resultContentSource: event.resultContentSource,
+      });
       enqueue(() => ({
         role: "toolResult",
         toolCallId,
