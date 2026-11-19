@@ -1,20 +1,22 @@
-import { createStore, Errored, lazy, Loading } from "solid-js";
+import { createStore } from "solid-js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { probeGatewayReachability } from "../api/gateway-browser-socket.ts";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { withPromiseModalHost } from "../components/promise-modal-host.ts";
+import { createIdleImport } from "../lib/idle-import.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
-import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
+// The dialog opens when proxy sign-in has expired, when every same-origin
+// chunk request redirects to the sign-in page, so its code loads up front.
+import RecoveryDialog from "./browser-auth-recovery-dialog.tsx";
 import { notifyBrowserAuthRestored, bindBrowserHttpFailures } from "./browser-http.ts";
 import {
   fetchWithControlUiAuth,
   resolveControlUiAuthCandidates,
   type ControlUiAuthSource,
 } from "./control-ui-auth.ts";
+import { ensureCustomElementDefined } from "./lazy-custom-element.ts";
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
-
-const RecoveryDialog = lazy(() => import("./browser-auth-recovery-dialog.tsx"));
 
 function renewBrowserSession(url: URL, signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
@@ -52,6 +54,15 @@ export function startBrowserAuthRecovery(
   const root = new URL(`${normalizeBasePath(resourceBasePath)}/`, window.location.origin);
   const probeUrl = new URL(CONTROL_UI_BOOTSTRAP_CONFIG_PATH.slice(1), root);
   const lifetime = new AbortController();
+  // Load the modal host while access is still valid; the dialog cannot fetch it
+  // later. Opening the dialog retries a failed preload.
+  const modalHost = createIdleImport(() =>
+    ensureCustomElementDefined(
+      "openclaw-modal-dialog",
+      () => import("../components/modal-dialog.tsx"),
+    ),
+  );
+  modalHost.schedule();
   let pending: Promise<void> | undefined;
   let lastProbeAt = Number.NEGATIVE_INFINITY;
   let signInRequired = false;
@@ -101,41 +112,13 @@ export function startBrowserAuthRecovery(
             draft.probeResult = probeResult;
           });
         return (
-          <Errored
-            fallback={(_error, reset) => (
-              <openclaw-modal-dialog
-                label={t("connection.browserSignIn.title")}
-                description={t("connection.browserSignIn.description")}
-                onModal-cancel={dismiss}
-              >
-                <div class="exec-approval-card">
-                  <div class="exec-approval-title">{t("connection.browserSignIn.title")}</div>
-                  <p role="alert">{t("lazyView.errorTitle")}</p>
-                  <openclaw-modal-actions class="exec-approval-actions">
-                    <button class="btn" onClick={dismiss}>
-                      {t("connection.browserSignIn.dismiss")}
-                    </button>
-                    <button class="btn" onClick={() => reset()}>
-                      {t("common.retry")}
-                    </button>
-                    <button class="btn primary" onClick={() => void signIn()}>
-                      {t("connection.browserSignIn.action")}
-                    </button>
-                  </openclaw-modal-actions>
-                </div>
-              </openclaw-modal-dialog>
-            )}
-          >
-            <Loading>
-              <RecoveryDialog
-                view={view}
-                readProbeResult={() => probeResult}
-                onSignIn={() => void signIn()}
-                onCheck={() => void check(true)}
-                onDismiss={dismiss}
-              />
-            </Loading>
-          </Errored>
+          <RecoveryDialog
+            view={view}
+            readProbeResult={() => probeResult}
+            onSignIn={() => void signIn()}
+            onCheck={() => void check(true)}
+            onDismiss={dismiss}
+          />
         );
       };
       dialog = { close: () => modal.finish(undefined), update: () => update?.() };
@@ -267,6 +250,7 @@ export function startBrowserAuthRecovery(
   listen(document, "visibilitychange", onVisibilityChange, options);
   return () => {
     lifetime.abort();
+    modalHost.dispose();
     stopFailures();
   };
 }
