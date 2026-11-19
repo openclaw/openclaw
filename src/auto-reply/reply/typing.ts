@@ -28,6 +28,10 @@ export type TypingController = {
   markRunComplete: () => void;
   markDispatchIdle: () => void;
   cleanup: () => void;
+  /** Keep this controller usable for a follow-up that shares it. */
+  holdForQueuedFollowup?: () => void;
+  isHeldForQueuedFollowup?: () => boolean;
+  releaseQueuedFollowupHold?: () => void;
 };
 
 /** Creates a typing controller that seals itself after run and dispatch completion. */
@@ -56,6 +60,8 @@ export function createTypingController(params: {
   let dispatchIdle = false;
   // Late streaming callbacks must not restart a completed controller.
   let sealed = false;
+  // Source dispatch must not seal a controller a queued follow-up still owns.
+  let queuedFollowupHold = false;
   let typingTtlTimer: NodeJS.Timeout | undefined;
   const typingIntervalMs = resolveTypingIntervalMs(params.typingIntervalSeconds);
   // Leave one full cadence for a keepalive call to settle before safety cleanup.
@@ -172,11 +178,17 @@ export function createTypingController(params: {
   };
 
   const markRunComplete = () => {
+    if (queuedFollowupHold) {
+      return;
+    }
     runComplete = true;
     maybeStopOnIdle();
   };
 
   const markDispatchIdle = () => {
+    if (queuedFollowupHold) {
+      return;
+    }
     dispatchIdle = true;
     maybeStopOnIdle();
   };
@@ -190,5 +202,12 @@ export function createTypingController(params: {
     markRunComplete,
     markDispatchIdle,
     cleanup,
+    holdForQueuedFollowup: () => {
+      queuedFollowupHold = true;
+    },
+    isHeldForQueuedFollowup: () => queuedFollowupHold,
+    releaseQueuedFollowupHold: () => {
+      queuedFollowupHold = false;
+    },
   };
 }
