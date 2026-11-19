@@ -18,9 +18,16 @@ API, so you can register it as a custom provider without installing a plugin.
 
 <Note>
 JZSTOKEN issues model-specific keys. A **Standard** key covers most models; its
-own flagship `jzs-max-3.0` requires a dedicated key. A key only lists the models
-it can access, so use `openclaw models list` (or the vendor's `/v1/models`
-endpoint) to confirm what your key can call.
+own flagship `jzs-max-3.0` requires a dedicated key. `openclaw models list` shows
+the models you configured or that are published in inventory; it cannot prove a
+credential can call them. Verify access with an authenticated request to the
+vendor endpoint:
+
+```bash
+curl -s https://jzstoken.com/api/v1/models \
+  -H "Authorization: Bearer $JZSTOKEN_API_KEY"
+```
+
 </Note>
 
 ## Getting started
@@ -52,12 +59,6 @@ endpoint) to confirm what your key can call.
             api: "openai-completions",
             apiKey: "${JZSTOKEN_API_KEY}",
             models: [
-              {
-                id: "jzs-max-3.0",
-                name: "JZS Max 3.0",
-                input: ["text", "image"],
-                contextWindow: 1048576,
-              },
               {
                 id: "gpt-5.6-terra",
                 name: "GPT-5.6 Terra",
@@ -107,9 +108,10 @@ does not seed local cost estimates for this custom provider.
 ## Troubleshooting
 
 - **`401` or `403` on a model you expect** — the key type does not cover it.
-  Create the dedicated key the vendor requires, or choose a model your Standard
-  key can access.
-- **Empty model list** — confirm `baseUrl` ends in `/api/v1` and that
+  Confirm with `GET /v1/models` using that key, then create the dedicated key the
+  vendor requires or choose a model the key can access.
+- **`openclaw models list` is empty** — that list is configured inventory, not an
+  access check. Confirm `baseUrl` ends in `/api/v1` and that
   `JZSTOKEN_API_KEY` is visible to the process that runs the Gateway.
 - **Images rejected** — only models that advertise image input accept them; the
   transport itself is `openai-completions`.
