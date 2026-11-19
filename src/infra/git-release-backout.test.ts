@@ -7,27 +7,11 @@ import {
   locateServingGitBuild,
   selectGitReleaseBackout,
 } from "./git-release-backout.js";
+import { writeGitReleaseBuild as writeBuild } from "./git-release-backout.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const serving = "a".repeat(40);
 const neverServed = "b".repeat(40);
-
-/** A built release (or checkout) with the provenance and artifacts update verification reads. */
-async function writeBuild(root: string, commit: string, buildId: string, version = "1.0.0") {
-  const files: Record<string, string> = {
-    "package.json": JSON.stringify({ name: "openclaw", version }),
-    "dist/entry.js": "",
-    "dist/build-info.json": JSON.stringify({ commit, buildId, version }),
-    "dist/.buildstamp": JSON.stringify({ head: commit }),
-    "dist/.runtime-postbuildstamp": JSON.stringify({ head: commit }),
-    "dist/control-ui/index.html": "ready",
-  };
-  for (const [file, contents] of Object.entries(files)) {
-    await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
-    await fs.writeFile(path.join(root, file), contents);
-  }
-  return root;
-}
 
 const release = (prefix: string, id: string) =>
   path.join(prefix, "releases", id, "lib", "node_modules", "openclaw");

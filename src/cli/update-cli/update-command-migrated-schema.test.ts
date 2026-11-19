@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { writeGitReleaseBuild } from "../../infra/git-release-backout.test-support.js";
 import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import { readUpdateDatabaseGenerations } from "../../infra/update-database-generations.js";
@@ -41,7 +42,8 @@ import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 // The retained updater reads through the real candidate's newer schema contract.
 // The serving Gateway's health report is the only network boundary in recovery.
 const gatewayProbe = vi.hoisted(() => ({ buildId: undefined as string | undefined }));
-vi.mock("../daemon-cli/restart-health-probe.js", () => ({
+vi.mock("../daemon-cli/restart-health-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon-cli/restart-health-probe.js")>()),
   resolveGatewayRestartProbeContext: async () => ({ auth: undefined, config: {} }),
   confirmGatewayReachable: async () => ({
     reachable: gatewayProbe.buildId !== undefined,
@@ -458,22 +460,6 @@ describe.skipIf(process.platform === "win32")(
       await fs.symlink(releaseLink("r1"), releaseSlot);
     });
 
-    /** A built tree with the provenance and artifacts release verification reads. */
-    async function writeBuild(root: string, commit: string, buildId: string) {
-      const files = {
-        "package.json": JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-        "dist/entry.js": "",
-        "dist/build-info.json": JSON.stringify({ commit, buildId }),
-        "dist/.buildstamp": JSON.stringify({ head: commit }),
-        "dist/.runtime-postbuildstamp": JSON.stringify({ head: commit }),
-        "dist/control-ui/index.html": "ready",
-      };
-      for (const [file, contents] of Object.entries(files)) {
-        await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
-        await fs.writeFile(path.join(root, file), contents);
-      }
-    }
-
     async function shippedFailure(
       overrides: {
         stderrTail?: string;
@@ -491,14 +477,14 @@ describe.skipIf(process.platform === "win32")(
       const root = overrides.plainRoot ? candidateRoot : releaseSlot;
       const store = await servingAgentStore("update-shipped-inconclusive-");
       const checkout = path.join(store.stateDir, "checkout");
-      await writeBuild(
+      await writeGitReleaseBuild(
         overrides.serving === "checkout"
           ? checkout
           : path.join(prefix(), "releases", "served", "lib", "node_modules", "openclaw"),
         servingCommit,
         "serving-build",
       );
-      await writeBuild(
+      await writeGitReleaseBuild(
         path.join(prefix(), "releases", "never-served", "lib", "node_modules", "openclaw"),
         "b".repeat(40),
         "never-served-build",
