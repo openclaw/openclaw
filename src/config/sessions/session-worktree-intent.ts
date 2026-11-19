@@ -8,4 +8,12 @@ export type PendingSessionWorktree = {
   /** Verified commit used for checkout while baseRef remains user-facing metadata. */
   baseCommit?: string;
   titleSource: string;
+  /** A moved conversation's checkout work, held under `ref` in the project repository. */
+  carried?: { ref: string; work: string };
+  /** A moved conversation's earlier files, kept readable for its earlier messages. */
+  prior?: {
+    workspaceDir: string;
+    fileRoot: string;
+    through: { generation: string | null; maxSeq: number | null };
+  };
 };

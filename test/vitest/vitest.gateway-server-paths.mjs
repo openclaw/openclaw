@@ -304,6 +304,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-message-events.history-worker.test.ts",
   "src/gateway/session-message-events.test.ts",
   "src/gateway/session-pr-workspace-adoption.test.ts",
+  "src/gateway/session-project-move.test.ts",
   "src/gateway/session-produced-media-delivery.test.ts",
   "src/gateway/session-repository-materialization.test.ts",
   "src/gateway/session-repository-publication-handoff.test.ts",
