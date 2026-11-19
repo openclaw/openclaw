@@ -658,7 +658,7 @@ export async function authenticateReceiptRecovery({
     "missing immutable recovery contract",
   );
   requireValue(
-    run.name === "Full Release Receipt Recovery" &&
+    run.name === "Receipt Recovery " + request.requestId &&
       run.id === Number(producer.runId) &&
       run.run_attempt === producer.runAttempt &&
       run.head_sha === producer.sha &&
