@@ -41,6 +41,7 @@ const childPublisher = "Seal full release child evidence / Seal child receipt";
 // Only external transport is replaced; validation runs through production owners.
 export function recoveryConsumptionFixture(
   admitted: boolean | ReturnType<typeof candidatePublicationFixture> = false,
+  fixtureOptions: { waivedFailure?: boolean } = {},
 ) {
   const direct =
     typeof admitted === "boolean"
@@ -121,8 +122,18 @@ export function recoveryConsumptionFixture(
   ) {
     return addArtifact(id, name, runId, makeStoredZip(files), sha);
   }
+  const waiverPolicy: {
+    targetVersion: string;
+    targetSha: string;
+    childRole: string;
+    jobName: string;
+    reason: string;
+    aggregates: never[];
+  }[] = [];
   const sourceFile = (_sha: string, path = ".github/workflows/full-release-validation.yml") =>
-    readFileSync(path, "utf8");
+    path === "scripts/lib/release-validation-waivers.json"
+      ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: waiverPolicy })
+      : readFileSync(path, "utf8");
   const producer = { runId: "900", runAttempt: 1, fullRef: "refs/heads/main", sha: p };
   const source = createPublicationSourceFact(
     receiptRecoverySourceRequest(direct.admission.receipt, producer),
@@ -209,6 +220,18 @@ export function recoveryConsumptionFixture(
     const workload = coverage.requiredJobs.map((name, offset) =>
       job(10000 + index * 100 + offset, name, id),
     );
+    if (fixtureOptions.waivedFailure && role === "normalCi") {
+      workload[0]!.conclusion = "failure";
+      current.conclusion = "failure";
+      waiverPolicy.push({
+        targetVersion: version,
+        targetSha: c,
+        childRole: role,
+        jobName: workload[0]!.name,
+        reason: "Synthetic Q-only recovery grant",
+        aggregates: [],
+      });
+    }
     const publisher = job(10099 + index * 100, childPublisher, id);
     publisher.steps = [
       "Checkout trusted child evidence tooling",
@@ -250,7 +273,7 @@ export function recoveryConsumptionFixture(
       dispatchId,
       sourceParentRunId: direct.runId,
       sourceParentAttempt: 1,
-      workloadConclusion: "success",
+      workloadConclusion: current.conclusion,
       inputs,
       publisher: { jobId: String(publisher.id), jobName: childPublisher },
       ...composite,

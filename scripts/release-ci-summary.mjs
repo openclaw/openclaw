@@ -81,6 +81,7 @@ import {
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
+  readReleaseValidationWaivers,
   readReleaseValidationWaiversAsync,
   RELEASE_VALIDATION_WAIVERS_PATH,
   validateReleaseWaiverAggregates,
@@ -1328,6 +1329,7 @@ export function validateParentManifest(value, expected) {
   }
   const advisoryJobs = validateReleaseManifestAdvisoryJobs(value, {
     deferWaiverPolicy: expected.deferWaiverPolicy,
+    waiverPolicy: expected.waiverPolicy,
   });
   const childRuns = value.childRuns;
   if (!childRuns || typeof childRuns !== "object" || Array.isArray(childRuns)) {
@@ -3638,6 +3640,21 @@ function readSummaryParentRun(runId, repository) {
   return parent;
 }
 
+function validateSummaryManifest(rawManifest, parent, runId, repository) {
+  // Summary/watch must use this parent's immutable Q, not the verifier's local P ledger.
+  const client = createReleaseEvidenceClient(repository);
+  const waiverPolicy = readReleaseValidationWaivers((sourcePath) =>
+    client.getWorkflowSource(parent.headSha, sourcePath),
+  );
+  return validateParentManifest(rawManifest, {
+    runAttempt: parent.attempt,
+    runId,
+    waiverPolicy,
+    workflowRef: parent.headBranch,
+    workflowSha: parent.headSha,
+  });
+}
+
 function readSummaryEvidence(runId, repository, label) {
   const parent = readSummaryParentRun(runId, repository);
   if (parent.status !== "completed" || parent.conclusion !== "success") {
@@ -3649,12 +3666,7 @@ function readSummaryEvidence(runId, repository, label) {
   }
   return {
     parent,
-    manifest: validateParentManifest(rawManifest, {
-      runAttempt: parent.attempt,
-      runId,
-      workflowRef: parent.headBranch,
-      workflowSha: parent.headSha,
-    }),
+    manifest: validateSummaryManifest(rawManifest, parent, runId, repository),
   };
 }
 
@@ -3737,12 +3749,7 @@ async function main() {
   const currentManifestRaw = tryDownloadParentManifest(runId, parent.attempt, repository);
   let children;
   if (currentManifestRaw) {
-    const currentManifest = validateParentManifest(currentManifestRaw, {
-      runAttempt: parent.attempt,
-      runId,
-      workflowRef: parent.headBranch,
-      workflowSha: parent.headSha,
-    });
+    const currentManifest = validateSummaryManifest(currentManifestRaw, parent, runId, repository);
     console.log(`candidate-sha: ${currentManifest.targetSha}`);
     console.log(`manifest-run: ${currentManifest.runId}/${currentManifest.runAttempt}`);
 

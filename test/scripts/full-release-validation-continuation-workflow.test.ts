@@ -44,7 +44,7 @@ function step(job: string, name: string) {
 }
 
 it("pins both hosted callers to the Q-ledger-aware watcher definition", () => {
-  const revision = "8ddb0bb7784a3cde6475e7e436b077af15c8df54";
+  const revision = "b720fcdb58b62c90eaae10c2d1ba99ba813adb36";
   for (const name of ["release_decision", "diagnostic_drain"]) {
     expect((workflowJob(name) as { uses?: string }).uses).toBe(
       "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@" + revision,
@@ -54,7 +54,7 @@ it("pins both hosted callers to the Q-ledger-aware watcher definition", () => {
   // dependency in shallow CI checkouts. A changed watcher needs a new verified pin.
   const selectedSource = readFileSync(".github/workflows/full-release-state-watcher.yml", "utf8");
   expect(createHash("sha256").update(selectedSource).digest("hex")).toBe(
-    "5de8f27a05bdd63e5e2dc7068ee62bf6bc5c3a6c49292000f7720296af89008a",
+    "4ee76e74a50fa5d0939b67010e0b334bf0a7bda604c0e81de079f05291ce561f",
   );
   const selected = parse(selectedSource);
   expect(selected.jobs.watch.env.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
