@@ -25,6 +25,7 @@ import {
 } from "./cache-ttl-checkpoint.js";
 import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
+import { promptDelta } from "./session-prompt-delta.js";
 import {
   readToolSurfaceCheckpoint,
   type ToolDefinition,
@@ -292,7 +293,6 @@ export function prepareSessionPublicationToolListing(
           catalogMode: current.catalogMode,
         };
   if (listing !== previous) {
-    // The listing owns the publication definition; a refresh replaces it in the series pin.
     const { name, description, parameters } = listing;
     params.state.pendingToolSurface = {
       routeKey: params.routeKey,
@@ -326,28 +326,28 @@ export function prepareSessionPublicationToolListing(
   );
 }
 
-/**
- * The series' first request pins its tool set and every definition. Later turns send
- * the pin whatever started them: a tool the turn did not build stays listed and refuses
- * its calls, and a tool the pin lacks waits for the next series unless the surface still
- * filters per turn. Live facts, such as the
- * connected computer, reach the model in tool results, never in the definition.
- */
+/** The series' first request pins tools and definitions; unbuilt pinned tools refuse calls. */
 export function prepareSessionToolSurface(
   params: ToolSurfaceInput & { admitNewTools?: boolean },
 ): AnyAgentTool[] {
   const { known, historyId } = resolveSessionToolSurface(params);
+  const previous = new Map(known?.tools?.map((pin) => [pin.name, pin]));
+  // Surfaces that still filter per turn admit new tools and changed schemas, as before.
+  const admitted =
+    !known?.tools || params.admitNewTools
+      ? params.tools.filter(
+          (tool) =>
+            !previous.has(tool.name) ||
+            !sameToolParameters(previous.get(tool.name)?.parameters, tool.parameters),
+        )
+      : [];
   let pinned = known?.tools;
-  // Surfaces that still filter per turn (Tool Search off, directory mode, selectors) admit a
-  // tool the pin lacks once; pinned definitions stay frozen.
-  const added = params.admitNewTools
-    ? params.tools.filter((tool) => !pinned?.some((pin) => pin.name === tool.name))
-    : [];
-  if (!pinned || added.length > 0) {
-    pinned = [
-      ...(pinned ?? []),
-      ...(pinned ? added : params.tools).map(describeSessionToolDefinition),
-    ].toSorted((a, b) => a.name.localeCompare(b.name));
+  if (!pinned || admitted.length > 0) {
+    const definitions = new Map([
+      ...previous,
+      ...admitted.map((tool) => [tool.name, describeSessionToolDefinition(tool)] as const),
+    ]);
+    pinned = [...definitions.values()].toSorted((a, b) => a.name.localeCompare(b.name));
     params.state.pendingToolSurface = {
       routeKey: params.routeKey,
       historyId,
@@ -370,12 +370,7 @@ function refusePinnedTool(tool: ToolDefinition): AnyAgentTool {
   );
 }
 
-/**
- * The tool definitions this session last sent to the provider, or undefined before its
- * first pin. Compaction estimates its replacement request with these: deferred catalog
- * tools stay registered but never reach the provider. Accepted edge case: a history or
- * tool policy change since the pin is counted from the next turn's pin.
- */
+/** Tools last sent to the provider (undefined before a pin), for compaction estimates. */
 export function readSessionSentTools(entries: SessionEntry[]): AnyAgentTool[] | undefined {
   return readToolSurfaceCheckpoint(entries)?.tools.map(refusePinnedTool);
 }
@@ -384,33 +379,6 @@ export function readSessionSentTools(entries: SessionEntry[]): AnyAgentTool[] | 
 export function beginSessionSystemPrompt(state: EmbeddedSessionPromptState): void {
   state.pendingSystemPrompt = undefined;
   state.historyBoundary = undefined;
-}
-
-function promptSections(text: string): Map<string, string> {
-  const sections = new Map<string, string>();
-  for (const section of text.split(/(?=^## )/m)) {
-    const lineEnd = section.indexOf("\n");
-    const heading = section.startsWith("## ")
-      ? section.slice(0, lineEnd < 0 ? section.length : lineEnd)
-      : "";
-    sections.set(heading, (sections.get(heading) ?? "") + section);
-  }
-  return sections;
-}
-
-function promptDelta(previous: string, current: string): string[] {
-  const before = promptSections(previous);
-  const sections: string[] = [];
-  for (const [heading, section] of promptSections(current)) {
-    if (before.get(heading) !== section) {
-      sections.push(section);
-    }
-    before.delete(heading);
-  }
-  for (const heading of before.keys()) {
-    sections.push(`${heading}\n(removed)`);
-  }
-  return sections;
 }
 
 /**
