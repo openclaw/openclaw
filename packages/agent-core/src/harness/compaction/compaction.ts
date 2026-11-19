@@ -49,6 +49,8 @@ export interface CompactionResult<T = unknown> {
 export interface CompactionSettings {
   /** Persisted summary character ceiling; omission preserves the 16,000-character default. */
   maxSummaryChars?: number;
+  /** Safeguard summary reserve ceiling; omission preserves the 20,000-token default. */
+  maxSummaryReserveTokens?: number;
   /** Enable automatic compaction decisions. */
   enabled: boolean;
   /** Tokens reserved for summary prompt and output. */

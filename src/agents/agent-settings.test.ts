@@ -155,6 +155,25 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     expect(shouldCompact(24_576, 32_768, settings)).toBe(false);
     expect(shouldCompact(24_577, 32_768, settings)).toBe(true);
   });
+
+  it.each([
+    { label: "omitted", global: undefined, agent: undefined, expected: undefined },
+    { label: "global", global: 65_536, agent: undefined, expected: 65_536 },
+    { label: "per-agent", global: 65_536, agent: 32_768, expected: 32_768 },
+  ])("resolves the $label summary reserve ceiling", ({ global, agent, expected }) => {
+    const settingsManager = SettingsManager.inMemory();
+    applySettings({
+      settingsManager,
+      agentId: "research",
+      cfg: {
+        agents: {
+          defaults: { compaction: { maxSummaryReserveTokens: global } },
+          entries: { research: { compaction: { maxSummaryReserveTokens: agent } } },
+        },
+      },
+    });
+    expect(settingsManager.getCompactionSettings().maxSummaryReserveTokens).toBe(expected);
+  });
 });
 
 describe("resolveEffectiveCompactionMode", () => {

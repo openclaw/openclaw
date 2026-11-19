@@ -127,6 +127,25 @@ describe("agent defaults schema", () => {
     expect(AgentEntrySchema.parse({ id: "ops" }).compaction).toBeUndefined();
   });
 
+  it("accepts a summary reserve ceiling at both scopes without adding a default", () => {
+    for (const [schema, entry] of [
+      [AgentDefaultsSchema, {}],
+      [AgentEntrySchema, { id: "ops" }],
+    ] as const) {
+      for (const maxSummaryReserveTokens of [1_000, 20_000, 65_536]) {
+        expect(schema.parse({ ...entry, compaction: { maxSummaryReserveTokens } })).toMatchObject({
+          compaction: { maxSummaryReserveTokens },
+        });
+      }
+      for (const maxSummaryReserveTokens of [0, 999, 20_000.5]) {
+        expectSchemaFailurePath(
+          schema.safeParse({ ...entry, compaction: { maxSummaryReserveTokens } }),
+          "compaction.maxSummaryReserveTokens",
+        );
+      }
+    }
+  });
+
   it("rejects unsafe byte-size strings in compaction defaults", () => {
     const unsafe = String(Number.MAX_SAFE_INTEGER + 1);
     for (const compaction of [

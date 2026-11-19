@@ -145,6 +145,7 @@ export class SettingsManager {
     reserveTokens: number;
     keepRecentTokens: number;
     maxSummaryChars?: number;
+    maxSummaryReserveTokens?: number;
   } {
     return {
       enabled: this.getCompactionEnabled(),
@@ -152,6 +153,9 @@ export class SettingsManager {
       keepRecentTokens: this.getCompactionKeepRecentTokens(),
       ...(this.settings.compaction?.maxSummaryChars !== undefined
         ? { maxSummaryChars: this.settings.compaction.maxSummaryChars }
+        : {}),
+      ...(this.settings.compaction?.maxSummaryReserveTokens !== undefined
+        ? { maxSummaryReserveTokens: this.settings.compaction.maxSummaryReserveTokens }
         : {}),
     };
   }

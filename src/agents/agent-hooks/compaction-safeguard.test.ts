@@ -390,6 +390,35 @@ it.each(["cap-staged-limit", "copilot-headers", "keyless-sdk-auth"] as const)(
     }
   },
 );
+it.each([
+  { label: "raises", ceiling: 65_536, reserveTokens: 80_000, expected: 65_536 },
+  { label: "lowers", ceiling: 8_000, reserveTokens: 80_000, expected: 8_000 },
+  {
+    label: "keeps the compaction reserve under",
+    ceiling: 65_536,
+    reserveTokens: 30_000,
+    expected: 30_000,
+  },
+  {
+    label: "keeps the model output limit over",
+    ceiling: 300_000,
+    reserveTokens: 200_000,
+    expected: 128_000,
+  },
+])("$label a configured summary reserve ceiling", async ({ ceiling, reserveTokens, expected }) => {
+  summarize.mockResolvedValue("mock summary");
+  const model = anthropicModel({ contextWindow: 1_000_000, maxTokens: 128_000 });
+  const session = configuredSession({ model, recentTurnsPreserve: 0 });
+  const event = historyEvent([userMessage("large history", 1)], {
+    tokensBefore: 250_000,
+    settings: { reserveTokens, maxSummaryReserveTokens: ceiling },
+  });
+  const { result } = await runCompaction(session, event, {
+    auth: { ok: true, apiKey: "test-key" },
+  });
+  expect(result.cancel).not.toBe(true);
+  expect(mockCallArg(summarize).reserveTokens).toBe(expected);
+});
 it("preserves history and redacts a total provider failure", async () => {
   testing.setSummarizeCompactionHistoryForTest(compactionModule.summarizeCompactionHistory);
   const model = anthropicModel({ api: "test-api" as never, baseUrl: "" });

@@ -124,7 +124,7 @@ export const createCompactionEvent = (
     messageText?: string;
     tokensBefore?: number;
     preparation?: Partial<Omit<CompactionPreparation, "fileOps" | "settings">> & {
-      settings?: { reserveTokens: number };
+      settings?: { reserveTokens: number; maxSummaryReserveTokens?: number };
     };
     customInstructions?: string;
     signal?: AbortSignal;
