@@ -104,8 +104,10 @@ If Codex detection or runtime inspection fails, automatic setup shows the error
 and stops rather than selecting a local model. Fix the reported problem and
 retry, or choose another available provider manually. A missing Codex executable
 or login still allows the remaining connections to be tried.
-If none works, OpenClaw installs or enables the official Codex plugin and uses
-its existing login, or asks you to sign in with ChatGPT. Apple Foundation Models
+If none works, OpenClaw asks you to sign in with ChatGPT and runs it on its own
+harness. When Codex is installed or signed in on the Gateway host, it instead
+installs or enables the official Codex plugin and uses its existing login, or
+asks for Codex login. Apple Foundation Models
 is a utility option and is never chosen as the primary model.
 
 When automatic setup reuses Codex, it shares the Gateway user's `CODEX_HOME`

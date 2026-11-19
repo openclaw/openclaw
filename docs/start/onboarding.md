@@ -169,10 +169,12 @@ It tries at most four detected connections and saves the first model that
 passes a live completion test. Apple Foundation Models is a utility option,
 not a primary model.
 
-If none works, setup installs or enables the official Codex plugin, then reuses
-a Codex login or offers ChatGPT sign-in. This is the only plugin capability
-approval automatic setup grants. If it fails, the dashboard shows the reason
-and lets you choose another connection.
+If none works, setup offers **Sign in with ChatGPT**, which runs on OpenClaw's
+own harness. When Codex is installed or signed in on the Gateway host, setup
+instead installs or enables the official Codex plugin, then reuses the Codex
+login or offers Codex login; this is the only plugin capability approval
+automatic setup grants. If setup fails, the dashboard shows the reason and lets
+you choose another connection.
 
 ### Codex login and isolation
 
@@ -184,8 +186,8 @@ Choose whether to share your existing Codex state:
 | **Separate** | An OpenClaw-owned login and agent home.                                    |
 
 When automatic setup selects an existing Codex ChatGPT or API-key login, it
-uses **Reuse**. Without an existing login,
-the offered ChatGPT sign-in uses a separate home. To switch, choose **Sign in separately** on the setup card, or sign in with ChatGPT or an OpenAI API key
+uses **Reuse**. When Codex is installed without a login, the offered Codex
+login uses a separate home. To switch, choose **Sign in separately** on the setup card, or sign in with ChatGPT or an OpenAI API key
 in **Models**. Completing that sign-in selects the isolated home.
 
 Choosing a Claude or Codex model does not automatically show native

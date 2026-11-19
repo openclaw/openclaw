@@ -84,6 +84,8 @@ const presentedOpenai = {
   detail: "OPENAI_API_KEY set",
 };
 const codex: SetupInferenceCandidate = { ...presentedCodex, credentials: true, recommended: false };
+// Codex is installed on this machine but its login is unverified, so it is not ranked.
+const installedCodex: SetupInferenceCandidate = { ...presentedCodex, recommended: false };
 const openai: SetupInferenceCandidate = {
   ...presentedOpenai,
   credentials: true,
@@ -229,6 +231,17 @@ describe("Gateway automatic inference setup", () => {
     },
   );
 
+  it("offers Sign in with ChatGPT without preparing Codex when Codex is not on the machine", async () => {
+    expect(await runSetup()).toEqual({
+      status: "needs-sign-in",
+      signIn: { authOptionId: siwcSignIn.id, label: siwcSignIn.label },
+      alternatives: [],
+      attempts: [],
+      installedPlugins: [],
+    });
+    expectUnused(fixture.activate, fixture.prepare, fixture.commit, fixture.audit);
+  });
+
   it("can select Ollama when Codex is genuinely absent", async () => {
     fixture.detect.mockResolvedValueOnce(detection([{ ...ollama }]));
     fixture.activate.mockResolvedValueOnce({
@@ -319,7 +332,7 @@ describe("Gateway automatic inference setup", () => {
       candidates.push({ ...openai, kind: `saved-auth:${id}`, label: `Saved ${id}` });
     }
     fixture.detect
-      .mockResolvedValueOnce(detection(candidates))
+      .mockResolvedValueOnce(detection([...candidates, installedCodex]))
       .mockResolvedValueOnce(detection([codex]));
     fixture.activate.mockResolvedValue({ ok: false, status: "auth", error: "Sign-in expired." });
     fixture.prepare.mockResolvedValue({ ok: true, config: {} });
@@ -395,7 +408,7 @@ describe("Gateway automatic inference setup", () => {
         },
       };
       fixture.prepare.mockResolvedValue({ ok: true, config: prepared });
-      fixture.detect.mockResolvedValueOnce(detection()).mockResolvedValueOnce(
+      fixture.detect.mockResolvedValueOnce(detection([installedCodex])).mockResolvedValueOnce(
         detection([], {
           authOptions: [
             {

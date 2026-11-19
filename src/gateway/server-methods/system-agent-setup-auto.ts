@@ -91,15 +91,15 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
   let shared = false;
   let authOptions = detection.authOptions;
   let authChoices: ProviderAuthChoiceMetadata[] | undefined;
-  const findCodexSignIn = (options: typeof authOptions) => {
-    authChoices ??= resolveManifestProviderAuthChoices({
+  const manifestAuthChoices = () =>
+    (authChoices ??= resolveManifestProviderAuthChoices({
       config: initialSnapshot.runtimeConfig ?? initialSnapshot.config,
       workspaceDir: detection.workspace,
       includeUntrustedWorkspacePlugins: false,
       includeWorkspacePlugins: false,
-    });
-    return findAgentRuntimeSignInOption(options, authChoices, "codex");
-  };
+    }));
+  const findCodexSignIn = (options: typeof authOptions) =>
+    findAgentRuntimeSignInOption(options, manifestAuthChoices(), "codex");
   const result = (
     status: SystemAgentSetupAutoResult["status"],
     selected?: SetupInferenceCandidate,
@@ -227,6 +227,25 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
     if (codexFailed) {
       return result("unavailable");
     }
+  }
+  // A machine without Codex signs in with ChatGPT and runs on OpenClaw's own harness;
+  // setup pins that runtime when it saves the sign-in. Machines where Codex is installed
+  // or signed in keep the Codex preparation below.
+  if (!detection.candidates.some((candidate) => candidate.kind === "codex-cli")) {
+    const codexLogins = new Set(
+      manifestAuthChoices()
+        .filter((choice) => choice.agentRuntimeLogin === "codex")
+        .map((choice) => choice.choiceId),
+    );
+    const signIn = authOptions.find(
+      (option) =>
+        option.brandId === "openai" &&
+        (option.kind === "oauth" || option.kind === "device-code") &&
+        !codexLogins.has(option.id),
+    );
+    return signIn
+      ? { ...result("needs-sign-in"), signIn: { authOptionId: signIn.id, label: signIn.label } }
+      : result("unavailable");
   }
   try {
     let complete: (() => Promise<boolean>) | undefined;
