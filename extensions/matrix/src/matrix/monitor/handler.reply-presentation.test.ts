@@ -2,11 +2,7 @@ import { shouldAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-outbound";
 // Matrix tests cover the handler's reply presentation wiring.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  createReplyDispatcherWithTyping,
-  type ReplyPayload,
-  type ReplyDispatcherWithTypingOptions,
-} from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareMatrixReplyPayload } from "../../outbound.js";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
@@ -73,53 +69,6 @@ beforeEach(() => {
 });
 
 describe("matrix monitor handler reply presentation", () => {
-  it("keeps native typing available after a delivery-only idle callback", async () => {
-    const context = {
-      cfg: { channels: { matrix: {} } },
-      client: {} as MatrixClient,
-      roomId: "!room:example.org",
-      accountId: "ops",
-      streaming: "off" as const,
-      replyToMode: "off" as const,
-      logVerboseMessage: vi.fn(),
-    };
-    const draftController = await createMatrixDraftController({
-      ...context,
-      messageId: "$queued",
-      previewToolProgressEnabled: false,
-    });
-    const start = vi.fn(async () => {});
-    const typingCallbacks = createTypingCallbacks({
-      start,
-      onStartError: vi.fn(),
-      keepaliveIntervalMs: 0,
-      maxDurationMs: 0,
-    });
-    try {
-      const { turnDispatcherOptions } = createMatrixReplyDispatcher({
-        ...context,
-        draftController,
-        draftStream: draftController.draftStream,
-        prefixOptions: { responsePrefixContextProvider: () => ({}) },
-        humanDelay: undefined,
-        typingCallbacks,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        mediaLocalRoots: [],
-      });
-      // Delivery callbacks can run for a queue acknowledgement before reply generation.
-      const options: ReplyDispatcherWithTypingOptions = {
-        ...turnDispatcherOptions,
-        deliver: async () => {},
-      };
-      await options.onIdle?.();
-      const dispatcher = createReplyDispatcherWithTyping(options);
-      await dispatcher.replyOptions.onReplyStart?.();
-      expect(start).toHaveBeenCalledOnce();
-    } finally {
-      draftController.cancelProgressDraft();
-      typingCallbacks.onCleanup?.();
-    }
-  });
   it.each([undefined] as const)(
     "applies current acknowledgement scope while preserving account override %s",
     async (accountScope) => {

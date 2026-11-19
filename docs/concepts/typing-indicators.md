@@ -17,8 +17,6 @@ When `agents.defaults.typingMode` is **unset**:
 - **Message-tool-only replies**: typing starts immediately, even in a group chat without a mention, so members can see the agent working when no automatic final reply is posted. This takes precedence over the group rules above; an explicit `typingMode` still wins over it.
 - **Session events**: background events suppress typing while their ordinary session turn runs.
 
-When [Decision assistance](/concepts/decision-models) assesses whether to join a group conversation, that assessment stays quiet. A queued group message also stays quiet while it waits. If the final assessment selects a reply, typing starts before generation unless the effective typing mode is `never`. A stay-silent decision produces no typing indicator. Typing for an already active reply continues independently. WhatsApp uses this shared policy for unmentioned message-tool-only group turns too; it no longer mutes their typing separately.
-
 ## Modes
 
 Set `agents.defaults.typingMode` to one of:

@@ -259,7 +259,8 @@ export function createMatrixReplyDispatcher(config: {
     turnDispatcherOptions: {
       ...prefixOptions,
       humanDelay,
-      typingCallbacks,
+      onReplyStart: typingCallbacks.onReplyStart,
+      onIdle: typingCallbacks.onIdle,
     },
     deliverReply: async (payload: ReplyPayload, info: MatrixReplyDispatchInfo) => {
       const createDraftReceipt = (id: string): MessageReceipt =>

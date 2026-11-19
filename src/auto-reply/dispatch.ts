@@ -35,6 +35,7 @@ import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
   composeReplyDispatchBeforeDeliver,
   createReplyDispatcher,
+  createReplyDispatcherWithTyping,
   markReplyDispatchBeforeDeliverDeadlineOwned,
   type ReplyDispatchBeforeDeliver,
   type ReplyDispatcherOptions,
@@ -48,7 +49,6 @@ import {
   resolveReplyOperationRunState,
   type ReplyOperationRunState,
 } from "./reply/reply-operation-run-state.js";
-import { createSourceReplyDispatcherWithTyping } from "./reply/reply-source-typing.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 
 type InternalDispatchReplyOptions = Omit<
@@ -318,15 +318,13 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
           return configuredBeforeDeliver ? await configuredBeforeDeliver(payload, info) : payload;
         })
       : undefined;
-  const { dispatcher, replyOptions, completeIngress } = createSourceReplyDispatcherWithTyping({
-    options: {
+  const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
+    createReplyDispatcherWithTyping({
       ...params.dispatcherOptions,
       beforeDeliver,
       onSettled: settleDeliveries,
       onFreshSettledDelivery: undefined,
-    },
-    runState: replyOperationRunState,
-  });
+    });
   const onTypingController = params.replyOptions?.onTypingController
     ? (typing: Parameters<NonNullable<typeof params.replyOptions.onTypingController>>[0]) => {
         replyOptions.onTypingController?.(typing);
@@ -357,7 +355,8 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
       await settledDeliveries;
     } finally {
       foregroundReplyLease?.release();
-      completeIngress();
+      markRunComplete();
+      markDispatchIdle();
     }
   }
 }

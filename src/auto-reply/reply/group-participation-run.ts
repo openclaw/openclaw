@@ -88,7 +88,6 @@ function createGroupParticipationRun(params: {
     live = false;
   });
   const timeoutMs = run.run.timeoutMs > 0 ? Math.min(run.run.timeoutMs, 30_000) : 30_000;
-  const deadline = performance.now() + timeoutMs;
   const assertCurrent = () => {
     operation.abortSignal.throwIfAborted();
     run.operatorAuthority?.assertCurrent();
@@ -115,6 +114,7 @@ function createGroupParticipationRun(params: {
     assertCurrent();
   };
   const refresh = async (): Promise<GroupParticipationSnapshot | undefined> => {
+    const deadline = performance.now() + timeoutMs;
     for (;;) {
       assertCurrent();
       selection = currentSelection();

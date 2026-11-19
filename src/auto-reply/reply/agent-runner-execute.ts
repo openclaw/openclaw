@@ -31,11 +31,7 @@ import {
 } from "./pending-final-delivery.js";
 import { claimNextQueuedFollowupRequestFrom, enqueueFollowupRun } from "./queue.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
-import type {
-  UnexecutedReplyTurnCompletion,
-  PendingReplyDelivery,
-} from "./reply-input-admission.js";
+import type { PendingReplyDelivery } from "./reply-input-admission.js";
 import {
   isReplyOperationSuperseded,
   resolveReplyOperationAbortReason,
@@ -137,16 +133,14 @@ type ExecutePreparedReplyAgentRunInput = Omit<
     "blockReplyChunking" | "toolProgressDetail" | "transcriptCommandBody" | "typing" | "typingMode"
   > & {
     admitUserTurn: (recorder?: UserTurnTranscriptRecorder) => Promise<void>;
-    completeUnexecutedTurn: (
-      completion: UnexecutedReplyTurnCompletion,
-      entry: SessionEntry | undefined,
-    ) => Promise<void>;
+    completeObservedTurn: () => Promise<void>;
     applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
     recordPendingDelivery: (delivery: PendingReplyDelivery) => Promise<void>;
     resolveVisibleReplyDelivery: () => Promise<boolean>;
     getActiveSessionEntry: () => SessionEntry | undefined;
     onCompactionNoticePayload: (payload: ReplyPayload) => void;
-    admittedTurn: AdmittedFollowupTurn;
+    preflightCompactionApplied: boolean;
+    recoveryMemoryFlushAttempted?: boolean;
     setRunFollowupTurn: (runner: FinalizeReplyAgentRunInput["runFollowupTurn"]) => void;
     shouldEmitToolOutput: () => boolean;
     shouldEmitToolResult: () => boolean;
@@ -212,7 +206,7 @@ async function executePreparedReplyAgentRunWithCompletion(
     replyOperation,
     replyThreadingOverride,
     returnWithQueuedFollowupDrain,
-    admittedTurn,
+    preflightCompactionApplied,
     sessionCtx,
     sessionKey,
     setRunFollowupTurn,
@@ -431,8 +425,8 @@ async function executePreparedReplyAgentRunWithCompletion(
     finalizeReplyAgentRun({
       ...context,
       opts: executionOpts,
-      activeSessionEntry: admittedTurn.session.current(),
-      preflightCompactionApplied: admittedTurn.preflightCompactionApplied,
+      activeSessionEntry,
+      preflightCompactionApplied,
       runFollowupTurn,
       execution,
       runId: runOutcome.runId,

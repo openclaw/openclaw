@@ -25,6 +25,7 @@ import {
   type SessionControllerMailboxClaim,
 } from "../../sessions/session-controller.mailbox.js";
 import { hasReplySteeringRequesterMismatch } from "../../sessions/session-controller.message-join.js";
+import { captureReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
 import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -69,6 +70,7 @@ import * as replyRunState from "./reply-operation-run-state.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { enqueueReplySourceAdmission } from "./reply-source-admission.js";
 import { bindReplySourceToFollowup, retireUnadoptedReplySource } from "./reply-source-binding.js";
+import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
 import { resolveReplyTurnKind } from "./reply-turn-kind.js";
 import { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
@@ -147,9 +149,6 @@ export async function runReplyAgent(
       followupRun.disableCollectBatching = true;
     }
     const replyOperationRunState = replyRunState.resolveReplyOperationRunState(opts);
-    if (replyOperationRunState) {
-      replyOperationRunState.sourceSettlement = controllerInput.settlement.promise;
-    }
     const { runOptions: runOpts, hasVisiblePartialReply } = prepareReplyRunOptions({
       opts,
       runId: controllerInput.protocolRunId ?? runId,
@@ -317,9 +316,7 @@ export async function runReplyAgent(
         touchActiveSessionEntry,
         typingSignals,
       });
-      if (!controllerInput.custody.enqueued || controllerInput.custody.completed) {
-        typing.cleanup();
-      }
+      typing.cleanup();
       return result === "handled" ? undefined : result;
     }
 
@@ -513,10 +510,10 @@ export async function runReplyAgent(
       }
       const queuedBehindActiveRun = (await isRunActive?.()) === true;
       await touchActiveSessionEntry();
-      // Queued execution retains its source's controller. A group input starts
-      // feedback only after its own participation assessment approves execution.
-      if (queuedBehindActiveRun && !followupRun.groupParticipation) {
+      if (queuedBehindActiveRun) {
         await typingSignals.signalToolStart();
+      } else {
+        typing.cleanup();
       }
       return undefined;
     }
@@ -715,7 +712,7 @@ export async function runReplyAgent(
           guidance,
         });
     }
-    const { admitUserTurn, completeUnexecutedTurn, recordPendingDelivery } =
+    const { admitUserTurn, completeObservedTurn, recordPendingDelivery } =
       createReplyInputAdmission({
         followupRun,
         replyOperation,
@@ -735,19 +732,26 @@ export async function runReplyAgent(
       if (turn.preflightError && !isChannelRunAuthorizationError(turn.preflightError)) {
         throw turn.preflightError;
       }
+      await replyOperation.bindToolAuthoritySnapshotAsync(
+        prepareReplyRunToolAuthority(
+          followupRun,
+          activeSessionEntry,
+          captureReplyOperationSessionReader(replyOperation),
+        ),
+      );
       const executePrepared = () =>
         executePreparedReplyAgentRun({
           ...params,
           activeSessionStore,
           admitUserTurn,
-          completeUnexecutedTurn,
+          completeObservedTurn,
           recordPendingDelivery,
           applyReplyToMode,
           blockReplyPipeline,
           cfg,
           resolveVisibleReplyDelivery,
           activeIsNewSession: isNewSession,
-          getActiveSessionEntry: turn.session.current,
+          getActiveSessionEntry: () => activeSessionEntry,
           opts: runOpts,
           onCompactionNoticePayload: (payload) => {
             pendingCompactionNotices.push(payload);
@@ -760,7 +764,8 @@ export async function runReplyAgent(
           replyToMode,
           returnWithQueuedFollowupDrain,
           runFollowupTurn,
-          admittedTurn: turn,
+          preflightCompactionApplied: turn.preflightCompactionApplied,
+          recoveryMemoryFlushAttempted: turn.memoryFlushAttempted,
           setRunFollowupTurn: (runner) => {
             runFollowupTurn = runner;
           },
