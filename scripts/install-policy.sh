@@ -323,13 +323,23 @@ resolve_git_openclaw_ref() {
     case "$requested" in
         ""|latest|next|beta)
             resolved_version="$(installer_npm view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
+            if [[ -z "$resolved_version" && "$requested" == "beta" ]]; then
+                # Documented channel contract: --beta is "beta if available,
+                # else latest" — the same fallback the npm and Bun engine
+                # channels apply. Never hand checkout the literal "beta": no
+                # such git ref exists, so the install would fail outright.
+                resolved_version="$(installer_npm view "openclaw" "dist-tags.latest" 2>/dev/null || true)"
+                if [[ -n "$resolved_version" ]]; then
+                    printf 'Warning: could not resolve the beta release tag; falling back to the latest stable release.\n' >&2
+                fi
+            fi
             if [[ -n "$resolved_version" ]]; then
                 echo "v${resolved_version}"
-            elif [[ -z "$requested" || "$requested" == "latest" ]]; then
+            elif [[ -z "$requested" || "$requested" == "latest" || "$requested" == "beta" ]]; then
                 # npm is not installed yet (or the registry lookup failed): a
                 # git install has no release tag to pin. Surface that instead of
                 # silently checking out unreleased main.
-                printf 'Warning: could not resolve the latest release tag (npm registry lookup failed); falling back to the main branch.\n' >&2
+                printf 'Warning: could not resolve the %s release tag (npm registry lookup failed); falling back to the main branch.\n' "${requested:-latest}" >&2
                 echo "main"
             else
                 echo "$requested"
