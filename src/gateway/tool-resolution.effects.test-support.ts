@@ -293,7 +293,6 @@ export function registerGatewayToolFinalEffectTests() {
           if (outcome === "tool-cancelled") {
             expect(f.manager.isPending(record)).toBe(true);
             controller.abort();
-            expect(f.manager.isPending(record)).toBe(false);
           } else if (outcome === "run-revoked") {
             releaseAgentRunDelegatedAuthority(f.authority);
             await f.manager.forceDenyIfRuntimeAuthorityClosed(record.id);
@@ -311,6 +310,9 @@ export function registerGatewayToolFinalEffectTests() {
           }
           // A cancelled tool wait can finish before the approval owner's durable handoff.
           await completion;
+          if (outcome === "tool-cancelled") {
+            expect(f.manager.isPending(record)).toBe(false);
+          }
           if (outcome === "precommit-revoked") {
             expect(revokeBeforeWrite).toHaveBeenCalledOnce();
           }
