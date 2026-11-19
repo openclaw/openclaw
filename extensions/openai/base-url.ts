@@ -1,11 +1,23 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveOpenAICodexClientVersion } from "./codex-client-version.js";
 
 export const OPENAI_CODEX_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/codex";
 
 /** ChatGPT model-list URL. The backend gates models on the reported Codex client version. */
 export async function resolveOpenAICodexModelsEndpoint(): Promise<string> {
-  const clientVersion = await resolveOpenAICodexClientVersion();
+  const { resolveProviderRequestPolicy } = await import("openclaw/plugin-sdk/provider-http");
+  const version = resolveProviderRequestPolicy({
+    provider: "openai",
+    baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+  }).attributionHeaders?.version;
+  // Match Responses attribution. Development placeholders can hide models or get HTTP 400.
+  const clientVersion =
+    version &&
+    Number(version.slice(0, 4)) >= 2026 &&
+    /^\d{4}\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/u.test(
+      version,
+    )
+      ? version
+      : "99.0.0";
   return `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${encodeURIComponent(clientVersion)}`;
 }
 

@@ -162,11 +162,14 @@ export function resumeSubagentRun(runId: string) {
     return;
   }
   const entry = subagentRuns.get(runId);
-  if (
-    !entry ||
-    resumedRuns.has(getSubagentRunRuntimeKey(entry)) ||
-    subagentRuns.isCompletionAuthorityRetired(entry)
-  ) {
+  if (!entry || resumedRuns.has(getSubagentRunRuntimeKey(entry))) {
+    return;
+  }
+  if (subagentRuns.isCompletionAuthorityRetired(entry)) {
+    // A retired owner cannot deliver, but its yielded batch still owes a visible failure.
+    if (entry.requesterSettleWake) {
+      resumeRequesterSettleWake(runId, entry);
+    }
     return;
   }
   if (entry.killReconciliation) {

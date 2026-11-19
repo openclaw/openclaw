@@ -410,33 +410,37 @@ async function capacityFixture(mebibytes: number | null, worker = false) {
   };
 }
 
-it("preflights activation database backup space before the update changes anything", async () => {
+it("preflights the pre-migration image without refusing or changing anything", async () => {
   const f = await fixture(0, ["main", "second"], false);
   // Admission measures family lengths; sparse tails avoid writing payloads this check never reads.
   for (const file of f.files) {
     await fs.truncate(file, 8 * 1024 ** 2);
   }
   const backupDirectory = path.join(f.root, "backup");
-  let freeMiB: number | null = 100;
+  let freeMiB: number | null = 80;
   capacity((target) =>
     target === backupDirectory ? (freeMiB === null ? null : freeMiB * 1024 ** 2) : 140 * 1024 ** 2,
   );
   const before = await readFiles(f.files);
-  for (freeMiB of [100, 140, null]) {
-    const result = await assessInitialUpdateSnapshotCapacity({
+  for (freeMiB of [80, 140, null]) {
+    const { step, shortfall } = await assessInitialUpdateSnapshotCapacity({
       config: {},
       stateDir: f.stateDir,
       env: {},
       backupDirectory,
     });
-    expect(result.exitCode, result.stderrTail ?? undefined).toBe(freeMiB === 100 ? 1 : 0);
-    if (freeMiB === 100) {
-      expect(result.stderrTail).toContain("Update database backup");
-      expect(result.stderrTail).toContain("125829120 bytes");
-      expect(result.stderrTail).toContain("104857600 bytes");
-      for (const file of f.files) {
-        expect(result.stderrTail).toContain(file);
-      }
+    // The image is skipped below its need; the migration's own room fits on the state volume.
+    expect(step.exitCode, step.stderrTail ?? undefined).toBe(0);
+    expect(shortfall).toBe(freeMiB === 80);
+    expect(step.warnings).toEqual(
+      freeMiB === 80
+        ? [expect.stringMatching(/^No pre-migration database image: it needs 88 MiB near /u)]
+        : freeMiB === null
+          ? [expect.stringContaining("could not be measured")]
+          : undefined,
+    );
+    for (const file of f.files) {
+      expect(step.diagnostics?.join("\n")).toContain(file);
     }
   }
   await expect(fs.stat(backupDirectory)).rejects.toMatchObject({ code: "ENOENT" });
