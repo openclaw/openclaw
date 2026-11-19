@@ -328,7 +328,8 @@ it("allows exactly the calls a scheduled toolsAllow allowed before", async () =>
 it("keeps the session's tools listed on a scheduled run and refuses the rest visibly", async () => {
   const run = await prepareTools(scheduled, baseConfig, "exec");
   const user = await prepareTools({ runId: "user", trigger: "user", senderIsOwner: true });
-  expect(run.listed).toEqual(user.listed);
+  // MCP servers still start only when the allowlist names them, as on main (follow-up).
+  expect(run.listed).toEqual(user.listed.filter((name) => name !== "notion__search"));
   expect(run.dispatched?.details).toMatchObject({ gated: true });
   expect(JSON.stringify(run.dispatched?.content)).toContain(
     "exec is outside the tools this run allows",
@@ -474,20 +475,6 @@ it("keeps a run allowlist refusal through a catalog rewrap", async () => {
   );
 });
 
-it("lists the full set under an allowlist that names only an MCP tool", async () => {
-  // A cron first after /compact must not pin only the Tool Search controls.
-  const run = await prepareTools({ ...scheduled, toolsAllow: ["notion__search"] });
-  const user = await prepareTools({ runId: "user", trigger: "user", senderIsOwner: true });
-  expect(run.listed).toEqual(user.listed);
-  expect(run.emptyAllowlistError).toBeUndefined();
-  expect(run.callable).toEqual([
-    "dispatch_action",
-    "notion__search",
-    "tool_describe",
-    "tool_search",
-  ]);
-});
-
 const guestGroup = {
   runId: "g",
   trigger: "user",
@@ -540,15 +527,14 @@ it("refuses what sender allow and deny policies removed, including MCP tools", a
 it("never delegates or captures a tool the guest sender is refused", async () => {
   const run = await prepareTools(
     { ...guestGroup, trigger: "user" },
-    withSenderPolicy({ deny: ["exec", "notion__*"] }),
+    withSenderPolicy({ deny: ["exec", "world__calendar_list"] }),
   );
   const owner = await prepareTools({ ...guestGroup, senderId: "owner", senderIsOwner: true });
-  // A guest's deny refuses an MCP server's tools without dropping them from the owner's list.
+  // A guest's deny refuses a plugin tool without dropping it from the owner's list.
   expect(run.listed).toEqual(owner.listed);
-  expect(run.listed).toContain("notion__search");
-  expect(run.callable).not.toContain("notion__search");
+  expect(run.callable).not.toContain("world__calendar_list");
   expect(run.inherited?.length).toBeGreaterThan(0);
-  for (const name of ["exec", "notion__search"]) {
+  for (const name of ["exec", "world__calendar_list"]) {
     expect(run.inherited ?? []).not.toContain(name);
     expect(run.cronCreator ?? []).not.toContain(name);
   }

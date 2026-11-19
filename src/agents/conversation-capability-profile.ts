@@ -204,8 +204,6 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
     return merged.length > 0 ? merged : undefined;
   };
   const explicitOverridePolicies = [...configuredOverridePolicies, runtimeToolPolicy];
-  const isSessionFact = (policy: unknown) =>
-    policy !== groupPolicy && policy !== senderPolicy && policy !== runtimeToolPolicy;
   const explicitToolAllowlistPolicies = [
     profilePolicy,
     providerProfilePolicy,
@@ -249,12 +247,11 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
     explicitToolAllowlist: collectExplicitAllowlist(explicitToolAllowlistPolicies),
     explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
     explicitToolDenylist: collectExplicitDenylist(explicitToolAllowlistPolicies),
-    // Session facts only: a fixed listing builds from these; sender, group and run policy gate calls.
-    sessionToolAllowlist: collectExplicitAllowlist(
-      explicitToolAllowlistPolicies.filter(isSessionFact),
-    ),
+    // A fixed listing builds plugins past sender, group and run denies; the turn policy gates calls.
     sessionToolDenylist: collectExplicitDenylist(
-      explicitToolAllowlistPolicies.filter(isSessionFact),
+      explicitToolAllowlistPolicies.filter(
+        (policy) => ![groupPolicy, senderPolicy, runtimeToolPolicy].includes(policy),
+      ),
     ),
     runtimePluginToolGrant: params.runtimePluginToolGrant,
   };

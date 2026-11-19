@@ -263,15 +263,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       ).toEqual(["read"]);
     }));
 
-  it("keeps the run's other tools when the MCP runtime fails to start", async () => {
-    const input = createInput([], [createStubTool("read")]);
-    input.attempt.config = { mcp: { servers: { notion: { command: "notion-mcp" } } } };
-    mocks.acquireSessionMcpRuntime.mockRejectedValue(new Error("mcp scheduler unavailable"));
-    const result = await prepare(input);
-    expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalled();
-    expect(toolNames(result.uncompactedEffectiveTools)).toEqual(["read"]);
-  });
-
   it("keeps an unavailable message tool listed when the session lists one fixed set", async () => {
     // A cron turn without a delivery route must not freeze a series without `message`.
     const input = createInput([], [createStubTool("message")]);

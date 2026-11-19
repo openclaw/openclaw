@@ -339,20 +339,18 @@ export function* assembleOpenClawCodingTools(
   const ownerOnlyCoreToolDenylist = automationsScope.denied
     ? [...sessionToolAccess.ownerOnlyCoreToolDenylist, AUTOMATIONS_TOOL_NAME]
     : sessionToolAccess.ownerOnlyCoreToolDenylist;
-  // A fixed listing keeps every grant (sender and group allows enable optional plugins) and
-  // the default plugin tools a session-fact allowlist would build; the turn policy gates calls.
+  // A fixed listing keeps every grant and also builds the default plugin tools a narrowing
+  // sender, group or run allowlist would skip; policy still filters the list and gates calls.
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
-    fixedListing && capabilityProfile.policy.sessionToolAllowlist.length === 0
+    fixedListing
       ? [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, ...capabilityProfile.policy.explicitToolAllowlist]
       : capabilityProfile.policy.explicitToolAllowlist,
     runtimePluginToolGrant,
   );
   // Owner-only tools stay listed; descendants and captured allowlists cannot inherit them.
-  const pluginToolDenylist = [
-    ...(fixedListing
-      ? capabilityProfile.policy.sessionToolDenylist
-      : capabilityProfile.policy.explicitToolDenylist),
-  ];
+  const pluginToolDenylist = fixedListing
+    ? capabilityProfile.policy.sessionToolDenylist
+    : capabilityProfile.policy.explicitToolDenylist;
   // Children inherit the turn's full denylist, including sender, group and run policy.
   const requesterToolDenylist = capabilityProfile.policy.explicitToolDenylist.concat(
     capabilityProfile.policy.inheritedToolPolicy?.deny ?? [],

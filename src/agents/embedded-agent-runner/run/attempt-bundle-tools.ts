@@ -10,7 +10,6 @@ import {
 import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
-import { refuseRunAllowlistTool } from "../../agent-tools.turn-authority.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
@@ -108,16 +107,11 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     cfg: params.attempt.config,
     manifestRegistry: bundleManifestRegistry,
     toolOverrides: params.attempt.toolOverrides,
-    toolDenylist: params.preparedToolBase.fixedListing
-      ? runtimeCapabilityProfile.policy.sessionToolDenylist
-      : runtimeCapabilityProfile.policy.explicitToolDenylist,
+    toolDenylist: runtimeCapabilityProfile.policy.explicitToolDenylist,
   };
-  const { fixedListing } = params.preparedToolBase;
-  // A fixed listing builds bundled tools whatever the allowlist names; policy gates their calls.
-  const listingToolsAllow = fixedListing ? undefined : params.attempt.toolsAllow;
   const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
     toolsEnabled: auxiliaryToolsEnabled,
-    toolsAllow: listingToolsAllow,
+    toolsAllow: params.attempt.toolsAllow,
     resolveConfiguredMcpNamespaces: () => {
       const configuredNames = Object.keys(params.attempt.config?.mcp?.servers ?? {});
       if (configuredNames.length === 0) {
@@ -138,59 +132,46 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     },
   });
   phases.mark("attempt.bundle-tools.mcp-acquire");
-  let bundleMcpAcquisition: Awaited<ReturnType<typeof acquireSessionMcpRuntime>> | undefined;
-  let bundleMcpRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
-  // An MCP failure leaves this run without MCP tools; it never fails the run.
-  try {
-    bundleMcpAcquisition = bundleMcpEnabled
-      ? await acquireSessionMcpRuntime({
-          ...mcpConfig,
-          sessionId: params.attempt.sessionId,
-          sessionKey: params.attempt.sessionKey,
-          agentId: params.setup.sessionAgentId,
-          agentDir: params.agentDir,
-          // senderId is only set from the verified inbound sender (sessionCtx.SenderId
-          // or the triggering run's sender on follow-ups). Cron/subagent runs
-          // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
-          requesterSenderId: params.attempt.senderId,
-          agentAccountId: params.attempt.agentAccountId,
-          messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
-        })
-      : undefined;
-    phases.mark("attempt.bundle-tools.mcp-materialize");
-    bundleMcpRuntime = bundleMcpAcquisition
-      ? await materializeBundleMcpToolsForRun({
-          ...bundleMcpAcquisition,
-          agentId: params.setup.sessionAgentId,
-          operatorConnect: params.attempt.config
-            ? {
-                cfg: params.attempt.config,
-                metadata: bundleMetadataSnapshot,
-                senderIsOwner: params.attempt.senderIsOwner,
-                chatType: params.attempt.chatType,
-                isTurnTainted: params.attempt.isTurnTainted,
-                toolOverrides: params.attempt.toolOverrides,
-                toolDenylist: mcpConfig.toolDenylist,
-              }
-            : undefined,
-          reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
-          ],
-        })
-      : undefined;
-  } catch (error) {
-    if (params.attempt.abortSignal?.aborted) {
-      throw error;
-    }
-    bundleMcpAcquisition?.releaseLease?.();
-    bundleMcpRuntime = undefined;
-    log.warn(`bundle MCP unavailable for this run: ${String(error)}`);
-  }
+  const bundleMcpAcquisition = bundleMcpEnabled
+    ? await acquireSessionMcpRuntime({
+        ...mcpConfig,
+        sessionId: params.attempt.sessionId,
+        sessionKey: params.attempt.sessionKey,
+        agentId: params.setup.sessionAgentId,
+        agentDir: params.agentDir,
+        // senderId is only set from the verified inbound sender (sessionCtx.SenderId
+        // or the triggering run's sender on follow-ups). Cron/subagent runs
+        // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
+        requesterSenderId: params.attempt.senderId,
+        agentAccountId: params.attempt.agentAccountId,
+        messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
+      })
+    : undefined;
+  phases.mark("attempt.bundle-tools.mcp-materialize");
+  const bundleMcpRuntime = bundleMcpAcquisition
+    ? await materializeBundleMcpToolsForRun({
+        ...bundleMcpAcquisition,
+        agentId: params.setup.sessionAgentId,
+        operatorConnect: params.attempt.config
+          ? {
+              cfg: params.attempt.config,
+              metadata: bundleMetadataSnapshot,
+              senderIsOwner: params.attempt.senderIsOwner,
+              chatType: params.attempt.chatType,
+              isTurnTainted: params.attempt.isTurnTainted,
+              toolOverrides: params.attempt.toolOverrides,
+              toolDenylist: runtimeCapabilityProfile.policy.explicitToolDenylist,
+            }
+          : undefined,
+        reservedToolNames: [
+          ...tools.map((tool) => tool.name),
+          ...(clientTools?.map((tool) => tool.function.name) ?? []),
+        ],
+      })
+    : undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   try {
     phases.mark("attempt.bundle-tools.lsp");
-    // LSP servers start only for runs whose allowlist can call them, as before.
     const bundleLspEnabled = shouldCreateBundleLspRuntimeForAttempt({
       toolsEnabled: auxiliaryToolsEnabled,
       toolsAllow: params.attempt.toolsAllow,
@@ -213,9 +194,8 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       applyEmbeddedAttemptToolsAllow(bundleTools, effectiveToolsAllow, {
         toolMeta: (tool) => getPluginToolMeta(tool),
       });
-    const applyBundlePolicy = (bundledTools: typeof toolsRaw, sessionFactsOnly = false) =>
+    const applyBundlePolicy = (bundledTools: typeof toolsRaw) =>
       applyFinalEffectiveToolPolicy({
-        sessionFactsOnly,
         bundledTools,
         config: params.attempt.config,
         workspaceDir: params.setup.effectiveWorkspace,
@@ -223,19 +203,10 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         conversationCapabilityProfile: runtimeCapabilityProfile,
         warn: (message) => log.warn(message),
       });
-    const bundledSourceTools = [
-      ...(bundleMcpRuntime?.tools ?? []),
-      ...(bundleLspRuntime?.tools ?? []),
-    ];
-    const allowedBundledTools = new Set(
-      applyBundlePolicy(applyRuntimeAllowlist(bundledSourceTools)),
-    );
-    // A fixed listing removes by session facts and refuses by sender, group and run policy.
-    const filteredBundledTools = fixedListing
-      ? applyBundlePolicy(bundledSourceTools, true).map((tool) =>
-          allowedBundledTools.has(tool) ? tool : refuseRunAllowlistTool(tool),
-        )
-      : [...allowedBundledTools];
+    const filteredBundledTools = applyBundlePolicy([
+      ...applyRuntimeAllowlist(bundleMcpRuntime?.tools ?? []),
+      ...applyRuntimeAllowlist(bundleLspRuntime?.tools ?? []),
+    ]);
     if (bundleMcpRuntime?.restrictAppTools) {
       // The view outlives this attempt; capture policy against the complete MCP catalog now.
       bundleMcpRuntime.restrictAppTools(
@@ -297,7 +268,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       // Presentation-only absence must not become a delegated capability denial.
       // Capture after final policy/quarantine, then omit from the model surface,
       // unless the session lists one fixed set (the call then fails visibly).
-      return !params.preparedToolBase.messageToolAvailable && !fixedListing
+      return !params.preparedToolBase.messageToolAvailable && !params.preparedToolBase.fixedListing
         ? schemaProjection.tools.filter((tool) => tool.name !== "message")
         : schemaProjection.tools;
     };
