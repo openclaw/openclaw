@@ -7,12 +7,14 @@ import {
   replaceSessionEntrySync,
   loadSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -26,7 +28,7 @@ import {
   createTestProjection,
   holdForeground,
 } from "./session-row-projection.read-fixture.test-support.js";
-import { listProjectedSessions } from "./session-utils-list.js";
+import { prepareSessionRowSelection, listProjectedSessions } from "./session-utils-list.js";
 
 describe("session model projection retained boundaries", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -64,6 +66,78 @@ describe("session model projection retained boundaries", () => {
       expect(other.sessions).toHaveLength(0);
     });
   });
+  it("refreshes profile display fields on selected live and archived rows", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      const owner = ensureProfileForEmail("owner@example.com");
+      const participant = ensureProfileForEmail("participant@example.com");
+      for (const archived of [false, true]) {
+        const scope = { agentId: "main", sessionKey: `agent:main:profile-${archived}` };
+        replaceSessionEntrySync(scope, {
+          sessionId: `profile-${archived}`,
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: owner.id },
+          ...(archived
+            ? { archivedAt: 1, archivedBy: { type: "human" as const, id: owner.id } }
+            : {}),
+        });
+        recordSessionParticipant(scope, {
+          identity: { type: "profile", id: participant.id },
+          promptedAt: 1,
+        });
+      }
+      using _ = holdForeground();
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
+      const list = (
+        opts: Parameters<typeof listProjectedSessions>[0]["opts"],
+        serialized = false,
+      ) => listProjectedSessions({ projection, opts, acceptsSerializedJson: serialized });
+      const allPeople = { archived: "all", includePeople: true } as const;
+      const expectedPerson = (id: string, label: string) =>
+        expect.objectContaining({ identity: { type: "profile", id }, label, sessionCount: 2 });
+
+      await list(allPeople, true);
+      setDisplayName(owner.id, "Current owner");
+      setDisplayName(participant.id, "Current participant");
+      const result = await list(allPeople, true);
+      expect(result.owners?.map((actor) => actor.label)).toEqual(["Current owner"]);
+      expect(result.people).toEqual([
+        expectedPerson(owner.id, "Current owner"),
+        expectedPerson(participant.id, "Current participant"),
+      ]);
+      expect(result.sessions).toHaveLength(2);
+      const originalPeople = structuredClone(result.people);
+      const live = await list({ includePeople: true });
+      expect(live.people).toEqual(
+        originalPeople?.map((person) => ({ ...person, sessionCount: 1 })),
+      );
+      expect(result.people).toEqual(originalPeople);
+      for (const person of live.people ?? []) {
+        person.sessionCount = 99;
+        person.label = "Changed response";
+      }
+      const repeated = await list(allPeople);
+      expect(repeated.people).toEqual(originalPeople);
+      expect(result.people).toEqual(originalPeople);
+      for (const row of result.sessions) {
+        expect(row.createdActor?.label).toBe("Current owner");
+        expect(row.owner?.actor.label).toBe("Current owner");
+        expect(row.participants).toMatchObject([{ label: "Current participant" }]);
+        if (row.archived) {
+          expect(row.archivedBy?.label).toBe("Current owner");
+        }
+      }
+      linkEmail("participant@example.com", owner.id);
+      const merged = await list({
+        ...allPeople,
+        profileRelation: { profileId: participant.id, relationship: "involving" },
+      });
+      expect(merged.sessions).toHaveLength(2);
+      expect(merged.people).toEqual([expectedPerson(owner.id, "Current owner")]);
+      expect(merged.sessions.every((row) => row.participants === undefined)).toBe(true);
+    });
+  });
+
   it("adopts changed model normalization after a manifest publication", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const baseConfig: OpenClawConfig = {
@@ -72,7 +146,7 @@ describe("session model projection retained boundaries", () => {
       };
       const cfg = baseConfig;
       setRuntimeConfigSnapshot(cfg);
-      const keys = Array.from({ length: 1 }, (_, index) => `agent:main:plugin-reload-${index}`);
+      const keys = Array.from({ length: 2 }, (_, index) => `agent:main:plugin-reload-${index}`);
       for (const [index, sessionKey] of keys.entries()) {
         replaceSessionEntrySync(
           { agentId: "main", sessionKey },
@@ -132,7 +206,7 @@ describe("session model projection retained boundaries", () => {
         ]);
       };
       let catalog = view("original");
-      using release = holdForeground();
+      using _release = holdForeground();
       using projection = await createTestProjection({
         cfg,
         getConfig: () => cfg,
@@ -140,11 +214,22 @@ describe("session model projection retained boundaries", () => {
       });
       const list = () => listProjectedSessions({ projection, opts: {} });
       try {
-        expect((await list()).sessions.map((row) => row.model)).toEqual(["original"]);
+        expect((await list()).sessions.map((row) => row.model)).toEqual(["original", "original"]);
+        const sequences = () =>
+          keys.map((key) => projection.capture({ agentId: "main", key })?.materializedSequence);
+        const beforeEquivalent = sequences();
+        catalog = view("original");
+        notifyPreparedModelRuntimePublication({ phase: "published" });
+        await projection.ensureMaterialized();
+        expect((await list()).sessions.map((row) => row.model)).toEqual(["original", "original"]);
+        expect(sequences()).toEqual(beforeEquivalent);
         catalog = view("replacement");
         notifyPreparedModelRuntimePublication({ phase: "published" });
         await projection.ensureMaterialized();
-        expect((await list()).sessions.map((row) => row.model)).toEqual(["replacement"]);
+        expect((await list()).sessions.map((row) => row.model)).toEqual([
+          "replacement",
+          "replacement",
+        ]);
       } finally {
         await projection.ensureMaterialized();
         projection.dispose();
@@ -154,6 +239,56 @@ describe("session model projection retained boundaries", () => {
       }
     });
   });
+
+  it("updates creator and involvement selection when configured agents change", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const ada = ensureProfileForEmail("selection-ada@example.test");
+      const bob = ensureProfileForEmail("selection-bob@example.test");
+      const actor = (id: string) => ({ type: "human" as const, source: "profile" as const, id });
+      const key = "agent:main:authored";
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key },
+        { sessionId: key, updatedAt: 1, createdActor: actor(bob.id) },
+      );
+      using _release = holdForeground();
+      using projection = await createTestProjection({
+        cfg,
+        getConfig: () => cfg,
+        modelCatalog: [],
+      });
+      const opts = { configuredAgentsOnly: true };
+      const created = async (creatorId: string) =>
+        (await listProjectedSessions({ projection, opts: { ...opts, creatorId } })).sessions.map(
+          (row) => row.key,
+        );
+      const involvement = (profileId: string) => [
+        ...prepareSessionRowSelection(projection, opts, { ordered: true }).involvementKeys(
+          profileId,
+          true,
+        ),
+      ];
+      expect(await created(bob.id)).toEqual([key]);
+      expect(involvement(ada.id)).toEqual([]);
+      const added = "agent:ops:topology-added";
+      replaceSessionEntrySync(
+        { agentId: "ops", sessionKey: added },
+        { sessionId: "topology-added", updatedAt: 2, createdActor: actor(ada.id) },
+      );
+      cfg = { agents: { entries: { main: {}, ops: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      expect(await created(ada.id)).toEqual([added]);
+      expect(await created(bob.id)).toEqual([key]);
+      expect(involvement(ada.id)).toEqual([added]);
+      cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      expect(await created(ada.id)).toEqual([]);
+      expect(await created(bob.id)).toEqual([key]);
+      expect(involvement(ada.id)).toEqual([]);
+    });
+  });
+
   it("keeps inherited model selection current after reparenting and parent deletion", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       vi.spyOn(Date, "now").mockReturnValue(100);

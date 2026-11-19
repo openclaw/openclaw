@@ -538,4 +538,22 @@ describe("device worker placement dispatch", () => {
     expect(harness.environments.destroy).toHaveBeenCalledWith(harness.ready.environmentId);
     expect(harness.placements.current()).toMatchObject({ state: "failed" });
   });
+  it("adopts an offline paired-device placement without eagerly starting its tunnel", async () => {
+    const harness = await createHarness(database, placementStore);
+    await harness.environments.attachSession({
+      environmentId: harness.ready.environmentId,
+      ownerEpoch: harness.ready.ownerEpoch,
+      sessionId: REQUEST.sessionId,
+    });
+    await harness.placements.seedActive(harness.attached.ownerEpoch);
+    harness.markEnvironmentNodeDeviceId("offline-device");
+    harness.log.length = 0;
+
+    await harness.service.reconcile();
+
+    expect(harness.log).toEqual(["environment:reconcile", "placement:adopted"]);
+    expect(harness.placements.current()).toMatchObject({ state: "active" });
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
 });

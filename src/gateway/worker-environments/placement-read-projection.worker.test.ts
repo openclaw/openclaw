@@ -10,6 +10,10 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
@@ -46,6 +50,68 @@ describe("worker placement authority retained boundaries", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-projection-"));
     database = openOpenClawStateDatabase();
+  });
+
+  it("publishes retention after its scheduler callback finishes", async () => {
+    const placements = createWorkerSessionPlacementStore({ database });
+    const time = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(time.clock);
+    const node = createNodeWorkerBundleTestNode();
+    node.workerHost.bundleRetention = 1;
+    const build = { bundleHash: "b".repeat(64), openclawVersion: "2026.10.10" };
+    const preparing = createDeferred();
+    const prepared = createDeferred<typeof build>();
+    let holdPreparation = false;
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
+      ok: true,
+      payloadJSON: JSON.stringify({ applied: true, deleted: 0, hasMore: false }),
+    }));
+    const warn = vi.fn();
+    const coordinator = createNodeWorkspaceRetainCoordinator({
+      gatewayNamespace: "gateway-retention",
+      placements,
+      environments: { list: () => [] },
+      warn,
+      bundleRetention: {
+        currentBuild: async () => {
+          if (holdPreparation) {
+            preparing.resolve();
+            return await prepared.promise;
+          }
+          return build;
+        },
+        isEnvironmentOwnedNode: () => false,
+      },
+    });
+    coordinator.bindTransport(retentionTransport(node, invoke));
+    let publication: Promise<void> | undefined;
+    try {
+      await coordinator.start();
+      invoke.mockClear();
+      holdPreparation = true;
+      scheduler.schedule({
+        id: "node-retention",
+        delayMs: 60_000,
+        run: async () => {
+          publication = coordinator.schedule();
+        },
+      });
+      await time.advanceBy(60_000);
+      await preparing.promise;
+      prepared.resolve(build);
+      await publication;
+      expect(warn).not.toHaveBeenCalled();
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
+        retain: [],
+        bundleHashes: [build.bundleHash],
+      });
+    } finally {
+      prepared.resolve(build);
+      await publication;
+      await coordinator.stop();
+      await scheduler.stop();
+    }
   });
 
   it("discovers retained workspace data after placements become local or reclaimed", async () => {

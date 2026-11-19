@@ -237,6 +237,54 @@ async function withRecoveryRuntime(
 }
 
 describe("worker placement recovery session events", () => {
+  it("publishes only active device bindings affected by coalesced runner edges", async () => {
+    const placement = recoveryPlacement();
+    const environmentRows = new Map<string, WorkerEnvironmentPlacementFacts>();
+    const environment = (row: RecoveryPlacement, deviceId: string) => {
+      environmentRows.set(row.environmentId!, {
+        environmentId: row.environmentId!,
+        providerId: DEVICE_WORKER_PROVIDER_ID,
+        profileId: `device:${deviceId}`,
+        profileSnapshot: {},
+        state: "attached",
+        leaseId: "device-lease",
+        ownerEpoch: 1,
+        nodeDeviceId: deviceId,
+        attachedSessionIds: [row.sessionId],
+      });
+    };
+    environment(placement, "changed-device");
+    await withRecoveryRuntime(
+      { placement, environmentRows },
+      async ({ context, placements, runtime, start, expectBroadcast, nextChange }) => {
+        for (const excluded of ["other-device", "inactive", "stale-epoch", "cloud"] as const) {
+          const row: RecoveryPlacement = {
+            ...placement,
+            sessionId: excluded,
+            sessionKey: `agent:main:${excluded}`,
+            environmentId: `environment-${excluded}`,
+            ...(excluded === "inactive" ? { state: "failed" } : {}),
+            ...(excluded === "stale-epoch" ? { activeOwnerEpoch: 2 } : {}),
+          };
+          placements.set(row.sessionId, row);
+          environment(row, excluded === "other-device" ? "other-device" : "changed-device");
+          if (excluded === "cloud") {
+            environmentRows.get(row.environmentId!)!.providerId = "cloud";
+          }
+        }
+        await start();
+        const published = nextChange();
+        const revision = runtime.runnerAvailability.version();
+        runtime.runnerAvailability.markChanged("changed-device");
+        runtime.runnerAvailability.markChanged("changed-device");
+        expect(runtime.runnerAvailability.version()).toBe(revision + 2);
+        await published;
+        await flushPendingSessionsChangedEvents(context);
+        expectBroadcast({ sessionKey: placement.sessionKey, sessionId: placement.sessionId });
+      },
+    );
+  });
+
   it("joins pending machine metadata reporting on stop without publishing a late reply", async () => {
     const placement = recoveryPlacement();
     await withRecoveryRuntime(

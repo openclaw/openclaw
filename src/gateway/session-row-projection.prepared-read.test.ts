@@ -44,7 +44,10 @@ import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
-import { withAcceptedSuffix } from "./session-row-projection.accepted-facts.test-support.js";
+import {
+  withAcceptedSuffix,
+  registerAcceptedSuffixRaceTests,
+} from "./session-row-projection.accepted-facts.test-support.js";
 import {
   seedRow,
   waitForRead,
@@ -623,6 +626,8 @@ describe("accepted session facts retained boundaries", () => {
       ...options,
     });
   }
+
+  registerAcceptedSuffixRaceTests(writeTranscript);
 
   function sharedFactReads(reads: {
     mock: { calls: Parameters<typeof stateReads.executeExistingOpenClawStateRead>[] };

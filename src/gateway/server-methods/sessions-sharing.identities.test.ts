@@ -8,6 +8,7 @@ import {
 import type { SessionMemberPermissionLevel } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import * as combinedStore from "../../config/sessions/combined-store-gateway.native.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   replaceSessionEntrySync,
@@ -27,7 +28,8 @@ import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../../state/openclaw-agent-write-admission.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import * as userProfileReads from "../../state/user-profile-reads.js";
+import { setDisplayName, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail, ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { createBoardViewTicket } from "../board-view-ticket.js";
 import {
@@ -168,6 +170,74 @@ describe("sharing identity authority retained boundaries", () => {
       expect((await readSessionMembersInWorker({ agentId: "main", sessionKey })).members).toEqual(
         [],
       );
+    }));
+
+  it("lists current identities and adds members without decoding unrelated saved prompts", () =>
+    withState(async () => {
+      const sessionKey = "agent:main:profile-member";
+      const profile = ensureProfileForEmail("member@example.com");
+      setDisplayName(profile.id, "Member");
+      await seed(sessionKey, "session-profile-member", { visibility: "read-only" });
+      const savedPrompt = "unrelated saved sharing prompt".repeat(512);
+      for (const [agentId, createdActor] of [
+        ["main", { type: "human", source: "profile", id: profile.id, label: "Old member name" }],
+        ["research", { type: "agent", id: "research", label: "Alpha Research" }],
+      ] as const) {
+        await seed(
+          `agent:${agentId}:unrelated-sharing`,
+          `unrelated-sharing-${agentId}`,
+          {
+            createdActor,
+            skillsSnapshot: { prompt: savedPrompt, skills: [] },
+          },
+          agentId,
+        );
+      }
+      const incognitoKey = "agent:main:dashboard:incognito-picker";
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: incognitoKey },
+        {
+          sessionId: "incognito-picker",
+          updatedAt: 1,
+          incognito: true,
+          createdActor: { type: "agent", id: "incognito-creator", label: "Incognito" },
+        },
+      );
+      const requestContext = context(vi.fn(), {
+        agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+      });
+      setRuntimeConfigSnapshot(requestContext.getRuntimeConfig());
+      await call("session.members.list", { sessionKey }, requestContext);
+      const projection = getSessionRowProjection(requestContext)!;
+      await projection.ensureMaterialized();
+      const expected = [
+        { type: "agent", id: "research", label: "Alpha Research" },
+        { type: "agent", id: "incognito-creator", label: "Incognito" },
+        { type: "human", id: profile.id, label: "Member" },
+      ];
+      const scans = vi.spyOn(combinedStore, "loadCombinedSessionStoreForGatewayCore");
+      vi.spyOn(userProfileReads, "listProfiles").mockRejectedValue(
+        new Error("Profile worker enumeration is unavailable"),
+      );
+      const parse = vi.spyOn(JSON, "parse");
+      for (const method of ["session.members.list", "session.members.listEvidence"] as const) {
+        const listed = await call(method, { sessionKey }, requestContext);
+        expect(listed[0]?.[1]).toMatchObject({ identities: expected });
+      }
+      expect(scans).not.toHaveBeenCalled();
+      expect(
+        await call("session.members.add", { sessionKey, identityId: profile.id }, requestContext),
+      ).toEqual([[true, { ok: true, sessionKey, identityId: profile.id }, undefined]]);
+      expect(parse.mock.calls.flat()).not.toContainEqual(expect.stringContaining(savedPrompt));
+      vi.restoreAllMocks();
+      expect(
+        await authorizeResolvedSessionMutationAsync({
+          cfg: {},
+          client: identifiedClient(profile.id, "Member"),
+          sessionKey,
+          agentId: "main",
+        }),
+      ).toBeNull();
     }));
 
   it("lists sharing evidence and adds members independently of placement display failures", () =>

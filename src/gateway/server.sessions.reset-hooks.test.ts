@@ -21,6 +21,7 @@ import {
   directSessionReq,
   sessionHookMocks,
   beforeResetHookMocks,
+  beforeResetHookState,
   sessionLifecycleHookMocks,
   seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
@@ -332,6 +333,40 @@ describe("session reset hooks retained boundaries", () => {
     } finally {
       memorySessionActorOwners.closeDatabase(location);
     }
+  });
+
+  test("passes the parent transcript and links lifecycle events on successful rollover", async () => {
+    await createSessionStoreDir();
+    const parentId = "sess-parent";
+    const content = "remember this before new";
+    const transcriptPath = await writeStoredSession(parentId, { content });
+    beforeResetHookState.hasBeforeResetHook = true;
+    const result = await createFromMainSession({ emitCommandHooks: true });
+    expect(result.ok).toBe(true);
+    expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+    const [event, context] = firstHookCall(beforeResetHookMocks.runBeforeReset);
+    expect(event).toMatchObject({
+      sessionFile: transcriptPath,
+      reason: "new",
+      messages: [{ role: "user", content }],
+    });
+    expect(context).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: parentId,
+    });
+    const [endEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
+    const [startEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
+    expect(endEvent).toMatchObject({
+      sessionId: parentId,
+      sessionKey: "agent:main:main",
+      reason: "new",
+      nextSessionId: startEvent.sessionId,
+      nextSessionKey: startEvent.sessionKey,
+    });
+    expect(startEvent.resumedFrom).toBe(parentId);
+    expect(startEvent.sessionId).toEqual(expect.stringMatching(/[\s\S]+/));
+    expect(startEvent.sessionKey).toEqual(expect.stringMatching(/^agent:main:dashboard:[\s\S]+$/));
   });
 
   test.each([false, true])(

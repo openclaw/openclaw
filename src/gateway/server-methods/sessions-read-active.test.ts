@@ -121,6 +121,41 @@ describe("active session ownership retained boundaries", () => {
     resetAgentEventsForTest();
   });
 
+  it("lists an isolated cron execution once under its schedule key", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(config);
+      const cronKey = "agent:main:cron:daily";
+      const runKey = `${cronKey}:run:cron-session`;
+      for (const sessionKey of [cronKey, runKey]) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: "cron-session",
+            updatedAt: 1,
+            visibility: "shared",
+          },
+        );
+      }
+      registerAgentRunContext("cron-run", {
+        agentId: "main",
+        sessionKey: runKey,
+        sessionId: "cron-session",
+        projectSessionActive: true,
+      });
+      try {
+        const { list } = sessionReader(config, "viewer@example.test", requestContext(config));
+        const result = await list({ activeOnly: true, limit: 1 });
+        expect(result).toMatchObject({ count: 1, totalCount: 1, nextOffset: null });
+        expect(result.sessions).toMatchObject([
+          { key: cronKey, hasActiveRun: true, status: "running" },
+        ]);
+      } finally {
+        clearAgentRunContext("cron-run");
+      }
+    });
+  });
+
   it.each(["global", "unknown"] as const)(
     "keeps %s activity with its agent when physical stores share a session ID",
     async (sessionKey) => {

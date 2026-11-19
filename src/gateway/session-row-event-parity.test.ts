@@ -57,7 +57,7 @@ describe("session event privacy retained boundaries", () => {
   it("filters private child rows for each event recipient", async () => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const now = 1_000_000;
-      vi.spyOn(Date, "now").mockReturnValue(now);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       const profiles = ["owner", "viewer", "other-viewer"].map((name) =>
         ensureProfileForEmail(`${name}@row-parity.test`),
       );
@@ -224,6 +224,37 @@ describe("session event privacy retained boundaries", () => {
         } finally {
           finishPermissionChange?.();
         }
+        const compactRequest = { ...request, rowMode: "compact" as const };
+        const expiresAt = now - 100 + 30 * 60_000;
+        for (const [sampledAt, owners, snapshotAt] of [
+          [now, [navigationParent], now],
+          [expiresAt, [navigationParent], now],
+          [expiresAt + 1, [], expiresAt + 1],
+        ] as const) {
+          clock.mockReturnValue(sampledAt);
+          const children = await listFor(0, { ...compactRequest, spawnedBy: navigationParent });
+          expect(children.sessions.map((row) => row.key)).toEqual(
+            owners.length ? [lineageKey] : [],
+          );
+          const listed = await listFor(0, compactRequest);
+          expect(listed.sessions.find((row) => row.key === lineageKey)).toMatchObject({
+            childOwnerSessionKeys: owners,
+            snapshotAt,
+          });
+          for (const event of ["sessions.changed", "session.message"]) {
+            connection.broadcast(event, { sessionKey: lineageKey, agentId: "main" });
+            for (const peer of peers) {
+              const frame = peer.frame();
+              expect(frame.event).toBe(event);
+              expect(frame.payload.session).toMatchObject({
+                key: lineageKey,
+                childOwnerSessionKeys: owners,
+                snapshotAt,
+              });
+            }
+          }
+        }
+        clock.mockReturnValue(now);
         for (const { client } of peers) {
           connection.sessionEventSubscribers.subscribe(client.connId);
         }
@@ -355,15 +386,23 @@ describe("session event privacy retained boundaries", () => {
             return entry;
           };
           const lineage = [[parent], [movedParent], [child, parent], [grandchild, child]] as const;
-          for (const [key, owner] of lineage) {
-            seedRow(key, {
-              sessionId: key,
-              updatedAt: endedAt,
-              label: key === parent ? "Selected parent" : "Hidden child",
-              status: "done",
-              endedAt,
-              ...(owner ? { spawnedBy: owner } : {}),
-            });
+          const retainedHistory = Array.from(
+            { length: state === "running" ? 2_048 : 0 },
+            (_value, index) =>
+              [`agent:main:subagent:retained-${index}`, "agent:main:unrelated-parent"] as const,
+          );
+          for (const [index, [key, owner]] of [...lineage, ...retainedHistory].entries()) {
+            const retained = index >= lineage.length;
+            if (!retained) {
+              seedRow(key, {
+                sessionId: key,
+                updatedAt: endedAt,
+                label: key === parent ? "Selected parent" : "Hidden child",
+                status: "done",
+                endedAt,
+                ...(owner ? { spawnedBy: owner } : {}),
+              });
+            }
             if (owner) {
               commit(
                 createSubagentRunRecord({
@@ -375,6 +414,7 @@ describe("session event privacy retained boundaries", () => {
                   startedAt: endedAt - 1_000,
                   endedAt,
                   outcome: { status: "ok" },
+                  ...(retained ? { delivery: { status: "not_required" as const } } : {}),
                 }),
               );
             }
@@ -422,6 +462,28 @@ describe("session event privacy retained boundaries", () => {
             hasActiveSubagentRun: true,
             childSessions: [child],
           });
+          if (state === "running") {
+            const history = projection.state.rowContext.subagentRuns.latestRunsByChildSessionKey;
+            const iterate = history[Symbol.iterator].bind(history);
+            let visited = 0;
+            const historyIterator = vi
+              .spyOn(history, Symbol.iterator)
+              .mockImplementation(function* () {
+                for (const entry of iterate()) {
+                  visited++;
+                  yield entry;
+                }
+                return undefined;
+              });
+            seedRow(movedParent, {
+              sessionId: movedParent,
+              updatedAt: endedAt + 1,
+              label: "Unrelated update",
+            });
+            expect((await list()).sessions[0]?.hasActiveSubagentRun).toBe(true);
+            expect(visited).toBeLessThan(16);
+            historyIterator.mockRestore();
+          }
           expect(snapshot(child)).toMatchObject({
             hasActiveSubagentRun: true,
             childSessions: [grandchild],
