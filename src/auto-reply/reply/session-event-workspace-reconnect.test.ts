@@ -43,52 +43,50 @@ function workspaceDisconnect(nodeCommandDispatched?: boolean) {
 }
 
 /** Run one restart input; `node` decides each pre-admission skill discovery attempt. */
-async function runRestartEvent(label: string, signal: AbortSignal, node: (attempt: number) => void) {
-  return await withOpenClawTestState(
-    { label, env: { OPENCLAW_TEST_FAST: "0" } },
-    async (state) => {
-      await configureEventState(state, completionConfig(state.workspaceDir));
-      const target = { agentId: "main", sessionKey: `agent:main:dashboard:${label}` };
-      await replaceSessionEntry(target, {
-        sessionId: label,
-        lifecycleRevision: "original",
-        permissionMode: "full",
-        updatedAt: Date.now(),
+async function runRestartEvent(
+  label: string,
+  signal: AbortSignal,
+  node: (attempt: number) => void,
+) {
+  return await withOpenClawTestState({ label, env: { OPENCLAW_TEST_FAST: "0" } }, async (state) => {
+    await configureEventState(state, completionConfig(state.workspaceDir));
+    const target = { agentId: "main", sessionKey: `agent:main:dashboard:${label}` };
+    await replaceSessionEntry(target, {
+      sessionId: label,
+      lifecycleRevision: "original",
+      permissionMode: "full",
+      updatedAt: Date.now(),
+    });
+    let discoveries = 0;
+    const discover = sessionUpdates.ensureSkillSnapshot;
+    using _skills = vi
+      .spyOn(sessionUpdates, "ensureSkillSnapshot")
+      .mockImplementation(async (params) => {
+        node(++discoveries);
+        return await discover(params);
       });
-      let discoveries = 0;
-      const discover = sessionUpdates.ensureSkillSnapshot;
-      using _skills = vi
-        .spyOn(sessionUpdates, "ensureSkillSnapshot")
-        .mockImplementation(async (params) => {
-          node(++discoveries);
-          return await discover(params);
-        });
-      runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
-        await startEmbeddedTurn(params, "restart turn");
-        return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+    runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+      await startEmbeddedTurn(params, "restart turn");
+      return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+    });
+    try {
+      const receipt = enqueueSessionEventForHost("Resume required work", {
+        ...target,
+        source: "restart",
+        expectedTarget: await captureSessionEventTargetForHost(target.agentId, target.sessionKey),
+        abortSignal: signal,
+        deliver: false,
       });
-      try {
-        const receipt = enqueueSessionEventForHost("Resume required work", {
-          ...target,
-          source: "restart",
-          expectedTarget: await captureSessionEventTargetForHost(
-            target.agentId,
-            target.sessionKey,
-          ),
-          abortSignal: signal,
-          deliver: false,
-        });
-        const [outcome, accepted] = await withinTest(
-          Promise.all([receipt.settled, receipt.accepted]),
-          signal,
-        );
-        return { outcome, accepted, discoveries, runs: runEmbeddedAgentMock.mock.calls.length };
-      } finally {
-        await drainGlobalSingletonLifecycleState("restart");
-        resetSystemEventsForTest();
-      }
-    },
-  );
+      const [outcome, accepted] = await withinTest(
+        Promise.all([receipt.settled, receipt.accepted]),
+        signal,
+      );
+      return { outcome, accepted, discoveries, runs: runEmbeddedAgentMock.mock.calls.length };
+    } finally {
+      await drainGlobalSingletonLifecycleState("restart");
+      resetSystemEventsForTest();
+    }
+  });
 }
 
 it("retries an undispatched restart input until its workspace node reconnects", async ({

@@ -1,6 +1,4 @@
-import { setTimeout as delay } from "node:timers/promises";
-import { collectErrorGraphCandidates } from "@openclaw/normalization-core/error-coercion";
-import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
@@ -9,7 +7,6 @@ import {
 } from "../../agents/agent-run-terminal-outcome.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { FAILOVER_REASONS } from "../../agents/failover/signal.js";
-import { isWorkspaceAccessUnavailableError } from "../../agents/workspace-access.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import {
   composeSessionSourceAssertion,
@@ -68,9 +65,11 @@ import {
   prepareSessionEventTargetForHost,
 } from "./session-event-target.js";
 import {
+  createSessionEventReadmission,
+  prepareSessionEventReadmission,
   readmitSessionEventOccurrence,
   resolveSessionEventTerminalOutcome,
-  waitForSessionEventReadmission,
+  type SessionEventReadmission,
 } from "./session-event-terminal.js";
 
 export { assertSessionEventTargetCurrent, captureSessionEventTargetForHost };
@@ -85,38 +84,14 @@ const loadGenerationReadmission = createLazyRuntimeNamedExport(
   "runOutsideAdmittedGenerationScopes",
 );
 
-// A dedicated workspace node reconnects a few seconds after a Gateway restart.
-const RESTART_WORKSPACE_RECONNECT_WINDOW_MS = 60_000;
-const RESTART_WORKSPACE_RECONNECT_POLL_MS = 1_000;
-
-/** Only a node.invoke refused before dispatch proves a retry cannot repeat an effect. */
-function isUndispatchedWorkspaceDisconnect(error: unknown): boolean {
-  return (
-    isWorkspaceAccessUnavailableError(error) &&
-    collectErrorGraphCandidates(error, (current) => [current.cause]).some((candidate) => {
-      const details = asNullableRecord(asNullableRecord(candidate)?.details);
-      return (
-        asNullableRecord(details?.nodeError)?.code === "NOT_CONNECTED" &&
-        details?.nodeCommandDispatched === false
-      );
-    })
-  );
-}
-
-/** Producer-owned occurrence; passive notices continue to use enqueueSystemEvent. */
+/**
+ * Producer-owned occurrence; passive notices continue to use enqueueSystemEvent.
+ * Producers omit `readmission`; only re-admission of the same occurrence passes it.
+ */
 export function enqueueSessionEventForHost(
   text: string,
-  options: SessionEventOptions,
-): SessionEventReceipt {
-  return enqueueSessionEventAttempt(text, options, 0);
-}
-
-function enqueueSessionEventAttempt(
-  text: string,
   { assertAcceptanceCurrent, ...options }: SessionEventOptions,
-  readmissionAttempt: number,
-  configReadmissionAttempt = 0,
-  reconnectDeadline = Date.now() + RESTART_WORKSPACE_RECONNECT_WINDOW_MS,
+  readmission: SessionEventReadmission = createSessionEventReadmission(),
 ): SessionEventReceipt {
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
@@ -330,7 +305,7 @@ function enqueueSessionEventAttempt(
     }
     settlement = "settling";
     const complete = async () => {
-      let pendingInputSettled = true;
+      let inputSettled = true;
       try {
         await settleUserTurnPendingInput(
           inputRecorder,
@@ -341,54 +316,28 @@ function enqueueSessionEventAttempt(
           accepted,
         );
       } catch (error) {
-        pendingInputSettled = false;
+        inputSettled = false;
         failure ??= error instanceof Error ? error : String(error);
       }
       // Submitting custody ends at the first acceptance; a pre-acceptance re-admission
       // carries the still-live assertion so revoked ingress rejects the retry.
       const pendingAcceptanceAssertion = accepted ? undefined : acceptanceAssertion;
       acceptanceAssertion = undefined;
-      // Producers never retry, so a policy publication that rejected an unstarted
-      // occurrence re-admits it under the current policy instead of destroying it.
-      // Stop, abort and abandonment still settle terminally.
-      const retainForConfigChange = () =>
-        configPolicy.changed &&
-        !started &&
-        !delivery.deliveryAttempted &&
-        !signal.aborted &&
-        !abandoned &&
-        configPolicy.canReadmit(configReadmissionAttempt);
-      // A restart input that reached a workspace node before it reconnected was never
-      // dispatched; retry it within the reconnect window. Anything that may have had
-      // effects, or whose staged input was not durably cancelled, stays terminal.
-      const retainForWorkspaceReconnect = () =>
-        pendingInputSettled &&
-        options.source === "restart" &&
-        !accepted &&
-        !adopted &&
-        !started &&
-        !conversationResultCommitted &&
-        !delivery.delivered &&
-        !delivery.deliveryAttempted &&
-        !delivery.deliveryAmbiguous &&
-        !signal.aborted &&
-        !abandoned &&
-        Date.now() < reconnectDeadline &&
-        isUndispatchedWorkspaceDisconnect(failure);
-      const configRetry = retainForConfigChange();
-      if (configRetry) {
-        await waitForSessionEventReadmission(configReadmissionAttempt, signal);
-      } else if (retainForWorkspaceReconnect()) {
-        await delay(RESTART_WORKSPACE_RECONNECT_POLL_MS, undefined, { signal }).catch(
-          (error: unknown) => {
-            if (!signal.aborted) {
-              throw error;
-            }
-          },
-        );
-      }
+      // Producers never retry; re-admit the same unstarted occurrence when policy or the
+      // workspace node changed under it. Stop, abort and abandonment settle terminally.
+      const nextReadmission = await prepareSessionEventReadmission(readmission, signal, () => ({
+        source: options.source,
+        failure,
+        configPolicy,
+        inputSettled,
+        accepted,
+        adopted,
+        started,
+        conversationResultCommitted,
+        delivery,
+        abandoned,
+      }));
       settlement = "finished";
-      const canReadmit = retainForConfigChange() || retainForWorkspaceReconnect();
       const terminal = resolveSessionEventTerminalOutcome({
         operation,
         signal,
@@ -398,7 +347,7 @@ function enqueueSessionEventAttempt(
       });
       ({ failure, terminalOutcome } = terminal);
       const { status } = terminal;
-      if (status === "failed" && !canReadmit) {
+      if (status === "failed" && !nextReadmission) {
         log.error("session event execution failed", {
           source: options.source,
           agentId,
@@ -409,7 +358,7 @@ function enqueueSessionEventAttempt(
       }
       signal.removeEventListener("abort", onAbort);
       generationLease?.release();
-      if (canReadmit) {
+      if (nextReadmission) {
         ownership.release();
         const readmission = readmitSessionEventOccurrence({
           text: eventText,
@@ -420,17 +369,10 @@ function enqueueSessionEventAttempt(
             assertAcceptanceCurrent: pendingAcceptanceAssertion,
             occurrences,
           },
-          attempt: readmissionAttempt + 1,
+          readmission: nextReadmission,
           adopted,
           occurrenceId,
-          enqueue: (nextText, nextOptions, attempt) =>
-            enqueueSessionEventAttempt(
-              nextText,
-              nextOptions,
-              attempt,
-              configReadmissionAttempt + (configRetry ? 1 : 0),
-              reconnectDeadline,
-            ),
+          enqueue: enqueueSessionEventForHost,
           log,
         });
         readmittedReceipt = readmission.receipt;
@@ -545,7 +487,7 @@ function enqueueSessionEventAttempt(
       sessionKey,
       text: promptText,
       options,
-      readmissionAttempt,
+      readmissionAttempt: readmission.attempt,
       occurrenceId,
       deliveryContext: route,
       target,
@@ -604,7 +546,7 @@ function enqueueSessionEventAttempt(
             options.source === "restart" && operatorAuthority ? true : undefined,
           prepareInput: async (recorder) => {
             inputRecorder = recorder;
-            await stageSessionEventInput(recorder, occurrenceId, assertCurrent, readmissionAttempt);
+            await stageSessionEventInput(recorder, occurrenceId, assertCurrent, readmission.attempt);
           },
           execRequestOwners,
           deliver: options.deliver === false || target.deliver === false ? false : undefined,
