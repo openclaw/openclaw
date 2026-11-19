@@ -142,6 +142,13 @@ the completed backup image while retaining filesystem inventory and source-chang
 checks. The candidate must contain these changes; backup publication, integrity
 checks, migrations, and rollback rules are unchanged.
 
+Candidate Doctor checks an existing OpenClaw ID role catalog against local
+membership, offers missing preset definitions only with repair consent, and
+preserves existing definitions, the named default, and assignments. Its cron
+owner review enables named-role enforcement only when `gateway.roles.default`
+is set. These checks and repairs must be present in the candidate Doctor; the
+installed updater needs no protocol or schema change.
+
 Lazy SQLite schema catalogs load through the retained updater's module loader.
 An updater that first needs a catalog after Git activation therefore reads its
 own generation, not the candidate's replacement JSON. This fix must be present
@@ -283,6 +290,10 @@ references protect their files on each cleanup pass. The candidate Gateway must
 contain this fix. It does not restore generations already deleted or discover
 references supplied only through environment variables, relative paths, or external
 symlinks. An incidental path-valued setting can conservatively retain extra files.
+
+If a retained npm marker cannot be read or parsed, cleanup reports that candidate
+and leaves its files intact. Other eligible retired npm installs are still cleaned
+during the same pass, including legacy shared-root installs.
 
 The candidate macOS app's narrow credential Doctor also completes pending local
 service-runtime intent migration before native startup selects a Gateway. This
@@ -597,6 +608,14 @@ the stale backup. Existing integrity, schema, and maintenance-ownership checks
 still apply, as do checks for writes after maintenance admission. The candidate must contain
 this repair; the installed updater's capture and backup checks are unchanged.
 Empty WAL-index transitions without write evidence remain rollback-eligible.
+An outside read-only SQLite open, such as a monitoring script using `mode=ro`, can
+rebuild the WAL index over retained frames after Doctor admits a database. The
+rebuild resets only the index change counter, so Doctor still accepts that
+database at migration publication when its file identity, committed content and
+last commit checksum are unchanged, and automatic restoration stays available.
+Any commit after admission, including one that restores identical content, still
+refuses. The Doctor of the version being installed owns this check, so updates
+from older releases benefit once the target contains it.
 
 The post-plugin Doctor runs for plugin changes, deferred model retirement, and
 pending deferred plugin migrations. Before each Doctor, the updater observes its
@@ -2001,7 +2020,12 @@ filesystem device numbers change after a reboot or remount. With a version conta
 this fix installed, run `openclaw update repair` from an independent terminal. Repair
 can settle `prepared`, `publishing`, `publication-complete`, and superseded operations
 when the journal's inodes still match under a consistent device-number mapping.
-Ordinary update admission stays strict.
+Ordinary update admission stays strict, but an updater containing
+[#201057](https://github.com/openclaw/openclaw/issues/201057)'s fix first applies
+the same verified settlement automatically, so the next `openclaw update` (or
+Control UI update) proceeds without a separate repair. Earlier updaters decline
+it and refuse with `device number changed only`; run `openclaw update repair`,
+then update again.
 
 This settlement first shipped in 2026.10.5. Earlier releases, including the
 2026.9 extended-stable line, refuse with `Package publication journal does not

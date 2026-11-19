@@ -2535,58 +2535,7 @@ jobs:
       - name: Install Playwright WebKit
         id: ui_webkit
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && matrix.shard == 1 && needs.preflight.outputs.run_ui_webkit == 'true' }}
-        run: &install_playwright_webkit_run |
-          # Hosted images rank one archive mirror first and apt leaves it only on errors,
-          # so a mirror that trickles packages can outlast the job. Download under a
-          # deadline (stopping a download is safe, stopping dpkg is not), retry once
-          # without that mirror, then install from the downloaded archives.
-          set -euo pipefail
-          as_root=()
-          [[ "$(id -u)" == 0 ]] || as_root=(sudo -n)
-          download_only=/etc/apt/apt.conf.d/99openclaw-webkit-download-only
-          mirrors=/etc/apt/apt-mirrors.txt
-          mirrors_backup=
-          restore_apt() {
-            "${as_root[@]}" rm -f "$download_only"
-            if [[ -n "$mirrors_backup" ]]; then
-              "${as_root[@]}" tee "$mirrors" < "$mirrors_backup" > /dev/null
-              mirrors_backup=
-            fi
-          }
-          trap restore_apt EXIT
-          # Run the deadline as root: Playwright's own sudo does not pass it on, so a
-          # deadline outside sudo would leave apt-get downloading with its lock held.
-          # Resolve the CLI as the runner user so pnpm (a Corepack shim) never runs as root.
-          playwright="$(pnpm --dir ui exec which playwright)"
-          download_webkit_deps() {
-            "${as_root[@]}" env "PATH=$PATH" timeout --kill-after=10s "$1" \
-              "$playwright" install-deps webkit
-          }
-          printf 'APT::Get::Download-Only "true";\n' | "${as_root[@]}" tee "$download_only" > /dev/null
-          status=0
-          download_webkit_deps 120s || status=$?
-          if [[ "$status" == 124 || "$status" == 137 ]]; then
-            if [[ -f "$mirrors" ]] && (( $(grep -c . "$mirrors") > 1 )); then
-              echo "::warning::WebKit system packages did not download in 120s from $(head -n 1 "$mirrors" | cut -f 1); retrying with the image's other archive mirrors."
-              mirrors_backup="$(mktemp)"
-              cp "$mirrors" "$mirrors_backup"
-              sed 1d "$mirrors_backup" | "${as_root[@]}" tee "$mirrors" > /dev/null
-              status=0
-              download_webkit_deps 300s || status=$?
-              if [[ "$status" != 0 ]]; then
-                echo "::error::WebKit system packages did not download from the fallback archive mirrors (exit $status)."
-                exit "$status"
-              fi
-            else
-              echo "::warning::WebKit system packages did not download in 120s and no other archive mirror is configured; continuing without a deadline."
-            fi
-          elif [[ "$status" != 0 ]]; then
-            exit "$status"
-          fi
-          "${as_root[@]}" rm -f "$download_only"
-          pnpm --dir ui exec playwright install-deps webkit
-          restore_apt
-          pnpm --dir ui exec playwright install webkit
+        uses: ./.ci-harness/.github/actions/setup-playwright-webkit
 
       - name: Test Control UI WebKit overlays and focus
         if: ${{ !cancelled() && steps.ui_webkit.outcome == 'success' && (steps.ui_bun.outcome == 'success' || steps.ui_bun.outcome == 'skipped') && matrix.shard == 1 && needs.preflight.outputs.run_ui_webkit == 'true' }}
@@ -2710,7 +2659,7 @@ jobs:
 
       - name: Install selected Control UI E2E WebKit
         if: matrix.task == 'control-ui' && contains(steps.ui_e2e_requirements.outputs.requirements, 'webkit')
-        run: *install_playwright_webkit_run
+        uses: ./.ci-harness/.github/actions/setup-playwright-webkit
 
       - name: Prepare selected Control UI E2E Gateway runtime
         if: matrix.task == 'control-ui' && contains(steps.ui_e2e_requirements.outputs.requirements, 'runtime')
@@ -4876,7 +4825,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/postgres-conformance
         with:
           image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
-          target: src/gateway/server-database-engine.postgres.test.ts
+          target: src/gateway/server-database-engine-cron.postgres.test.ts
 
   check-docs:
     permissions:

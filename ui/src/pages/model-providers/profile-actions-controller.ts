@@ -45,7 +45,6 @@ export function createModelProviderProfileActions(options: {
   isBusy: (key: string) => boolean;
   setBusy: (key: string, value: boolean) => void;
   setProbeResult: (cardId: string, result: ModelsProbeResult | null) => void;
-  setProbeError: (cardId: string, message: string) => void;
   clearMessage: (cardId: string) => void;
   cancelRefresh: () => void;
   refresh: () => Promise<void>;
@@ -58,10 +57,17 @@ export function createModelProviderProfileActions(options: {
   const pendingOrders = new Map<string, PendingProfileOrder>();
   const activeOrderProviders = new Set<string>();
 
-  function clearProbe(cardId: string): void {
-    probeEpochs.set(cardId, (probeEpochs.get(cardId) ?? 0) + 1);
+  function beginProbe(cardId: string): () => boolean {
+    const epoch = (probeEpochs.get(cardId) ?? 0) + 1;
+    probeEpochs.set(cardId, epoch);
+    return () => probeEpochs.get(cardId) === epoch;
+  }
+
+  function clearProbe(cardId: string): () => boolean {
+    const isLatest = beginProbe(cardId);
     options.setBusy("probe:" + cardId, false);
     options.setProbeResult(cardId, null);
+    return isLatest;
   }
 
   /** Account targets sign out their profiles; removal targets clear a provider or its API key. */
@@ -272,9 +278,8 @@ export function createModelProviderProfileActions(options: {
         return;
       }
       const { agentId, isCurrent } = captureScope(client);
-      const probeEpoch = (probeEpochs.get(cardId) ?? 0) + 1;
-      probeEpochs.set(cardId, probeEpoch);
-      const ownsProbe = () => isCurrent() && probeEpochs.get(cardId) === probeEpoch;
+      const isLatest = beginProbe(cardId);
+      const ownsProbe = () => isCurrent() && isLatest();
       options.setBusy(key, true);
       options.clearMessage(cardId);
       try {
@@ -294,7 +299,12 @@ export function createModelProviderProfileActions(options: {
         if (!ownsProbe()) {
           return;
         }
-        options.setProbeError(cardId, modelProviderErrorMessage(error));
+        options.setProbeResult(cardId, {
+          provider: cardId,
+          status: "unknown",
+          error: modelProviderErrorMessage(error),
+          results: [],
+        });
       } finally {
         if (ownsProbe()) {
           options.setBusy(key, false);

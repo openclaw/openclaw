@@ -1,6 +1,9 @@
 import { createMemo, createSignal, lazy, Loading, onSettled, Show } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../../src/plugin-sdk/control-ui.js";
-import type { RunFailureCause } from "../../../../../src/shared/run-failure-notice.js";
+import {
+  HARNESS_UPDATE_REQUIRED_CODE,
+  type RunFailureCause,
+} from "../../../../../src/shared/run-failure-notice.js";
 import { formatWebUiIconErrorText } from "../../../components/error-presentation.ts";
 import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { ReportIssueLink } from "../../../components/report-issue-link.tsx";
@@ -43,6 +46,7 @@ export function ChatRunFailureNotice(props: {
   cause?: RunFailureCause;
   repeatCount?: number;
   onRetry?: () => void;
+  onStartNewSession?: () => void;
   editSource?: FailedMessageEditSource;
   onFocusComposer?: () => void;
 }) {
@@ -58,6 +62,8 @@ export function ChatRunFailureNotice(props: {
     });
   const app = useOptionalApplication();
   const openModels = () => (app && fixTitle() ? props.cause?.provider : undefined);
+  const startNewSession = () =>
+    props.cause?.code === HARNESS_UPDATE_REQUIRED_CODE && props.onStartNewSession;
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
   const concise = createMemo(() => {
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";
@@ -182,10 +188,22 @@ export function ChatRunFailureNotice(props: {
             </button>
           )}
         </Show>
+        <Show when={startNewSession()}>
+          <button
+            type="button"
+            class="btn primary btn--sm chat-run-failure__retry"
+            onClick={() => props.onStartNewSession?.()}
+          >
+            {t("chat.recovery.startNewSession")}
+          </button>
+        </Show>
         <Show when={props.onRetry}>
           <button
             type="button"
-            class={`btn ${openModels() ? "" : "primary "}btn--sm chat-run-failure__retry`}
+            class={[
+              "btn btn--sm chat-run-failure__retry",
+              { primary: !openModels() && !startNewSession() },
+            ]}
             onClick={() => props.onRetry?.()}
           >
             <Icon name="refresh" />

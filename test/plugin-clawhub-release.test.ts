@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { Header } from "tar";
+import { Header } from "tar/raw";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildOpenClawReleaseClawHubPlan,
