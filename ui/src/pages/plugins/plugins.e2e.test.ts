@@ -67,7 +67,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
   afterAll(teardownPluginsE2e);
 
   it("explains why Install is disabled while plugin inventory is loading", async () => {
-    const { page, gateway } = await setup({}, { heldMethods: ["plugins.list"] });
+    const { page, gateway } = await setup(
+      {},
+      { heldMethods: ["plugins.list"], awaitInitialRoster: false },
+    );
     await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
     await gateway.waitForRequest("plugins.list");
 

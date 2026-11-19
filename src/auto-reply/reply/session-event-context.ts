@@ -83,7 +83,7 @@ export async function stageSessionEventInput(
     !(await recorder.stageApproved({
       runId,
       assertCurrent,
-      // Only this live policy retry can reclaim its cancelled attempt.
+      // Only this live admission retry can reclaim its cancelled attempt.
       retryCancelled: readmissionAttempt > 0,
     }))
   ) {

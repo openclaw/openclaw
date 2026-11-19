@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi, type Mock } from "vitest";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import type { RuntimeConfigWriteApplicationStatus } from "../../config/runtime-write-application.js";
 import { FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import {
   expectRecordFields,
@@ -13,6 +14,7 @@ import {
 type IdentityUpdateHarness = {
   mocks: {
     loadConfigReturn: Record<string, unknown>;
+    configApplicationStatus: Mock<() => RuntimeConfigWriteApplicationStatus>;
     applyAgentConfig: Mock<(cfg: unknown, opts: unknown) => unknown>;
     ensureAgentWorkspace: Mock<
       (params?: { dir?: string }) => Promise<{ dir: string; identityPathCreated: boolean }>
@@ -129,6 +131,25 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
         relativePath: "IDENTITY.md",
         data: "# IDENTITY.md - Agent Identity\n\n- Name: New Name\n- Theme: steady\n- Emoji: 🤖\n- Avatar: https://example.com/new.png\n",
       });
+    });
+
+    it("reports a save held behind a busy plugin reload as deferred, with when it applies", async () => {
+      mocks.rootRead.mockRejectedValue(new FsSafeError("not-found", "file not found"));
+      const deferred = {
+        status: "deferred" as const,
+        reason: "Plugin discord reload is waiting for retained work.",
+        appliesWhen: "After the retained plugin work finishes, or after a Gateway restart.",
+      };
+      mocks.configApplicationStatus.mockReturnValue(deferred);
+
+      const respond = await update({ avatar: "https://example.com/new.png" });
+
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: "UNAVAILABLE",
+        message: `Agent configuration saved but deferred: ${deferred.reason} ${deferred.appliesWhen}`,
+        details: { application: deferred },
+      });
+      expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
     });
 
     it.each([true, false])(
