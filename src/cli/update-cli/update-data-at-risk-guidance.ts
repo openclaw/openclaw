@@ -10,7 +10,6 @@ import {
 } from "../../infra/update-run-data-at-risk.js";
 import { listUpdateRuns, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
-import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import { confirmGatewayReachable } from "../daemon-cli/restart-health-probe.js";
 import {
