@@ -97,11 +97,6 @@ const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
       "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
     ],
     "template_package_refs.updated_at_ms": ["updated_at_ms INTEGER NOT NULL DEFAULT 0"],
-    // Fleet databases created by the earlier continuation composite still allow the retired
-    // 'rollback-election-conflict' notice; nothing writes it any more. New tables stay narrow.
-    "continuation_records.terminal_notice_pending": [
-      "terminal_notice_pending TEXT CHECK ( terminal_notice_pending IS NULL OR terminal_notice_pending IN ( 'retry-exhausted', 'delegate-spawn-interrupted', 'rollback-election-conflict' ) )",
-    ],
     "cron_jobs.enabled": ["enabled INTEGER NOT NULL DEFAULT 1"],
     "cron_jobs.name": ["name TEXT NOT NULL DEFAULT ''"],
     "cron_jobs.payload_kind": ["payload_kind TEXT NOT NULL DEFAULT 'message'"],

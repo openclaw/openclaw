@@ -1,2 +1,3 @@
 # openclaw/openclaw#129388 (continuation feature): its fossils and regression suites for continuation work, delegates, custody, restart custody and the subagent hop-2 wake.
-44526
+# -133 (pure rebuild, 2026-11-19): openclaw-state-db.continuation-records-fleet.test.ts left with the fleet-composite continuation_records compatibility row it covered.
+44393
