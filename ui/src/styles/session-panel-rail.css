@@ -169,8 +169,7 @@
   outline-offset: var(--control-ui-focus-ring-offset);
 }
 
-.session-panel-rail .session-panel-rail__button[aria-pressed="true"] > svg,
-.session-panel-rail .session-panel-rail__toggle[aria-expanded="true"] > svg {
+.session-panel-rail .session-panel-rail__button[aria-pressed="true"] > svg {
   color: var(--icon-active, var(--accent));
 }
 

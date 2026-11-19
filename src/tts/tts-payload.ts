@@ -146,12 +146,13 @@ export async function maybeApplyTtsToPayloadCore(
     providerConfigs: config.providerConfigs,
     preferredProviderId: activeProvider,
   };
-  const directives = ttsMetadata?.tts
-    ? {
-        cleanedText: text,
-        ...resolveTtsDirectiveFacts(ttsMetadata.tts, config.modelOverrides, directiveOptions),
-      }
-    : parseTtsDirectives(text, config.modelOverrides, directiveOptions);
+  const directives =
+    ttsMetadata?.tts || ttsMetadata?.ttsDirectivesParsed
+      ? {
+          cleanedText: text,
+          ...resolveTtsDirectiveFacts(ttsMetadata.tts, config.modelOverrides, directiveOptions),
+        }
+      : parseTtsDirectives(text, config.modelOverrides, directiveOptions);
   if (directives.warnings.length > 0) {
     logVerbose(`TTS: ignored ${directives.warnings.length} directive override(s)`);
   }

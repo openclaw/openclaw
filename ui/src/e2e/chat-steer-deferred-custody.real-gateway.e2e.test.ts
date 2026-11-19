@@ -135,7 +135,7 @@ describe.skipIf(!variant)("Task proof: actual deferred steering custody", () => 
         await page.goto(new URL("settings/appearance", suite.server.baseUrl).href);
         await waitForControlUiGatewayReady(page);
         await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
-        await page.locator("[data-settings-send-shortcut]").selectOption("enter");
+        await page.locator('[data-test-id="send-shortcut-enter"]').click();
         await rpc(page, "sessions.create", {
           key: sessionKey,
           agentId: "main",

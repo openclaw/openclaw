@@ -58,14 +58,22 @@ async function executeRegistry<Key extends keyof SandboxRegistryOperations>(
     await import("../../state/openclaw-state-worker-store.js");
   // Reservation checks stay outside grants; the worker checks its authoritative rows.
   guard?.beforeLegacyApply?.();
-  return runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
-    assertCurrent,
-    createAdmission: withSandboxRegistryPublication(
-      createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
-      () => context.admission.identity.key,
-      () => context.admission.assertCurrent(),
-    ),
-  });
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({
+        ...command,
+        input: { ...command.input, stateOwnerPath: guard?.stateOwnerPath },
+      }),
+    {
+      assertCurrent,
+      createAdmission: withSandboxRegistryPublication(
+        createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
+        () => context.admission.identity.key,
+        () => context.admission.assertCurrent(),
+      ),
+    },
+  );
 }
 
 function writeRegistry(
@@ -90,7 +98,7 @@ export async function readRegistry(
   const install = captureSandboxRegistryFacts(context);
   const reply = await executeExistingOpenClawStateRead(
     options,
-    { type: "sandboxRegistry.list", workspaceDir: options.workspaceDir },
+    { type: "sandboxRegistry.list", input: { workspaceDir: options.workspaceDir } },
     { context },
   );
   if (!reply) {
@@ -108,7 +116,7 @@ export async function readRegistryEntry(
   const install = captureSandboxRegistryFacts(context);
   const reply = await executeExistingOpenClawStateRead(
     options,
-    { type: "sandboxRegistry.get", containerName },
+    { type: "sandboxRegistry.get", input: { containerName } },
     { context },
   );
   if (!reply) {
@@ -124,7 +132,7 @@ export async function readRegisteredSandboxRuntimeIds(params: {
 }): Promise<string[]> {
   const reply = await executeExistingOpenClawStateRead(
     {},
-    { type: "sandboxRegistry.runtimeIds", ...params },
+    { type: "sandboxRegistry.runtimeIds", input: params },
   );
   if (!reply) {
     return [];
@@ -141,12 +149,16 @@ export async function updateRegistry(entry: SandboxRegistryEntry, guard?: Worksp
 export async function removeRegistryEntry(
   containerName: string,
   options: { preserveRemovalIntent?: boolean } = {},
+  guard?: WorkspaceStateGuard,
 ) {
-  await writeRegistry({
-    operation: "remove",
-    containerName,
-    preserveRemovalIntent: options.preserveRemovalIntent,
-  });
+  await writeRegistry(
+    {
+      operation: "remove",
+      containerName,
+      preserveRemovalIntent: options.preserveRemovalIntent,
+    },
+    guard,
+  );
 }
 
 /** Atomically select one generation for a backend/scope before provider allocation. */
@@ -297,7 +309,7 @@ export async function removeSandboxRegistryRuntime(
         assertCurrent();
         const reply = await executeExistingOpenClawStateRead(
           { path: context.admission.databasePath, env: context.environment },
-          { type: "sandboxRegistry.get", containerName: selected.containerName },
+          { type: "sandboxRegistry.get", input: { containerName: selected.containerName } },
           { context, current: true },
         );
         assertCurrent();
@@ -327,7 +339,7 @@ export async function readBrowserRegistry(
   const install = captureSandboxRegistryFacts(context);
   const reply = await executeExistingOpenClawStateRead(
     options,
-    { type: "sandboxRegistry.browsers", workspaceDir: options.workspaceDir },
+    { type: "sandboxRegistry.browsers", input: { workspaceDir: options.workspaceDir } },
     { context },
   );
   if (!reply) {
@@ -345,8 +357,9 @@ export function assertSandboxBrowserRegistryEntryCurrent(entry: SandboxBrowserRe
 export async function updateBrowserRegistry(
   entry: SandboxBrowserRegistryEntry,
   assertCurrent?: () => void,
+  guard?: WorkspaceStateGuard,
 ) {
-  await writeRegistry({ operation: "updateBrowser", entry }, undefined, assertCurrent);
+  await writeRegistry({ operation: "updateBrowser", entry }, guard, assertCurrent);
 }
 
 /** Forget only the inspected allocation, under the caller's still-live settlement lease. */
@@ -355,10 +368,11 @@ export async function removeSandboxRegistryGeneration(
   entry: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
   assertCurrent?: () => void,
   options: { path?: string; env?: NodeJS.ProcessEnv } = {},
+  guard?: WorkspaceStateGuard,
 ): Promise<void> {
   await writeRegistry(
     { operation: "removeGeneration", kind, entry },
-    undefined,
+    guard,
     assertCurrent,
     captureOpenClawStateWorkerContext(options),
   );

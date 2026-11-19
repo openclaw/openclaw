@@ -15,7 +15,6 @@ import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.
 import { PluginInstance } from "./plugin-instance.js";
 import { resolvePluginPreparationExecArgv } from "./plugin-preparation-exec-argv.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
-import { pluginSourceSnapshotOptionsDigest } from "./plugin-source-snapshot-options.js";
 
 /** Exercise actual runtime flags, worker creation, publication, and frozen module loading. */
 async function runPluginSnapshotWorkerOptionsRegression(home: string) {
@@ -104,7 +103,7 @@ async function runPluginSnapshotWorkerOptionsRegression(home: string) {
           installRecordHash: "worker-options-install",
           contentDigest: snapshot.contentDigest,
           dependencyClosureDigest: snapshot.dependencyClosureDigest,
-          buildResolutionDigest: pluginSourceSnapshotOptionsDigest(),
+          buildResolutionDigest: "worker-options",
         })),
         installedRevision: 1,
       };

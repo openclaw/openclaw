@@ -3,6 +3,7 @@ import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-con
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginDoctorContractModules } from "../plugins/doctor-contract-preparation.js";
 import {
   listPluginDoctorStateMigrationEntries,
   PluginDoctorStateMigrationDeclarationError,
@@ -168,6 +169,16 @@ export async function collectPluginDoctorStateMigrationPlans(
   const { config, env } = input;
   let entries: ReturnType<typeof listPluginDoctorStateMigrationEntries>;
   try {
+    await preparePluginDoctorContractModules({
+      config,
+      env,
+      inventory: params.inventory,
+      pluginIds: params.pluginIds,
+      includeDisabled: params.includeDisabled,
+      surfaces: ["stateMigrations"],
+      assertCurrent: () => params.repairAuthority?.assertCurrent(),
+    });
+    params.repairAuthority?.assertCurrent();
     entries = listPluginDoctorStateMigrationEntries({
       config,
       env,
@@ -554,11 +565,14 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
     assertDeferredPluginMigrationsCurrent({ env: params.env, expectedPending });
   };
   let completed: MigrationMessages = { changes: [], warnings: [] };
+  // Gateways older than 2026.11.5 (including 2026.10 extended-stable) record no process
+  // namespace, so a lease their failed release or stop left behind ends only at expiry.
+  const pluginLeaseOptions = { env: params.env, assertCurrent: () => maintenance.assertCurrent() };
   try {
     const result = await withAgentDatabaseMaintenanceLease(
       { env: params.env },
       async (agentLease) =>
-        withPluginLifecycleLease({ env: params.env, waitMs: 5_000 }, async (pluginLease) => {
+        withPluginLifecycleLease(pluginLeaseOptions, async (pluginLease) => {
           let active = true;
           const assertCurrent = () => {
             if (!active) {

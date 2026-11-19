@@ -21,6 +21,7 @@ struct QuickChatCatalogPresentationTests {
             try await presentation.checkConversationDisclosurePreservesOneComposerAndItsDraft()
             try await presentation.checkShortcutPresentsAnEditorWithoutRequiringForegroundOwnership()
             try await self.checkRestrictedOperatorModelPolicyRetiresRenderedChoices()
+            try await presentation.checkConnectionStatusSurvivesModelCatalogFailure()
         }
     }
 

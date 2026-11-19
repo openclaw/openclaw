@@ -175,6 +175,7 @@ function readProjectionRows(
       "preparation_key",
       "preparation_purpose",
       "provision_operation_id",
+      "provision_source_json",
       "resource_receipt_json",
       "node_setup_id",
       "node_device_id",
@@ -406,3 +407,10 @@ export function readWorkerPlacementRecoveryCandidatesInDatabase(
     return [...candidates.values()];
   });
 }
+
+export const workerPlacementReadOperations = {
+  "workers.placementRecoveryCandidates": (_input: undefined, db: EngineConnection) => ({
+    type: "workers.placementRecoveryCandidates" as const,
+    candidates: readWorkerPlacementRecoveryCandidatesInDatabase(db),
+  }),
+};

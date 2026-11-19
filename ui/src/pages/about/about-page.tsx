@@ -1,6 +1,6 @@
 import { createMemo, createSignal } from "solid-js";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
+import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -45,13 +45,7 @@ export function AboutPage() {
 
   return (
     <openclaw-about-page>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <h1 class="page-title">{t("tabs.about")}</h1>
-          </div>
-        </section>
-      </ShellLayoutBoundary>
+      <SettingsPageHeader title={t("tabs.about")} />
       <SettingsWorkspace>
         <AboutView
           buildInfo={CONTROL_UI_BUILD_INFO}

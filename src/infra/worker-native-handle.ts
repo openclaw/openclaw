@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
+import { fileURLToPath } from "node:url";
 import {
   receiveMessageOnPort,
   type MessagePort,
@@ -35,6 +36,16 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   private readonly diagnosticName: string;
   threadId = 0;
   started = false;
+  /** Where this worker's code lives; eval and non-file workers have no path. */
+  get sourcePath(): string | undefined {
+    if (this.evalSource) {
+      return undefined;
+    }
+    if (!(this.filename instanceof URL)) {
+      return this.filename;
+    }
+    return this.filename.protocol === "file:" ? fileURLToPath(this.filename) : undefined;
+  }
   executionStopped = false;
   private executionExitCode: number | undefined;
   private referenced = true;

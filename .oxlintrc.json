@@ -229,6 +229,11 @@
   "ignorePatterns": [
     "dist/",
     "dist-runtime/",
+    // napi-rs generates the iroh binding loader and its type declarations.
+    "crates/openclaw-iroh-node/index.js",
+    "crates/openclaw-iroh-node/index.d.ts",
+    // Preserve the official Beam client bytes and recorded upstream hash.
+    "test/fixtures/beam-live-handoff-client/beam.mjs",
     // Intentional negative-test corpora contain parser and lint violations by contract.
     "test/fixtures/oxlint-boundary-guards/**",
     "extensions/diffs/assets/viewer-runtime.js",
@@ -475,6 +480,13 @@
       }
     },
     {
+      "files": ["src/gateway/operator-run-recovery.test.ts"],
+      "rules": {
+        // Keep recovery-reason and legacy-refusal regressions with the existing authority fixtures.
+        "max-lines": ["error", { "max": 1046, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
       "files": ["src/agents/agent-command.live-model-switch.test.ts"],
       "rules": {
         // expectations updated for equal-primary saved selections keeping configured fallbacks; #185496
@@ -485,12 +497,6 @@
       "files": ["extensions/copilot/src/event-bridge.ts"],
       "rules": {
         "max-lines": ["error", { "max": 950, "skipBlankLines": true, "skipComments": true }]
-      }
-    },
-    {
-      "files": ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
-      "rules": {
-        "max-lines": ["error", { "max": 1200, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {

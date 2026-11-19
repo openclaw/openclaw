@@ -295,7 +295,8 @@ it("skips the pending video original link without skipping native controls", asy
   await viewer.updateComplete;
   await expect.poll(() => viewer.querySelector("dialog")?.open).toBe(true);
   const video = viewer.querySelector("video")!;
-  await expect.poll(() => video.readyState).toBeGreaterThanOrEqual(2);
+  // Real media decoding can outlast the default poll window on a loaded CI runner.
+  await expect.poll(() => video.readyState, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
   video.pause();
   const close = viewer.querySelector<HTMLButtonElement>(".close")!;
   const previous = viewer.querySelector<HTMLButtonElement>(".previous")!;

@@ -52,7 +52,7 @@ export async function createCodeModeToolApiFile(
   }
   const content = [
     "// Generated from the effective tool contract. Unsupported shapes stay unknown.",
-    "// JSON Schema validation owns constraints; describe() exposes the original schema.",
+    "// JSON Schema validation owns constraints; describe() exposes the original input schema.",
     "// Values enter the guest intact or reject when program-data admission is full.",
     ...declarations,
   ].join("\n");

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import { resolveVitestNodeArgs } from "../../../scripts/lib/vitest-process-env.mts";
+import { resolveNodeCompilerArgs } from "../../../scripts/lib/vitest-node-args.mts";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import {
   assertManagedHandoffTestConsumer,
@@ -276,7 +276,7 @@ it.skipIf(process.platform === "win32").for([
         const child = spawn(
           resolveTestNodeExecPath(),
           [
-            ...resolveVitestNodeArgs(),
+            ...resolveNodeCompilerArgs(),
             ...(mode.endsWith("-compensation") ? ["--experimental-test-module-mocks"] : []),
             ...sourceImportArgs,
             binding.nodeOption,

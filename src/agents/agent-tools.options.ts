@@ -6,7 +6,6 @@ import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.j
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
-import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import type { MemoryFlushToolRunContext } from "./agent-tools.memory-flush.types.js";
 import type { SkillInstructionDeliveryCache } from "./agent-tools.read.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
@@ -15,7 +14,7 @@ import type {
   AgentRunClientContext,
   AgentRunMessageContext,
   AgentRunChannelContext,
-} from "./command/shared-types.js";
+} from "./command/execution-context.types.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import type { DelegationCapability } from "./delegation-capability.js";
 import type { ModelAuthMode } from "./model-auth.js";
@@ -26,6 +25,7 @@ import type { SpawnedToolContext } from "./spawned-context.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import type { OpenClawCodingToolConstructionPlan } from "./tool-catalog.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.js";
+import type { ToolOutcomeObserver } from "./tool-outcome-observation.js";
 import type {
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,
@@ -119,8 +119,6 @@ export type OpenClawCodingToolsOptions = {
   systemAgentTool?: import("./tools/system-agent-tool.js").SystemAgentToolOptions;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
-  /** Reads the sticky untrusted-content flag for the current user turn. */
-  isTurnTainted?: () => boolean;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   /** Original identities for sandbox-materialized skill instruction paths. */
@@ -139,18 +137,30 @@ export type OpenClawCodingToolsOptions = {
   AgentRunChannelContext;
 
 export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  /** Internal listing owner pins discovery changes or renders a read-only inventory. */
+  githubPublicationConfigurationAware?: true;
   /** Describe prospective GitHub actions before policy filtering; never executable. */
   githubPublicationPreview?: true;
   assertInvocationCurrent?: () => void;
   /** Live harness-owned local execution, independent of the Gateway tool catalog. */
   nativeHarnessExecution?: true;
+  /** Host-recorded handoff to a caller whose additional execution policy is unknown. */
+  unverifiedExecutionPolicy?: true;
   pluginExecutionAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
   pluginExecutionSkillsSnapshot?: SkillSnapshot;
   awaitSessionDiffBaseline?: () => Promise<void>;
+  /** Execution owner's current deadline, without lane cleanup grace. */
+  getRunAbortDeadlineAtMs?: () => number | undefined;
   /** Policy-approved tool names unavailable here but usable in a child's own workspace. */
   additionalInheritedToolNamesRef?: string[];
   /** The host owns continuation policy when this factory builds only part of its tool surface. */
   sessionEventSourcePolicy?: SessionEventSourcePolicy;
+  /**
+   * Host-resolved lifetime of this turn's tool policy, supplied only by host tool construction.
+   * "conversation" means the turn adds no narrowing the session would not re-derive on its next
+   * turn. Omitted or "turn" keeps every background follow-up capped at this turn's tool list.
+   */
+  toolPolicyScope?: "conversation" | "turn";
 };
 
 export type PluginCodingToolsOptions = Omit<

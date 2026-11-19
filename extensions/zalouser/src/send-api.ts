@@ -39,6 +39,7 @@ export async function sendZaloTextWithApi(
     const media = mediaUrl
       ? await loadOutboundMediaFromUrl(mediaUrl, {
           maxBytes: options.mediaMaxBytes,
+          mediaAccess: options.mediaAccess,
           mediaLocalRoots: options.mediaLocalRoots,
           mediaReadFile: options.mediaReadFile,
           fetchImpl: fetchMediaWithZaloSendContext,

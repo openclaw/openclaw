@@ -11,6 +11,7 @@ import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import { currentOwnerDevicePrincipal } from "./openclaw-id/tunnel-principal.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
@@ -26,6 +27,7 @@ import {
 } from "./server/client-presence.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { getHealthCache } from "./server/health-state.js";
+import { disconnectDisallowedGatewayPolicyClients } from "./server/ws-origin-policy.js";
 import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
 import { resolveSessionRequestTargets } from "./session-request-targets.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -64,6 +66,7 @@ type GatewayRequestContextRuntime = Pick<
   | "nodeRegistry"
   | "workerEnvironmentService"
   | "hostDesktopService"
+  | "openclawIdService"
   | "gatewayComputerService"
   | "githubPublicationService"
   | "validateAgentRuntimeApprovalAuthority"
@@ -444,6 +447,10 @@ export function createGatewayRequestContext(
       if (presenceChanged) {
         runtime.publishPresence();
       }
+      disconnectDisallowedGatewayPolicyClients(
+        clients.authorityClients,
+        context.getCommittedRuntimeConfig?.() ?? getRuntimeConfig(),
+      );
     },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
       const reason = opts?.reason ?? "device-invalidated";
@@ -470,9 +477,12 @@ export function createGatewayRequestContext(
       }
       disconnectDeviceTransports?.(deviceId, opts);
     },
-    disconnectClientsForUserProfile: (profileId: string) => {
+    disconnectClientsForUserProfile: (profileId: string, opts?: { roleOnly?: boolean }) => {
       for (const gatewayClient of clients.authorityClients) {
         if (gatewayClient.authenticatedUserProfile?.profileId !== profileId) {
+          continue;
+        }
+        if (opts?.roleOnly && currentOwnerDevicePrincipal(gatewayClient)) {
           continue;
         }
         invalidateGatewayPolicyClient(gatewayClient, {
@@ -508,6 +518,7 @@ export function createGatewayRequestContext(
       ? { workerEnvironmentService: runtime.workerEnvironmentService }
       : {}),
     ...(runtime.hostDesktopService ? { hostDesktopService: runtime.hostDesktopService } : {}),
+    ...(runtime.openclawIdService ? { openclawIdService: runtime.openclawIdService } : {}),
     ...(runtime.gatewayComputerService
       ? { gatewayComputerService: runtime.gatewayComputerService }
       : {}),

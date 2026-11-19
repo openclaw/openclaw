@@ -24,6 +24,10 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
+import {
+  estimateAggregateUsageCostAsync,
+  resolveModelCostConfig,
+} from "../../utils/usage-format.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import { prepareSessionUsageUpdate } from "./session-usage.js";
 
@@ -35,7 +39,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("session actor usage accounting", () => {
-  type UsageUpdate = Parameters<typeof prepareSessionUsageUpdate>[0];
+  type UsageUpdate = Omit<Parameters<typeof prepareSessionUsageUpdate>[0], "estimatedCostUsd"> & {
+    cfg?: OpenClawConfig;
+    agentDir?: string;
+  };
   async function usageSession(seed: Partial<SessionEntry> = {}, sessionKey = "agent:main:main") {
     const root = tempDirs.make("openclaw-usage-");
     const env = { OPENCLAW_STATE_DIR: root };
@@ -67,11 +74,24 @@ describe("session actor usage accounting", () => {
               if (!completion) {
                 throw new Error("Missing usage completion owner");
               }
-              const prepared = prepareSessionUsageUpdate({ cfg: {}, ...update });
+              const { cfg, agentDir, ...usage } = update;
+              const prepared = prepareSessionUsageUpdate({
+                ...usage,
+                estimatedCostUsd: await estimateAggregateUsageCostAsync({
+                  usage: usage.usage,
+                  prepareCost: () =>
+                    resolveModelCostConfig({
+                      config: cfg ?? {},
+                      agentDir,
+                      provider: usage.providerUsed ?? entry.modelProvider,
+                      model: usage.modelUsed ?? entry.model,
+                    }),
+                }),
+              });
               if (prepared) {
-                completion.patch((current) => ({
+                completion.patch(() => ({
                   kind: "usage",
-                  update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(current) },
+                  update: prepared,
                   updatedAt: Date.now(),
                 }));
               }

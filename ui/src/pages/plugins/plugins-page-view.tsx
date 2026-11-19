@@ -17,28 +17,31 @@ import {
 } from "../../app-route-paths.ts";
 import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsLoadingSkeleton, SettingsPage } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsLoadingSkeleton,
+  SettingsPage,
+  SettingsPageHeader,
+} from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { WizardLogin } from "../../components/wizard-login-controller.tsx";
+import { configSecretFields } from "../../lib/config/config-secret-fields.ts";
 import { currentConfigRead } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginCatalogResults as PluginCatalogResults } from "./catalog-results.tsx";
-import {
-  PluginArtTile,
-  renderPluginConsentDialog as PluginConsentDialog,
-} from "./consent-dialog.tsx";
 import "./custom-elements.ts";
+import { renderPluginConsentDialog as PluginConsentDialog } from "./consent-dialog.tsx";
 import { pluginDetailLocation, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import {
   pluginRowKey,
   renderPluginRowMessage as PluginRowMessageView,
 } from "./plugin-row-message.tsx";
 import { PluginsHubHeader } from "./plugins-hub-header.tsx";
-import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
+import { pluginsHubPanel, type PluginsHubTab } from "./plugins-hub.ts";
 import { installRequestForDiscoveryDetail } from "./plugins-page-model.ts";
 import type { PluginsPageModel } from "./plugins-page.ts";
+import { PluginArtTile } from "./presentation.tsx";
 import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-inventory.tsx";
 import {
   pluginAdvancedSchema,
@@ -90,11 +93,19 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     props.page.read();
     return props.page;
   };
+  const installPaused = () => {
+    const update = page().context.overlays.snapshot;
+    return update.updateRunning || update.updateReconciliationPending;
+  };
   const hasInventory = createMemo(() => page().state.result !== null);
+  const pluginSettingsLocation = (pluginId: string) => ({
+    pathname: pathForPluginSettings(pluginId, page().context.basePath),
+    // Settings returns to the Plugins workspace it was opened from.
+    search: "?view=settings&from=plugins",
+  });
   // The owner mutates in place; publish fresh props for each page revision.
   const discovery = createMemo(() => ({
     ...page().discovery.read(),
-    error: page().discovery.read().error ?? page().state.error,
   }));
   const onOpenSkill = (request: PluginsSkillsReadParams) => void page().skillPreview.open(request);
   const actions = {
@@ -117,6 +128,12 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       });
     },
     selectInstalledDetailTab: (tab: InstalledPluginDetailTab) => {
+      const pluginId = page().state.detail?.pluginId;
+      // Plugin settings live in Settings; the Plugins workspace links there, never embeds them.
+      if (tab === "configuration" && page().surface === "discovery" && pluginId) {
+        page().context.navigate("plugin-settings", pluginSettingsLocation(pluginId));
+        return;
+      }
       page().setState({ installedDetailTab: tab });
       page().context.navigate(
         page().surface === "discovery" ? "plugins" : "plugin-settings",
@@ -197,6 +214,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     onConfigPatch: (path: Array<string | number>, value: unknown) =>
       page().settings.patch(path, value),
     onConfigRemove: (path: Array<string | number>) => page().settings.patch(path, undefined),
+    configSecretFields: configSecretFields(page().context),
     onConfigReload: page().reloadConfig,
     onConfigReadRetry: actions.retryConfigRead,
     onConfigWriteRetry: () => void page().context.runtimeConfig.retry(),
@@ -208,7 +226,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
   }));
 
   function CatalogInventory() {
-    // The route owns first-load readiness; retain accepted inventory during refresh.
+    // Observe the page owner's read while retaining accepted inventory during refresh.
     const catalogRead = createMemo(() => props.page.catalogRead());
     const loading = () => {
       latest(catalogRead);
@@ -244,7 +262,10 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       () => components()?.skillDetails ?? components()?.skills.map((name) => ({ name })) ?? [],
     );
     const settings = () => page().state.installedDetailTab === "configuration";
-    const settingsLocation = () => pluginDetailLocation(page().routeData?.location, true);
+    const settingsLocation = () =>
+      page().surface === "discovery"
+        ? pluginSettingsLocation(detailProps.pluginId)
+        : pluginDetailLocation(page().routeData?.location, true);
     const overviewLocation = () => pluginDetailLocation(page().routeData?.location, false);
     return (
       <PluginDetailBoundary onRetry={() => void page().showDetails(detailProps.pluginId)}>
@@ -307,11 +328,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                   page().context.basePath,
                 )
           }
-          backLabel={
-            page().surface === "discovery" || settingsParentRoute() === "plugins"
-              ? t("tabs.plugins")
-              : t("nav.settings")
-          }
+          backLabel={t("tabs.plugins")}
           tab={page().state.installedDetailTab}
           onBack={() => {
             if (settings()) {
@@ -346,10 +363,27 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           }}
         />
       )}
+      {page().surface !== "discovery" && !detailPluginId() && (
+        <SettingsPageHeader
+          registerHeading={page().registerRemovalHeading}
+          title={t("tabs.plugins")}
+          subtitle={t("pluginsPage.settingsDescription")}
+        />
+      )}
       <SettingsWorkspace>
         {PluginRowMessageView(page().state.pageNotice ?? undefined)}
         {page().surface === "discovery" ? (
-          <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-plugins">
+          <div {...pluginsHubPanel("plugins")}>
+            <Show when={page().state.catalogDetail && page().loading && !hasInventory()}>
+              <div class="muted" role="status">
+                {t("pluginsPage.loading")}
+              </div>
+            </Show>
+            <Show when={page().state.error}>
+              {(error) => (
+                <PluginRetryError error={error()} onRetry={() => void page().refreshCatalog()} />
+              )}
+            </Show>
             {page().state.catalogDetail ? (
               detailPluginId() && !page().consent.getActiveInstall(`install:${catalogId()}`) ? (
                 <InstalledDetail pluginId={detailPluginId()!} />
@@ -376,8 +410,12 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                     onRetry={() =>
                       void page().showCatalogDetail(page().state.catalogDetail?.id ?? null)
                     }
+                    installTitle={
+                      installPaused() ? t("pluginsPage.installPausedByUpdate") : undefined
+                    }
                     canInstall={
                       page().canMutate() &&
+                      !installPaused() &&
                       !page().state.messages[`install:${catalogId()}`]?.savedInstall &&
                       catalogInstallable()
                     }
@@ -410,7 +448,10 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                   pluginIconUrls={page().state.iconUrls}
                   iconLoading={page().icons.catalog.isLoading}
                   pluginIconLoading={page().icons.installed.isLoading}
-                  canInstall={page().canMutate()}
+                  installTitle={
+                    installPaused() ? t("pluginsPage.installPausedByUpdate") : undefined
+                  }
+                  canInstall={page().canMutate() && !installPaused()}
                   installProgress={page().consent.read().installProgress}
                   inventory={page().state.result?.plugins}
                   entryHref={(id) => pathForPluginCatalogEntry(id, page().context.basePath)}

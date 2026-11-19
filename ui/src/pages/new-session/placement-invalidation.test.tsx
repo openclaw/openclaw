@@ -232,7 +232,7 @@ it("preserves draft intent through failed defaults refresh and agent replacement
   });
   host.draft.open();
   await waitForSolid(() =>
-    expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
+    expect(host.querySelector(".palette-session-settings__trigger")).not.toBeNull(),
   );
   const expectBlocked = async (disabledReason: string) => {
     expect(host.draft).toMatchObject({ canSubmit: false, disabledReason, error: null });
@@ -246,7 +246,7 @@ it("preserves draft intent through failed defaults refresh and agent replacement
   fresh.reject(new Error("roster temporarily unavailable"));
   await read;
   await host.updateComplete;
-  await expectBlocked("Could not refresh agent defaults. Reload to try again.");
+  await expectBlocked("Couldn’t refresh agent defaults. Reload to try again.");
   read = agents.ensureList();
   retry.resolve({
     defaultId: "replacement",

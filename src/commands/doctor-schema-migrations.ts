@@ -2,11 +2,11 @@ import { withEngineStoreAdmission } from "../infra/database-engine/admission-sco
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteIntegrityOperationSync } from "../infra/sqlite-integrity.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import {
   hasUpdateDoctorMigrationCapture,
   runUpdateSqliteMigrationAsync,
-} from "../infra/update-doctor-migration-attribution.js";
+} from "../infra/update-doctor-migration-context.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import { agentEngineInput, openAgentEngineStore } from "../state/openclaw-agent-db-engine.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
@@ -37,7 +37,7 @@ async function prepareSharedStateForAgentMaintenance(
     "doctor-preparation",
   );
   if (prepared.warnings.length > 0) {
-    throw new Error(prepared.warnings.join("\n"));
+    throw new Error(prepared.warnings.join("\n"), { cause: prepared.failure });
   }
   changes.push(...prepared.changes);
   await openOpenClawStateDatabaseForDoctor({ env: params.env });
@@ -122,7 +122,7 @@ export async function prepareDoctorDatabaseMigrations(
       "version",
     );
     if (migrated.warnings.length > 0) {
-      throw new Error(migrated.warnings.join("\n"));
+      throw new Error(migrated.warnings.join("\n"), { cause: migrated.failure });
     }
     result.changes.push(...migrated.changes);
   }

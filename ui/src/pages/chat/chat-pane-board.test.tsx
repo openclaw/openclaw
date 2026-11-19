@@ -103,6 +103,8 @@ function createTestPane(
   const client = {
     request: vi.fn(async () => ({ session: { key: "agent:main:current", kind: "direct" } })),
   } as unknown as GatewayBrowserClient;
+  // Panes always ask whether their session's archive is still inside its Undo window.
+  sessions.archiveVisibility ??= () => undefined;
   const connectionBootstrap = createConnectionBootstrapCoordinator();
   connectionBootstrap.synchronize({ client, connected: true });
   onTestFinished(() => connectionBootstrap.reset());

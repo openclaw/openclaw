@@ -10,7 +10,7 @@ import {
   type PlainTextToolCallNameMatcher,
 } from "../../../../packages/tool-call-repair/src/index.js";
 import { mapAssistantMessageStream } from "../../../llm/utils/stream-wrapper.js";
-import { findCodeRegions } from "../../../shared/text/code-regions.js";
+import { createCodeRegionResolver } from "../../../shared/text/code-regions.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import { isThinkingLikeBlock } from "../../thinking-block.js";
@@ -29,6 +29,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
     hasExactName: (name) => Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
     hasNamePrefix: (prefix) => couldNormalizeToolNamePrefixToAllowedTool(prefix, allowedToolNames),
   };
+  const resolveProtectedRanges = createCodeRegionResolver();
   const promotedIdBySource = new Map<string, string>();
   const normalizeTerminalMessage = (params: {
     allowPromotion: boolean;
@@ -40,7 +41,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       matcher,
       message: params.message,
       preserveEmptyTextBlocks: params.preserveEmptyTextBlocks,
-      resolveProtectedRanges: findCodeRegions,
+      resolveProtectedRanges,
       requireAssistantRole: true,
     });
     if (scrubbed) {
@@ -74,7 +75,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       isRetainableNonTextBlock: isThinkingLikeBlock,
       message: params.message,
       requireAssistantRole: true,
-      resolveProtectedRanges: findCodeRegions,
+      resolveProtectedRanges,
       resolveToolName: (name) => resolveToolCallName(name, allowedToolNames, undefined, true),
     });
     if (promoted) {
@@ -102,11 +103,11 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
       matcher,
       normalizeTerminalMessage,
-      // findCodeRegions resolves exactly the CommonMark fenced/indented/inline code shapes
+      // The resolver preserves exactly the CommonMark fenced/indented/inline code shapes
       // the carried fence scan models (and yields to the full parse for the rest), so its
       // protection is safe to trust from the fast path.
       protectedRangesFenceCompatible: true,
-      resolveProtectedRanges: findCodeRegions,
+      resolveProtectedRanges,
     })[Symbol.asyncIterator]();
     let started = false;
     return createStreamIteratorWrapper({

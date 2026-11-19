@@ -121,9 +121,7 @@ declare module "@solidjs/web" {
           "prop:replacementCompanion"?: unknown;
           "prop:presented": boolean;
         };
-      "openclaw-message-reaction-picker": HTMLAttributes<HTMLElement> & {
-        compact?: boolean;
-      };
+      "openclaw-message-reaction-picker": HTMLAttributes<HTMLElement>;
       "openclaw-chat-clawhub-card": HTMLAttributes<HTMLElement> & {
         "prop:recommendation"?: ClawHubRecommendation;
         "prop:agentId"?: string;
@@ -200,7 +198,6 @@ declare module "@solidjs/web" {
           >
         >;
       "openclaw-chat-pdf-preview": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-pane-versions-menu": HTMLAttributes<HTMLElement>;
       "openclaw-chat-skill-learned-notice": HTMLAttributes<HTMLElement>;
       "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
         "prop:agentId"?: string;

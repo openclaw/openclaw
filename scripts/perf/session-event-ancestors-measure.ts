@@ -20,6 +20,8 @@
  * Wide-parent acceptance: child-count-independent membership reads and lower CPU/event;
  * wire bytes must match after only the generated ancestor revision normalization above.
  * This measures the publication owner, not whole-Gateway latency or production share.
+ * --base-traversals 1 compares later presentation changes after ancestor traversal reuse.
+ * --identities 8 spreads recipients across eight independently authorized audiences.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -49,6 +51,8 @@ const { values } = parseArgs({
     events: { type: "string", default: "3000" },
     sessions: { type: "string", default: "1600" },
     clients: { type: "string", default: "10" },
+    identities: { type: "string" },
+    "base-traversals": { type: "string", default: "2" },
     allocations: { type: "boolean", default: false },
     profiles: { type: "boolean", default: false },
     "state-root": { type: "string", default: ".local/session-event-ancestors-measure" },
@@ -59,12 +63,16 @@ assert(["tree", "wide"].includes(values.shape));
 assert(["steady", "state"].includes(values.churn));
 assert(values.churn === "steady" || values.shape === "wide");
 const wide = values.shape === "wide";
-const integer = (name: "events" | "pairs" | "sessions" | "clients", fallback: number) =>
-  parseStrictIntegerOption({ raw: values[name], label: name, min: 1, fallback });
+const integer = (
+  name: "events" | "pairs" | "sessions" | "clients" | "identities" | "base-traversals",
+  fallback: number,
+) => parseStrictIntegerOption({ raw: values[name], label: name, min: 1, fallback });
 const events = integer("events", 3000);
 const pairs = integer("pairs", 5);
 const sessions = integer("sessions", 1600);
 const clientCount = integer("clients", 10);
+const identities = integer("identities", wide ? clientCount : 2);
+const baseTraversals = integer("base-traversals", 2);
 assert(
   wide ? sessions >= 2 : sessions >= 4 && sessions % 4 === 0,
   "Invalid session count for shape",
@@ -157,7 +165,7 @@ try {
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const inspector = new Session();
     const peers = Array.from({ length: clientCount }, (_, index) => {
-      const profileId = `synthetic-profile-${wide ? index : index % 2}`;
+      const profileId = `synthetic-profile-${index % identities}`;
       return {
         client: {
           connId: `synthetic-connection-${index}`,
@@ -400,7 +408,7 @@ try {
           assert.equal(frames, events * clientCount);
           assert.equal(
             ancestorTraversals,
-            events * (!values.arm && variants[index]!.name === "base" ? 2 : 1),
+            events * (!values.arm && variants[index]!.name === "base" ? baseTraversals : 1),
           );
           let allocatedBytes: number | undefined;
           if (values.allocations) {
@@ -447,6 +455,7 @@ try {
         sessions,
         leafSessions: leaves.length,
         clients: clientCount,
+        identities,
         pairs,
         mode: values.allocations ? "allocation" : "timing",
         normalizedPayloadDigest: digests[0],

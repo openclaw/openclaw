@@ -535,7 +535,7 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
         : "web_search is disabled or no provider is available.",
     );
   }
-  const allowFallback = !hasExplicitWebSearchSelection({
+  const allowAutomaticFallback = !hasExplicitWebSearchSelection({
     search,
     runtimeWebSearch,
     providerId: params.providerId,
@@ -553,6 +553,12 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
       // Keep the selected provider's failure, including null or undefined rejections.
       let firstFailure: WebSearchProviderError | undefined;
       for (const candidate of candidates) {
+        const allowFallback =
+          allowAutomaticFallback &&
+          !(
+            params.modelSelection?.authProfileId &&
+            candidate.authProviderId === params.modelSelection.provider
+          );
         params.signal?.throwIfAborted();
         assertRequestCurrent?.();
         try {
@@ -570,6 +576,7 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
           }
           const executed = await definition.execute(params.args, {
             signal: params.signal,
+            ...(params.modelSelection ? { modelSelection: params.modelSelection } : {}),
             ...(assertRequestCurrent ? { assertCurrent: assertRequestCurrent } : {}),
           });
           // Cancellation wins races with provider completion or cleanup failures. Otherwise an
@@ -598,9 +605,10 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
           if (isTrustedToolExecutionPreflightError(error)) {
             throw error;
           }
-          firstFailure ??= new WebSearchProviderError(candidate.id, error);
+          const failure = new WebSearchProviderError(candidate.id, error);
+          firstFailure ??= failure;
           if (!allowFallback) {
-            throw firstFailure;
+            throw failure;
           }
         }
       }

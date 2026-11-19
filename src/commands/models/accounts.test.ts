@@ -73,6 +73,10 @@ const self = {
     hasAvatar: false,
   },
 } satisfies UsersSelfResult;
+const defaultResponses: Record<string, unknown> = {
+  "users.self": self,
+  "users.authConnect.catalog": catalog,
+};
 
 type Request = {
   method: string;
@@ -104,6 +108,7 @@ async function withGateway(
     requests: Request[];
     connections: Request[];
     upgradeHeaders: IncomingHttpHeaders[];
+    close: () => Promise<void>;
   }) => Promise<void>,
   options: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv } = {},
 ): Promise<void> {
@@ -111,6 +116,11 @@ async function withGateway(
     { label: "personal-account-cli", scenario: "minimal", env: options.env },
     async (state) => {
       const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+      const close = async () => {
+        if (server.address()) {
+          await closeMinimalGatewayServer(server);
+        }
+      };
       const requests: Request[] = [];
       const connections: Request[] = [];
       const upgradeHeaders: IncomingHttpHeaders[] = [];
@@ -135,16 +145,8 @@ async function withGateway(
             .then(
               (payload) => {
                 if (socket.readyState === WebSocket.OPEN) {
-                  sendMinimalGatewayResponse(
-                    socket,
-                    id,
-                    payload ??
-                      (request.method === "users.self"
-                        ? self
-                        : request.method === "users.authConnect.catalog"
-                          ? catalog
-                          : {}),
-                  );
+                  const response = payload ?? defaultResponses[request.method] ?? {};
+                  sendMinimalGatewayResponse(socket, id, response);
                 }
                 return undefined;
               },
@@ -181,9 +183,10 @@ async function withGateway(
           requests,
           connections,
           upgradeHeaders,
+          close,
         });
       } finally {
-        await closeMinimalGatewayServer(server);
+        await close();
       }
     },
   );
@@ -277,7 +280,7 @@ afterEach(() => {
 });
 
 describe("personal model account CLI over an identified Gateway connection", () => {
-  it("prints one metadata page and its next cursor without fetching another page", async () => {
+  it("prints one metadata page and reports a later unreachable Gateway", async () => {
     const page: UsersListModelAccountsResult = {
       profileId: PROFILE_ID,
       accounts: [
@@ -295,7 +298,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
     const output = runtime();
     await withGateway(
       ({ method }) => (method === "users.listModelAccounts" ? page : undefined),
-      async ({ port, url, requests, connections }) => {
+      async ({ port, url, requests, connections, close }) => {
         await modelsAccountsListCommand({ port, cursor: "previous-account", json: true }, output);
         expect(requestData(requests)).toEqual([
           rpc("users.self"),
@@ -308,6 +311,11 @@ describe("personal model account CLI over an identified Gateway connection", () 
           device: { nonce: "test-nonce" },
           scopes: ["operator.read"],
         });
+        await close();
+        await expect(modelsAccountsListCommand({ port }, runtime())).rejects.toHaveProperty(
+          "name",
+          "GatewayTransportError",
+        );
       },
     );
   });
@@ -441,15 +449,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
           expect.objectContaining({ output: process.stderr, signal: expect.any(AbortSignal) }),
         );
         expect(output.error).toHaveBeenCalledWith(validationError);
-        expectLoginOutput(
-          output,
-          {
-            status: "connected",
-            authProfileId: ACCOUNT_ID,
-            links: [],
-          },
-          "xai",
-        );
+        expectLoginOutput(output, { ...connected, links: [] }, "xai");
         expect(printed(output)).not.toContain(apiKey);
         expect(printed(output)).not.toContain(invalidKey);
       },

@@ -8,7 +8,10 @@ import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.
 export async function readPreparedPoolPresenceDemand(): Promise<
   PreparedPoolPresenceDemand | undefined
 > {
-  const reply = await executeExistingOpenClawStateRead({}, { type: "preparedPoolPresence.read" });
+  const reply = await executeExistingOpenClawStateRead(
+    {},
+    { type: "preparedPoolPresence.read", input: undefined },
+  );
   return reply?.demand;
 }
 

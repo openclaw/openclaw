@@ -96,6 +96,7 @@ it.for(["current", "historical-v1", "lost-journal"] as const)(
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_TEST_FAST: "1",
       OPENCLAW_TEST_RUNTIME_LOG: "1",
+      OPENCLAW_TEST_CONSOLE: "1",
       NO_COLOR: "1",
     };
     for (const key of [

@@ -25,7 +25,7 @@ import {
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { prepareSqliteDatabaseDirectory } from "../infra/sqlite-wal-filesystem.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
@@ -46,7 +46,7 @@ import {
 import {
   runUpdateSqliteMigration,
   runUpdateSqliteMigrationAsync,
-} from "../infra/update-doctor-migration-attribution.js";
+} from "../infra/update-doctor-migration-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
@@ -61,10 +61,10 @@ import {
   migrateCronDefaultStoreIdentity,
   resolveCronIdentityMigrationDefaultStoreKey,
 } from "./openclaw-state-db-cron-identity-migration.js";
+import { stateEngineInput } from "./openclaw-state-db-engine-input.js";
 import {
   admitStatePostgres,
   inspectStateSqlite,
-  stateEngineInput,
   stateEngineSchema,
 } from "./openclaw-state-db-engine.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";

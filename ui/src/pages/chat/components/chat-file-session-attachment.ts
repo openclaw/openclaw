@@ -1,5 +1,5 @@
 import { action, createMemo, createOptimistic, onCleanup } from "solid-js";
-import { isHttpArtifactDownloadUrl } from "../../../api/artifact-download.ts";
+import { isHttpArtifactDownloadUrl } from "../../../api/artifact-download-url.ts";
 import { fetchControlUiResource } from "../../../app/browser-http.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";

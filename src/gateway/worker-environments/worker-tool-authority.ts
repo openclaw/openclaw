@@ -7,7 +7,7 @@ import {
   resolvePreparedExecDefaultsAsync,
 } from "../../agents/exec-defaults.js";
 import { prepareInstalledSkillCatalog } from "../../agents/installed-skill-runtime.js";
-import { resolveExecToolConfig } from "../../agents/lazy-exec-tool.js";
+import { resolveExecToolConfig, resolveModelExecCeilings } from "../../agents/lazy-exec-tool.js";
 import { supportsModelTools } from "../../agents/model-tool-support.js";
 import { prepareCoreToolPolicy } from "../../agents/prepared-tool-surface.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
@@ -101,6 +101,12 @@ export async function resolveWorkerToolAuthority(params: {
         base: { ...defaults, host: defaults.effectiveHost },
         permissionPolicy: turn.permissionMode ? { mode: turn.permissionMode } : undefined,
         scheduledExecTarget: turn.scheduledToolPolicy?.execTarget,
+        modelExecCeilings: resolveModelExecCeilings({
+          cfg: turn.config,
+          agentId: capabilityProfile.policy.agentId,
+          modelProvider: params.modelRef.provider,
+          modelId: params.modelRef.model,
+        }),
       });
       // Node/sandbox execution remains outside the worker-local exec transport.
       const execUnavailable =

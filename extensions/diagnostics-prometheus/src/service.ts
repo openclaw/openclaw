@@ -76,6 +76,7 @@ function recordDiagnosticEvent(
       }
       return;
     case "sessions.list.retention":
+    case "sessions.projection.retention":
     case "sessions.event.retention":
     case "sessions.event.rows.reset":
       if (metadata.trusted) {
@@ -673,6 +674,7 @@ export function createDiagnosticsPrometheusExporter() {
         ctx.internalDiagnostics?.onWorkerRequestMetrics?.(
           createWorkerRequestMetricsRecorder(store),
         ),
+        ctx.internalDiagnostics?.onPluginMetrics?.({ record: store.plugin, retire: store.retire }),
         subscribe(
           (event, metadata) => {
             try {

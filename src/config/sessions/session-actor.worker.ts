@@ -408,6 +408,7 @@ export function createSessionActorWorker(
       target,
       { epoch: randomUUID(), sequence: 0 },
       currentToken,
+      resident,
     );
     const hydratedToken = token(database, target, hydrated.hot.dependencySessionIds);
     // Hydration is synchronous in the serialized execution owner.
@@ -500,17 +501,20 @@ export function createSessionActorWorker(
           };
           const resident = residents.get(target.sessionKey);
           const before = read(opened, target);
-          const entryReference =
-            command.input.entryReference === before.hot.writeToken ? before.hot : undefined;
+          const preimage = before.hot;
           const projectAuthority = (state: SessionActorAuthorityFacts) =>
-            projectSessionActorAuthority(state, entryReference);
+            projectSessionActorAuthority(state, preimage);
           recordPhase("actorReadMs");
           diagnosticContext.actorResident = before === resident;
           diagnosticContext.actorTranscriptEvents = before.transcript.identities.size;
           diagnosticContext.actorActiveEvents = before.transcript.active.size;
           admit("transaction", {
             kind: "session-actor-admission",
-            snapshot: projectAuthority(before.hot),
+            // Reuse the admitted preimage at settlement even after replica eviction.
+            snapshot:
+              command.input.entryReference === before.hot.writeToken
+                ? projectAuthority(before.hot)
+                : { ...projectSessionActorAuthority(preimage), writeToken: preimage.writeToken },
           });
           if (
             command.input.expected !== undefined &&
@@ -615,7 +619,7 @@ export function createSessionActorWorker(
                   : undefined;
             deferSessionActorOutcome({
               database: opened,
-              outcome: projectSessionActorCommittedOutcome(accepted, entryReference),
+              outcome: projectSessionActorCommittedOutcome(accepted, preimage),
               state,
               projectAuthority,
               publication: turn ?? commitPublication,

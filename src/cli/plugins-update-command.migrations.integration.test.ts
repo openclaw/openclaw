@@ -164,7 +164,7 @@ it.each([
                 ? { listener: { port: 57597, host: "${LISTENER_HOST}" } }
                 : { oldPort: 57597 }),
               label: "kept",
-              ...(scenario === "env-reference" ? { oldHost: "${LISTENER_HOST}" } : {}),
+              ...(is("env-reference", "include") ? { oldHost: "${LISTENER_HOST}" } : {}),
             }),
           },
         },
@@ -641,7 +641,7 @@ it.each([
         ...(inactive || pendingState ? { oldPort: 57597 } : {}),
         listener: {
           port: 57597,
-          ...(scenario === "env-reference" || ready ? { host: "${LISTENER_HOST}" } : {}),
+          ...(is("env-reference", "include") || ready ? { host: "${LISTENER_HOST}" } : {}),
         },
         label: "kept",
       });

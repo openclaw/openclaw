@@ -4,10 +4,10 @@ import { getEventListeners, once } from "node:events";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { setTimeout as nextTimerTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { forceFullGc } from "../../../../src/test-utils/retention.js";
 import { createApiRegistry } from "../api-registry.js";
 import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
@@ -86,7 +86,7 @@ describe("ChatGPT Responses cached transport", () => {
       // This later timer follows the stream's cooperative timer; the cached native
       // socket and its real expiry timer remain live through GC.
       await nextTimerTurn(0);
-      queryObjects(WeakRef);
+      forceFullGc();
       expect(control.deref()).toBeUndefined();
       assert.ok(reference);
       expect(reference.deref()).toBeUndefined();
@@ -566,7 +566,7 @@ describe("ChatGPT Responses cached transport", () => {
   const REASONING_CIPHERTEXT = "opaque-reasoning-replay";
   const COMPACTION_CIPHERTEXT = "opaque-compaction-replay";
   const FULL_HISTORY_PREFIX = "native full history before compaction";
-  const REPLAY_IDENTITY = { sessionId: "retry-session", authProfileId: "retry-profile" };
+  const REPLAY_IDENTITY = { sessionId: "retry-session" };
 
   function createReplayContext(kind: "compaction" | "mixed"): Context {
     const content: AssistantMessage["content"] = [];

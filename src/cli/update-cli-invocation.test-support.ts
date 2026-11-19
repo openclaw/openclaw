@@ -247,10 +247,11 @@ export async function retainFixtureGitRuntime(
 export function createGitUpdateAfterMutationFixture(
   result = makeOkUpdateResult({ mode: "git" }),
   reinspect = false,
+  targetDeclaration: { databaseEngines?: string[] } = {},
 ) {
   const mutationAdmitted = vi.fn();
   const run: typeof updateGitCheckout = async ({ opts, gitRoot }) => {
-    const target = { version: result.after?.version ?? undefined };
+    const target = { version: result.after?.version ?? undefined, ...targetDeclaration };
     await opts.inspectGitTarget(target);
     await opts.prepareGitExposure?.(
       expectDefined(result.root, "candidate checkout"),
@@ -258,7 +259,7 @@ export function createGitUpdateAfterMutationFixture(
       undefined,
     );
     await opts.validateCandidate(result.root ?? gitRoot);
-    await expectDefined(opts.beforeGitMutation, "Git mutation admission")({});
+    await expectDefined(opts.beforeGitMutation, "Git mutation admission")(targetDeclaration);
     mutationAdmitted();
     if (opts.onTransaction) {
       await retainFixtureGitRuntime(gitRoot, opts.onTransaction);
@@ -274,8 +275,9 @@ export function createGitUpdateAfterMutationFixture(
 export const mockGitUpdateAfterMutation = (
   result = makeOkUpdateResult({ mode: "git" }),
   reinspect = false,
+  targetDeclaration: { databaseEngines?: string[] } = {},
 ) => {
-  const fixture = createGitUpdateAfterMutationFixture(result, reinspect);
+  const fixture = createGitUpdateAfterMutationFixture(result, reinspect, targetDeclaration);
   vi.mocked(updateGitCheckout).mockImplementationOnce(fixture.run);
   return fixture.mutationAdmitted;
 };

@@ -1,6 +1,7 @@
 import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { MemoryFlushToolRunContext } from "../../agents/agent-tools.memory-flush.types.js";
 import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
@@ -258,5 +259,20 @@ export type CompactEmbeddedAgentSessionParams = {
   sessionEntry?: SessionEntry;
   sessionFile?: string;
   sessionId?: string;
+  skillsSnapshot?: unknown;
   trigger?: string;
 };
+
+export function registerClaudeCliBackend(ownsNativeCompaction = false): void {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+        ownsNativeCompaction,
+      },
+    ],
+  });
+}

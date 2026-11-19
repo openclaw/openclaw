@@ -1,8 +1,8 @@
+import type { MemorySearchManager } from "../../packages/memory-host-sdk/src/host/search-manager.types.js";
 /**
  * Lazy private-local facade for active memory search manager lifecycle operations.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 
 type ActiveMemorySearchPurpose = "default" | "status";
 
@@ -38,13 +38,15 @@ export async function closeActiveMemorySearchManager(params: {
 }
 
 export type {
-  ActiveMemoryProviderResult,
-  MemoryCallerAuthority,
-  MemoryCallerContext,
   MemoryReference,
   MemoryCitation,
   MemorySearchHit,
   MemoryHealth,
+} from "../plugins/memory-provider-runtime-types.js";
+export type {
+  ActiveMemoryProviderResult,
+  MemoryCallerAuthority,
+  MemoryCallerContext,
 } from "../plugins/memory-provider-types.js";
 
 /** Opens a caller-bound neutral provider lease; close it when the operation finishes. */

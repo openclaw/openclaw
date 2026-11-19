@@ -120,7 +120,7 @@
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  gap: 2px;
+  gap: 4px;
 }
 
 .agent-chat__goal-command-actions {
@@ -310,7 +310,6 @@
     padding-inline-end: 4px;
     overflow-y: auto;
     overscroll-behavior: contain;
-    scrollbar-width: thin;
   }
 
   .agent-chat__goal[data-expanded="true"]
@@ -450,17 +449,6 @@
   corner-shape: superellipse(1.5);
   background: var(--composer-attached-surface, var(--chat-composer-surface, var(--card)));
   backdrop-filter: blur(8px);
-}
-
-.agent-chat__goal-float
-  :is(
-    .agent-chat__goal--blocked,
-    .agent-chat__goal--budget_limited,
-    .agent-chat__goal--usage_limited
-  ) {
-  color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 10%, var(--card));
-  border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
 }
 
 .agent-chat__goal-float .agent-chat__goal-row,
@@ -625,7 +613,6 @@
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
   padding: 0 18px 14px 13px;
   border: 0;
   border-radius: 0;
@@ -695,18 +682,6 @@
     .session-progress-card__summary-count:is([data-outcome="failed"], [data-outcome="timeout"]) {
     color: var(--danger);
   }
-}
-
-.agent-chat__goal-float .agent-chat__goal--blocked {
-  border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
-  background:
-    radial-gradient(
-      circle at 92% 0%,
-      color-mix(in srgb, var(--warn) 13%, transparent),
-      transparent 42%
-    ),
-    color-mix(in srgb, var(--warn) 8%, var(--composer-attached-surface));
-  box-shadow: 7px -7px 20px -18px color-mix(in srgb, var(--warn) 45%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {

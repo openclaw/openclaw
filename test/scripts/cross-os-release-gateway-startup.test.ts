@@ -27,11 +27,13 @@ const emit = (stream: ChildProcess["stdout"], text: string) =>
 
 function makeChild() {
   const child = new ChildProcess();
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
   let exitCode: number | null = null;
   // The external fixture owns settlement; ChildProcess exposes a read-only projection.
-  Object.defineProperty(child, "exitCode", { get: () => exitCode });
+  Object.defineProperties(child, {
+    stdout: { value: new PassThrough() },
+    stderr: { value: new PassThrough() },
+    exitCode: { get: () => exitCode },
+  });
   const finish = (code: number, stderr = "") => {
     if (exitCode !== null) {
       return;

@@ -19,7 +19,11 @@ import type {
   ModelProviderRemovalTarget,
 } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
-import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.tsx";
+import {
+  showProfileActionError,
+  showProfileActionWarning,
+  showProfileLogoutSuccess,
+} from "./profiles-view.tsx";
 import { updateRecordEntry } from "./record-state.ts";
 
 type PendingProfileOrder = {
@@ -41,7 +45,6 @@ export function createModelProviderProfileActions(options: {
   isBusy: (key: string) => boolean;
   setBusy: (key: string, value: boolean) => void;
   setProbeResult: (cardId: string, result: ModelsProbeResult | null) => void;
-  setProbeError: (cardId: string, message: string) => void;
   clearMessage: (cardId: string) => void;
   cancelRefresh: () => void;
   refresh: () => Promise<void>;
@@ -54,10 +57,17 @@ export function createModelProviderProfileActions(options: {
   const pendingOrders = new Map<string, PendingProfileOrder>();
   const activeOrderProviders = new Set<string>();
 
-  function clearProbe(cardId: string): void {
-    probeEpochs.set(cardId, (probeEpochs.get(cardId) ?? 0) + 1);
+  function beginProbe(cardId: string): () => boolean {
+    const epoch = (probeEpochs.get(cardId) ?? 0) + 1;
+    probeEpochs.set(cardId, epoch);
+    return () => probeEpochs.get(cardId) === epoch;
+  }
+
+  function clearProbe(cardId: string): () => boolean {
+    const isLatest = beginProbe(cardId);
     options.setBusy("probe:" + cardId, false);
     options.setProbeResult(cardId, null);
+    return isLatest;
   }
 
   /** Account targets sign out their profiles; removal targets clear a provider or its API key. */
@@ -195,7 +205,7 @@ export function createModelProviderProfileActions(options: {
             }
           }
           if (clearOptimisticOrder(provider, pending.optimisticOrder) && result.warning) {
-            showProfileActionError(result.warning);
+            showProfileActionWarning(result.warning);
           }
         } catch (error) {
           if (!isCurrent()) {
@@ -268,9 +278,8 @@ export function createModelProviderProfileActions(options: {
         return;
       }
       const { agentId, isCurrent } = captureScope(client);
-      const probeEpoch = (probeEpochs.get(cardId) ?? 0) + 1;
-      probeEpochs.set(cardId, probeEpoch);
-      const ownsProbe = () => isCurrent() && probeEpochs.get(cardId) === probeEpoch;
+      const isLatest = beginProbe(cardId);
+      const ownsProbe = () => isCurrent() && isLatest();
       options.setBusy(key, true);
       options.clearMessage(cardId);
       try {
@@ -290,7 +299,12 @@ export function createModelProviderProfileActions(options: {
         if (!ownsProbe()) {
           return;
         }
-        options.setProbeError(cardId, modelProviderErrorMessage(error));
+        options.setProbeResult(cardId, {
+          provider: cardId,
+          status: "unknown",
+          error: modelProviderErrorMessage(error),
+          results: [],
+        });
       } finally {
         if (ownsProbe()) {
           options.setBusy(key, false);
@@ -341,7 +355,7 @@ export function createModelProviderProfileActions(options: {
       const confirmed = await showConfirmDialog({
         title: removing
           ? t("modelProviders.remove.title", { provider: pending.label })
-          : t("modelProviders.logout.actionFor", { account: pending.label }),
+          : t("modelProviders.logout.title", { account: pending.label }),
         message: removing
           ? [
               pending.removeTargets.some((target) => !target.credentialType)
@@ -350,6 +364,9 @@ export function createModelProviderProfileActions(options: {
               pending.configKey ? t("modelProviders.remove.keys", { key: pending.configKey }) : "",
               pending.keptSource
                 ? t("modelProviders.remove.kept", { source: pending.keptSource })
+                : "",
+              pending.defaultModels
+                ? t("modelProviders.remove.defaults", { models: pending.defaultModels })
                 : "",
             ]
               .filter(Boolean)

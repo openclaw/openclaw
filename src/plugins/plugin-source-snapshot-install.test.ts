@@ -1,23 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
-import { hashJson } from "./installed-plugin-index-hash.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import {
   PLUGIN_SOURCE_SNAPSHOT_PREFIX,
   resolvePluginSourceCapturesDirectory,
 } from "./plugin-source-capture-path.js";
-import { acquirePluginSourceSnapshot } from "./plugin-source-snapshot-artifact.js";
 import { preparePluginInstallSourceSnapshots } from "./plugin-source-snapshot-install.js";
+import * as snapshotPublication from "./plugin-source-snapshot-publication.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeDefaultRetainedNativeWorkerSource());
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await closeDefaultRetainedNativeWorkerSource();
+});
 
 it.each(["demo", "constructor", "toString", "__proto__"])(
-  "publishes unexecuted install bytes and a new generation for %s on same-version reinstall",
+  "records unexecuted install digests without publishing snapshots for %s",
   async (pluginId) => {
     const stateDir = fs.realpathSync(temp.make("plugin-install-snapshot-"));
     const rootDir = path.join(stateDir, "source");
@@ -33,8 +35,14 @@ it.each(["demo", "constructor", "toString", "__proto__"])(
       installPath: rootDir,
       version: "1.0.0",
     };
+    const publishCalls = vi.fn();
+    const bind = snapshotPublication.bindPluginSnapshotPublication;
+    vi.spyOn(snapshotPublication, "bindPluginSnapshotPublication").mockImplementation((...args) => {
+      const capture = bind(...args);
+      return { ...capture, publish: publishCalls.mockImplementation(capture.publish) };
+    });
     await withPluginSourceCaptureStorage({ stateDir, placement: "temporary" }, async () => {
-      const publish = () =>
+      const prepare = () =>
         preparePluginInstallSourceSnapshots({
           installOwner: pluginId,
           installRecord,
@@ -43,32 +51,16 @@ it.each(["demo", "constructor", "toString", "__proto__"])(
           assertCurrent() {},
           assertCleanupOwned() {},
         });
-      await using first = await publish();
-      await using second = await publish();
-      const left = first.sourceSnapshots[0]!.descriptor;
-      const right = second.sourceSnapshots[0]!.descriptor;
-      expect(right.generation).not.toBe(left.generation);
-      expect(right.installRecordHash).toBe(hashJson(installRecord));
-      expect(Object.hasOwn(installRecord.sourceSnapshotDigests ?? {}, pluginId)).toBe(true);
-      expect(right.contentDigest).toBe(
-        installRecord.sourceSnapshotDigests?.[pluginId]?.contentDigest,
-      );
-      expect(right.dependencyClosureDigest).toBe(
-        installRecord.sourceSnapshotDigests?.[pluginId]?.dependencyClosureDigest,
-      );
+      await using first = await prepare();
+      const firstDigests = installRecord.sourceSnapshotDigests?.[pluginId];
+      expect(firstDigests?.contentDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(firstDigests?.dependencyClosureDigest).toMatch(/^[a-f0-9]{64}$/);
+      await using second = await prepare();
+      expect(installRecord.sourceSnapshotDigests?.[pluginId]).toEqual(firstDigests);
+      expect(publishCalls).toHaveBeenCalledTimes(0);
+      expect(first.sourceSnapshots).toEqual([]);
+      expect(second.sourceSnapshots).toEqual([]);
       expect(fs.existsSync(marker)).toBe(false);
-      const acquired = await acquirePluginSourceSnapshot({
-        stateDir,
-        descriptor: { ...right, installedRevision: 1 },
-        assertCurrent() {},
-      });
-      try {
-        expect(fs.readFileSync(path.join(acquired.rootDir, "index.cjs"), "utf8")).toContain(
-          "writeFileSync",
-        );
-      } finally {
-        await acquired.releaseAsync();
-      }
     });
   },
 );
@@ -88,19 +80,14 @@ it("keeps a mutable local install on the ordinary capture path", async () => {
   expect(installRecord.sourceSnapshotDigests).toBeUndefined();
 });
 
-it("reclaims a published candidate after the installation owner changes", async () => {
+it("releases captured source when the installation owner changes", async () => {
   const stateDir = fs.realpathSync(temp.make("plugin-install-publication-loss-"));
   const rootDir = path.join(stateDir, "source");
   fs.mkdirSync(rootDir);
   fs.writeFileSync(path.join(rootDir, "package.json"), '{"name":"demo","version":"1.0.0"}');
   fs.writeFileSync(path.join(rootDir, "index.cjs"), "exports.value = 42;");
-  const captureRoot = resolvePluginSourceCapturesDirectory(stateDir);
-  const candidates = () =>
-    fs.existsSync(captureRoot)
-      ? fs.readdirSync(captureRoot).filter((name) => name.startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX))
-      : [];
-  const changed = new Error("installation owner changed after publication");
-  let observedPublished = false;
+  const changed = new Error("installation owner changed after capture");
+  let checks = 0;
   await withPluginSourceCaptureStorage({ stateDir, placement: "temporary" }, async () => {
     await expect(
       preparePluginInstallSourceSnapshots({
@@ -109,15 +96,20 @@ it("reclaims a published candidate after the installation owner changes", async 
         manifests: [{ id: "demo", rootDir, origin: "global" }],
         stateDir,
         assertCurrent() {
-          if (candidates().length) {
-            observedPublished = true;
+          if (++checks === 2) {
             throw changed;
           }
         },
         assertCleanupOwned() {},
       }),
     ).rejects.toBe(changed);
-    expect(observedPublished).toBe(true);
-    expect(candidates()).toEqual([]);
+    const captureRoot = resolvePluginSourceCapturesDirectory(stateDir);
+    expect(
+      fs.existsSync(captureRoot)
+        ? fs
+            .readdirSync(captureRoot)
+            .filter((name) => name.startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX))
+        : [],
+    ).toEqual([]);
   });
 });

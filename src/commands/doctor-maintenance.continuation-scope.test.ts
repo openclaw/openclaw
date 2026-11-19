@@ -9,7 +9,7 @@ import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { listUpdateRuns } from "../infra/update-run-reader.js";
-import * as pluginResources from "../plugins/doctor-contract-registry.js";
+import * as pluginResources from "../plugins/doctor-contract-preparation.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,

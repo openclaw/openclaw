@@ -100,6 +100,13 @@ export function ensureDevicePairingJoinCodeSchema(database: EngineConnection): v
   });
 }
 
+/** Lazily install the additive browser pairing request table on first use. */
+export function ensureDevicePairingBrowserRequestSchema(database: EngineConnection): void {
+  ensureTable(database, "device_pairing_browser_requests", {
+    errorMessage: "OpenClaw device pairing browser request schema marker is missing.",
+  });
+}
+
 /** Lazily installs the Gateway's installation-local config revision key owner. */
 export function ensureConfigRevisionKeySchema(database: EngineConnection): void {
   ensureTable(database, "config_revision_keys", {

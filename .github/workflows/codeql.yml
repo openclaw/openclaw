@@ -14,6 +14,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - ".gitattributes"
+      - "**/.gitattributes"
       - ".github/actions/**"
       - ".github/codeql/**"
       - ".github/workflows/**"
@@ -163,8 +165,10 @@ jobs:
                 if (result.exitCode !== 0 || files.length === 0) {
                   throw new Error("changed paths unavailable");
                 }
+                // Attributes can transform checked-out sources for either language.
                 const policy = files.some((file) =>
-                  file === ".github/workflows/codeql.yml" || file.startsWith(".github/codeql/"));
+                  file === ".github/workflows/codeql.yml" || file.startsWith(".github/codeql/") ||
+                  file === ".gitattributes" || file.endsWith("/.gitattributes"));
                 const workflow = (file) =>
                   file.startsWith(".github/workflows/") || file.startsWith(".github/actions/");
                 actions = policy || files.some(workflow);

@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import { sendJson as sendJsonResponse } from "../infra/http-json.js";
 import { acceptsMediaType, hasExplicitAcceptableMediaRange } from "./http-media-range.js";
 
 export function isReadHttpMethod(method: string | undefined): boolean {
@@ -28,4 +29,9 @@ export function respondPlainText(res: ServerResponse, statusCode: number, body: 
 
 export function respondNotFound(res: ServerResponse): void {
   respondPlainText(res, 404, "Not Found");
+}
+
+export function sendControlUiJson(res: ServerResponse, status: number, body: unknown) {
+  res.setHeader("Cache-Control", "no-cache");
+  sendJsonResponse(res, status, body);
 }

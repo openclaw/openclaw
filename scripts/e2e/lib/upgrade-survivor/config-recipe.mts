@@ -117,6 +117,13 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
     "base",
     [
       {
+        // Personal-library authoring left skill_workshop for skill_library; the candidate
+        // must keep this pre-split allowlist covering it exactly once.
+        id: "tools-allow-skill-workshop",
+        intent: "skill-library-split",
+        argv: ["config", "set", "tools.allow", '["read","skill_workshop"]', "--strict-json"],
+      },
+      {
         id: "logging-file",
         intent: "logging",
         // Raw debug output stays in the isolated home, outside uploaded artifact roots.
@@ -189,7 +196,7 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   ],
 ]);
 
-export function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
+function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
   return scenarioConfigSteps.get(scenario) ?? [];
 }
 
@@ -277,6 +284,10 @@ function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null):
   }
   let value = JSON.parse(json);
   if (step.id === "agents") {
+    // beta.1 retired heartbeat defaults; those baselines are idle without the legacy setting.
+    if ((compareReleaseVersions(baselineVersion ?? "", "2026.11.5-beta.1") ?? -1) >= 0) {
+      delete value.defaults.heartbeat;
+    }
     // Keyed rosters shipped before explicit ownership; those baselines still
     // require the legacy default marker.
     if (compareReleaseVersions(baselineVersion ?? "", "2026.8.1-beta.2") === -1) {
