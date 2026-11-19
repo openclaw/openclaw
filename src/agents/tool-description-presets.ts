@@ -6,7 +6,7 @@ const SECRET_EGRESS_USAGE_PROMPT =
 export const EXEC_TOOL_DISPLAY_SUMMARY = "Run shell now.";
 export const PROCESS_TOOL_DISPLAY_SUMMARY = "Inspect/control exec sessions.";
 export const CRON_TOOL_DISPLAY_SUMMARY =
-  "Schedule reminders, automations, wake events. Before any add, plan all ordered slots (even one).";
+  "Schedule reminders, automations, wake events. To create, first call plan with names:[all requested names], then add each job (position:1,2,… if several). No user-supplied IDs.";
 export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filters/previews.";
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
 export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past chats.";

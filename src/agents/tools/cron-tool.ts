@@ -195,7 +195,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       }
       assertCronSelfRemoveScope(opts, action, params);
       if (action === "plan") {
-        return jsonResult(creationPlans.declare(params.slots));
+        return jsonResult(creationPlans.declare(params.slots, params.names));
       }
       const creationReceipt = action === "add" ? creationPlans.bindAdd(params) : undefined;
       const mutationResult = (result: unknown) =>

@@ -410,16 +410,27 @@ describe("dynamic tool execution helpers", () => {
       status: "created",
       jobId: "invoice",
     };
+    const definition = {
+      id: "invoice",
+      name: "Invoice",
+      enabled: false,
+      configRevision: "rev",
+      schedule: { kind: "every", everyMs: 60000 },
+    };
     for (const event of [plan, saved]) {
       const details =
         event === plan
           ? { ...plan, privateField: "host only" }
-          : { automationCreation: saved, job: { privateField: "host only" } };
+          : {
+              automationCreation: saved,
+              created: true,
+              job: { ...definition, privateField: "host only" },
+            };
       const response = { ...textResponse("result"), transcriptDetails: details };
       const protocol = toCodexDynamicToolProtocolResponse(response);
       expect(toCodexDynamicToolProgressResponse(response, protocol, "automations")).toEqual({
         ...protocol,
-        details: { automationCreation: event },
+        details: { automationCreation: event === plan ? event : { ...event, definition } },
       });
       expect(toCodexDynamicToolProgressResponse(response, protocol, "exec")).toEqual(protocol);
       const rejected = { ...protocol, success: false };

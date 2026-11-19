@@ -12,8 +12,10 @@ import {
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import {
+  automationSlotAtPosition,
   readAutomationCreationEvent,
   type AutomationCreationEvent,
+  type AutomationCreationPlan,
 } from "../../../../src/shared/automation-creation.js";
 
 type ToolCall = { args: Record<string, unknown>; source: unknown; runId?: string };
@@ -58,8 +60,21 @@ export function automationCreationToolEvents(
 ): AutomationCreationEvent[] {
   const events: AutomationCreationEvent[] = [];
   const calls = new Map<string, ToolCall>();
+  const declarations = new Map<string, AutomationCreationPlan>();
   const emit = (call: ToolCall, details: unknown, isError: boolean | undefined) => {
-    const event = terminalEvent(call.args, details, isError);
+    let args = call.args;
+    if (args.action === "add" && args.planId === undefined && args.slotId === undefined) {
+      const plan = call.runId ? declarations.get(call.runId) : undefined;
+      const slot = plan && automationSlotAtPosition(plan, args.position);
+      if (!slot || !plan) {
+        return;
+      }
+      args = { ...args, planId: plan.planId, slotId: slot.slotId };
+    }
+    const event = terminalEvent(args, details, isError);
+    if (event?.type === "automation_creation_plan" && call.runId) {
+      declarations.set(call.runId, event);
+    }
     if (event) {
       events.push(event);
       onEvent?.(event, call.source, call.runId);

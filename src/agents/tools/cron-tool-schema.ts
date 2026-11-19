@@ -518,10 +518,28 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       ...gatewayCallOptionSchemaProperties(),
       ...(!managementOnly && !options?.selfRemoveOnly
         ? {
+            names: Type.Optional(
+              Type.Array(Type.String({ minLength: 1, maxLength: 200 }), {
+                minItems: 1,
+                maxItems: CRON_CREATION_PLAN_MAX_SLOTS,
+                description:
+                  "Plan: supply all automation names from the request in order, even for one job.",
+              }),
+            ),
+            position: optionalPositiveIntegerSchema({
+              maximum: CRON_CREATION_PLAN_MAX_SLOTS,
+              description: "Add: one-based position in your plan; omit for a single job.",
+            }),
             slots: Type.Optional(CronCreationSlotsSchema),
-            planId: Type.Optional(Type.String({ description: "Add: plan ID returned by plan." })),
+            planId: Type.Optional(
+              Type.String({
+                description: "Optional explicit binding for callers using slots instead of names.",
+              }),
+            ),
             slotId: Type.Optional(
-              Type.String({ description: "Add: the declared slot for this job." }),
+              Type.String({
+                description: "Optional explicit slot binding; not needed with names and position.",
+              }),
             ),
           }
         : {}),

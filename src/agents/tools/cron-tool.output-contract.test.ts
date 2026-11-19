@@ -122,7 +122,8 @@ describe("automations output contract", () => {
   });
 
   it("composes a trusted plan and add receipt using real Code Mode bindings", async () => {
-    const gatewayCall = vi.fn().mockResolvedValue(job);
+    const saved = cronJobReadView(job);
+    const gatewayCall = vi.fn().mockResolvedValue(saved);
     mockGateway(gatewayCall);
     const tool = createCronTool({ requireCreationPlan: true });
     const { createSubscribedCodeModeHarness } =
@@ -143,8 +144,8 @@ describe("automations output contract", () => {
     const run = (code: string) =>
       runUntilCompleted({ execTool: harness.tools[0]!, waitTool: harness.tools[1]!, code });
     const composed =
-      await run(`const plan = await automations({action:"plan",slots:[{slotId:"invoice",name:"Invoice check"}]});
-      const result = await automations({action:"add",planId:plan.planId,slotId:"invoice",job:${JSON.stringify(createJob)}});
+      await run(`const plan = await automations({action:"plan",names:["Invoice check"]});
+      const result = await automations({action:"add",job:${JSON.stringify(createJob)}});
       return {plan, receipt:result.automationCreation};`);
     expect(composed).toMatchObject({
       status: "completed",
@@ -152,7 +153,7 @@ describe("automations output contract", () => {
         plan: { type: "automation_creation_plan", planId: expect.any(String) },
         receipt: {
           type: "automation_creation_result",
-          slotId: "invoice",
+          slotId: "1",
           jobId: job.id,
           status: "created",
         },
@@ -169,7 +170,7 @@ describe("automations output contract", () => {
       },
       {
         toolName: tool.name,
-        input: { action: "add", slotId: "invoice" },
+        input: { action: "add", job: { name: job.name } },
         isError: false,
         result: { details: { automationCreation: { jobId: job.id, status: "created" } } },
       },
@@ -429,6 +430,8 @@ async function consume() {
 async function checkContracts(action: "list" | "runs", input: Parameters<typeof automations>[0]) {
   const listed = await automations({ action: "list" });
   const { includeDisabled, inventoryHint }: { includeDisabled: boolean; inventoryHint: string } = listed;
+  await automations({action:"plan",names:["Invoice check", "Follow-up"]});
+  await automations({action:"add",position:2,job:${JSON.stringify(createJob)}});
   const planned = await automations({action:"plan",slots:[{slotId:"invoice", name:"Invoice check"}]});
   const bound = await automations({action:"add",planId:planned.planId,slotId:planned.slots[0].slotId,job:${JSON.stringify(createJob)}});
   if (bound.automationCreation?.status === "created") {

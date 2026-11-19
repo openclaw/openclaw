@@ -1,4 +1,8 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  readAutomationSavedDefinition,
+  type AutomationSavedDefinition,
+} from "./automation-saved-definition.js";
 
 export type AutomationCreationSlot = { slotId: string; name: string };
 export type AutomationCreationPlan = {
@@ -6,11 +10,21 @@ export type AutomationCreationPlan = {
   planId: string;
   slots: AutomationCreationSlot[];
 };
+/** Positions are public, one-based references into this exact declaration, never arrival order. */
+export function automationSlotAtPosition(plan: AutomationCreationPlan, position: unknown) {
+  const ordinal = position === undefined && plan.slots.length === 1 ? 1 : position;
+  return typeof ordinal === "number" && Number.isInteger(ordinal) && ordinal >= 1
+    ? plan.slots[ordinal - 1]
+    : undefined;
+}
 export type AutomationCreationResult = {
   type: "automation_creation_result";
   planId: string;
   slotId: string;
-} & ({ status: "created"; jobId: string } | { status: "failed" });
+} & (
+  | { status: "created"; jobId: string; definition?: AutomationSavedDefinition }
+  | { status: "failed" }
+);
 export type AutomationCreationEvent = AutomationCreationPlan | AutomationCreationResult;
 
 function identity(value: unknown): value is string {
@@ -32,7 +46,15 @@ export function readAutomationCreationEvent(value: unknown): AutomationCreationE
       return { type, planId, slotId, status };
     }
     if (status === "created" && identity(raw.jobId)) {
-      return { type, planId, slotId, status, jobId: raw.jobId };
+      const definition = readAutomationSavedDefinition(raw.definition, raw.jobId);
+      return {
+        type,
+        planId,
+        slotId,
+        status,
+        jobId: raw.jobId,
+        ...(definition ? { definition } : {}),
+      };
     }
   }
   if (type !== "automation_creation_plan" || !Array.isArray(raw.slots) || raw.slots.length === 0) {

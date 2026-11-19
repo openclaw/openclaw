@@ -8,13 +8,48 @@ import {
 
 installCronToolTestFixture();
 
+it("recovers a natural add using only the ordered names, never operator-supplied internal IDs", async () => {
+  const tool = createTestCronTool({ requireCreationPlan: true });
+  const job = {
+    name: "Morning brief",
+    schedule: { kind: "every", everyMs: 60_000 },
+    payload: { kind: "systemEvent", text: "Read" },
+  };
+  await expect(tool.execute("natural", { action: "add", job })).rejects.toThrow(
+    '"names":["Morning brief"]',
+  );
+  expect(callGatewayMock).not.toHaveBeenCalled();
+  const plan = (await tool.execute("declare", { action: "plan", names: [job.name] })).details;
+  expect(plan).toMatchObject({ slots: [{ name: job.name }] });
+  callGatewayMock.mockResolvedValueOnce({ ...job, enabled: false, id: "persisted" });
+  const saved = (await tool.execute("retry-original", { action: "add", job })).details;
+  expect(saved).toMatchObject({ automationCreation: { status: "created", jobId: "persisted" } });
+});
+
+it("binds out-of-order jobs by declared position, not their names or execution order", async () => {
+  const tool = createTestCronTool({ requireCreationPlan: true });
+  const plan = await tool.execute("plan", { action: "plan", names: ["Same", "Same"] });
+  const job = {
+    name: "Same",
+    schedule: { kind: "every", everyMs: 60_000 },
+    payload: { kind: "systemEvent", text: "Read" },
+  };
+  await expect(tool.execute("missing", { action: "add", job })).rejects.toThrow(/position/);
+  expect(callGatewayMock).not.toHaveBeenCalled();
+  callGatewayMock.mockResolvedValueOnce({ ...job, enabled: true, id: "second" });
+  expect((await tool.execute("second", { action: "add", position: 2, job })).details).toMatchObject(
+    { automationCreation: { slotId: "2", jobId: "second" } },
+  );
+  expect(plan.details).toMatchObject({ slots: [{ slotId: "1" }, { slotId: "2" }] });
+});
+
 it("declares all slots without a scheduler call and resolves only newly saved jobs", async ({
   annotate,
 }) => {
   const tool = createTestCronTool({ requireCreationPlan: true });
   await expect(
     tool.execute("unplanned", { action: "add", job: { name: "Unplanned" } }),
-  ).rejects.toThrow(/planId/);
+  ).rejects.toThrow(/action.*plan/);
   expect(callGatewayMock).not.toHaveBeenCalled();
   const slots = [
     { slotId: "brief", name: "Morning brief" },

@@ -35,7 +35,7 @@ const rows = [
   },
   { id: "add-2", args: { ...add, slotId: "b" }, details: undefined, isError: true },
 ];
-function direct(row: (typeof rows)[number]) {
+function direct(row: { id: string; args: object; details?: unknown; isError: boolean }) {
   const { id, args, details, isError } = row;
   return [
     {
@@ -102,6 +102,46 @@ it("replays direct, Code Mode, and live tool ownership identically before and af
     expect(automationCreationToolEvents(messages)).toEqual([plan, created, failed]);
   }
   expect(JSON.stringify(projectChatDisplayMessages(nested))).not.toContain("not-for-history");
+});
+
+it("resolves bare single and positional multi-job calls by their run's declared list", () => {
+  const only = { ...plan, slots: plan.slots.slice(0, 1) };
+  const implicit = (r: (typeof rows)[number], args: object) => direct({ ...r, args });
+  expect(
+    automationCreationToolEvents([
+      ...direct({ ...rows[0]!, details: only }),
+      ...implicit(rows[1]!, { action: "add" }),
+    ]),
+  ).toEqual([only, created]);
+  expect(
+    automationCreationToolEvents([
+      ...direct(rows[0]!),
+      ...implicit(rows[2]!, { action: "add", position: 2 }),
+      ...implicit(rows[1]!, { action: "add", position: 1 }),
+    ]),
+  ).toEqual([plan, failed, created]);
+});
+
+it("carries only the confirmed job's visible definition through live and durable tool projections", () => {
+  const definition = {
+    id: "saved",
+    name: "Morning digest",
+    enabled: false,
+    ownerProfileId: "owner",
+    configRevision: "rev1",
+    schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+  };
+  const [call, result] = direct(rows[1]!);
+  const history = [
+    call,
+    {
+      ...result,
+      details: { ...definition, automationCreation: created, payload: { message: "private task" } },
+    },
+  ];
+  for (const messages of [history, projectChatDisplayMessages(history)]) {
+    expect(automationCreationToolEvents(messages)).toEqual([{ ...created, definition }]);
+  }
 });
 
 it("retains bounded receipts when persistence omits oversized job definitions and Code Mode arguments", () => {
