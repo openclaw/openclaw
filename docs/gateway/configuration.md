@@ -127,6 +127,13 @@ to an already-truncated file does not approve that earlier loss for replacing th
 backup, so Doctor can still restore the intact configuration.
 The health owner carries that anomaly across automatic metadata stamping and later
 reads; stamping a missing `meta` section does not restore the lost settings.
+Explicit Doctor repair can restore a suspicious reduction even when the remaining
+file still validates and the anomaly was already reported. It prefers an eligible
+intact `.bak` over the trusted, hash-verified `.last-good` copy, and saves the exact
+replaced bytes as `.clobbered.*`. A backup that is itself truncated is not used
+to repair that loss. When a healthy baseline is recorded, Doctor uses only backup
+bytes it previously recorded as healthy. Other backup bytes remain
+available for manual recovery. Startup and hot-reload recovery policy is unchanged.
 
 ## Configuration pages
 
