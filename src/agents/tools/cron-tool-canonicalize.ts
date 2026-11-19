@@ -4,7 +4,7 @@ import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-c
 import { isRecord } from "../../utils.js";
 import { isStringOption } from "../../utils/string-readers.js";
 
-const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream", "event"] as const;
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream", "event"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script", "command"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",

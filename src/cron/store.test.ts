@@ -99,8 +99,8 @@ describe("cron store", () => {
       failureAlert: { after: 3, cooldownMs: 60_000, includeSkipped: true },
     },
     {
-      name: "process-exit schedule with explicit failure destination clears",
-      schedule: { kind: "on-exit", command: "./watch.sh", cwd: "/repo" },
+      name: "one-shot schedule with explicit failure destination clears",
+      schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
       delivery: {
         mode: "announce",
         channel: "telegram",

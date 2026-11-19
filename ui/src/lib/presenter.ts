@@ -66,11 +66,6 @@ export function formatCronSchedule(job: Pick<CronJob, "schedule">) {
     const duration = resolveExactDurationParts(s.everyMs)?.map(formatUnit).join(" ");
     return t("cron.scheduleLabel.every", { duration: duration ?? t("common.na") });
   }
-  if (s.kind === "on-exit") {
-    // on-exit jobs carry a watched command (+ optional cwd), not a cron expr;
-    // without this branch they fall through and render "Cron undefined".
-    return withCwd(t("cron.scheduleLabel.onExit", { command: s.command }), s.cwd);
-  }
   if (s.kind === "event") {
     const name = typeof s.options.name === "string" ? s.options.name : s.source;
     return t("cron.scheduleLabel.event", { name });

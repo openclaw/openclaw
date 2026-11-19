@@ -203,6 +203,15 @@ and retained-checkpoint maintenance remain available. Protected setup secrets ke
 snapshots enabled; old plaintext setup image identities are not adopted as
 protected images.
 
+## Retired On exit schedules
+
+`openclaw doctor --fix` backs up cron state before pausing automations that
+used the retired **On exit** schedule. The original definitions move to the
+cron recovery store, outside the runnable job list, and existing run history
+stays in place. Doctor does not convert the schedules or restart their commands:
+that could repeat side effects. For a new one-time wait, use a
+[background command that wakes the conversation on exit](/tools/exec).
+
 ## Runtime config migration
 
 ### Heartbeat to ordinary automations

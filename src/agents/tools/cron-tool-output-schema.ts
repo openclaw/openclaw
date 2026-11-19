@@ -40,7 +40,6 @@ const CompactCronJobSchema = closedObject({
     Type.Literal("at"),
     Type.Literal("every"),
     Type.Literal("cron"),
-    Type.Literal("on-exit"),
     Type.Literal("stream"),
     Type.Literal("event"),
   ]),

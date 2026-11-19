@@ -194,10 +194,6 @@ it.each<[UnknownRecord, UnknownRecord]>([
       cwd: "/x",
     },
   ],
-  [
-    { kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo/job " },
-    { ...STALE_SCHEDULE, kind: "on-exit" },
-  ],
 ])("canonicalizes %j schedules on create and patch", (expected, overrides) => {
   const input = { ...structuredClone(expected), ...overrides };
   const created = createMain({ schedule: input });

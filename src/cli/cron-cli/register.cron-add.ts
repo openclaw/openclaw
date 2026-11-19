@@ -113,7 +113,6 @@ export function registerCronAddCommand(cron: Command) {
             const deliveryPolicy = parseCronDeliveryPolicyOptions(opts);
             for (const [flag, cwd] of [
               ["--command-cwd", opts.commandCwd],
-              ["--on-exit-cwd", opts.onExitCwd],
               ["--stream-cwd", opts.streamCwd],
             ] as const) {
               if (typeof cwd === "string" && !normalizeOptionalString(cwd)) {
@@ -124,7 +123,6 @@ export function registerCronAddCommand(cron: Command) {
               typeof opts.at === "string" ||
               typeof opts.cron === "string" ||
               typeof opts.every === "string" ||
-              typeof opts.onExit === "string" ||
               typeof opts.streamCommand === "string";
             const positionalSchedule = hasScheduleFlag ? undefined : nameArg;
             const schedule = resolveCronCreateScheduleFromArgs({ ...opts, positionalSchedule });

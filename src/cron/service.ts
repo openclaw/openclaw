@@ -12,7 +12,6 @@ import * as mutationOps from "./service/ops-mutations.js";
 import * as readOps from "./service/ops-read.js";
 import * as runOps from "./service/ops-run.js";
 import * as streamOps from "./service/ops-stream.js";
-import type { OnExitRunOptions } from "./service/run-options.js";
 import {
   type CronAddOptions,
   type CronRemoveOptions,
@@ -178,10 +177,6 @@ export class CronService implements CronServiceContract {
     opts?: CronServiceRunOptions,
   ): Promise<CronServiceRunResult> {
     return await runOps.run(this.state, id, mode, opts);
-  }
-
-  async runOnExit(id: string, opts: OnExitRunOptions): Promise<CronServiceRunResult> {
-    return await runOps.runOnExit(this.state, id, opts);
   }
 
   async enqueueRun(

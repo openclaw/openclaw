@@ -26,7 +26,6 @@ import { reloadPlanNeedsRecovery } from "./config-reload-recovery.js";
 import type { GatewayHotReloadApplication } from "./config-reload-status.types.js";
 import { commitHookTransformMappingReload } from "./hooks-mapping.js";
 import { resolveHooksConfig } from "./hooks.js";
-import type { GatewayCronExitWatcherHandoff } from "./server-cron-contract.js";
 import { reconcileOrphanedMemoryDreamingJobs } from "./server-cron-memory-dreaming-jobs.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
@@ -133,9 +132,6 @@ export function createGatewayReloadHandlers(
         publication?.isCurrent() ?? true,
         isRestartRetryStopped() || reloadSignal.aborted,
       );
-    let cronExitWatcherHandoff:
-      | { previous: GatewayCronExitWatcherHandoff; next: GatewayCronExitWatcherHandoff }
-      | undefined;
     if (plan.restartCron) {
       const [{ buildGatewayCronService }, storePath] = await Promise.all([
         import("./server-cron.js"),
@@ -154,20 +150,6 @@ export function createGatewayReloadHandlers(
         resolveGatewayContext: params.resolveGatewayContext,
         resolvePluginRegistry: params.getPluginRegistry,
       });
-      if (
-        state.cronState.cronEnabled &&
-        nextState.cronState.cronEnabled &&
-        state.cronState.storePath === nextState.cronState.storePath
-      ) {
-        const [previous, next] = await Promise.all([
-          state.cronState.prepareExitWatcherHandoff?.(),
-          nextState.cronState.prepareExitWatcherHandoff?.(),
-        ]);
-        assertCronReloadCurrent();
-        if (previous && next) {
-          cronExitWatcherHandoff = { previous, next };
-        }
-      }
     }
 
     resetDirectoryCache();
@@ -324,9 +306,14 @@ export function createGatewayReloadHandlers(
                 params.cronReconciliation.invalidate();
                 params.onCronRestart?.();
               }
-              if (cronExitWatcherHandoff && ownsCron()) {
-                await cronExitWatcherHandoff.next.adopt(cronExitWatcherHandoff.previous.current());
-                await cronExitWatcherHandoff.previous.stopOwner();
+              if (
+                ownsCron() &&
+                state.cronState.cronEnabled &&
+                nextState.cronState.cronEnabled &&
+                state.cronState.storePath === nextState.cronState.storePath &&
+                state.cronState.handOver
+              ) {
+                await state.cronState.handOver();
               } else if (state.cronState.cron.stopAndDrain) {
                 await state.cronState.cron.stopAndDrain();
               } else {

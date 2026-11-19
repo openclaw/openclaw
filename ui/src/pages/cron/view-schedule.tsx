@@ -99,24 +99,22 @@ export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
     const read = formSentenceFrequency(draft);
     return preferredMode === "daily" && read === "weekly" ? "daily" : read;
   });
-  const isOnExit = () => form().scheduleKind === "on-exit";
-  const isStream = () => form().scheduleKind === "stream";
-  // Process-backed schedules stay selectable only while current: jobs can
-  // convert to an editable schedule, but never synthesize a command in the UI.
-  const processSchedule = () =>
-    isOnExit()
-      ? { value: "on-exit" as const, label: t("cron.form.repeatOnExit") }
-      : isStream()
-        ? { value: "stream" as const, label: t("cron.form.repeatStream") }
-        : null;
+  // Stream is selectable only while current: the UI cannot create its source command.
   const kinds = (): Array<{
     value: CronFormState["scheduleKind"];
     label: string;
     testId: string;
   }> => {
-    const process = processSchedule();
     return [
-      ...(process ? [{ ...process, testId: `cron-schedule-kind-${process.value}` }] : []),
+      ...(form().scheduleKind === "stream"
+        ? [
+            {
+              value: "stream" as const,
+              label: t("cron.form.repeatStream"),
+              testId: "cron-schedule-kind-stream",
+            },
+          ]
+        : []),
       { value: "every", label: t("cron.form.repeatInterval"), testId: "cron-schedule-kind-every" },
       { value: "at", label: t("cron.form.repeatOnce"), testId: "cron-schedule-kind-at" },
       { value: "cron", label: t("cron.form.cronOption"), testId: "cron-schedule-kind-cron" },
@@ -300,13 +298,10 @@ export function ScheduleNote(props: CronProps) {
     </>
   );
 }
-/** Schedule settings too large for the tray: the event source and process-backed notes. */
+/** Schedule settings too large for the tray: the event source. */
 export function ScheduleDetails(props: CronProps) {
   return (
     <>
-      {props.form.scheduleKind === "on-exit" ? (
-        <p class="cron-help cron-schedule-note">{t("cron.form.onExitHelp")}</p>
-      ) : undefined}
       {props.form.scheduleKind === "event" ? (
         <div class="settings-group cron-editor-card" data-test-id="cron-event-source">
           <EventSourceFields {...props} />

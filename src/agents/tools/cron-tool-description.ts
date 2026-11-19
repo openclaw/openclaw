@@ -19,7 +19,7 @@ export function buildCronToolDescription(params: {
   }
   const commandPolicySuffix =
     params.allowCommandJobs === false
-      ? "\nGateway policy forbids creating, editing, enabling or running command jobs and on-exit command watchers. Use direct Gateway administration for those operations."
+      ? "\nGateway policy forbids creating, editing, enabling or running command jobs. Use direct Gateway administration for those operations."
       : "";
   if (params.managementOnly) {
     return (

@@ -364,7 +364,6 @@ describe("Gateway automation policy", () => {
 
   it.each([
     ["conversion", false, { payload: { kind: "command", argv: ["fixture-command"] } }],
-    ["on-exit conversion", false, { schedule: { kind: "on-exit", command: "fixture-command" } }],
     ["metadata", true, { description: "changed" }],
     ["enable", true, { enabled: true }],
     [

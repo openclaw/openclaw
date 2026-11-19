@@ -266,14 +266,6 @@ export function assertNoCronShellExecution(value: unknown): void {
       "automation command payloads cannot be created or edited through the agent automations tool; use the CLI or Gateway API.",
     );
   }
-  const schedule = isRecord(value.schedule) ? value.schedule : undefined;
-  if (schedule?.kind === "on-exit") {
-    throw new Error(
-      "automation on-exit schedules cannot be created or edited through the agent automations tool; use the CLI or Gateway API.",
-    );
-  }
-  // Stream argv has a separate Gateway exec and persistent approval check below;
-  // keep it out of this blanket operator-only payload/schedule prohibition.
 }
 
 export function assertCronCreatorAuthorityResolutionAvailable(params: {

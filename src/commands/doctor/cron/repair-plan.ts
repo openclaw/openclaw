@@ -1,10 +1,13 @@
-// Cron doctor repair planning helpers for previewing and merging legacy rows.
 import { decodeStoredCronJobConfig } from "../../../cron/store/job-config-codec.js";
+// Cron doctor repair planning helpers for previewing and merging legacy rows.
+import type { LoadedCronStore } from "../../../cron/store/types.js";
+import type { QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
 import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "../shared/legacy-tool-name-migration.js";
+import { hasRetiredOnExitSchedule, RETIRED_ON_EXIT_SCHEDULE_REASON } from "./store-migration.js";
 
 type CronLegacyIssueCounts = Partial<Record<string, number>>;
 
@@ -101,6 +104,7 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
       "can recover scheduled account authority from persisted owner identity",
     reconciledOwnerAccount:
       "can reconcile its owner account from persisted creator identity without changing tool permissions",
+    retiredOnExitSchedule: `will be paused and kept in the cron recovery store. ${RETIRED_ON_EXIT_SCHEDULE_REASON}`,
     invalidSchedule: "has an invalid persisted schedule and will be removed",
     invalidPayload: "has an invalid persisted payload and will be removed",
   };
@@ -121,4 +125,25 @@ export function mergeRuntimeEntryIntoConfigJob(params: {
       : {}),
     ...(params.runtimeEntry?.state ? { state: structuredClone(params.runtimeEntry.state) } : {}),
   };
+}
+
+export function collectCronRepairRows(loaded: LoadedCronStore) {
+  const invalidConfigRows: QuarantinedCronConfigJob[] = [];
+  const currentJobs =
+    loaded.configJobs.length > 0
+      ? loaded.configJobs.map((job, index) =>
+          mergeRuntimeEntryIntoConfigJob({
+            job,
+            runtimeEntry: loaded.configJobRuntimeEntries[index],
+          }),
+        )
+      : (loaded.store.jobs as unknown as Array<Record<string, unknown>>);
+  for (const entry of loaded.invalidConfigRows) {
+    if (entry.job && hasRetiredOnExitSchedule(entry.job)) {
+      currentJobs.push(mergeRuntimeEntryIntoConfigJob({ job: entry.job, runtimeEntry: entry }));
+    } else {
+      invalidConfigRows.push(entry);
+    }
+  }
+  return { invalidConfigRows, currentJobs };
 }

@@ -33,8 +33,6 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--idle-only", "Yield scheduled execution to foreground work")
     .option("--no-idle-only", "Do not require an idle agent")
     .option("--cron <expr>", "Cron expression (5-field or 6-field with seconds)")
-    .option("--on-exit <shell>", "Fire once when the watched command exits")
-    .option("--on-exit-cwd <path>", "Working directory for the --on-exit watched command")
     .option("--stream-command <json>", "Stream source argv as a JSON array of strings")
     .option("--stream-cwd <path>", "Working directory for the stream source")
     .option("--stream-mode <mode>", "Stream line selection mode (line|match)")

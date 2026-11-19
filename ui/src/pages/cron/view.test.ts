@@ -122,16 +122,6 @@ describe("cron view editor", () => {
     expect(findToggleByLabel(cronContainer, "Delete after it runs")).toBeNull();
     selectSchedule(cronContainer, "every");
     expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "every", deleteAfterRun: false });
-    const onExitFormChange = vi.fn();
-    const onExitContainer = await renderEditor(
-      { scheduleKind: "on-exit" },
-      { onFormChange: onExitFormChange },
-    );
-    expect(onExitContainer.querySelector(testId("cron-schedule-kind-on-exit"))).not.toBeNull();
-    expect(findToggleByLabel(onExitContainer, "Delete after it runs")).not.toBeNull();
-    expect(everyContainer.querySelector(testId("cron-schedule-kind-on-exit"))).toBeNull();
-    selectSchedule(onExitContainer, "at");
-    expect(onExitFormChange).toHaveBeenCalledWith({ scheduleKind: "at" });
   });
 
   it("adds to the schedule controls only the time zone they cannot show", async () => {

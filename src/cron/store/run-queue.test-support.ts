@@ -31,15 +31,6 @@ export function scheduled(storeKey: string, current: CronJob, now: number) {
     mode: "scheduled",
   });
 }
-export function requestForJob(storeKey: string, current: CronJob, now: number) {
-  return current.schedule.kind === "on-exit"
-    ? requestFor(current, {
-        receiptId: "cron:request:exit",
-        mode: "on-exit",
-        onExitSchedule: current.schedule,
-      })
-    : scheduled(storeKey, current, now);
-}
 export function queueJob(id: string, now: number, overrides: Partial<CronJob> = {}): CronJob {
   return makeCronJob({
     id,

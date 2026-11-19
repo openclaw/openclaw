@@ -49,16 +49,13 @@ import type {
 export function assertCronModelJobAllowed(
   client: GatewayClient | null,
   config: OpenClawConfig,
-  job: Pick<CronJobCreate, "payload" | "schedule">,
+  job: Pick<CronJobCreate, "payload">,
   patch?: CronJobPatch,
 ): void {
   if (
     client?.internal?.agentRuntimeIdentity &&
     config.tools?.gatewayPolicy?.automations?.allowCommandJobs === false &&
-    (job.payload.kind === "command" ||
-      job.schedule.kind === "on-exit" ||
-      patch?.payload?.kind === "command" ||
-      patch?.schedule?.kind === "on-exit")
+    (job.payload.kind === "command" || patch?.payload?.kind === "command")
   ) {
     throw new TypeError(
       "Gateway tool policy denies model changes to or runs of command automations.",
@@ -380,7 +377,6 @@ export function resolveCronJobOwnerAgentId(job: Pick<CronJob, "owner">): string 
 function isOperatorCommandCronJob(job: CronJob): boolean {
   return (
     job.payload.kind === "command" ||
-    job.schedule.kind === "on-exit" ||
     (job.schedule.kind === "stream" && job.scheduledToolPolicy?.mode !== "account")
   );
 }
@@ -432,7 +428,7 @@ export function cronJobMatchesCallerScope(params: {
   }
   // Command cron is an operator-admin automation surface, not a model-visible
   // agent tool capability. Hide it before owner/routing fallback can expose
-  // payload env, watched commands, or manual force-run controls.
+  // payload env, stream commands, or manual force-run controls.
   if (isOperatorCommandCronJob(params.job)) {
     return false;
   }

@@ -205,7 +205,6 @@ export function createTestCronState(overrides: Partial<GatewayCronState> = {}): 
     cron: { start: vi.fn(async () => {}), stop: vi.fn() } as never,
     storePath: "/tmp/cron.json",
     cronEnabled: false,
-    reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
     ...overrides,

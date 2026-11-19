@@ -43,9 +43,6 @@ function automationSchedule(job: CronJob): string {
   if (schedule.kind === "event") {
     return t("workboard.automationEvent", { source: schedule.source });
   }
-  if (schedule.kind === "on-exit") {
-    return t("workboard.automationOnExit", { command: schedule.command });
-  }
   return t("workboard.automationStream", { command: schedule.command.join(" ") });
 }
 

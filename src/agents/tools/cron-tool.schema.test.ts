@@ -29,7 +29,6 @@ describe("cron model schema regressions", () => {
   it("omits command edits when management is retained but command jobs are prohibited", () => {
     const restricted = createCronToolSchema({ management: "also", allowCommandJobs: false });
     expect(propertyAt(restricted, "job.payload.kind")?.enum).not.toContain("command");
-    expect(propertyAt(restricted, "job.schedule.kind")?.enum).not.toContain("on-exit");
     expect(propertyAt(restricted, "job.payload.argv")).toBeUndefined();
     expect(propertyAt(restricted, "job.schedule.kind")?.enum).toContain("stream");
     expect(propertyAt(restricted, "job.schedule.command")).toBeDefined();
@@ -434,11 +433,6 @@ describe("cron shorthand and schedule recovery", () => {
     });
 
     it.each<[label: string, args: Record<string, unknown>, error?: string]>([
-      [
-        "on-exit",
-        { action: "add", kind: "on-exit", command: "pnpm build" },
-        "automation on-exit schedules cannot be created or edited",
-      ],
       ["command-only update", { action: "update", jobId: "job", command: "make" }],
       ["flat command without kind", { action: "add", everyMs: 60_000, command: ["tail"] }],
       ["nested command without kind", { action: "add", job: { schedule: { command: ["tail"] } } }],

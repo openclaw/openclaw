@@ -102,9 +102,6 @@ to replace a job's schedule:
 - `--cron <expression>` sets a five- or six-field cron schedule. Use
   `--tz <iana>` for the evaluation timezone, `--exact` to disable staggering,
   or `--stagger <duration>` to set a stagger window.
-- `--on-exit <shell>` starts a watched command and fires the job once when it
-  exits. `--on-exit-cwd <path>` sets that command's working directory and
-  requires `--on-exit`.
 - `--stream-command <json>` takes a nonempty JSON array of nonempty strings as the
   arguments for a supervised long-lived command and fires the job from its
   batched output. `--stream-cwd <path>` sets the source's working directory.
@@ -119,7 +116,7 @@ flags is valid with exit or stream schedules. See
 [Automation schedules](/automation/cron-jobs/schedules#schedule-types) for stream lifecycle,
 batching limits, and trigger details.
 
-On creation, omit `--command-cwd`, `--on-exit-cwd`, or `--stream-cwd` to use
+On creation, omit `--command-cwd` or `--stream-cwd` to use
 the default working directory. An explicitly empty or whitespace-only path is
 an error. When editing a stream job, `--stream-cwd ""` still clears its configured
 working directory.
@@ -286,7 +283,7 @@ daylight-saving transition are reported separately as `--at` errors.
 One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delivery failure or unknown completion keeps the job disabled, with no next run, so restarts do not replay payload side effects. Intentional silence and successful executions with explicit `delivery.bestEffort: true` complete and delete normally. Use `--keep-after-run` to preserve successful jobs too.
 </Note>
 
-An `at` job records a terminal execution failure after a permanent error or exhausted retries. An `on-exit` job fired by its watcher is terminal on any execution error, including a transient one, because retrying would rerun the watched command. These failures record `state.autoDisabled`, which `openclaw doctor` reports. Manually force-running a paused `on-exit` job preserves its pause without recording an auto-disable.
+An `at` job records a terminal execution failure after a permanent error or exhausted retries. These failures record `state.autoDisabled`, which `openclaw doctor` reports.
 
 ### Recurring jobs
 
@@ -548,7 +545,7 @@ names, schedule summaries, enabled state, and status. Retry the same command
 with the intended job ID instead of the name.
 
 With `--json`, the failure envelope includes these summaries in `error.matches`.
-Event schedules appear as `on-exit` or `stream` without their command text.
+Stream schedules appear as `stream` without their command text.
 
 `automations list --json` and `automations show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status uses the plain values above without decoration, so external tooling can read job state without re-deriving it. Human output may decorate repeated `error` statuses with a failure count.
 

@@ -120,14 +120,7 @@ function cancelChangedQueuedRuns(
       continue;
     }
     const current = currentJobs.get(previous.id);
-    // Re-arming an already consumed exit watch leaves its accepted event intact.
-    const rearmedExit =
-      current &&
-      previous.schedule.kind === "on-exit" &&
-      !previous.enabled &&
-      current.enabled &&
-      cronSchedulingInputsEqual({ ...previous, enabled: true }, current);
-    if (current && (cronSchedulingInputsEqual(previous, current) || rearmedExit)) {
+    if (current && cronSchedulingInputsEqual(previous, current)) {
       continue;
     }
     const receipt = findActiveCronRunReceiptInDatabase({

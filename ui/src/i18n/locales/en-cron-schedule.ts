@@ -8,7 +8,6 @@ const catalog = {
     scheduleLabel: {
       at: "At {time}",
       every: "Every {duration}",
-      onExit: "On exit: {command}",
       event: "Event: {name}",
       stream: "Stream: {command}",
       cron: "Cron {expr}",

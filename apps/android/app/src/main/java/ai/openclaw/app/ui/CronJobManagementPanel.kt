@@ -411,22 +411,6 @@ private fun CronScheduleEditor(
       }
     }
 
-    is GatewayCronScheduleEdit.OnExit -> {
-      ClawTextField(
-        value = schedule.command,
-        onValueChange = { onChange(schedule.copy(command = it)) },
-        placeholder = nativeString("Command to watch"),
-        label = nativeString("Command"),
-        enabled = enabled,
-      )
-      ClawTextField(
-        value = schedule.cwd,
-        onValueChange = { onChange(schedule.copy(cwd = it)) },
-        placeholder = nativeString("Optional path"),
-        label = nativeString("Working directory"),
-        enabled = enabled,
-      )
-    }
   }
 }
 
@@ -610,7 +594,6 @@ private fun cronScheduleKindLabel(schedule: GatewayCronScheduleEdit): String =
     is GatewayCronScheduleEdit.At -> nativeString("One time")
     is GatewayCronScheduleEdit.Every -> nativeString("Interval")
     is GatewayCronScheduleEdit.Cron -> nativeString("Cron")
-    is GatewayCronScheduleEdit.OnExit -> nativeString("On command exit")
   }
 
 private fun cronPayloadKindLabel(payload: GatewayCronPayloadEdit): String =

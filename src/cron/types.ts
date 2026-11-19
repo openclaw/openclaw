@@ -40,11 +40,6 @@ export type {
 export type { CronCompletionStatus } from "./completion-status.js";
 
 /** Supported schedule forms persisted in cron job specs. */
-// on-exit watchers belong to the Gateway ProcessSupervisor, outside agent-turn
-// teardown; events use the normal cron pipeline and bound-session delivery.
-// computeNextRunAtMs returns undefined for on-exit and stream schedules.
-// Cron staggerMs=0 keeps exact timing; stream command argv emits trigger lines,
-// with match carrying the required JavaScript regex source when mode is "match".
 export type CronSchedule = CronJobWire["schedule"];
 
 /** Runtime target that decides whether a job joins main, isolated, or a named session. */

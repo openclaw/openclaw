@@ -223,7 +223,6 @@ it.each([false, true])(
       cron: service,
       storePath,
       cronEnabled: true,
-      reconcileExitWatchers: async () => {},
       reconcileStreamWatchers: async () => {},
       stopStreamWatchers: async () => {},
     };

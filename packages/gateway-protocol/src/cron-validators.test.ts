@@ -35,6 +35,13 @@ const jobWithState = (state: unknown = {}) => ({
   updatedAtMs: 2,
   state,
 });
+it("refuses retired exit watchers for writes and schedule filters", () => {
+  const schedule = { kind: "on-exit", command: "./wait.sh" };
+  expect(isAdd(add({ schedule }))).toBe(false);
+  expect(isUpdate(update({ schedule }))).toBe(false);
+  expect(list({ scheduleKind: "on-exit" })).toBe(false);
+});
+
 const checkAdd = (overrides: Record<string, unknown>) => expect(isAdd(add(overrides)));
 const checkUpdate = (patch: Record<string, unknown>) => expect(isUpdate(update(patch)));
 const cleared = (...fields: string[]) => Object.fromEntries(fields.map((field) => [field, null]));
@@ -48,7 +55,6 @@ describe("cron protocol validators", () => {
     ["schedule", "at", "at", "2030-01-01T00:00:00Z", undefined, "'at'"],
     ["schedule", "every", "everyMs", 1000, "soon", "integer"],
     ["schedule", "cron", "expr", "0 * * * *", undefined, "'expr'"],
-    ["schedule", "on-exit", "command", "true", [], "string"],
     ["schedule", "stream", "command", ["tail", "/tmp/log"], [], "items"],
     ["payload", "systemEvent", "text", "tick", 1, "string"],
     ["payload", "agentTurn", "message", "report", 1, "string"],

@@ -110,10 +110,8 @@ export function assertHumanCronExecutionAccess(
   }
   const hostCommand =
     job.payload.kind === "command" ||
-    job.schedule.kind === "on-exit" ||
     job.schedule.kind === "stream" ||
     patch?.payload?.kind === "command" ||
-    patch?.schedule?.kind === "on-exit" ||
     patch?.schedule?.kind === "stream";
   // Pause, delete, and transfer remain available without authorizing another host process.
   const currentFields = new Map(Object.entries(job));

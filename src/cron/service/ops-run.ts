@@ -1,11 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { retainGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
-import {
-  createAbortError,
-  isAbortError,
-  racePromiseWithAbortSignal,
-} from "../../infra/abort-signal.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
@@ -13,13 +8,8 @@ import { captureCronRunAdmissionTracker } from "../mutation-completion.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { locked } from "./locked.js";
 import { inspectManualRunPreflight } from "./ops-run-preparation.js";
-import type { ManualRunOptions, OnExitRunOptions } from "./run-options.js";
-import {
-  commitCronRunRequests,
-  drainCronRunQueue,
-  waitForCronJobRun,
-  type RequestedCronRun,
-} from "./run-queue.js";
+import type { ManualRunOptions } from "./run-options.js";
+import { commitCronRunRequests, drainCronRunQueue, type RequestedCronRun } from "./run-queue.js";
 import type { CronRunMode, CronRunResult, CronServiceState } from "./state.js";
 import { captureCronServiceMutationSource } from "./store.js";
 import { wake } from "./wake.js";
@@ -63,40 +53,6 @@ export async function run(
   const execute = async () => {
     const result = await requestManualCronRun(state, id, mode, opts);
     return "requested" in result ? result.requested.completion : result;
-  };
-  return state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(execute) : execute();
-}
-
-/** Consuming an exit and queuing its payload share the receipt commit. */
-export async function runOnExit(state: CronServiceState, id: string, opts: OnExitRunOptions) {
-  const generation = state.lifecycleGeneration;
-  const execute = async () => {
-    const commitGuard = () => {
-      if (opts.signal.aborted || state.stopped || generation !== state.lifecycleGeneration) {
-        throw createAbortError("cron on-exit admission cancelled");
-      }
-      opts.commitGuard();
-    };
-    try {
-      while (!opts.signal.aborted && !state.stopped && generation === state.lifecycleGeneration) {
-        const waited = await racePromiseWithAbortSignal(waitForCronJobRun(state, id), opts.signal);
-        const result = await requestManualCronRun(state, id, "force", {
-          onExit: { ...opts, commitGuard },
-          commitGuard,
-        });
-        if ("requested" in result) {
-          return await result.requested.completion;
-        }
-        if (!waited || !(result.ok && "reason" in result && result.reason === "already-running")) {
-          return result;
-        }
-      }
-    } catch (error) {
-      if (!isAbortError(error)) {
-        throw error;
-      }
-    }
-    return { ok: true, ran: false, reason: "stopped" } as const;
   };
   return state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(execute) : execute();
 }

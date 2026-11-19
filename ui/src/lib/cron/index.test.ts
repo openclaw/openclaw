@@ -474,7 +474,6 @@ it.each([
 
 it.each([
   { schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 60_000 } },
-  { schedule: { kind: "on-exit", command: "make build", cwd: "/repo" } },
   {
     failureAlert: {
       after: 4,

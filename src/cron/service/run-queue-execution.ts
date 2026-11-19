@@ -43,7 +43,6 @@ export type CronLaunchContext = {
   started?: boolean;
   preparation?: { agentId: string; controller: AbortController };
   eventTransferred?: boolean;
-  removeCancellation?: () => void;
   completion: ReturnType<typeof createDeferredCore<CronRunResult>>;
   activation: ReturnType<typeof createDeferredCore<void>>;
   receiptSettlement?: Promise<void>;
@@ -139,10 +138,8 @@ export async function launchCronRun(
   await ensureLoaded(state);
   pending.context.admission.assertCurrent();
   // Request authority ends at enqueue; occurrences restore the job's scheduled authority.
-  // On-exit watchers still own their source until execution consumes the exit.
-  options.onExit?.commitGuard();
   const current = state.store?.jobs.find((job) => job.id === entry.job.id);
-  const force = options.mode === "force" || options.onExit !== undefined;
+  const force = options.mode === "force";
   const unavailable =
     state.deps.isAgentAvailable?.(entry.runReceipt.agentId, {
       deletionBlocked: false,
@@ -184,15 +181,10 @@ export async function launchCronRun(
   }
   const manual = options.source === "manual" || options.source === "event";
   const admittedJob = structuredClone(continuationSession ? current : entry.job);
-  if (options.onExit) {
-    admittedJob.enabled = false;
-  }
   const executionJob = structuredClone(admittedJob);
   executionJob.payload = options.event
     ? cronEventPayload(entry.job, options.event.input)
-    : (options.onExit?.payload?.(structuredClone(entry.job)) ??
-      options.payload ??
-      executionJob.payload);
+    : (options.payload ?? executionJob.payload);
   if (options.payload) {
     delete executionJob.operatorSource;
   }
@@ -241,10 +233,8 @@ export async function launchCronRun(
     }
     return;
   }
-  pending.removeCancellation?.();
   pending.started = true;
   pending.activation.resolve();
-  const onExit = options.onExit;
   let result: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
     result = await executeJobCoreWithTimeout(state, executionJob, {
@@ -262,19 +252,6 @@ export async function launchCronRun(
         entry.runReceipt,
         pending.context,
       ),
-      ...(onExit
-        ? {
-            idleAdmission: {
-              signal: onExit.signal,
-              assertCurrent: () => {
-                onExit.commitGuard();
-                if (activeJobMarker?.messageSourceAuthorityRevoked) {
-                  throw new Error("cron on-exit source changed while awaiting idle execution");
-                }
-              },
-            },
-          }
-        : {}),
     });
   } catch (error) {
     result = authorCronRunCompletion(executionJob, {
@@ -313,7 +290,6 @@ export async function launchCronRun(
               request: {
                 executionJob,
                 preserveCadence: isImmediateCronRunMode(options.mode),
-                onExitWatcherCompletion: options.onExit !== undefined,
                 scheduleOwnershipAtMs:
                   options.scheduleOwnershipAtMs ?? entry.runReceipt.startedAtMs,
                 runId: options.runId,
@@ -337,6 +313,5 @@ export async function launchCronRun(
       job: executionJob,
     });
   }
-  pending.removeCancellation?.();
   pending.completion.resolve({ ok: true, ran: true });
 }

@@ -2,7 +2,7 @@
 doc-schema-version: 1
 summary: "Schedule kinds, cron expressions, stream sources, pacing, and condition triggers"
 read_when:
-  - Choosing between at, every, cron, on-exit, and stream schedules
+  - Choosing between at, every, cron, and stream schedules
   - Writing a cron expression or a timezone-aware schedule
   - Adding a condition script that gates when a job fires
 title: "Automation schedules"
@@ -13,17 +13,16 @@ When a job fires: the five schedule kinds, cron expression rules, dynamic cadenc
 
 ## Schedule types
 
-| Kind      | CLI flag           | Description                                                                                              |
-| --------- | ------------------ | -------------------------------------------------------------------------------------------------------- |
-| `at`      | `--at`             | One-shot timestamp (ISO 8601 or relative like `20m`)                                                     |
-| `every`   | `--every`          | Fixed interval (`10m`, `1h`, `1d`)                                                                       |
-| `cron`    | `--cron`           | 5-field or 6-field cron expression with optional `--tz`                                                  |
-| `on-exit` | `--on-exit`        | Fire once when a watched command exits (event trigger; survives turn teardown; optional `--on-exit-cwd`) |
-| `stream`  | `--stream-command` | Fire from batched lines produced by a supervised long-lived command                                      |
+| Kind     | CLI flag           | Description                                                         |
+| -------- | ------------------ | ------------------------------------------------------------------- |
+| `at`     | `--at`             | One-shot timestamp (ISO 8601 or relative like `20m`)                |
+| `every`  | `--every`          | Fixed interval (`10m`, `1h`, `1d`)                                  |
+| `cron`   | `--cron`           | 5-field or 6-field cron expression with optional `--tz`             |
+| `stream` | `--stream-command` | Fire from batched lines produced by a supervised long-lived command |
 
-These schedule flags work with both `openclaw automations add` and `openclaw automations edit <job-id>`. For example, `openclaw automations edit <job-id> --on-exit "./watch.sh" --on-exit-cwd /srv/app` converts an existing job to an exit-triggered schedule.
+These schedule flags work with both `openclaw automations add` and `openclaw automations edit <job-id>`.
 
-Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` to interpret an offset-less `--at` datetime, or to evaluate a cron expression, in that IANA timezone. Cron expressions without `--tz` use the Gateway host timezone. `--tz` is not valid with `--every` or `--on-exit`.
+Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` to interpret an offset-less `--at` datetime, or to evaluate a cron expression, in that IANA timezone. Cron expressions without `--tz` use the Gateway host timezone. `--tz` is not valid with `--every` or `--stream-command`.
 
 The Control UI's **Run at** field uses your browser's local timezone. A time skipped by a daylight-saving transition is invalid; choose a time before or after the gap. A newly entered repeated fall-back time uses its first occurrence. Editing other fields preserves the existing one-shot instant, including its original offset and timestamp precision.
 
@@ -31,11 +30,9 @@ Recurring top-of-hour expressions (minute `0` with a wildcard hour field) are au
 
 In the Control UI, enable **Exact timing** to disable staggering. For recurring top-of-hour expressions, turn it off and clear **Stagger window** to restore the default window of up to 5 minutes. For other expressions, clearing a saved window without changing the expression disables staggering and reopens with **Exact timing** enabled. A new schedule with a blank window keeps default timing when its expression changes.
 
-An `on-exit` job disables itself when its payload is queued to run. Re-enable the job to watch again; this also works while the previous payload is still finishing. If the new command exits before that payload finishes, its exit waits for the previous run to settle before disabling the job and starting the next payload. This includes cleanup still running after a timeout response. Disabling or changing the watch cancels its pending exit. You can change the watched command or working directory when re-enabling it.
+For a one-time wait inside a conversation, [run a background command](/tools/exec) and let its exit wake the conversation.
 
-The Gateway owns the watched command's process tree, including cleanup after failed startup. Cleanup must finish before its payload fires or a replacement command starts. If cleanup cannot be confirmed, the Gateway reports the failure, keeps a suspension blocker, and refuses to rearm that watch in the same process. Inspect and stop any remaining command processes, then restart the Gateway; disabling and re-enabling the job does not clear uncertain cleanup.
-
-Changing an `at` or `on-exit` job to an `every` or `cron` schedule clears its inherited `deleteAfterRun` setting. An explicit `deleteAfterRun` value in the same update takes precedence.
+Changing an `at` job to an `every` or `cron` schedule clears its inherited `deleteAfterRun` setting. An explicit `deleteAfterRun` value in the same update takes precedence.
 
 ### Heartbeat task migration
 

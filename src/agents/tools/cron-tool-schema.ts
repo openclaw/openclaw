@@ -97,7 +97,6 @@ function createCronScheduleSchema(params: {
             ...(params.triggersEnabled
               ? CRON_SCHEDULE_KINDS
               : CRON_SCHEDULE_KINDS_TRIGGERS_DISABLED),
-            ...(params.management ? ["on-exit"] : []),
           ],
           { description: "Schedule kind" },
         ),

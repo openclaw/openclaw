@@ -91,16 +91,11 @@ export function bindCronStreamUpdate({
   cron,
   streamWatchers,
   reconcile,
-  cancelDisabledExitWatcher,
   logger,
 }: {
   cron: CronService;
   streamWatchers: ReturnType<typeof createCronStreamWatchers>;
   reconcile: (jobId: string) => Promise<void>;
-  cancelDisabledExitWatcher: (
-    job: CronJob,
-    precondition?: Parameters<CronService["updateWithPrecondition"]>[2],
-  ) => void;
   logger: Pick<ReturnType<typeof getChildLogger>, "warn">;
 }) {
   const queueStreamStopAfterCommit = (previous: CronJob | undefined, current: CronJob) => {
@@ -142,9 +137,6 @@ export function bindCronStreamUpdate({
       },
       opts,
     );
-    if (patch.enabled === false) {
-      cancelDisabledExitWatcher(result, precondition);
-    }
     await settleCronStreamStopAfterCommit({
       jobId,
       stop: queueStreamStopAfterCommit(previous, result),

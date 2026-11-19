@@ -108,9 +108,6 @@ describe("formatCronSchedule", () => {
     expect(label({ kind: "cron", expr: "0 9 * * *", tz: "UTC" })).toBe(
       "<cron.scheduleLabel.withTimeZone <cron.scheduleLabel.cron 0 9 * * *>|UTC>",
     );
-    expect(label({ kind: "on-exit", command: "make", cwd: "/repo" })).toBe(
-      "<cron.scheduleLabel.withCwd <cron.scheduleLabel.onExit make>|/repo>",
-    );
   });
 });
 

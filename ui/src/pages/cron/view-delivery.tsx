@@ -231,7 +231,7 @@ export function Advanced(
               help={t("cron.form.startEnabledHelp")}
             />
           ) : undefined}
-          {props.form.scheduleKind === "at" || props.form.scheduleKind === "on-exit" ? (
+          {props.form.scheduleKind === "at" ? (
             <ToggleRow
               {...props}
               field="deleteAfterRun"

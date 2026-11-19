@@ -5,7 +5,6 @@ import type { CronJobScratchState, CronJobScratchWriteResult } from "../cron/scr
 import type { CronServiceContract } from "../cron/service-contract.js";
 import type { CronJob, CronStoredJob } from "../cron/types.js";
 import type { DeferredHookWake } from "../cron/wake-contract.js";
-import type { CronExitWatchers } from "./cron-exit-watchers.js";
 
 export type GatewayCronServiceContract = CronServiceContract & {
   /** Borrow the current resident jobs without loading storage. */
@@ -56,14 +55,7 @@ export type GatewayCronState = {
   storePath: string;
   cronEnabled: boolean;
   readHeartbeatSummary?: (cfg: OpenClawConfig) => Promise<CronJob[]>;
-  prepareExitWatcherHandoff?: () => Promise<GatewayCronExitWatcherHandoff | undefined>;
-  reconcileExitWatchers: () => Promise<void>;
+  handOver?: () => Promise<void>;
   reconcileStreamWatchers: () => Promise<void>;
   stopStreamWatchers: () => Promise<void>;
-};
-
-export type GatewayCronExitWatcherHandoff = {
-  current: () => CronExitWatchers;
-  adopt: (watchers: CronExitWatchers) => Promise<void> | void;
-  stopOwner: () => Promise<void>;
 };

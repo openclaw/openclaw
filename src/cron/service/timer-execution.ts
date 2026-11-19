@@ -26,7 +26,6 @@ import type {
   CronTriggerEvalOutcome,
 } from "../types.js";
 import { abortErrorMessage, cronAbortErrorClassification } from "./execution-errors.js";
-import { waitForCronExecutionIdle } from "./execution-idle.js";
 import { admitCronOccurrence, resolvePausedOccurrence } from "./occurrence-admission.js";
 import {
   describeCronHostExecutionRestriction,
@@ -47,7 +46,7 @@ export async function executeJobCore(
   abortSignal?: AbortSignal,
   initialOptions?: ExecuteJobCoreOptions,
 ): Promise<CronJobExecutionResult> {
-  let options = initialOptions;
+  const options = initialOptions;
   const resolveAbortError = () => ({
     status: "error" as const,
     error: abortErrorMessage(abortSignal),
@@ -74,39 +73,6 @@ export async function executeJobCore(
       throw new Error("Gateway restarting.");
     }
   };
-  if (job.schedule.kind === "on-exit") {
-    const originalOptions = options;
-    const waitForIdle: NonNullable<ExecuteJobCoreOptions["waitForIdle"]> = async (
-      ownSessionKey,
-      signal,
-      ownReplyOperation,
-    ) => {
-      const signals = [abortSignal, signal, originalOptions?.idleAdmission?.signal].filter(
-        (entry): entry is AbortSignal => entry !== undefined,
-      );
-      const currentSignal = AbortSignal.any(signals);
-      const assertIdleOwnerCurrent = async () => {
-        originalOptions?.idleAdmission?.assertCurrent();
-        await originalOptions?.assertRunCurrent?.();
-        originalOptions?.idleAdmission?.assertCurrent();
-        assertCurrent();
-        currentSignal.throwIfAborted();
-      };
-      originalOptions?.onLaneWait?.({ waiting: true });
-      try {
-        await waitForCronExecutionIdle(state, job, {
-          activeJobMarker: originalOptions?.activeJobMarker,
-          ownSessionKey,
-          ownReplyOperation,
-          signal: currentSignal,
-          assertCurrent: assertIdleOwnerCurrent,
-        });
-      } finally {
-        originalOptions?.onLaneWait?.({ waiting: false });
-      }
-    };
-    options = { ...options, waitForIdle };
-  }
   const agentId = tryResolveCronJobEffectiveAgentId(
     job,
     state.deps.resolveDefaultAgentId
@@ -145,37 +111,15 @@ export async function executeJobCore(
     };
   }
   if (job.idleOnly && state.deps.isExecutionIdle?.(job) === false) {
-    if (options?.waitForIdle) {
-      await options.waitForIdle();
-      assertCurrent();
-      if (
-        !isCronWithinActiveHours(
-          job.activeHours,
-          state.deps.nowMs(),
-          state.deps.resolveUserTimezone?.(),
-        )
-      ) {
-        return {
-          status: "skipped",
-          summary: "Outside this automation's active hours",
-          admissionDeferred: job.schedule.kind === "at",
-          admissionDeferredReason: "active-hours",
-          executionStarted: false,
-          delivered: false,
-          deliveryAttempted: false,
-        };
-      }
-    } else {
-      return {
-        status: "skipped",
-        summary: "Automation deferred while its agent is busy",
-        admissionDeferred: true,
-        admissionDeferredReason: "busy",
-        executionStarted: false,
-        delivered: false,
-        deliveryAttempted: false,
-      };
-    }
+    return {
+      status: "skipped",
+      summary: "Automation deferred while its agent is busy",
+      admissionDeferred: true,
+      admissionDeferredReason: "busy",
+      executionStarted: false,
+      delivered: false,
+      deliveryAttempted: false,
+    };
   }
   let sessionPreparation: CronSessionRunPreparation | undefined;
   let occurrence: ScheduledOccurrence | undefined;
@@ -437,7 +381,6 @@ async function executeMainSessionCronJob(
   assertCurrent();
   return await state.deps.runSessionEvent({
     occurrence,
-    waitForIdle: options?.waitForIdle,
     admissionSource: resolveCronRunAdmissionSource(job),
     sessionPreparation,
     deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
@@ -540,7 +483,6 @@ async function executeDetachedCronJob(
 
   const res = await state.deps.runIsolatedAgentJob({
     occurrence,
-    waitForIdle: options?.waitForIdle,
     deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
     job,
     admissionSource: resolveCronRunAdmissionSource(job),

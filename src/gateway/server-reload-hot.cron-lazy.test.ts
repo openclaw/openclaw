@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import type { GatewayCronExitWatcherHandoff, GatewayCronState } from "./server-cron-contract.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import type {
   GatewayHotReloadPublication,
   GatewayReloadHandlerParams,
@@ -124,7 +124,6 @@ describe("cron reload loading", { concurrent: false }, () => {
   // Each await rechecks the same ownership guard; cover every cause and await point.
   it.each([
     { phase: "load", action: "stop", plugins: false },
-    { phase: "handoff", action: "replace", plugins: false },
     { phase: "publication", action: "supersede", plugins: false },
     { phase: "publication", action: "supersede", plugins: true },
   ] as const)(
@@ -137,13 +136,6 @@ describe("cron reload loading", { concurrent: false }, () => {
         entered.resolve();
         await release.promise;
       };
-      const handoff = (): GatewayCronExitWatcherHandoff => ({
-        current: vi.fn(),
-        adopt: vi.fn(),
-        stopOwner: vi.fn(async () => {}),
-      });
-      const previousHandoff = handoff();
-      const nextHandoff = handoff();
       const publishPluginRuntime = vi.fn();
       if (plugins) {
         fixture.reloadPlugins.mockImplementationOnce(async ({ commitRuntime }) => {
@@ -156,12 +148,6 @@ describe("cron reload loading", { concurrent: false }, () => {
           await hold();
           return { buildGatewayCronService };
         });
-      } else if (phase === "handoff") {
-        fixture.previous.prepareExitWatcherHandoff = async () => {
-          await hold();
-          return previousHandoff;
-        };
-        fixture.next.prepareExitWatcherHandoff = async () => nextHandoff;
       }
       let current = true;
       const publication: GatewayHotReloadPublication = {
@@ -213,8 +199,6 @@ describe("cron reload loading", { concurrent: false }, () => {
       fixture.expectUnpublished();
       expect(publishPluginRuntime).not.toHaveBeenCalled();
       expect(fixture.previous.stopStreamWatchers).not.toHaveBeenCalled();
-      expect(nextHandoff.adopt).not.toHaveBeenCalled();
-      expect(previousHandoff.stopOwner).not.toHaveBeenCalled();
     },
   );
 

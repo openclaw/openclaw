@@ -530,31 +530,3 @@ it("#102238 waits for a disabled run to abort before a re-enabled timer tick", a
   expect(dispatchCount).toBe(2);
   expect(peakInFlight).toBe(1);
 });
-
-it("#104518 finalizes watcher-fired on-exit job: onexit-delete-ok", async () => {
-  const nowMs = Date.now();
-  const job = recurringJob("onexit-delete-ok", nowMs, {
-    schedule: { kind: "on-exit", command: 'sh -c "exit 0"' },
-    state: {},
-  });
-  job.deleteAfterRun = true;
-  // The gateway watcher persists this disable before force-running the payload.
-  job.enabled = false;
-  const events: CronEvent[] = [];
-  const state = await prepareJob(job, {
-    cronEnabled: false,
-    runIsolatedAgentJob: vi
-      .fn()
-      .mockResolvedValue({ status: "ok", summary: "ok", delivered: true }),
-    onEvent: (event) => events.push(event),
-  });
-  await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
-
-  const memoryJob = state.store?.jobs.find((entry) => entry.id === job.id);
-  const durableJob = (await loadCronStore(state.deps.storePath)).jobs.find(
-    (entry) => entry.id === job.id,
-  );
-  expect(memoryJob).toBeUndefined();
-  expect(durableJob).toBeUndefined();
-  expect(events.map((event) => event.action)).toEqual(["started", "finished", "removed"]);
-});

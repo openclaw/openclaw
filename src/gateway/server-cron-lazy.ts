@@ -8,11 +8,7 @@ import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worke
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createLazyPromiseLoader, createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
 import { measureGatewayCloseStep } from "./restart-trace.js";
-import type {
-  GatewayCronServiceContract,
-  GatewayCronExitWatcherHandoff,
-  GatewayCronState,
-} from "./server-cron-contract.js";
+import type { GatewayCronServiceContract, GatewayCronState } from "./server-cron-contract.js";
 import type { buildGatewayCronService } from "./server-cron.js";
 import { expectSessionAutomationSource } from "./session-automation-index.js";
 
@@ -35,8 +31,6 @@ export function createLazyGatewayCronState(
   let stopped = false;
   let closed = false;
   let lifecycleGeneration = 0;
-  let exitWatcherHandoff: GatewayCronExitWatcherHandoff | undefined;
-  let exitWatcherHandoffStop: Promise<void> | undefined;
   let schedulingPaused = false;
   const assertOpen = () => {
     if (closed) {
@@ -94,12 +88,10 @@ export function createLazyGatewayCronState(
     return resolved;
   });
 
-  const stopResolvedCron = async (resolved: GatewayCronState): Promise<void> =>
+  const stopResolvedCron = async (resolved: GatewayCronState, handover = false): Promise<void> =>
     runWithInstallation(async () => {
-      if (exitWatcherHandoff) {
-        // A cancelled startup must join the exact prepared owner's drain, not
-        // prepare or stop another owner after its watchers have been adopted.
-        await (exitWatcherHandoffStop ??= exitWatcherHandoff.stopOwner());
+      if (handover && resolved.handOver) {
+        await resolved.handOver();
       } else if (resolved.cron.stopAndDrain) {
         await resolved.cron.stopAndDrain();
       } else {
@@ -108,15 +100,19 @@ export function createLazyGatewayCronState(
       }
     });
 
-  const stopLoadedCronAndDrain = async (handoff?: GatewayCronExitWatcherHandoff): Promise<void> => {
+  const stopLoadedCronAndDrain = async (handover = false): Promise<void> => {
+    if (closed) {
+      return;
+    }
     closed = true;
     stopped = true;
     lifecycleGeneration += 1;
-    exitWatcherHandoff ??= handoff;
     // An import owns no scheduler resources; final close prevents its late construction.
     const resolved = loaded;
     if (resolved) {
-      await measureGatewayCloseStep("restart.close.cron-owner", () => stopResolvedCron(resolved));
+      await measureGatewayCloseStep("restart.close.cron-owner", () =>
+        stopResolvedCron(resolved, handover),
+      );
     }
   };
 
@@ -254,25 +250,7 @@ export function createLazyGatewayCronState(
     },
     storePath,
     cronEnabled,
-    prepareExitWatcherHandoff: async (): Promise<GatewayCronExitWatcherHandoff | undefined> => {
-      if (closed) {
-        return undefined;
-      }
-      const loading = cronStateLoader.peek();
-      const resolved = loaded ?? (loading ? await loading : null);
-      const handoff = await runWithInstallation(() => resolved?.prepareExitWatcherHandoff?.());
-      if (!handoff) {
-        return undefined;
-      }
-      return {
-        ...handoff,
-        stopOwner: async () => {
-          await stopLoadedCronAndDrain(handoff);
-        },
-      };
-    },
-    // Reload hooks follow the serving lazy owner.
-    reconcileExitWatchers: bindCron((state) => state.reconcileExitWatchers.bind(state)),
+    handOver: () => stopLoadedCronAndDrain(true),
     reconcileStreamWatchers: bindCron((state) => state.reconcileStreamWatchers.bind(state)),
     async stopStreamWatchers() {
       // Nothing to stop before the heavy cron service is built.

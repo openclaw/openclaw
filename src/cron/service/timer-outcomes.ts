@@ -97,8 +97,6 @@ export function applyJobResult(
     // Startup recovery restores historical notification facts separately.
     replay?: boolean;
     replaySchedule?: { nextRunAtMs?: number };
-    /** Only runOnExit carries the completed watcher's terminal occurrence. */
-    onExitWatcherCompletion?: boolean;
     deferredNotifications: DeferredCronNotifications;
   },
 ): boolean {
@@ -212,14 +210,13 @@ export function applyJobResult(
   }
 
   // An operator force-run borrows a future at-schedule; it cannot consume,
-  // disable, or retry that scheduled occurrence. On-exit watchers also use
-  // force, but their terminal callback owns and must retire the watched job.
+  // disable, or retry that scheduled occurrence.
   const scheduleOwnershipAtMs = opts.scheduleOwnershipAtMs ?? result.startedAt;
   const oneShotOccurrenceAtMs = resolveManualOneShotOccurrenceAtMs(job, scheduleOwnershipAtMs);
   const preserveOneShotSchedule =
     opts.scheduleMode === "preserve" && oneShotOccurrenceAtMs !== undefined;
   const ownsSchedule = opts.scheduleOwnership !== "stale";
-  const isOneShotSchedule = job.schedule.kind === "at" || job.schedule.kind === "on-exit";
+  const isOneShotSchedule = job.schedule.kind === "at";
   const oneShotNextCheck =
     ownsSchedule &&
     !preserveOneShotSchedule &&
@@ -422,15 +419,6 @@ export function applyJobResult(
           );
         }
       }
-    } else if (
-      job.schedule.kind === "on-exit" &&
-      opts.onExitWatcherCompletion &&
-      result.status === "error"
-    ) {
-      // Re-enabling would rerun the completed watched command, even for a transient error.
-      job.enabled = false;
-      job.state.nextRunAtMs = undefined;
-      terminalOneShot = result.errorClassification?.kind !== "aborted";
     } else if (opts.scheduleMode === "preserve") {
       // Forced recurring or disabled one-shot runs cannot change a scheduled
       // slot. Preserve its absence, or its timestamp and paced provenance.
@@ -713,7 +701,6 @@ export function applyOutcomeToAuthoritativeJob(
     request?: {
       preserveCadence: boolean;
       scheduleOwnershipAtMs: number;
-      onExitWatcherCompletion?: boolean;
     };
   },
 ): boolean {
@@ -768,7 +755,6 @@ export function applyOutcomeToAuthoritativeJob(
       opts.request?.preserveCadence && scheduleOwnership === "current" ? "preserve" : "advance",
     scheduleOwnership,
     scheduleOwnershipAtMs: opts.request?.scheduleOwnershipAtMs,
-    onExitWatcherCompletion: opts.request?.onExitWatcherCompletion,
     deferredNotifications: opts.deferredNotifications,
   });
   applyTriggerRunResult(job, result, { scheduleOwnership, triggerOwnership });

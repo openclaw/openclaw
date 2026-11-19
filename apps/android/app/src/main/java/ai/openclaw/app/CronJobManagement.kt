@@ -171,10 +171,7 @@ sealed interface GatewayCronScheduleEdit {
     val staggerMs: String,
   ) : GatewayCronScheduleEdit
 
-  data class OnExit(
-    val command: String,
-    val cwd: String,
-  ) : GatewayCronScheduleEdit
+
 }
 
 sealed interface GatewayCronPayloadEdit {
@@ -357,13 +354,6 @@ internal fun GatewayCronJobDetail.toCronJobEdit(): GatewayCronJobEdit =
             expression = scheduleCronExpr.orEmpty(),
             timezone = scheduleTimezone.orEmpty(),
             staggerMs = scheduleStaggerMs?.toString().orEmpty(),
-          )
-        }
-
-        "on-exit" -> {
-          GatewayCronScheduleEdit.OnExit(
-            command = scheduleCommand.orEmpty(),
-            cwd = scheduleCwd.orEmpty(),
           )
         }
 
@@ -552,16 +542,7 @@ private fun buildCronSchedulePatch(
       }
     }
 
-    is GatewayCronScheduleEdit.OnExit -> {
-      require(original.scheduleKind == "on-exit") { "Changing schedule type is not supported here." }
-      val command = edit.command.trim()
-      require(command.isNotEmpty()) { "On-exit automations need a command." }
-      val cwd = edit.cwd.trim().ifEmpty { null }
-      cronPatchIfChanged("on-exit", command != original.scheduleCommand || cwd != original.scheduleCwd) {
-        put("command", JsonPrimitive(command))
-        cwd?.let { put("cwd", JsonPrimitive(it)) }
-      }
-    }
+
   }
 
 private fun buildCronPayloadPatch(

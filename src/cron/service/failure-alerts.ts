@@ -103,7 +103,6 @@ function hasFailureRepairOwner(
     job.payload &&
     job.payload.kind !== "command" &&
     job.schedule &&
-    job.schedule.kind !== "on-exit" &&
     job.schedule.kind !== "stream",
   );
 }
@@ -501,7 +500,7 @@ function maybeEmitFailureAlert(
     !terminalRecurring &&
     (terminalOneShot || alertConfig.mode === "announce") &&
     params.status === "error" &&
-    // Command jobs and on-exit or stream schedules are operator-only, so they alert as before.
+    // Command jobs and stream schedules are operator-only, so they alert as before.
     hasFailureRepairOwner(params.job) &&
     (terminalOneShot || isJobEnabled(params.job))
   ) {
