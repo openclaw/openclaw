@@ -1,4 +1,4 @@
-import type { CommittedCompactionBoundary } from "../../agents/sessions/session-compaction-persistence.js";
+import type { CommittedCompactionBoundary } from "../../agents/sessions/session-compaction-persistence.types.js";
 import {
   captureSessionManagerIncognitoBinding,
   withSessionManagerMemoryActor,

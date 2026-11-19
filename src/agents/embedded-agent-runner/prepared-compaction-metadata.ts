@@ -1,29 +1,17 @@
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
-import {
-  appendSessionMetadataInWorker,
-  type PreparedCompactionAppend,
-} from "../sessions/session-compaction-persistence.js";
-import {
-  prepareSessionInitialMetadata,
-  type SessionInitialMetadataFacts,
-} from "../sessions/session-initial-metadata.js";
+import { appendSessionMetadataInWorker } from "../sessions/session-compaction-persistence.js";
+import type { PreparedCompactionAppend } from "../sessions/session-compaction-persistence.types.js";
+import { prepareSessionInitialMetadata } from "../sessions/session-initial-metadata.js";
 import { generateSessionEntryId } from "../sessions/session-manager-id.js";
 import type {
   ModelChangeEntry,
   ThinkingLevelChangeEntry,
   SessionHeader,
 } from "../sessions/session-manager-types.js";
-import {
-  isSameModelSnapshot,
-  MODEL_SNAPSHOT_CUSTOM_TYPE,
-  type ModelSnapshotEntry,
-} from "./replay-session-state.js";
-
-export type PreparedCompactionMetadataFacts = SessionInitialMetadataFacts & {
-  leafEntryId: string | null;
-  lastModelSnapshot: ModelSnapshotEntry | null;
-};
+import type { PreparedCompactionMetadataFacts } from "./prepared-compaction-metadata.types.js";
+import { isSameModelSnapshot, MODEL_SNAPSHOT_CUSTOM_TYPE } from "./replay-session-state.js";
+import type { ModelSnapshotEntry } from "./replay-session-state.types.js";
 
 /** Initialize before planning; true means the captured source must be refreshed. */
 export async function initializePreparedCompactionMetadata(

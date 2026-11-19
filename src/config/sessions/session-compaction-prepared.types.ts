@@ -11,7 +11,7 @@ import type {
   ConversationEntryDescriptor,
   BoundedConversation,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
-import type { PreparedCompactionMetadataFacts } from "../../agents/embedded-agent-runner/prepared-compaction-metadata.js";
+import type { PreparedCompactionMetadataFacts } from "../../agents/embedded-agent-runner/prepared-compaction-metadata.types.js";
 import type {
   CompactionMessageSource,
   CompactionSelections,
@@ -22,7 +22,7 @@ import type {
 import type {
   ModelSnapshotState,
   ModelSnapshotEntry,
-} from "../../agents/embedded-agent-runner/replay-session-state.js";
+} from "../../agents/embedded-agent-runner/replay-session-state.types.js";
 import type { SessionHeader } from "../../agents/sessions/session-manager-types.js";
 import type { SessionCompactionPreparation } from "./session-history-read.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";

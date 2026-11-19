@@ -8,6 +8,7 @@ import { rethrowIncognitoSessionError } from "../../state/incognito-session-erro
 import { withSessionManagerWriteAssertion } from "../sessions/session-manager-write-admission.js";
 import type { SessionManager } from "../sessions/session-manager.js";
 import { warnSessionPersistenceDeprecation } from "../sessions/session-persistence-deprecation.js";
+import type { ModelSnapshotEntry, ModelSnapshotState } from "./replay-session-state.types.js";
 
 export function createProviderReplaySessionState(sessionManager: SessionManager): {
   state: ProviderReplaySessionStateV2;
@@ -66,16 +67,6 @@ export function createProviderReplaySessionState(sessionManager: SessionManager)
 }
 
 export const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
-export type ModelSnapshotEntry = {
-  timestamp: number;
-  provider?: string;
-  modelApi?: string | null;
-  modelId?: string;
-};
-export type ModelSnapshotState = {
-  lastSnapshot: ModelSnapshotEntry | null;
-  latestSwitchTimestamp: number | null;
-};
 
 export function readModelSnapshotState(sessionManager: SessionManager): ModelSnapshotState {
   try {

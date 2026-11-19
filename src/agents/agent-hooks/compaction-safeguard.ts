@@ -29,7 +29,6 @@ import {
   buildSplitTurnContextSection,
   resolveRecentTurnsPreserve,
   splitPreservedRecentTurns,
-  type ContextSection,
 } from "./compaction-safeguard-context.js";
 import type {
   CompactionSafeguardResult,
@@ -45,6 +44,7 @@ import {
   prepareCompactionSafeguardSummary,
   type CompactionSafeguardHistory,
 } from "./compaction-safeguard-preparation.js";
+import type { ContextSection } from "./compaction-safeguard-prepared.types.js";
 import {
   appendSummarySection,
   auditSummaryQuality,

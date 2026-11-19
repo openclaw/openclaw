@@ -19,6 +19,10 @@ import {
   resolveRecentTurnsPreserve,
   splitPreservedRecentTurns,
 } from "./compaction-safeguard-context.js";
+import type {
+  CompactionSafeguardSummary,
+  PreparedCompactionSafeguardFacts,
+} from "./compaction-safeguard-prepared.types.js";
 import {
   extractOpaqueIdentifiers,
   nestRequiredSummaryHeadings,
@@ -47,10 +51,8 @@ export type CompactionSafeguardMessages = {
   turnPrefixMessages: AgentMessage[];
 };
 
-export type CompactionSafeguardHistory = CompactionSafeguardMessages & {
-  hasRealConversation: boolean;
-  usedPreparationRange: boolean;
-};
+export type CompactionSafeguardHistory = CompactionSafeguardMessages &
+  PreparedCompactionSafeguardFacts["history"];
 
 function containsRealConversation(messages: AgentMessage[]): boolean {
   return messages.some((message, index, allMessages) =>
@@ -132,7 +134,7 @@ export function prepareCompactionSafeguardHistory(params: {
 export function prepareCompactionSafeguardSections(params: {
   fileOps: CompactionPreparation["fileOps"];
   history: CompactionSafeguardHistory;
-}) {
+}): PreparedCompactionSafeguardFacts["sections"] {
   const { readFiles, modifiedFiles } = computeFileLists(params.fileOps);
   const { messagesToSummarize, turnPrefixMessages } = params.history;
   return {
@@ -226,7 +228,7 @@ export function prepareCompactionSafeguardSummary(params: {
   recentTurnsPreserve?: number;
   splitTurnContextChars: number;
   qualityGuardEnabled: boolean;
-}) {
+}): CompactionSafeguardSummary {
   const { messagesToSummarize, turnPrefixMessages, previousSummary } = params.history;
   const { requestSelection, latestUnresolvedUserRequest } = params.preparation;
   const oracleMessages =

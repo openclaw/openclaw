@@ -1,13 +1,7 @@
 import type { SessionMetadataChange } from "../../config/sessions/transcript-write-context-store.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
+import type { SessionInitialMetadataFacts } from "./session-initial-metadata.types.js";
 import type { SessionHeader } from "./session-manager-types.js";
-
-export type SessionInitialMetadataFacts = {
-  /** Whether the restored SDK context contains any messages, including summaries. */
-  hasExistingSession: boolean;
-  /** Whether the active branch contains a thinking-level entry. */
-  hasThinkingEntry: boolean;
-};
 
 /** Shared SDK initialization policy; bounded callers supply owner-prepared history facts. */
 export function prepareSessionInitialMetadata(

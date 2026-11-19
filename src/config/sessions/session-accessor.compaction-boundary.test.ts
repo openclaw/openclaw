@@ -6,10 +6,12 @@ import { afterAll, expect, it, onTestFinished } from "vitest";
 import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import {
   withSessionCompactionPersistenceAsync,
-  type CommittedCompactionBoundary,
-  type PreparedCompactionAppend,
   type CompactionAppendPersistenceAsync,
 } from "../../agents/sessions/session-compaction-persistence.js";
+import type {
+  CommittedCompactionBoundary,
+  PreparedCompactionAppend,
+} from "../../agents/sessions/session-compaction-persistence.types.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";

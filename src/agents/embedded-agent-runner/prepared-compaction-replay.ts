@@ -1,37 +1,21 @@
 import { preserveCompactionReplayWindow } from "@openclaw/ai/transports";
 import { estimateTokens } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import { buildSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
-import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { createRealConversationClassifier } from "../compaction-real-conversation.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
-import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
-import type { TranscriptPolicy } from "../transcript-policy.types.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 import { buildBeforeCompactionHookMetrics } from "./compaction-hook-metrics.js";
 import { limitHistoryTurns } from "./history.js";
+import type { PreparedCompactionReplayOptions } from "./prepared-compaction-replay.types.js";
 import {
   finishGenericReplayHistory,
   prepareGenericReplayHistory,
   validateGenericReplayTurns,
 } from "./replay-history.js";
-import {
-  readModelSnapshotStateFromEntries,
-  type ModelSnapshotState,
-} from "./replay-session-state.js";
-
-/** Serializable policy, not configuration or provider callbacks. */
-export type PreparedCompactionReplayOptions = {
-  model: ProviderRuntimeModel;
-  policy: TranscriptPolicy;
-  sessionId: string;
-  allowedToolNames: string[];
-  imageLimits: ImageSanitizationLimits;
-  historyLimit?: number;
-  replayEnabled: boolean;
-  observedTokenCount?: number;
-};
+import { readModelSnapshotStateFromEntries } from "./replay-session-state.js";
+import type { ModelSnapshotState } from "./replay-session-state.types.js";
 
 /** The same generic replay owners run worker-local; callbacks retain the session adapter. */
 export async function prepareNativeCompactionReplay(

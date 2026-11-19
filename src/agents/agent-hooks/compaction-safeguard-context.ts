@@ -4,20 +4,13 @@ import type { AgentMessage } from "../runtime/index.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import { formatContextMessage } from "./compaction-safeguard-messages.js";
+import type { ContextSection } from "./compaction-safeguard-prepared.types.js";
 
 const MAX_SPLIT_TURN_CONTEXT_CHARS = Math.floor(MAX_COMPACTION_SUMMARY_CHARS / 2);
 const SPLIT_TURN_TRUNCATED_MARKER = "[Earlier split-turn messages truncated]\n";
 const PRESERVED_TURNS_TRUNCATED_MARKER = "[Earlier preserved messages truncated]\n";
 const DEFAULT_RECENT_TURNS_PRESERVE = 3;
 const MAX_RECENT_TURNS_PRESERVE = 12;
-
-export type ContextSection = {
-  text: string;
-  segmentStarts: number[];
-  // Keep producer loss attached to the bounded artifact so every finalizer path
-  // emits the same redacted diagnostic when the section already dropped context.
-  truncatedLoss?: "split-turn-head" | "preserved-turn-head";
-};
 
 export function resolveRecentTurnsPreserve(value: number | undefined): number {
   return Math.min(

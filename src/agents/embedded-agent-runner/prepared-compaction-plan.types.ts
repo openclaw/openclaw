@@ -7,7 +7,7 @@ import type { ConversationEntryDescriptor } from "../../../packages/agent-core/s
 import type { CompactionError } from "../../../packages/agent-core/src/harness/types.js";
 import type { PreparedCompactionSafeguardFacts } from "../agent-hooks/compaction-safeguard-prepared.types.js";
 import type { CompactionRequestConstraints } from "../sessions/compaction/request-budget.types.js";
-import type { PreparedCompactionReplayOptions } from "./prepared-compaction-replay.js";
+import type { PreparedCompactionReplayOptions } from "./prepared-compaction-replay.types.js";
 
 export type CompactionMessageSource = { seq: number; index: number };
 export type CompactionSelections = {

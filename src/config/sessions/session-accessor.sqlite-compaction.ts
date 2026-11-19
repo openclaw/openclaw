@@ -1,4 +1,4 @@
-import type { PreparedCompactionAppend } from "../../agents/sessions/session-compaction-persistence.js";
+import type { PreparedCompactionAppend } from "../../agents/sessions/session-compaction-persistence.types.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   resolveOpenClawAgentSqlitePath,

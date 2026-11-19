@@ -26,6 +26,7 @@ import {
 import { readSessionReferenceOwners } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
+import type { SessionDeletionSurvivors } from "./session-entry-storage.types.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -57,7 +58,7 @@ export function readSessionDeletionSurvivors(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   sessionIds: readonly string[],
-) {
+): SessionDeletionSurvivors {
   const db = getSessionKysely(database.db);
   const survivingOwners = readSessionReferenceOwners(database, new Set([sessionKey]), sessionIds);
   const survivingNodes = new Map(
@@ -85,7 +86,7 @@ export function deleteSessionEntryRows(
     deliveryCleanupKeys?: readonly string[];
     validatedEntry?: SessionEntry;
     postimages?: SessionEntryWritePostimages;
-    preparedSurvivors?: () => ReturnType<typeof readSessionDeletionSurvivors> | undefined;
+    preparedSurvivors?: () => SessionDeletionSurvivors | undefined;
   } = {},
 ): boolean {
   // Lifecycle deletion reuses its transaction snapshot; Doctor also supplies validated legacy rows.
@@ -201,9 +202,7 @@ export function deleteLifecycleTargetRows(
   database: OpenClawAgentDatabase,
   target: { canonicalKey: string; storeKeys: string[] },
   snapshot: SqliteLifecycleTargetSnapshot,
-  preparedSurvivors?: (
-    sessionKey: string,
-  ) => ReturnType<typeof readSessionDeletionSurvivors> | undefined,
+  preparedSurvivors?: (sessionKey: string) => SessionDeletionSurvivors | undefined,
 ): boolean {
   let transcriptInventoryUnchanged = true;
   for (const sessionKey of uniqueStrings([target.canonicalKey, ...target.storeKeys])) {

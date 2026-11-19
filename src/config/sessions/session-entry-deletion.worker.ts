@@ -21,6 +21,7 @@ import type {
 } from "./session-entry-deletion.types.js";
 import type { SessionEntryPatchReceipt } from "./session-entry-patch.types.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import type { SessionDeletionSurvivors } from "./session-entry-storage.types.js";
 import { runSessionNativeBindingTransaction } from "./session-native-binding.worker.js";
 
 export function planSessionDeletionInAgentWorker(
@@ -41,7 +42,7 @@ export function deleteSessionEntryInAgentWorker(
     ...input.plan,
     databaseOptions: { ...input.plan.databaseOptions, ...context.options },
   };
-  const preparedOwners = new Map<string, ReturnType<typeof readSessionDeletionSurvivors>>();
+  const preparedOwners = new Map<string, SessionDeletionSurvivors>();
   const source = context.open();
   const revision = readSessionEntryCacheValidityToken(source.db);
   // Empty-transcript deletion only rehomes retained windows. Prepare its survivor

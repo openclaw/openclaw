@@ -79,9 +79,8 @@ import {
   isSameModelSnapshot,
   MODEL_SNAPSHOT_CUSTOM_TYPE,
   readModelSnapshotState,
-  type ModelSnapshotEntry,
-  type ModelSnapshotState,
 } from "./replay-session-state.js";
+import type { ModelSnapshotEntry, ModelSnapshotState } from "./replay-session-state.types.js";
 import {
   dropReasoningFromHistory,
   dropThinkingBlocks,

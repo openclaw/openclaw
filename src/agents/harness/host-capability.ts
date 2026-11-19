@@ -30,6 +30,7 @@ import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.async.js"
 import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { log } from "../embedded-agent-runner/logger.js";
+import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
@@ -52,7 +53,6 @@ import type {
   AgentHarnessHostCapabilities,
   AgentHarnessHost,
   AgentHarnessHostApprovalResult,
-  AgentHarnessHostAttempt,
   HostToolSurfaceOptions,
 } from "./host-capability-types.js";
 import {
@@ -83,6 +83,9 @@ import {
 import { bindHarnessTrajectory } from "./host-trajectory.js";
 import { formatHarnessApprovalPresentation } from "./native-hook-relay-approval-presentation.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
+
+type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptInternalParams> &
+  Pick<EmbeddedRunAttemptInternalParams, "admittedRunContext" | "runId">;
 
 /** Creates a closure-bound capability before plugin invocation. */
 export function createAgentHarnessHostCapabilities(params: {

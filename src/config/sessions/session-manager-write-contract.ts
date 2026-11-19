@@ -3,7 +3,7 @@ import type { BashExecutionMessage, CustomMessage } from "../../agents/sessions/
 import type {
   CommittedCompactionBoundary,
   PreparedCompactionAppend,
-} from "../../agents/sessions/session-compaction-persistence.js";
+} from "../../agents/sessions/session-compaction-persistence.types.js";
 import type {
   ModelChangeEntry,
   SessionEntry,

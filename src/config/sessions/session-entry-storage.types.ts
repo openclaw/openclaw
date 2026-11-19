@@ -6,6 +6,15 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionEntryRow = Selectable<DB["session_nodes"]>;
 
+export type SessionDeletionSurvivors = Map<
+  string,
+  | Pick<
+      SessionEntryRow,
+      "current_session_id" | "entry_json" | "session_key" | "entry_valid" | "updated_at"
+    >
+  | undefined
+>;
+
 export type SqliteSessionOwnerRow = {
   owner_actor_type?: string | null;
   owner_actor_id?: string | null;
