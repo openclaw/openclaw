@@ -277,6 +277,23 @@ suite.define(() => {
     });
   });
 
+  it("hides toolbar actions in the resting phone composer, like its other controls", async () => {
+    const phone = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true };
+    await suite.withPage(phone, async ({ page }) => {
+      const { textarea } = await open(page);
+      const action = page.getByRole("button", { name: "Rewrite", exact: true });
+      await textarea.fill("");
+      // An outside pointer action ends editing and selects the one-line layout.
+      await page.mouse.click(100, 80);
+      const shell = page.locator('.agent-chat__composer-shell[data-composer-resting="true"]');
+      await shell.waitFor();
+      // A shown action would fall to its own row under the one-line composer.
+      expect(await action.isVisible()).toBe(false);
+      await textarea.fill(DRAFT);
+      await expect.poll(() => action.isVisible()).toBe(true);
+    });
+  });
+
   it("needs a draft, then inserts its result at once with an Undo receipt", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const { textarea } = await open(page);
