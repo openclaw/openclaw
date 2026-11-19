@@ -142,13 +142,14 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
     const sessions = createTestSessionCapability(gateway);
     const refresh = () => sessions.refresh({ agentId: "main", rowMode: "compact", force: true });
     const row = () => sessions.state.result?.sessions.find((entry) => entry.key === key);
+    let creation: ReturnType<typeof sessions.createResult> | undefined;
     try {
       await initializeSessionReadContext(context);
       // Thinking reconciliation needs compact detail facts, not the sidebar display projection.
       await refresh();
       expect(row()).toBeUndefined();
       const created = await waitFor(
-        sessions.createResult(
+        (creation = sessions.createResult(
           {
             key,
             agentId: "main",
@@ -157,7 +158,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
             message: "/think low",
           },
           { reconciliation: "background" },
-        ),
+        )),
         "create response",
       );
       const highEntry = { thinkingLevel: "high", updatedAt: Date.now() };
@@ -218,6 +219,8 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
       releaseReply.resolve(undefined);
       releaseFirstList.resolve(undefined);
       try {
+        // A response timeout does not cancel creation; join admission before draining its runs.
+        await creation?.catch(() => undefined);
         await settleWorkspaceRuns(context, storePath, key, true);
       } finally {
         sessions.dispose();
