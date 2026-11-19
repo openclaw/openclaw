@@ -18,8 +18,9 @@ export function createComposerProposal() {
     accepted: { title: string } | null;
   }>({ pending: null, accepted: null });
   let pending: Pending | null = null;
-  // The draft Use replaced, for the receipt's Undo.
+  // What Use replaced and what it wrote; Undo applies only while the draft is still `written`.
   let replaced = "";
+  let written = "";
   // Mounted proposal cards; a replacement composer mounts none and so cannot be offered drafts.
   let presenters = 0;
 
@@ -70,6 +71,7 @@ export function createComposerProposal() {
       draft.accepted = { title: entry.title };
     });
     replaced = previous;
+    written = entry.text;
     return true;
   }
 
@@ -77,9 +79,11 @@ export function createComposerProposal() {
     if (!target || !state.accepted) {
       return;
     }
-    // The receipt only exists while the accepted text is unedited, so this restores exactly
-    // what Use replaced, through the same path as the replacement.
-    replaceDraft(target, replaced);
+    // Any later edit, including one that does not pass through the textarea (an attachment
+    // restoring its text, another action's setDraft), makes the receipt stale: never undo over it.
+    if (target.value === written) {
+      replaceDraft(target, replaced);
+    }
     clearAccepted();
   }
 
@@ -105,6 +109,8 @@ export function createComposerProposal() {
     get pending() {
       return state.pending;
     },
+    /** The accepted text is still the whole draft, so the receipt can still undo it. */
+    isCurrent: (draft: string) => draft === written,
     get accepted() {
       return state.accepted;
     },

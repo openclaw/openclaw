@@ -28,6 +28,10 @@ const fixture = `export default { id: "composer-fixture", activate(host) {
     },
   });
   host.ui.registerAction({
+    id: "replace", label: "Replace draft", icon: "pencil", placement: "composer",
+    run({ composer }) { composer.setDraft("written by another action"); },
+  });
+  host.ui.registerAction({
     id: "broken", label: "Broken", icon: "alertTriangle", placement: "composer",
     run() { throw new Error("Fixture action failed"); },
   });
@@ -147,6 +151,24 @@ suite.define(() => {
       await page.getByRole("button", { name: "Undo" }).click();
       await expect.poll(() => textarea.inputValue()).toBe(DRAFT);
       expect(await sendCount(page)).toBe(0);
+    });
+  });
+
+  it("retires the Undo receipt when the draft changes outside the textarea", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { textarea } = await open(page);
+      await page.getByRole("button", { name: "Rewrite", exact: true }).click();
+      await finish(page);
+      await page.getByRole("region", { name: "Fixture rewrite" }).waitFor();
+      await textarea.focus();
+      await textarea.press("Tab");
+      await expect.poll(() => textarea.inputValue()).toBe(PROPOSED);
+      await page.getByRole("button", { name: "Undo" }).waitFor();
+      await page.getByRole("button", { name: "Replace draft", exact: true }).click();
+      await expect.poll(() => textarea.inputValue()).toBe("written by another action");
+      // The receipt no longer matches the draft, so it cannot undo over the newer text.
+      await expect.poll(() => page.getByRole("button", { name: "Undo" }).count()).toBe(0);
+      expect(await textarea.inputValue()).toBe("written by another action");
     });
   });
 

@@ -25,7 +25,7 @@ export function ComposerProposalCard(props: {
       when={props.proposal.pending}
       keyed
       fallback={
-        <Show when={props.proposal.accepted}>
+        <Show when={props.proposal.isCurrent(props.draft) && props.proposal.accepted}>
           {(accepted) => (
             <div
               class="agent-chat__composer-proposal agent-chat__composer-proposal--accepted"
