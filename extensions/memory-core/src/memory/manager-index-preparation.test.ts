@@ -79,3 +79,13 @@ it.each([undefined, { id: "test", maxInputTokens: 4096 }])(
     expect(serialize(prepared).byteLength).toBeLessThan(80 * 1024);
   },
 );
+
+it("bounds heading-only merges to the chunker's maximum characters", () => {
+  // A long run of headings with no body text previously merged without limit.
+  const content = Array.from({ length: 200 }, (_, index) => `###### heading ${index}`).join("\n");
+  const { chunks } = prepareHeading(content, 0);
+  const maxChars = 8 * 4; // chunking.tokens * estimate
+  expect(Math.max(...chunks.map((chunk) => chunk.text.length))).toBeLessThanOrEqual(maxChars);
+  expect(chunks.length).toBeGreaterThan(1);
+  expect(chunks.map((chunk) => chunk.text).join("\n")).toBe(content);
+});

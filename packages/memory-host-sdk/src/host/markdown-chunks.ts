@@ -72,11 +72,16 @@ function takeTailByEstimatedChars(text: string, budget: number): string {
 }
 
 /** Incremental text chunking: callers retain only the current chunk and overlap. */
+/** One owner for the textual chunk ceiling shared by the chunker and heading merges. */
+export function resolveMarkdownChunkMaxChars(chunking: { tokens: number }): number {
+  return Math.max(32, chunking.tokens * CHARS_PER_TOKEN_ESTIMATE);
+}
+
 export function createMarkdownChunker(
   chunking: { tokens: number; overlap: number },
   onChunk: (chunk: MemoryChunk) => void,
 ) {
-  const maxChars = Math.max(32, chunking.tokens * CHARS_PER_TOKEN_ESTIMATE);
+  const maxChars = resolveMarkdownChunkMaxChars(chunking);
   const overlapChars = Math.max(0, chunking.overlap * CHARS_PER_TOKEN_ESTIMATE);
 
   let current: Array<{ line: string; lineNo: number }> = [];
