@@ -166,6 +166,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/openclaw-id/member-source-role-upgrade.test.ts",
   "src/gateway/openclaw-id/remote-signout.test.ts",
   "src/gateway/openclaw-id/scheduled-source.persistence.test.ts",
+  "src/gateway/openclaw-id/service.disabled-member-import.test.ts",
   "src/gateway/openresponses-session-store.test.ts",
   "src/gateway/operator-approval-mcp-grants.test.ts",
   "src/gateway/operator-approval-placement-grants.test.ts",
