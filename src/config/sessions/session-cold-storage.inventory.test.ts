@@ -26,7 +26,7 @@ import {
   historicalId,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
-import { historyLane, sessionStoreLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 
 let state: OpenClawTestState;
 let fixture: Awaited<ReturnType<typeof createSessionColdStorageFixture>>;
@@ -108,7 +108,11 @@ it.each(["sqlite", "file"] as const)(
   },
 );
 
-it("refuses a replaced source while its worker inventory is delayed", async () => {
+it.each([
+  ["status", "cold-storage-inventory", /Session store changed/],
+  ["status", "session-target-inventory", /SQLite database path identity changed/],
+  ["maintenance", "session-target-inventory", /Session store changed/],
+] as const)("refuses a replaced source during %s %s", async (kind, operation, expectedError) => {
   const missing = state.statePath("delayed", "openclaw-agent.sqlite");
   await fs.mkdir(path.dirname(missing), { recursive: true });
   const entered = createDeferredCore();
@@ -121,20 +125,23 @@ it("refuses a replaced source while its worker inventory is delayed", async () =
       typeof reply.value === "object" &&
       !Array.isArray(reply.value) &&
       "kind" in reply.value &&
-      reply.value.kind === "cold-storage-inventory"
+      reply.value.kind === operation
     ) {
       entered.resolve();
       await release.promise;
     }
     return reply;
   });
-  const pending = status(missing);
+  const pending =
+    kind === "status"
+      ? status(missing)
+      : runSessionColdStorageMaintenance({ config: maintenanceConfig(missing) });
   const outcome = pending.catch((error: unknown) => error);
   try {
     await awaitGateBeforeSettlement(entered.promise, pending, "Inventory was not dispatched");
     await fs.writeFile(missing, "replacement source");
     release.resolve();
-    await expect(pending).rejects.toThrow(/Session store changed/);
+    await expect(pending).rejects.toThrow(expectedError);
   } finally {
     release.resolve();
     await outcome;
@@ -142,14 +149,26 @@ it("refuses a replaced source while its worker inventory is delayed", async () =
   }
 });
 
-it("propagates worker rejection without a synchronous fallback", async () => {
-  const failure = new Error("inventory worker refused");
-  vi.spyOn(historyLane.pool, "run").mockRejectedValueOnce(failure);
-  const observer = observeParentSqlite();
-  onTestFinished(observer.restore);
-  await expect(status()).rejects.toBe(failure);
-  expect(observer.counts).toEqual(emptySqliteCounts());
-});
+it.each(["status", "maintenance"] as const)(
+  "propagates %s inventory rejection without a synchronous fallback",
+  async (kind) => {
+    const failure = new Error("inventory worker refused");
+    const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+    vi.spyOn(sessionStoreLane.pool, "run").mockImplementation((...args) =>
+      args[1]?.diagnosticOperation === "session-target-inventory"
+        ? Promise.reject(failure)
+        : run(...args),
+    );
+    const observer = observeParentSqlite();
+    onTestFinished(observer.restore);
+    const pending =
+      kind === "status"
+        ? status()
+        : runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.scope.storePath) });
+    await expect(pending).rejects.toBe(failure);
+    expect(observer.counts).toEqual(emptySqliteCounts());
+  },
+);
 
 it("reads cold storage status without synchronous filesystem work on the host", async () => {
   await status();
