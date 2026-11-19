@@ -33,7 +33,9 @@ beforeEach(() => {
     output += String(chunk);
     return true;
   });
-  vi.mocked(callGatewayFromCli).mockImplementation(async (_method, _opts, params) => {
+  vi.mocked(callGatewayFromCli).mockImplementation(async (_method, _opts, raw) => {
+    // SAFETY: runUnlink sends only { action, clawId? } to openclawId.authority.
+    const params = raw as { action?: string; clawId?: string } | undefined;
     actions.push(params?.action === "unlink" ? `unlink:${String(params.clawId)}` : params?.action);
     return params?.action === "unlink_preview"
       ? preview

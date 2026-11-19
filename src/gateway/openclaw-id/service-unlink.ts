@@ -14,16 +14,15 @@ import type { OpenClawIdAuthority } from "./authority.js";
 import type { createPendingUnlinkSender } from "./pending-unlink.js";
 import type { createServiceGatewayKey } from "./service-gateway-key.js";
 import type { OpenClawIdStatus } from "./service-status.js";
-import type { OpenClawIdRemovalSummary } from "./service.js";
 import { pendingUnlinkHosts, type UnlinkPreview } from "./unlink-operations.js";
 
-/** A committed unlink: what it cut, and what Discovery said. */
-export type UnlinkResult = {
+/** A committed unlink: what it cut (`Removal`, the service's removal summary), and what Discovery said. */
+export type UnlinkResult<Removal = unknown> = {
   ok: true;
   unlinked: true;
   hostname: string;
   removed: UnlinkPreview;
-  removal: OpenClawIdRemovalSummary | null;
+  removal: Removal | null;
   /**
    * `confirmed`: Discovery retired the claw. `pending`: sent when Discovery is reachable.
    * `refused`: Discovery refused it (`discoveryCode`); the address was not retired.
@@ -41,12 +40,12 @@ const localOnly = () =>
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-export function createServiceUnlink(deps: {
+export function createServiceUnlink<Removal>(deps: {
   getConfig: () => GatewayOpenClawIdConfig | undefined;
   getAuthority: () => Promise<OpenClawIdAuthority>;
   gatewayKey: ReturnType<typeof createServiceGatewayKey>;
   /** Performs an accepted write's side effects; returns what a removal cut. */
-  applyEvents: (events: AuthorityEvent[]) => Promise<OpenClawIdRemovalSummary | undefined>;
+  applyEvents: (events: AuthorityEvent[]) => Promise<Removal | undefined>;
   /** Restarts remote access: stops the tunnel child and its sessions, then starts unlinked. */
   restartRemoteAccess: () => Promise<OpenClawIdStatus>;
   /** Whether this Gateway's OpenClaw ID lifetime is on (Labs switch on, not stopped). */
@@ -103,7 +102,7 @@ export function createServiceUnlink(deps: {
     run: async (
       channel: Channel | undefined,
       clawId: unknown,
-    ): Promise<UnlinkResult | AuthorityRefusal> => {
+    ): Promise<UnlinkResult<Removal> | AuthorityRefusal> => {
       if (channel !== "local_operator") {
         return localOnly();
       }
