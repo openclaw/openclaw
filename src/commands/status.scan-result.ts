@@ -38,7 +38,7 @@ export type StatusScanResult<
     summary: StatusSummary;
     memory: MemoryStatusSnapshot | null;
     memoryPlugin: MemoryPluginStatus;
-    pluginCompatibility: PluginCompatibilityNotice[];
+    pluginCompatibility: PluginCompatibilityNotice[] | null;
     agentStatus: AgentStatus;
     collection?: {
       source: "gateway";

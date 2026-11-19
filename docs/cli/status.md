@@ -107,8 +107,10 @@ Deep health also warns when a context engine is quarantined or configuration hot
 reload is disabled. Healthy auxiliary components do not add warning rows.
 
 Plain `openclaw status` stays on the fast read-only path and marks memory as
-`not checked` instead of unavailable when it skips memory inspection. Heavy
-security audit, plugin compatibility, and memory-vector checks are left to
+`not checked` instead of unavailable when it skips memory inspection. Plain
+`openclaw status` and `openclaw status --deep` also mark plugin compatibility as
+`not checked`. Use `openclaw status --all` to collect plugin compatibility notices.
+Heavy security audit and memory-vector checks are left to
 `openclaw status --all`, `openclaw status --deep`, `openclaw security audit`,
 and `openclaw memory status --deep`.
 

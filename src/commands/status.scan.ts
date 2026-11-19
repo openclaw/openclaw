@@ -44,7 +44,7 @@ export async function scanStatus(
       progress.setLabel("Checking memory and sessions…");
       const result = await executeStatusScanFromOverview({
         overview,
-        pluginCompatibility: [],
+        pluginCompatibility: null,
       });
       progress.tick();
 
