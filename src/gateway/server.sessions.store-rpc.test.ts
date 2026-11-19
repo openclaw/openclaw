@@ -11,6 +11,7 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { CronJob } from "../cron/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { bindInProcessRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import {
@@ -106,18 +107,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(methods).toContain("sessions.compact");
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  const directContext = {
-    broadcastToConnIds: vi.fn(),
-    dedupe: new Map(),
-    getSessionEventSubscriberConnIds: () => new Set<string>(),
-    logGateway: { debug: vi.fn() },
-    loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
-    loadGatewayModelCatalogSnapshot: async () => ({
-      entries: agentDiscoveryMock.models,
-      routeVariants: agentDiscoveryMock.models,
-    }),
-    getRuntimeConfig,
-  };
+  const directContext = createDirectChatContext({ getRuntimeConfig });
   async function directSessionReq<TPayload = unknown>(
     method: keyof typeof sessionsHandlers,
     params: Record<string, unknown>,
@@ -130,7 +120,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
           error?: unknown;
         }
       | undefined;
-    await initializeSessionReadContext(directContext as never);
+    await initializeSessionReadContext(directContext);
     await expectDefined(
       sessionsHandlers[method],
       "sessionsHandlers[method] test invariant",
@@ -151,7 +141,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
               error,
             };
           },
-          context: directContext as never,
+          context: directContext,
           client: null,
           isWebchatConnect: () => false,
         },

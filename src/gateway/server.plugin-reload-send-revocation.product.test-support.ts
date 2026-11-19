@@ -62,8 +62,9 @@ const DONE = "BOB-TARGET-COMPLETED-7d2e";
 const WAKE =
   "Continue the original task in this conversation. Do not repeat a completed operation.";
 const UNDELIVERED = "could not continue this conversation automatically";
-// Observed refusal: Bob's revoked authority ends the retained Gateway continuation.
-const CONTINUATION_REVOKED = "Gateway continuation authority is no longer active";
+// The admitted continuation survives; the next start checks Bob's revoked source.
+const CONTINUATION_REVOKED =
+  "operator source authority is no longer active. Reconnect to the Gateway, then resend your message. If access is denied, ask an administrator to restore it.";
 const ORIGIN = "https://control.revocation.example.test";
 const ADMIN = "admin@revocation.example.test";
 const ALICE = "alice@revocation.example.test";
@@ -590,7 +591,19 @@ it.for(["allowed", "revoked"] as const)(
             sessionKey: targetKey,
             sessionId: targetEntry.sessionId,
           }),
-        ).toEqual({ items: [], total: 0 });
+        ).toEqual({
+          // Refused input remains a terminal receipt, never a queued replay.
+          items: revoked
+            ? [
+                expect.objectContaining({
+                  runId: result.runId,
+                  state: "cancelled",
+                  endCause: "revoked",
+                }),
+              ]
+            : [],
+          total: revoked ? 1 : 0,
+        });
       }
       if (revoked) {
         expect(revocation).toEqual({ method: revokeMethod, bobRefused: true });
@@ -601,9 +614,12 @@ it.for(["allowed", "revoked"] as const)(
         expect(durableWakes).toHaveLength(0);
         expect(durableNotices).toHaveLength(1);
         expect(notices).toHaveLength(1);
-        // The host notice carries the refused replay's own settled outcome.
+        // The resume failure has public copy; the result preserves the replay refusal.
         const noticeText = messageText(durableNotices[0]);
-        expect(noticeText).toContain(UNDELIVERED + ": " + CONTINUATION_REVOKED);
+        expect(noticeText).toContain(
+          UNDELIVERED +
+            ": ⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal.",
+        );
         settledOutcome = between(noticeText, "Its result: ", ". Send a message");
         expect(settledOutcome).toEqual({
           outcomes: [

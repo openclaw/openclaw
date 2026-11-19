@@ -566,7 +566,6 @@ export async function appendSessionTurnInWorker(
             );
           },
           async () => {
-            let expectedState = inputExpectedState;
             let candidate: SessionTurnCommitted | undefined;
             const actorOutcome = await runSessionActorCommand<
               SessionActorPhaseResults["acceptInput" | "adoptRun"]
@@ -574,9 +573,10 @@ export async function appendSessionTurnInWorker(
               { ...actor, snapshot: (current) => inputActor.snapshot(current) },
               authority,
               async (snapshot) => {
-                // Metadata may advance; the writer checks the captured lifecycle at commit.
-                if (snapshot) {
-                  expectedState ??= buildSessionTranscriptTurnExpectedState(
+                // Keep explicit guards; otherwise follow the actor preimage after prior-run settlement.
+                let expectedState = options.expectedSessionState ?? inputExpectedState;
+                if (snapshot && !options.expectedSessionState) {
+                  expectedState = buildSessionTranscriptTurnExpectedState(
                     snapshot.entry ?? { sessionId: options.expectedSessionId, updatedAt: 0 },
                   );
                 }
