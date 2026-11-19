@@ -177,6 +177,8 @@ cronJobs:
 ```
 
 Environment values remain unresolved references; never package credentials.
+MCP server `timeout` and `connectTimeout` declarations are in seconds. Add stores
+and compares them as `requestTimeoutMs` and `connectionTimeoutMs` in milliseconds.
 Shared plugins and MCP servers must match existing declarations exactly or Add
 reports the conflict without replacing them. Plugin and skill trust warnings
 require explicit consent. Automations are assigned to the new agent.

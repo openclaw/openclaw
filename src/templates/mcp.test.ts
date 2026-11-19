@@ -131,3 +131,25 @@ it("keeps an earlier server in refs when a later action cannot start", async () 
   await expect(rollbackStatelessTemplateMcpServers(refs)).resolves.toEqual([]);
   expect(await configured("fixture")).toBeUndefined();
 });
+
+const SERVER_WITH_TIMEOUTS = { ...SERVER, requestTimeoutMs: 30_000, connectionTimeoutMs: 5_000 };
+
+it.each([false, true])(
+  "normalizes manifest timeouts before install and reuse (%s)",
+  async (existing) => {
+    if (existing) {
+      await mcpConfigInternal.set({ name: "fixture", server: SERVER_WITH_TIMEOUTS });
+    }
+    const refs: PersistedTemplateMcpServerRef[] = [];
+    await installTemplateMcpServersStateless(
+      fixturePlan(["fixture"], { ...SERVER, timeout: 30, connectTimeout: 5 }),
+      { refs },
+    );
+    expect(refs).toEqual([
+      expect.objectContaining({ relationship: existing ? "referenced" : "managed" }),
+    ]);
+    expect(await configured("fixture")).toEqual(SERVER_WITH_TIMEOUTS);
+    await expect(rollbackStatelessTemplateMcpServers(refs)).resolves.toEqual([]);
+    expect(await configured("fixture")).toEqual(existing ? SERVER_WITH_TIMEOUTS : undefined);
+  },
+);
