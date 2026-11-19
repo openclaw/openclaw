@@ -8,6 +8,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseSecretRef } from "../../config/types.secrets.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { secretRefKey } from "../../secrets/ref-contract.js";
@@ -16,6 +17,7 @@ import {
   findActiveDegradedSecretOwner,
   SecretSurfaceUnavailableError,
 } from "../../secrets/runtime-degraded-state.js";
+import { AuthProfileCredentialPublicationPendingError } from "../../state/user-model-account-authority.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
@@ -140,6 +142,21 @@ export async function refreshOAuthCredentialForRuntime(params: {
 
 const oauthManager = createOAuthManager();
 
+/** A credential save can still be publishing when it is read; wait for it rather than fail. */
+async function prepareCurrentCredentialRead(params: ResolveApiKeyForProfileParams) {
+  for (;;) {
+    try {
+      return await prepareAuthProfileCredentialRead(params);
+    } catch (error) {
+      // Only a publication in flight settles; a lost or unconfirmed owner still fails.
+      if (!(error instanceof AuthProfileCredentialPublicationPendingError)) {
+        throw error;
+      }
+      await racePromiseWithAbortSignal(error.waitUntilCurrent(), params.signal, (s) => s.reason);
+    }
+  }
+}
+
 async function resolveOAuthProfileAccess(
   params: ResolveApiKeyForProfileParams,
   credential: OAuthCredential,
@@ -147,7 +164,7 @@ async function resolveOAuthProfileAccess(
 ): Promise<ResolveApiKeyForProfileResult | null> {
   const readCurrentCredential =
     !personalStore && credential.authFlow === "chatgpt-token-sharing"
-      ? await prepareAuthProfileCredentialRead(params)
+      ? await prepareCurrentCredentialRead(params)
       : null;
   const resolved = await oauthManager.resolveOAuthAccess({
     personalStore,
