@@ -124,8 +124,9 @@ To let teammates read selected sessions from a personal Gateway without controll
 
 ### Step 5: Bound what each person can do
 
-Setting the optional `gateway.roles.default` enables named operator roles for
-authenticated profiles. Definitions alone do not enforce profile assignments.
+Configure `gateway.roles.definitions` to govern authenticated profiles. Explicit
+profile assignments apply with or without `gateway.roles.default`; the optional
+default supplies a fallback for people without a matching assignment.
 Each role supplies a policy: which sessions they can touch, which agents they can use, a maximum set of operator scopes, and whether their new sessions must be sandboxed:
 
 ```json5
@@ -155,13 +156,20 @@ Give guests the session-only `operator.sessions.write` scope, which also permits
 
 For these profile-based connections, assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture. To admit and expire individual outside guests, see [Invite guests](#invite-guests).
 
-For [OpenClaw ID members](/concepts/experimental-features#member-roles), manage roles
-on **Access** instead. Turning on OpenClaw ID installs editable `operator`,
-`viewer`, and `guest` definitions without setting a named default. Member connections
-use their membership role even without that default; another sign-in method uses
-its own policy, not a union of both roles. A missing member definition blocks
-connection. With a role catalog present, `openclaw doctor` can check local membership
-and offer to restore missing presets while the Gateway is stopped.
+[OpenClaw ID members](/concepts/experimental-features#member-roles) use that same
+profile role on every sign-in route. Invite approval and **Access → Change role**
+assign the role to their linked profile; owners and administrators can also use
+`users.setRole`. Turning on OpenClaw ID installs editable `operator`, `viewer`, and
+`guest` definitions without setting a default. Members with no resolvable role or
+no granted scopes cannot connect. Clearing an assignment exposes any configured
+mapping or default rather than disabling that fallback. Role changes disconnect
+the person's connections and stop their active and queued work; owner devices
+retain owner authority.
+
+Use `sessions.others: "invited"` when a person should see only shared sessions they
+are explicitly invited into. A session creator or administrator can select that
+person in an @mention to invite them. The person's actual profile role, agent
+allowlist, and sandbox requirement still apply.
 
 #### Coding as a guest
 
