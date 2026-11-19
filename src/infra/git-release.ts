@@ -118,6 +118,8 @@ export async function settleGitReleaseTrial(runningRoot: string | null): Promise
   const trial = raw ? (JSON.parse(raw) as GitReleaseTrial) : null;
   if (trial?.target === slot.target) {
     await fs.rm(trialFile, { force: true });
+    // Durable before the caller changes state an older launcher could not undo.
+    await syncDirectoryIfSupported(path.dirname(trialFile));
   }
 }
 

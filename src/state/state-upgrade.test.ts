@@ -741,12 +741,15 @@ describe("startup pre-images", () => {
     const { stateDir } = corpus("openclaw-upgrade-other-build-");
     // A build that was replaced (fix forward) migrated every database, then stopped before
     // its Doctor finished the config and legacy files.
+    const files = databases(stateDir).map(([file]) => file);
+    const images = files.map((file) => `${file}.pre-2026.1.1-otherbuild`);
+    files.forEach((file, index) => fs.copyFileSync(file, images[index]!));
     await migrate({ stateDir });
     const record = path.join(stateDir, ".upgrade-2026.1.1-otherbuild-1-1");
     fs.mkdirSync(record);
     fs.writeFileSync(
       path.join(record, "inventory.json"),
-      JSON.stringify({ outdated: databases(stateDir).map(([file]) => file), images: [] }),
+      JSON.stringify({ outdated: files, images }),
     );
     const chain = vi.fn(migrate);
 
@@ -754,6 +757,60 @@ describe("startup pre-images", () => {
 
     expect(chain).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(record)).toBe(false);
+    // The images it resumed on are the only pre-migration copies: they stay.
+    expect(images.every((image) => fs.existsSync(image))).toBe(true);
+  });
+
+  it("never resumes or rebuilds a recorded database newer than this build", async () => {
+    const { stateDir } = corpus("openclaw-upgrade-resume-newer-");
+    const [, [agent, agentVersion]] = databases(stateDir) as [unknown, readonly [string, number]];
+    {
+      using db = new DatabaseSync(agent);
+      db.exec(`PRAGMA user_version = ${agentVersion + 1}`);
+    }
+    const record = path.join(stateDir, `.upgrade-${preImage("").slice(".pre-".length)}-1-1`);
+    fs.mkdirSync(record);
+    fs.writeFileSync(
+      path.join(record, "inventory.json"),
+      JSON.stringify({ outdated: databases(stateDir).map(([file]) => file), images: [] }),
+    );
+
+    const result = await upgradeStateDirectory({
+      env: stateEnv(stateDir),
+      log: quiet,
+      // A chain that migrates only what is older, as Doctor does.
+      runChain: async ({ stateDir: dir }) => {
+        for (const [file, version] of databases(dir)) {
+          using db = new DatabaseSync(file);
+          if (userVersion(file) < version) {
+            db.exec(`PRAGMA user_version = ${version}`);
+          }
+        }
+        return { warnings: [] };
+      },
+    });
+
+    expect(result).toMatchObject({ status: "upgraded", mode: "chain" });
+    expect(userVersion(agent)).toBe(agentVersion + 1);
+  });
+
+  it("keeps the upgrade pending when a signal stops Doctor", async () => {
+    const { root, stateDir } = corpus("openclaw-upgrade-doctor-killed-");
+    // Doctor's process is stopped by a signal before it finishes.
+    const entry = path.join(root, "killed-doctor.mjs");
+    fs.writeFileSync(entry, 'process.kill(process.pid, "SIGKILL");\n');
+
+    await expect(
+      upgradeStateDirectory({
+        env: stateEnv(stateDir),
+        log: quiet,
+        runChain: createDoctorChain(entry, []),
+      }),
+    ).rejects.toThrow(/Doctor was stopped before it finished/u);
+
+    // No generic rebuild ran over a half-done Doctor; the next start reruns it.
+    expect(fs.readdirSync(stateDir).some((name) => name.startsWith(".upgrade-"))).toBe(true);
+    expect(fs.readdirSync(stateDir).some((name) => name.startsWith(".upgraded-"))).toBe(false);
   });
 
   it("stops instead of resuming when an interrupted run's inventory cannot be read", async () => {

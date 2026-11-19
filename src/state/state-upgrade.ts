@@ -68,6 +68,7 @@ import {
 } from "./state-upgrade-tree.js";
 import {
   ChainStepError,
+  StateUpgradeInterruptedError,
   conservationMismatches,
   validateShadow,
 } from "./state-upgrade-validate.js";
@@ -443,14 +444,19 @@ export async function upgradeStateDirectory(params: {
   // Finish an interrupted chain on every database it started on, current or not, imaged or
   // not: the images stay the baseline, and a refusal or fallback covers all of them together.
   if (interruptedChain) {
+    // A database newer than this build is left to the normal admission, which refuses it;
+    // it is never resumed here or rebuilt down to this build's schema.
     const started = targets.filter(
       (target) =>
         target.version > 0 &&
+        target.version <= expectedVersion(target) &&
         (priorOutdated.has(target.path) || fs.existsSync(`${target.path}${suffixOf()}`)),
     );
     outdated = [...outdated, ...started.filter((target) => !outdated.includes(target))];
     if (outdated.length === 0) {
-      outdated = targets.filter((target) => target.version > 0);
+      outdated = targets.filter(
+        (target) => target.version > 0 && target.version <= expectedVersion(target),
+      );
     }
   }
   if (outdated.length === 0) {
@@ -609,6 +615,7 @@ export async function upgradeStateDirectory(params: {
       });
     } catch (error) {
       if (
+        error instanceof StateUpgradeInterruptedError ||
         error instanceof StateUpgradeCustodyLostError ||
         (!(error instanceof ChainStepError) && isMachineFailure(error))
       ) {
@@ -700,10 +707,17 @@ export async function upgradeStateDirectory(params: {
       }
       retainAppliedPlan(stateDir, { appVersion: generation(), ops });
       keepChainLog();
+      // An image another build took, which this run resumed on, keeps its generation.
+      const reused = new Set(
+        [...images.values(), ...(configImage ? [configImage] : [])]
+          .map((image) => /\.pre-([^/]+)$/u.exec(image)?.[1])
+          .filter((value): value is string => value !== undefined && value !== generation()),
+      );
       finish(
         stateDir,
         workDir,
         new Set([...outdated.map((t) => t.path), configPath].filter((file) => !skip(file))),
+        reused,
       );
       const unimaged = outdated.filter((target) => !images.has(target.path)).length;
       const summary = `State upgraded to ${VERSION} in place by ${mode === "chain" ? "migration chain" : "generic copy"}; ${unimaged === 0 ? `previous databases kept as *${suffix}` : `${unimaged} database(s) without a pre-migration image`}.`;

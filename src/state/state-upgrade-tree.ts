@@ -28,9 +28,6 @@ const SQLITE_HEADER = Buffer.from("SQLite format 3\0", "latin1");
 // Copies an earlier upgrade or the retired in-place migration left behind.
 const RETIRED_BACKUP_NAME =
   /\.pre-startup-migration-|\.scoped\.bak$|\.sqlite[^/]*\.bak$|^openclaw-media-persistence-recovery-/u;
-const GENERATION_NAME = /\.pre-[^/]+$/u;
-// SQLite companions the private copy folds in or the next open recreates.
-const COMPANION_NAME = /-(wal|shm|journal)$|\.seal$/u;
 
 export function fsyncPath(pathname: string, directory = false): void {
   let fd: number | undefined;
@@ -138,10 +135,6 @@ export function withRecoveredSource<T>(pathname: string, read: (readable: string
   }
 }
 
-function skipEntry(name: string): boolean {
-  return GENERATION_NAME.test(name) || RETIRED_BACKUP_NAME.test(name) || COMPANION_NAME.test(name);
-}
-
 const LARGE_COPY_BYTES = 256 * 1024 * 1024;
 
 function checkCopySpace(volumePath: string, bytes: number): void {
@@ -176,32 +169,6 @@ function reportCopy(
       `State upgrade copied ${bytes} bytes in ${files} files in ${seconds.toFixed(1)}s (${(bytes / seconds / 1e6).toFixed(1)} MB/s).`,
     );
   };
-}
-
-/** File names under a root, without generations, retired backups or SQLite companions. */
-export function listFiles(
-  root: string,
-  skip: (absolute: string) => boolean,
-  out = new Set<string>(),
-) {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(root, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const entry of entries) {
-    const absolute = path.join(root, entry.name);
-    if (skipEntry(entry.name) || skip(absolute)) {
-      continue;
-    }
-    if (entry.isDirectory()) {
-      listFiles(absolute, skip, out);
-    } else {
-      out.add(absolute);
-    }
-  }
-  return out;
 }
 
 /** Old WAL, SHM, journal and seal files must never pair with a replaced database. */
