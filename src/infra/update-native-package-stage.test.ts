@@ -272,7 +272,10 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
           await expect(finalized).resolves.toBeTypeOf("function");
           return;
         }
-        await expect(finalized).rejects.toThrow("still points into the update stage");
+        // The refusal names the verified recovery route, since the CLI is still the old one.
+        await expect(finalized).rejects.toThrow(
+          "The staged openclaw launcher still points into the update stage after relocation; the installation was left unchanged. To install the update directly, run `pnpm add -g --allow-build=openclaw openclaw@<version>` as the account that owns this install, then `openclaw gateway install --force` and `openclaw gateway restart`. Run `openclaw triage` to diagnose the launcher.",
+        );
         // Refused before activation: the live project and bin directory are untouched.
         expect(await snapshot()).toEqual(before);
         expect(await fs.readdir(join(base, "bin"))).toEqual([]);
