@@ -3,6 +3,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import {
+  readPreLaunchTaskPids,
   readScheduledTaskDefinition,
   restoreScheduledTaskDefinition,
   resumeScheduledTaskAutoStartAfterUpdate,
@@ -13,6 +14,7 @@ import { execScheduledTaskEnabledChange, execSchtasks } from "./schtasks-exec.js
 import { resolveTaskName } from "./schtasks-layout.js";
 import {
   shouldManageGatewayListenerPort,
+  terminateGatewayProcessTree,
   terminateScheduledTaskGatewayListeners,
   terminateScheduledTaskNodeHost,
 } from "./schtasks-process.js";
@@ -126,11 +128,14 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
     /**
      * `beforeRestart` runs only once registration ownership is verified and the replacement task
      * is stopped and its processes settled, before any file, definition or launch is restored.
+     * `preserved` holds processes observed before the attempted run; they predate this install,
+     * so recovery never settles them as its replacement.
      */
     restore: async (
       files: ScheduledTaskFileRecovery,
       activated: boolean,
       beforeRestart?: () => Promise<void>,
+      preserved?: ReadonlySet<number>,
     ) => {
       await files.assertPublished();
       await assertReceipt();
@@ -148,7 +153,20 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
         ) {
           throw new Error(`Scheduled Task ${taskName} may still be queued or running.`);
         }
-        if (activated) {
+        if (activated && preserved) {
+          // Settle each process that appeared with the attempted run; Gateways observed before it
+          // belong to the operator. An incomplete inventory proves neither set, so it refuses.
+          const replacements = async () => {
+            const current = await readPreLaunchTaskPids(env, scriptPath);
+            return current.complete ? [...current.pids].filter((pid) => !preserved.has(pid)) : null;
+          };
+          for (const pid of (await replacements()) ?? []) {
+            await terminateGatewayProcessTree(pid);
+          }
+          if ((await replacements())?.length !== 0) {
+            throw new Error(`Scheduled Task ${taskName} replacement process did not settle.`);
+          }
+        } else if (activated) {
           const runtime = await resolveFallbackRuntime(env, undefined, "control");
           if (runtime.status === "running") {
             if (shouldManageGatewayListenerPort(env)) {

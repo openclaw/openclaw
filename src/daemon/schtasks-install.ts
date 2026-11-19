@@ -14,6 +14,7 @@ import {
   restartRegisteredScheduledTask,
   runScheduledTaskOrThrow,
   stopRegisteredScheduledTask,
+  type PreLaunchTaskPids,
   type ScheduledTaskActivation,
 } from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
@@ -192,6 +193,10 @@ export async function installScheduledTask(
   let recovery: ScheduledTaskFileRecovery | undefined;
   const warn = args.warn ?? ((message: string) => args.stdout.write(`${message}\n`));
   let activationAttempted = false;
+  let preLaunch: PreLaunchTaskPids | undefined;
+  const recordPreLaunch = (observed: PreLaunchTaskPids) => {
+    preLaunch = observed;
+  };
   const install = async () => {
     const installedCommand = await readScheduledTaskCommand(args.env).catch(() => null);
     const fallbackEnv = resolveScheduledTaskActivationEnv(args.env, installedCommand?.environment);
@@ -329,6 +334,7 @@ export async function installScheduledTask(
               scriptPath,
               allowFallback: false,
               acceptProcessLaunchEvidence: startupRuntime !== null,
+              onPreLaunch: recordPreLaunch,
             });
         writeFormattedLines(stdout, [
           { label: "Updated task script", value: scriptPath },
@@ -456,6 +462,7 @@ export async function installScheduledTask(
             assertCurrent: definitionTransaction?.assertCurrent,
             allowFallback: definitionTransaction ? false : undefined,
             acceptProcessLaunchEvidence: startupRuntime !== null,
+            onPreLaunch: recordPreLaunch,
           });
       // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
       writeFormattedLines(stdout, [
@@ -529,11 +536,17 @@ export async function installScheduledTask(
       return false;
     }
     let hookFailure: { error: unknown } | undefined;
-    const restored = await restoreTask.restore(recovery, activationAttempted, async () => {
-      await args.beforeRecovery?.().catch((error: unknown) => {
-        hookFailure = { error };
-      });
-    });
+    const restored = await restoreTask.restore(
+      recovery,
+      activationAttempted,
+      async () => {
+        await args.beforeRecovery?.().catch((error: unknown) => {
+          hookFailure = { error };
+        });
+      },
+      // An incomplete inventory cannot prove which Gateway predates the run.
+      preLaunch?.complete ? preLaunch.pids : undefined,
+    );
     if (hookFailure) {
       throw hookFailure.error;
     }

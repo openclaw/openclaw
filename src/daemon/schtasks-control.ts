@@ -71,11 +71,13 @@ type ScheduledTaskRestartResult = GatewayServiceRestartResult & {
 };
 export type ScheduledTaskActivation = "scheduled-task" | "direct-fallback";
 
+export type PreLaunchTaskPids = { pids: ReadonlySet<number>; complete: boolean };
+
 /** Capture every pre-activation owner so a direct fallback cannot duplicate it. */
-async function readPreLaunchTaskPids(
+export async function readPreLaunchTaskPids(
   env: GatewayServiceEnv,
   scriptPath: string,
-): Promise<{ pids: ReadonlySet<number>; complete: boolean }> {
+): Promise<PreLaunchTaskPids> {
   const pids = new Set<number>();
   try {
     const command = await readScheduledTaskCommand(env, { profileScope: "registered" });
@@ -149,9 +151,12 @@ export async function runScheduledTaskOrThrow(params: {
   assertCurrent?: () => void;
   allowFallback?: boolean;
   acceptProcessLaunchEvidence?: boolean;
+  /** Receives the processes that predate this run so failed-install recovery can keep them. */
+  onPreLaunch?: (preLaunch: PreLaunchTaskPids) => void;
 }): Promise<ScheduledTaskActivation> {
   params.assertCurrent?.();
   const preLaunch = await readPreLaunchTaskPids(params.env, params.scriptPath);
+  params.onPreLaunch?.(preLaunch);
   params.assertCurrent?.();
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {

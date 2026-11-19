@@ -370,6 +370,45 @@ describe("Scheduled Task activation provenance", () => {
     },
   );
 
+  it.for([false, true])(
+    "keeps a Gateway that predates a refused install (surviving replacement: %s)",
+    async (replacement, { env }) => {
+      const commandLine = "node gateway.js --port 18789";
+      let replacementAlive = replacement;
+      mockProcesses(
+        () => [
+          processEntry(4242, commandLine),
+          ...(replacementAlive && schtasksCalls.some(([action]) => action === "/Run")
+            ? [processEntry(5353, commandLine)]
+            : []),
+          POWERSHELL_PROCESS,
+        ],
+        () => {
+          replacementAlive = false;
+          return makeSpawnSyncResult();
+        },
+      );
+      inspectPortUsageMock.mockImplementation(async (port) => ({
+        port,
+        status: "busy",
+        listeners: [{ pid: 4242, command: "node.exe", commandLine }],
+        hints: [],
+      }));
+      fastForwardTaskStartWait();
+      addAcceptedRunNeverStartsResponses();
+
+      const install = installGateway(env);
+
+      await expect(install).rejects.toThrow("refusing a direct fallback");
+      await expect(install).rejects.not.toBeInstanceOf(AggregateError);
+      const taskkills = spawnSync.mock.calls.filter(([command]) =>
+        command.endsWith("taskkill.exe"),
+      );
+      expect(taskkills.map(([, args]) => args?.at(-1))).toEqual(replacement ? ["5353"] : []);
+      expect(schtasksCalls.some(([action]) => action === "/Delete")).toBe(true);
+    },
+  );
+
   it.for(["running", "stopped"] as const)(
     "migrates a %s Startup fallback to the Scheduled Task",
     async (fallback, { env }) => {
