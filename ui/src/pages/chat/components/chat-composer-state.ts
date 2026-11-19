@@ -19,6 +19,8 @@ function createChatComposerState(): ChatComposerState {
     queuedSubmit: null,
   });
   const [tasks, setTasks] = createSignal<ComposerTasks | null>(null);
+  // Signal writes commit on flush, so concurrent loads share this synchronous owner.
+  let owner: ComposerTasks | undefined;
   const state: ChatComposerState = {
     // Admission survives composer remounts while the same goal mode is pending.
     goalPending: createSignal<ChatGoalDraftMode | null>(null),
@@ -48,10 +50,14 @@ function createChatComposerState(): ChatComposerState {
     tasks,
     // One owner per pane, created once the runtime has loaded.
     loadTasks: () =>
-      loadComposerTasksRuntime().then(
-        ({ createComposerTasks }) =>
-          tasks() ?? setTasks(() => createComposerTasks(() => state.taskPresenters > 0)),
-      ),
+      loadComposerTasksRuntime().then(({ createComposerTasks }) => {
+        if (!owner) {
+          const created = createComposerTasks(() => state.taskPresenters > 0);
+          owner = created;
+          setTasks(() => created);
+        }
+        return owner;
+      }),
     taskPresenters: 0,
   };
   return state;
