@@ -19,6 +19,7 @@ import { readSessionCreationReceiptInWorker } from "../../config/sessions/sessio
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { buildAgentOnboardingGreeting } from "../../shared/agent-onboarding.js";
@@ -46,6 +47,9 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { createSystemAgentGatewayRuntime } from "./system-agent-execution.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+/** The hidden Template setup turn only; later turns keep the session's own level. */
+const TEMPLATE_SETUP_THINKING_LEVEL = "low";
 
 export type PreparedAgentOnboarding = {
   expectedConfigHash: string | null;
@@ -352,6 +356,8 @@ export async function startAgentOnboardingConversation(
   /** Chat-based Template Add only: the caller has built the one setup opening. */
   templateSetupPrompt?: string,
   onStarted?: () => void,
+  /** Chat-based Template Add only: the opening turn has sent its first model request. */
+  onModelRequested?: () => void,
 ): Promise<void> {
   const releaseAuthorization = options.sessionMutationAuthorization?.retain?.();
   using _ = { [Symbol.dispose]: () => releaseAuthorization?.() };
@@ -360,6 +366,15 @@ export async function startAgentOnboardingConversation(
   const runId = setup
     ? `agents.create:${agentId}:template-setup:${randomUUID()}`
     : `agents.create:${agentId}:${opening === "template" ? "template-greeting" : "onboarding-question"}`;
+  const stopModelRequestWatch = onModelRequested
+    ? onAgentEventForRun(runId, (event) => {
+        if (event.stream === "run_status" && event.data.phase === "starting_model") {
+          stopModelRequestWatch?.();
+          onModelRequested();
+        }
+      })
+    : undefined;
+  using _modelRequestWatch = { [Symbol.dispose]: () => stopModelRequestWatch?.() };
   try {
     await runOutsideAsyncWorkScope(() =>
       handleTrustedInternalChatSend(
@@ -380,6 +395,8 @@ export async function startAgentOnboardingConversation(
                   ].join("\n\n"),
             idempotencyKey: runId,
             deliver: false,
+            // Setup is a scripted checklist: the greeting should not wait on extended reasoning.
+            ...(setup ? { thinking: TEMPLATE_SETUP_THINKING_LEVEL } : {}),
             suppressCommandInterpretation: true,
             systemInputProvenance: {
               kind: "internal_system",

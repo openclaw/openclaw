@@ -41,11 +41,15 @@ export type ChatTemplateAddInput = ClawHubFetchOptions & {
     expectedAgentConfig: TemplateAgentConfig,
     expectedCronJobs: PersistedTemplateCronRef[],
   ) => Promise<void>;
-  /** Creation has finished; the agent's first turn starts here with its outcome. */
+  /**
+   * Creation has finished; the agent's first turn starts here with its outcome.
+   * `onModelRequested` reports that the turn has sent its first model request.
+   */
   onAgentCreated?: (
     agent: { agentId: string; sessionKey: string },
     report: TemplateSetupReport,
     dependenciesPending?: true,
+    onModelRequested?: () => void,
   ) => Promise<void>;
   /** A separate hidden turn reports results after the opening, never concurrently with it. */
   onDependenciesSettled?: (

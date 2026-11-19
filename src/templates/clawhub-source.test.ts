@@ -52,6 +52,7 @@ vi.mock("./reader.js", () => ({
 
 import {
   listClawHubTemplates,
+  prefetchClawHubSource,
   readClawHubTemplateDetail,
   readClawHubTemplatePreview,
   readClawHubTemplatesOverview,
@@ -772,6 +773,52 @@ describe("verified ClawHub Template source", () => {
     }
     expect(mocks.trust).toHaveBeenCalledTimes(1);
     expect(mocks.download).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves from registry reads an Add started earlier, without reading them again", async () => {
+    const { stateDir } = await prepareResolverFixture();
+    const prefetched = prefetchClawHubSource({
+      coordinate: { packageName, version },
+      mode: "apply",
+    });
+    await prefetched.claim();
+    const reads = [mocks.detail, mocks.artifact, mocks.trust, mocks.download].map(
+      (read) => read.mock.calls.length,
+    );
+    expect(reads).toEqual([1, 1, 1, 1]);
+    expect(mocks.extract).not.toHaveBeenCalled();
+
+    await expect(
+      resolveSource({
+        mode: "apply",
+        stateDir,
+        prefetched,
+        run: async (source) => source.source.name,
+      }),
+    ).resolves.toMatchObject({ value: packageName });
+    expect(
+      [mocks.detail, mocks.artifact, mocks.trust, mocks.download].map(
+        (read) => read.mock.calls.length,
+      ),
+    ).toEqual(reads);
+    expect(mocks.extract).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes the archive of registry reads that no Add went on to use", async () => {
+    await prepareResolverFixture();
+    const cleanup = vi.fn(async () => undefined);
+    const archive = await mocks.download();
+    mocks.download.mockClear();
+    mocks.download.mockResolvedValue({ ...archive, cleanup });
+    const prefetched = prefetchClawHubSource({
+      coordinate: { packageName, version },
+      mode: "apply",
+    });
+
+    await prefetched.discard();
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(mocks.extract).not.toHaveBeenCalled();
   });
 
   it("keeps preview ephemeral and persists only after an approved apply asks for it", async () => {
