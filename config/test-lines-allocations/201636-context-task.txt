@@ -1,0 +1,2 @@
+# Exact net regression growth for backported #201636: preserve task and canonical tool ownership under a bounded history retry.
+41
