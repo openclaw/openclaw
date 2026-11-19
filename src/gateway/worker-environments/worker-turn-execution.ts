@@ -40,7 +40,7 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-failure.js";
 import { prepareWorkerTurnMedia } from "./worker-turn-media.js";
-import { prepareWorkerTurnModel } from "./worker-turn-model.js";
+import { prepareWorkerTurnModel, workerTurnRuntimeLeaseOptions } from "./worker-turn-model.js";
 import {
   assertSupportedTurn,
   captureWorkerTurnInputAuthority,
@@ -85,7 +85,7 @@ export async function executeWorkerTurn(
       agentDir: input.agentDir ?? resolveAgentDir(input.config ?? {}, placement.agentId),
       workspaceDir: input.workspaceDir,
     },
-    { pluginGeneration: input.pluginGeneration, abortSignal: input.abortSignal },
+    workerTurnRuntimeLeaseOptions(input),
   );
   return await preparedRuntime.run(async () => {
     const backend = "cloud-worker";
@@ -462,7 +462,7 @@ export async function executeWorkerTurn(
       };
       const promptContext = await runPrepared(() => prepareWorkerTurnPrompt(promptPreparation));
       using mcpQuestions = new DisposableStack();
-      const { allowedToolNames, issueLaunchAuthority } = await prepareWorkerLaunchTools({
+      const { allowedToolNames, issueAuthority, bindAuthority } = await prepareWorkerLaunchTools({
         ...turnOwner,
         surface,
         localMcpNodeId,
@@ -548,7 +548,7 @@ export async function executeWorkerTurn(
         );
         throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
       }
-      const toolAuthority = issueLaunchAuthority();
+      const toolAuthority = issueAuthority();
       githubGrant = await bindWorkerGitHubTurn({
         operatorAuthority: readAdmittedRunOperatorAuthority(admittedRunContext),
         session: placement,
@@ -664,7 +664,7 @@ export async function executeWorkerTurn(
       let processResult: Awaited<ReturnType<NonNullable<typeof tunnel.launchTurn>>>;
       try {
         processResult = await tunnel.launchTurn({
-          assertCurrent: githubGrant?.assertCurrent ?? assertActive,
+          assertCurrent: bindAuthority(githubGrant?.assertCurrent ?? assertActive),
           plan: launchPlan.plan,
           turnClaim: params.turnClaim,
           timeoutMs: turn.timeoutMs,

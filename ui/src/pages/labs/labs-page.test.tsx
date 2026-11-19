@@ -5,9 +5,13 @@ import { onSettled } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ConfigSnapshot } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import { invalidateConfigConnection } from "../../lib/config/config-state-model.ts";
+import {
+  invalidateConfigConnection,
+  type ConfigAutoSaveStatus,
+} from "../../lib/config/config-state-model.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -16,10 +20,12 @@ import { LabsPage } from "./labs-page.tsx";
 type RuntimeConfigState = {
   connected: boolean;
   configLoading: boolean;
+  configAutoSaveStatus: ConfigAutoSaveStatus;
   configSnapshot: {
     hash: string;
     sourceConfig: Record<string, unknown>;
     valid?: boolean;
+    warnings?: ConfigSnapshot["warnings"];
   } | null;
   lastError: string | null;
 };
@@ -49,6 +55,7 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   const state: RuntimeConfigState = {
     connected: true,
     configLoading: false,
+    configAutoSaveStatus: "idle",
     configSnapshot: { hash: "config-hash", sourceConfig },
     lastError: null,
   };
@@ -131,7 +138,6 @@ const experimental = (values: Record<string, unknown>) => ({
   gateway: { controlUi: { experimental: values } },
 });
 const codeMode = (value: unknown) => ({ tools: { codeMode: value } });
-const advisor = (value: Record<string, unknown>) => ({ plugins: { entries: { advisor: value } } });
 const hostDesktop = (value: Record<string, unknown>) => ({ desktop: { host: value } });
 const workerDesktop = (desktop: boolean) => ({ cloudWorkers: { desktop } });
 const hostEnabled = (enabled: boolean) => hostDesktop({ enabled });
@@ -221,13 +227,6 @@ describe("LabsPage", () => {
       hostDesktop({ enabled: true, managed: false, port: 5908, passwordFile: "/tmp/vnc-password" }),
       hostEnabled(false),
     ],
-    [
-      "Advisor",
-      "advisor",
-      false,
-      advisor({ enabled: true, config: { everyToolCalls: 3 } }),
-      advisor({ enabled: null }),
-    ],
     // Labs offers Auto/Off; force-on stays a config-only power-user state.
     ["Code Mode", "codeMode", true, codeMode({ enabled: false }), codeMode({ enabled: "auto" })],
     ["Code Mode", "codeMode", true, codeMode(false), codeMode(null)],
@@ -249,7 +248,6 @@ describe("LabsPage", () => {
       openclawId({ enabled: true, relayUrl: "https://relay.example.test/" }),
       openclawId({ enabled: false }),
     ],
-    ["Advisor", "advisor", true, {}, advisor({ enabled: true })],
     ["Code Mode", "codeMode", false, {}, codeMode({ enabled: false })],
     [
       "Code Mode",
@@ -277,6 +275,44 @@ describe("LabsPage", () => {
     expect(page.textContent).toContain("from the account menu");
     expect(page.textContent).not.toContain("Make reachable");
     expect(page.textContent).not.toContain("Invite someone");
+  });
+
+  it("shows the Gateway activation warning and clears it with the config snapshot", async () => {
+    const message =
+      "OpenClaw ID is on, but the Access page stays off: plugins.deny includes openclaw-id-access. Remove that deny entry yourself if you want the page.";
+    const plugins = { deny: ["openclaw-id-access"] };
+    const { page, runtimeConfig } = await mountPage({ plugins });
+    const toggle = labToggle(page, "OpenClaw ID remote access");
+    expect(page.textContent).not.toContain(message);
+    runtimeConfig.patch.mockImplementationOnce(async () => {
+      runtimeConfig.state.configSnapshot = {
+        hash: "activated-config-hash",
+        sourceConfig: { ...openclawId({ enabled: true }), plugins },
+        warnings: [
+          { path: "gateway.openclawId.enabled", message },
+          { path: "plugins.other", message: "An unrelated config warning" },
+        ],
+      };
+      runtimeConfig.notify();
+      return true;
+    });
+
+    changeToggle(toggle, true);
+    await waitForSolid(() => {
+      expect(page.querySelector('[role="status"]')?.textContent ?? "").toContain(message);
+      expect(toggle.checked).toBe(true);
+      expect(toggle.hasAttribute("aria-disabled")).toBe(false);
+    });
+    expect(page.textContent).not.toContain("An unrelated config warning");
+    runtimeConfig.state.configSnapshot = {
+      hash: "unblocked-config-hash",
+      sourceConfig: openclawId({ enabled: true }),
+      warnings: [],
+    };
+    runtimeConfig.notify();
+    await waitForSolid(() => expect(page.querySelector('[role="status"]')).toBeNull());
+    expect(toggle.checked).toBe(true);
+    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
   });
 
   it("does not publish a retired save failure after a same-client reconnect", async () => {
@@ -319,26 +355,6 @@ describe("LabsPage", () => {
     await waitForSolid(() => expect(toggle.checked).toBe(false));
     pendingPatch.reject(new Error("Retired save failed"));
     await waitForSolid(() => expect(page.querySelector('[role="alert"]')).toBeNull());
-  });
-
-  it("opens Advisor settings from Configure without toggling the lab", async () => {
-    const { page, context, runtimeConfig } = await mountPage({}, "/ui");
-    const link = labRow(page, "Advisor").querySelector<HTMLAnchorElement>(
-      '.settings-row__control a[aria-label="Configure Advisor"]',
-    );
-    expect(link?.textContent?.trim()).toBe("Configure");
-    expect(link?.getAttribute("href")).toBe("/ui/settings/plugins/advisor?view=settings");
-
-    link!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
-
-    expect(context.navigate).toHaveBeenCalledExactlyOnceWith("plugin-settings", {
-      pathname: "/ui/settings/plugins/advisor",
-      search: "?view=settings",
-      hash: "",
-    });
-    // The row toggles on plain clicks; its own links must not flip the switch.
-    expect(labToggle(page, "Advisor").checked).toBe(false);
-    expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
 
   it("does not narrate the default in the row", async () => {
@@ -391,10 +407,16 @@ describe("LabsPage Decision assistance", () => {
       expect(toggle.hasAttribute("aria-disabled")).toBe(true);
     });
     expect(labRow(page, "Decision assistance").textContent).not.toContain("Preference saved.");
+    runtimeConfig.state.configAutoSaveStatus = "rejected";
+    runtimeConfig.state.lastError = "The setting was rejected";
+    runtimeConfig.notify();
     pendingPatch.resolve(false);
     await pendingPatch.promise;
     await waitForSolid(() => {
-      expect(toggle.checked).toBe(false);
+      expect(labToggle(page, "Decision assistance").checked).toBe(false);
+      expect(labRow(page, "Decision assistance").textContent).not.toContain(
+        "Couldn’t load this setting",
+      );
       expect(page.querySelector('[role="alert"]')).not.toBeNull();
     });
     expect(runtimeConfig.patch).toHaveBeenCalledOnce();

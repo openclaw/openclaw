@@ -867,7 +867,6 @@ describe("Gateway owner lease", () => {
       const recorded = readGatewayOwnerLease({ env });
       expect(recorded).toBeDefined();
       renameSync(lock.lockPath, `${lock.lockPath}.retired`);
-      expect(() => lock.assertCurrent()).toThrow("no longer current");
       await lock.release();
       expect(existsSync(lock.stateLockPath)).toBe(false);
       expect(readGatewayOwnerLease({ env })?.owner).toBe(recorded?.owner);

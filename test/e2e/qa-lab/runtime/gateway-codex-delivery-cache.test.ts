@@ -82,8 +82,15 @@ it(
           });
           expect(outbound.text).toBe("QA-MESSAGE-DELIVERY-OK\n\nQA-MESSAGE-DELIVERY-OK");
           expect(outboundCount() - sinceIndex).toBe(1);
-          const deliveryRequests = (await readRequests()).filter(
-            (request) => request.cursor > cursor && request.plannedToolName === "message",
+          const turnRequests = (await readRequests()).filter((request) => request.cursor > cursor);
+          expect(turnRequests[0]?.body.tools).toContainEqual(
+            expect.objectContaining({ type: "function", name: "message" }),
+          );
+          expect(turnRequests[0]?.body.tools).not.toContainEqual(
+            expect.objectContaining({ name: "message", defer_loading: true }),
+          );
+          const deliveryRequests = turnRequests.filter(
+            (request) => request.plannedToolName === "message",
           );
           expect(deliveryRequests).toHaveLength(1);
           const { body } = deliveryRequests[0]!;

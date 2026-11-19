@@ -15,6 +15,7 @@ import {
 } from "../agent-tools.before-tool-call.diagnostics.js";
 import type {
   CliCompactionDelta,
+  CliOutput,
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
@@ -69,7 +70,8 @@ export function createCliEventHandlers(params: {
   };
   let observedCliActivity = false;
   let compactionActive = false;
-  let compactionClosed = false;
+  // One owner for native compaction facts: the published end event, the run's count, and its sizes.
+  let nativeCompaction: NonNullable<CliOutput["nativeCompaction"]> | undefined;
   let onCompactionActiveChange: (() => void) | undefined;
   const signaledPhases = new Set<"tool_execution_started" | "assistant_output_started">();
   const signalExecutionPhase = (phase: "tool_execution_started" | "assistant_output_started") => {
@@ -440,14 +442,13 @@ export function createCliEventHandlers(params: {
     if (event.phase === "start" && compactionActive) {
       return;
     }
-    // Claude Code closes one successful compaction with a status `compact_result`
-    // and an automatic `compact_boundary`. Drop that one repeat; ends without a
-    // start (boundary-only streams) still publish.
-    if (event.phase === "end" && compactionClosed) {
-      compactionClosed = false;
-      return;
+    if (event.phase === "end" && event.completed) {
+      nativeCompaction = {
+        compactionCount: (nativeCompaction?.compactionCount ?? 0) + 1,
+        ...(event.tokensBefore !== undefined ? { compactionTokensBefore: event.tokensBefore } : {}),
+        ...(event.tokensAfter !== undefined ? { compactionTokensAfter: event.tokensAfter } : {}),
+      };
     }
-    compactionClosed = event.phase === "end" && event.completed && compactionActive;
     // Native compaction is silent but busy: the no-output watchdog reads this
     // between phase boundaries, so an end event must always clear the flag,
     // even for a failed compaction (`completed: false`).
@@ -613,6 +614,7 @@ export function createCliEventHandlers(params: {
       return tool !== undefined && isClaudeForegroundAgentToolName(tool.toolName);
     },
     getToolSummary,
+    getNativeCompaction: () => nativeCompaction,
   };
 }
 

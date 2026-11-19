@@ -234,27 +234,35 @@ describe("personal publication definitive outcomes", () => {
         expect((await status(initial.requestId)).confirmation).toEqual(pending.confirmation);
         return;
       }
-      if (revoked) {
-        expect(confirmed[0]).toBe(false);
-        expect(read(initial.requestId)).toMatchObject({
-          status: "needs_confirmation",
-          last_effect: "pull_request",
-          effect_state: "observed",
-          pull_request_url: url,
-        });
-        return;
-      }
       expect(confirmed[0], JSON.stringify(confirmed[2])).toBe(true);
       expect(confirmed[1]).toMatchObject({
         requestId: initial.requestId,
         status: "failed",
         publisher: initial.publisher,
         code: outcome === "no-changes" ? "no_changes" : "github_rejected",
-        effect: afterCreate ? dispatched : initial.effect,
-        nextAction: expect.stringContaining(outcome === "no-changes" ? "change" : "permission"),
+        effect: revoked
+          ? { ...dispatched, status: "observed", url }
+          : afterCreate
+            ? dispatched
+            : initial.effect,
+        nextAction: expect.stringContaining(
+          outcome === "no-changes" ? "change" : revoked ? "Reopen" : "permission",
+        ),
       });
       expect(await status(initial.requestId)).toEqual({ result: confirmed[1], confirmation: null });
       expect((await rpc("options"))[1].pendingPersonal).toBeNull();
+      if (revoked) {
+        expect(read(initial.requestId)).toMatchObject({
+          status: "failed",
+          last_effect: "pull_request",
+          effect_state: "observed",
+          pull_request_url: url,
+        });
+        expect((await rpc("publish", request()))[0]).toBe(false);
+        expect((await rpc("confirm", confirm))[0]).toBe(false);
+        expect(workspace.effects).toEqual(["push", "pull_request"]);
+        return;
+      }
       expect((await rpc("publish", request()))[1]).toEqual(confirmed[1]);
       expect((await rpc("confirm", confirm))[1]).toEqual(confirmed[1]);
       expect(workspace.effects).toEqual(afterCreate ? ["push", "pull_request"] : ["push"]);

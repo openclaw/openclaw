@@ -381,6 +381,7 @@ export function PersonalSessionGroupDialogView(props: {
                 size={28}
                 icon="x"
                 label={t("sessionsView.personalGroupSearchClose")}
+                tooltip={false}
                 onClick={closeSearch}
               />
             </Show>

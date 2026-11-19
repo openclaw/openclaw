@@ -67,6 +67,9 @@ export function buildPersistedUserTurnMetadata(
     : undefined;
   return {
     ...(requesterOrigin ? { requesterOrigin } : {}),
+    ...(input.subagentCompletions?.length
+      ? { subagentCompletions: input.subagentCompletions.map((completion) => ({ ...completion })) }
+      : {}),
     // Privileged synthetic handoffs may execute owner tools but never author trusted memory.
     ...(input.senderIsOwner === undefined
       ? {}

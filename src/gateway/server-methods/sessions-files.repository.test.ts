@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import * as worktreeGit from "../../agents/worktrees/git.js";
 import {
@@ -22,6 +23,7 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { execNodeEvalSync } from "../../test-utils/node-process.js";
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
   parseNodeWorkerWorkspaceExecInput,
@@ -41,6 +43,7 @@ import type { WorkerWorkspaceCommand } from "../worker-environments/tunnel-contr
 import { captureWorkspaceManifest } from "../worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "../worker-environments/workspace-manifest.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
+import { downloadRepositoryArtifact } from "./session-repository-artifacts.js";
 import { loadSessionDiff } from "./sessions-diff.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
@@ -259,6 +262,52 @@ async function persistSessionEntry() {
     },
   );
 }
+
+it.skipIf(process.platform === "win32")(
+  "streams retained repository bytes through the Gateway spawn broker",
+  async () => {
+    const base = await capture();
+    const bytes = Buffer.from("retained repository download through the real broker\n");
+    writeFile("retained.txt", bytes);
+    await publishCheckpoint(base, await capture());
+    const download = await downloadRepositoryArtifact(
+      { kind: "stored", repository: source, store, assertCurrent() {}, [Symbol.dispose]() {} },
+      "retained.txt",
+    );
+    if (download.status !== "ok") {
+      throw new Error("Retained repository file is unavailable");
+    }
+    // One native module graph keeps the broker's child identity intact.
+    const moduleUrl = (relative: string) => pathToFileURL(path.resolve(relative)).href;
+    const output = execNodeEvalSync(
+      `
+        import {createSpawnBrokerHost} from ${JSON.stringify(moduleUrl("src/process/spawn-broker/host.ts"))};
+        import {runWithSpawnBroker} from ${JSON.stringify(moduleUrl("src/process/spawn-broker/context.ts"))};
+        import {streamRepositoryArtifact} from ${JSON.stringify(moduleUrl("src/gateway/server-methods/session-repository-artifacts.ts"))};
+        const broker = createSpawnBrokerHost();
+        await broker.ready();
+        try {
+          await runWithSpawnBroker(broker, async () => {
+            const chunks = [];
+            const access = {
+              repository: ${JSON.stringify(source)},
+              store: {artifactPath: () => ${JSON.stringify(store.artifactPath(source.workspaceId))}},
+              assertCurrent() {},
+            };
+            for await (const chunk of streamRepositoryArtifact(
+              access, ${JSON.stringify(download.identity)}, 0, ${bytes.length}, new AbortController().signal
+            )) chunks.push(chunk);
+            process.stdout.write(Buffer.concat(chunks));
+          });
+        } finally {
+          await broker.close();
+        }
+      `,
+      { imports: [moduleUrl("scripts/tsx.mjs")], timeout: 15_000 },
+    );
+    expect(Buffer.from(output)).toEqual(bytes);
+  },
+);
 
 it("refuses stored file fallback when the repository belongs to a retained disk", async () => {
   source = await bindRepositoryDiskForTest(source, sessionId, store.path);

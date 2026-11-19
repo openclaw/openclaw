@@ -206,10 +206,7 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "message: .verbatim(self.problem.localizedMessage)",
     "Text(verbatim: primaryActionTitle)",
   ],
-  "apps/ios/Sources/LiveActivity/LiveActivityManager.swift": [
-    'String(localized: "Connecting...")',
-    "status: .disconnected",
-  ],
+  "apps/ios/Sources/LiveActivity/LiveActivityManager.swift": ["status: .disconnected"],
   "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
     "enum WatchTextValue {\n    case localized(LocalizedStringResource)",
     "private struct WatchFaceHeader: View {\n    let section: WatchTextValue\n    let title: WatchTextValue\n    let subtitle: WatchTextValue",

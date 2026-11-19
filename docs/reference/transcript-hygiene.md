@@ -76,6 +76,11 @@ thinking, omits unfinished calls and partial text, and uses a replayable stop re
 The stored failure and billing facts remain unchanged. This uses existing
 assistant-row shapes and requires no database migration.
 
+Responses item-conflict recovery receipts survive discarded failed or silent
+assistant content as empty replay rows. The transport consumes their metadata
+without sending an empty assistant message, preserving the repaired identity
+boundary after a failed retry or session reopen.
+
 Direct Anthropic Messages append-only replay also keeps failed and recovered
 assistant frames separate, along with consecutive user turns. Strict routes
 retain their role-merging behavior.

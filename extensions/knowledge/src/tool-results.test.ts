@@ -4,7 +4,6 @@ import { expect, it } from "vitest";
 import { HASH_PREFIX_CHARS, hashMatches } from "./hash-fence.js";
 import plugin from "./index.js";
 import { sessionActions, storeFixture, toolContext, useTestTempDirs } from "./test-support.js";
-import { leanRecord } from "./tool-results.js";
 
 const dirs = useTestTempDirs();
 
@@ -469,31 +468,31 @@ it("maxChars bounds claim text too, continuing over the stored text", async () =
   expect(read).toBe(body);
 });
 
-it("authored IDs of merged pages count once, as the page they resolve to", () => {
-  const survivor = { id: "survivor-page", title: "Survivor", kind: "page", type: "person" };
-  const output: any = {
-    view: "content",
-    record: {
-      ...survivor,
-      id: "claim-0001",
-      kind: "claim",
-      type: "fact",
-      title: "A fact",
-      path: "claims/a.md",
-      lifecycle: "active",
-      revision: 1,
-      valid: true,
-      hash: "a".repeat(64),
-      body: "A fact.",
-      about: [{ ...survivor, path: "people/s.md", lifecycle: "active", revision: 3, valid: true }],
-      metadata: { entities: ["absorbed-page", "survivor-page"] },
-    },
-    content: { offset: 0, totalChars: 7, nextOffset: null },
-    issues: [],
-    redirects: [{ from: "absorbed-page", to: "survivor-page" }],
-  };
-  const lean = leanRecord(output, {});
-  expect(lean.record?.about).toStrictEqual([{ id: "survivor-page", title: "Survivor" }]);
+it("authored IDs of merged pages count once, as the page they resolve to", async () => {
+  const s = await seeded();
+  const absorbed = await s.tool("knowledge_save_page", {
+    requestId: randomUUID(),
+    title: "Alex from the meeting",
+    type: "person",
+    body: "Alex's notes.",
+  });
+  await s.tool("knowledge_annotate", {
+    requestId: randomUUID(),
+    id: s.claim.id,
+    expectedRevision: 1,
+    expectedHash: s.claim.hash,
+    reason: "Link both authored identities",
+    annotations: {},
+    entities: [absorbed.id, s.person.id],
+  });
+  await s.tool("knowledge_merge", {
+    requestId: randomUUID(),
+    reason: "Both pages describe Alex",
+    survivor: { id: s.person.id, expectedRevision: 1, expectedHash: s.person.hash },
+    absorbed: { id: absorbed.id, expectedRevision: 1, expectedHash: absorbed.hash },
+  });
+  const lean = await s.tool("knowledge_record", { id: s.claim.id });
+  expect(lean.record.about).toStrictEqual([{ id: s.person.id, title: "Alex Rivera" }]);
 });
 
 it("record reads keep domain fields whole when they fill the response budget", async () => {
@@ -512,24 +511,20 @@ it("record reads keep domain fields whole when they fill the response budget", a
   expect(read.nextOffset).toBeGreaterThan(0);
 });
 
-it("record reads keep attribution doubt and never date a claim by when it was recorded", () => {
-  const output: any = {
-    view: "content",
-    record: {
-      id: "claim-0002",
-      kind: "claim",
-      type: "fact",
-      title: "A fact",
-      revision: 1,
-      hash: "b".repeat(64),
-      recordedAt: "2026-09-22T12:00:00Z",
-      attribution: "Someone on the call",
-      body: "A fact.",
-      metadata: { attribution_confidence: { level: "low", basis: "Two similar voices" } },
-    },
-    content: { offset: 0, totalChars: 7, nextOffset: null },
-  };
-  const record = leanRecord(output, {}).record!;
+it("record reads keep attribution doubt and never date a claim by when it was recorded", async () => {
+  const s = await seeded();
+  const claim = await s.tool("knowledge_create_claim", {
+    requestId: randomUUID(),
+    expectedOntologyFingerprint: s.meeting.ontologyFingerprint,
+    title: "A fact",
+    body: "A fact.",
+    claim_kind: "fact",
+    assertion_origin: "source",
+    attribution: "Someone on the call",
+    evidence: [s.evidence],
+    attribution_confidence: { level: "low", basis: "Two similar voices", evidence: [s.evidence] },
+  });
+  const { record } = await s.tool("knowledge_record", { id: claim.id });
   expect(record.attributionConfidence).toStrictEqual({ level: "low", basis: "Two similar voices" });
   expect(record).not.toHaveProperty("date");
 });

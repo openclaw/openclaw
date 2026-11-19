@@ -364,7 +364,11 @@ export class DecisionProviderHost {
         // V1 validation and cross-version conversion need the executor's original questions.
         // Same-version V2 validation retains its snapshot in executePreparedDecision.
         const offeredV1 =
-          provider.contractVersion === 1 && v1Batch ? structuredClone(v1Batch) : undefined;
+          provider.contractVersion === 1 && v1Batch
+            ? version === 1
+              ? { ...v1Batch, questions: structuredClone(v1Batch.questions) }
+              : structuredClone(v1Batch)
+            : undefined;
         const offeredV2 = version === 1 && v2Batch ? structuredClone(v2Batch) : undefined;
         const admissible = () => {
           observedInterruption ??= interrupted();

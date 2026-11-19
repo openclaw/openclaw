@@ -77,7 +77,7 @@ attention and degrades search.
   `entities` or `dependencies`.
 - An authored source → entity link gives the entity a derived backlink. The
   entity's way back to the source is its source note
-  ([profiles](profiles.md#source-notes)), not a page link.
+  ([source notes](source-notes.md)), not a page link.
 - Link the source to every identified entity that has a page. Never
   link a garbled name or a low-confidence guess: a wrong link pollutes the graph
   more than a missing one.

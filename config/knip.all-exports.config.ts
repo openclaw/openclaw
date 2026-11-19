@@ -55,6 +55,12 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/helpers/run-quiet-steering-live.mts!",
   // The PR artifact Vitest suite launches this standalone Node regression by path.
   "test/scripts/pr-review-artifacts.node.mjs!",
+  // The PR cache suite launches this standalone Node regression by path.
+  "test/scripts/pr-cache-deferral.node.mjs!",
+  // The compiler scheduling test launches this dependency-hook fixture by exact path.
+  "test/scripts/fixtures/vitest-worker-scheduling.cjs!",
+  // The cache test launches this isolated GC worker through runRetentionNodeScript.
+  "test/scripts/vitest-worker-cache-retention.test-support.ts!",
   // The Gateway profiler tests launch these subprocess fixtures through a computed path.
   "test/scripts/fixtures/gateway-bench-cpu-usage.mjs!",
   "test/scripts/fixtures/gateway-bench-profile-startup.mjs!",
@@ -68,6 +74,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/scripts/state-read-worker-dependency.test-support.mts!",
   // The relay artifact test launches this emitted-source fixture by path.
   "test/scripts/service-relay-artifact.test-support.mjs!",
+  // The npm CLI process fixture passes this transport to its child by file URL.
+  "test/scripts/plugin-npm-cli-transport.test-support.mjs!",
   // tsgo:test:root checks these compile-only contracts without runtime imports.
   "test/type-contracts/**/*.ts!",
   // The module-generation test launches this Bun regression directly from its source path.
@@ -96,6 +104,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/fixtures/qa-gateway-rpc-proxy.mjs!",
   // Prior-release fixture generation invokes this CLI from the selected release checkout.
   "test/fixtures/state-corpus/generate.mjs!",
+  // Gateway upgrade tests copy these installed plugins with their manifest-declared entries.
+  "test/fixtures/state-corpus-populated/*/state/extensions/corpus-plugin/index.js!",
   // The prerelease manifest runs this frozen planner and checks its historical config is present.
   "test/fixtures/plugin-prerelease-frozen-target/scripts/lib/extension-test-plan.mjs!",
   "test/fixtures/plugin-prerelease-frozen-target/test/vitest/vitest.extension-telegram.config.mjs!",

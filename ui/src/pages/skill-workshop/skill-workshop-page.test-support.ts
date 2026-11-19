@@ -73,10 +73,7 @@ export function createContext(
         return () => selectionListeners.delete(listener);
       },
     },
-    agentIdentity: {
-      get: () => ({ agentId: "research", name: "Research" }),
-      subscribe,
-    },
+    agentIdentity: { get: () => ({ agentId: "research", name: "Research" }), subscribe },
     sessions: {
       state: { result: null, loading: false },
       presentation: {
@@ -89,6 +86,7 @@ export function createContext(
     chatSubmissions: { retain: vi.fn() },
     navigate: vi.fn(),
     router: {
+      subscribe,
       getState: () => ({
         location: { pathname: "/skills/workshop", search: options?.search ?? "" },
       }),

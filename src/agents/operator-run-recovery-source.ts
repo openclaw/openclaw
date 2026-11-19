@@ -74,11 +74,8 @@ export function captureScheduledOperatorSource(
     source = {
       version: 1,
       agentId: params.agentId,
+      // The conversation is linked by key, so its edits and resets keep the source.
       sessionKey,
-      sessionId: entry.sessionId,
-      ...(entry.lifecycleRevision !== undefined
-        ? { lifecycleRevision: entry.lifecycleRevision }
-        : {}),
       sourceRunId: params.sourceRunId,
       snapshot: { ...snapshot, scopes: intersectOperatorScopes(snapshot.scopes, authority.scopes) },
     };

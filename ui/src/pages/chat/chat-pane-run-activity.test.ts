@@ -34,11 +34,11 @@ afterEach(() => {
 describe.each([false, true])("chat run activity (recovery ready: %s)", (recoveryScopeReady) => {
   it.each([
     {
-      name: "shows a completed parent waiting on its child roster",
+      name: "does not make a completed parent wait merely because children are active",
       selectedKey: "agent:main:main",
       parentActive: false,
       // Until its own child query answers, preserve the generic recovery status.
-      expectWorking: recoveryScopeReady,
+      expectWorking: false,
     },
     {
       name: "shows activity on the visible child itself",
@@ -90,17 +90,24 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
     pane.render();
 
     const container = createApplicationContextProvider(context);
+    // Exercise the cold transcript's task yield without depending on machine load.
+    let renderTime = performance.now();
+    const renderClock = vi.spyOn(performance, "now").mockImplementation(() => (renderTime += 20));
     renderChatPropsInto(container, expectDefined(pane.chatProps, "chat props"), context);
+    renderClock.mockRestore();
 
-    await waitForSolid(() => expect(container.querySelector(".chat-thread-inner")).not.toBeNull());
-    expect(pane.chatProps?.canAbort).toBe(true);
-    expect(
-      container.querySelector(
-        ".chat-working-indicator:not(.chat-working-indicator--subagents) .chat-reading-indicator",
-      ) !== null,
-    ).toBe(expectWorking);
-    expect(container.querySelector(".chat-working-indicator--subagents")).toBeNull();
-    expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
+    await waitForSolid(() => {
+      expect(container.querySelector(".chat-thread-inner")).not.toBeNull();
+      expect(container.querySelector(".chat-conversation-loading")).toBeNull();
+      expect(pane.chatProps?.canAbort).toBe(true);
+      expect(
+        container.querySelector(
+          ".chat-working-indicator:not(.chat-working-indicator--subagents) .chat-reading-indicator",
+        ) !== null,
+      ).toBe(expectWorking);
+      expect(container.querySelector(".chat-working-indicator--subagents")).toBeNull();
+      expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
+    });
   });
 });
 
@@ -171,9 +178,9 @@ describe("composer run status", () => {
       };
       await draw([], false);
       await waitForSolid(() =>
-        expect(
-          container.querySelector(".chat-working-indicator .chat-reading-indicator"),
-        ).not.toBeNull(),
+        expect(container.querySelector(".chat-working-indicator")?.textContent).toContain(
+          "Wait for subagents",
+        ),
       );
       await draw([child]);
       await vi.dynamicImportSettled();
@@ -187,29 +194,15 @@ describe("composer run status", () => {
       expect(container.querySelector(".chat-working-indicator .chat-reading-indicator")).toBeNull();
       expect(container.querySelector(".chat-subagent-activity")).toBeNull();
       expect(container.querySelector("openclaw-working-phrase")).toBeNull();
-      // A handoff's wait names the session it waits on in place of a running count.
-      const wait = () =>
-        container.querySelector(".chat-subagent-wait")?.textContent?.replace(/\s+/gu, " ").trim();
-      expect(wait()).toBe("Waiting on Backend implementation · 1m 5s");
-      expect(container.querySelector(".chat-working-indicator__subagents")).toBeNull();
-      const timer = container.querySelector(".chat-working-indicator openclaw-elapsed-time");
-      expect(timer?.textContent).toBe("1m 5s");
-
+      const wait = () => container.querySelector(".chat-working-indicator__status")?.textContent;
+      expect(wait()).toBe("Wait for subagents");
+      expect(container.querySelector(".chat-working-indicator openclaw-elapsed-time")).toBeNull();
       await draw([
         child,
         { ...child, key: "agent:main:subagent:frontend", label: "Frontend implementation" },
       ]);
-      expect(
-        container
-          .querySelector(".chat-subagent-wait button[aria-expanded]")
-          ?.textContent?.replace(/\s+/gu, " ")
-          .trim(),
-      ).toBe("Waiting on 2 sessions · 1m 5s");
-      expect(
-        container.querySelectorAll(".chat-working-indicator openclaw-elapsed-time"),
-      ).toHaveLength(1);
-      expect(container.querySelector(".chat-subagent-activity")).toBeNull();
-
+      expect(wait()).toBe("Wait for subagents");
+      expect(container.textContent).not.toContain("Frontend implementation");
       await draw([{ ...child, hasActiveRun: false }]);
       expect(container.querySelector(".chat-subagent-activity")).toBeNull();
       expect(container.querySelector(".chat-subagent-wait")).toBeNull();

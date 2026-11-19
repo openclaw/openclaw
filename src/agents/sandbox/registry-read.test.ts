@@ -1,3 +1,4 @@
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
@@ -19,6 +20,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
 import { registerSandboxBackend } from "./backend.js";
@@ -103,6 +105,62 @@ function recordRegistryFacts() {
 }
 
 describe("registry race safety", () => {
+  it("captures sandbox custody and checks its live owner without main-thread filesystem calls", async () => {
+    using owner = acquireSandboxGatewayOwner(fixture.root);
+    await updateRegistry(containerEntry());
+    const realpath = vi.spyOn(nodeFs.realpathSync, "native").mockImplementation(() => {
+      throw new Error("Synchronous sandbox owner path lookup on main thread");
+    });
+    const stat = vi.spyOn(nodeFs, "statSync");
+    const lstat = vi.spyOn(nodeFs, "lstatSync");
+    const captured = await captureSandboxStateOwner();
+    expect(realpath).not.toHaveBeenCalled();
+    for (let index = 0; index < 54; index++) {
+      captured.assertCurrent();
+    }
+    expect(realpath).not.toHaveBeenCalled();
+    expect(stat).not.toHaveBeenCalled();
+    expect(lstat).not.toHaveBeenCalled();
+    realpath.mockRestore();
+    owner.release();
+    expect(captured.assertCurrent).toThrow("Sandbox workspace preparation");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a registry effect after the captured state alias retargets",
+    async () => {
+      const first = fixture.root;
+      using firstOwner = acquireSandboxGatewayOwner(first);
+      await updateRegistry(containerEntry({ containerName: "first" }));
+      const second = fixture.make("openclaw-sandbox-successor-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", second);
+      using _ = acquireSandboxGatewayOwner(second);
+      await updateRegistry(containerEntry({ containerName: "second" }));
+      const alias = path.join(fixture.make("openclaw-sandbox-alias-"), "root");
+      await fs.symlink(first, alias);
+      vi.stubEnv("OPENCLAW_STATE_DIR", alias);
+      const databasePath = resolveOpenClawStateSqlitePath();
+      const stateOwnerPath = {
+        path: databasePath,
+        canonicalPath: await fs.realpath(databasePath),
+      };
+      await fs.unlink(alias);
+      await fs.symlink(second, alias);
+      firstOwner.assertCurrent();
+      await expect(
+        updateRegistry(containerEntry({ containerName: "forbidden" }), {
+          assertHost: firstOwner.assertCurrent,
+          stateOwnerPath,
+        }),
+      ).rejects.toThrow();
+      expect((await readRegistry()).entries.map((entry) => entry.containerName)).toEqual([
+        "second",
+      ]);
+      vi.stubEnv("OPENCLAW_STATE_DIR", first);
+      expect((await readRegistry()).entries.map((entry) => entry.containerName)).toEqual(["first"]);
+    },
+  );
+
   it.each(["container", "browser"] as const)(
     "keeps retirement authority current across %s activity, replacement, and unknown writes",
     async (kind) => {
@@ -279,7 +337,7 @@ describe("registry race safety", () => {
   it("refuses queued browser publication after hosted custody is released", async () => {
     using owner = acquireSandboxGatewayOwner(fixture.root);
     await updateRegistry(containerEntry());
-    const assertOwner = await captureSandboxStateOwner();
+    const { assertCurrent: assertOwner } = await captureSandboxStateOwner();
     const publication = updateBrowserRegistry(browserEntry(), assertOwner);
     owner.release();
     await expect(publication).rejects.toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });

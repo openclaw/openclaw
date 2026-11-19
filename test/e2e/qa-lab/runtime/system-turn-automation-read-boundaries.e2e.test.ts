@@ -6,6 +6,7 @@ import path from "node:path";
 import { text as readBody } from "node:stream/consumers";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withFastReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
+import * as sessionEventHandoff from "../../../../src/auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { captureCronSchedulerWakeForTest } from "../../../../src/cron/service/scheduler-actor.test-support.js";
 import type { CronJob } from "../../../../src/cron/types.js";
@@ -178,7 +179,10 @@ it(
     const stateDir = path.join(home, ".openclaw");
     const workspaceDir = path.join(home, "workspace");
     const configPath = path.join(stateDir, "openclaw.json");
-    await Promise.all([stateDir, workspaceDir].map((dir) => fs.mkdir(dir, { recursive: true })));
+    await Promise.all([
+      fs.mkdir(stateDir, { recursive: true, mode: 0o700 }),
+      fs.mkdir(workspaceDir, { recursive: true }),
+    ]);
     const token = randomUUID();
     const controlUi = {
       origin: "http://127.0.0.1",
@@ -211,12 +215,18 @@ it(
     };
     const closingNoticeHeld = createDeferred();
     const forgedDone = createDeferred();
-    let releaseHold: () => void = () => {};
+    let pendingHoldRelease: (() => void) | undefined;
+    const releaseHold = () => {
+      const release = pendingHoldRelease;
+      pendingHoldRelease = undefined;
+      release?.();
+    };
     let lateNoticeRequest: string | undefined;
     const holdNextHistoryRead = () => {
       const held = createDeferred();
       const release = createDeferred();
-      releaseHold = () => release.resolve();
+      assert(!pendingHoldRelease, "The previous history hold is still owned");
+      pendingHoldRelease = () => release.resolve();
       seams.hold = { held: () => held.resolve(), release: release.promise };
       return held.promise;
     };
@@ -253,6 +263,16 @@ it(
       https_proxy: undefined,
       NO_PROXY: "127.0.0.1,localhost",
       no_proxy: "127.0.0.1,localhost",
+    };
+    const handoff = vi.spyOn(sessionEventHandoff, "enqueueSessionEventForHost");
+    const noticeReceipt = (job: CronJob) => {
+      const captured = handoff.mock.calls.flatMap(([, options], index) =>
+        options.contextKey === `cron:${job.id}:auto-disabled` ? [handoff.mock.results[index]] : [],
+      );
+      expect(captured).toHaveLength(1);
+      const receipt = captured[0];
+      assert(receipt?.type === "return", "Missing original auto-disable receipt");
+      return receipt.value;
     };
     const scenario = withEnvAsync(env, async () => {
       try {
@@ -370,7 +390,9 @@ it(
                   call("automations", "runs_removed", { action: "runs", jobId: owned() });
                   break;
                 case 17:
-                  throw new Error("Removed automation disclosed a result to its retired notice");
+                  throw new Error(
+                    "Removed automation made another provider request from its retired notice",
+                  );
                 // The second notice turn's read is closed before disclosure.
                 case 18: {
                   expect(JSON.stringify(body.input)).toContain(
@@ -493,7 +515,12 @@ it(
         await live.client.request("cron.remove", { id: jobs.owned.id });
         releaseHold();
         const removedOutcome = await observe(removed.promise);
-        // Removal retires the notice's restored operator source as well as the job.
+        // Removal retires the notice's restored operator source. Wait for the original
+        // notice to settle and prove it cannot make another provider request.
+        await observe(noticeReceipt(jobs.owned).settled);
+        expect(step).toBe(17);
+        expect(outputs.has("runs_removed")).toBe(false);
+        // Only the next notice may consume the next scripted continuation.
         step = 18;
 
         expect(await runDue(jobs.closing)).toMatchObject({ status: "error" });
@@ -504,6 +531,7 @@ it(
         await live.client.request("chat.abort", { sessionKey: ownedSession });
         releaseHold();
         const closedOutcome = await observe(closed.promise);
+        await observe(noticeReceipt(jobs.closing).settled);
 
         nonOwner = await connectGatewayClient({
           url: "ws://127.0.0.1:" + live.port,
@@ -557,12 +585,11 @@ it(
           expect(outputs.get(id)).toContain("Other actions need the owner's authority");
         }
         expect(outputs.get("gateway")).toContain("gateway needs the owner's authority");
-        // Removal retires the source during the read: no history reaches the model.
+        // Removal revokes the notice source during the read: no response or history escapes.
         expect(removedOutcome).toEqual({
           id: jobs.owned.id,
-          threw: expect.stringContaining("authority is no longer active"),
+          threw: expect.stringContaining("agent runtime authority is no longer active"),
         });
-        expect(outputs.has("runs_removed")).toBe(false);
         // Closed during the awaited read: the handler responds with nothing at all.
         expect(closedOutcome).toEqual({
           id: jobs.closing.id,
@@ -579,6 +606,7 @@ it(
           "Foreign proof",
         ]);
       } finally {
+        releaseHold();
         try {
           if (requester) {
             await disconnectGatewayClient(requester);
@@ -594,7 +622,11 @@ it(
             }
           }
         } finally {
-          await provider?.close();
+          try {
+            await provider?.close();
+          } finally {
+            handoff.mockRestore();
+          }
         }
       }
     });

@@ -629,7 +629,7 @@ export async function collectDoctorPreviewNotes(params: {
     const safeBinCoverage = scanExecSafeBinCoverage(params.cfg);
     appendScanWarnings(safeBinCoverage, collectExecSafeBinCoverageWarnings);
 
-    const safeBinTrustedDirHints = scanExecSafeBinTrustedDirHints(params.cfg);
+    const safeBinTrustedDirHints = await scanExecSafeBinTrustedDirHints(params.cfg);
     if (safeBinTrustedDirHints.length > 0) {
       warnings.push(collectExecSafeBinTrustedDirHintWarnings(safeBinTrustedDirHints).join("\n"));
     }

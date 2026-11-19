@@ -35,6 +35,7 @@ import {
   createGatewayAuthRateLimiter,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { handleControlUiAssistantMediaRequest } from "./control-ui-assistant-media-http.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
@@ -43,11 +44,7 @@ import {
   createTrustedProxyHeaders,
   setupTrustedProxyAuth,
 } from "./control-ui.http.test-support.js";
-import {
-  handleControlUiAssistantMediaRequest,
-  handleControlUiAvatarRequest,
-  handleControlUiHttpRequest,
-} from "./control-ui.js";
+import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
 import { ANIMATED_GIF_BYTES, APNG_BYTES } from "./http-image.test-support.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { createAuthRateLimiterSpy, makeMockHttpResponse } from "./test-http-response.js";

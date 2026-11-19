@@ -191,7 +191,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
   const terminalThinkingSignatureError =
     "ValidationException: invalid signature on thinking block in message history";
   const genericizedProviderError =
-    "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.";
+    "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the OpenClaw app.";
   const history = () => [assistant([thinking("secret", "sig")])];
   function message(value = "recovered", errorMessage?: string) {
     return makeAgentAssistantMessage({

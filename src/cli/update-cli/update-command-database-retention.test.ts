@@ -7,9 +7,11 @@ import { createNpmTarget } from "../../infra/package-update-steps.test-support.j
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
+import { UpdateCaptureSpaceError } from "../../infra/update-capture-space.js";
 import * as databaseBackup from "../../infra/update-database-backup.js";
 import { createGitRuntimeTransaction } from "../../infra/update-runner-git-runtime.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import * as snapshotBackup from "../../snapshot/database-backup.js";
 import { captureUpdateDatabases } from "./update-command-database-backup.js";
 import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
@@ -118,11 +120,86 @@ it.runIf(process.platform !== "win32").each([false, true])(
   },
 );
 
+function captureWith(base: string, root: string, env: NodeJS.ProcessEnv) {
+  return captureUpdateDatabases({
+    transaction: {
+      backupRoot: path.join(base, "runtime.backup"),
+      rollback: async () => {
+        throw new Error("Unexpected rollback");
+      },
+      complete: async () => {
+        throw new Error("Unexpected completion");
+      },
+    },
+    execution: captureExecution(root, env, "package"),
+    context: undefined,
+    assertCurrent: () => {},
+  });
+}
+
+const shortfall = () =>
+  new UpdateCaptureSpaceError("short", {
+    requiredBytes: 3 * 1024 ** 3,
+    availableBytes: 1024 ** 3,
+    volume: "backup",
+  });
+
+it("skips the pre-migration image and continues when the owner measures a shortfall", async () => {
+  const base = await fs.realpath(dirs.make("update-database-skip-"));
+  const root = path.join(base, "install");
+  await fs.mkdir(root);
+  const env = await captureEnvironment(path.join(base, "state"));
+  const directory = path.join(base, "runtime.backup.databases");
+  vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockImplementation(async () => {
+    // The owner created its directory exclusively, then measured before any copy.
+    await fs.mkdir(directory);
+    throw new Error(`Capture failed. Database backup files retained at ${directory}.`, {
+      cause: shortfall(),
+    });
+  });
+
+  const capture = await captureWith(base, root, env);
+
+  expect(capture.backup).toBeUndefined();
+  expect(capture.step).toMatchObject({ name: "database snapshot", exitCode: 0 });
+  expect(capture.step.warnings).toEqual([
+    `No pre-migration database image: it needs 3.0 GiB near ${directory} and 1.0 GiB is free. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward. The update continues.`,
+  ]);
+  await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.each([
+  { cause: "an integrity failure", error: () => new Error("synthetic integrity failure") },
+  {
+    // A copy that ran out of room has started; its owner did not measure and settle it.
+    cause: "a disk that filled mid-copy",
+    error: () =>
+      Object.assign(new Error("write copy stage: No space left on device"), { code: "ENOSPC" }),
+  },
+  {
+    cause: "a shortfall joined by a cleanup failure",
+    error: () =>
+      new AggregateError([shortfall(), new Error("staging cleanup did not settle")], "both", {
+        cause: shortfall(),
+      }),
+  },
+])("still fails the update for $cause", async ({ error }) => {
+  const base = await fs.realpath(dirs.make("update-database-skip-"));
+  const root = path.join(base, "install");
+  await fs.mkdir(root);
+  const env = await captureEnvironment(path.join(base, "state"));
+  const failure = error();
+  vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockRejectedValue(failure);
+
+  await expect(captureWith(base, root, env)).rejects.toBe(failure);
+});
+
 it.each(
   (["git", "package"] as const).flatMap((kind) =>
     [
       { restorable: false, lateRefusal: false, outcome: "success" },
       { restorable: true, lateRefusal: false, outcome: "success" },
+      { restorable: true, lateRefusal: false, outcome: "success", discardFails: true },
       { restorable: true, lateRefusal: true, outcome: "success" },
       { restorable: true, lateRefusal: true, outcome: "failure" },
       { restorable: true, lateRefusal: false, outcome: "failure" },
@@ -132,8 +209,8 @@ it.each(
     ].map((scenario) => Object.assign(scenario, { kind })),
   ),
 )(
-  "retains $kind snapshots: restorable=$restorable, lateRefusal=$lateRefusal, outcome=$outcome",
-  async ({ kind, restorable, lateRefusal, outcome }) => {
+  "retains $kind snapshots: restorable=$restorable, lateRefusal=$lateRefusal, outcome=$outcome, discardFails=$discardFails",
+  async ({ kind, restorable, lateRefusal, outcome, discardFails }) => {
     const base = await fs.realpath(dirs.make("update-database-retention-"));
     const fixture = await createPackageSwapFixture(base);
     const root = fixture.packageRoot;
@@ -143,6 +220,8 @@ it.each(
     let snapshotPath = "";
     // Snapshot generation has its own tests; retain both real transaction lifecycles here.
     vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockImplementation(async (input) => {
+      // Server captures are opt-in; this config leaves them portable.
+      expect(input.postgresSchemaCaptures).toBe(false);
       const directory = `${input.backupRoot}.databases`;
       snapshotPath = path.join(directory, "snapshot.sqlite");
       await fs.mkdir(directory);
@@ -158,6 +237,13 @@ it.each(
         warnings: [],
       };
     });
+    const discard = vi
+      .spyOn(snapshotBackup, "discardPostgresSchemaCaptures")
+      .mockImplementation(async () => {
+        if (discardFails) {
+          throw new Error("synthetic capture drop failure");
+        }
+      });
     let transaction: PackageUpdateTransaction | undefined;
     let capture: Awaited<ReturnType<typeof captureUpdateDatabases>> | undefined;
     const onTransaction = async (value: PackageUpdateTransaction) => {
@@ -230,7 +316,16 @@ it.each(
       finalResult,
       () => {},
     );
-    if (restorable && !lateRefusal && outcome === "success") {
+    const retired = restorable && !lateRefusal && outcome === "success";
+    // Server-side captures are dropped only where their snapshots retire, and first.
+    expect(discard).toHaveBeenCalledTimes(retired ? 1 : 0);
+    if (retired && discardFails) {
+      // A failed drop keeps the manifests and reports the pending cleanup.
+      expect(JSON.stringify(finalResult.steps.at(-1))).toContain(
+        "PostgreSQL capture cleanup remains pending",
+      );
+    }
+    if (retired && !discardFails) {
       await expect(
         fs.stat(kind === "git" ? path.dirname(snapshotPath) : snapshotPath),
       ).rejects.toMatchObject({ code: "ENOENT" });

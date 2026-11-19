@@ -8,12 +8,26 @@ import {
   TemplateGatewayPlanBlockedError,
   TemplateGatewayPlanChangedError,
 } from "../../templates/gateway-add-apply.js";
+import type { TemplateAddSource } from "../../templates/gateway-add-source.js";
 import { TemplateGatewayConsentError } from "../../templates/gateway-plugin-consent.js";
 import { TemplateSkillConsentError } from "../../templates/gateway-skill-consent.js";
+import { TemplateProjectError } from "../../templates/project.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import { templatesAddHandlers } from "./templates-add.js";
 import type { RespondFn } from "./types.js";
+
+const diagnosticLog = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (name: string) =>
+      name === "gateway/templates-add"
+        ? { ...actual.createSubsystemLogger(name), ...diagnosticLog }
+        : actual.createSubsystemLogger(name),
+  };
+});
 
 const planAdd = vi.hoisted(() => vi.fn());
 const applyAdd = vi.hoisted(() => vi.fn());
@@ -23,6 +37,13 @@ const readPolicy = vi.hoisted(() => vi.fn());
 const validateDelivery = vi.hoisted(() => vi.fn());
 const reloadPlugin = vi.hoisted(() => vi.fn());
 const deleteAgent = vi.hoisted(() => vi.fn());
+const captureCreator = vi.hoisted(() => vi.fn());
+// mock-isolation: Account persistence and revocation use the native inference-binding
+// suite; this adapter suite supplies capture facts while testing its other fences.
+vi.mock("./cron-input-validation.js", async (original) => ({
+  ...(await original<typeof import("./cron-input-validation.js")>()),
+  captureCronCreatorSession: captureCreator,
+}));
 vi.mock("../../templates/gateway-add-plan.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../templates/gateway-add-plan.js")>()),
   planTemplateAddForGateway: planAdd,
@@ -61,6 +82,7 @@ const ready = { ...complete, readiness: { ready: true, requirements: [] } };
 const onDisk = { ...enabled, agents: { list: [{ id: agentId }] } };
 
 beforeEach(() => {
+  captureCreator.mockResolvedValue({});
   listMcp.mockResolvedValue({ ok: true, mcpServers: {} });
   readPolicy.mockResolvedValue(enabled);
 });
@@ -71,7 +93,12 @@ const params = { source, planIntegrity: "sha256:reviewed", acknowledgeCapabiliti
 const plan = { operation: "add", planIntegrity: "sha256:reviewed", target: { agentId } };
 
 function makeCron<T extends object>(overrides: T) {
-  return { add: vi.fn(), list: vi.fn().mockResolvedValue([]), ...overrides };
+  return {
+    add: vi.fn(),
+    list: vi.fn().mockResolvedValue([]),
+    getDefaultAgentId: () => "main",
+    ...overrides,
+  };
 }
 
 async function callAdd(
@@ -79,21 +106,31 @@ async function callAdd(
   getRuntimeConfig: () => unknown = () => enabled,
   options: {
     hasCurrentClientAuthority?: () => boolean;
+    source?: TemplateAddSource;
     cron?: unknown;
     applyPluginLifecycleChange?: unknown;
+    applyParams?: Record<string, unknown>;
   } = {},
 ) {
-  const { hasCurrentClientAuthority, ...runtime } = options;
+  const {
+    hasCurrentClientAuthority,
+    source: sourceOverride = source,
+    applyParams = params,
+    ...runtime
+  } = options;
   const method = `templates.add.${operation}`;
   const respond = vi.fn<RespondFn>();
   const handler = expectDefined(templatesAddHandlers[method], method);
   await handler({
     req: { type: "req", id: "add", method },
-    params: operation === "plan" ? { source } : params,
+    params:
+      operation === "plan"
+        ? { source: sourceOverride }
+        : { ...applyParams, ...(options.source ? { source: sourceOverride } : {}) },
     respond,
     context: { getRuntimeConfig, ...runtime } as never,
     client:
-      operation === "apply"
+      operation === "apply" || "kind" in sourceOverride
         ? ({ connect: { role: "operator", scopes: ["operator.admin"] } } as never)
         : null,
     hasCurrentClientAuthority,
@@ -141,7 +178,9 @@ it("plans from the persisted roster, not a stale Gateway cache", async () => {
   const request = await callAdd("plan");
   expect(planAdd).toHaveBeenCalledWith({
     source,
+    onStage: expect.any(Function),
     config: onDisk,
+    resolvePreferredModel: expect.any(Function),
     sourceMcpServers: expect.any(Function),
   });
   expect(listMcp).not.toHaveBeenCalled();
@@ -152,7 +191,22 @@ it("drops a preview if Labs is switched off mid-request", async () => {
   let calls = 0;
   planAdd.mockResolvedValue(plan);
   const request = await callAdd("plan", () => (calls++ === 0 ? enabled : {}));
-  expect(request[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+  expect(request[0]?.[2]).toMatchObject({
+    code: "FORBIDDEN",
+    details: { mutationAccepted: false },
+  });
+});
+
+it.each([
+  new ClawHubSourceError("clawhub_manifest_invalid", "Manifest is invalid"),
+  new Error("MCP listing failed"),
+])("reports a failed preview as having no effect: %s", async (error) => {
+  planAdd.mockRejectedValueOnce(error);
+  const replies = await callAdd("plan");
+  expect(replies[0]?.[2]).toMatchObject({
+    code: "UNAVAILABLE",
+    details: { mutationAccepted: false },
+  });
 });
 const schedule = {
   name: "daily-brief",
@@ -172,6 +226,7 @@ it("applies the reviewed coordinate against the persisted roster", async () => {
   applyAdd.mockImplementation(async (input) => {
     expect(await input.getPlanningContext()).toEqual({
       config: onDisk,
+      resolvePreferredModel: expect.any(Function),
       sourceMcpServers: expect.any(Function),
     });
     expect(listMcp).not.toHaveBeenCalled();
@@ -182,6 +237,56 @@ it("applies the reviewed coordinate against the persisted roster", async () => {
   expect(readPolicySync).not.toHaveBeenCalled();
   expect(request).toEqual([[true, ready]]);
 });
+
+it("routes to chat-based creation only on its explicit mode", async () => {
+  applyAdd.mockResolvedValue(complete);
+  const chat = { mode: "chat", source, agentId };
+  await callAdd("apply");
+  await callAdd("apply", () => enabled, { applyParams: chat });
+  // The reviewed request keeps its installer hand-off: opening at agent-ready, install events.
+  const [reviewed, created] = applyAdd.mock.calls.map(([input]) => input);
+  expect(reviewed).toMatchObject({
+    planIntegrity: params.planIntegrity,
+    acknowledgeCapabilities: [],
+    onAgentReady: expect.any(Function),
+    onSetupEvent: expect.any(Function),
+  });
+  expect(Object.keys(reviewed)).not.toContain("mode");
+  expect(Object.keys(reviewed)).not.toContain("onAgentCreated");
+  // Chat-based creation opens once, after creation, and publishes no installer events.
+  expect(created).toMatchObject({ ...chat, onAgentCreated: expect.any(Function) });
+  for (const reviewedOnly of ["planIntegrity", "onAgentReady", "onSetupEvent"]) {
+    expect(Object.keys(created)).not.toContain(reviewedOnly);
+  }
+  const mixed = await callAdd("apply", () => enabled, {
+    applyParams: { ...chat, planIntegrity: params.planIntegrity },
+  });
+  expect(mixed[0]?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+  expect(applyAdd).toHaveBeenCalledTimes(2);
+});
+
+it.each(["plan", "apply"] as const)(
+  "templates.add.%s reads MCP servers as the config file declares them",
+  async (operation) => {
+    const declared = { command: "node", env: { TOKEN: "${FIXTURE_MCP_TOKEN}" } };
+    listMcp.mockResolvedValue({
+      ok: true,
+      mcpServers: { docs: { command: "node", env: { TOKEN: "synthetic-token" } } },
+      authoredConfig: { mcp: { servers: { docs: declared } } },
+    });
+    let servers: unknown;
+    planAdd.mockImplementation(async (input) => {
+      servers = await input.sourceMcpServers();
+      return plan;
+    });
+    applyAdd.mockImplementation(async (input) => {
+      servers = await (await input.getPlanningContext()).sourceMcpServers();
+      return ready;
+    });
+    await callAdd(operation);
+    expect(servers).toEqual({ docs: declared });
+  },
+);
 
 it.each(["applied", "applied-restart-required", "restart-pending"] as const)(
   "reports the reload owner's %s receipt without admitting an unpublished agent",
@@ -507,3 +612,94 @@ it("rechecks reviewed access at the plugin reload's persistent apply", async () 
   expect(applied).not.toHaveBeenCalled();
   expect(request[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
 });
+
+it.each(["plan", "apply"] as const)(
+  "logs bounded %s outcomes without source or error data",
+  async (operation) => {
+    const localSource = { kind: "local" as const, path: "/private/template-secret" };
+    const operationMock = operation === "plan" ? planAdd : applyAdd;
+    operationMock.mockRejectedValueOnce(new Error("private error with token=secret"));
+    const response = await callAdd(operation, () => enabled, { source: localSource });
+    expect(response[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+    expect(diagnosticLog.warn).toHaveBeenCalledExactlyOnceWith("Template add did not complete", {
+      operation,
+      stage: operation === "plan" ? "source_resolution_and_plan" : "apply",
+      outcome: "failed",
+      sourceKind: "local",
+      correlationId: expect.stringMatching(/^[a-f0-9-]{36}$/),
+      durationMs: expect.any(Number),
+    });
+    expect(diagnosticLog.error).not.toHaveBeenCalled();
+    expect(JSON.stringify(diagnosticLog.warn.mock.calls)).not.toContain("private");
+    const firstId = diagnosticLog.warn.mock.calls[0]?.[1].correlationId;
+    operationMock.mockResolvedValueOnce(operation === "plan" ? plan : ready);
+    await callAdd(operation, () => enabled, { source: localSource });
+    expect(diagnosticLog.info).toHaveBeenCalledExactlyOnceWith(
+      "Template add completed",
+      expect.objectContaining({ operation, outcome: "success", sourceKind: "local" }),
+    );
+    expect(diagnosticLog.info.mock.calls[0]?.[1].correlationId).not.toBe(firstId);
+  },
+);
+
+it.each(["plan", "apply"] as const)(
+  "records the failing upload stage for %s",
+  async (operation) => {
+    const operationMock = operation === "plan" ? planAdd : applyAdd;
+    operationMock.mockImplementationOnce(async (input) => {
+      input.onStage?.("upload_decode_and_staging");
+      input.onStage?.("upload_extraction");
+      throw new Error("private upload error");
+    });
+    await callAdd(operation, () => enabled, { source: { kind: "upload", archiveBase64: "YWJj" } });
+    expect(diagnosticLog.warn).toHaveBeenCalledExactlyOnceWith(
+      "Template add did not complete",
+      expect.objectContaining({
+        operation,
+        stage: "upload_extraction",
+        outcome: "failed",
+        sourceKind: "upload",
+      }),
+    );
+    expect(JSON.stringify(diagnosticLog.warn.mock.calls)).not.toContain("private");
+  },
+);
+
+it("records local source authority rejection without resolving the source", async () => {
+  await callAdd("plan", () => enabled, {
+    source: { kind: "local", path: "/private/template-secret" },
+    hasCurrentClientAuthority: () => false,
+  });
+  expect(planAdd).not.toHaveBeenCalled();
+  expect(diagnosticLog.warn).toHaveBeenCalledExactlyOnceWith(
+    "Template add did not complete",
+    expect.objectContaining({ stage: "policy", outcome: "forbidden", sourceKind: "local" }),
+  );
+});
+
+it("records a partial Add as a non-success outcome", async () => {
+  applyAdd.mockResolvedValueOnce({ ...complete, status: "partial" });
+  await callAdd("apply");
+  expect(diagnosticLog.info).not.toHaveBeenCalled();
+  expect(diagnosticLog.warn).toHaveBeenCalledExactlyOnceWith(
+    "Template add did not complete",
+    expect.objectContaining({ operation: "apply", stage: "apply", outcome: "partial" }),
+  );
+});
+
+it.each(["plan", "apply"] as const)(
+  "returns actionable invalid-project diagnostics for %s",
+  async (operation) => {
+    const service = operation === "plan" ? planAdd : applyAdd;
+    service.mockRejectedValueOnce(
+      new TemplateProjectError("project_invalid", "missing openclaw.template"),
+    );
+    const replies = await callAdd(operation, () => enabled, {
+      source: { kind: "local", path: "/tmp/invalid-template" },
+    });
+    expect(replies[0]?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringMatching(/missing openclaw.template.*templates validate/s),
+    });
+  },
+);

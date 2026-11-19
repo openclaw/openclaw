@@ -331,7 +331,12 @@ export function listAdoptedSessionCatalogSessions(params: {
     }
     const source = params.sourceFromEntry(entry);
     if (source) {
-      adopted.set(sessionCatalogAdoptedSourceKey(source.hostId, source.threadId), sessionKey);
+      const sourceKey = sessionCatalogAdoptedSourceKey(source.hostId, source.threadId);
+      const previous = adopted.get(sourceKey);
+      // Duplicate bindings use SQLite's binary key order, independent of notification order.
+      if (!previous || Buffer.compare(Buffer.from(sessionKey), Buffer.from(previous)) > 0) {
+        adopted.set(sourceKey, sessionKey);
+      }
     }
   }
   return adopted;

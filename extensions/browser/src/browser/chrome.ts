@@ -1,14 +1,16 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { canAccess } from "openclaw/plugin-sdk/path-existence-runtime";
 import { isPidAlive, prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtime";
 import { ensurePortAvailable, type SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CONFIG_DIR } from "openclaw/plugin-sdk/text-utility-runtime";
+import { prepareProfileFilesystem } from "../../profile-filesystem.js";
 import { hasChromeProxyControlArg } from "./browser-proxy-mode.js";
 import { assertManagedProxyAllowsCdpUrl } from "./cdp-proxy-bypass.js";
 import {
@@ -62,8 +64,14 @@ import {
   sameManagedChromeIdentity,
   type ManagedChromeProcessIdentity,
 } from "./chrome.process-ownership.js";
-import { prepareOpenClawProfile, usesOpenClawMockKeychain } from "./chrome.profile-decoration.js";
 import { withChromeProfileLifecycleLock } from "./chrome.profile-lifecycle-lock.js";
+import {
+  clearRecoveredChromeSingletonArtifacts,
+  clearStaleChromeSingletonLocks,
+  readSingletonLockTarget,
+  unverifiedSingletonLockReason,
+  type ChromeSingletonLock,
+} from "./chrome.singleton-lock.js";
 import type { BrowserGraphicsDiagnostics } from "./client.types.js";
 import {
   getManagedBrowserMissingDisplayError,
@@ -74,7 +82,6 @@ import {
 } from "./config.js";
 import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME } from "./constants.js";
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
-import { ensureOutputDirectory } from "./output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import type { ManagedBrowserHeadlessSource } from "./profile.types.js";
 import {
@@ -83,48 +90,7 @@ import {
 } from "./server-context.constants.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
-const CHROME_SINGLETON_LOCK_PATHS = [
-  "SingletonLock",
-  "SingletonSocket",
-  "SingletonCookie",
-] as const;
 const CHROME_GRACEFUL_CLOSE_COMMAND_TIMEOUT_MS = 500;
-
-type ChromeSingletonLock =
-  | { status: "missing" }
-  | { status: "invalid"; reason: string }
-  | { status: "owner"; hostname: string; pid: number };
-
-function readSingletonLockTarget(userDataDir: string): ChromeSingletonLock {
-  let target: string;
-  try {
-    target = fs.readlinkSync(path.join(userDataDir, "SingletonLock"));
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "ENOENT"
-      ? { status: "missing" }
-      : { status: "invalid", reason: "Chromium profile lock could not be read" };
-  }
-  const match = /^(?<lockHost>.+)-(?<pid>\d+)$/.exec(target);
-  if (!match?.groups) {
-    return { status: "invalid", reason: "Chromium profile lock is malformed" };
-  }
-  const hostname = normalizeOptionalString(match.groups.lockHost) ?? "";
-  const pid = Number.parseInt(match.groups.pid ?? "", 10);
-  if (!hostname || !Number.isSafeInteger(pid) || pid <= 0) {
-    return { status: "invalid", reason: "Chromium profile lock is malformed" };
-  }
-  return { status: "owner", hostname, pid };
-}
-
-function unverifiedSingletonLockReason(lock: ChromeSingletonLock): string | undefined {
-  if (lock.status === "invalid") {
-    return lock.reason;
-  }
-  if (lock.status === "owner" && lock.hostname !== os.hostname()) {
-    return "Chromium profile lock names another hostname";
-  }
-  return undefined;
-}
 
 function resolveOwnedManagedChromeIdentity(params: {
   resolved: ResolvedBrowserConfig;
@@ -186,34 +152,6 @@ function isPortInUseError(err: unknown): boolean {
   );
 }
 
-function clearChromeSingletonArtifacts(userDataDir: string) {
-  for (const basename of CHROME_SINGLETON_LOCK_PATHS) {
-    try {
-      fs.rmSync(path.join(userDataDir, basename), { force: true });
-    } catch {
-      // ignore best-effort cleanup
-    }
-  }
-}
-
-function clearStaleChromeSingletonLocks(
-  userDataDir: string,
-  expectedOwner?: { pid: number; hostname: string },
-): boolean {
-  const lock = readSingletonLockTarget(userDataDir);
-  if (
-    lock.status !== "owner" ||
-    lock.hostname !== (expectedOwner?.hostname ?? os.hostname()) ||
-    (expectedOwner && lock.pid !== expectedOwner.pid) ||
-    isPidAlive(lock.pid)
-  ) {
-    return false;
-  }
-
-  clearChromeSingletonArtifacts(userDataDir);
-  return true;
-}
-
 async function waitForChromeProcessExit(proc: ChildProcess, timeoutMs: number): Promise<boolean> {
   // ChildProcess state/events identify the spawned child; a bare PID probe can
   // mistake a later process that reused the number for the retained child.
@@ -262,7 +200,7 @@ async function terminateChromeForRetry(proc: ChildProcess, userDataDir: string):
   if (!(await signalChromeProcess(proc, "SIGKILL", CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS))) {
     return false;
   }
-  clearStaleChromeSingletonLocks(userDataDir);
+  await clearStaleChromeSingletonLocks(userDataDir);
   return true;
 }
 
@@ -313,26 +251,6 @@ async function terminateOwnedStaleChromeProcess(
   return false;
 }
 
-function clearRecoveredChromeSingletonArtifacts(
-  userDataDir: string,
-  stoppedPid: number,
-  expectedLock: ChromeSingletonLock,
-): boolean {
-  if (isPidAlive(stoppedPid)) {
-    return false;
-  }
-  if (readSingletonLockTarget(userDataDir).status === "missing") {
-    return true;
-  }
-  // A shell can inherit a dead full-Chromium lock with a different PID.
-  // Only the captured local owner may be cleared after the stopped process exits.
-  return (
-    expectedLock.status === "owner" &&
-    expectedLock.hostname === os.hostname() &&
-    clearStaleChromeSingletonLocks(userDataDir, expectedLock)
-  );
-}
-
 async function recoverOwnedStaleManagedChromeCdpListener(params: {
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;
@@ -343,7 +261,7 @@ async function recoverOwnedStaleManagedChromeCdpListener(params: {
   if (!params.profile.cdpIsLoopback) {
     return false;
   }
-  const lock = readSingletonLockTarget(params.userDataDir);
+  const lock = await readSingletonLockTarget(params.userDataDir);
   if (unverifiedSingletonLockReason(lock)) {
     return false;
   }
@@ -381,7 +299,7 @@ async function recoverOwnedStaleManagedChromeCdpListener(params: {
     return false;
   }
   if (
-    !clearRecoveredChromeSingletonArtifacts(params.userDataDir, pid, lock) ||
+    !(await clearRecoveredChromeSingletonArtifacts(params.userDataDir, pid, lock)) ||
     (await managedChromeProfileReleaseReason(params.profile, params.userDataDir))
   ) {
     return false;
@@ -663,7 +581,7 @@ async function launchOpenClawChromeLocked(
   await ensureManagedChromePortAvailable(resolved, profile, userDataDir, signal);
   signal?.throwIfAborted();
 
-  const lock = readSingletonLockTarget(userDataDir);
+  const lock = await readSingletonLockTarget(userDataDir);
   const lockReason =
     unverifiedSingletonLockReason(lock) ?? headlessShellProfileInUseReason(userDataDir);
   if (lockReason || (lock.status === "owner" && isPidAlive(lock.pid))) {
@@ -681,19 +599,20 @@ async function launchOpenClawChromeLocked(
   }
 
   assertBrowserExecutableSupportsLaunch(exe, headlessMode.headless, process.platform);
-  fs.mkdirSync(userDataDir, { recursive: true });
-  await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
+  await fs.mkdir(userDataDir, { recursive: true });
+  await prepareProfileFilesystem({ type: "output-directory", path: DEFAULT_DOWNLOAD_DIR });
 
   const localStatePath = path.join(userDataDir, "Local State");
   const preferencesPath = path.join(userDataDir, "Default", "Preferences");
-  const profileIsNew = !fs.existsSync(localStatePath);
+  const profileIsNew = !(await canAccess(localStatePath));
   const needsBootstrap =
-    !headlessMode.headless && (profileIsNew || !fs.existsSync(preferencesPath));
+    !headlessMode.headless && (profileIsNew || !(await canAccess(preferencesPath)));
   // Never change the encryption key source for an established profile: doing
   // so would make its existing cookies unreadable. New headless profiles opt in.
   const useMockKeychain =
     process.platform === "darwin" &&
-    (usesOpenClawMockKeychain(userDataDir) || (profileIsNew && headlessMode.headless));
+    ((await prepareProfileFilesystem({ type: "mock-keychain", userDataDir })).mockKeychain ||
+      (profileIsNew && headlessMode.headless));
 
   // Headless profiles are seeded directly; headed profiles retain Chrome's first-run bootstrap.
   const spawnOnce = async (onStderr?: (chunk: Buffer | string) => void) => {
@@ -799,7 +718,7 @@ async function launchOpenClawChromeLocked(
       const deadline = performance.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
       while (performance.now() < deadline) {
         signal?.throwIfAborted();
-        if (fs.existsSync(localStatePath) && fs.existsSync(preferencesPath)) {
+        if ((await canAccess(localStatePath)) && (await canAccess(preferencesPath))) {
           break;
         }
         await waitForManagedLaunchPoll(CHROME_BOOTSTRAP_PREFS_POLL_MS, signal);
@@ -827,11 +746,15 @@ async function launchOpenClawChromeLocked(
   signal?.throwIfAborted();
 
   try {
-    await prepareOpenClawProfile(userDataDir, {
-      name: profile.name,
-      color: profile.color,
-      downloadDir: DEFAULT_DOWNLOAD_DIR,
-      mockKeychain: useMockKeychain,
+    await prepareProfileFilesystem({
+      type: "decorate",
+      userDataDir,
+      options: {
+        name: profile.name,
+        color: profile.color,
+        downloadDir: DEFAULT_DOWNLOAD_DIR,
+        mockKeychain: useMockKeychain,
+      },
     });
   } catch (err) {
     log.warn(`openclaw browser profile preparation failed: ${String(err)}`);
@@ -962,7 +885,7 @@ async function launchOpenClawChromeLocked(
         if (
           allowSingletonRecovery &&
           stderrSignals.singletonInUse &&
-          clearStaleChromeSingletonLocks(userDataDir)
+          (await clearStaleChromeSingletonLocks(userDataDir))
         ) {
           log.warn(
             `Removed stale Chromium Singleton* locks for profile "${profile.name}" and retrying launch.`,
@@ -1233,7 +1156,7 @@ async function managedChromeProfileReleaseReason(
   if (shellReason) {
     return shellReason;
   }
-  const lock = readSingletonLockTarget(userDataDir);
+  const lock = await readSingletonLockTarget(userDataDir);
   return (
     unverifiedSingletonLockReason(lock) ??
     (lock.status === "owner" && isPidAlive(lock.pid)
@@ -1262,7 +1185,7 @@ async function stopOwnedOpenClawChromeLocked(
   timeoutMs: number,
 ): Promise<ManagedChromeStopResult> {
   const userDataDir = resolveOpenClawUserDataDir(profile.name);
-  const lock = readSingletonLockTarget(userDataDir);
+  const lock = await readSingletonLockTarget(userDataDir);
   const lockReason = unverifiedSingletonLockReason(lock);
   if (lockReason) {
     return { status: "unverified", reason: lockReason };
@@ -1316,7 +1239,7 @@ async function stopOwnedOpenClawChromeLocked(
   ) {
     return { status: "unverified", reason: "The Chromium profile owner changed or did not stop" };
   }
-  if (!clearRecoveredChromeSingletonArtifacts(userDataDir, pid, lock)) {
+  if (!(await clearRecoveredChromeSingletonArtifacts(userDataDir, pid, lock))) {
     return {
       status: "unverified",
       reason: "The Chromium profile lock changed or its owner is still running",
