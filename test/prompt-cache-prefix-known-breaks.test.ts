@@ -17,14 +17,14 @@ const known = (api: string, previous: WireRequest, current: WireRequest) =>
   KNOWN_BREAKS.some((entry) => entry.api === api && entry.accepts(previous, current));
 
 describe("known prefix breaks", () => {
-  it("accepts the known tool addition only when nothing else changed", () => {
+  it("accepts the opt-out tool addition only when nothing else changed", () => {
     const previous = request(["u1", "a1"]);
     const tools = ["read", "skills_read", "skills_search"];
-    expect(unknownChange(previous, request(["u1", "a1", "u2"], tools), true)).toBeUndefined();
-    expect(unknownChange(previous, request(["u1-rewritten", "a1", "u2"], tools), true)).toMatch(
+    expect(unknownChange(previous, request(["u1", "a1", "u2"], tools), false)).toBeUndefined();
+    expect(unknownChange(previous, request(["u1-rewritten", "a1", "u2"], tools), false)).toMatch(
       /^message 0:/,
     );
-    expect(unknownChange(previous, request(["u1", "a1"], [...tools, "exec"]), true)).toMatch(
+    expect(unknownChange(previous, request(["u1", "a1"], [...tools, "exec"]), false)).toMatch(
       /^tools /,
     );
   });

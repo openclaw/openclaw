@@ -161,23 +161,17 @@ function prefixChange(previous: WireRequest, current: WireRequest): string | und
 }
 
 // Tools added mid-session, per tool surface. The request must equal its predecessor once only these
-// tools are taken out, so the known change cannot hide another one. After a switch to a second
-// provider, turns started by a subagent completion or an inter-session message list two more tools
-// than user turns do.
+// tools are taken out, so the known change cannot hide another one. The default surface (Tool
+// Search on) lists the same tools from the first request and has no entry.
 const KNOWN_TOOL_ADDITIONS: ReadonlyArray<{
   toolSearch: boolean;
   tools: readonly string[];
   owner: string;
 }> = [
-  // The default surface lists a fixed tool set from the first request; remove this entry when
-  // its owner lands, and the suite then fails until it goes.
-  {
-    toolSearch: true,
-    tools: ["skills_read", "skills_search"],
-    owner: "https://github.com/openclaw/openclaw/pull/201710",
-  },
   // Designed exception: with Tool Search off, each turn lists the tools it builds
-  // (docs/reference/prompt-caching.md#stable-tools-between-turns).
+  // (docs/reference/prompt-caching.md#stable-tools-between-turns). After a switch to a second
+  // provider, turns started by a subagent completion or an inter-session message list two more
+  // tools than user turns do.
   {
     toolSearch: false,
     tools: ["skills_read", "skills_search"],
@@ -437,7 +431,8 @@ export function usePrefixRandomizedJourney() {
       );
       const tools = (webFetch: boolean): ToolsConfig => ({
         codeMode: { enabled: false },
-        toolSearch,
+        // The default surface leaves Tool Search on.
+        ...(toolSearch ? {} : { toolSearch: false }),
         exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: true },
         ...(webFetch ? {} : { deny: ["web_fetch"] }),
       });
@@ -595,8 +590,17 @@ export function usePrefixRandomizedJourney() {
                 target
                   .slice(before)
                   .filter((entry) => !entry.fork)
-                  // Tool Search lists a deferred tool in the system prompt instead.
-                  .map((entry) => /\bweb_fetch\b/.test(entry.request.tools + entry.request.system)),
+                  // Tool Search lists a deferred tool in its directory; a later directory arrives
+                  // as a prompt update, so the newest one counts.
+                  .map(({ request }) => {
+                    const directory = request.text.slice(
+                      request.text.lastIndexOf("Deferred Tool Schemas"),
+                    );
+                    return (
+                      toolNames(request.tools).includes("web_fetch") ||
+                      /- web_fetch \(/.test(directory)
+                    );
+                  }),
                 `step ${step} toolsChanged`,
               ).toEqual([toolsWidened]);
               break;

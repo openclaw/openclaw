@@ -16,6 +16,7 @@ import {
   hasToolResult as containsToolResult,
   latestInput as lastMessage,
   readWireRequest,
+  toolNames,
   writeReply,
   type FakeReply as Reply,
   type FakeTransport as Api,
@@ -301,6 +302,7 @@ export function usePrefixStabilityJourney() {
         );
         writeReply(api, response, reply, ++ordinal, {
           inputTokens: Math.ceil(body.length / 4),
+          listed: toolNames(wire.tools),
           ...(typeof json.model === "string" ? { model: json.model } : {}),
         });
       });
@@ -340,8 +342,8 @@ export function usePrefixStabilityJourney() {
               }
             : { enabled: false },
           tools: {
+            // The default surface: Tool Search on.
             codeMode: { enabled: false },
-            toolSearch: false,
             exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: true },
           },
         },
