@@ -146,6 +146,14 @@ function eventStreamMessage(eventType: string, payload: unknown): Buffer {
   return message;
 }
 
+/** A tool declaration's name across transport shapes. */
+export const toolName = (tool: Record<string, unknown>) =>
+  String(
+    tool.name ??
+      (tool.function as { name?: unknown } | undefined)?.name ??
+      (tool.toolSpec as { name?: unknown } | undefined)?.name,
+  );
+
 /** Tool names in a request's tool list (Gemini groups them under `functionDeclarations`). */
 export function toolNames(tools: string): string[] {
   return (JSON.parse(tools) as Array<Record<string, unknown>>)
@@ -154,13 +162,22 @@ export function toolNames(tools: string): string[] {
         ? (tool.functionDeclarations as Array<Record<string, unknown>>)
         : [tool],
     )
-    .map((tool) =>
-      String(
-        tool.name ??
-          (tool.function as { name?: unknown } | undefined)?.name ??
-          (tool.toolSpec as { name?: unknown } | undefined)?.name,
-      ),
-    );
+    .map(toolName);
+}
+
+/** `request` without the named tools (Gemini nests them under `functionDeclarations`). */
+export function withoutTools(request: WireRequest, names: readonly string[]): WireRequest {
+  const keep = (tool: Record<string, unknown>) => !names.includes(toolName(tool));
+  const tools = (JSON.parse(request.tools) as Array<Record<string, unknown>>).filter(keep);
+  for (const tool of tools) {
+    // A fresh parse, so changing it in place is safe; the key keeps its position.
+    if (Array.isArray(tool.functionDeclarations)) {
+      tool.functionDeclarations = (
+        tool.functionDeclarations as Array<Record<string, unknown>>
+      ).filter(keep);
+    }
+  }
+  return { ...request, tools: JSON.stringify(tools) };
 }
 
 /**

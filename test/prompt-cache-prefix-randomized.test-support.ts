@@ -16,7 +16,9 @@ import {
   hasToolResult,
   latestInput as lastMessage,
   readWireRequest,
+  toolName,
   toolNames,
+  withoutTools,
   writeReply,
   type FakeReply as Reply,
   type FakeTransport as Api,
@@ -178,28 +180,6 @@ const KNOWN_TOOL_ADDITIONS: ReadonlyArray<{
     owner: "docs/reference/prompt-caching.md#stable-tools-between-turns",
   },
 ];
-
-const toolName = (tool: Record<string, unknown>) =>
-  String(
-    tool.name ??
-      (tool.function as { name?: unknown } | undefined)?.name ??
-      (tool.toolSpec as { name?: unknown } | undefined)?.name,
-  );
-
-/** `request` without the named tools (Gemini nests them under `functionDeclarations`). */
-function withoutTools(request: WireRequest, names: readonly string[]): WireRequest {
-  const keep = (tool: Record<string, unknown>) => !names.includes(toolName(tool));
-  const tools = (JSON.parse(request.tools) as Array<Record<string, unknown>>).filter(keep);
-  for (const tool of tools) {
-    // A fresh parse, so changing it in place is safe; the key keeps its position.
-    if (Array.isArray(tool.functionDeclarations)) {
-      tool.functionDeclarations = (
-        tool.functionDeclarations as Array<Record<string, unknown>>
-      ).filter(keep);
-    }
-  }
-  return { ...request, tools: JSON.stringify(tools) };
-}
 
 /** First change of `current` against `previous` that no known tool addition explains. */
 export function unknownChange(
