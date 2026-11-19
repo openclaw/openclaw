@@ -4919,6 +4919,9 @@ export function packCompactNodeTestJobsToCapacity(
           ? estimateParallelTestSeconds(groups, options.estimateGroupSeconds)
           : seconds;
         if (
+          (options.runnerBackend === "github" &&
+            groups.some(isExclusiveCompactGroup) &&
+            !groups.every(isExclusiveCompactGroup)) ||
           (!parallel && groups.length > COMPACT_NODE_TEST_JOB_GROUPS) ||
           new Set(families).size !== families.length ||
           seconds >
@@ -5945,7 +5948,10 @@ function createCompactNodeTestShardBundles(
         true,
       );
     }
-    if (options.runnerBackend === "hybrid") {
+    if (
+      options.runnerBackend === "hybrid" ||
+      (options.runnerBackend === "github" && options.mainValidation)
+    ) {
       measuredJobs = packCompactNodeTestJobsToCapacity(measuredJobs, {
         compactJobCap,
         runnerBackend: options.runnerBackend,
