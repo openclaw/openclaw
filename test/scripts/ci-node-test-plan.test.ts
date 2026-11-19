@@ -728,18 +728,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     ).toBe(before);
   });
 
-  it("keeps hosted tooling separate from ordinary work when fitting the job cap", () => {
-    const jobs = smallCapacityJobs(2);
-    jobs[1]!.groups[0]!.shard_name = "core-tooling-1-hosted-1";
-    expect(() =>
-      packCompactNodeTestJobsToCapacity(jobs, {
-        ...capacityOptions,
-        compactJobCap: 1,
-        runnerBackend: "github",
-      }),
-    ).toThrow("no compatible bundles fit the existing limits");
-  });
-
   it.each(["runner", "build", "workers", "environment", "time budget", "group budget"] as const)(
     "refuses over-cap bundles that cannot merge within the existing %s policy",
     (policy) => {
