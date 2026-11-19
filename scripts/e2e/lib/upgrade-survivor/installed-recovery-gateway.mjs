@@ -527,16 +527,50 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
     return { result, repairRun, output };
   };
 
-  /** Repair checks a recorded data-at-risk mark against state on disk before acting on it. */
+  /** A recorded data-at-risk mark is checked against state on disk before anything acts on it. */
   const verifyRecordedDataAtRisk = async (servingPid) => {
     evidence.dataAtRisk = {};
-    // A false mark: the state is consistent and the operator has started the Gateway again.
+    // A false mark while the operator has started the Gateway again: the next plain
+    // update checks it, resolves it in one line and proceeds, with no repair first.
     const marked = await killUpdate("marked-update", 1, servingPid);
     recordDataAtRiskMark(marked.runId);
     await run("operator-start", ["gateway", "start"], 0);
     await waitForReady("operator-start");
     const operatorPid = await assertServing("operator-start", marked.version);
-    const resolved = await repairMarked("marked-repair", marked);
+    const nextTarget = path.join(artifacts, "after-mark-update.tgz");
+    packFirstHopUpdateFixture(tarball, nextTarget, 2);
+    const nextVersion = packedVersion(nextTarget);
+    const before = new Set(runs().map((row) => row.run_id));
+    const next = await run(
+      "after-mark-update",
+      ["update", "--tag", `file:${nextTarget}`, "--yes", "--json"],
+      null,
+    );
+    const nextRun = runs().find((row) => !before.has(row.run_id) && hasStep(row, "requested"));
+    evidence.dataAtRisk["after-mark-update"] = {
+      markedRunId: marked.runId,
+      exit: next.status,
+      runId: nextRun?.run_id,
+      steps: nextRun?.steps.map(({ step, status }) => `${step}:${status}`),
+    };
+    write(summary, evidence);
+    assert.equal(next.status, 0, "after-mark-update: exit");
+    assert.match(
+      next.stderr,
+      /recorded data at risk \(rollback-state-unverified\); verification found the state schemas match installed OpenClaw .+ so that mark is resolved\./u,
+    );
+    assert(
+      runs().some((row) => hasStep(row, `finalize:data-at-risk-verified:${marked.runId}`)),
+      "after-mark-update: an update run must record the verification",
+    );
+    const nextPid = await assertServing("after-mark-update", nextVersion, operatorPid);
+    fs.unlinkSync(nextTarget);
+
+    // A false mark on an update that stopped the Gateway: repair verifies it, then starts
+    // and verifies the Gateway.
+    const stopped = await killUpdate("stopped-marked-update", 3, nextPid);
+    recordDataAtRiskMark(stopped.runId);
+    const resolved = await repairMarked("marked-repair", stopped);
     assert.equal(resolved.result.status, 0, "marked-repair: exit");
     assert.match(
       resolved.output,
@@ -544,29 +578,16 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
     );
     assert.doesNotMatch(resolved.output, /Gateway remains stopped|Keep the Gateway stopped/u);
     assert(
-      hasStep(resolved.repairRun, `finalize:data-at-risk-verified:${marked.runId}`),
+      hasStep(resolved.repairRun, `finalize:data-at-risk-verified:${stopped.runId}`),
       "marked-repair: the repair run must record the verification",
     );
-    const resolvedPid = await assertServing("marked-repair", marked.version);
-    evidence.dataAtRisk.gatewayPids = [operatorPid, resolvedPid];
+    const resolvedPid = await assertServing("marked-repair", stopped.version, nextPid);
+    evidence.dataAtRisk.gatewayPids = [operatorPid, nextPid, resolvedPid];
     write(summary, evidence);
-
-    // The next plain update proceeds.
-    const nextTarget = path.join(artifacts, "after-mark-update.tgz");
-    packFirstHopUpdateFixture(tarball, nextTarget, 2);
-    const nextVersion = packedVersion(nextTarget);
-    const next = await run(
-      "after-mark-update",
-      ["update", "--tag", `file:${nextTarget}`, "--yes", "--json"],
-      0,
-    );
-    assert.equal(JSON.parse(next.stdout.trim()).status, "ok");
-    const nextPid = await assertServing("after-mark-update", nextVersion, resolvedPid);
-    fs.unlinkSync(nextTarget);
 
     // A real inconsistency: the marked update's database rollback moved migrated state
     // aside and stopped, so the shared database may be only partly restored.
-    const inconsistent = await killUpdate("inconsistent-update", 3, nextPid);
+    const inconsistent = await killUpdate("inconsistent-update", 5, resolvedPid);
     recordDataAtRiskMark(inconsistent.runId);
     const leftover = `${stateDatabase}.migrated-${inconsistent.runId}`;
     fs.copyFileSync(stateDatabase, leftover);
@@ -583,14 +604,14 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
       refused.output.includes(leftover),
       "inconsistent-repair: the finding names the leftover",
     );
-    await assertStopped("inconsistent-repair", nextPid);
+    await assertStopped("inconsistent-repair", resolvedPid);
     assert(fs.existsSync(leftover), "refused repair must leave the leftover as it was");
     // Once the leftover is resolved, the same repair proceeds.
     fs.unlinkSync(leftover);
     const restored = await repairMarked("restored-repair", inconsistent);
     assert.equal(restored.result.status, 0, "restored-repair: exit");
     assert.match(restored.output, /so that mark is resolved\./u);
-    await assertServing("restored-repair", inconsistent.version, nextPid);
+    await assertServing("restored-repair", inconsistent.version, resolvedPid);
   };
 
   const baselineVersion = installedVersion();

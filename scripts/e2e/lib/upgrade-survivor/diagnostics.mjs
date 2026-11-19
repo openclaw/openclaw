@@ -223,6 +223,7 @@ function installedRecoveryCurrent(value, sanitize) {
           "owed-next-check-probe",
           // The data-at-risk cell's commands.
           "marked-update",
+          "stopped-marked-update",
           "operator-start",
           "operator-start-probe",
           "marked-repair",
