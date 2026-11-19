@@ -298,8 +298,8 @@ an access policy supplied by a plugin.
 ```
 
 Use the administrator-scoped `users.setRole` Gateway method with
-`{ profileId, role }` to assign a configured role while named-role enforcement is
-enabled. Set `role: null` to clear an assignment, even when enforcement is disabled. Assignment changes immediately invalidate and close that profile's
+`{ profileId, role }` to assign a role defined in `gateway.roles.definitions`.
+Set `role: null` to clear an assignment. Assignment changes immediately invalidate and close that profile's
 active Gateway connections. Reconnecting applies the current role and scope
 ceiling. A committed change still retires the previous access if returning the
 result fails. An authorized self-downgrade receives its response before its
@@ -334,8 +334,36 @@ Without a default, `definitions` is a role catalog only for non-member connectio
 sign-in, authorization, profile requirements, and session access behave as if
 `gateway.roles` were absent.
 Stored explicit assignments do not apply, and `users.list` reports no effective
-role. Assigning a named role requires a default; clearing an assignment remains
-available. Existing configurations with a default keep their behavior unchanged.
+role. You can still assign defined roles: the assignment is staged, shown as
+`role` in `users.list`, and applies once a default is set. Existing
+configurations with a default keep their behavior unchanged.
+
+To turn on named roles without locking out administrators, enable them in this
+order:
+
+1. Add `gateway.roles.definitions`, including an administrative role, without a
+   default.
+2. Stage that role on each administrator's profile with `users.setRole`, and
+   confirm the assignments in `users.list`. OpenClaw ID members' roles are managed
+   on **Access** instead. A person who has not signed in yet has no profile to
+   assign; at first sign-in they receive a matching
+   `assignments.byGithubLogin` role, if configured, or the default.
+3. Set `gateway.roles.default`, usually to the most restricted role.
+4. Have each administrator sign in again through their verified identity and
+   repeat the admin-only check below, now under the enforced role.
+
+A staged role is a ceiling, not a grant, and it applies only to verified identity
+sign-in, such as a trusted proxy or Tailscale. Once a default is set, operator
+sign-in with a device token or setup code and no verified identity is rejected.
+Before step 3, have each administrator sign in through a verified identity that
+grants `operator.admin`, for example through `gateway.auth.identityScopes`. On
+that connection, confirm that `users.self` returns the staged profile and that an
+admin-only call such as `openclaw.changes.list` succeeds.
+
+Shared-secret owner sign-in (the Gateway token or password) is never limited by
+named roles. Keep it available during the rollout so the owner can repair role
+configuration if an administrator loses access, for example because the role
+requires an access-policy plugin that is not available.
 
 Definitions alone do not disable device-token or setup-code sign-in, browser-code
 pairing, or owner ingress. They do not cap trusted-proxy or Tailscale users; existing

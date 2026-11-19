@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import { ensureProfileIdForEmail } from "../../state/user-profile-email.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
@@ -163,11 +162,8 @@ export function resolveUserRoleAssignmentError(
   if (role === null) {
     return undefined;
   }
-  const cfg = getConfig();
-  const definitions = cfg.gateway?.roles?.definitions;
-  if (definitions && !isNamedOperatorRoleEnforcementEnabled(cfg)) {
-    return "Named-role assignment requires gateway.roles.default to enable named-role enforcement.";
-  }
+  // Without gateway.roles.default the assignment is staged: stored, inert until a default is set.
+  const definitions = getConfig().gateway?.roles?.definitions;
   return definitions && Object.hasOwn(definitions, role)
     ? undefined
     : `unknown operator role "${role}"; define it under gateway.roles.definitions before assigning it`;

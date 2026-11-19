@@ -6,7 +6,6 @@ import {
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
 } from "../../../shared/device-bootstrap-profile.js";
-import { setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { loadDeviceIdentity, openTrackedWs } from "../../device-authz.test-helpers.js";
 import {
@@ -68,20 +67,17 @@ describe("definitions-only operator admission", () => {
       expect(connected.ok, JSON.stringify(connected)).toBe(true);
       expect((connected.payload as HelloOk).auth.sessionCap).toBeUndefined();
       const person = ensureProfileForEmail("definitions-only@example.test");
-      setUserProfileRole(person.id, "guest");
-      const listed = await rpcReq<UsersListResult>(reconnect, "users.list", {});
-      expect(listed.ok).toBe(true);
-      expect(listed.payload?.profiles.find((p) => p.id === person.id)).toMatchObject({
-        role: "guest",
-      });
-      expect(
-        listed.payload?.profiles.find((p) => p.id === person.id)?.effectiveRole,
-      ).toBeUndefined();
-      const assigned = await rpcReq(reconnect, "users.setRole", {
+      // A defined role is staged: stored and listed, with no effective role until a default.
+      const staged = await rpcReq(reconnect, "users.setRole", {
         profileId: person.id,
         role: "guest",
       });
-      expect(assigned.error?.message).toContain("gateway.roles.default");
+      expect(staged.ok, JSON.stringify(staged.error)).toBe(true);
+      const listed = await rpcReq<UsersListResult>(reconnect, "users.list", {});
+      expect(listed.ok).toBe(true);
+      const row = listed.payload?.profiles.find((p) => p.id === person.id);
+      expect(row).toMatchObject({ role: "guest", roleSource: "default" });
+      expect(row?.effectiveRole).toBeUndefined();
       expect(
         (await rpcReq(reconnect, "users.setRole", { profileId: person.id, role: null })).ok,
       ).toBe(true);

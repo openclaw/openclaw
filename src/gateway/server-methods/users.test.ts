@@ -691,23 +691,6 @@ it.each(
   }
 });
 
-it("requires gateway.roles.default to assign a named role from definitions alone", async () => {
-  setUserProfileRole.mockReturnValue({ ...profile, role: "guest" });
-  const respond = await runUsersHandler(
-    "users.setRole",
-    { profileId: profile.id, role: "guest" },
-    adminClient,
-    {
-      getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
-    },
-  );
-  expectError(respond, {
-    code: "INVALID_REQUEST",
-    message: expect.stringContaining("gateway.roles.default"),
-  });
-  expect(setUserProfileRole).not.toHaveBeenCalled();
-});
-
 it("refuses assigning a member profile's role outside Access but permits clearing", async () => {
   const prepareMemberProfileCheck = vi.fn(async () => () => true);
   const context = { ...roleConfig, openclawIdService: { prepareMemberProfileCheck } };
