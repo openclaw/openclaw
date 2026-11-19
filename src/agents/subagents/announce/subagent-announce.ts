@@ -474,14 +474,19 @@ async function runSubagentAnnounceFlowBound(
       continuation.originDelegateFlowStatus === "running" ||
       ((await prepareChildSessionEffects()) &&
         childSessionEffectsAllowed() &&
-        (await countPendingDescendantRuns(params.childSessionKey, () => {
-          if (!childSessionEffectsAllowed()) {
-            throw new Error("Subagent child-session effects are no longer current.");
-          }
-        })) > 0)
+        (await countPendingDescendantRuns(
+          params.childSessionKey,
+          () => {
+            if (!childSessionEffectsAllowed()) {
+              throw new Error("Subagent child-session effects are no longer current.");
+            }
+          },
+          { excludeSuspendedDelivery: true },
+        )) > 0)
     ) {
       // Coordination can admit a child after the earlier descendant check.
       // Recheck now so cleanup cannot retire the orchestrator before its return.
+      // A suspended descendant cannot hold this completion (upstream #197323).
       shouldDeleteChildSession = false;
       return "retryable";
     }
