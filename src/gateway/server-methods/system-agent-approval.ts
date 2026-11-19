@@ -205,7 +205,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
     let ownedApproval: GatewaySystemAgentSession["pendingApproval"];
     // Retirement belongs to the proposal's owner. A same-source observer that lost its
     // lease between preparation and resolution would otherwise cancel the live original.
-    const holdsLiveForeignApproval = async (): Promise<boolean> => {
+    const holdsLiveForeignApproval = (): boolean => {
       const pending = params.session.pendingApproval;
       if (
         pending === undefined ||
@@ -214,8 +214,9 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       ) {
         return false;
       }
-      const forcedDeny = await manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
-      return params.session.pendingApproval === pending && forcedDeny === null;
+      // Pending-object ownership only: run authority is checked at admission, so a
+      // foreign proposal's approval is retired by its own owner, not by this observer.
+      return params.session.pendingApproval === pending;
     };
     const withProposalFailureCleanup = async <T>(resolve: () => Promise<T>): Promise<T> => {
       try {
@@ -225,7 +226,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         // Otherwise a later run can inherit it without the failed run's authority.
         if (
           params.sessions.get(params.sessionId) === params.session &&
-          !(await holdsLiveForeignApproval())
+          !holdsLiveForeignApproval()
         ) {
           await retireSystemAgentProposal(params.session, manager, proposal.hash);
         }

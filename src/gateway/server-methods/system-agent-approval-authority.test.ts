@@ -148,7 +148,7 @@ function pausedApply() {
 
 function wireIdentity(params: {
   operationalRunInstance: ReturnType<typeof createOperationalRunInstanceRef>;
-  delegatedAuthority: ReturnType<typeof claimAgentRunDelegatedAuthority>;
+  delegatedAuthority: ReturnType<typeof claimAgentRunDelegatedAuthority> & { kind: "local" };
   fullPermission?: boolean;
   assertion?: () => void;
 }) {
@@ -448,7 +448,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       proposal,
       trustedAgentRuntime: wireIdentity({
         operationalRunInstance,
-        delegatedAuthority: authority,
+        delegatedAuthority: { kind: "local", ...authority },
         fullPermission: true,
         assertion,
       }),
@@ -477,7 +477,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       proposal,
       trustedAgentRuntime: wireIdentity({
         operationalRunInstance,
-        delegatedAuthority: authority,
+        delegatedAuthority: { kind: "local", ...authority },
         fullPermission: true,
         assertion: () => {
           throw new DelegatedChangeApprovalRequiredError(reason);
@@ -509,7 +509,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       proposal,
       trustedAgentRuntime: wireIdentity({
         operationalRunInstance,
-        delegatedAuthority: authority,
+        delegatedAuthority: { kind: "local", ...authority },
         fullPermission: true,
       }),
     });
