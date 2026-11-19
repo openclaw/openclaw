@@ -114,7 +114,9 @@ in 44465878180/1, only for candidate
 UI, and cron uncertainty, not a claim of fixes or passing tests. Their aggregates
 require the exact observed causes and failed steps; the silent QA status-check
 aggregate additionally requires the SHA-256 of its complete reviewed original
-log. Different runs, attempts, candidates, and additional failures are not granted.
+log. These FRV16 grants apply across runs and attempts for the same release,
+candidate, and named jobs. Different candidates and additional failed jobs are
+not granted.
 
 Changing P alone does not invalidate retained evidence for unchanged C/Q, coverage,
 inputs, and source digests. With reuse enabled, admitted P reevaluates sealed child

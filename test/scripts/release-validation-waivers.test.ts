@@ -731,8 +731,8 @@ describe("beta.1 exact FRV11 test failures", () => {
   });
 });
 
-// FRV16 accepts original failed jobs, not replacement tests or future attempts.
-describe("beta.1 exact FRV16 execution grants", () => {
+// FRV16 grants follow the frozen release/candidate, not a run or attempt.
+describe("beta.1 release-scoped FRV16 grants", () => {
   const targetVersion = "2026.11.10-beta.1";
   const candidateSha = "995f9059b6e6fe3ba0865a3354924fd2bcbfceea";
   const ciNames = [
@@ -773,56 +773,72 @@ describe("beta.1 exact FRV16 execution grants", () => {
     ],
   };
 
-  it.each([ci, qa])("accepts only original $key jobs and retains raw conclusions", (selected) => {
-    expect(terminalPolicyPass(selected, targetVersion, candidateSha)).toBe(true);
-    expect(() =>
-      validateReleaseManifestAdvisoryJobs({
-        targetSha: candidateSha,
-        validationInputs: { targetVersion },
-        childEvidence: { [selected.key]: selected },
-      }),
-    ).not.toThrow();
-    expect(selected.jobs.every((job) => job.conclusion === "failure")).toBe(true);
-    expect(releaseQualificationExemptions(targetVersion, "beta")).toEqual([]);
-    for (const changed of [
-      { targetVersion: "2026.11.10-beta.2", targetSha: candidateSha, child: selected },
-      { targetVersion, targetSha: "a".repeat(40), child: selected },
-      { targetVersion, targetSha: candidateSha, child: { ...selected, runId: "44465881624" } },
-      { targetVersion, targetSha: candidateSha, child: { ...selected, runAttempt: 2 } },
-      { targetVersion, targetSha: candidateSha, child: { ...selected, runAttempt: undefined } },
-    ]) {
-      expect(evaluateReleaseChildPolicy(changed).waivers).toEqual([]);
-      expect(terminalPolicyPass(changed.child, changed.targetVersion, changed.targetSha)).toBe(
+  it.each([ci, qa])(
+    "accepts named $key failures across runs and attempts and retains raw conclusions",
+    (selected) => {
+      expect(terminalPolicyPass(selected, targetVersion, candidateSha)).toBe(true);
+      expect(() =>
+        validateReleaseManifestAdvisoryJobs({
+          targetSha: candidateSha,
+          validationInputs: { targetVersion },
+          childEvidence: { [selected.key]: selected },
+        }),
+      ).not.toThrow();
+      expect(selected.jobs.every((job) => job.conclusion === "failure")).toBe(true);
+      expect(releaseQualificationExemptions(targetVersion, "beta")).toEqual([]);
+      for (const changed of [
+        { targetVersion: "2026.11.10-beta.2", targetSha: candidateSha, child: selected },
+        { targetVersion, targetSha: "a".repeat(40), child: selected },
+      ]) {
+        expect(evaluateReleaseChildPolicy(changed).waivers).toEqual([]);
+        expect(terminalPolicyPass(changed.child, changed.targetVersion, changed.targetSha)).toBe(
+          false,
+        );
+      }
+      for (const execution of [
+        { ...selected, runId: "44465881624", runAttempt: 1 },
+        { ...selected, runAttempt: 2 },
+        { ...selected, runId: undefined, runAttempt: undefined },
+      ]) {
+        expect(terminalPolicyPass(execution, targetVersion, candidateSha)).toBe(true);
+        expect(() =>
+          validateReleaseManifestAdvisoryJobs({
+            targetSha: candidateSha,
+            validationInputs: { targetVersion },
+            childEvidence: { [execution.key]: execution },
+          }),
+        ).not.toThrow();
+      }
+      for (const conclusion of ["cancelled", "timed_out", null]) {
+        expect(
+          terminalPolicyPass(
+            { ...selected, jobs: [{ ...selected.jobs[0], conclusion }] },
+            targetVersion,
+            candidateSha,
+          ),
+        ).toBe(false);
+      }
+      expect(
+        terminalPolicyPass({ ...selected, status: "in_progress" }, targetVersion, candidateSha),
+      ).toBe(false);
+      expect(terminalPolicyPass({ ...selected, jobs: [] }, targetVersion, candidateSha)).toBe(
         false,
       );
-    }
-    for (const conclusion of ["cancelled", "timed_out", null]) {
       expect(
         terminalPolicyPass(
-          { ...selected, jobs: [{ ...selected.jobs[0], conclusion }] },
+          {
+            ...selected,
+            jobs: [
+              ...selected.jobs,
+              { ...failedJob, id: 99, name: "Seal artifact producer receipt" },
+            ],
+          },
           targetVersion,
           candidateSha,
         ),
       ).toBe(false);
-    }
-    expect(
-      terminalPolicyPass({ ...selected, status: "in_progress" }, targetVersion, candidateSha),
-    ).toBe(false);
-    expect(terminalPolicyPass({ ...selected, jobs: [] }, targetVersion, candidateSha)).toBe(false);
-    expect(
-      terminalPolicyPass(
-        {
-          ...selected,
-          jobs: [
-            ...selected.jobs,
-            { ...failedJob, id: 99, name: "Seal artifact producer receipt" },
-          ],
-        },
-        targetVersion,
-        candidateSha,
-      ),
-    ).toBe(false);
-  });
+    },
+  );
 
   it("requires exact CI cause union and rejects missing or non-policy aggregate steps", async () => {
     const policy = evaluateReleaseChildPolicy({

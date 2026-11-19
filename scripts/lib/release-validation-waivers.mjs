@@ -85,21 +85,18 @@ const RELEASE_VALIDATION_WAIVERS = [
     ...[...FRV16_CI_FAILURES.keys()].map((jobName) => ({
       childRole: "normalCi",
       jobName,
-      evidence: { runId: "44465881623", runAttempt: 1 },
     })),
     {
       childRole: "releaseChecksIndependent",
       jobName: FRV16_QA_JOB,
-      evidence: { runId: "44465878180", runAttempt: 1 },
     },
-  ].map(({ childRole, jobName, evidence }) => ({
+  ].map(({ childRole, jobName }) => ({
     childRole,
     jobName,
-    evidence,
     targetVersion: "2026.11.10-beta.1",
     targetSha: FRV16_TARGET_SHA,
     reason:
-      "Dallin Romney authorized tooling-only acceptance on 2026-11-19 at 06:44 UTC, preserving C=Q 995f9059b6e6fe3ba0865a3354924fd2bcbfceea. The lead assessment found no demonstrated high-risk product defect; runtime, worker, UI and cron uncertainty remains accepted, not fixed or proven flaky. This grants only the observed terminal failed job in the original child run/attempt. Preserve raw failures, required execution and complete evidence. Other jobs, runs, attempts, targets, unknown aggregate causes, missing/cancelled/incomplete evidence, integrity, install/update and publication gates remain blocking.",
+      "Dallin Romney authorized tooling-only acceptance on 2026-11-19 at 06:44 UTC, preserving C=Q 995f9059b6e6fe3ba0865a3354924fd2bcbfceea. The lead assessment found no demonstrated high-risk product defect; runtime, worker, UI and cron uncertainty remains accepted, not fixed or proven flaky. Following his 2026-11-19 07:06 UTC instruction, these grants apply across runs and attempts for the named terminal failed jobs on this exact release and candidate. Preserve raw failures, required execution and complete evidence. Other jobs, targets, unknown aggregate causes, missing/cancelled/incomplete evidence, integrity, install/update and publication gates remain blocking.",
   })),
   ...[...STABLE_116_CI_FAILURES.keys()].map((jobName) => ({
     targetVersion: "2026.11.6",
