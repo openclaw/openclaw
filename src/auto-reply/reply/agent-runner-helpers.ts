@@ -42,6 +42,6 @@ export const signalTypingIfNeeded = async (
     hasOutboundReplyContent(payload, { trimText: true }),
   );
   if (shouldSignalTyping) {
-    await typingSignals.signalRunStart();
+    await typingSignals.signalRunStart(payloads.find((payload) => payload.text?.trim())?.text);
   }
 };

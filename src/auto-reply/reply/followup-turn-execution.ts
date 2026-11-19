@@ -200,7 +200,8 @@ export async function executeFollowupTurn(params: {
   });
   const typingSignals: TypingSignaler = {
     ...baseTypingSignals,
-    signalRunStart: () => enqueueProgress(baseTypingSignals.signalRunStart),
+    signalRunStart: (visibleText) =>
+      enqueueProgress(() => baseTypingSignals.signalRunStart(visibleText)),
     signalMessageStart: () => enqueueProgress(baseTypingSignals.signalMessageStart),
     signalTextDelta: (text) => enqueueProgress(() => baseTypingSignals.signalTextDelta(text)),
     signalReasoningDelta: () => enqueueProgress(baseTypingSignals.signalReasoningDelta),

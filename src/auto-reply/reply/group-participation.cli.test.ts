@@ -16,7 +16,9 @@ it.each([
       expect(fixture.typing()).toBe(0);
       return judgment(batch, { attention });
     });
-    models.embedded.mockImplementation(async () => {
+    models.embedded.mockImplementation(async (params) => {
+      expect(fixture.typing()).toBe(0);
+      await params.onPartialReply?.({ text: "Approved reply." });
       expect(fixture.typing() > 0).toBe(shouldType);
       return { payloads: [{ text: "Approved reply." }], meta: { durationMs: 1 } };
     });
@@ -107,6 +109,7 @@ it("preserves ordinary policy when an admitted embedded reply falls back to CLI"
   });
   const reply = await fixture.reply("Bob, do you know the port?", "cli-fallback-source", "-10102");
   expect(reply).toMatchObject({ text: "Ordinary fallback reply." });
+  expect(fixture.typing()).toBeGreaterThan(0);
   expect(models.embedded).toHaveBeenCalledTimes(1);
   expect(models.embedded.mock.calls[0]?.[0]).toMatchObject({
     terminalReplyExpectation: "required",

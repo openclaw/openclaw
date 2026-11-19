@@ -28,6 +28,8 @@ Set `agents.defaults.typingMode` to one of:
 
 Order of "how early it fires": `never` -> `message`/`thinking` -> `instant`.
 
+For group turns assessed by Decision assistance, approval permits generation but does not start typing. Typing waits for visible reply text, so a primary response of `NO_REPLY` stays quiet. `never` mode still disables typing.
+
 ## Configuration
 
 Set the agent-level default:

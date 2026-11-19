@@ -36,42 +36,51 @@ beforeEach(async () => {
   decision.mockReset();
 });
 
-it("observes chatter without typing or generation and persists its source", async () => {
-  const previousRequests = fixture.requests.length;
-  const previousTyping = fixture.typing();
-  const previousPartials = fixture.partials.length;
-  decision.mockImplementation(async (batch) => judgment(batch, { attention: "none" }));
-  expect(texts(await fixture.reply("Bob, see you at lunch.", "observed-source"))).toEqual([]);
-  expect(decision).toHaveBeenCalledOnce();
-  expect(fixture.requests).toHaveLength(previousRequests);
-  expect(fixture.typing()).toBe(previousTyping);
-  expect(fixture.partials).toHaveLength(previousPartials);
-  const sessionKey = "agent:main:telegram:group:-10001";
-  const entry = await readSessionEntryInWorker({ storePath: fixture.storePath, sessionKey });
-  if (!entry) {
-    throw new Error("The reply flow did not create its session");
-  }
-  expect(entry.status).toBe("done");
-  expect(entry.lifecycleRunId).toBeUndefined();
-  const events = await loadTranscriptEvents({
-    agentId: "main",
-    sessionId: entry.sessionId,
-    sessionKey,
-    storePath: fixture.storePath,
-  });
-  expect(
-    events.some(
-      (event) =>
-        isIndexedSessionEntry(event) &&
-        event.type === "message" &&
-        event.message.role === "user" &&
-        extractTextFromChatContent(event.message.content, {
-          joinWith: "\n",
-          normalizeText: (text) => text,
-        })?.includes("Bob, see you at lunch."),
-    ),
-  ).toBe(true);
-});
+it.each([
+  ["none", 0],
+  ["engagement", 1],
+] as const)(
+  "keeps the turn silent after %s participation (primary calls: %s)",
+  async (attention, primaryCalls) => {
+    const previousRequests = fixture.requests.length;
+    const previousTyping = fixture.typing();
+    const previousPartials = fixture.partials.length;
+    decision.mockImplementation(async (batch) => judgment(batch, { attention }));
+    fixture.respond(answer("NO_REPLY"));
+    expect(texts(await fixture.reply("Bob, see you at lunch.", "observed-source"))).toEqual([]);
+    expect(decision).toHaveBeenCalledOnce();
+    expect(fixture.requests).toHaveLength(previousRequests + primaryCalls);
+    expect(fixture.typing()).toBe(previousTyping);
+    expect(fixture.partials).toHaveLength(previousPartials);
+    const sessionKey = "agent:main:telegram:group:-10001";
+    const entry = await readSessionEntryInWorker({ storePath: fixture.storePath, sessionKey });
+    if (!entry) {
+      throw new Error("The reply flow did not create its session");
+    }
+    if (attention === "none") {
+      expect(entry.status).toBe("done");
+      expect(entry.lifecycleRunId).toBeUndefined();
+    }
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: entry.sessionId,
+      sessionKey,
+      storePath: fixture.storePath,
+    });
+    expect(
+      events.some(
+        (event) =>
+          isIndexedSessionEntry(event) &&
+          event.type === "message" &&
+          event.message.role === "user" &&
+          extractTextFromChatContent(event.message.content, {
+            joinWith: "\n",
+            normalizeText: (text) => text,
+          })?.includes("Bob, see you at lunch."),
+      ),
+    ).toBe(true);
+  },
+);
 
 it.each(["engagement", "opportunity", "unavailable"] as const)(
   "preserves ordinary tools, streaming, delivery and history after %s",

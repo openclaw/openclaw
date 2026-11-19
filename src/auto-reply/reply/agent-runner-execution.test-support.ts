@@ -403,6 +403,7 @@ export function createMockTypingSignaler(): TypingSignaler {
     signalReasoningDelta: vi.fn(async () => {}),
     signalToolStart: vi.fn(async () => {}),
     signalExecutionActivity: vi.fn(async () => {}),
+    deferUntilText: vi.fn(),
   };
 }
 
