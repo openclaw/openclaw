@@ -223,7 +223,12 @@ provider-auth headers, cache admission, and static fallback.
 Use `buildLiveModelProviderConfig` when the plugin builds the provider config
 itself. Without `projectRows`, the listing decides which models exist: every
 listed chat model is published, static `models` rows only enrich matching IDs,
-and non-chat rows are filtered by the same rules as `liveModelDiscovery`. To
+and non-chat rows are filtered by the same rules as `liveModelDiscovery`. A listed model can still fail its first chat request. When a 400, 403 or 404
+rejects its model or chat capability, and the successful listing made with the
+same credential returned that ID, the turn explains the rejection and moves
+to the next configured fallback without retrying, changing logins, compacting,
+or persisting health. It uses `listedModelIds` or `modelIdCatalog` evidence.
+To
 restrict the list, pass `readModelId(row)` and return `undefined` for rows the
 provider does not support; the returned string also becomes the model ID. Pass
 `projectRows` when the live API publishes richer model metadata:

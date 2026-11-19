@@ -2,6 +2,10 @@ import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { classifyGatewayStorageFailure } from "../../../infra/sqlite-error-diagnostics.js";
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
+import {
+  isModelInCredentialListing,
+  type ProviderCatalogOutcome,
+} from "../../../plugins/provider-catalog-outcome.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
@@ -23,6 +27,8 @@ import {
   recordModelFallbackStop,
   resolveFailoverStatus,
 } from "../../failover-error.js";
+import { inferSignalStatus } from "../../failover/classification-rules.js";
+import { MODEL_CHAT_REJECTED_CODE, MODEL_CHAT_REJECTED_TEXT } from "../../failover/error.js";
 import { isTimeoutErrorMessage } from "../../failover/message-patterns.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import {
@@ -35,6 +41,7 @@ import {
   formatBillingErrorMessage,
   renderRateLimitRetryExhaustion,
 } from "../../failover/user-copy.js";
+import { isListedModelChatRejection } from "../../live-model-errors.js";
 import { resolveSessionSuspensionReason } from "../../session-suspension.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
 import { log } from "../logger.js";
@@ -68,6 +75,8 @@ export async function handleEmbeddedAssistantFailure(input: {
     PreparedEmbeddedRunInput,
     "runParams" | "fallbackConfigured" | "suspendForFailure" | "agentDir" | "isProbeSession"
   >;
+  /** Live listing outcomes of the admitted model catalog. */
+  providerOutcomes?: readonly ProviderCatalogOutcome[];
   preparedRuntime: Pick<
     PreparedRuntime,
     | "provider"
@@ -199,6 +208,15 @@ export async function handleEmbeddedAssistantFailure(input: {
     ? buildAssistantFailoverSignal(failedAssistant)
     : undefined;
   const assistantStatus = assistantSignal?.status;
+  // Only this credential’s listing proves the model exists.
+  const listedModelRejection =
+    assistantSignal !== undefined &&
+    isListedModelChatRejection(inferSignalStatus(assistantSignal), assistantSignal.message ?? "") &&
+    isModelInCredentialListing(input.providerOutcomes, {
+      provider,
+      modelId,
+      profileId: runtime.lastProfileId,
+    });
   const nonRetryableClientError =
     assistantSignal !== undefined &&
     assistantStatus !== undefined &&
@@ -248,7 +266,9 @@ export async function handleEmbeddedAssistantFailure(input: {
     input.emptyErrorRetries >= MAX_EMPTY_ERROR_RETRIES;
   const effectiveFailoverReason = exhaustedUnclassifiedSilentError
     ? ("unknown" as const)
-    : assistantFailoverReason;
+    : listedModelRejection
+      ? ("format" as const)
+      : assistantFailoverReason;
 
   const logFailoverDecision = createFailoverDecisionLogger({
     stage: "assistant",
@@ -271,6 +291,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   if (
     !signalOwnedInterruption &&
     authFailure &&
+    !listedModelRejection &&
     (await preparedRuntime.maybeRefreshRuntimeAuthForAuthError(
       failedAssistant?.errorMessage ?? "",
       input.runtimeAuthRetry,
@@ -311,6 +332,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       failoverFailure,
       failoverReason: assistantFailoverReason,
       harnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
+      listedModelRejected: listedModelRejection,
       profileRotated,
     });
   const initialDecision = exhaustedUnclassifiedSilentError
@@ -466,9 +488,13 @@ export async function handleEmbeddedAssistantFailure(input: {
   // and stale classified text retain the normal payload path.
   if (
     decision.action === "fallback_model" ||
-    (decision.action === "surface_error" && !externalAbort && !timedOut && failoverFailure)
+    (decision.action === "surface_error" &&
+      !externalAbort &&
+      !timedOut &&
+      (failoverFailure || listedModelRejection))
   ) {
     const message =
+      (listedModelRejection ? MODEL_CHAT_REJECTED_TEXT : undefined) ||
       (failedAssistant
         ? formatUserFacingAssistantErrorText(failedAssistant, {
             cfg: runInput.runParams.config,
@@ -521,7 +547,7 @@ export async function handleEmbeddedAssistantFailure(input: {
           profileId: runtime.lastProfileId,
           authMode,
           status,
-          code: failedAssistant?.errorCode,
+          code: listedModelRejection ? MODEL_CHAT_REJECTED_CODE : failedAssistant?.errorCode,
           rawError: failedAssistant?.errorMessage?.trim(),
           // Retry reason "timeout" also includes 5xx; only the terminal owner records a deadline.
           timeout:

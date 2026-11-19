@@ -12,6 +12,7 @@ import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import type { FailoverReason } from "../failover/signal.js";
+import { readCapturedPreparedModelRuntimeCatalog } from "../prepared-model-runtime.capture.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
 import { resolveSourceReplyDelivery } from "./delivery-evidence.js";
@@ -519,8 +520,15 @@ export async function runPreparedEmbeddedLoop(
           lastRetryFailoverReason = recovery.lastRetryFailoverReason;
           continue;
         }
+        const preparedModelRuntime = admittedRunInput.preparedModelRuntime;
         const assistantFailureOutcome = await handleEmbeddedAssistantFailure({
           runInput: admittedRunInput,
+          providerOutcomes:
+            preparedModelRuntime &&
+            (
+              readCapturedPreparedModelRuntimeCatalog(preparedModelRuntime) ??
+              preparedModelRuntime.modelCatalog
+            ).providerOutcomes,
           preparedRuntime,
           normalizedAttempt,
           runtime: attemptRuntimeSnapshot,
