@@ -7,11 +7,16 @@ import {
   resolveGatewayOwnerStatus,
 } from "./gateway-lock.js";
 
-/** Published 2026.6.33 Gateways predate state-local locks and SQLite coordinators. */
-export async function readLegacyGatewayLockIdentity(env: NodeJS.ProcessEnv) {
+/** Historical per-config lock that older Gateways wrote under the system temporary directory. */
+export function resolveLegacyGatewayLockPath(env: NodeJS.ProcessEnv): string {
   const uid = process.getuid?.();
   const lockDir = path.join(os.tmpdir(), uid === undefined ? "openclaw" : `openclaw-${uid}`);
-  const { configLockPath } = resolveGatewayLockPaths(env, lockDir);
+  return resolveGatewayLockPaths(env, lockDir).configLockPath;
+}
+
+/** Published 2026.6.33 Gateways predate state-local locks and SQLite coordinators. */
+export async function readLegacyGatewayLockIdentity(env: NodeJS.ProcessEnv) {
+  const configLockPath = resolveLegacyGatewayLockPath(env);
   const payload = await readLockPayload(configLockPath, true).catch((cause: unknown) => {
     throw new GatewayLockError(
       `Legacy Gateway lock could not be read at ${configLockPath}; inspect that file as the Gateway service account before retrying maintenance.`,
@@ -32,11 +37,13 @@ export async function assertLegacyGatewayStoppedForMaintenance(
 ): Promise<void> {
   const owner = await readLegacyGatewayLockIdentity(env);
   if (owner) {
-    // `gateway recover-lock` inspects only the state-local lock directory.
+    // `gateway recover-lock` inspects the state-local lock directory, and on Linux this file too.
     const next =
       owner.path === resolveGatewayLockPaths(env).configLockPath
         ? "If that process has stopped, run `openclaw gateway recover-lock` to inspect and explicitly recover it."
-        : "If that process has stopped on this host and in every container sharing this directory, remove that file as the Gateway service account.";
+        : process.platform === "linux"
+          ? "If that process has stopped on this host and in every container sharing this directory, run `openclaw gateway recover-lock` as the Gateway service account with the same TMPDIR to inspect and explicitly recover it, or remove that file as the Gateway service account."
+          : "If that process has stopped on this host and in every container sharing this directory, remove that file as the Gateway service account.";
     throw new GatewayLockError(
       `Legacy Gateway lock ${owner.path} still has a live or unverified owner (PID ${owner.pid}). ${next}`,
     );

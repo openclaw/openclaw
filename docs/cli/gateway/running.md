@@ -180,6 +180,21 @@ cannot be verified from the new process, including containers with separate PID
 namespaces. `openclaw gateway recover-lock --json` exposes the inspection and
 confirmation command for operator tooling.
 
+On Linux, inspection also covers the historical per-config lock
+(`gateway.<hash>.lock` in the `openclaw-<uid>` folder of the system temporary
+directory) that older Gateways wrote and that `openclaw doctor` still checks
+before maintenance, when that folder and file are owned by the current user and
+writable by nobody else; otherwise it names the file and why it was skipped. When
+Doctor refuses with "Legacy Gateway lock ... still has a live or unverified
+owner", run `openclaw gateway recover-lock` as the Gateway service account from
+the same environment as that Doctor run (the same `TMPDIR`), so it inspects the
+same file; a run that had to skip that file (wrong owner, writable by others,
+or a parent directory another user could replace) says so instead of reporting
+an empty inspection. On macOS and Windows a separate system-temp copy of that
+record is not inspected; a stopped owner without a process namespace is admitted
+once its heartbeat is older than 90 seconds, and a record at the state-local
+config lock path is inspected like any other.
+
 Recovery supports SQLite global state and the selected PostgreSQL state family.
 For PostgreSQL, inspection binds the original local anchor, remote store UUID and
 namespace, and complete Gateway-owner lease record. Confirmation clears only that

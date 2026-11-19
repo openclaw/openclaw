@@ -17,9 +17,19 @@ export function addGatewayLockRecoveryCommand(gateway: Command): void {
           const result = await recoverGatewayLock({ confirmation: opts.confirm });
           if (opts.json) {
             defaultRuntime.writeJson(result);
-          } else {
-            defaultRuntime.log("Gateway lock recovery completed. Start the Gateway again.");
+            return;
           }
+          const unresolved = result.notes ?? [];
+          for (const note of unresolved) {
+            defaultRuntime.log(note);
+          }
+          defaultRuntime.log(
+            !result.recovered
+              ? "Nothing was recovered: no eligible Gateway lock or owner lease is present. Resolve the entry above, if any, then inspect again."
+              : unresolved.length > 0
+                ? "Gateway lock recovery completed for the records shown, but a skipped historical lock remains and can still block Doctor; resolve it, then inspect again."
+                : "Gateway lock recovery completed. Start the Gateway again.",
+          );
           return;
         }
         const inspection = await inspectGatewayLockRecovery();
@@ -30,13 +40,22 @@ export function addGatewayLockRecoveryCommand(gateway: Command): void {
           defaultRuntime.writeJson({
             present: inspection.present,
             holders: inspection.holders,
+            notes: inspection.notes,
             confirmation: inspection.confirmation,
             command,
           });
           return;
         }
+        const skipped = inspection.notes ?? [];
+        for (const note of skipped) {
+          defaultRuntime.log(note);
+        }
         if (!inspection.present) {
-          defaultRuntime.log("No Gateway lock or owner lease is present.");
+          defaultRuntime.log(
+            skipped.length > 0
+              ? "Inspection was incomplete; no other Gateway lock or owner lease is present. Resolve the entry above, then inspect again."
+              : "No Gateway lock or owner lease is present.",
+          );
           return;
         }
         for (const holder of inspection.holders) {
