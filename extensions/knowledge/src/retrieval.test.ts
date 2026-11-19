@@ -560,3 +560,44 @@ it("matches canonical keyword spellings without changing record bytes", async ()
   }
   expect(ids(await f.service.grep({ query: "αλφα" }, f.owner))).not.toContain("canonical_nfc");
 });
+
+it("canonical keyword forms preserve authored records and snippet offsets", async () => {
+  const f = await fixture();
+  const nfc = "άλφα",
+    nfd = nfc.normalize("NFD"),
+    beta = "βήτα";
+  const bodies = new Map([
+    ["nfc_note", nfc],
+    ["nfd_note", nfd],
+    ["mixed_note", nfc + " " + beta.normalize("NFD")],
+    ["hangul_note", "가나"],
+    ["hangul_nfc_note", "가나"],
+  ]);
+  for (const [id, body] of bodies) {
+    await f.put(id, "Canonical", body);
+  }
+  const read = async (id: string) =>
+    (await f.service.record({ id, includeMetadata: true }, f.owner)).record!;
+  const before = await Promise.all([...bodies.keys()].map(read));
+  for (const query of [nfc, nfd]) {
+    const result = await f.service.grep({ query, detail: "full" }, f.owner);
+    expect(ids(result).toSorted()).toStrictEqual(["mixed_note", "nfc_note", "nfd_note"]);
+    for (const hit of result.hits.filter(isFullHit)) {
+      const body = bodies.get(hit.record.id)!;
+      expect(hit.snippet.text).toBe(body.slice(hit.snippet.start, hit.snippet.end));
+    }
+  }
+  expect(await f.total({ query: "αλφα" })).toBe(1);
+  for (const mode of ["all", "any"] as const) {
+    expect(ids(await f.service.grep({ query: nfc + " " + beta, mode }, f.owner))).toContain(
+      "mixed_note",
+    );
+  }
+  expect(await f.total({ query: nfc + " " + beta, mode: "phrase" })).toBe(0);
+  expect(await f.total({ query: nfc + " " + beta.normalize("NFD"), mode: "phrase" })).toBe(1);
+  expect(ids(await f.service.grep({ query: "가나" }, f.owner)).toSorted()).toStrictEqual([
+    "hangul_nfc_note",
+    "hangul_note",
+  ]);
+  expect(await Promise.all([...bodies.keys()].map(read))).toStrictEqual(before);
+});
