@@ -1,6 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { isDecisionAssistanceEligible } from "../../agents/decision-assistance.js";
+import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
+import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import {
@@ -35,6 +37,7 @@ import {
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import { getRequesterProfile } from "../requester-profile.js";
+import type { TemplateContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { applySessionHints } from "./body.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
@@ -42,7 +45,6 @@ import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import {
   buildExecOverridePromptHint,
   finishReplyPreparation,
-  formatRoomEventLine,
   hasInboundHistoryBody,
   hasReplyTargetContext,
 } from "./get-reply-run-helpers.js";
@@ -186,11 +188,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     promptSessionCtx.ChatType === "group" || promptSessionCtx.ChatType === "channel";
   const groupParticipation =
     isGroupChat &&
+    !isSyntheticTurn &&
     inboundEventKind !== "room_event" &&
     promptSessionCtx.WasMentioned !== true &&
     !isExplicitCommandTurnContext(promptSessionCtx, cfg) &&
-    (conversation.activation ?? defaultActivation) === "always" &&
-    isDecisionAssistanceEligible(cfg, agentId)
+    (conversation.activation ?? defaultActivation) === "always"
       ? {
           agentName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId)?.name),
           replyToText: sessionCtx.ReplyToBody,
@@ -494,6 +496,17 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     ({ activeGoalContext, inboundUserContext } = buildInboundContextState());
   };
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
+  function formatRoomEventLine(context: TemplateContext, body: string): string {
+    const messageId =
+      normalizeOptionalString(context.MessageSid) ??
+      normalizeOptionalString(context.MessageSidFull);
+    const sender =
+      normalizeOptionalString(context.SenderName) ??
+      normalizeOptionalString(context.SenderUsername) ??
+      normalizeOptionalString(context.SenderId);
+    const prefix = [messageId ? `#${messageId}` : undefined, sender].filter(Boolean).join(" ");
+    return prefix ? `${prefix}: ${body}` : body;
+  }
 
   function resolveRoomEventBody(): string {
     const hasBaseBody = Boolean(normalizeOptionalString(baseBodyFinal));
@@ -531,7 +544,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       promptSessionCtx.SenderIsBot === true &&
       terminalReplyExpectation === "optional")
       ? sourceReplyDeliveryMode === "message_tool_only"
-        ? `${ROOM_EVENT_PARTICIPATION_RULE} To respond visibly, use message(action=send); your final text here stays private either way.`
+        ? `${groupParticipation ? "Without participation approval for this turn: " : ""}${ROOM_EVENT_PARTICIPATION_RULE} To respond visibly, use message(action=send); your final text here stays private either way.`
         : ROOM_EVENT_PARTICIPATION_RULE
       : inboundEventKind === "user_request" && sourceReplyDeliveryMode === "message_tool_only"
         ? MESSAGE_TOOL_ONLY_DELIVERY_HINT

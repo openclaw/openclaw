@@ -12,6 +12,8 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 
 const groupsRuntimeLoader = createLazyImportLoader(() => import("./groups.runtime.js"));
+export const GROUP_PARTICIPATION_GUIDANCE =
+  "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. If addressed to someone else, stay silent unless invited or correcting key facts.";
 const silentReplyGuidance = `If no text reply is needed, including after a reaction or other action, reply with exactly "${SILENT_REPLY_TOKEN}" as the entire final answer, without commentary, punctuation, or formatting. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`;
 
 async function resolveRuntimeChannelId(raw?: string | null): Promise<string | null> {
@@ -121,7 +123,7 @@ function buildGroupChatContext(params: {
     );
   }
   lines.push(
-    "Follow the participation assessment in the current turn's runtime context: approval requires a conversational reply. Without approval, mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
+    `Follow the participation assessment in the current turn's runtime context: approval requires a conversational reply. Without approval, apply this etiquette: ${GROUP_PARTICIPATION_GUIDANCE} Emoji reactions are welcome when available.`,
   );
   const channelId = normalizeChatChannelId(provider) ?? provider ?? "";
   const tableMode = getLoadedChannelPluginForRead(channelId)?.messaging?.defaultMarkdownTableMode;
@@ -129,9 +131,6 @@ function buildGroupChatContext(params: {
     tableMode === "block" || tableMode === "off" ? "" : " Avoid Markdown tables.";
   lines.push(
     `Write like a human.${tableGuidance} Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.`,
-  );
-  lines.push(
-    "Without participation approval for the current turn, if addressed to someone else, stay silent unless invited or correcting key facts.",
   );
   if (provider === "discord") {
     lines.push("Discord: wrap bare URLs like <https://example.com> to suppress embeds.");

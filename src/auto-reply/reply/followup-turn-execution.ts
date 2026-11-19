@@ -4,12 +4,9 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
-import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { captureReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { resolveTurnPersonalProfiles } from "../../sessions/session-participant-input.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
@@ -18,7 +15,6 @@ import { isFastModeAutoProgressPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -26,14 +22,12 @@ import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { readGroupParticipationRun } from "./group-participation-run.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import { createReplyInputAdmission } from "./reply-input-admission.js";
-import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-turn-admission.types.js";
 import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
@@ -95,16 +89,11 @@ export async function executeFollowupTurn(params: {
   const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);
   turn.queued.run.terminalReplyExpectation = terminalReplyExpectation;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
-  const progressAllowed = () =>
-    turn.sendPolicy === "allow" &&
-    !roomEvent &&
-    !readGroupParticipationRun(turn.operation)?.isObserving;
+  const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const progressAllowed = () =>
     deliveryAllowed() &&
     (sourceOpts?.progressRequiresReply !== true ||
-      isRequiredReplyExpectation(
-        turn.queued.run.terminalReplyExpectation ?? terminalReplyExpectation,
-      ));
+      isRequiredReplyExpectation(terminalReplyExpectation));
   const currentVerboseLevel = (): VerboseLevel => {
     const level =
       turn.queued.run.verboseLevelOverride ??
@@ -198,23 +187,19 @@ export async function executeFollowupTurn(params: {
       : undefined;
   const baseTypingSignals = createTypingSignaler({
     typing: defaults.typing,
-    mode: defaults.typingMode,
+    mode: progressAllowed() ? defaults.typingMode : "never",
   });
-  const enqueueTyping = (signal: () => Promise<void>) =>
-    enqueueProgress(async () => {
-      if (progressAllowed()) {
-        await signal();
-      }
-    });
   const typingSignals: TypingSignaler = {
     ...baseTypingSignals,
-    signalRunStart: () => enqueueTyping(baseTypingSignals.signalRunStart),
-    signalMessageStart: () => enqueueTyping(baseTypingSignals.signalMessageStart),
-    signalTextDelta: (text) => enqueueTyping(() => baseTypingSignals.signalTextDelta(text)),
-    signalReasoningDelta: () => enqueueTyping(baseTypingSignals.signalReasoningDelta),
-    signalToolStart: () => enqueueTyping(baseTypingSignals.signalToolStart),
+    signalRunStart: () => enqueueProgress(baseTypingSignals.signalRunStart),
+    signalMessageStart: () => enqueueProgress(baseTypingSignals.signalMessageStart),
+    signalTextDelta: (text) => enqueueProgress(() => baseTypingSignals.signalTextDelta(text)),
+    signalReasoningDelta: () => enqueueProgress(baseTypingSignals.signalReasoningDelta),
+    signalToolStart: () => enqueueProgress(baseTypingSignals.signalToolStart),
     signalExecutionActivity: () =>
-      enqueueTyping(baseTypingSignals.signalExecutionActivity ?? baseTypingSignals.signalRunStart),
+      enqueueProgress(
+        baseTypingSignals.signalExecutionActivity ?? baseTypingSignals.signalRunStart,
+      ),
   };
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
@@ -333,10 +318,7 @@ export async function executeFollowupTurn(params: {
     return pendingWorkDrain;
   };
   const sessionCtx = buildFollowupTemplateContext(turn);
-  // Canonical execution settles this memoized failure through the existing refusal owner.
-  const channelAdmissionFailure =
-    turn.preflightError !== undefined && isChannelRunAuthorizationError(turn.preflightError);
-  if (turn.preflightError && !turn.preflightFailurePayload && !channelAdmissionFailure) {
+  if (turn.preflightError && !turn.preflightFailurePayload) {
     throw turn.preflightError instanceof Error
       ? turn.preflightError
       : new Error(formatErrorMessage(turn.preflightError));
@@ -375,7 +357,7 @@ export async function executeFollowupTurn(params: {
     await admitFollowupRunLifecycle(turn.queued);
     turn.operation.abortSignal.throwIfAborted();
     setChannelSourceTurnId(sessionCtx, sourceTurnId);
-    if (turn.preflightFailurePayload && !channelAdmissionFailure) {
+    if (turn.preflightFailurePayload) {
       turn.operation.fail("run_failed", turn.preflightError);
       execution = {
         runId: turn.runId,
@@ -408,7 +390,6 @@ export async function executeFollowupTurn(params: {
       }
       const execute = () =>
         executeAgentTurn({
-          completeObservedTurn: inputAdmission.completeObservedTurn,
           recoveryMemoryFlushAttempted: turn.memoryFlushAttempted,
           completionSource: gatewayOwnsCompletion ? "reply-dispatch" : undefined,
           commandBody: turn.queued.prompt,
@@ -449,37 +430,33 @@ export async function executeFollowupTurn(params: {
       // Queued execution outlives its ingress scope. Re-enter the exact source
       // custody after lazy collection binds it, so runtime appends consume all sources.
       turn.operation.abortSignal.throwIfAborted();
-      const sourceTurnId = resolveReplySourceTurnId({
-        sourceTurnId: turn.queued.sourceTurnId,
-        admissionRunId: turn.queued.messageId,
-        ingressProvider: turn.queued.run.messageProvider,
-        entry: turn.session.current(),
-      });
-      if (sourceTurnId) {
-        replyRunRegistry.bindSourceTurnId(turn.operation, sourceTurnId);
-        setChannelSourceTurnId(sessionCtx, sourceTurnId);
-      }
-      execution = await withBeforeAgentReplyObserver(
-        { shouldDispatch: () => !readGroupParticipationRun(turn.operation)?.isPrivate },
-        () => (recorder?.withPendingInput ? recorder.withPendingInput(execute) : execute()),
-      );
-    } catch (error) {
-      await drainPendingWork();
-      if (!hasReplyOperationExecutionStarted(turn.operation)) {
-        throw error;
-      }
-      turn.operation.fail("run_failed", error);
-      execution = {
-        runId: turn.runId,
-        outcome: {
-          kind: "rejected",
-          payload: buildTerminalAgentRunFailureReplyPayload({
-            isHeartbeat,
-            replyExpectation: turn.queued.run.terminalReplyExpectation ?? terminalReplyExpectation,
-            visibleReplyDelivered,
-          }),
-        },
-      };
+      // Only the original fresh ingress can recreate authority for this new run.
+      // Maintenance copies and synthetic turns must not reuse the source factory.
+      const run = turn.queued.run;
+      const capability =
+        run.senderIsOwner &&
+        isFreshChannelCronAuthorityTurn({
+          messageProvider: run.messageProvider,
+          senderId: run.senderId,
+          isRoomEvent: roomEvent,
+          inputProvenance: run.inputProvenance,
+          spawnedBy: run.spawnedBy,
+          suppressNextUserMessagePersistence: run.suppressNextUserMessagePersistence,
+        })
+          ? turn.queued.createChannelCronAuthority?.(
+              turn.runId,
+              getCommandOwnerAuthority(run)?.isCurrent,
+            )
+          : undefined;
+      progressOpts.cronCreatorAuthorityCapability = capability;
+      const runWithInput = () => withCurrentUserTurnInput(recorder, execute);
+      execution = capability
+        ? await runWithCronCreatorAuthorityCapability(
+            capability,
+            runWithInput,
+            turn.operation.abortSignal,
+          )
+        : await runWithInput();
     }
   } catch (error) {
     await drainPendingWork();
@@ -491,25 +468,6 @@ export async function executeFollowupTurn(params: {
       throw error;
     }
     turn.queued.operatorAuthority?.assertCurrent();
-    if (
-      turn.queued.controllerInput?.retirementRequested === true &&
-      (turn.queued.controllerClaim?.custody ?? turn.queued.controllerInput.custody).failure ===
-        error
-    ) {
-      createAgentLifecycleTerminalBackstop({
-        runId: turn.runId,
-        sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
-        startedAt: runStartedAt,
-        getLifecycleGeneration: () =>
-          turn.operation.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
-        resolveTerminationFields: (failure) =>
-          resolveReplyOperationTerminationFields(
-            failure,
-            turn.operation.abortSignal,
-            turn.operation,
-          ),
-      }).emit("error", error);
-    }
     // Input is already accepted. A setup failure must surface without replaying it.
     turn.operation.fail("run_failed", error);
     execution = {

@@ -2,7 +2,7 @@ import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-re
 import type { ReplyPayload } from "../types.js";
 import type { SettledAgentTurn } from "./agent-runner-execution.types.js";
 import type { resolveFollowupDeliveryDecision } from "./followup-delivery.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import type { AdmittedFollowupTurn } from "./reply-turn-admission.types.js";
 import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 export function createTurn(overrides: Partial<AdmittedFollowupTurn> = {}): AdmittedFollowupTurn {

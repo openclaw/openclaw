@@ -16,10 +16,8 @@ import { isPluginHookAgentTrigger } from "./hook-types.js";
 const BEFORE_AGENT_REPLY_OBSERVER_KEY = Symbol.for("openclaw.beforeAgentReply.observer");
 
 type BeforeAgentReplyObserver = {
-  /** Deferred preparation must not consume the once-per-turn hook admission. */
-  shouldDispatch?: () => boolean;
-  beforeDispatch?: () => Promise<boolean | void>;
-  afterDispatch?: (
+  beforeDispatch: () => Promise<boolean | void>;
+  afterDispatch: (
     result: PluginHookBeforeAgentReplyResult | undefined,
   ) => Promise<PluginHookBeforeAgentReplyResult | undefined>;
 };
@@ -58,16 +56,6 @@ export function runBeforeAgentReplyForTurn(params: {
   if (!isPluginHookAgentTrigger(trigger)) {
     return Promise.resolve(undefined);
   }
-  const scope = beforeAgentReplyObserver.getStore();
-  // Nested runs inherit async context. Select and bind the observer once, before
-  // preparation can yield, so a child cannot checkpoint its parent's admission.
-  const observer = scope && (!scope.runId || scope.runId === params.runId) ? scope : undefined;
-  if (observer) {
-    observer.runId ??= params.runId;
-  }
-  if (observer?.shouldDispatch?.() === false) {
-    return Promise.resolve(undefined);
-  }
   const context = { ...params.context, trigger };
   const inherited = readClaimingHookAdmission(context);
   const assertCurrent = params.assertCurrent
@@ -84,7 +72,17 @@ export function runBeforeAgentReplyForTurn(params: {
       }
       await params.awaitSessionDiffBaseline?.();
       assertCurrent?.();
-      if ((await observer?.beforeDispatch?.()) === false) {
+      const observerScope = beforeAgentReplyObserver.getStore();
+      // Nested agent runs inherit async context. Bind recovery to the first runner
+      // so a hook-spawned child cannot checkpoint its parent's admitted turn.
+      const observer =
+        observerScope && (!observerScope.runId || observerScope.runId === params.runId)
+          ? observerScope
+          : undefined;
+      if (observer && !observer.runId) {
+        observer.runId = params.runId;
+      }
+      if ((await observer?.beforeDispatch()) === false) {
         return undefined;
       }
       assertCurrent?.();
@@ -96,7 +94,7 @@ export function runBeforeAgentReplyForTurn(params: {
         params.onDeclined?.();
       }
       assertCurrent?.();
-      if (observer?.afterDispatch) {
+      if (observer) {
         result = await observer.afterDispatch(result);
       }
       assertCurrent?.();

@@ -43,7 +43,7 @@ import { completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue } from "./queue/state.js";
 import { isFollowupRunAborted } from "./queue/types.js";
 import { createReplyActorFixture } from "./reply-actor.test-support.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import type { AdmittedFollowupTurn } from "./reply-turn-admission.types.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
 

@@ -52,12 +52,7 @@ import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
-import { recordGroupParticipationInput } from "./group-participation-inputs.js";
-import {
-  resolveGroupParticipationCandidate,
-  readGroupParticipationRun,
-} from "./group-participation-run.js";
-import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { resolveGroupParticipationCandidate } from "./group-participation.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
   completeFollowupRunLifecycle,
@@ -319,8 +314,10 @@ export async function runReplyAgent(
         touchActiveSessionEntry,
         typingSignals,
       });
-      typing.cleanup();
-      return result === "handled" ? undefined : result;
+      if (result !== "followup") {
+        typing.cleanup();
+      }
+      return result === "handled" || result === "followup" ? undefined : result;
     }
 
   recordGroupParticipationInput(providedReplyOperation, followupRun, "initial");
@@ -513,17 +510,16 @@ export async function runReplyAgent(
       }
       const queuedBehindActiveRun = (await isRunActive?.()) === true;
       await touchActiveSessionEntry();
-      if (queuedBehindActiveRun) {
-        if (
-          !resolveGroupParticipationCandidate({
-            run: followupRun,
-            sessionKey: sessionKey ?? followupRun.run.sessionKey,
-            storePath,
-            sessionEntry: activeSessionEntry,
-          })
-        ) {
-          await typingSignals.signalToolStart();
-        }
+      if (
+        queuedBehindActiveRun &&
+        !resolveGroupParticipationCandidate({
+          run: followupRun,
+          sessionKey: sessionKey ?? followupRun.run.sessionKey,
+          storePath,
+          sessionEntry: activeSessionEntry,
+        })
+      ) {
+        await typingSignals.signalToolStart();
       }
       return undefined;
     }
@@ -722,22 +718,30 @@ export async function runReplyAgent(
           guidance,
         });
     }
-    const { admitUserTurn, completeObservedTurn, recordPendingDelivery } =
-      createReplyInputAdmission({
-        followupRun,
-        replyOperation,
-        runId: turn.runId,
-        sourceTurnId,
-        sessionKey,
-        storePath,
-        setEntry: (entry) => {
-          activeSessionEntry = entry;
-          if (activeSessionStore && sessionKey) {
-            activeSessionStore[sessionKey] = entry;
-          }
-        },
-      });
+    const { admitUserTurn, recordPendingDelivery } = createReplyInputAdmission({
+      followupRun,
+      replyOperation,
+      runId: turn.runId,
+      sourceTurnId,
+      sessionKey,
+      storePath,
+      setEntry: (entry) => {
+        activeSessionEntry = entry;
+        if (activeSessionStore && sessionKey) {
+          activeSessionStore[sessionKey] = entry;
+        }
+      },
+    });
     try {
+      if (preparation.kind === "observed") {
+        if (replyOperationRunState) {
+          replyOperationRunState.replyCompletion = resolveReplyCompletion(
+            replyExpectation,
+            "silent",
+          );
+        }
+        return returnWithQueuedFollowupDrain(undefined);
+      }
       // Channel admission rethrows its memoized preflight failure in the execution handler.
       if (turn.preflightError && !isChannelRunAuthorizationError(turn.preflightError)) {
         throw turn.preflightError;
@@ -754,7 +758,6 @@ export async function runReplyAgent(
           ...params,
           activeSessionStore,
           admitUserTurn,
-          completeObservedTurn,
           recordPendingDelivery,
           applyReplyToMode,
           blockReplyPipeline,

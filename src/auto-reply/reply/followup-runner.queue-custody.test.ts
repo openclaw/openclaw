@@ -27,7 +27,7 @@ import { enqueueFollowupRun, scheduleFollowupDrain, type FollowupRun } from "./q
 import { createQueueTestRun, installQueueRuntimeErrorSilencer } from "./queue.test-helpers.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue } from "./queue/state.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import type { AdmittedFollowupTurn } from "./reply-turn-admission.types.js";
 import { createTypingController } from "./typing.js";
 
 const state = vi.hoisted(() => ({

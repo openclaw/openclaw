@@ -12,7 +12,7 @@ import {
   createTurn,
 } from "../auto-reply/reply/followup-delivery.test-helpers.js";
 import type { FollowupExecutionResult } from "../auto-reply/reply/followup-turn-execution.js";
-import type { FollowupRunnerParams } from "../auto-reply/reply/reply-agent-turn-preparation.js";
+import type { FollowupRunnerParams } from "../auto-reply/reply/reply-turn-admission.types.js";
 import { createTypingController } from "../auto-reply/reply/typing.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";

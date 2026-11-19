@@ -46,7 +46,7 @@ export function recordReplyOperationAgentTurn(
   states: readonly ReplyOperationRunState[] | undefined,
   owner: ReplyOperation | undefined,
   outcome?:
-    | { kind: "aborted" | "rejected" | "observed" }
+    | { kind: "aborted" | "rejected" }
     | {
         kind: "settled";
         status: "ok" | "failed";
