@@ -1,7 +1,9 @@
+import { bytesToBase64url, concatBytes, utf8 } from "../bytes.js";
 // ClawUnlink vectors: the vector claw's Gateway unlinks it at binding 2. Discovery checks a
 // ClawUnlink against binding 2; a client checks it against the pin that stored binding 2's K_gw.
 import type { StatementSigner } from "../crypto.js";
-import { signStatement } from "../statements/envelope.js";
+import { canonicalize } from "../jcs.js";
+import { signStatement, statementDomain } from "../statements/envelope.js";
 import type { ClawPin } from "../statements/pin.js";
 import type { SignedStatement } from "../statements/types.js";
 import type { VerifyErrorCode } from "../statements/verify.js";
@@ -41,7 +43,11 @@ export async function buildUnlinkVectors(input: {
   const corrupted = { ...unlink, sig: older.sig };
   const crossType = {
     ...unlink,
-    sig: (await signStatement("RootReset", body as never, input.gateway)).sig,
+    sig: bytesToBase64url(
+      await input.gateway.sign(
+        concatBytes(utf8(statementDomain("RootReset")), utf8(canonicalize(body))),
+      ),
+    ),
   };
   const refused = (
     name: string,
