@@ -90,6 +90,19 @@ function failure(error: unknown): FsSafeCopyReply {
   };
 }
 
+function readCloneWriteBytes(): number | undefined {
+  if (process.platform !== "linux") {
+    return undefined;
+  }
+  try {
+    const value = readFileSync("/proc/self/io", "utf8").match(/^write_bytes: (\d+)$/m)?.[1];
+    return value === undefined ? undefined : Number(value);
+  } catch {
+    // IO accounting is optional; missing procfs must not disable native cloning.
+    return undefined;
+  }
+}
+
 function prepareOwnedDirectoryRemoval(directory: string): void {
   const stats = lstatSync(directory);
   if (!stats.isDirectory()) {
@@ -324,12 +337,19 @@ if (parentPort) {
       case "create":
         await createCloneSource(command.destination, { signal: controller.signal });
         break;
-      case "copy":
+      case "copy": {
+        const before = readCloneWriteBytes();
         await copyTree(command.source, command.destination, {
           clone: "always",
           signal: controller.signal,
         });
+        const after = readCloneWriteBytes();
+        reply = {
+          type: "written",
+          cloneWriteBytes: before === undefined || after === undefined ? undefined : after - before,
+        };
         break;
+      }
       default:
         throw new Error("Unknown native worktree operation");
     }

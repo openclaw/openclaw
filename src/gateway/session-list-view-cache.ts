@@ -126,6 +126,7 @@ export type SessionListView = {
   rowHistory?: SessionRowGeneration[];
   conditional?: boolean;
   selection?: SessionEntrySelection;
+  rowKeys?: Set<string>;
   selectedAt?: number;
   activityExpiresAt?: number;
   partitions?: SelectionPartitions;
@@ -138,6 +139,7 @@ function hasRowBaseline(view: SessionListView): boolean {
 /** The publication owns admission, recency, accounting and retirement of every list view. */
 export class SessionListViewCache {
   private readonly lists = new Map<string, SessionListView>();
+  private readonly selections = new Set<SessionListView>();
   private rowEncodings = new WeakMap<
     GatewaySessionRow,
     { refs: number; bytes: number; extraBytes: number; factBytes: number }
@@ -147,6 +149,22 @@ export class SessionListViewCache {
 
   values() {
     return this.lists.values();
+  }
+
+  invalidateSelections() {
+    // Release obsolete entries even without another read; each populated view retires once.
+    for (const view of this.selections) {
+      view.selection = undefined;
+      this.update(view);
+    }
+  }
+
+  invalidateRows(key?: string) {
+    for (const view of this.lists.values()) {
+      if (key === undefined || view.rowKeys?.has(key)) {
+        this.retireRows(view);
+      }
+    }
   }
 
   hasRowBaselines() {
@@ -184,6 +202,7 @@ export class SessionListViewCache {
       this.retainRows(view, view.rows);
     }
     view.rows = undefined;
+    view.rowKeys = undefined;
     view.encodedBytes = 0;
     this.update(view);
   }
@@ -204,8 +223,9 @@ export class SessionListViewCache {
       this.retainRows(view, view.rows);
     }
     view.rows = rows;
+    view.rowKeys = retained ? new Set() : undefined;
     view.encodedBytes =
-      (retained ? this.retainRowEncodings(rows, extraRowEncodingBytes) : 0) +
+      (retained ? this.retainRowEncodings(rows, view.rowKeys!, extraRowEncodingBytes) : 0) +
       serializedJsonArrayBytes(rows) +
       sharedBytes;
     this.update(view);
@@ -213,10 +233,12 @@ export class SessionListViewCache {
 
   private retainRowEncodings(
     rows: GatewaySessionRow[],
+    keys: Set<string>,
     extraBytes?: (row: GatewaySessionRow) => number,
   ) {
     let bytes = 0;
     for (const row of rows) {
+      keys.add(row.key);
       let encoding = this.rowEncodings.get(row);
       if (encoding) {
         encoding.refs++;
@@ -282,6 +304,11 @@ export class SessionListViewCache {
     if (this.lists.get(view.key) !== view) {
       return;
     }
+    if (view.selection) {
+      this.selections.add(view);
+    } else {
+      this.selections.delete(view);
+    }
     const rowRefs = (view.rows?.length ?? 0) + view.historyRefs;
     const entryRefs =
       (view.selection ? selectionRefs(view.selection) : 0) + (view.partitions?.refs ?? 0);
@@ -295,6 +322,7 @@ export class SessionListViewCache {
       1024 +
       view.key.length * 2 +
       rowRefs * 8 +
+      (view.rowKeys?.size ?? 0) * 32 +
       pairRefs * 8 +
       (entryRefs - pairRefs) * 48 +
       (view.partitions?.size ?? 0) * 64 +
@@ -364,6 +392,7 @@ export class SessionListViewCache {
       });
     }
     this.lists.delete(view.key);
+    this.selections.delete(view);
     this.bytes -= view.bytes;
     retainedBytes -= view.bytes;
     retainedRefs -= view.refs;
@@ -379,6 +408,7 @@ export class SessionListViewCache {
     this.bytes = 0;
     this.refs = 0;
     this.lists.clear();
+    this.selections.clear();
     this.rowEncodings = new WeakMap();
     scheduleRetentionReport();
   }
@@ -416,7 +446,8 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       const { key, kind, updatedAt, sessionId, rowMode } = row;
       return { key, kind, updatedAt, sessionId, rowMode };
     };
-    const retainedRows = sessions.map((row, index) => {
+    // Capture aliases before any occurrence publishes a new packing layout.
+    const previousRows = sessions.map((row, index) => {
       let retained = prepared.get(row);
       rows.push(retained?.packed?.row ?? required(row));
       let facts = retained?.facts;
@@ -465,19 +496,19 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
           candidates.set(fact.encoded, fact);
         }
       }
-      return retained!;
+      return retained?.packed;
     });
-    // A source can occur twice in one page; publishing one occurrence must not
-    // replace the comparison layout of its later aliases.
-    const previousRows = retainedRows.map((retained) => retained.packed);
     // Compare each response-local layout against the immutable source's last packed row.
     // Copy only the matching singleton prefix when that layout actually changes.
-    const writable = (index: number) => {
+    const writable = (index: number, complete = false) => {
       const previous = previousRows[index];
       let row = rows[index]!;
       if (previous && row === previous.row) {
         row = required(sessions[index]!);
-        const prefix = previous.fields.slice(0, fieldCounts[index]);
+        const prefix =
+          complete && previous.fields.length === fieldCounts[index]
+            ? previous.fields
+            : previous.fields.slice(0, fieldCounts[index]);
         for (const field of prefix) {
           Object.assign(row, field.fact);
         }
@@ -533,12 +564,11 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
         ) {
           continue;
         }
-        const row = writable(index);
+        const row = writable(index, true);
         (row.sharedFacts ??= previous?.row.sharedFacts?.slice(0, position) ?? []).push(reference);
       }
     }
     for (let index = 0; index < rows.length; index++) {
-      const retained = retainedRows[index]!;
       const previous = previousRows[index];
       const references = referenceCounts[index]!;
       if (
@@ -547,7 +577,7 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
         (previous.fields.length !== fieldCounts[index] ||
           (previous.row.sharedFacts?.length ?? 0) !== references)
       ) {
-        const row = writable(index);
+        const row = writable(index, true);
         if (references > 0) {
           row.sharedFacts = previous.row.sharedFacts!.slice(0, references);
         }
@@ -577,7 +607,11 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
           const suffix = JSON.stringify(row.sharedFacts) + "}";
           registerSerializedSessionRow(row, prefix.json + suffix, prefix.utf8Bytes + suffix.length);
         }
-        retained.packed = { row, fields: sameKeys ? previous.fields : currentFields, prefix };
+        prepared.get(sessions[index]!)!.packed = {
+          row,
+          fields: sameKeys ? previous.fields : currentFields,
+          prefix,
+        };
       }
     }
     return { sessions: rows, sharedFacts };

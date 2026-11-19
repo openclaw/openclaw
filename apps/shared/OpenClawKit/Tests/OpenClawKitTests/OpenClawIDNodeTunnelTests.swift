@@ -318,7 +318,7 @@ struct OpenClawIDNodeTunnelTests {
             endpoint: endpoint,
             verifiedServerKey: { try await keys.next() },
             relayURL: #require(URL(string: "https://relay.example/")),
-            clock: OpenClawIDNodeClock(now: { 0 }, sleep: { _ in }))
+            clock: OpenClawIDNodeClock(now: { 0 }, sleep: { _ in try await NodeTestWaiter<Void>().wait() }))
         // The first dial is refused by the server; the redial follows the rotated, re-verified K_srv.
         await #expect(throws: OpenClawIDNodeTransportError.closed) { try await tunnel.openStream() }
         await #expect(throws: OpenClawIDNodeTransportError.closed) { try await tunnel.openStream() }

@@ -29,7 +29,7 @@ const CATALOG_WORKER_HEAP_LIMITS = { maxOldGenerationSizeMb: 512, maxYoungGenera
  * while no task is waiting. It reports its first close so the owner can tell that from its own.
  */
 export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, Output> {
-  private captures?: ReturnType<typeof createPluginCaptureOwner>;
+  private captures?: Awaited<ReturnType<typeof createPluginCaptureOwner>>;
   private preparingRoot?: Promise<void>;
   private releasingRoot?: Promise<void>;
   // The pool's input factory settles before prepareWorker consumes this owned root.
@@ -72,15 +72,15 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
   override run(input: WorkerTaskInput<Input>, options: WorkerTaskOptions<Input>): Promise<Output> {
     return super.run(async () => {
       await (this.preparingRoot ??= (async () => {
-        const captures = await (this.captures ??= createPluginCaptureOwner(
+        this.captures = await createPluginCaptureOwner(
           captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }),
           {
             native() {
               throw new Error("Catalog execution owns its native captures locally");
             },
           },
-        ));
-        this.sourceCapture = await captures.createSource(
+        );
+        this.sourceCapture = await this.captures.createSource(
           0,
           { stateDir: resolveStateDir(this.env), placement: "state" },
           "openclaw-model-catalog-",
@@ -101,7 +101,7 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
 
   private releaseRoot(): Promise<void> {
     return (this.releasingRoot ??= (async () => {
-      await (await this.captures)?.releaseSource(0);
+      await this.captures?.releaseSource(0);
     })());
   }
 
@@ -113,7 +113,7 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
     }
     return closed.then(async () => {
       await this.releaseRoot();
-      await (await this.captures)?.close();
+      await this.captures?.close();
     });
   }
 }

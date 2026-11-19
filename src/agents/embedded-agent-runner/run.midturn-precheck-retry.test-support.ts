@@ -65,6 +65,7 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
     promptErrorSource: "precheck",
     preflightRecovery: {
       route: "compact_only",
+      pressure: "overflow",
       source: "mid-turn",
       estimatedPromptTokens: 201_000,
     },
@@ -117,6 +118,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
         session.makeAttemptResult({
           preflightRecovery: {
             route: "truncate_tool_results_only",
+            pressure: "overflow",
             source: "mid-turn",
             handled: true,
             truncatedCount: 0,
@@ -151,6 +153,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
         session.makeAttemptResult({
           preflightRecovery: {
             route: "truncate_tool_results_only",
+            pressure: "overflow",
             source: "mid-turn",
             handled: true,
             truncatedCount: 0,
@@ -178,7 +181,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
-  it("recovers a successor transcript from its own frozen tool projection", async () => {
+  it("replays a successor's frozen tool projection without rewriting its transcript", async () => {
     const { SessionManager } = await import("../sessions/session-manager.js");
     const { retainEmbeddedSessionPromptState, clearEmbeddedSessionPromptStates } =
       await import("./session-prompt-state.js");
@@ -272,7 +275,11 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
           ...makeReplayUnsafeMidTurnOverflow(),
           sessionIdUsed: successorId,
           messagesSnapshot: successor.messages,
-          preflightRecovery: { route: "compact_then_truncate", source: "mid-turn" },
+          preflightRecovery: {
+            route: "compact_then_truncate",
+            pressure: "overflow",
+            source: "mid-turn",
+          },
         });
       })
       .mockResolvedValueOnce(session.makeAttemptResult({ sessionIdUsed: successorId }));
@@ -292,11 +299,21 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       if (!successor) {
         throw new Error("expected the successor attempt to populate its projection");
       }
-      // Recovery writes through a separate manager; read its committed branch.
+      // Predicted recovery replays the successor projection, but must not commit
+      // its already-bounded bytes over the original result.
       await successor.manager.reloadPersistedTranscriptAsync();
+      const messages = successor.manager.buildSessionContext().messages;
+      expect(messages.find((message) => message.role === "toolResult")).toMatchObject({
+        content: toolResult.content,
+      });
+      using restored = retainEmbeddedSessionPromptState(successorId);
+      actualTruncation.restoreCacheTtlToolResultProjections(
+        restored.state.toolResults,
+        successor.manager.getEntries(),
+      );
       expect(
-        successor.manager
-          .buildSessionContext()
+        actualTruncation
+          .projectToolResultMessages({ messages, projectionState: restored.state.toolResults })
           .messages.find((message) => message.role === "toolResult"),
       ).toMatchObject({ content: successor.content });
     } finally {

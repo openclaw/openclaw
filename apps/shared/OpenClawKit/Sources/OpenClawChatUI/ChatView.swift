@@ -18,7 +18,6 @@ public struct OpenClawChatView: View {
     private let viewModel: OpenClawChatViewModel
     private let resolveComposerModel: (@MainActor () -> OpenClawChatViewModel?)?
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.openClawChatIsObscured) private var isObscured
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -182,15 +181,8 @@ public struct OpenClawChatView: View {
         }
         .onChange(of: ObjectIdentifier(self.viewModel)) { _, _ in
             self.viewModel.refreshSourceContext()
-            self.viewModel.streamPacing.interval = self.isObscured ? 0.5 : 0.15
-            self.viewModel.setComposerPresentationActive(self.isComposerPresentationActive)
         }
-        .onChange(of: self.isComposerPresentationActive, initial: true) { _, active in
-            self.viewModel.setComposerPresentationActive(active)
-        }
-        .onChange(of: self.isObscured, initial: true) { _, obscured in
-            self.viewModel.streamPacing.interval = obscured ? 0.5 : 0.15
-        }
+        .modifier(ChatObscuredPresentation(viewModel: self.viewModel, isVisible: self.isVisibleToUser))
         .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
             self.updateTurnRecap(observation)
         }
@@ -1001,12 +993,12 @@ extension OpenClawChatView {
         row.contextMenu { ChatDeferredContent { self.messageMenuActions(for: actionMessage) } }
     }
 
-    /// A rejected message returns to the composer only while the user can see it.
-    private var isComposerPresentationActive: Bool {
+    /// Visible unless another surface covers it; see `ChatObscuredPresentation`.
+    private var isVisibleToUser: Bool {
         #if os(macOS)
-        self.isOnScreen && self.appearsActive && !self.isObscured
+        self.isOnScreen && self.appearsActive
         #else
-        self.isOnScreen && self.scenePhase == .active && !self.isObscured
+        self.isOnScreen && self.scenePhase == .active
         #endif
     }
 

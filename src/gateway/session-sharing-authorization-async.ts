@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
@@ -6,6 +7,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import {
   retainPreparedSessionSharingFacts,
   projectSessionSharingEntry,
@@ -24,11 +26,13 @@ import {
   intersectOperatorScopes,
   resolveMissingOperatorScope,
 } from "../shared/operator-scope-compat.js";
+import { waitForAgentInputAdmission } from "../state/agent-database-preparation-context.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
 import {
   prepareUserProfileIdentity,
   readResidentGatewayOwnerProfile,
 } from "../state/user-profile-list.js";
+import { sanitizeChatSendMessageInput } from "./chat-input-sanitize.js";
 import { errorShapeFromError } from "./error-shape.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
@@ -375,6 +379,18 @@ export async function resolveSessionMutationAuthorizationAsync(
     return resolveSessionMutationAuthorization(params);
   }
   const cfg = params.context.getRuntimeConfig();
+  const chatParams =
+    params.method === "chat.send" ? asOptionalRecord(params.requestParams) : undefined;
+  const chatMessage =
+    typeof chatParams?.message === "string"
+      ? sanitizeChatSendMessageInput(chatParams.message)
+      : undefined;
+  // Match the chat handler's command interpretation: cancellation must not join startup.
+  const stopCommand =
+    chatParams?.suppressCommandInterpretation !== true &&
+    chatParams?.intent === undefined &&
+    chatMessage?.ok === true &&
+    isAbortRequestText(chatMessage.message);
   using phases = observeDiagnosticsTimelinePhases("sessionAuthority.profiles");
   const preparedProfiles = await prepareSessionSharingProfiles(params.client);
   phases.mark("sessionAuthority.targets");
@@ -433,6 +449,15 @@ export async function resolveSessionMutationAuthorizationAsync(
       if (!input.ok) {
         release();
         return { error: input.error };
+      }
+      if (params.method === "chat.send" && !stopCommand) {
+        // Capture session facts after the same startup work that input preparation joins.
+        await waitForAgentInputAdmission(input.agentId, {
+          cfg,
+          sessionKey: target.sessionKey,
+          owner: params.context.agentDatabaseStartup,
+        });
+        request.assertInvocationCurrent?.();
       }
       const retained = await prepareSessionMutationFacts({
         cfg,

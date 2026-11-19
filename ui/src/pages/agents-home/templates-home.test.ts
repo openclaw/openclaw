@@ -194,7 +194,7 @@ describe("Templates discovery", () => {
     });
     expect(request).toHaveBeenCalledWith("templates.catalog.search", {
       overview: true,
-      limit: 8,
+      limit: 4,
     });
   });
 
@@ -464,7 +464,7 @@ describe("Templates discovery", () => {
     await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith("templates.catalog.search", {
         category: "productivity",
-        limit: 8,
+        limit: 4,
       }),
     );
     await waitForSolid(() =>

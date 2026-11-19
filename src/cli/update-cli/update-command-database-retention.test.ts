@@ -7,6 +7,7 @@ import { createNpmTarget } from "../../infra/package-update-steps.test-support.j
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
+import { UpdateCaptureSpaceError } from "../../infra/update-capture-space.js";
 import * as databaseBackup from "../../infra/update-database-backup.js";
 import { createGitRuntimeTransaction } from "../../infra/update-runner-git-runtime.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -118,6 +119,80 @@ it.runIf(process.platform !== "win32").each([false, true])(
     expect(snapshot.prepare("SELECT value FROM payload").all()).toEqual([{ value: "synthetic" }]);
   },
 );
+
+function captureWith(base: string, root: string, env: NodeJS.ProcessEnv) {
+  return captureUpdateDatabases({
+    transaction: {
+      backupRoot: path.join(base, "runtime.backup"),
+      rollback: async () => {
+        throw new Error("Unexpected rollback");
+      },
+      complete: async () => {
+        throw new Error("Unexpected completion");
+      },
+    },
+    execution: captureExecution(root, env, "package"),
+    context: undefined,
+    assertCurrent: () => {},
+  });
+}
+
+const shortfall = () =>
+  new UpdateCaptureSpaceError("short", {
+    requiredBytes: 3 * 1024 ** 3,
+    availableBytes: 1024 ** 3,
+    volume: "backup",
+  });
+
+it("skips the pre-migration image and continues when the owner measures a shortfall", async () => {
+  const base = await fs.realpath(dirs.make("update-database-skip-"));
+  const root = path.join(base, "install");
+  await fs.mkdir(root);
+  const env = await captureEnvironment(path.join(base, "state"));
+  const directory = path.join(base, "runtime.backup.databases");
+  vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockImplementation(async () => {
+    // The owner created its directory exclusively, then measured before any copy.
+    await fs.mkdir(directory);
+    throw new Error(`Capture failed. Database backup files retained at ${directory}.`, {
+      cause: shortfall(),
+    });
+  });
+
+  const capture = await captureWith(base, root, env);
+
+  expect(capture.backup).toBeUndefined();
+  expect(capture.step).toMatchObject({ name: "database snapshot", exitCode: 0 });
+  expect(capture.step.warnings).toEqual([
+    `No pre-migration database image: it needs 3.0 GiB near ${directory} and 1.0 GiB is free. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward. The update continues.`,
+  ]);
+  await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.each([
+  { cause: "an integrity failure", error: () => new Error("synthetic integrity failure") },
+  {
+    // A copy that ran out of room has started; its owner did not measure and settle it.
+    cause: "a disk that filled mid-copy",
+    error: () =>
+      Object.assign(new Error("write copy stage: No space left on device"), { code: "ENOSPC" }),
+  },
+  {
+    cause: "a shortfall joined by a cleanup failure",
+    error: () =>
+      new AggregateError([shortfall(), new Error("staging cleanup did not settle")], "both", {
+        cause: shortfall(),
+      }),
+  },
+])("still fails the update for $cause", async ({ error }) => {
+  const base = await fs.realpath(dirs.make("update-database-skip-"));
+  const root = path.join(base, "install");
+  await fs.mkdir(root);
+  const env = await captureEnvironment(path.join(base, "state"));
+  const failure = error();
+  vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockRejectedValue(failure);
+
+  await expect(captureWith(base, root, env)).rejects.toBe(failure);
+});
 
 it.each(
   (["git", "package"] as const).flatMap((kind) =>

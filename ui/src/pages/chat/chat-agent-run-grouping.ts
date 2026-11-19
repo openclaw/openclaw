@@ -37,6 +37,8 @@ export type AgentRunFrameRenderItem = {
   key: string;
   runId: string;
   boundaryId: string;
+  /** Earlier run identities explicitly continued by a handoff in this frame. */
+  handoffRunIds?: readonly string[];
   outcome:
     | { kind: "active" }
     | { kind: "completed"; actionOwner: MessageGroup["messages"][number] | null }
@@ -220,7 +222,7 @@ export function coalesceAgentRunFrames(
   // A run that resumes a handoff continues the open frame: one answer, one
   // footer. The frame keeps the identity it opened with, so resuming reuses its
   // row; `resuming` lets exactly the next run in.
-  let opened: { runId: string; boundaryId: string | undefined } | undefined;
+  let opened: { runIds: string[]; boundaryId: string | undefined } | undefined;
   let resuming = false;
   // Without a Resumed rule marking the handoff, operations on either side of it are one log.
   let afterHandoff = false;
@@ -236,9 +238,9 @@ export function coalesceAgentRunFrames(
     }
   };
   const flush = (failed = false) => {
-    const frameRunId = opened?.runId ?? runId;
+    const frameRunId = opened?.runIds[0] ?? runId;
     const openedBoundaryId = opened ? opened.boundaryId : boundaryId;
-    const handedOff = opened !== undefined;
+    const handoffRunIds = opened?.runIds;
     opened = undefined;
     resuming = false;
     afterHandoff = false;
@@ -251,7 +253,7 @@ export function coalesceAgentRunFrames(
     // only the session's explicit abort marks it. Yielding to background work is not one.
     const interrupted =
       !active &&
-      !handedOff &&
+      !handoffRunIds &&
       !terminalRuns.has(runId) &&
       frameRunId !== opts.activeRunId &&
       opts.session?.abortedLastRun === true &&
@@ -288,6 +290,7 @@ export function coalesceAgentRunFrames(
       key,
       runId,
       boundaryId: frameBoundaryId,
+      ...(handoffRunIds ? { handoffRunIds } : {}),
       outcome: failed
         ? { kind: "failed" }
         : active
@@ -303,7 +306,10 @@ export function coalesceAgentRunFrames(
   };
   for (const item of items) {
     if (item.kind === "notice" && item.handoffBoundary && runId && parts.length > 0) {
-      opened ??= { runId, boundaryId };
+      opened ??= { runIds: [], boundaryId };
+      if (opened.runIds.at(-1) !== runId) {
+        opened.runIds.push(runId);
+      }
       resuming = true;
       afterHandoff = true;
       continue;

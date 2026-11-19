@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/cjk-chars";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
 import { resolveEffectiveCompactionReserveTokens } from "../../agent-compaction-constants.js";
+import type { ContextPressure } from "../../context-pressure.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import { calculateContextTokens, IMAGE_BLOCK_TOKENS } from "../../runtime/index.js";
 import {
@@ -23,6 +24,16 @@ import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js
 
 export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
   "Context overflow: prompt too large for the model (precheck).";
+
+/** Local control flow for soft pressure; never a provider or overflow failure. */
+export const CONTEXT_MAINTENANCE_SIGNAL_TEXT =
+  "Context maintenance scheduled before the next model request.";
+
+export function contextPressureSignal(pressure: ContextPressure): Error {
+  return new Error(
+    pressure === "overflow" ? PREEMPTIVE_OVERFLOW_ERROR_TEXT : CONTEXT_MAINTENANCE_SIGNAL_TEXT,
+  );
+}
 
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 
@@ -359,6 +370,7 @@ function resolveCompactionPressureDecision(
           messages: pressure.messages,
           contextWindowTokens: params.contextTokenBudget,
           maxCharsOverride: params.toolResultMaxChars,
+          preserveSentToolResults: true,
         }).maxReducibleChars)
       : 0;
   const overflowChars = overflowTokens * CHARS_PER_TOKEN_ESTIMATE;

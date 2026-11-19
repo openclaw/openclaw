@@ -521,3 +521,37 @@ describe("memory transcript read adapters", () => {
     );
   });
 });
+
+it("preflights incognito compaction through the explicit memory adapter without SQLite or workers", async () => {
+  const { scope, binding, actor } = await fixture("compaction", "main", [
+    message("first", null, "user", "Earlier request"),
+    message("last", "first", "user", "Current request"),
+  ]);
+  const { prepareGatewaySessionCompaction } =
+    await import("../../gateway/server-methods/sessions-compaction-runner.js");
+  const { attachCompactionAccountingRecorder, readCompactionAccountingRecorder } =
+    await import("../../agents/embedded-agent-runner/run/compaction-accounting-bridge.js");
+  await runWithSessionActorStorage(binding, async () => {
+    const entry = actor.storage!.readCurrent({ type: "session.entry.read", input: {} }, authority)!;
+    const prepared = await prepareGatewaySessionCompaction({
+      ...scope,
+      cfg: { agents: { defaults: { model: { primary: "fixture/model" } } } },
+      sessionStoreKey: scope.sessionKey,
+      entry,
+    });
+    expect(prepared.reason).toBeUndefined();
+    expect(prepared.preparedSession?.source).toBeUndefined();
+    const memory = prepared.preparedSession?.memoryTranscript;
+    expect(memory?.sessionManager.getBranch().map((row) => row.id)).toEqual(["first", "last"]);
+    expect(memory?.sessionTarget).toMatchObject({
+      sessionId: scope.sessionId,
+      storePath: scope.storePath,
+    });
+    const runtimeContext = {};
+    attachCompactionAccountingRecorder(runtimeContext, {
+      preparedSession: prepared.preparedSession,
+    });
+    expect(readCompactionAccountingRecorder(runtimeContext)?.memoryTranscript).toBe(memory);
+    memory!.assertActive();
+  });
+});

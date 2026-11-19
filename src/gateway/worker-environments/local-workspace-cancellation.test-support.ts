@@ -19,6 +19,7 @@ import {
   bindLocalSandboxWorkspace,
   prepareLocalSandboxWorkspace,
 } from "../../agents/sandbox/local-workspace.js";
+import { createLocalRemoteShellScriptRunner } from "../../agents/sandbox/remote-fs-bridge.test-helpers.js";
 import { createSandboxTestContext } from "../../agents/sandbox/test-fixtures.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -99,7 +100,7 @@ async function proveQueuedLocalWorkspaceCheckpoint(
           ...store,
           manifest: async (...args) => {
             const result = await store.manifest(...args);
-            if (result.kind === "scan") {
+            if (result.kind === "scan" && !(args[1].kind === "scan" && args[1].prehash)) {
               void capture(...args);
               const afterScan = afterCapture;
               afterCapture = undefined;
@@ -283,12 +284,17 @@ export async function proveStoppedSandboxAuthority(
       await users.setCanonicalUserProfileRole(profile.id, guestInvolvement ? "guest" : "writer");
       const context = server.createContext();
       context.getRuntimeConfig = () => config;
+      const source = new AbortController();
       const captured = await auth.captureGatewayOperatorRunAuthority({
         client: server.createOperatorClient({
           profileId: profile.id,
           scopes: guestInvolvement ? guestScopes : ["operator.write"],
         }),
         context,
+        sourceAuthority: {
+          assertCurrent: () => source.signal.throwIfAborted(),
+          signal: source.signal,
+        },
       });
       assert(captured?.authority.retain, "Expected retained operator authority");
       const releaseOperator = captured.authority.retain();
@@ -302,8 +308,14 @@ export async function proveStoppedSandboxAuthority(
       );
       const backend = createBackend("authority-command");
       const shell = guestInvolvement ? vi.spyOn(backend, "runShellCommand") : undefined;
+      shell?.mockImplementation(createLocalRemoteShellScriptRunner());
       // Substitute container execution only; the authority and checkpoint owners stay real.
-      const provision = vi.spyOn(backends, "createSandboxBackend").mockResolvedValue(backend);
+      const provision = vi
+        .spyOn(backends, "createSandboxBackend")
+        .mockImplementation(async (params) => {
+          backend.workdir = params.workspaceDir;
+          return backend;
+        });
       try {
         const { scope } = await registerWorkspace(owner, guestInvolvement ? profile.id : undefined);
         if (revoke === "prepare-release" || revoke === "prepare-cancel") {
@@ -355,6 +367,18 @@ export async function proveStoppedSandboxAuthority(
           await writeSource(sandbox.workspaceDir, "accepted guest edit\n");
           await finish(backend, accepted.finalizeToken);
           await expectSource(owner.worktree.path, "accepted guest edit\n");
+
+          await users.setCanonicalUserProfileRole(profile.id, "denied", {
+            onCommitted: roles.invalidateOperatorRolePolicy,
+          });
+          expect(captured.authority.assertCurrent).not.toThrow();
+          expect(captured.authority.reauthorize).toThrow(/operator role changed/);
+          await sandbox.fsBridge.writeFile({
+            filePath: "source.txt",
+            data: "admitted guest edit\n",
+          });
+          await expectSource(owner.worktree.path, "admitted guest edit\n");
+          shell.mockClear();
 
           const [receipts, agentWorkers, involvement] = await Promise.all([
             import("../../infra/sqlite-worker-operation-admission.js"),
@@ -446,9 +470,7 @@ export async function proveStoppedSandboxAuthority(
               testSignal,
             );
             captured.authority.assertCurrent();
-            await users.setCanonicalUserProfileRole(profile.id, "denied", {
-              onCommitted: roles.invalidateOperatorRolePolicy,
-            });
+            source.abort(new Error("operator source execution authority cancelled"));
             deliverReceipt();
             releaseResult.resolve();
             await expect(mutation).resolves.toBe(true);
@@ -457,7 +479,7 @@ export async function proveStoppedSandboxAuthority(
             expect(loadSessionEntry(scope)?.profileInvolvement?.profiles[profile.id]?.hidden).toBe(
               true,
             );
-            // No Stop, run close or workspace disposal can account for this denial.
+            // A late receipt cannot revive the explicitly cancelled source.
             expect(controller.signal.aborted).toBe(false);
             await expect(
               sandbox.fsBridge.writeFile({ filePath: "revoked.txt", data: "must not write" }),
@@ -473,7 +495,7 @@ export async function proveStoppedSandboxAuthority(
                 code: "ENOENT",
               });
             }
-            await expectSource(owner.worktree.path, "accepted guest edit\n");
+            await expectSource(owner.worktree.path, "admitted guest edit\n");
           } finally {
             closing = true;
             try {
@@ -489,6 +511,8 @@ export async function proveStoppedSandboxAuthority(
         }
         const accepted = await backend.buildExecSpec(command());
         const pending = await backend.buildExecSpec(command());
+        const cancelled =
+          revoke === "operator" ? await backend.buildExecSpec(command()) : undefined;
         await writeSource(sandbox.workspaceDir, "accepted guest edit\n");
         const reason = createAgentRunDirectAbortError();
         controller.abort(reason);
@@ -503,17 +527,24 @@ export async function proveStoppedSandboxAuthority(
           await users.setCanonicalUserProfileRole(profile.id, "denied", {
             onCommitted: roles.invalidateOperatorRolePolicy,
           });
+          expect(captured.authority.assertCurrent).not.toThrow();
+          expect(captured.authority.reauthorize).toThrow(/operator role changed/);
+          await finish(backend, pending.finalizeToken);
+          await expectSource(owner.worktree.path, "revoked guest edit\n");
+          await writeSource(sandbox.workspaceDir, "cancelled guest edit\n");
+          source.abort(new Error("operator source execution authority cancelled"));
           expect(captured.authority.assertCurrent).toThrow();
-          await expect(finish(backend, pending.finalizeToken)).rejects.toThrow(
+          await expect(finish(backend, cancelled!.finalizeToken)).rejects.toThrow(
             /operator|source execution authority/,
           );
+          await expectSource(owner.worktree.path, "revoked guest edit\n");
         } else {
           gateway.release();
           await expect(finish(backend, pending.finalizeToken)).rejects.toMatchObject({
             code: "GATEWAY_STATE_OWNER_REQUIRED",
           });
+          await expectSource(owner.worktree.path, "accepted guest edit\n");
         }
-        await expectSource(owner.worktree.path, "accepted guest edit\n");
       } finally {
         shell?.mockRestore();
         provision.mockRestore();
@@ -527,7 +558,7 @@ export async function proveStoppedSandboxAuthority(
   });
 }
 
-/** Observe native contention without replacing the lease or preparation owner. */
+/** Observe workspace admission without replacing the lease or preparation owner. */
 async function proveAttemptPreparationWhileLeaseHeld(
   owner: LocalWorkspaceOwner,
   ending: "release" | "cancel",
@@ -536,12 +567,6 @@ async function proveAttemptPreparationWhileLeaseHeld(
     controller: AbortController,
   ) => Promise<{ workspaceDir: string; [Symbol.dispose](): void }>,
 ) {
-  const {
-    areDiagnosticsEnabledForProcess,
-    onInternalDiagnosticEvent,
-    setDiagnosticsEnabledForProcess,
-  } = await import("../../infra/diagnostic-events.js");
-  const { flushLogger, resetLogger, setLoggerOverride } = await import("../../logging/logger.js");
   const prepare = (controller: AbortController) =>
     prepareLocalSandboxWorkspace({
       cfg: { worktreeAcceleration: false },
@@ -561,27 +586,9 @@ async function proveAttemptPreparationWhileLeaseHeld(
   const reason = createAgentRunDirectAbortError();
   const entered = createDeferred();
   const release = createDeferred();
-  const waited = createDeferred<string>();
-  const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
-  setDiagnosticsEnabledForProcess(true);
-  setLoggerOverride({
-    level: "warn",
-    consoleLevel: "silent",
-    file: path.join(path.dirname(owner.worktree.path), "preparation-wait.log"),
-  });
-  const unsubscribe = onInternalDiagnosticEvent(
-    (event) => {
-      if (
-        event.type === "log.record" &&
-        event.message.includes(
-          `Waiting for local sandbox workspace workspace.local-reconciliation/${owner.worktree.id} held by `,
-        )
-      ) {
-        waited.resolve(event.message);
-      }
-    },
-    { include: ["log.record"] },
-  );
+  const waited = createDeferred();
+  const withStore = workspaceStore.withLocalWorkspaceStore;
+  const admission = vi.spyOn(workspaceStore, "withLocalWorkspaceStore");
   type PreparationOutcome =
     | { kind: "returned"; value: Awaited<ReturnType<typeof prepareAttempt>> }
     | { kind: "rejected"; error: unknown };
@@ -607,6 +614,13 @@ async function proveAttemptPreparationWhileLeaseHeld(
       awaitGateBeforeSettlement(entered.promise, holder, "Holder settled before acquiring custody"),
       testSignal,
     );
+    admission.mockImplementation((params, run) => {
+      const pending = withStore(params, run);
+      if (params.worktreeId === owner.worktree.id) {
+        waited.resolve();
+      }
+      return pending;
+    });
     preparation = prepareAttempt(controller).then(
       (value) => ({ kind: "returned" as const, value }),
       (error: unknown) => ({ kind: "rejected" as const, error }),
@@ -615,7 +629,7 @@ async function proveAttemptPreparationWhileLeaseHeld(
       awaitGateBeforeSettlement(
         waited.promise,
         preparation,
-        "Preparation settled before its native held-lease observation",
+        "Preparation settled before workspace admission",
       ),
       testSignal,
     );
@@ -631,12 +645,8 @@ async function proveAttemptPreparationWhileLeaseHeld(
       if (afterRelease?.kind === "returned") {
         afterRelease.value?.[Symbol.dispose]();
       }
-      await flushLogger();
     } finally {
-      unsubscribe();
-      setLoggerOverride(null);
-      resetLogger();
-      setDiagnosticsEnabledForProcess(diagnosticsEnabled);
+      admission.mockRestore();
     }
   }
   expect(afterHolder?.kind).toBe("returned");

@@ -248,6 +248,8 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     params.source,
     await requireGit(params.source, ["rev-parse", "--git-common-dir"], gitOptions),
   );
+  const cacheKey = sandboxTemplateCacheKey(commonDir, params.templateRoot, identity.key);
+  const contentKey = digest(`${params.baseCommit}\n${digest(lockfile.stdout)}\n${identity.key}`);
   const prepareSource = async (
     directory: string,
     templateGuard: typeof guard,
@@ -309,7 +311,9 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
       ),
     );
     if (contained && valid) {
-      log.info("sandbox dependency template prepared for the selected commit");
+      log.info(
+        `sandbox dependency template prepared for the selected commit identity=sandbox-${backend.id}:${cacheKey}:${contentKey}`,
+      );
       return;
     }
     const reason = result.installed
@@ -332,8 +336,8 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     now: Date.now,
     backgroundUsedAt: params.backgroundUsedAt,
     options: guard,
-    cacheKey: sandboxTemplateCacheKey(commonDir, params.templateRoot, identity.key),
-    contentKey: digest(`${params.baseCommit}\n${digest(lockfile.stdout)}\n${identity.key}`),
+    cacheKey,
+    contentKey,
     repoRoot: params.repoRoot,
     commonDir,
     worktreeRoot: params.templateRoot,
@@ -376,9 +380,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
           : undefined;
       if (
         !changedPaths ||
-        changedPaths.some(
-          (entry) => entry === "pnpm-lock.yaml" || path.posix.basename(entry) === ".gitattributes",
-        )
+        changedPaths.some((entry) => path.posix.basename(entry) === ".gitattributes")
       ) {
         return false;
       }

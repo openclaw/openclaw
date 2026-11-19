@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import type http from "node:http";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { vi } from "vitest";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,

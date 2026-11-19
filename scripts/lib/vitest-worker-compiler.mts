@@ -62,10 +62,14 @@ async function compileVitestWorkerArtifacts(
     );
   }
   if (restored) {
-    await writeVitestWorkerManifest(directory, restored.inputs, restored.outputs, started, {
-      restored: true,
-      cacheSignature: restored.cacheSignature,
-    });
+    const manifest = await prepareVitestWorkerManifest(
+      directory,
+      restored.inputs,
+      restored.outputs,
+      started,
+      { restored: true, cacheSignature: restored.cacheSignature },
+    );
+    fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`);
     console.error("[vitest-workers] reused local compiler outputs");
     return;
   }
@@ -516,17 +520,19 @@ async function compileVitestWorkerArtifacts(
     // Output paths stay relative to dist, including package-root runtime assets.
     outputs[path.relative(outDir, destination).replaceAll("\\", "/")] = hash;
   }
-  const manifest = await writeVitestWorkerManifest(directory, inputs, outputs, started);
+  const manifest = await prepareVitestWorkerManifest(directory, inputs, outputs, started);
   reportPhase("compiler outputs verified");
   if (cache) {
     manifest.cacheSignature = await cache.seal(manifest);
     reportPhase("compiler cache inputs sealed");
   }
   manifest.durationMs = performance.now() - started;
-  fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`);
+  fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`, {
+    flag: "wx",
+  });
 }
 
-async function writeVitestWorkerManifest(
+async function prepareVitestWorkerManifest(
   directory: string,
   inputs: Record<string, string>,
   outputs: Record<string, string>,
@@ -558,11 +564,6 @@ async function writeVitestWorkerManifest(
     await verifyVitestWorkerArtifacts(directory, manifest);
   }
   manifest.durationMs = performance.now() - started;
-  fs.writeFileSync(
-    path.join(directory, "manifest.json"),
-    `${JSON.stringify(manifest)}\n`,
-    restored ? {} : { flag: "wx" },
-  );
   return manifest;
 }
 

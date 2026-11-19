@@ -1,9 +1,9 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { createAbortError } from "../infra/abort-signal.js";
 import {
   createWatchdogAssessment,
   type WatchdogAssessmentBackend,
 } from "./session-controller.watchdog-assessment.js";
+import { SessionWatchdogError } from "./session-controller.watchdog-error.js";
 import {
   decideSessionWatchdog,
   SESSION_WATCHDOG_ABORT_FLOOR_MS,
@@ -17,6 +17,7 @@ import {
   type SessionWatchdogSnapshot,
 } from "./session-controller.watchdog-state.js";
 import type {
+  DiagnosticToolAwaiting,
   SessionControllerWatchdog,
   SessionControllerWatchdogAttempt,
   SessionWatchdogEffect,
@@ -83,13 +84,19 @@ export function createSessionControllerWatchdog(params: {
   let started = false;
   let blockedReported = false;
   let recovery: SessionWatchdogSnapshot["recovery"];
+  let recoveryPendingTools: SessionWatchdogError["pendingTools"] | undefined;
   let recoveryAction: "stop" | "expire_cleanup" | undefined;
   let pendingTick:
     | { decision: SessionWatchdogDecision; resolve: (decision: SessionWatchdogDecision) => void }
     | undefined;
   const requests = new Set<{ requestTimeoutMs?: number; deadlineAtMs?: number }>();
   const waits = new Set<OwnedWait>();
-  const tools = new Set<SessionWatchdogSnapshot["tools"][number] & { touch(): void }>();
+  const tools = new Set<
+    SessionWatchdogSnapshot["tools"][number] & {
+      touch(): void;
+      awaiting?: readonly DiagnosticToolAwaiting[];
+    }
+  >();
   const executions = new Set<OwnedExecution>();
   const finalizationWork = new Set<{ deadlineAtMs: number }>();
   const current = () => !closed && live(params.isCurrent);
@@ -224,6 +231,23 @@ export function createSessionControllerWatchdog(params: {
     };
   };
   const decide = (at = now()) => decideSessionWatchdog(snapshot(at), at);
+  const readPendingTools = () => {
+    const stoppedAtMs = now();
+    return [...tools]
+      .slice(0, 5)
+      .map(({ toolName, toolCallId, startedAtMs, explicitDeadlineAtMs, awaiting }) => {
+        const pending: SessionWatchdogError["pendingTools"][number] = {
+          toolName,
+          toolCallId,
+          elapsedMs: Math.max(0, stoppedAtMs - startedAtMs),
+          explicitDeadline: explicitDeadlineAtMs !== undefined,
+        };
+        if (awaiting?.length) {
+          pending.awaiting = awaiting;
+        }
+        return pending;
+      });
+  };
   const tick = async (at = now()): Promise<SessionWatchdogDecision> => {
     assessment.check(at);
     const cleanupDeadlineAtMs = snapshot(at).cleanupDeadlineAtMs;
@@ -236,6 +260,7 @@ export function createSessionControllerWatchdog(params: {
       at >= cleanupDeadlineAtMs
     ) {
       recovery = undefined;
+      recoveryPendingTools = undefined;
       recoveryAction = undefined;
       blockedReported = false;
     }
@@ -321,6 +346,8 @@ export function createSessionControllerWatchdog(params: {
       startedAtMs: at,
     };
     recovery = ownedRecovery;
+    // Recovery can abort and drain tools before abortForStall describes this stop.
+    recoveryPendingTools = readPendingTools();
     recoveryAction = decision.action;
     let ownedPendingTick: typeof pendingTick;
     const deadlineResult = new Promise<SessionWatchdogDecision>((resolve) => {
@@ -335,6 +362,7 @@ export function createSessionControllerWatchdog(params: {
         if (result === "resumed" || result === "model_recovery") {
           if (recovery === ownedRecovery && current()) {
             recovery = undefined;
+            recoveryPendingTools = undefined;
             recoveryAction = undefined;
             if (!effect.isCurrent()) {
               assessment.clear();
@@ -412,6 +440,7 @@ export function createSessionControllerWatchdog(params: {
       closed = true;
       assessment.clear();
       recoveryAction = undefined;
+      recoveryPendingTools = undefined;
       started = false;
       clearTimeout(timer);
       timer = undefined;
@@ -435,19 +464,18 @@ export function createSessionControllerWatchdog(params: {
           wait.kind === "retry" && wait.rateLimitStopMessage !== undefined && live(wait.isCurrent),
       )?.rateLimitStopMessage;
       const result = assessment.result();
+      const staleReason = rateLimitMessage === undefined ? "no_activity" : "rate_limited";
+      const pendingTools = recoveryPendingTools ?? readPendingTools();
       return {
-        staleReason: rateLimitMessage === undefined ? "no_activity" : "rate_limited",
-        error: Object.assign(
-          createAbortError(
-            rateLimitMessage ??
-              (result?.state === "closed"
-                ? "Reply backend closed before completing"
-                : "Reply operation stalled"),
-          ),
-          {
-            code: "OPENCLAW_SESSION_WATCHDOG",
-            ...(result ? { assessment: result } : {}),
-          },
+        staleReason,
+        error: new SessionWatchdogError(
+          rateLimitMessage ??
+            (result?.state === "closed"
+              ? "Reply backend closed before completing"
+              : "Reply operation stalled"),
+          staleReason,
+          pendingTools,
+          result,
         ),
       };
     },
@@ -581,6 +609,9 @@ export function createSessionControllerWatchdog(params: {
             toolName: tool.toolName,
             toolCallId: tool.toolCallId,
             startedAtMs,
+            get awaiting() {
+              return tool.awaiting;
+            },
             touch() {
               lastProgressAtMs = now();
             },
