@@ -437,4 +437,18 @@ describe("worker placement recovery session events", () => {
       },
     );
   });
+
+  it("publishes session placement retirement after startup", async () => {
+    const current = recoveryPlacement("local");
+    await withRecoveryRuntime(
+      { placement: current, evidence: "absent" },
+      async ({ placements, start, expectBroadcast }) => {
+        await start();
+        await vi.dynamicImportSettled();
+
+        expect(placements.has(current.sessionId)).toBe(false);
+        expectBroadcast({ sessionKey: current.sessionKey }, {});
+      },
+    );
+  });
 });

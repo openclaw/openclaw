@@ -562,4 +562,32 @@ export function registerAcceptedSuffixRaceTests(
       },
     );
   });
+
+  it("retains accepted database facts through native reader retirement", async () => {
+    await withAcceptedSuffix(async ({ projection, suffix, query, reads, resume }) => {
+      await closeOpenClawAgentDatabaseByPathAsync(suffix.storeTarget.storePath, "main");
+      await resume();
+      expect(reads).toHaveLength(1);
+      expect(projection.snapshot(query).row?.label).toBe("accepted-1");
+    });
+  });
+
+  it("demotes an accepted suffix without rendering it during the bulk drain", async () => {
+    await withAcceptedSuffix(async ({ projection, scope, query, entry, resume }) => {
+      const count = projection.materializedCount;
+      replaceSessionEntrySync(scope, { ...entry, archivedAt: 3, label: "archived suffix" });
+      await resume();
+      expect(projection.materializedCount).toBe(count);
+      const cold = projection.findBySessionId({ agentId: "main", sessionId: entry.sessionId })[0]!;
+      expect(isColdArchivedSessionRow(cold)).toBe(true);
+      expect(cold.pendingDatabaseFacts).toBeUndefined();
+      await withReadySessionRows(
+        projection,
+        () => [query],
+        () => {
+          expect(projection.snapshot(query).row?.label).toBe("archived suffix");
+        },
+      );
+    });
+  });
 }
