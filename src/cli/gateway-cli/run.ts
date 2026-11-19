@@ -1,4 +1,3 @@
-import { asOptionalObjectRecord } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -44,6 +43,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   beginGatewayBootLifecycle,
   completeGatewayBootLifecycle,
+  reportPreviousGatewayCrash,
+  type GatewayBootLifecycleStart,
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
   formatGatewayCrashLoopManualChannelStartHint,
   type GatewayCrashLoopBreakerDecision,
@@ -78,7 +79,12 @@ import { createGatewayCrashLoopRecovery } from "./crash-loop-recovery.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
 import { getGatewayStartGuardErrors } from "./pre-bootstrap.js";
 import { runGatewayLoop } from "./run-loop.js";
-import { resolveGatewayPasswordOption, toOptionString } from "./run-option-values.js";
+import {
+  extractGatewayMiskeys,
+  parseEnumOption,
+  resolveGatewayPasswordOption,
+  toOptionString,
+} from "./run-option-values.js";
 import type { GatewayRunOpts } from "./run-options.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
 import {
@@ -110,26 +116,6 @@ const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
   "trusted-proxy",
 ];
 const GATEWAY_TAILSCALE_MODES: readonly GatewayTailscaleMode[] = ["off", "serve", "funnel"];
-
-function extractGatewayMiskeys(parsed: unknown): {
-  hasGatewayToken: boolean;
-  hasRemoteToken: boolean;
-} {
-  // Detect common token misplacements before startup falls back to unauthenticated mode.
-  const gateway = asOptionalObjectRecord(asOptionalObjectRecord(parsed)?.gateway);
-  const remote = asOptionalObjectRecord(gateway?.remote);
-  return {
-    hasGatewayToken: gateway ? "token" in gateway : false,
-    hasRemoteToken: remote ? "token" in remote : false,
-  };
-}
-
-function parseEnumOption<T extends string>(
-  raw: string | undefined,
-  allowed: readonly T[],
-): T | null {
-  return raw ? (allowed.find((value) => value === raw) ?? null) : null;
-}
 
 async function readGatewayStartupConfig(
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>,
@@ -779,6 +765,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     | ReadConfigFileSnapshotWithPluginMetadataResult
     | undefined = startupConfigSnapshotRead;
   const envSidecarStartupMode = isChannelStartupSuppressedByEnvironment() ? "defer" : "start";
+  let boot: GatewayBootLifecycleStart | undefined;
   let crashLoopDecision: GatewayCrashLoopBreakerDecision | undefined;
   let channelAutostartSuppression: { reason: "crash-loop-breaker"; message: string } | undefined;
   let tryRecoverChannelAutostartSuppression:
@@ -815,10 +802,13 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     triageAttempted = true;
     return await triageGatewayStartupFailure(defaultRuntime, error, signal);
   };
-  const beginBoot = async (startedAtMs: number) => {
+  const beginBoot = async (
+    startedAtMs: number,
+    previousOwner?: { pid: number; heartbeatAt?: number },
+  ) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so
     // in-process restarts re-evaluate breaker state instead of reusing stale mode.
-    const boot = await beginGatewayBootLifecycle(process.env, startedAtMs);
+    boot = await beginGatewayBootLifecycle(process.env, startedAtMs, previousOwner);
     crashLoopDecision = boot.decision;
     activeBootId = boot.id;
     bootRecorded = activeBootId !== undefined;
@@ -869,20 +859,26 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
         const { requestHotReloadRecovery, ...startupOptions } = startOptions;
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
-        return await startGatewayServer(port, {
-          bind,
-          ...(opts.updateCanary ? { updateCanary: true } : {}),
-          ...(activeBootId ? { bootId: activeBootId } : {}),
-          auth: authOverride,
-          tailscale: tailscaleOverride,
-          ...startupOptions,
-          ...(requestHotReloadRecovery ? { hotReloadRecovery: requestHotReloadRecovery } : {}),
-          startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart,
-          ...(envSidecarStartupMode !== "start" ? { sidecarStartup: envSidecarStartupMode } : {}),
-          ...(channelAutostartSuppression ? { channelAutostartSuppression } : {}),
-          ...(channelAutostartSuppression ? { tryRecoverChannelAutostartSuppression } : {}),
-          ambientEnvTriggers,
-        });
+        try {
+          return await startGatewayServer(port, {
+            bind,
+            ...(opts.updateCanary ? { updateCanary: true } : {}),
+            ...(activeBootId ? { bootId: activeBootId } : {}),
+            auth: authOverride,
+            tailscale: tailscaleOverride,
+            ...startupOptions,
+            ...(requestHotReloadRecovery ? { hotReloadRecovery: requestHotReloadRecovery } : {}),
+            startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart,
+            ...(envSidecarStartupMode !== "start" ? { sidecarStartup: envSidecarStartupMode } : {}),
+            ...(channelAutostartSuppression ? { channelAutostartSuppression } : {}),
+            ...(channelAutostartSuppression ? { tryRecoverChannelAutostartSuppression } : {}),
+            ambientEnvTriggers,
+          });
+        } finally {
+          if (boot?.previousCrash) {
+            await reportPreviousGatewayCrash(boot.previousCrash, gatewayLog);
+          }
+        }
       },
     });
     requestExitAfterOneShotOutput(defaultRuntime, code);

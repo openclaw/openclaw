@@ -161,8 +161,10 @@ retries setup when needed. See
 
 ## Manual recovery
 
-If the bundled runtime exits with an illegal instruction (`SIGILL`), the app stops
-automatic restarts immediately and preserves the crash output in the Gateway log.
+The app automatically restarts a crashed Gateway, including an illegal instruction
+(`SIGILL`), after 1, 2, 4, then 8 seconds. It stops after five fast failures and
+preserves the crash output in the Gateway log. A minute of healthy operation resets
+that limit.
 Update or reinstall OpenClaw.app and include that log if the failure persists.
 An independently managed [Node Gateway](/install/node) is an alternative; connect
 the app to it. The app does not automatically switch its bundled runtime to Node.

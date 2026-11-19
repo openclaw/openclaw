@@ -1,3 +1,4 @@
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import {
@@ -13,6 +14,7 @@ import {
   type GatewayServiceCommandConfig,
 } from "../../daemon/service-types.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-user-transport.js";
+import { formatGatewayCrash, type GatewayCrashRecord } from "../../infra/gateway-crash.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -119,6 +121,20 @@ export function formatGatewayServiceRootRedirect(redirect: {
   previousRoot: string;
 }): string {
   return `Only the Gateway installation at ${redirect.root} will be updated. Your CLI at ${redirect.previousRoot} will remain unchanged and may become incompatible with shared config and plugins. Use the CLI from ${redirect.root} after updating.`;
+}
+
+export type GatewayCrashHistory = {
+  recentCrashes?: readonly GatewayCrashRecord[];
+  crashHistoryError?: string;
+};
+
+export function formatGatewayCrashHistory(history?: GatewayCrashHistory): string[] {
+  return history?.crashHistoryError
+    ? [terminalText`Recent Gateway crashes unavailable: ${history.crashHistoryError}`]
+    : (history?.recentCrashes ?? []).map(
+        (crash) =>
+          terminalText`Previous Gateway run ended unexpectedly (${new Date(crash.detectedAtMs).toISOString()}): ${formatGatewayCrash(crash)}`,
+      );
 }
 
 export function createCliStatusTextStyles() {

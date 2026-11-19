@@ -619,6 +619,7 @@ export type StatusSummary = Omit<
     "heartbeat" | "channelSummary" | "queuedSystemEvents" | "sessions"
   > & {
     runtimeVersion?: string | null;
+    recentCrashes?: readonly import("../infra/gateway-crash.js").GatewayCrashRecord[];
     childRuntime?: {
       execPath: string;
       available: boolean;

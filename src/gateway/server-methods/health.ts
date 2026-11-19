@@ -3,6 +3,7 @@ import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public
 import { prepareChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
+import { getGatewayRecentCrashes } from "../../infra/gateway-crash.js";
 import { prepareStatusSummary } from "../../status/summary.js";
 import { buildContextEngineHealthSummary } from "../health/context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
@@ -105,6 +106,7 @@ export const healthHandlers: GatewayRequestHandlers = {
             : {}),
           // Live check. The cache must not keep a path that disappeared after it was stored.
           childRuntime: viability,
+          recentCrashes: getGatewayRecentCrashes(),
         },
         undefined,
         { cached: true },
@@ -127,6 +129,7 @@ export const healthHandlers: GatewayRequestHandlers = {
           coreReady: context.getReadiness?.(viability).coreReady,
           modelRuntime: getPreparedModelRuntimeStartupStatus(),
           childRuntime: viability,
+          recentCrashes: getGatewayRecentCrashes(),
         },
         undefined,
       );
@@ -167,6 +170,7 @@ export const healthHandlers: GatewayRequestHandlers = {
         pid: process.pid,
         shutdownBudget: shutdownStatus,
         childRuntime: childRuntime.publish(),
+        recentCrashes: getGatewayRecentCrashes(),
         pluginReload: context.getPluginReloadStatus?.(),
       },
       undefined,
