@@ -28,6 +28,7 @@ const CORE_PHASES = [
   "UI protocol",
   "Source install",
   "CLI launcher",
+  "Gateway restart handoff",
   "Plugin runtime links",
   "Config repairs",
   "Preserve original state",

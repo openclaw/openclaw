@@ -443,6 +443,18 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     );
 
   update
+    .command("finish-gateway-restart", { hidden: true })
+    .description("Internal Gateway restart after a shipped updater refused it")
+    .requiredOption("--run-id <id>", "Update run whose refused restart to finish")
+    .action(
+      createUpdateLeafAction(async (opts) => {
+        const { finishShippedRestartCommand } =
+          await import("./update-cli/update-shipped-restart-finisher.js");
+        await finishShippedRestartCommand(requiredUpdateLeafString(opts, "runId"));
+      }),
+    );
+
+  update
     .command("wizard")
     .description("Interactive update wizard")
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)

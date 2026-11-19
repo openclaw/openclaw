@@ -1518,10 +1518,28 @@ get them.
 
 When 2026.11.4 or 2026.11.5 updates a pnpm install to a release with this fix,
 it still publishes a launcher that points into its removed stage. The new
-package's Doctor, which runs during that update, repairs the launcher. Both of
-those updaters hand the later update steps to the new package, which restarts
-the Gateway on the new version. In test runs this first hop ended with a working
-CLI and Gateway.
+package's Doctor, which runs during that update, repairs the launcher. If the
+new release migrates the database schema, those updaters hand the later update
+steps to the new package, which restarts the Gateway on the new version. In test
+runs, 2026.11.4 to 2026.11.6 and 2026.11.5 to 2026.11.10 ended with a working
+CLI and Gateway this way.
+
+Without a schema migration there is no handoff. When 2026.11.5 or earlier (or a
+2026.11.6 or 2026.11.10 build without the fix) updates a pnpm install to a
+release with the same schema, such as 2026.11.5 to 2026.11.6, the installed
+updater refuses the Gateway restart and ends with `service-revalidation-failed`;
+the command still works, but the Gateway stays stopped. The new
+package's Doctor then prints that OpenClaw will try to restart the Gateway after
+the updater exits, and leaves one background process. Once the updater has
+exited, that process checks that no newer update has started, the Gateway is
+still stopped and the service still belongs to this installation. It then runs
+`openclaw gateway install --force` and `openclaw gateway start`, checks that the
+new version is serving, and adds the outcome to that update's history as a
+warning. It waits at most 60 minutes for the updater. If it cannot finish, the
+history warning names the reason. Then run `openclaw gateway install --force`
+followed by `openclaw gateway restart`, or ask the instance's agent with
+`openclaw triage`. `openclaw gateway restart` alone does not work in that state,
+because the service definition still names the previous version.
 
 If `openclaw` still points into a missing `.openclaw-update-native-*` directory,
 the new package's Doctor and Gateway startup repair it. They rewrite a launcher

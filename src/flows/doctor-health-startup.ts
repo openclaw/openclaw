@@ -398,6 +398,12 @@ export async function prepareDoctorRuntimeChecks(
       }
     }
   });
+  // Shipped updaters can refuse a pnpm Gateway restart after the swap; leave its finisher.
+  await measure("Gateway restart handoff", async () => {
+    const { maybeLeaveShippedRestartFinisher } =
+      await import("../cli/update-cli/update-shipped-restart-finisher.js");
+    await maybeLeaveShippedRestartFinisher({ root, log: (message) => runtime.log(message) });
+  });
   await measure("Plugin runtime links", () => noteStalePluginRuntimeSymlinks(root));
   noteStartupOptimizationHints();
   return { schemas, nocowPaths: nocow.paths, warnings: deletionJournal.warnings };
