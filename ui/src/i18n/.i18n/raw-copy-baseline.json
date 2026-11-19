@@ -683,6 +683,104 @@
     {
       "count": 1,
       "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-balance-pill.ts",
+      "text": "Claude"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-balance-pill.ts",
+      "text": "DeepSeek"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-balance-pill.ts",
+      "text": "Doubao"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-balance-pill.ts",
+      "text": "Gemini"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-balance-pill.ts",
+      "text": "GLM"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-balance-pill.ts",
+      "text": "Grok"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-balance-pill.ts",
+      "text": "Groq"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-balance-pill.ts",
+      "text": "Kimi"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-balance-pill.ts",
+      "text": "MiniMax"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-balance-pill.ts",
+      "text": "Mistral"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-balance-pill.ts",
+      "text": "Moonshot"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-balance-pill.ts",
+      "text": "Ollama"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-balance-pill.ts",
+      "text": "OpenAI"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-balance-pill.ts",
+      "text": "OpenRouter"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
       "name": "description",
       "path": "ui/src/lib/agents/display.ts",
       "text": "Control canvases"

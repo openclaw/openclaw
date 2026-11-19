@@ -133,6 +133,7 @@ export type ChatPageHost = ChatHost &
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
     chatMessageMaxWidth: string | null;
+    balanceChip: import("../../components/provider-balance-pill.ts").BalanceChipOverride | null;
     chatToolMessages: Record<string, unknown>[];
     chatAttachments: ChatAttachment[];
     chatQueue: ChatQueueItem[];
@@ -977,6 +978,7 @@ export function createPageState(
     embedSandboxMode: appConfig.embedSandboxMode,
     allowExternalEmbedUrls: appConfig.allowExternalEmbedUrls,
     chatMessageMaxWidth: appConfig.chatMessageMaxWidth,
+    balanceChip: appConfig.balanceChip ?? null,
     client: null,
     connected: false,
     hello: null,

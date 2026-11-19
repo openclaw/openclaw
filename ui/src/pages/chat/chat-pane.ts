@@ -64,6 +64,7 @@ import {
   type ChatPageHost,
 } from "./chat-state.ts";
 import { renderChat, resetChatViewState, type ChatProps } from "./chat-view.ts";
+import { renderProviderBalancePill } from "../../components/provider-balance-pill.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import {
   createSessionWorkspaceProps,
@@ -99,6 +100,76 @@ const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
 const NEW_SESSION_LIST_LOADING_MESSAGE =
   "Session list is still refreshing. Try New Chat again in a moment.";
+/**
+ * Resolve the provider id for the balance chip.
+ * Priority: latest assistant turn's provider > session model override > agent default model.
+ * Providers come either as "deepseek/deepseek-flash" or a bare "deepseek".
+ */
+function resolveBalanceProviderId(state: unknown, agentDefaultModel?: string | null) {
+  const chatState = state as {
+    chatMessages?: Array<{ role?: string; provider?: string | null; responseModel?: string | null }>;
+    sessionKey?: string;
+    sessionsResult?: { sessions?: Array<{ key?: string; model?: string | null }> };
+    sessions?: { state?: { modelOverrides?: Record<string, string> } };
+  } | null;
+  const cut = (value?: string | null) => {
+    const raw = (value ?? "").trim();
+    if (!raw) {
+      return null;
+    }
+    if (raw === "default" || raw === "auto") {
+      return null;
+    }
+    const head = raw.split("/")[0];
+    return head || raw;
+  };
+  const messages = chatState?.chatMessages ?? [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message?.role === "user") {
+      break;
+    }
+    if (message?.role !== "assistant") {
+      continue;
+    }
+    const fromProvider =
+      cut(message.provider) ?? cut(String(message.responseModel ?? "").split(":").pop());
+    if (fromProvider) {
+      return fromProvider;
+    }
+    break;
+  }
+  const sessionKey = chatState?.sessionKey;
+  const override = sessionKey
+    ? chatState?.sessions?.state?.modelOverrides?.[sessionKey] ??
+      chatState?.sessionsResult?.sessions?.find((row) => row.key === sessionKey)?.model
+    : null;
+  return cut(override) ?? cut(agentDefaultModel) ?? null;
+}
+
+function buildProviderBalanceProps(
+  state: unknown,
+  agentDefaultModel?: string | null,
+  onNeedsRepaint?: () => void,
+) {
+  const chatState = state as {
+    basePath?: string;
+    client?: unknown;
+    connected?: boolean;
+    chatMessages?: unknown[];
+    chatRunId?: string | null;
+  } | null;
+  return {
+    basePath: chatState?.basePath,
+    client: (chatState?.client ?? null) as never,
+    connected: Boolean(chatState?.connected),
+    refreshToken: `${chatState?.chatMessages?.length ?? 0}:${chatState?.chatRunId ?? ""}`,
+    activeProvider: resolveBalanceProviderId(state, agentDefaultModel),
+    onNeedsRepaint,
+    overrides: (state as { balanceChip?: unknown } | null)?.balanceChip as never,
+  };
+}
+
 const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new session. Try again in a moment.";
 
@@ -863,6 +934,9 @@ class ChatPane extends LitElement {
         modelAuthStatusResult: state.modelAuthStatusResult,
       },
       composerControls: renderChatControls({
+        providerBalance: renderProviderBalancePill(
+          buildProviderBalanceProps(state, agentDefaultModel, () => state.requestUpdate),
+        ),
         paneId: this.paneId,
         agentsList: state.agentsList,
         connected: state.connected,

@@ -3578,3 +3578,69 @@ openclaw-chat-page {
 
 /* Mobile dropdown toggle — hidden on desktop */
 /* Mobile gear toggle + dropdown are hidden by default in layout.css */
+
+/* Provider balance chip — sits in the composer meta slot next to the context
+   usage instrument. Brand color comes from --balance-brand; the logo comes
+   from /provider-icons. */
+.provider-balance-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  height: 1.85em;
+  padding: 0 0.7em 0 0.5em;
+  border: 1px solid color-mix(in srgb, var(--balance-brand, var(--accent)) 38%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--balance-brand, var(--accent)) 12%, transparent);
+  color: var(--balance-brand, var(--accent));
+  /* 跟随根字号：屏幕大 / 浏览器缩放时整体等比放大，不会显得缩成一团 */
+  font-size: 0.8rem;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: background 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out;
+}
+
+.provider-balance-pill:hover {
+  background: color-mix(in srgb, var(--balance-brand, var(--accent)) 20%, transparent);
+  border-color: color-mix(in srgb, var(--balance-brand, var(--accent)) 55%, transparent);
+}
+
+.provider-balance-pill:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--balance-brand, var(--accent)) 60%, transparent);
+  outline-offset: 1px;
+}
+
+/* 图标用 SVG mask，尺寸用 em 跟随字号：既能在高分屏/大屏上保持锐利，
+   又不会随浏览器缩放糊掉（mask 重绘是真矢量）。 */
+.provider-balance-pill__icon {
+  width: 1.15em;
+  height: 1.15em;
+  flex: 0 0 auto;
+  background-color: currentColor;
+  -webkit-mask-image: var(--provider-icon-url);
+  mask-image: var(--provider-icon-url);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  shape-rendering: geometricPrecision;
+}
+
+.provider-balance-pill__label {
+  opacity: 0.78;
+  font-weight: 600;
+}
+
+.provider-balance-pill__value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 低余额：只把数字变红加粗，胶囊保持品牌色。 */
+.provider-balance-pill--low .provider-balance-pill__value {
+  color: var(--danger, #ef4444);
+  font-weight: 750;
+}

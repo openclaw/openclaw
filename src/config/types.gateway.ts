@@ -160,6 +160,36 @@ export type GatewayControlUiConfig = {
   allowInsecureAuth?: boolean;
   /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
   dangerouslyDisableDeviceAuth?: boolean;
+  /**
+   * Operator overrides for the composer provider-balance chip.
+   * Omitted fields keep the built-in brand defaults.
+   */
+  balanceChip?: {
+    /** Disable the chip entirely (default: enabled). */
+    enabled?: boolean;
+    /** Label shown before the amount; per-provider `label` wins. */
+    label?: string;
+    /** Amounts below this value render in the danger color (default 1). */
+    lowBalanceThreshold?: number;
+    /** Milliseconds between automatic refreshes (min 5000, default 20000). */
+    refreshIntervalMs?: number;
+    /** Case-insensitive substring match on provider id. */
+    providers?: Record<
+      string,
+      {
+        /** Text before the amount, e.g. "余额" or "Credits". */
+        label?: string;
+        /** Accent color, any CSS color. */
+        color?: string;
+        /** URL opened on click. */
+        url?: string;
+        /** Provider icon slug (`ProviderIcon-<slug>.svg`) or a URL. */
+        icon?: string;
+        /** Currency symbol used when the provider reports no currency. */
+        currency?: string;
+      }
+    >;
+  };
 };
 
 /** Gateway authentication strategy for WebSocket and HTTP clients. */

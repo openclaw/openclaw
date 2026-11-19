@@ -1,11 +1,16 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-07-08T13:50:18.329Z",
+  "fallbackKeys": [
+    "chat.balanceChipLabel",
+    "chat.balanceChipLoading",
+    "chat.balanceChipOpenConsole",
+    "chat.balanceChipRemaining"
+  ],
+  "generatedAt": "2026-11-19T10:32:20.567Z",
   "locale": "ar",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "46a510a0c1922e82db6836aedafbded1b740535fc1aa22071f5398692b5aeee9",
-  "totalKeys": 1669,
+  "sourceHash": "0a9890b074af554cb67c8515e61b37d2f7387f15e2eb2fbec4b0e8d4c11157f8",
+  "totalKeys": 1673,
   "translatedKeys": 1669,
   "workflow": 1
 }

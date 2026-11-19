@@ -2,6 +2,8 @@ import { normalizeRouteBasePath } from "@openclaw/uirouter";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
+  type ControlUiBalanceChipConfig,
+  type ControlUiBalanceChipProviderStyle,
   type ControlUiBootstrapConfig,
   type ControlUiEmbedSandboxMode,
 } from "../../../src/gateway/control-ui-contract.js";
@@ -43,6 +45,8 @@ type ApplicationConfig = {
   allowExternalEmbedUrls: boolean;
   chatMessageMaxWidth: string | null;
   terminalEnabled: boolean;
+  /** Operator overrides for the composer balance chip (null = use defaults). */
+  balanceChip: ControlUiBalanceChipConfig | null;
 };
 
 export type ApplicationConfigCapability = {
@@ -77,7 +81,76 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   allowExternalEmbedUrls: false,
   chatMessageMaxWidth: null,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
+  balanceChip: null,
 };
+
+/**
+ * Defensive re-validation of `balanceChip` in the browser. The gateway already
+ * sanitizes this, but a stale or hand-crafted payload must not be able to point
+ * the chip at `javascript:` URLs or inject arbitrary CSS.
+ */
+function sanitizeBalanceChipConfig(value: unknown): ControlUiBalanceChipConfig | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  if (raw.enabled === false) {
+    return null;
+  }
+  const out: ControlUiBalanceChipConfig = {};
+  if (typeof raw.label === "string" && raw.label.trim()) {
+    out.label = raw.label.trim().slice(0, 40);
+  }
+  if (typeof raw.lowBalanceThreshold === "number" && Number.isFinite(raw.lowBalanceThreshold)) {
+    out.lowBalanceThreshold = Math.max(0, raw.lowBalanceThreshold);
+  }
+  if (typeof raw.refreshIntervalMs === "number" && Number.isFinite(raw.refreshIntervalMs)) {
+    out.refreshIntervalMs = Math.max(5000, Math.round(raw.refreshIntervalMs));
+  }
+  const providers: Record<string, ControlUiBalanceChipProviderStyle> = {};
+  if (raw.providers && typeof raw.providers === "object") {
+    for (const [key, entry] of Object.entries(raw.providers as Record<string, unknown>)) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const item = entry as Record<string, unknown>;
+      const style: ControlUiBalanceChipProviderStyle = {};
+      if (typeof item.label === "string" && item.label.trim()) {
+        style.label = item.label.trim().slice(0, 40);
+      }
+      // Only accept plain CSS colors: no url(), expression(), or var() lookups
+      // that could exfiltrate via remote fetches.
+      if (
+        typeof item.color === "string" &&
+        item.color.trim() &&
+        !/[();]|url\(|expression\(|javascript:/iu.test(item.color)
+      ) {
+        style.color = item.color.trim().slice(0, 80);
+      }
+      if (typeof item.url === "string" && /^https?:\/\//iu.test(item.url.trim())) {
+        style.url = item.url.trim().slice(0, 500);
+      }
+      if (typeof item.icon === "string" && item.icon.trim()) {
+        const icon = item.icon.trim().slice(0, 200);
+        if (/^(https?:\/\/|\/|\.{0,2}\/)/iu.test(icon)) {
+          style.icon = icon;
+        } else if (/^[a-z0-9-]+$/iu.test(icon)) {
+          style.icon = icon;
+        }
+      }
+      if (typeof item.currency === "string" && item.currency.trim()) {
+        style.currency = item.currency.trim().slice(0, 8);
+      }
+      if (Object.keys(style).length > 0) {
+        providers[key.toLowerCase()] = style;
+      }
+    }
+  }
+  if (Object.keys(providers).length > 0) {
+    out.providers = providers;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
 
 function normalizeSeamColor(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -152,6 +225,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
         ? parsed.chatMessageMaxWidth
         : null,
     terminalEnabled: parsed.terminalEnabled === true,
+    balanceChip: sanitizeBalanceChipConfig(parsed.balanceChip),
   };
 }
 

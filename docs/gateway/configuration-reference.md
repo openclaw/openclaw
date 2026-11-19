@@ -541,6 +541,7 @@ See [Inferred commitments](/concepts/commitments).
       // embedSandbox: "scripts", // strict | scripts | trusted
       // allowExternalEmbedUrls: false, // dangerous: allow absolute external http(s) embed URLs
       // chatMessageMaxWidth: "min(1280px, 82%)", // optional grouped chat message max-width
+      // balanceChip: { label: "Balance", lowBalanceThreshold: 5 }, // composer balance chip
       // allowedOrigins: ["https://control.example.com"], // required for non-loopback Control UI
       // dangerouslyAllowHostHeaderOriginFallback: false, // dangerous Host-header origin fallback mode
       // allowInsecureAuth: false,
@@ -615,6 +616,7 @@ See [Inferred commitments](/concepts/commitments).
   it if an externally configured Funnel route already covers the gateway port.
   Default `false`.
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required for public non-loopback browser origins. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
+- `controlUi.balanceChip`: optional composer balance chip shown next to the model picker. Displays the active provider's account balance and opens that provider's billing console in a new tab on click. Fields: `enabled` (set `false` to hide), `label` (text before the amount), `lowBalanceThreshold` (amounts below this render in the danger color), `refreshIntervalMs` (minimum `5000`), and `providers.<id>` overrides matched by case-insensitive substring on the provider id, each accepting `label`, `color`, `url`, `icon` (a `ProviderIcon-<slug>` name or an absolute URL), and `currency`. Omitted fields fall back to the built-in provider table. Balance data comes from the existing `usage.status` RPC, so no extra credentials are needed.
 - `controlUi.chatMessageMaxWidth`: optional max-width for grouped Control UI chat messages. Accepts constrained CSS width values such as `960px`, `82%`, `min(1280px, 82%)`, and `calc(100% - 2rem)`.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
 - `terminal.enabled`: opt in to the admin-scoped operator terminal. Default: `false`. The terminal starts a host PTY in the selected agent workspace, inherits the Gateway process environment, and is refused for agents with `sandbox.mode: "all"`. Enable it only for trusted operator deployments; changing it restarts the Gateway and updates the Control UI content security policy.

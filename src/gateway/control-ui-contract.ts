@@ -57,4 +57,41 @@ export type ControlUiBootstrapConfig = {
    * switch removes the surface rather than showing a button that errors on open.
    */
   terminalEnabled?: boolean;
+  /**
+   * Operator-supplied overrides for the composer provider-balance chip.
+   * Read from `gateway.controlUi.balanceChip`; unknown or absent fields keep
+   * the built-in brand defaults so older configs are unaffected.
+   */
+  balanceChip?: ControlUiBalanceChipConfig | null;
+};
+
+/** Per-provider presentation overrides for the composer balance chip. */
+export type ControlUiBalanceChipProviderStyle = {
+  /** Display label shown before the amount (default "余额"). */
+  label?: string;
+  /** Accent color (any CSS color). */
+  color?: string;
+  /** URL opened in a new tab when the chip is clicked. */
+  url?: string;
+  /**
+   * Icon to show: either a provider-icon slug (`ProviderIcon-<slug>.svg`) or
+   * an absolute/relative URL. Missing icons fall back to a colored dot.
+   */
+  icon?: string;
+  /** Symbol prefixed to the amount when the provider reports no currency. */
+  currency?: string;
+};
+
+/** Operator overrides for the composer provider-balance chip. */
+export type ControlUiBalanceChipConfig = {
+  /** Disable the chip entirely. */
+  enabled?: boolean;
+  /** Global label override, applied when a provider has no specific label. */
+  label?: string;
+  /** Show balances below this amount in the danger color. */
+  lowBalanceThreshold?: number;
+  /** Milliseconds between automatic balance refreshes (min 5000). */
+  refreshIntervalMs?: number;
+  /** Case-insensitive substring matching on the provider id. */
+  providers?: Record<string, ControlUiBalanceChipProviderStyle>;
 };

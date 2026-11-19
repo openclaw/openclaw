@@ -1,5 +1,5 @@
 // Chat-owned quota, settings, refresh, and display controls.
-import { html } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
 import {
   normalizeChatAutoScrollMode,
@@ -21,6 +21,8 @@ import { renderChatModelControls, type ChatModelControlsProps } from "./chat-mod
 import { renderRealtimeTalkOptions, type RealtimeTalkOptions } from "./chat-realtime-controls.ts";
 
 type ChatControlsProps = {
+  /** 余额胶囊（已渲染好的模板），插在模型选择器左边。 */
+  providerBalance?: TemplateResult | typeof nothing;
   paneId: string;
   agentsList: AgentsListResult | null;
   connected: boolean;
@@ -361,6 +363,9 @@ export function renderChatControls(props: ChatControlsProps) {
           : ""}
       </div>
     </div>
+    ${props.providerBalance
+      ? html`<div class="chat-composer-balance-control">${props.providerBalance}</div>`
+      : nothing}
     <div
       class="chat-composer-model-control"
       @click=${() => {

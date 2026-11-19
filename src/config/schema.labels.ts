@@ -358,6 +358,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.root": "Control UI Assets Root",
   "gateway.controlUi.embedSandbox": "Control UI Embed Sandbox Mode",
   "gateway.controlUi.allowExternalEmbedUrls": "Allow External Control UI Embed URLs",
+  "gateway.controlUi.balanceChip": "Control UI Balance Chip",
   "gateway.controlUi.chatMessageMaxWidth": "Control UI Chat Message Max Width",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":

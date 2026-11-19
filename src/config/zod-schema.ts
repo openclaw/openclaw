@@ -1121,6 +1121,29 @@ export const OpenClawSchema = z
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),
             dangerouslyDisableDeviceAuth: z.boolean().optional(),
+            balanceChip: z
+              .object({
+                enabled: z.boolean().optional(),
+                label: z.string().optional(),
+                lowBalanceThreshold: z.number().min(0).optional(),
+                refreshIntervalMs: z.number().int().min(5000).optional(),
+                providers: z
+                  .record(
+                    z.string(),
+                    z
+                      .object({
+                        label: z.string().optional(),
+                        color: z.string().optional(),
+                        url: z.string().optional(),
+                        icon: z.string().optional(),
+                        currency: z.string().optional(),
+                      })
+                      .strict(),
+                  )
+                  .optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict()
           .optional(),

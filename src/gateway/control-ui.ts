@@ -42,6 +42,8 @@ import {
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
+  type ControlUiBalanceChipConfig,
+  type ControlUiBalanceChipProviderStyle,
   type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
@@ -927,6 +929,62 @@ const LEGACY_CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw";
 const LEGACY_BOOTSTRAP_CONFIG_PATH = `${LEGACY_CONTROL_UI_NAMESPACE_PREFIX}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
 
 /**
+ * Sanitizes `gateway.controlUi.balanceChip` before it reaches the browser.
+ *
+ * Returns null when the operator disabled the chip or supplied nothing, so the
+ * Control UI falls back to its compiled-in brand table.
+ */
+function normalizeBalanceChipConfig(
+  raw: ControlUiBalanceChipConfig | undefined,
+): ControlUiBalanceChipConfig | null {
+  if (!raw) {
+    return null;
+  }
+  if (raw.enabled === false) {
+    return null;
+  }
+  const providers: Record<string, ControlUiBalanceChipProviderStyle> = {};
+  for (const [key, value] of Object.entries(raw.providers ?? {})) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    const entry: ControlUiBalanceChipProviderStyle = {};
+    if (typeof value.label === "string" && value.label.trim()) {
+      entry.label = value.label.trim().slice(0, 40);
+    }
+    if (typeof value.color === "string" && value.color.trim()) {
+      entry.color = value.color.trim().slice(0, 80);
+    }
+    if (typeof value.url === "string" && /^https?:\/\//u.test(value.url.trim())) {
+      entry.url = value.url.trim().slice(0, 500);
+    }
+    if (typeof value.icon === "string" && value.icon.trim()) {
+      entry.icon = value.icon.trim().slice(0, 200);
+    }
+    if (typeof value.currency === "string" && value.currency.trim()) {
+      entry.currency = value.currency.trim().slice(0, 8);
+    }
+    if (Object.keys(entry).length > 0) {
+      providers[key.toLowerCase()] = entry;
+    }
+  }
+  const out: ControlUiBalanceChipConfig = {};
+  if (typeof raw.label === "string" && raw.label.trim()) {
+    out.label = raw.label.trim().slice(0, 40);
+  }
+  if (typeof raw.lowBalanceThreshold === "number" && Number.isFinite(raw.lowBalanceThreshold)) {
+    out.lowBalanceThreshold = Math.max(0, raw.lowBalanceThreshold);
+  }
+  if (typeof raw.refreshIntervalMs === "number" && Number.isFinite(raw.refreshIntervalMs)) {
+    out.refreshIntervalMs = Math.max(5000, Math.round(raw.refreshIntervalMs));
+  }
+  if (Object.keys(providers).length > 0) {
+    out.providers = providers;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
  * Whether `pathname` should be served the Control UI bootstrap config payload.
  *
  * The canonical endpoint is the configured base path joined with the shared
@@ -1048,6 +1106,7 @@ export async function handleControlUiHttpRequest(
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
+      balanceChip: normalizeBalanceChipConfig(config?.gateway?.controlUi?.balanceChip),
       seamColor: config?.ui?.seamColor,
       timeFormat: config?.agents?.defaults?.timeFormat,
       terminalEnabled,
