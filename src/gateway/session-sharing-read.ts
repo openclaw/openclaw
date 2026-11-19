@@ -17,10 +17,7 @@ import {
 import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
-import {
-  isOpenClawIdTunnelPrincipalCurrent,
-  openclawIdSubjectRolePolicy,
-} from "./openclaw-id/tunnel-principal.js";
+import { openclawIdSubjectRolePolicy } from "./openclaw-id/tunnel-principal.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import {
   authorizeCurrentOperatorRoleScopes,
@@ -428,9 +425,6 @@ export function prepareProjectedSessionSharing(params: {
   const retainedSnapshot = params.owner ? projectedSharingKeys.get(params.owner) : undefined;
   const publication = runtimeConfigPublication.current;
   const principal = client?.internal?.openclawIdPrincipal;
-  if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
-    throw new Error("OpenClaw ID membership authority changed");
-  }
   const policy =
     actor?.kind === "system"
       ? undefined

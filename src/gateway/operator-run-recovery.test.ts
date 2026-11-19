@@ -159,7 +159,7 @@ describe("scheduled authenticated operator source", () => {
     }));
 
   it("does not derive retained or recovered policy from an opaque membership label", () =>
-    withRecovery(async (fixture) => {
+    withRecovery(async (fixture, _stateDir, profile) => {
       const principal: OpenClawIdTunnelPrincipal = {
         kind: "member",
         peerKey: `iroh:${"ab".repeat(32)}`,
@@ -167,32 +167,53 @@ describe("scheduled authenticated operator source", () => {
         role: "guest",
         authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
       };
+      const role: GatewayOperatorRoleDefinition = {
+        scopes: ["operator.admin"],
+        agents: ["main"],
+        sessions: { others: "view" },
+      };
+      fixture.setConfig({ gateway: { roles: { definitions: { worker: role } } } });
+      setUserProfileRole(profile.id, "worker");
       setOpenClawIdTunnelPrincipalLookup(() => principal);
       try {
         fixture.client.internal!.openclawIdPrincipal = principal;
-        const caller = acceptedCaller(fixture);
-        try {
-          const captured = await caller.capture();
-          captured?.release();
-        } finally {
-          caller.release();
-        }
+        using caller = {
+          ...acceptedCaller(fixture),
+          [Symbol.dispose]() {
+            this.release();
+          },
+        };
+        using captured = {
+          ...expectDefined(await caller.capture(), "member authority"),
+          [Symbol.dispose]() {
+            this.release();
+          },
+        };
         const snapshot = expectDefined(
-          normalizeGatewayOperatorRecoverySnapshot({
-            ...fixture.snapshot,
-            openclawIdPrincipal: principal,
-          }),
+          normalizeGatewayOperatorRecoverySnapshot(captured.authority.recoverySnapshot),
           "opaque role survives recovery decoding",
         );
-        expect(snapshot.openclawIdPrincipal).toEqual(principal);
-        const restored = await restoreGatewayOperatorSource({
-          snapshot,
-          target: fixture.target,
-          context: fixture.context,
-          assertCurrent: () => {},
+        expect(snapshot).toMatchObject({
+          assignedRole: "worker",
+          openclawIdPrincipal: principal,
+          rolePolicy: role,
+        });
+        using restored = {
+          ...(await restoreGatewayOperatorSource({
+            snapshot,
+            target: fixture.target,
+            context: fixture.context,
+            assertCurrent: () => {},
+          })),
+          [Symbol.dispose]() {
+            this.release();
+          },
+        };
+        expect(restored.authority.rolePolicy).toMatchObject({
+          agents: ["main"],
+          sessionAccessCap: "view",
         });
         restored.authority.assertCurrent();
-        restored.release();
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
       }
