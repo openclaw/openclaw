@@ -64,15 +64,6 @@ it("keeps identity inputs editable through an admitted save and clears its error
   await waitForSolid(() => expect(mounted.queryByRole("alert")).toBeNull());
   expect(state.identityDraft.name).toBe("Garden curator");
   expect(mounted.container.querySelector(".agent-identity-editor__name")).toBe(input);
-
-  state.identityOutcome = Promise.resolve({ notice: "Synthetic save waiting to apply" });
-  await waitForSolid(() =>
-    expect(mounted.container.querySelector(".agent-identity-status")?.textContent).toContain(
-      "Synthetic save waiting to apply",
-    ),
-  );
-  expect(mounted.container.querySelector(".agent-identity-status")?.role).toBe("status");
-  expect(mounted.queryByRole("alert")).toBeNull();
 });
 
 it("switches identity editors while the previous agent save is pending", async () => {

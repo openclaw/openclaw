@@ -205,14 +205,21 @@ export async function executeConfigExternalMutation<T>(
       };
     }
     const outcome = configMutationFailure(state, error);
+    const deferred =
+      outcome.status !== "conflict" &&
+      error instanceof GatewayRequestError &&
+      isRecord(error.details) &&
+      isDeferredApplication(error.details);
+    if (deferred) {
+      // Saved but not applied: applied-revision polling retires the waiting status.
+      state.configNeedsApply = true;
+    }
     return {
       ok: false,
       reason:
         outcome.status === "conflict"
           ? "conflict"
-          : error instanceof GatewayRequestError &&
-              isRecord(error.details) &&
-              isDeferredApplication(error.details)
+          : deferred
             ? "deferred"
             : isDefinitiveConfigMutationRejection(error)
               ? "rejected"

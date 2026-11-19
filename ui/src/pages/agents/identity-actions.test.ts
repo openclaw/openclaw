@@ -219,18 +219,27 @@ describe("agent identity actions", () => {
   });
 
   it.each([
-    { shownBy: "the shared save status", earlierEditWaiting: false },
-    { shownBy: "the identity block", earlierEditWaiting: true },
+    { waiting: "this save", earlierEditWaiting: false },
+    { waiting: "an earlier edit", earlierEditWaiting: true },
   ])(
-    "reports a save held behind a busy plugin reload as waiting to apply through $shownBy",
+    "shows a save held behind a busy plugin reload as waiting to apply until it applies ($waiting)",
     async ({ earlierEditWaiting }) => {
+      vi.useFakeTimers();
       const message =
         "Agent configuration saved but deferred: Plugin discord reload is waiting for retained work. After the retained plugin work finishes, or after a Gateway restart.";
+      let saved = false;
+      let applied = false;
       const request = vi.fn(async (method: string) => {
         if (method === "config.get") {
-          return sourceConfigSnapshot({}, "hash-1");
+          const revision = saved ? "saved" : "initial";
+          return {
+            ...sourceConfigSnapshot({}, revision),
+            configRevisionHash: revision,
+            appliedConfigHash: applied ? revision : "initial",
+          };
         }
         if (method === "agents.update") {
+          saved = true;
           throw new GatewayRequestError({
             code: "UNAVAILABLE",
             message,
@@ -251,17 +260,29 @@ describe("agent identity actions", () => {
       });
       await runtimeConfig.ensureLoaded();
       if (earlierEditWaiting) {
-        // An earlier plugin edit already owns the shared status, so the block reports this save.
         runtimeConfig.state.configAutoSaveStatus = "deferred";
+        runtimeConfig.state.lastError = "An earlier edit is waiting.";
       }
       const state = host();
       state.identityDraft.name = "Agent Smith";
 
       await saveIdentityDraft({ ...saveOptions(state, client), runtimeConfig });
 
-      expect(await state.identityOutcome).toEqual(earlierEditWaiting ? { notice: message } : null);
+      // The shared status reports it; the identity block raises no error of its own.
+      expect(await state.identityOutcome).toBeNull();
       expect(runtimeConfig.state.configAutoSaveStatus).toBe("deferred");
+      expect(runtimeConfig.state.lastError).toBe(
+        earlierEditWaiting ? "An earlier edit is waiting." : message,
+      );
       expect(state.identityDraft.name).toBe("Agent Smith");
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("deferred");
+
+      applied = true;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
+      expect(runtimeConfig.state.lastError).toBeNull();
       runtimeConfig.dispose();
     },
   );

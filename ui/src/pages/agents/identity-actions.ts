@@ -16,11 +16,7 @@ export type AgentIdentityDraft = {
   avatar: string | null;
 };
 
-export type AgentIdentityOutcome =
-  | { error: string; notice?: never }
-  /** Saved; the Gateway applies it later, so this is a status and not an alert. */
-  | { notice: string; error?: never }
-  | null;
+export type AgentIdentityOutcome = { error: string } | null;
 
 export function identityDraftStatus(draft: AgentIdentityDraft) {
   // agents.update can replace fields, but cannot clear them with a blank edit.
@@ -148,7 +144,6 @@ export async function saveIdentityDraft(params: {
   }
   const completion = Promise.withResolvers<AgentIdentityOutcome>();
   let failure: string | undefined;
-  let notice: string | undefined;
   let staleClient = false;
   host.identitySaving = true;
   host.identityOutcome = completion.promise;
@@ -179,12 +174,6 @@ export async function saveIdentityDraft(params: {
     if (!mutation.ok) {
       // A failure the shared save status shows keeps the edit for its Retry. The status
       // stays with a paused or conflicted form, so the block reports anything else.
-      if (mutation.reason === "deferred" && !mutation.reported) {
-        if (params.isCurrent()) {
-          notice = mutation.error;
-        }
-        return;
-      }
       if (staleClient || !mutation.reported) {
         throw new Error(mutation.error);
       }
@@ -220,10 +209,10 @@ export async function saveIdentityDraft(params: {
   } finally {
     if (params.isCurrent()) {
       host.identitySaving = false;
-      if (failure || notice) {
+      if (failure) {
         host.identityOutcome = completion.promise;
       }
     }
-    completion.resolve(failure ? { error: failure } : notice ? { notice } : null);
+    completion.resolve(failure ? { error: failure } : null);
   }
 }
