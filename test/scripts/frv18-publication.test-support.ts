@@ -7,7 +7,7 @@ import { candidatePublicationFixture } from "./candidate-publication.test-suppor
 
 export function createFrv18PublicationClient(
   f: ReturnType<typeof candidatePublicationFixture>,
-  parent = f.parent,
+  parent: Omit<typeof f.parent, "conclusion"> & { conclusion: string | null } = f.parent,
   { missingManifest = false, tamperedArtifact = false } = {},
 ) {
   const sha = "995f9059b6e6fe3ba0865a3354924fd2bcbfceea";

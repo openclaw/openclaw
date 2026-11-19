@@ -29,7 +29,6 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import { releaseExecutionPlanSha256 } from "../../scripts/full-release-validation-policy.mjs";
 import { waitForClawHubPublicVersion } from "../../scripts/lib/clawhub-publication-state.mjs";
-import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
 import { verifyPublishedClawHubPackage } from "../../scripts/verify-clawhub-published-artifact.mjs";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 import { createFrv18PublicationClient } from "./frv18-publication.test-support.js";
@@ -721,6 +720,9 @@ function authenticatedParentRecoveryFixture(
   };
   const evidenceClient = {
     ...qualification.client,
+    verifyRetainedPublicationArtifacts() {
+      throw new Error("Unexpected retained publication verification");
+    },
     downloadArtifactArchive() {
       throw new Error("Unexpected publication artifact download");
     },
