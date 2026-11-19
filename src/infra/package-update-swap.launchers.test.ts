@@ -45,6 +45,8 @@ describe("native launcher publication", () => {
           expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
             "1.0.0",
           );
+          // The live bin had no launchers before; the broken ones are not left published.
+          expect(await fs.readdir(binDir)).toEqual([]);
           return;
         }
         expect(result).toMatchObject({ status: "committed", step: { exitCode: 0 } });

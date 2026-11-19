@@ -117,9 +117,18 @@ export async function runGatewayPostReadyStartupMaintenance(params: {
           ]);
         const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
         params.signal.throwIfAborted();
-        for (const repair of root ? await repairPublishedPnpmLaunchers({ root }) : []) {
+        if (!root) {
+          return;
+        }
+        const { repaired, failed } = await repairPublishedPnpmLaunchers({ root });
+        for (const repair of repaired) {
           params.log.info(
             `Repaired the openclaw launcher ${repair.file}: it still pointed at the removed update stage ${repair.stage}.`,
+          );
+        }
+        for (const { file, error } of failed) {
+          params.log.warn(
+            `The openclaw launcher ${file} still points at a removed update stage and could not be repaired: ${formatErrorMessageWithCode(error)}. Recreate it with pnpm add -g openclaw@<installed-version>.`,
           );
         }
       },

@@ -1186,14 +1186,25 @@ Both pnpm 10's home-level shim and pnpm 11's `bin/` shim are supported, and the
 child PATH includes both locations. The installed updater must contain this fix;
 installing a newer candidate cannot repair an older updater's preflight.
 
-Native pnpm updates also relocate pnpm 12 launcher paths before publishing them.
-After activation, unresolved launcher targets produce a warning with repair
-guidance without rolling back the updated package. These protections require
-the installed updater to contain the fix. If an older updater left `openclaw`
-pointing into a missing `.openclaw-update-native-*` directory, reinstall the
-same version with `pnpm add -g --force openclaw@<installed-version>` using the
-same account and global directories to recreate the launcher. Back up first
-and follow the [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun).
+Native pnpm updates also relocate pnpm launcher paths before publishing them,
+including the quoted `"$basedir_abs"/'<target>'` form current pnpm writes. A
+staged launcher that still points into the update stage stops the update before
+the Gateway is stopped. After activation, a published launcher whose target
+does not exist fails the update, and the package transaction restores the
+previous launchers; a launcher format the updater cannot read only produces a
+warning with repair guidance. A pnpm package update also restarts the Gateway on
+the new version even though pnpm moved the package to a new versioned store
+directory. These protections require the installed updater to contain the fix.
+
+If an older updater left `openclaw` pointing into a missing
+`.openclaw-update-native-*` directory, the new package repairs it: its Doctor
+(which also runs during the update) and Gateway startup rewrite a launcher whose
+`cmd-shim-target` names this installation and whose stage directory is gone. If
+the Gateway is also down and no new code has run yet, reinstall the same version
+with `pnpm add -g openclaw@<installed-version>` using the same account and global
+directories, then run `openclaw gateway install --force` and
+`openclaw gateway restart`. Back up first and follow the
+[manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun).
 
 If a pnpm-owned install fails with `IO error: not a terminal`, the installed
 updater may be triggering an interactive pnpm build-approval prompt while

@@ -64,9 +64,12 @@ export async function repairStagedRuntimeLauncher(
   if (path.dirname(projectRoot) !== (await fs.realpath(path.dirname(stage)))) {
     return { outcome: "not-ours" };
   }
-  // Relocate a private copy, verify it, then replace the launcher in one rename.
-  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.repair-${process.pid}`);
-  await fs.copyFile(file, temporary);
+  // Relocate the analyzed content in a private directory beside the launcher, verify it,
+  // then replace the launcher in one rename. The exclusive directory keeps another account
+  // from planting a link where the repair writes.
+  const staging = await fs.mkdtemp(path.join(path.dirname(file), ".openclaw-launcher-repair-"));
+  const temporary = path.join(staging, path.basename(file));
+  await fs.writeFile(temporary, content, { flag: "wx", mode: 0o600 });
   try {
     // pnpm 12 resolves the shim's directory physically; relocate from that same base.
     const physical = path.join(await fs.realpath(path.dirname(file)), path.basename(file));
@@ -84,11 +87,10 @@ export async function repairStagedRuntimeLauncher(
     if (repaired.length === 0) {
       throw new Error("The repaired launcher names no executable target");
     }
-    await fs.chmod(temporary, stat.mode);
+    await fs.chmod(temporary, stat.mode & 0o7777);
     await fs.rename(temporary, file);
-  } catch (error) {
-    await fs.rm(temporary, { force: true });
-    throw error;
+  } finally {
+    await fs.rm(staging, { recursive: true, force: true });
   }
   return { outcome: "repaired", file, stage, projectRoot };
 }
@@ -101,12 +103,16 @@ export async function repairStagedRuntimeLauncher(
 export async function repairPublishedPnpmLaunchers(params: {
   root: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<Extract<StagedLauncherRepair, { outcome: "repaired" }>[]> {
+}): Promise<{
+  repaired: Extract<StagedLauncherRepair, { outcome: "repaired" }>[];
+  failed: { file: string; error: unknown }[];
+}> {
+  const repaired: Extract<StagedLauncherRepair, { outcome: "repaired" }>[] = [];
+  const failed: { file: string; error: unknown }[] = [];
   const root = await fs.realpath(params.root).catch(() => undefined);
   if (!root || process.platform === "win32") {
-    return [];
+    return { repaired, failed };
   }
-  const repaired: Extract<StagedLauncherRepair, { outcome: "repaired" }>[] = [];
   for (const file of new Set(listPnpmLauncherCandidates(params.root, params.env ?? process.env))) {
     const content = await fs.readFile(file, "utf8").catch(() => undefined);
     const recorded = content && CMD_SHIM_TARGET.exec(content)?.[1]?.trim();
@@ -115,16 +121,24 @@ export async function repairPublishedPnpmLaunchers(params: {
     if (!recordedReal || recordedReal !== path.join(root, "openclaw.mjs")) {
       continue;
     }
-    const repair = await repairStagedRuntimeLauncher(file);
-    if (repair.outcome === "repaired") {
-      repaired.push(repair);
+    try {
+      const repair = await repairStagedRuntimeLauncher(file);
+      if (repair.outcome === "repaired") {
+        repaired.push(repair);
+      }
+    } catch (error) {
+      failed.push({ file, error });
     }
   }
-  return repaired;
+  return { repaired, failed };
 }
 
-/** Published `openclaw` launchers a pnpm installation of `root` may own. */
-export function listPnpmLauncherCandidates(root: string, env: NodeJS.ProcessEnv): string[] {
+/**
+ * Published `openclaw` launchers a pnpm installation of `root` may own: its pnpm home
+ * and bin directory, and every PATH entry, since `pnpm bin -g` can be configured outside
+ * PNPM_HOME. Callers still require the exact recorded target before any write.
+ */
+function listPnpmLauncherCandidates(root: string, env: NodeJS.ProcessEnv): string[] {
   const directories = new Set<string>();
   const pnpmHome = env.PNPM_HOME?.trim();
   if (pnpmHome) {
@@ -137,6 +151,11 @@ export function listPnpmLauncherCandidates(root: string, env: NodeJS.ProcessEnv)
     const home = root.slice(0, marker.index);
     directories.add(path.join(home, "bin"));
     directories.add(home);
+  }
+  for (const directory of (env.PATH ?? "").split(path.delimiter)) {
+    if (path.isAbsolute(directory)) {
+      directories.add(directory);
+    }
   }
   return [...directories].map((directory) => path.join(directory, "openclaw"));
 }

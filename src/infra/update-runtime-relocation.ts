@@ -21,14 +21,72 @@ type PreparedRuntimeRelocations = {
 };
 type RuntimeRelocations = readonly RuntimeRelocation[] | PreparedRuntimeRelocations;
 
-// pnpm cmd-shim writes `"$basedir/target"`; pnpm 12.15+ writes `"$basedir"/'target'`.
+// Older pnpm shims write `"$basedir/target"`; current ones (seen from 11.28 and 12.21)
+// write `"$basedir"/'target'`, a single-quoted shell word where `'` is spelled `'\''`.
 const launcherRelativePath =
   /(\$(?:basedir_abs|basedir_win|basedir)(?:"[/\\]'|[/\\])|%~dp0\\)([^"\r\n]+)/gu;
+const ESCAPED_QUOTE = "'\\''";
 
-/** Split a matched reference into its directory-relative target and the text after it. */
+/** Split a matched reference into its decoded directory-relative target and the text after it. */
 function splitLauncherReference(prefix: string, reference: string): [string, string] {
-  const end = prefix.endsWith("'") ? reference.indexOf("'") : -1;
-  return end < 0 ? [reference, ""] : [reference.slice(0, end), reference.slice(end)];
+  if (!prefix.endsWith("'")) {
+    return [reference, ""];
+  }
+  let target = "";
+  for (let index = 0; index < reference.length;) {
+    const quote = reference.indexOf("'", index);
+    if (quote < 0) {
+      return [reference, ""];
+    }
+    target += reference.slice(index, quote);
+    if (!reference.startsWith(ESCAPED_QUOTE, quote)) {
+      return [target, reference.slice(quote)];
+    }
+    target += "'";
+    index = quote + ESCAPED_QUOTE.length;
+  }
+  return [reference, ""];
+}
+
+/**
+ * Replace an absolute path prefix, spelling a destination `'` as `'\''` where the
+ * occurrence sits inside a single-quoted shell word (pnpm's NODE_PATH export).
+ */
+function replaceShellPath(content: string, source: string, destination: string): string {
+  if (!destination.includes("'")) {
+    return content.replaceAll(source, destination);
+  }
+  return content
+    .split("\n")
+    .map((line) => {
+      let result = "";
+      let quoted = false;
+      for (let index = 0; index < line.length;) {
+        if (!line.startsWith("#") && line.startsWith(source, index)) {
+          result += quoted ? destination.replaceAll("'", ESCAPED_QUOTE) : destination;
+          index += source.length;
+          continue;
+        }
+        if (line[index] === "\\" && !quoted) {
+          result += line.slice(index, index + 2);
+          index += 2;
+          continue;
+        }
+        if (line[index] === "'") {
+          quoted = !quoted;
+        }
+        result += line[index];
+        index += 1;
+      }
+      // Comments (the cmd-shim-target record) keep the literal path.
+      return line.startsWith("#") ? line.replaceAll(source, destination) : result;
+    })
+    .join("\n");
+}
+
+/** Encode a relative target for the reference form it came from. */
+function encodeLauncherReference(prefix: string, target: string): string {
+  return prefix.endsWith("'") ? target.replaceAll("'", ESCAPED_QUOTE) : target;
 }
 
 /** The entry paths a launcher file executes, resolved the way its shell resolves them. */
@@ -222,12 +280,13 @@ export async function relocateRuntimeLauncher(
         ? path.resolve(destinationBase, path.relative(sourceDir, sourceTarget))
         : relocateRuntimePath(sourceTarget, prepared);
       const replacement = path.relative(destinationBase, target);
-      return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}${rest}`;
+      return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : encodeLauncherReference(prefix, replacement.replaceAll("\\", "/"))}${rest}`;
     });
     for (const relocation of prepared.rules) {
       for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
         // NODE_PATH and the shim's target comment can carry absolute project paths.
-        content = content.replaceAll(
+        content = replaceShellPath(
+          content,
           `${sourceRoot}${path.sep}`,
           `${relocation.destinationRoot}${path.sep}`,
         );
