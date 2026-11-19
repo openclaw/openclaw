@@ -329,7 +329,10 @@ struct RootTabs: View {
             // Agent identity pill owns the chat header (prototype parity).
             ChatProTab(
                 headerSidebarAction: self.sidebarHeaderAction,
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.selectSidebarDestination(.gateway) },
+                startFirstGatewaySetup: self.hasNeverHadGateway
+                    ? { self.evaluateOnboardingPresentation(force: true) }
+                    : nil)
         case .overview:
             CommandCenterTab(
                 headerSidebarAction: self.sidebarHeaderAction,
@@ -718,6 +721,7 @@ struct RootTabs: View {
             .fullScreenCover(isPresented: self.$showOnboarding) {
                 OnboardingWizardView(
                     allowSkip: true,
+                    offersNewUserGuide: self.hasNeverHadGateway,
                     onRequestLocalNetworkAccess: { reason in
                         self.requestLocalNetworkAccess(reason: reason)
                     },
@@ -927,6 +931,11 @@ extension RootTabs {
             self.selectSidebarDestination(.gateway)
             self.maybeRequestLocalNetworkAccess(reason: "root_appear")
         }
+    }
+
+    /// First-run help applies only until a Gateway is saved or has ever connected.
+    private var hasNeverHadGateway: Bool {
+        !self.hasConnectedOnce && !self.hasExistingGatewayConfig()
     }
 
     private func hasExistingGatewayConfig() -> Bool {

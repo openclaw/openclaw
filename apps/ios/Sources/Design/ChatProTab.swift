@@ -46,6 +46,8 @@ struct ChatProTab: View {
     @State private var isGatewayStatusManuallyExpanded = false
     let headerSidebarAction: OpenClawSidebarHeaderAction?
     let openSettings: () -> Void
+    /// Set only while no Gateway has ever been saved or connected on this device.
+    let startFirstGatewaySetup: (() -> Void)?
 
     var body: some View {
         self.content
@@ -178,6 +180,15 @@ struct ChatProTab: View {
                     !self.appModel.talkMode.isEnabled &&
                         !self.appModel.talkMode.hasActivePushToTalkSession &&
                         !self.appModel.voiceNoteRecorder.ownsPendingChatAttachment
+                },
+                firstConnectionNotice: self.startFirstGatewaySetup.map { start in
+                    OpenClawChatFirstConnectionNotice(
+                        title: String(localized: "Not connected yet"),
+                        message: UIDevice.current.userInterfaceIdiom == .pad
+                            ? String(localized: "Connect this iPad to OpenClaw on your computer.")
+                            : String(localized: "Connect this iPhone to OpenClaw on your computer."),
+                        actionTitle: String(localized: "Connect"),
+                        action: start)
                 })
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
                 .environment(\.openClawAssistantBubblesInCleanChrome, true)
