@@ -116,7 +116,11 @@ export async function repairPublishedPnpmLaunchers(params: {
     return { repaired, failed };
   }
   for (const file of new Set(listPnpmLauncherCandidates(params.root, params.env ?? process.env))) {
-    const content = await fs.readFile(file, "utf8").catch(() => undefined);
+    // pnpm writes regular files; reading a FIFO or device on PATH would block Doctor.
+    const stat = await fs.lstat(file).catch(() => undefined);
+    const content = stat?.isFile()
+      ? await fs.readFile(file, "utf8").catch(() => undefined)
+      : undefined;
     const recorded = content && CMD_SHIM_TARGET.exec(content)?.[1]?.trim();
     const recordedReal = recorded ? await fs.realpath(recorded).catch(() => undefined) : undefined;
     // Only launchers whose recorded target is this installation's entry.

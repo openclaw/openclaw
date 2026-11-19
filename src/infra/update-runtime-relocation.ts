@@ -33,6 +33,11 @@ const windowsLauncherRelativePath =
   /(\$(?:basedir_abs|basedir_win|basedir)[/\\]|%~dp0\\)([^"\r\n]+)/gu;
 const SHELL_BASEDIR = new Set(["basedir", "basedir_abs", "basedir_win"]);
 
+// pnpm 12 shims resolve their directory physically through `basedir_abs`, however spelled.
+function usesPhysicalBasedir(content: string): boolean {
+  return content.includes("basedir_abs");
+}
+
 function isWindowsLauncher(file: string): boolean {
   return /\.(?:cmd|ps1)$/iu.test(file);
 }
@@ -65,7 +70,7 @@ export async function resolveRuntimeLauncherTargets(
   if (bunLauncher) {
     return [bunLauncher.entryPath];
   }
-  const base = content.includes("$basedir_abs")
+  const base = usesPhysicalBasedir(content)
     ? await fs.realpath(path.dirname(file))
     : path.dirname(file);
   const relatives = isWindowsLauncher(file)
@@ -79,18 +84,23 @@ export async function resolveRuntimeLauncherTargets(
 }
 
 /** Check executable references, not cmd-shim-target metadata that may already be correct. */
-export async function verifyRuntimeLauncher(file: string, entryName: string): Promise<void> {
+export async function verifyRuntimeLauncher(
+  file: string,
+  entryName: string,
+): Promise<"verified" | "unknown-format"> {
   if ((await fs.lstat(file)).isSymbolicLink()) {
     await fs.stat(file);
-    return;
+    return "verified";
   }
   const targets = await resolveRuntimeLauncherTargets(file, entryName);
+  // A format this reader does not recognize proves nothing either way.
   if (targets.length === 0) {
-    throw new Error("Cannot resolve the launcher's executable target");
+    return "unknown-format";
   }
   for (const target of new Set(targets)) {
     await fs.access(target);
   }
+  return "verified";
 }
 
 /** Prepare once for the whole tree; never cache mutable filesystem observations. */
@@ -236,7 +246,7 @@ export async function relocateRuntimeLauncher(
     const sourceDir = path.dirname(sourceFile);
     const destinationDir = path.dirname(destinationFile);
     // pnpm 12 resolves the bin directory physically, including for not-yet-published groups.
-    const shellBase = original.includes("$basedir_abs")
+    const shellBase = usesPhysicalBasedir(original)
       ? await canonicalPathFromExistingAncestor(destinationDir)
       : destinationDir;
     const relocateRelative = (relative: string, destinationBase: string) => {
@@ -261,6 +271,8 @@ export async function relocateRuntimeLauncher(
       }
       return next;
     };
+    const relocateAbsoluteEverySpelling = (value: string) =>
+      path.sep === "\\" ? relocateAbsolute(relocateAbsolute(value), true) : relocateAbsolute(value);
     if (isWindowsLauncher(destinationFile) || isWindowsLauncher(file)) {
       content = original.replace(
         windowsLauncherRelativePath,
@@ -276,10 +288,7 @@ export async function relocateRuntimeLauncher(
           return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
         },
       );
-      content = relocateAbsolute(content);
-      if (path.sep === "\\") {
-        content = relocateAbsolute(content, true);
-      }
+      content = relocateAbsoluteEverySpelling(content);
     } else {
       // Rewrite each shell word by value, so every quoting form pnpm emits (including
       // `'\''` for an apostrophe and paths containing `"`, `$` or `\\`) is handled alike.
@@ -299,10 +308,10 @@ export async function relocateRuntimeLauncher(
             return joinLeadingExpansion(leading.name, `/${posix}`);
           }
           // NODE_PATH and other absolute project paths.
-          return relocateAbsolute(word.value);
+          return relocateAbsoluteEverySpelling(word.value);
         },
         // The cmd-shim-target record is a literal path in a comment.
-        (line) => relocateAbsolute(line),
+        (line) => relocateAbsoluteEverySpelling(line),
       );
     }
   }
