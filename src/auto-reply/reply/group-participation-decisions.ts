@@ -26,6 +26,11 @@ export type GroupParticipationEvidence = {
   agentTranscriptEvidence?: GroupConversationMessage[];
 };
 
+export type GroupParticipationConcern = {
+  messageId: string;
+  reason: "engagement" | "opportunity";
+};
+
 type Options = Pick<Parameters<DecisionRuntimeV1["evaluate"]>[1], "signal" | "timeoutMs">;
 
 const participationCriteria = {
@@ -51,12 +56,12 @@ export async function assessGroupAttention(
   runtime: DecisionRuntimeV1,
   evidence: GroupParticipationEvidence,
   options: Options,
-): Promise<{ status: "ok"; shouldReply: boolean } | { status: "unavailable" }> {
+): Promise<{ status: "ok"; concerns: GroupParticipationConcern[] } | { status: "unavailable" }> {
   const anchors = evidence.messages.filter(
     (message) => message.role === "user" && message.admission !== "queued",
   );
   if (anchors.length === 0) {
-    return { status: "ok", shouldReply: false };
+    return { status: "ok", concerns: [] };
   }
   const questions: Record<string, DecisionQuestion> = {};
   for (const [index, anchor] of anchors.entries()) {
@@ -100,19 +105,30 @@ export async function assessGroupAttention(
     }
     Object.assign(answers, outcome.result.answers);
   }
-  let shouldReply = false;
+  const concerns: GroupParticipationConcern[] = [];
   for (const [index, anchor] of anchors.entries()) {
     const participation = answers[`participation_${index}`];
     const messageFunction = answers[`function_${index}`];
     if (participation?.type !== "choice" || messageFunction?.type !== "choice") {
       throw new Error("Group attention requires validated Choice answers");
     }
-    shouldReply ||=
-      (participation.choice === "engagement" && anchor.admission === "current") ||
-      ((participation.choice === "engagement" || participation.choice === "opportunity") &&
-        (messageFunction.choice === "opening" || messageFunction.choice === "answer_and_opening"));
+    if (participation.choice === "engagement") {
+      if (anchor.admission === "current") {
+        concerns.push({ messageId: anchor.id, reason: "engagement" });
+      } else if (
+        messageFunction.choice === "opening" ||
+        messageFunction.choice === "answer_and_opening"
+      ) {
+        concerns.push({ messageId: anchor.id, reason: "opportunity" });
+      }
+    } else if (
+      participation.choice === "opportunity" &&
+      (messageFunction.choice === "opening" || messageFunction.choice === "answer_and_opening")
+    ) {
+      concerns.push({ messageId: anchor.id, reason: "opportunity" });
+    }
   }
-  return { status: "ok", shouldReply };
+  return { status: "ok", concerns };
 }
 
 /** Judge the whole actual draft, never a predicted answer or a confidence threshold. */

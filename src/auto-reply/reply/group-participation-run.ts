@@ -16,7 +16,11 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import { resolveReplyCandidateRuntime } from "./agent-runner-runtime.js";
 import { readGroupParticipationEvidence } from "./group-participation-context.js";
-import { assessGroupAttention } from "./group-participation-decisions.js";
+import {
+  assessGroupAttention,
+  type GroupParticipationConcern,
+  type GroupParticipationEvidence,
+} from "./group-participation-decisions.js";
 import {
   readGroupParticipationInputs,
   recordGroupParticipationInput,
@@ -25,7 +29,12 @@ import type { InternalFollowupRun } from "./queue/types.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
 
-type GroupParticipationMode = "ordinary" | "observe" | "reply";
+type GroupParticipationMode = "ordinary" | "observe" | "engagement" | "opportunity";
+type GroupParticipationSnapshot = {
+  revision: number;
+  evidence: GroupParticipationEvidence;
+  concerns: GroupParticipationConcern[];
+};
 
 export type GroupParticipationRun = ReturnType<typeof createGroupParticipationRun>;
 const runs = new WeakMap<ReplyOperation, GroupParticipationRun>();
@@ -40,7 +49,7 @@ function createGroupParticipationRun(params: {
   const run = params.run();
   const originalExpectation = run.run.terminalReplyExpectation;
   let mode: GroupParticipationMode = "ordinary";
-  let assessedRevision: number | undefined;
+  let snapshot: GroupParticipationSnapshot | undefined;
   let live = true;
   const readConfig = createRuntimeConfigReader(run.run.config);
   const currentSelection = () => {
@@ -105,18 +114,18 @@ function createGroupParticipationRun(params: {
     applyExpectation();
     assertCurrent();
   };
-  const refresh = async (): Promise<void> => {
+  const refresh = async (): Promise<GroupParticipationSnapshot | undefined> => {
     for (;;) {
       assertCurrent();
       selection = currentSelection();
       if (!selection || performance.now() >= deadline) {
         useOrdinaryBehavior();
-        return;
+        return undefined;
       }
       const inputs = readGroupParticipationInputs(operation);
       if (inputs.requiresOrdinaryBehavior) {
         useOrdinaryBehavior();
-        return;
+        return undefined;
       }
       const evidence = await readGroupParticipationEvidence({
         agentId: target.agentId,
@@ -136,12 +145,12 @@ function createGroupParticipationRun(params: {
       }
       if (!evidence) {
         useOrdinaryBehavior();
-        return;
+        return undefined;
       }
       const remaining = deadline - performance.now();
       if (remaining <= 0) {
         useOrdinaryBehavior();
-        return;
+        return undefined;
       }
       const attention = await assessGroupAttention(runtime, evidence, {
         signal: operation.abortSignal,
@@ -153,25 +162,37 @@ function createGroupParticipationRun(params: {
       }
       if (attention.status === "unavailable") {
         useOrdinaryBehavior();
-        return;
+        return undefined;
       }
       if (readGroupParticipationInputs(operation).revision !== inputs.revision) {
         continue;
       }
-      assessedRevision = inputs.revision;
-      mode = attention.shouldReply ? "reply" : "observe";
+      snapshot = { revision: inputs.revision, evidence, concerns: attention.concerns };
+      mode = attention.concerns.some(
+        (item) =>
+          item.reason === "engagement" &&
+          evidence.messages.some(
+            (message) => message.id === item.messageId && message.admission === "current",
+          ),
+      )
+        ? "engagement"
+        : attention.concerns.length
+          ? "opportunity"
+          : "observe";
       applyExpectation();
-      return;
+      return snapshot;
     }
   };
-  const isCurrent = () =>
-    assessedRevision !== undefined &&
+  const isCurrent = (revision: number) =>
     selection !== undefined &&
     selection === currentSelection() &&
-    readGroupParticipationInputs(operation).revision === assessedRevision;
+    readGroupParticipationInputs(operation).revision === revision;
   return {
     get mode() {
       return mode;
+    },
+    get snapshot() {
+      return snapshot;
     },
     get isObserving() {
       return mode === "observe";

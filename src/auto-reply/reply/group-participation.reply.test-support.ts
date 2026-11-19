@@ -2,15 +2,9 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import {
-  closeHttpServer,
-  listenLoopback,
-  readRequestText,
-} from "../../../test/helpers/gateway-integration-fixtures.js";
-import {
   disposeAllSessionMcpRuntimes,
   setSessionMcpRuntimeScheduler,
 } from "../../agents/agent-bundle-mcp-manager-api.js";
-import { model as createModelFixture } from "../../agents/model-catalog-fixtures.test-support.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/send.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
@@ -40,7 +34,11 @@ export async function createGroupReplyFixture(channel: "telegram" | "whatsapp" =
     [];
   const server = createServer((request, response) => {
     void (async () => {
-      requests.push(JSON.parse(await readRequestText(request)));
+      let body = "";
+      for await (const chunk of request) {
+        body += String(chunk);
+      }
+      requests.push(JSON.parse(body));
       const next = responses.shift();
       if (!next) {
         response.writeHead(400);
@@ -63,7 +61,13 @@ export async function createGroupReplyFixture(channel: "telegram" | "whatsapp" =
       response.destroy(error instanceof Error ? error : new Error(String(error)));
     });
   });
-  const modelUrl = await listenLoopback(server);
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("The model fixture has no address");
+  }
   const storePath = path.join(state.sessionsDir(), "sessions.json");
   const config: OpenClawConfig = {
     agents: {
@@ -85,12 +89,17 @@ export async function createGroupReplyFixture(channel: "telegram" | "whatsapp" =
         "test-provider": {
           api: "openai-completions",
           apiKey: "synthetic-test-key",
-          baseUrl: `${modelUrl}/v1`,
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
           models: [
-            createModelFixture("test-model", "Synthetic model", {
+            {
+              id: "test-model",
+              name: "Synthetic model",
+              reasoning: false,
+              input: ["text"],
               contextWindow: 32768,
               maxTokens: 8192,
-            }),
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
           ],
         },
       },
@@ -248,7 +257,15 @@ export async function createGroupReplyFixture(channel: "telegram" | "whatsapp" =
       await scheduler.stop();
       clearRuntimeConfigSnapshot();
       resetPluginRuntimeStateForTest();
-      await closeHttpServer(server);
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      });
       await state.cleanup();
     },
   };

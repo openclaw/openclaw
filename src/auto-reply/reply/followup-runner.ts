@@ -48,10 +48,10 @@ import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
 import {
   prepareReplyAgentTurn,
+  type AdmittedFollowupTurn,
   type FollowupRunnerParams,
 } from "./reply-agent-turn-preparation.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
-import type { AdmittedFollowupTurn } from "./reply-turn-admission.types.js";
 import {
   isReplyOperationStalledBeforeOutput,
   resolveStalledTurnNoticeText,

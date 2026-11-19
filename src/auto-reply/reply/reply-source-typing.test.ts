@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
 import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
+import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import {
   admitFollowupRunLifecycle,
@@ -17,6 +18,8 @@ it.each([false, true])(
   async (adopted) => {
     const start = vi.fn(async () => {});
     const stop = vi.fn(async () => {});
+    const sourceOptions: GetReplyOptions = { onQueuedFollowupSettled: vi.fn(async () => {}) };
+    const onSettled = vi.fn();
     const runState: ReplyOperationRunState = {
       admission: { status: "accepted", mode: "followup" },
     };
@@ -35,7 +38,7 @@ it.each([false, true])(
         }),
       },
     });
-    const options = source.replyOptions;
+    const options: GetReplyOptions = { ...sourceOptions, ...source.replyOptions };
     const typing = createTypingController({
       onReplyStart: options.onReplyStart,
       onCleanup: options.onTypingCleanup,
@@ -44,6 +47,7 @@ it.each([false, true])(
     options.onTypingController?.(typing);
     const queued = createQueueTestRun({ prompt: "queued feedback" });
     queued.run.sessionKey = `agent:main:queued-feedback-${adopted}`;
+    queued.turnAdoptionLifecycle = { onAdopted: vi.fn(), onSettled };
     try {
       expect(markFollowupRunEnqueued(queued)).toBe(true);
       runState.sourceSettlement = queued.controllerInput!.settlement.promise;
@@ -53,10 +57,15 @@ it.each([false, true])(
       await settleReplyDispatcher({ dispatcher: source.dispatcher });
       source.completeIngress();
       expect(stop).not.toHaveBeenCalled();
+      // A failed preparation attempt releases presentation, but retains its source for retry.
+      await options.onQueuedFollowupSettled?.();
+      expect(stop).not.toHaveBeenCalled();
       await typing.startTypingLoop();
       expect(start).toHaveBeenCalledOnce();
       completeFollowupRunLifecycle(queued, adopted ? "consumed" : undefined);
       await queued.controllerInput!.settlement.promise;
+      expect(sourceOptions.onQueuedFollowupSettled).toHaveBeenCalledOnce();
+      expect(onSettled).toHaveBeenCalledOnce();
       expect(stop).toHaveBeenCalledOnce();
       await typing.startTypingLoop();
       expect(start).toHaveBeenCalledOnce();

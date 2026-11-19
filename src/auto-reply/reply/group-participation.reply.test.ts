@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { DecisionOutcome } from "../../decisions/host-outcomes.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import type { ReplyPayload } from "../types.js";
 import { judgment } from "./group-participation.decision.test-support.js";
 import { createGroupReplyFixture } from "./group-participation.reply.test-support.js";
-import {
-  REPLY_OPERATION_RUN_STATE,
-  type ReplyOperationRunState,
-} from "./reply-operation-run-state.js";
 
 const decision = vi.hoisted(() =>
   vi.fn<typeof import("../../decisions/runtime.js").evaluateDecision>(),
@@ -32,6 +32,62 @@ afterAll(async () => {
 });
 beforeEach(() => {
   decision.mockReset();
+});
+
+it("keeps explicitly mentioned requests on the ordinary reply path", async () => {
+  const previousRequests = fixture.requests.length;
+  const previousPartials = fixture.partials.length;
+  fixture.respond(answer("Use port 443."));
+  expect(
+    texts(await fixture.reply("Which port?", "mentioned-source", "-10006", undefined, true)),
+  ).toContain("Use port 443.");
+  expect(decision).not.toHaveBeenCalled();
+  expect(fixture.requests).toHaveLength(previousRequests + 1);
+  expect(fixture.partials.slice(previousPartials).join("")).toContain("Use port 443.");
+});
+
+it("streams invited replies and observes chatter without starting a primary run", async () => {
+  const previousRequests = fixture.requests.length;
+  fixture.respond(answer("Use port 443."));
+  decision.mockImplementation(async (batch) => judgment(batch, { attention: "engagement" }));
+  expect(texts(await fixture.reply("Agent, which port should I use?", "invited-source"))).toContain(
+    "Use port 443.",
+  );
+  expect(fixture.partials.join("")).toContain("Use port 443.");
+  expect(fixture.requests).toHaveLength(previousRequests + 1);
+  expect(fixture.typing()).toBeGreaterThan(0);
+  const previousTyping = fixture.typing();
+  const previousPartials = fixture.partials.length;
+  decision.mockImplementation(async (batch) => judgment(batch, { attention: "none" }));
+  expect(texts(await fixture.reply("Bob, see you at lunch.", "observed-source"))).toEqual([]);
+  expect(fixture.requests).toHaveLength(previousRequests + 1);
+  expect(fixture.typing()).toBe(previousTyping);
+  expect(fixture.partials).toHaveLength(previousPartials);
+  const sessionKey = "agent:main:telegram:group:-10001";
+  const entry = await readSessionEntryInWorker({ storePath: fixture.storePath, sessionKey });
+  if (!entry) {
+    throw new Error("The reply flow did not create its session");
+  }
+  expect(entry.status).toBe("done");
+  expect(entry.lifecycleRunId).toBeUndefined();
+  const events = await loadTranscriptEvents({
+    agentId: "main",
+    sessionId: entry.sessionId,
+    sessionKey,
+    storePath: fixture.storePath,
+  });
+  expect(
+    events.some(
+      (event) =>
+        isIndexedSessionEntry(event) &&
+        event.type === "message" &&
+        event.message.role === "user" &&
+        extractTextFromChatContent(event.message.content, {
+          joinWith: "\n",
+          normalizeText: (text) => text,
+        })?.includes("Bob, see you at lunch."),
+    ),
+  ).toBe(true);
 });
 
 it("runs an opportunity through ordinary tools, streaming and delivery without draft review", async () => {
@@ -78,20 +134,31 @@ it("runs an opportunity through ordinary tools, streaming and delivery without d
   );
 });
 
+it("does not editorially withhold or regenerate an admitted answer", async () => {
+  const previousRequests = fixture.requests.length;
+  fixture.respond(answer("Can you send the report?"));
+  decision.mockImplementation(async (batch) => judgment(batch, { attention: "opportunity" }));
+  expect(
+    texts(await fixture.reply("Bob, is the report available?", "clarification-source", "-10003")),
+  ).toContain("Can you send the report?");
+  expect(decision).toHaveBeenCalledTimes(1);
+  expect(fixture.requests).toHaveLength(previousRequests + 1);
+
+  // Generated replies use ordinary history, just like directly invited answers.
+  const nextRequest = fixture.requests.length;
+  fixture.respond(answer("I can check the new report."));
+  await fixture.reply("Please check now.", "later-invitation", "-10003", undefined, true);
+  expect(JSON.stringify(fixture.requests[nextRequest])).toContain("Can you send the report?");
+});
+
 it("uses ordinary streaming and tools when the preflight decision is unavailable", async () => {
   const previousRequests = fixture.requests.length;
-  const runState: ReplyOperationRunState = {};
   const previousPartials = fixture.partials.length;
   fixture.respond(answer("Ordinary answer after the outage."));
   decision.mockResolvedValue(unavailable);
   expect(
-    texts(
-      await fixture.reply("Bob, which port should I use?", "outage-source", "-10004", {
-        [REPLY_OPERATION_RUN_STATE]: runState,
-      }),
-    ),
+    texts(await fixture.reply("Bob, which port should I use?", "outage-source", "-10004")),
   ).toContain("Ordinary answer after the outage.");
-  expect(runState.replyCompletion?.expectation).toBe("required");
   expect(decision).toHaveBeenCalledTimes(1);
   expect(fixture.requests).toHaveLength(previousRequests + 1);
   expect(fixture.requests[previousRequests]).toMatchObject({

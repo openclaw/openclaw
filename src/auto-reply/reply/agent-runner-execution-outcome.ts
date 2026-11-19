@@ -212,7 +212,12 @@ export async function runAgentTurnWithOutcome(
                 outcome: { kind: "rejected", payload: params.admittedTurn.preflightFailurePayload },
               };
             }
-            if (participation?.isObserving && participation.isCurrent()) {
+            const revision = participation?.snapshot?.revision;
+            if (
+              participation?.isObserving &&
+              revision !== undefined &&
+              participation.isCurrent(revision)
+            ) {
               params.replyOperation?.freezeAbort();
               await params.completeUnexecutedTurn?.(
                 { kind: "observed" },

@@ -27,6 +27,54 @@ beforeEach(() => {
   preflight.mockImplementation(async (params) => params.sessionEntry);
 });
 
+it.each(["success", "maintenance failure", "authority failure"] as const)(
+  "prepares a newly approved reply before generation (%s)",
+  async (outcome) => {
+    const fails = outcome !== "success";
+    const groupId = "-10121";
+    const events: string[] = [];
+    models.decision.mockImplementationOnce(async (batch) => judgment(batch, { attention: "none" }));
+    models.decision.mockImplementation(async (batch) =>
+      judgment(batch, { attention: "engagement" }),
+    );
+    preflight.mockImplementation(async (params) => {
+      events.push("maintenance");
+      if (outcome === "maintenance failure") {
+        throw new Error("Preflight maintenance unavailable");
+      }
+      return params.sessionEntry;
+    });
+    models.embedded.mockImplementation(async () => {
+      events.push("generation");
+      return { payloads: [{ text: "The approved answer." }], meta: { durationMs: 1 } };
+    });
+    await fixture.reply("Bob, which port?", "late-approval", groupId, {
+      onRunVerbosityResolved: () => {
+        acceptGroupInputForActiveReply(groupId);
+        if (outcome === "authority failure") {
+          const operation = getSessionControllerOperation(`agent:main:telegram:group:${groupId}`);
+          if (!operation) {
+            throw new Error("The approved reply owner is missing");
+          }
+          vi.spyOn(operation, "bindToolAuthoritySnapshotAsync").mockRejectedValue(
+            new Error("Tool authority unavailable before execution"),
+          );
+        }
+      },
+    });
+    expect(events).toEqual(fails ? ["maintenance"] : ["maintenance", "generation"]);
+    expect(models.decision).toHaveBeenCalledTimes(2);
+    if (fails) {
+      const entry = await readSessionEntryInWorker({
+        storePath: fixture.storePath,
+        sessionKey: `agent:main:telegram:group:${groupId}`,
+      });
+      expect(entry?.status).toBe("failed");
+      expect(entry?.lifecycleRunId).toBeUndefined();
+    }
+  },
+);
+
 it("shares one assessment deadline across a changed-input reassessment", async () => {
   const groupId = "-10122";
   const now = performance.now.bind(performance);
@@ -80,95 +128,72 @@ it.each(["instant", "message"] as const)(
   },
 );
 
-it.for(["maintenance failure", "renderable failure", "authority failure"] as const)(
-  "settles a newly approved queued reply when preparation fails (%s)",
-  async (outcome, { signal }) => {
-    const groupId = "-10125";
-    const sourceId = `queued-preflight-${outcome}`;
-    const events: string[] = [];
-    const entered = createDeferred();
-    const release = createDeferred();
-    const published = createDeferred();
-    const settled = createDeferred();
-    let operation: ReplyOperation | undefined;
-    models.decision.mockImplementationOnce(async (batch) => judgment(batch, { attention: "none" }));
-    models.decision.mockImplementation(async (batch) =>
-      judgment(batch, { attention: "engagement" }),
-    );
-    models.embedded.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return { payloads: [{ text: "First answer." }], meta: { durationMs: 1 } };
-    });
-    preflight.mockImplementation(async (params) => {
-      if (params.followupRun.messageId === sourceId) {
-        events.push("maintenance");
-        if (outcome === "maintenance failure") {
-          throw new Error("Preflight maintenance unavailable");
-        }
-        if (outcome === "renderable failure") {
-          throw new Error(
-            "Preflight compaction required but failed: synthetic maintenance failure",
-          );
-        }
-      }
-      return params.sessionEntry;
-    });
-    const first = fixture.dispatch(
-      "Agent, first question?",
-      `before-${sourceId}`,
-      groupId,
-      undefined,
-      true,
-    );
-    let queued: ReturnType<typeof fixture.dispatch> | undefined;
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, first, "The first reply did not start"),
-        signal,
-      );
-      queued = fixture.dispatch(
-        "Bob, queued question?",
-        sourceId,
-        groupId,
-        {
-          onRunVerbosityResolved: () => {
-            operation = getSessionControllerOperation(`agent:main:telegram:group:${groupId}`);
-            if (!operation) {
-              throw new Error("The approved reply owner is missing");
-            }
-            acceptGroupInputForActiveReply(groupId);
-            if (outcome === "authority failure") {
-              vi.spyOn(operation, "bindToolAuthoritySnapshotAsync").mockRejectedValue(
-                new Error("Tool authority unavailable before execution"),
-              );
-            }
-          },
-          onQueuedFollowupSettled: () => settled.resolve(),
-        },
-        false,
-        () => published.resolve(),
-      );
-      await withinTest(
-        awaitGateBeforeSettlement(published.promise, queued, "The queued reply was not published"),
-        signal,
-      );
-    } finally {
-      release.resolve();
-      await first;
-      await queued;
+it("fails a queued reply's controller and durable lifecycle when deferred maintenance fails", async ({
+  signal,
+}) => {
+  const groupId = "-10125";
+  const entered = createDeferred();
+  const release = createDeferred();
+  const published = createDeferred();
+  const settled = createDeferred();
+  let operation: ReplyOperation | undefined;
+  models.decision.mockImplementationOnce(async (batch) => judgment(batch, { attention: "none" }));
+  models.decision.mockImplementation(async (batch) => judgment(batch, { attention: "engagement" }));
+  models.embedded.mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+    return { payloads: [{ text: "First answer." }], meta: { durationMs: 1 } };
+  });
+  preflight.mockImplementation(async (params) => {
+    if (params.followupRun.messageId === "queued-maintenance-failure") {
+      throw new Error("Preflight compaction required but failed: synthetic maintenance failure");
     }
-    await withinTest(settled.promise, signal);
-    await operation?.ownerSettlement;
-    expect(events).toEqual(["maintenance"]);
-    expect(models.decision).toHaveBeenCalledTimes(2);
-    expect(models.embedded).toHaveBeenCalledOnce();
-    expect(operation?.result).toMatchObject({ kind: "failed", code: "run_failed" });
-    const entry = await readSessionEntryInWorker({
-      storePath: fixture.storePath,
-      sessionKey: `agent:main:telegram:group:${groupId}`,
-    });
-    expect(entry?.status).toBe("failed");
-    expect(entry?.lifecycleRunId).toBeUndefined();
-  },
-);
+    return params.sessionEntry;
+  });
+  const first = fixture.dispatch(
+    "Agent, first question?",
+    "first-before-failure",
+    groupId,
+    undefined,
+    true,
+  );
+  let queued: ReturnType<typeof fixture.dispatch> | undefined;
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(entered.promise, first, "The first reply did not start"),
+      signal,
+    );
+    queued = fixture.dispatch(
+      "Bob, queued question?",
+      "queued-maintenance-failure",
+      groupId,
+      {
+        onRunVerbosityResolved: () => {
+          operation = getSessionControllerOperation(`agent:main:telegram:group:${groupId}`);
+          acceptGroupInputForActiveReply(groupId);
+        },
+        onQueuedFollowupSettled: () => settled.resolve(),
+      },
+      false,
+      () => published.resolve(),
+    );
+    await withinTest(
+      awaitGateBeforeSettlement(published.promise, queued, "The queued reply was not published"),
+      signal,
+    );
+  } finally {
+    release.resolve();
+    await first;
+    await queued;
+  }
+  await withinTest(settled.promise, signal);
+  await operation?.ownerSettlement;
+  expect(operation?.result).toMatchObject({ kind: "failed", code: "run_failed" });
+  const entry = await readSessionEntryInWorker({
+    storePath: fixture.storePath,
+    sessionKey: `agent:main:telegram:group:${groupId}`,
+  });
+  expect(entry?.status).toBe("failed");
+  expect(entry?.lifecycleRunId).toBeUndefined();
+  expect(models.embedded).toHaveBeenCalledOnce();
+});
