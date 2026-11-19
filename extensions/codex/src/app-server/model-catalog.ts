@@ -16,10 +16,6 @@ import type { CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import { isCodexResponsesOAuthCredential } from "./responses-oauth-policy.js";
 import { isCodexAppServerIndeterminateRequestCancellationError } from "./rpc-error.js";
-import {
-  captureSharedCodexAppServerCatalogLifetime,
-  retireSharedCodexAppServerClientIfCurrent,
-} from "./shared-client-lifecycle.js";
 
 type ModelInputType = NonNullable<ModelCatalogEntry["input"]>[number];
 const INPUT_TYPES: ReadonlySet<string> = new Set(["text", "image", "audio", "video", "document"]);
@@ -142,6 +138,7 @@ export function createCodexAppServerModelCatalog(
       const timeoutMs = discovery?.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
       const result = await withCodexAppServerJsonClient(
         {
+          requestScope: "control-plane",
           startOptions: start,
           pluginConfig: configured,
           config: params.config,
@@ -152,7 +149,7 @@ export function createCodexAppServerModelCatalog(
             ? { authRequirement: "environment-api-key" as const }
             : {}),
         },
-        async (request, client) => {
+        async (request, lifecycle) => {
           try {
             // Codex serializes this read after login's delayed account/updated.
             // Drain startup before pinning the account revision for discovery.
@@ -160,7 +157,7 @@ export function createCodexAppServerModelCatalog(
               method: "account/read",
               requestParams: { refreshToken: false },
             });
-            const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
+            const isCurrent = lifecycle.captureCatalogLifetime();
             const listed = await listAllCodexAppServerModels({
               request,
               limit: 100,
@@ -187,7 +184,7 @@ export function createCodexAppServerModelCatalog(
           } catch (error) {
             // Discovery owns its deadline; retire unanswered work without aborting sibling leases.
             if (isCodexAppServerIndeterminateRequestCancellationError(error)) {
-              retireSharedCodexAppServerClientIfCurrent(client);
+              lifecycle.retireIfCurrent();
             }
             throw error;
           }

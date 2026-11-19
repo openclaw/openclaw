@@ -20,20 +20,17 @@ const profiles = vi.hoisted((): { store: AuthProfileStore } => ({
   store: { version: 1, profiles: {} },
 }));
 
-const rpc = vi.hoisted(() => ({ request: vi.fn(), retire: vi.fn(), epoch: 0, client: {} }));
+const rpc = vi.hoisted(() => ({
+  request: vi.fn(),
+  retire: vi.fn(),
+  capture: vi.fn(),
+  epoch: 0,
+}));
 vi.mock("./request.js", () => ({
   withCodexAppServerJsonClient: vi.fn(
     (_options: unknown, run: (request: unknown, client: unknown) => unknown) =>
-      run(rpc.request, rpc.client),
+      run(rpc.request, { captureCatalogLifetime: rpc.capture, retireIfCurrent: rpc.retire }),
   ),
-}));
-// mock-isolation: Keep physical clients and shared lease state outside catalog projection tests.
-vi.mock("./shared-client-lifecycle.js", () => ({
-  retireSharedCodexAppServerClientIfCurrent: rpc.retire,
-  captureSharedCodexAppServerCatalogLifetime: () => {
-    const epoch = rpc.epoch;
-    return () => rpc.epoch === epoch;
-  },
 }));
 let owner: ReturnType<typeof createCodexAppServerModelCatalog>;
 const loadCodexAppServerModelCatalog = async (...args: Parameters<typeof owner.load>) =>
@@ -80,6 +77,10 @@ describe("Codex app-server model catalog", () => {
     vi.mocked(withCodexAppServerJsonClient).mockClear();
     rpc.epoch += 1;
     rpc.retire.mockClear();
+    rpc.capture.mockReset().mockImplementation(() => {
+      const epoch = rpc.epoch;
+      return () => rpc.epoch === epoch;
+    });
     rpc.request
       .mockReset()
       .mockResolvedValue({ account: { type: "apiKey" }, requiresOpenaiAuth: true });
@@ -137,10 +138,40 @@ describe("Codex app-server model catalog", () => {
     await expect(owner.load(catalogParams, undefined)).rejects.toBe(error);
     expect(rpc.retire).toHaveBeenCalledTimes(retires ? 1 : 0);
     if (retires) {
-      expect(rpc.retire).toHaveBeenCalledWith(rpc.client);
+      expect(rpc.retire).toHaveBeenCalledWith();
     }
     expect(listModelsMock).not.toHaveBeenCalled();
     expect(read()).toBeUndefined();
+  });
+
+  it("pins the account revision after startup drains and before listing models", async () => {
+    const startup = createDeferred<void>();
+    const entered = createDeferred<void>();
+    rpc.request.mockImplementationOnce(async () => {
+      entered.resolve();
+      await startup.promise;
+      rpc.epoch += 1;
+      return { account: { type: "apiKey" }, requiresOpenaiAuth: true };
+    });
+    listModelsMock.mockResolvedValue(opaqueCatalog());
+    const loading = owner.load(catalogParams, undefined);
+    try {
+      await entered.promise;
+      expect(rpc.capture).not.toHaveBeenCalled();
+      expect(listModelsMock).not.toHaveBeenCalled();
+      startup.resolve();
+      await loading;
+      expect(rpc.capture).toHaveBeenCalledOnce();
+      expect(rpc.capture.mock.invocationCallOrder[0]).toBeLessThan(
+        listModelsMock.mock.invocationCallOrder[0]!,
+      );
+      expect(read()).toBeDefined();
+      rpc.epoch += 1;
+      expect(read()).toBeUndefined();
+    } finally {
+      startup.resolve();
+      await loading;
+    }
   });
 
   it("keeps native picker models independent of a host transport", async () => {
@@ -341,7 +372,7 @@ describe("Codex app-server model catalog", () => {
     listModelsMock.mockResolvedValue({ models: [] });
     await loadCodexAppServerModelCatalog(catalogParams, { discovery: { timeoutMs: 750 } });
     expect(withCodexAppServerJsonClient).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ timeoutMs: 750 }),
+      expect.objectContaining({ timeoutMs: 750, requestScope: "control-plane" }),
       expect.any(Function),
     );
   });
