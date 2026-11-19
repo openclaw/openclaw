@@ -640,8 +640,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     },
   );
 
-  it("opens an automation's schedule and instructions from its row and the inline preview", async () => {
-    const { page, gateway } = await fixture();
+  it("opens automation instructions from the template row and describes the schedule in both views", async () => {
+    const { page, gateway } = await fixture(undefined, undefined, undefined, false, "dark");
     await gateway.setMethodResponse("templates.catalog.detail", {
       detail: {
         ...workflowOperator,

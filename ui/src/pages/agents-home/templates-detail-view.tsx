@@ -166,19 +166,19 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         {(item) => (
           <ModalDialog label={item().name} open onModal-cancel={() => setAutomation(null)}>
             <article class="oc-dialog">
-              <header class="template-automation-dialog__header">
-                <span class="plugin-capability__icon" aria-hidden="true">
-                  <Icon name="clock" />
-                </span>
-                <DialogHeader
-                  title={item().name}
-                  description={automationSummary(item())}
-                  onClose={() => setAutomation(null)}
-                />
-              </header>
-              <div class="oc-dialog__body">
-                <p class="template-automation-dialog__message">{item().message}</p>
-              </div>
+              <DialogHeader
+                title={
+                  <>
+                    <span class="plugin-capability__icon" aria-hidden="true">
+                      <Icon name="clock" />
+                    </span>
+                    {item().name}
+                  </>
+                }
+                description={automationSummary(item())}
+                onClose={() => setAutomation(null)}
+              />
+              <div class="oc-dialog__body template-automation-message">{item().message}</div>
             </article>
           </ModalDialog>
         )}
