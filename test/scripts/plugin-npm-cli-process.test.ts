@@ -71,7 +71,8 @@ it("retains the ordinary CLI final authority after sharing acquisition reads", a
     ]),
   );
   expect(counts).toEqual({
-    preview: 52,
+    // Preview also reads the immutable qualification waiver policy.
+    preview: 53,
     consume: 25,
     authorize: 22,
     "consume-beta": 25,
