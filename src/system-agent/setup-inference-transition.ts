@@ -223,7 +223,12 @@ export async function commitSetupInferenceActivation(params: {
         ) {
           return true;
         }
-        if (status !== "applied") {
+        // Activating the credential refreshes the model runtime, which holds the provider plugin
+        // this write replaces, so the Gateway defers the reload and retries it once that settles.
+        // With no working connection to keep, the activated setup stands until then.
+        const deferred =
+          typeof status === "object" && !params.preserveWorkingConnection && !params.requireApplied;
+        if (status !== "applied" && !deferred) {
           throw new Error(
             `The Gateway did not complete activation (${typeof status === "object" ? status.status : status}). Resolve the reported problem, then retry the saved sign-in.`,
           );

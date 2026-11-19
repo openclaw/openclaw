@@ -12,6 +12,12 @@ it.each([
   { status: "restart-pending", requireApplied: true, outcome: "restored" },
   { status: "applied-restart-required", requireApplied: true, outcome: "restored" },
   { status: "restart-pending", requireApplied: undefined, outcome: "restart" },
+  // A first setup's own credential activation makes the Gateway defer the plugin reload.
+  {
+    status: { status: "deferred", reason: "retained work", appliesWhen: "after it settles" },
+    requireApplied: undefined,
+    outcome: "applied",
+  },
 ] as const)(
   "settles $status (requireApplied=$requireApplied) as $outcome",
   async ({ status, requireApplied, outcome }) => {
