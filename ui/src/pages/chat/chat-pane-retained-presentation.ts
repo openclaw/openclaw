@@ -484,7 +484,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     this.composerPrefillAttentionTarget = null;
   }
 
-  protected showComposerPrefillAttention(input: HTMLElement): void {
+  protected showComposerPrefillAttention(input?: HTMLElement | null): void {
+    if (!input) {
+      return;
+    }
     this.clearComposerPrefillAttention();
     // Force a fresh animation frame when the same mounted composer is prompted again.
     void input.offsetWidth;

@@ -104,7 +104,7 @@ describe("protocol event coverage", () => {
       /GATEWAY_EVENT_UPDATE_AVAILABLE/,
     );
   });
-  it("collects Swift events without resolving quoted constants or nested/non-event code", () => {
+  it("collects direct and typed Swift events without counting unrelated cases", () => {
     const source = `
       static func mapEventFrame(_ evt: EventFrame) -> Event? {
         switch evt.event {
@@ -126,9 +126,38 @@ describe("protocol event coverage", () => {
         }
       }
       if evt.event == "connect.challenge" { return }
+      private enum EventKind: String {
+        case health
+        case message = "session.status"
+        case unused = "ignored.enum"
+      }
+      func typed(_ frame: EventFrame) {
+        guard let kind = EventKind(rawValue: frame.event) else { return }
+        switch kind {
+        case .health, .message:
+          switch payload.kind {
+          case .unused: break
+          default: break
+          }
+        default: break
+        }
+      }
+      func differentSource(_ frame: EventFrame) {
+        guard let kind = EventKind(rawValue: frame.reason) else { return }
+        switch kind {
+        case .unused: break
+        default: break
+        }
+      }
+      func differentFunction(_ kind: EventKind) {
+        switch kind {
+        case .unused: break
+        default: break
+        }
+      }
     `;
     expect([...extractSwiftHandledEvents(source, swiftConstants)].toSorted()).toEqual(
-      "ApprovalBridge.requestedKind chat connect.challenge exec.approval.requested session.message tick".split(
+      "ApprovalBridge.requestedKind chat connect.challenge exec.approval.requested health session.message session.status tick".split(
         " ",
       ),
     );

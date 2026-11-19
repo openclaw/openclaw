@@ -49,12 +49,13 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
       flush();
     }
   };
-  function mountPane(paneId: string, restoring = false) {
+  function mountPane(paneId: string, restoring = false, initialSubmission = false) {
     const chat = createChatProps({
       paneId,
       sessionKey: `agent:main:${paneId}`,
       messages: [{ role: "assistant", content: "Initial history", timestamp: 1 }],
       restoring,
+      initialSubmission,
     });
     chat.transcript.start();
     onTestFinished(() => chat.transcript.dispose());
@@ -165,6 +166,11 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
   expect(restored.container.querySelector('.chat-thread[role="log"]')).not.toBeNull();
   expect(restored.container.querySelector(".chat-conversation-loading")).toBeNull();
   restored.unmount();
+
+  const created = mountPane("mount-created", false, true);
+  expect(created.container.querySelector('.chat-thread[role="log"]')).not.toBeNull();
+  expect(created.container.querySelector(".chat-conversation-loading")).toBeNull();
+  created.unmount();
 
   document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
   const warmYield = Promise.withResolvers<void>();

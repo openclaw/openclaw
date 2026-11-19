@@ -12,6 +12,7 @@ import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/s
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import type { HookExternalContentSource } from "../../security/external-content.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import type { SkillLibraryPromptListing } from "./skill-library-prompt-listing.js";
 
 /** Persisted identity excludes display-only actor projections. */
 export type SessionActor = SchemaContract<
@@ -150,7 +151,7 @@ export function sessionPersonalProfileId(
   return assigned?.type === "human" ? assigned.id : sessionCreatorProfileId(entry?.createdActor);
 }
 
-/** Visible spawns default to the verified requester unless a different human owns the parent. */
+/** A new child belongs to its verified requester; the parent's assignment stays untouched. */
 export function inheritSpawnSessionOwner(
   source: { owner?: SessionOwnerAssignment; createdActor?: SessionCreatedActor } | undefined,
   assignedBy: SessionActor | undefined,
@@ -171,20 +172,19 @@ export function inheritSpawnSessionOwner(
   const resolvedOwnerId = !directMatch && owner?.id ? resolveProfileId(owner.id) : owner?.id;
   const resolvedRequesterId =
     !directMatch && requesterProfileId ? resolveProfileId(requesterProfileId) : requesterProfileId;
-  const assignmentActor =
-    resolvedRequesterId && (!owner || resolvedOwnerId === resolvedRequesterId)
+  const assignmentActor = resolvedRequesterId
+    ? {
+        type: "human" as const,
+        id: resolvedRequesterId,
+        ...(resolvedOwnerId === resolvedRequesterId && owner?.label ? { label: owner.label } : {}),
+      }
+    : assignedBy?.type === "agent" && assignedBy.id
       ? {
-          type: "human" as const,
-          id: resolvedRequesterId,
-          ...(owner?.label ? { label: owner.label } : {}),
+          type: "agent" as const,
+          id: assignedBy.id,
+          ...(assignedBy.label ? { label: assignedBy.label } : {}),
         }
-      : assignedBy?.type === "agent" && assignedBy.id
-        ? {
-            type: "agent" as const,
-            id: assignedBy.id,
-            ...(assignedBy.label ? { label: assignedBy.label } : {}),
-          }
-        : undefined;
+      : undefined;
   if (!assignmentActor) {
     return undefined;
   }
@@ -209,20 +209,22 @@ export type SessionCreatedVia = NonNullable<SessionRow["createdVia"]>;
 // types.ts imports from here, never the reverse (madge cycle guard).
 export function buildSessionCreationStamp(params: {
   via: SessionCreatedVia;
-  surface?: "plugin-dock";
+  surface?: SessionRow["createdSurface"];
   actor?: SessionCreatedActor;
   now?: number;
   sandbox?: "required";
   incognito?: boolean;
   skillLibrarySelections?: SkillLibrarySelection[];
+  skillLibraryPromptListing?: SkillLibraryPromptListing;
   inheritedGitContributorProfileIds?: string[];
 }): {
   createdVia: SessionCreatedVia;
-  createdSurface?: "plugin-dock";
+  createdSurface?: SessionRow["createdSurface"];
   createdActor?: SessionCreatedActor;
   createdAt: number;
   sandbox?: "required";
   skillLibrarySelections?: SkillLibrarySelection[];
+  skillLibraryPromptListing?: SkillLibraryPromptListing;
   inheritedGitContributorProfileIds?: string[];
 } {
   return {
@@ -240,6 +242,9 @@ export function buildSessionCreationStamp(params: {
             ...selection,
           })),
         }
+      : {}),
+    ...(params.skillLibraryPromptListing
+      ? { skillLibraryPromptListing: { ...params.skillLibraryPromptListing } }
       : {}),
   };
 }

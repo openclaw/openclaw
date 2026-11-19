@@ -63,7 +63,11 @@ export async function evaluateSystemRunAllowlist(params: {
       platform: process.platform,
     });
   } else {
-    const analysis = analyzeArgvCommand({ argv: params.argv, cwd: params.cwd, env: params.env });
+    const analysis = await analyzeArgvCommand({
+      argv: params.argv,
+      cwd: params.cwd,
+      env: params.env,
+    });
     evaluation = {
       ...(await evaluateExecAllowlist({ ...context, analysis })),
       analysisOk: analysis.ok,

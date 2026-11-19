@@ -277,4 +277,26 @@ describe("Gateway core reload policy", () => {
     expect(plan.hotReasons).toEqual(restart ? [] : [path]);
     expect(resolveConfigReloadMetadata(path).kind).toBe(restart ? "restart" : "hot");
   });
+
+  it("reloads plugins when OpenClaw ID is switched on or off without restarting", () => {
+    const off: OpenClawConfig = {};
+    const disabled: OpenClawConfig = { gateway: { openclawId: { enabled: false } } };
+    const enabled: OpenClawConfig = {
+      gateway: { openclawId: { enabled: true, relayUrl: "https://relay.test/" } },
+    };
+    for (const [before, after] of [
+      [off, enabled],
+      [disabled, enabled],
+      [enabled, disabled],
+    ] as const) {
+      const paths = diffGatewayReloadPaths(before, after, listConfigReloadRefinementPrefixes());
+      expect(
+        buildGatewayReloadPlan(paths, { previousConfig: before, candidateConfig: after }),
+      ).toMatchObject({ restartGateway: false, reloadPlugins: true });
+    }
+    expect(buildGatewayReloadPlan(["gateway.openclawId.relayUrl"])).toMatchObject({
+      restartGateway: false,
+      reloadPlugins: false,
+    });
+  });
 });

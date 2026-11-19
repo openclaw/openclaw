@@ -188,12 +188,37 @@ describe("CI changed lint", () => {
     );
   });
 
+  it("keeps comment and literal mentions of declare on the affected-file lint path", async () => {
+    const { cwd, write } = fixture("ci-nonambient-consumer-");
+    write("package.json", '{"type":"module"}');
+    write(
+      "src/value.ts",
+      '// π: consumers declare their own result type.\r\nexport const value = "declare global";\r\n',
+    );
+    write(
+      "src/reader.ts",
+      'import { value } from "./value.js"; export const text = `declare ${value}`;\n',
+    );
+    expect((await resolveChangedOxlintFileScope(["src/value.ts"], cwd))?.files).toEqual([
+      "src/reader.ts",
+      "src/value.ts",
+    ]);
+  });
+
   it.each([
     [
       "globals.ts",
       'import type { Work } from "./value.js"; declare global { interface Window { work: Work; } }',
     ],
     ["globals.d.ts", 'interface Window { work: import("./value.js").Work; }'],
+    [
+      "generic-globals.ts",
+      'import type { Work } from "./value.js"; const text = "declare"; const n = generic<number> / denominator; declare /* contract */ global { interface Window { work: Work; } }',
+    ],
+    [
+      "unparsed.tsx",
+      'import type { Work } from "./value.js"; export const text = <div>declare</div>;',
+    ],
   ])(
     "retains full lint when an affected consumer augments globals through %s",
     async (file, source) => {

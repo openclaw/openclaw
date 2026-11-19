@@ -11,6 +11,7 @@ import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import { currentOwnerDevicePrincipal } from "./openclaw-id/tunnel-principal.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
@@ -476,9 +477,12 @@ export function createGatewayRequestContext(
       }
       disconnectDeviceTransports?.(deviceId, opts);
     },
-    disconnectClientsForUserProfile: (profileId: string) => {
+    disconnectClientsForUserProfile: (profileId: string, opts?: { roleOnly?: boolean }) => {
       for (const gatewayClient of clients.authorityClients) {
         if (gatewayClient.authenticatedUserProfile?.profileId !== profileId) {
+          continue;
+        }
+        if (opts?.roleOnly && currentOwnerDevicePrincipal(gatewayClient)) {
           continue;
         }
         invalidateGatewayPolicyClient(gatewayClient, {

@@ -185,6 +185,9 @@ export function createSessionRowRefresh(
     ) {
       throw new WorkerTaskError("Session row preparation capacity reached", "overloaded");
     }
+    // One request awaits all its keys. Group agent/store-prefixed identities before
+    // appending to the FIFO so interleaved list rows share worker admissions.
+    missing.sort();
     for (const id of missing) {
       const row = owner.rows.get(id)!;
       const read: ExactRowPreparation = {

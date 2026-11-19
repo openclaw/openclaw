@@ -17,7 +17,7 @@ import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
 type Category = "instructions" | "skills" | "integrations" | "automations";
 const categories: Array<{ key: Category; labelKey: string; icon: IconName }> = [
   { key: "instructions", labelKey: "workspaceFiles", icon: "fileText" },
-  { key: "skills", labelKey: "skillsSection", icon: "book" },
+  { key: "skills", labelKey: "skillsSection", icon: "sparkles" },
   { key: "integrations", labelKey: "integrations", icon: "plug" },
   { key: "automations", labelKey: "automations", icon: "clock" },
 ];
@@ -83,7 +83,11 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
         " · " +
         item.timezone +
         " · " +
-        t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationPaused")
+        t(
+          item.enabled
+            ? "templatesCatalog.automationEnabled"
+            : "templatesCatalog.automationDisabled",
+        )
       );
     }
     if ("source" in item && item.source === "bundled") {
@@ -236,7 +240,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                                   t(
                                                     item.enabled
                                                       ? "templatesCatalog.automationEnabled"
-                                                      : "templatesCatalog.automationPaused",
+                                                      : "templatesCatalog.automationDisabled",
                                                   )
                                                 : ""}
                                       </small>
@@ -325,7 +329,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
               !props.view.canAdd ||
               !props.view.detail ||
               props.view.applying ||
-              Boolean(props.view.consentWarning || props.view.reviewPlan)
+              Boolean(props.view.consentWarning)
             }
             onClick={() => void props.view.onConfirm()}
           >

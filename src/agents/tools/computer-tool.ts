@@ -24,7 +24,6 @@ import { markToolExecutionRefused } from "../tool-effect-receipt.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { type AnyAgentTool, readFiniteNumberParam, readToolStringParam } from "./common.js";
 import { ComputerToolSession } from "./computer-tool-node.js";
-import { recordComputerToolOutcome } from "./computer-tool-outcome.js";
 import { buildComputerActParams, isComputerActAction } from "./computer-tool-request.js";
 import {
   availableComputerActions,
@@ -432,6 +431,8 @@ export function createComputerTool(options?: {
     // model-visible screenshot block that coordinate actions depend on.
     catalogMode: "direct-only",
     executionMode: "sequential",
+    // Observing a desktop repeats by design; input actions still count.
+    repeatable: { actions: ["screenshot", "wait"] },
     description: buildComputerToolDescription(initialCapabilities, targetScope),
     parameters: parameterSchema,
     prepareArguments: prepareComputerArguments,
@@ -524,9 +525,7 @@ export function createComputerTool(options?: {
             },
           };
           session.recordObservation(resolved, result, imageCoordinates);
-          return action === "get_window_state"
-            ? recordComputerToolOutcome(projected, result)
-            : projected;
+          return projected;
         };
 
         if (action === "screenshot" || action === "wait" || action === "take_control") {

@@ -60,6 +60,7 @@ export function createDesktopSupervisor(
       return run;
     },
     cancel: (id) => runs.find((run) => run.runId === id)?.cancel(),
+    release: vi.fn(async () => undefined),
     cancelScope: (scope) => inScope(scope).forEach((run) => run.cancel()),
   };
   const exit = (index: number, stderr = "") => {

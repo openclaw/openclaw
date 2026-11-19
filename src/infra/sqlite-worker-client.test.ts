@@ -56,13 +56,20 @@ it("attributes queued commands without changing wire bytes or exposing private c
   const check = async (type: string, input: unknown, requestClass: string) => {
     const command = { type, input };
     await expect(store.execute(command)).resolves.toBe("committed");
-    expect(dispatch.mock.lastCall?.[0]).toEqual(serialize(command));
-    expect(dispatch.mock.lastCall?.[5]).toBe(requestClass);
-    expect(normalizeWorkerRequestClass(dispatch.mock.lastCall?.[5])).toBe(requestClass);
+    expect(dispatch.mock.lastCall?.[0].input).toEqual(serialize(command));
+    expect(dispatch.mock.lastCall?.[2].requestClass).toBe(requestClass);
+    expect(normalizeWorkerRequestClass(dispatch.mock.lastCall?.[2].requestClass)).toBe(
+      requestClass,
+    );
   };
   const input = { value: "synthetic-private-payload" };
   const cases = [
     ["audit.writer.process", "audit.writer.process"],
+    ["localWorkspace.prepare", "localWorkspace.prepare"],
+    ["localWorkspace.mutate", "localWorkspace.mutate"],
+    ["localWorkspace.manifest", "localWorkspace.manifest"],
+    ["localWorkspace.private-workspace", "localWorkspace"],
+    ["localWorkspace.prepare.private-workspace", "localWorkspace"],
     ["worktrees.private-customer-123", "worktrees"],
     ["session.entry.read", "session.entry.read"],
     ["session.entries.replace", "session.entries.replace"],
@@ -95,9 +102,11 @@ it("attributes queued commands without changing wire bytes or exposing private c
     ["publish", js, "preflight", "transcript-projection.preflight"],
     ["publish", `${projectionModule}.ts`, "sweep", "transcript-projection.sweep"],
     ["publish", js, "private-customer-123", "domain_execute"],
-    ["publish", "file:///synthetic-private-root/another.worker.js", "claim", "domain_execute"],
-    ["publish", `${js}.private`, "claim", "domain_execute"],
-    ["execute", undefined, "claim", "domain_execute"],
+    ["publish", "file:///synthetic-private-root/another.worker.js", "claim", "claim"],
+    ["publish", `${js}.private`, "claim", "claim"],
+    ["execute", undefined, "claim", "claim"],
+    ["execute", undefined, "source.replace", "source.replace"],
+    ["execute", undefined, "source.replace.private-customer-123", "domain_execute"],
     ["execute", undefined, "transcript.prepare", "transcript.prepare"],
     ["execute", undefined, "session.metadata.append", "session.metadata.append"],
     ["publish", js, "session.transcript.lock.commit", "transcripts"],

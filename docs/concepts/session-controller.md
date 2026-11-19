@@ -14,10 +14,11 @@ process-wide concurrency limits.
 
 The in-memory implementation extends the reply-operation owner rather than
 adding another session scheduler. Gateway, channel, direct-native, maintenance,
-and lifecycle adapters share that owner. Gateway protocols and stored data remain
-unchanged; a durable mailbox is a separate storage change. Harness attempts must
-run under host or controller admission before registering a session-keyed native
-run; see [Harness attempt runtime](/plugins/sdk-agent-harness/attempt-runtime)
+and lifecycle adapters share that owner. Accepted durable user-input rows retain
+custody independently of the process-local mailbox; execution still needs fresh
+admission. Harness attempts must run under host or controller admission before
+registering a session-keyed native run; see
+[Harness attempt runtime](/plugins/sdk-agent-harness/attempt-runtime)
 for the SDK migration.
 
 For operator-facing queue settings, see [Command queue](/concepts/queue).
@@ -146,6 +147,11 @@ For each accepted input, retain identity and custody through these boundaries:
 2. Waiting, being injected, or claimed by a new turn or collect batch.
 3. Confirmed consumed, deliberately dropped, cancelled, interrupted, or
    retained with an explicitly uncertain commitment.
+
+A failed authority assertion refuses that operation without ending queued-input
+custody. Revocation ends custody only when the authority owner records it by
+aborting its signal; Stop, lifecycle cancellation, deliberate drop, and confirmed
+consumption retain their own recorded causes.
 
 An input's `phase`, payload readiness, and retained custody are independent.
 Retirement can be requested while an admitted injection, turn claim, or
@@ -297,8 +303,9 @@ A mutation closes competing admission, targets exact current owners, waits for
 real settlement, and then acquires its mutation boundary. In-band commands must
 not wait for their own admitted stack, and a mailbox clear they request does not
 select their own claimed input. Committed shutdown records running root sessions
-and their accepted queued input IDs for resume, then aborts active producers, including the turn that
-requested the restart. In-flight persistence keeps a short bounded settlement
+for resume, then aborts active producers, including the turn that requested the
+restart. Accepted queued inputs keep their own durable row custody independently
+of that marker. In-flight persistence keeps a short bounded settlement
 grace. A mutation body that owns no turn
 and requests one for its own session, such as
 `sessions.compact` or a native `/compact`, receives that turn under its own fence,
@@ -342,18 +349,21 @@ reports the session as blocked; the user can continue in a separate session, and
 the operator can restart the Gateway to terminate the process-local writer. No
 in-process statechart can guarantee recovery from a blocked process by itself.
 
-The controller mailbox is process-local. Graceful shutdown writes one resume marker
-per running root session before aborting work, including the IDs of accepted
-queued user messages. Startup clears that marker and admits one ordinary system
-input; only its captured messages follow in FIFO order under each sender’s current
-authority. A crash does not reconstruct execution or queued work, and a later
-graceful marker does not adopt older crash-left rows. Explicit Stop remains terminal. Durable
-channel ingress, produced-message delivery, and file integrity keep their own
-contracts. See [Restart recovery](/gateway/restart-recovery).
+The controller mailbox is process-local; accepted durable user-input custody is
+not. Graceful shutdown writes one resume marker per running root session before
+aborting work. Startup admits one ordinary system input for that marker, then
+replays queued, unconsumed user-input rows in FIFO order using each row's original
+source and the sender's current authority. Crash recovery reads those same rows
+without requiring a marker or reconstructing the old process's mailbox claims.
 
-A later durable mailbox must reconcile these existing custody owners, specify
-retention and upgrade/rollback behavior, and distinguish queued from possibly
-consumed input. It requires a separate storage review. See
+Transcript consumption prevents duplicate execution, including when a crash lands
+after transcript commit but before the caller sees confirmation. A same-key resend
+reconciles that committed input rather than starting another turn. An input with
+no recoverable original source receives a recorded `restart-unrecoverable` cause;
+temporary authority or dispatch outages retain queued custody. Stop, reset,
+deletion, revocation, and queue-policy refusals remain terminal recorded outcomes.
+Durable channel ingress, produced-message delivery, and file integrity keep their
+own contracts. See [Restart recovery](/gateway/restart-recovery) and
 [Input durability](/concepts/queue#input-durability).
 
 ## Invariants and verification
@@ -361,7 +371,7 @@ consumed input. It requires a separate storage review. See
 The controller and its adapters must preserve:
 
 1. At most one current scheduling owner per canonical session identity.
-2. Every accepted input remains accounted for, including merged and uncertain inputs.
+2. Every accepted input remains queued, consumed, or terminal with a recorded cause, including merged and uncertain inputs.
 3. Captured active cancellation and late effects cannot act on a successor or replaced generation.
 4. At most one successor is admitted after the required outcome and settlement barriers.
 5. Mutations exclude competing turns and retain write-capable work until actual settlement.

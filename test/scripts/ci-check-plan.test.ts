@@ -341,6 +341,50 @@ it("retains the complete full-check stripe inventory", async () => {
   expect(plan.core_type_matrix).toEqual(stripeMatrix(5));
 });
 
+it.each(["hybrid", "github"])(
+  "sizes serial extension and script type checks independently on %s",
+  async (runnerProfile) => {
+    typeSelection.graphs = resolveCiTsgoGraphs(["extensions-test", "scripts"]);
+    const plan = await createPlan({
+      runnerProfile,
+      extensionLintMode: "affected",
+      checkMatrix: {
+        include: [
+          { ...checks("test-types").include[0]!, runner_label: "blacksmith-4vcpu-ubuntu-2404" },
+        ],
+      },
+    });
+    expect(plan.check_matrix.include[0]).toMatchObject({
+      runner: "unused",
+      runner_label: "blacksmith-2vcpu-ubuntu-2404",
+      core_type_graph_names_json: "[]",
+      core_type_concurrency: 1,
+      type_graph_names_json: JSON.stringify(["extensions-test", "scripts"]),
+    });
+  },
+);
+
+it.each([
+  { extensionLintMode: undefined },
+  { preserveFullChecks: true },
+  { runnerProfile: "blacksmith" },
+  { runnerProfile: "boat" },
+  { graphs: ["scripts", "test-root-tooling"] },
+  { runnerLabel: "blacksmith-8vcpu-ubuntu-2404" },
+])(
+  "retains unqualified central type capacity: %j",
+  async ({ graphs, runnerLabel, ...overrides }) => {
+    typeSelection.graphs = resolveCiTsgoGraphs(graphs ?? ["extensions-test", "scripts"]);
+    const label = runnerLabel ?? "blacksmith-4vcpu-ubuntu-2404";
+    const plan = await createPlan({
+      extensionLintMode: "affected",
+      checkMatrix: { include: [{ ...checks("test-types").include[0]!, runner_label: label }] },
+      ...overrides,
+    });
+    expect(plan.check_matrix.include[0]!.runner_label).toBe(label);
+  },
+);
+
 it.each([
   [undefined, "scripts/ci-sdk-declarations.mts"],
   ["affected", "scripts/ci-sdk-declarations.mts"],

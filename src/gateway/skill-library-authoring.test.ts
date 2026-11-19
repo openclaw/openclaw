@@ -13,9 +13,15 @@ import { createToolSurfacePresentationForTest } from "../agents/tool-surface-pla
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createSkillLibraryTool } from "../agents/tools/skill-library-tool.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+import { initSessionState } from "../auto-reply/reply/session.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-admitted-read.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -33,7 +39,14 @@ import {
   prepareGatewaySkillLibraryTurn,
   resolveGatewaySkillLibraryPromptGrant,
 } from "./skill-library-authoring.js";
+import { prepareSkillLibrarySessionCreation } from "./skill-library-session.js";
+import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 import { createWorkerConnectionIdentity } from "./worker-environments/connection-identity.test-support.js";
+
+// mock-isolation: ordinary authoring must not load archive or ClawHub import machinery.
+vi.mock("../skills/library/import.js", () => {
+  throw new Error("ordinary skill authoring must not load archive import runtime");
+});
 
 const catalogReleases: Array<() => void> = [];
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
@@ -534,6 +547,68 @@ it("keeps the skill_library prompt across settle and refuses that turn at execut
   expect(toolFor(synthetic!).description).toBe(humanTool.description);
   expect(synthetic?.turnRefusal).toContain("no human requester");
 });
+it("commits the first chat listing with session creation and reloads it after reopening storage", async () => {
+  const { alice, request } = await setup();
+  const owner = request(alice.id);
+  const firstSessionKey = "agent:main:first-chat";
+  const directory = temps.make("skill-library-first-chat-");
+  const storePath = path.join(directory, "sessions.sqlite");
+  const listingStore = { agentId: "main", storePath };
+  const scope = { ...listingStore, sessionKey: firstSessionKey };
+  const cfg = {
+    agents: { defaults: { workspace: directory } },
+    session: { store: storePath },
+  };
+  let creation: TrustedSessionCreation = {
+    via: "operator",
+    actor: { type: "human", source: "profile", id: alice.id },
+  };
+  try {
+    const live = (await prepareGatewaySkillLibraryTurn(
+      { owner, sessionKey: firstSessionKey, isHumanTurn: true, listingStore },
+      async (prepared) => {
+        creation = await prepareSkillLibrarySessionCreation(owner.client, cfg, creation, prepared);
+      },
+      () => {},
+    ))!;
+    // Match chat.send ordering: authoring is prepared before native initialization owns a row.
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    await initSessionState({
+      cfg,
+      commandAuthorized: true,
+      ctx: finalizeInboundContext({
+        Body: "List my personal skills.",
+        SessionKey: firstSessionKey,
+        Provider: "webchat",
+        ChatType: "direct",
+        SessionCreation: creation,
+      }),
+    });
+    expect(loadSessionEntry(scope)?.skillLibraryPromptListing).toEqual({
+      multipleProfiles: true,
+      defaultTarget: "personal",
+    });
+    await closeOpenClawAgentDatabasesAsync(directory);
+    closeOpenClawAgentDatabasesForTest(directory);
+    const reopened = (await resolveGatewaySkillLibraryPromptGrant({
+      owner,
+      sessionKey: firstSessionKey,
+      isHumanTurn: false,
+      listingStore,
+    }))!;
+    expect(createSkillLibraryTool(reopened).description).toBe(
+      createSkillLibraryTool(live).description,
+    );
+    expect(reopened.turnRefusal).toContain("no human requester");
+    await expect(reopened.invoke({ action: "list" })).rejects.toMatchObject({
+      code: "AUTHORITY_EXPIRED",
+    });
+  } finally {
+    await closeOpenClawAgentDatabasesAsync(directory);
+    closeOpenClawAgentDatabasesForTest(directory);
+  }
+});
+
 it("reloads a recorded skill_library listing for a settle after restart", async () => {
   const { alice, request } = await setup();
   const owner = request(alice.id);

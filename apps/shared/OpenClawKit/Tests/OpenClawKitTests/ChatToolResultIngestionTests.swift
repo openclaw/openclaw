@@ -44,7 +44,7 @@ struct ChatToolResultIngestionTests {
         ChatTranscriptRow.mergeToolResults(in: messages).first?.content.filter(\.isToolResult).map(\.text) ?? []
     }
 
-    @Test func `embedded output survives unrelated malformed block metadata`() throws {
+    @Test func `embedded output survives unrelated malformed block metadata`() async throws {
         let raw = try Self.raw(#"""
         {"role":"assistant","content":[
           {"type":"tool_result","tool_use_id":"a","content":[
@@ -55,7 +55,7 @@ struct ChatToolResultIngestionTests {
           {"type":"tool_result","tool_use_id":"b","content":"String output"}
         ]}
         """#)
-        let message = try #require(OpenClawChatViewModel.decodeMessages([raw]).first)
+        let message = try #require(await OpenClawChatViewModel.decodeMessages([raw]).first)
         #expect(message.content.filter(\.isToolResult).map(\.text) == ["Alpha\nBeta", "String output"])
     }
 
@@ -66,11 +66,11 @@ struct ChatToolResultIngestionTests {
         return try #require(payload.messages?.first)
     }
 
-    @Test func `wire activity with unknown outcome does not claim result absent`() throws {
+    @Test func `wire activity with unknown outcome does not claim result absent`() async throws {
         let url = try #require(Bundle.module.url(
             forResource: "claude-cli-embedded-tool-result", withExtension: "json", subdirectory: "Fixtures"))
         let payload = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: Data(contentsOf: url))
-        let messages = OpenClawChatViewModel.decodeMessages(payload.messages ?? [], activity: payload.activity)
+        let messages = await OpenClawChatViewModel.decodeMessages(payload.messages ?? [], activity: payload.activity)
         let message = try #require(messages.first)
         let items = ChatToolActivity.items(message: message)
         let item = try #require(items.first)
@@ -84,9 +84,9 @@ struct ChatToolResultIngestionTests {
         #expect(String(localized: absent.statusTitle) == "No result")
     }
 
-    @Test func `recorded assistant result exposes nested output`() throws {
+    @Test func `recorded assistant result exposes nested output`() async throws {
         let raw = try Self.embeddedResult()
-        let messages = OpenClawChatViewModel.decodeMessages([raw])
+        let messages = await OpenClawChatViewModel.decodeMessages([raw])
         let assistant = try #require(messages.first)
         let results = assistant.content.filter(\.isToolResult)
         let result = try #require(results.first)
@@ -102,9 +102,9 @@ struct ChatToolResultIngestionTests {
         #expect(vm.messages.first?.content.filter(\.isToolResult).first?.text == result.text)
     }
 
-    @Test func `recorded assistant results do not create duplicate rows`() throws {
+    @Test func `recorded assistant results do not create duplicate rows`() async throws {
         let raw = try Self.embeddedResult()
-        let messages = OpenClawChatViewModel.decodeMessages([raw, raw])
+        let messages = await OpenClawChatViewModel.decodeMessages([raw, raw])
         let merged = ChatTranscriptRow.mergeToolResults(in: messages)
         #expect(merged.count == 1)
         #expect(merged.first.map { ChatToolActivity.items(message: $0).count } == 1)
@@ -117,8 +117,8 @@ struct ChatToolResultIngestionTests {
         #expect(vm.messages.first?.content.filter(\.isToolResult).count == 1)
     }
 
-    @Test func `parallel results`() throws {
-        let messages = try OpenClawChatViewModel.decodeMessages([Self.raw(Self.parallel)])
+    @Test func `parallel results`() async throws {
+        let messages = try await OpenClawChatViewModel.decodeMessages([Self.raw(Self.parallel)])
         #expect(messages.map(\.role) == ["toolResult", "toolResult"])
         #expect(messages.map(\.toolCallId) == ["a", "b"])
         #expect(messages.map(\.toolName) == ["exec", "read"])
@@ -128,7 +128,7 @@ struct ChatToolResultIngestionTests {
         #expect(messages.map(\.transcriptMessageID) == ["carrier", "carrier"])
         #expect(Set(messages.compactMap(OpenClawChatViewModel.dedupeKey)).count == 2)
         #expect(Set(messages.map(\.id)).count == 2)
-        let merged = try ChatTranscriptRow.mergeToolResults(in: OpenClawChatViewModel.decodeMessages(
+        let merged = try ChatTranscriptRow.mergeToolResults(in: await OpenClawChatViewModel.decodeMessages(
             [Self.user, Self.calls, Self.parallel, Self.answer].map(Self.raw)))
         #expect(merged.count == 3)
         let results = try #require(merged.first { $0.role == "assistant" }).content.filter(\.isToolResult)
@@ -138,7 +138,7 @@ struct ChatToolResultIngestionTests {
         #expect(ChatTranscriptRow.collapseCompletedWork(rows, runWorking: false).count == 3)
     }
 
-    @Test func `mixed parallel results precede the next user turn`() throws {
+    @Test func `mixed parallel results precede the next user turn`() async throws {
         let calls = try Self.raw(Self.calls)
         let carrier = try Self.raw(#"""
         {"role":"user","timestamp":3,"content":[\#(Self.results),{"type":"text","text":"Next instruction"}]}
@@ -146,12 +146,12 @@ struct ChatToolResultIngestionTests {
         let textFirst = try Self.raw(#"""
         {"role":"user","content":[{"type":"text","text":"Actual user text"},\#(Self.results)]}
         """#)
-        #expect(OpenClawChatViewModel.decodeMessages([textFirst]).map(\.role) == ["toolResult", "toolResult", "user"])
-        #expect(OpenClawChatViewModel.decodeMessages([carrier]).map(\.role) == ["toolResult", "toolResult", "user"])
-        let merged = ChatTranscriptRow.mergeToolResults(in: OpenClawChatViewModel.decodeMessages([calls, carrier]))
+        #expect(await OpenClawChatViewModel.decodeMessages([textFirst]).map(\.role) == ["toolResult", "toolResult", "user"])
+        #expect(await OpenClawChatViewModel.decodeMessages([carrier]).map(\.role) == ["toolResult", "toolResult", "user"])
+        let merged = ChatTranscriptRow.mergeToolResults(in: await OpenClawChatViewModel.decodeMessages([calls, carrier]))
         #expect(merged.map(\.role) == ["assistant", "user"])
         #expect(!merged.contains { $0.isToolResult })
-        #expect(Self.mergedResults(OpenClawChatViewModel.decodeMessages([calls, carrier])) == [
+        #expect(Self.mergedResults(await OpenClawChatViewModel.decodeMessages([calls, carrier])) == [
             "Alpha output", "Beta output",
         ])
         #expect(merged.last?.content.map(\.text) == ["Next instruction"])
@@ -206,7 +206,7 @@ struct ChatToolResultIngestionTests {
         }
     }
 
-    @Test func `carrier turn boundary has one owner`() throws {
+    @Test func `carrier turn boundary has one owner`() async throws {
         let calls = try Self.raw(Self.calls)
         let pure = try Self.raw(#"{"role":"user","__openclaw":{"turnBoundary":true},"content":[\#(Self.results)]}"#)
         let mixed = try Self.raw(#"""
@@ -214,7 +214,7 @@ struct ChatToolResultIngestionTests {
           \#(Self.results),{"type":"text","text":"Next instruction"}
         ]}
         """#)
-        let pureMessages = OpenClawChatViewModel.decodeMessages([calls, pure])
+        let pureMessages = await OpenClawChatViewModel.decodeMessages([calls, pure])
         #expect(pureMessages.map(\.turnBoundary) == [nil, true, nil])
         let pureMerged = ChatTranscriptRow.mergeToolResults(in: pureMessages)
         // The real gateway boundary still prevents attachment across turns.
@@ -225,7 +225,7 @@ struct ChatToolResultIngestionTests {
         #expect(ChatTranscriptRow.collapseCompletedWork(pureRows, runWorking: false)
             .filter(\.startsTurn).count == 1)
 
-        let mixedMessages = OpenClawChatViewModel.decodeMessages([calls, mixed])
+        let mixedMessages = await OpenClawChatViewModel.decodeMessages([calls, mixed])
         #expect(mixedMessages.map(\.turnBoundary) == [nil, nil, nil, true])
         let mixedMerged = ChatTranscriptRow.mergeToolResults(in: mixedMessages)
         #expect(mixedMerged.map(\.role) == ["assistant", "user"])
@@ -236,15 +236,15 @@ struct ChatToolResultIngestionTests {
             .filter(\.startsTurn).count == 1)
     }
 
-    @Test func `unmatched result`() throws {
-        let messages = try OpenClawChatViewModel.decodeMessages([Self.raw(Self.parallel)])
+    @Test func `unmatched result`() async throws {
+        let messages = try await OpenClawChatViewModel.decodeMessages([Self.raw(Self.parallel)])
         let orphan = try #require(ChatTranscriptRow.mergeToolResults(in: messages).first)
         #expect(orphan.isToolResult)
         #expect(ChatTranscriptRow(orphan)?.startsTurn == false)
         #expect(ChatMessageVisibleText.displayText(in: orphan, includeThinking: false) == "Alpha output")
     }
 
-    @Test func `error result preserves metadata`() throws {
+    @Test func `error result preserves metadata`() async throws {
         func activity(_ items: String) throws -> [OpenClawChatHistoryActivity] {
             try JSONDecoder().decode(
                 [OpenClawChatHistoryActivity].self,
@@ -255,7 +255,7 @@ struct ChatToolResultIngestionTests {
         }
         let terminalA = item("terminal-a", call: #""toolCallId":"a","#)
         let terminalB = item("terminal-b", call: #""toolCallId":"b","#)
-        let messages = try OpenClawChatViewModel.decodeMessages([Self.raw(#"""
+        let messages = try await OpenClawChatViewModel.decodeMessages([Self.raw(#"""
         {"role":"user","isError":true,"details":{"exitCode":1},"__openclaw":{"id":"carrier","runId":"run-a"},"content":[
           {"type":"tool_result","tool_use_id":"a","name":"exec","is_error":true,
            "content":[{"type":"text","text":"Command failed"}]}
@@ -273,14 +273,14 @@ struct ChatToolResultIngestionTests {
           {"type":"tool_use","id":"a","name":"exec","arguments":{}}
         ]}
         """#)
-        let merged = ChatTranscriptRow.mergeToolResults(in: OpenClawChatViewModel.decodeMessages([call]) + messages)
+        let merged = ChatTranscriptRow.mergeToolResults(in: await OpenClawChatViewModel.decodeMessages([call]) + messages)
         let result = try #require(merged.first?.content.last)
         #expect(result.text == "Command failed")
         #expect(result.isError == true)
         #expect(result.details == message.details)
         #expect(merged.first?.activity?.map(\.itemId) == ["terminal-a"])
 
-        let parallelMessages = try OpenClawChatViewModel.decodeMessages(
+        let parallelMessages = try await OpenClawChatViewModel.decodeMessages(
             [Self.raw(Self.calls), Self.raw(Self.parallel)],
             activity: activity("\(terminalA),\(terminalB),\(item("carrier-status", call: ""))"))
         let parallelMerged = ChatTranscriptRow.mergeToolResults(in: parallelMessages)
@@ -288,7 +288,7 @@ struct ChatToolResultIngestionTests {
         #expect(parallelMerged.first?.activity?.map(\.itemId) == ["terminal-a", "terminal-b"])
     }
 
-    @Test func `conflicting runs stay unmatched`() throws {
+    @Test func `conflicting runs stay unmatched`() async throws {
         func call(run: String) throws -> AnyCodable {
             try Self.raw(#"""
             {"role":"assistant","__openclaw":{"runId":"\#(run)"},"content":[
@@ -296,7 +296,7 @@ struct ChatToolResultIngestionTests {
             ]}
             """#)
         }
-        let messages = try OpenClawChatViewModel.decodeMessages([
+        let messages = try await OpenClawChatViewModel.decodeMessages([
             call(run: "run-a"),
             call(run: "run-b"),
             Self.raw(#"""
@@ -309,7 +309,7 @@ struct ChatToolResultIngestionTests {
         #expect(merged.count == 3)
         #expect(merged.last?.role == "toolResult")
         #expect(merged.first?.content.count == 1)
-        let legacy = try OpenClawChatViewModel.decodeMessages([
+        let legacy = try await OpenClawChatViewModel.decodeMessages([
             call(run: "run-b"),
             Self.raw(#"""
             {"role":"user","idempotencyKey":"run-a:user","content":[
@@ -323,15 +323,15 @@ struct ChatToolResultIngestionTests {
         #expect(legacyMerged.last?.transcriptRunID == "run-a")
     }
 
-    @Test func `latest user, legacy range and voice fallback ignore carriers`() throws {
+    @Test func `latest user, legacy range and voice fallback ignore carriers`() async throws {
         let raw = try [Self.user, Self.answer, Self.parallel].map(Self.raw)
-        let messages = OpenClawChatViewModel.decodeMessages(raw)
+        let messages = await OpenClawChatViewModel.decodeMessages(raw)
         #expect(!OpenClawChatViewModel.hasUnansweredLatestUser(in: messages))
         #expect(OpenClawChatViewModel.latestUserTurn(in: messages)?.timestamp == 1)
         let turn = try OpenClawChatViewModel.latestUserTurn(
-            in: OpenClawChatViewModel.decodeMessages([Self.raw(Self.user)]))
+            in: await OpenClawChatViewModel.decodeMessages([Self.raw(Self.user)]))
         let orderedRaw = try [Self.user, Self.parallel, Self.answer].map(Self.raw)
-        let ordered = OpenClawChatViewModel.decodeMessages(orderedRaw)
+        let ordered = await OpenClawChatViewModel.decodeMessages(orderedRaw)
         let range = OpenClawChatViewModel.messageRange(after: turn, in: ordered)
         #expect(ordered[range].contains { $0.content.first?.text == "Both checked" })
         #expect(OpenClawChatHistoryPresentation.replyText(
@@ -347,14 +347,14 @@ struct ChatToolResultIngestionTests {
         #expect(OpenClawChatViewModel.latestUserTurn(in: vm.messages)?.timestamp == 1)
     }
 
-    @Test func `equal parallel output keeps both calls and distinct runs`() throws {
+    @Test func `equal parallel output keeps both calls and distinct runs`() async throws {
         let raw = try Self.raw(#"""
         {"role":"user","timestamp":3,"content":[
           {"type":"tool_result","tool_use_id":"a","content":"OK"},
           {"type":"tool_result","tool_use_id":"b","content":"OK"}
         ]}
         """#)
-        #expect(OpenClawChatViewModel.decodeMessages([raw]).map(\.toolCallId) == ["a", "b"])
+        #expect(await OpenClawChatViewModel.decodeMessages([raw]).map(\.toolCallId) == ["a", "b"])
         let vm = Self.model()
         defer { vm.detachTransport() }
         try Self.deliver(raw, to: vm)
@@ -365,7 +365,7 @@ struct ChatToolResultIngestionTests {
           {"type":"tool_result","tool_use_id":"a","runId":"run-b","content":"OK"}
         ]}
         """#)
-        #expect(OpenClawChatViewModel.decodeMessages([runs, runs]).map(\.transcriptRunID) == ["run-a", "run-b"])
+        #expect(await OpenClawChatViewModel.decodeMessages([runs, runs]).map(\.transcriptRunID) == ["run-a", "run-b"])
         let runsVM = Self.model()
         defer { runsVM.detachTransport() }
         for _ in 0..<2 { try Self.deliver(runs, to: runsVM) }
@@ -378,7 +378,7 @@ struct ChatToolResultIngestionTests {
           {"type":"tool_result","content":"Beta output"}
         ]}
         """#)
-        #expect(OpenClawChatViewModel.decodeMessages([missingIDs, missingIDs]).map { $0.content.first?.text }
+        #expect(await OpenClawChatViewModel.decodeMessages([missingIDs, missingIDs]).map { $0.content.first?.text }
             == ["Alpha output", "Beta output"])
         let missingVM = Self.model()
         defer { missingVM.detachTransport() }
@@ -386,7 +386,7 @@ struct ChatToolResultIngestionTests {
         #expect(missingVM.messages.map { $0.content.first?.text } == ["Alpha output", "Beta output"])
 
         let native = try Self.raw(#"{"role":"toolResult","timestamp":5,"content":"Native output"}"#)
-        #expect(OpenClawChatViewModel.decodeMessages([native, native]).count == 1)
+        #expect(await OpenClawChatViewModel.decodeMessages([native, native]).count == 1)
         let nativeVM = Self.model()
         defer { nativeVM.detachTransport() }
         for _ in 0..<2 {
@@ -433,7 +433,8 @@ struct ChatToolResultIngestionTests {
         #expect(vm.applyHistoryPayload(
             .init(sessionKey: "main", sessionId: nil, messages: [carrier], thinkingLevel: nil),
             for: vm.beginHistoryRequest(),
-            preservingOptimisticLocalMessages: false))
+            preservingOptimisticLocalMessages: false,
+            decodedMessages: await OpenClawChatViewModel.decodeMessages([carrier])))
         await vm.pendingCacheWriteTask?.value
         let scope = try #require(vm.outboxBranchScope(for: vm.currentSessionSnapshot()))
         let state = try #require(await store.branchState(for: scope))
@@ -443,7 +444,8 @@ struct ChatToolResultIngestionTests {
         #expect(vm.applyHistoryPayload(
             .init(sessionKey: "main", sessionId: nil, messages: [carrier, descendant], thinkingLevel: nil),
             for: vm.beginHistoryRequest(),
-            preservingOptimisticLocalMessages: false))
+            preservingOptimisticLocalMessages: false,
+            decodedMessages: await OpenClawChatViewModel.decodeMessages([carrier, descendant])))
         await vm.pendingCacheWriteTask?.value
 
         // Exercise the actual SQLite encode/decode path before branch ancestry

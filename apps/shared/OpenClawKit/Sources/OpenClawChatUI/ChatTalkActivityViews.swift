@@ -168,11 +168,11 @@ struct ChatTalkButtonGlyph: View {
     private var waveformPhase: TalkWaveformPhase {
         if self.control.isListening {
             return .listening(
-                level: self.control.level,
+                level: self.control.resolvedLevel,
                 speechActive: !self.control.partialTranscript.isEmpty)
         }
         if self.control.isSpeaking {
-            return .speaking(level: self.control.level)
+            return .speaking(level: self.control.resolvedLevel)
         }
         return .thinking
     }

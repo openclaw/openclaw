@@ -16,6 +16,12 @@ All plugin APIs are [experimental](/plugins/sdk-overview#api-stability),
 including these entry helpers. Pin and test the OpenClaw host versions your
 plugin supports.
 
+`openclaw/plugin-sdk/plugin-entry` also exports the named
+`PluginHookBeforeModelRequestEvent` and `PluginHookBeforeModelRequestResult`
+contracts for [model request hooks](/plugins/hooks/prompt-and-session#final-model-request-policy),
+plus `PluginMetricFamilyDeclaration`, `PluginMetricLabels`, `PluginMetrics`, and
+`PluginMetricFamily` for [plugin metrics](/gateway/prometheus#plugin-metric-families).
+
 Gateway adapters use the existing `core` or `gateway-runtime`
 `GatewayRequestHandlerOptions.context.githubPublicationService` contract for
 GitHub publication. Prepare its required capabilities with
@@ -354,6 +360,15 @@ personal-overlay refresh, turn-scoped project or memory guidance, native forks,
 or Gateway-to-hosted-workspace path projection. Those remain MVP integration gaps;
 shared preparation does not enable those operations.
 
+## Subagent progress references
+
+`formatSubagentProgressReference(id)` from
+`openclaw/plugin-sdk/agent-harness-runtime` returns a display-only four-character
+UUID suffix, or `undefined` when no UUID is available. Keep human labels and
+the original identity: short references can collide and must never be used
+for routing, authorization, deduplication, or lifecycle keys. Native harnesses
+should pass their actual worker/thread ID, not infer a session ID from a path.
+
 ## Tool failure diagnostics
 
 Agent harnesses can import `readToolOperatorHint(error)` from
@@ -579,6 +594,10 @@ generic environment sanitization and `assertCurrent` synchronously immediately
 before a process effect. The lease and invocation own its lifetime; saved copies
 do not survive release or cancellation. Use `redactOutput` at diagnostic egress.
 This capability is host-local and is never a wire environment override.
+
+`process-runtime` exports `AGENT_GIT_CONFIG_PARAMETERS` for the host-owned agent Git
+maintenance defaults. Native execution adapters append these parameters after
+resolving their own inherited Git configuration and environment filtering.
 
 `process-runtime` exports `createBoundedLineFramer` for bounded LF-delimited byte
 streams. It preserves incomplete lines and leaves CR handling to the consumer.

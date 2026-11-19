@@ -22,6 +22,11 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
+const deferCacheCollection = process.env.OPENCLAW_PR_DEFER_CACHE_COLLECTION;
+if (deferCacheCollection !== undefined && deferCacheCollection !== "1") {
+  throw new Error("OPENCLAW_PR_DEFER_CACHE_COLLECTION must be 1 or unset.");
+}
+
 // Older frozen collectors recognize neither namespace. Their PID-only policy
 // cannot safely collect an operation whose supervisor exited before its children.
 export const ANCHOR_PREFIX = "openclaw-pr-anchor-v3.";
@@ -822,9 +827,16 @@ function withCacheOwner(cache, operation, initialize, readOnly = false, recovery
   const deadline = performance.now() + 1_000;
   const pause = new Int32Array(new SharedArrayBuffer(4));
   const assertCache = () => {
-    if (!same(directory(cache), cacheIdentity)) {
-      throw new Error(`PR dependency cache directory changed; retain ${cache}`);
+    try {
+      if (same(directory(cache), cacheIdentity)) {
+        return;
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
     }
+    throw new Error(`PR dependency cache directory changed; retain ${cache}`);
   };
   // Only the atomic namespace creator may initialize. Peers wait for its DB
   // while it holds the mutex; a crashed empty namespace is never adopted.
@@ -1151,6 +1163,10 @@ export function privateDependencyDonor(root, destination) {
 
 export function collectUnusedDependencyCaches(lock, current = "") {
   const context = ledger(lock);
+  // Retained workflow versions call this export directly, without the wrapper sweep.
+  if (deferCacheCollection === "1") {
+    return [];
+  }
   let budget = 4;
   const pending = context.db
     .prepare("SELECT * FROM pending_lifetimes")
@@ -1709,6 +1725,9 @@ export function retireAnchorDependencies(anchor, retire) {
 }
 
 export function sweepDependencyCaches() {
+  if (deferCacheCollection === "1") {
+    return;
+  }
   const cache = dependencyCacheRoot();
   if (!lstatSync(cache, { throwIfNoEntry: false })) {
     return;

@@ -38,6 +38,7 @@ import {
 } from "./run-queue-requests.js";
 import {
   listCronRunQueueOwners,
+  notifyCronRunQueueTurn,
   registerCronRunQueue,
   releaseCronRunQueue,
   wakeCronRunQueues,
@@ -46,6 +47,7 @@ import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import {
   busyConversationCronJobIds,
   busyCronConversation,
+  cronMemoryAllowsExtraRun,
   preparingCronAgentIds,
 } from "./scheduler-config.js";
 import {
@@ -323,7 +325,9 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
   if (
     state.stopped ||
     (![...launchState(state).contexts.values()].some((pending) => !pending.started) &&
-      !state.store?.jobs.some((job) => job.state.queuedAtMs !== undefined))
+      !state.store?.jobs.some(
+        (job) => job.state.queuedAtMs !== undefined || job.state.runSlotWaitReceiptId !== undefined,
+      ))
   ) {
     return;
   }
@@ -363,6 +367,7 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
             schedulingPaused: state.schedulingPaused || isGatewayRestartDraining(),
             preparingAgentIds: preparingCronAgentIds(state.deps.env),
             busyConversationJobIds: busyConversationCronJobIds(state),
+            memoryAllowsExtraRun: cronMemoryAllowsExtraRun(),
             requests: getCronRunQueueRequests(state, { includePendingEvents: true }),
             hostProcessId: currentPluginCommandHostProcessId(),
             pluginCommandHosts: state.deps.resolvePluginCommandScheduleHosts?.(),
@@ -442,6 +447,7 @@ export async function launchCronRunQueueResult(
   context = captureOpenClawStateWorkerContext(),
   observedRevision = getCronJobsStoreRevision(state.deps.storeKey),
 ): Promise<void> {
+  notifyCronRunQueueTurn(state);
   if (result.launches.length || result.skipped.length) {
     const jobs = [...result.skipped, ...result.launches].flatMap(({ job }) => (job ? [job] : []));
     applyCronRuntimeRowsToState(state, jobs);

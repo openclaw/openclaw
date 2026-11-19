@@ -8,30 +8,11 @@
 }
 
 .person-activity-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px 16px 12px;
   font-size: calc(12px * var(--control-ui-text-scale));
   line-height: 1.5;
-}
-
-.person-activity-card__header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 15px 16px 12px;
-}
-
-.person-activity-card__header > div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.person-activity-card__header .viewer-avatar--footer {
-  flex-shrink: 0;
-  width: 34.5px;
-  height: 34.5px;
-  font-size: calc(12px * var(--control-ui-text-scale));
-  /* The base ring color assumes the sidebar surface; blend with the popover. */
-  border-color: var(--popover);
 }
 
 .person-activity-card h2,
@@ -40,122 +21,122 @@
   margin: 0;
 }
 
-.person-activity-card h2 {
-  overflow-wrap: anywhere;
-  font-size: calc(14px * var(--control-ui-text-scale));
-  font-weight: 600;
-  line-height: 1;
-}
-
-.person-activity-card__status {
-  display: inline-flex;
+.person-activity-card__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: 3px;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
+  gap: 10px 12px;
+  /* Identity reads as one unit; give it more room than the sections below. */
+  margin-bottom: 4px;
 }
 
-.person-activity-card__hint {
-  padding: 0 16px 12px;
+.person-activity-card__identity {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
 }
 
-.person-activity-card__status > span {
-  width: 6px;
-  height: 6px;
+.person-activity-card__avatar {
+  position: relative;
+  display: flex;
+}
+
+.person-activity-card__avatar .viewer-avatar--footer {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  font-size: calc(14px * var(--control-ui-text-scale));
+}
+
+/* Offline and unobserved presence carry no dot; the status line names them. */
+.person-activity-card__avatar[data-presence-activity]::after {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  box-sizing: content-box;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--popover);
   border-radius: var(--radius-full);
   background: var(--ok);
+  content: "";
 }
 
-.person-activity-card__status--idle > span {
+.person-activity-card__avatar[data-presence-activity="idle"]::after {
   background: var(--presence-idle);
 }
 
-.person-activity-card__status--unknown > span,
-.person-activity-card__status--offline > span {
+.person-activity-card__avatar[data-presence-activity="unknown"]::after {
   background: var(--muted);
 }
 
-.person-activity-card__facts {
-  display: grid;
-  gap: 12px;
-  padding: 0 16px 16px;
-  margin: 0;
+/* Name and metadata stay one line each; full values remain in titles. */
+.person-activity-card h2,
+.person-activity-card__status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.person-activity-card__facts > div {
-  display: grid;
-  grid-template-columns: 80px minmax(0, 1fr);
-  gap: 8px;
+.person-activity-card h2 {
+  color: var(--text-strong);
+  font-size: calc(15px * var(--control-ui-text-scale));
+  font-weight: 600;
+  line-height: 1.3;
 }
 
-.person-activity-card__facts dt,
-.person-activity-card h3 {
+.person-activity-card__status {
   color: var(--muted);
-  font-size: inherit;
-  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
 }
 
-.person-activity-card__muted,
-.person-activity-card small,
-.person-activity-card__session-age {
-  color: var(--muted);
+/* The face's spaces are narrow; widen them so two facts read as two. */
+.person-activity-card__separator {
+  padding-inline: 0.2em;
+  color: var(--text-tertiary);
 }
 
-.person-activity-card__facts dd {
-  display: grid;
-  gap: 3px;
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.person-activity-card__facts dd > span {
+.person-activity-card__clock strong {
+  color: var(--text);
   font-weight: 500;
 }
 
-.person-activity-card__facts time,
-.person-activity-card__session-age {
-  font-variant-numeric: tabular-nums;
-}
-
-.person-activity-card small {
-  display: block;
-  font-size: calc(11px * var(--control-ui-text-scale));
-}
-
-.person-activity-card__section,
-.person-activity-card footer {
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
+.person-activity-card__hint {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  line-height: 1.42;
 }
 
 .person-activity-card h3 {
-  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: calc(11px * var(--control-ui-text-scale));
+  font-weight: 400;
+  line-height: 1.92;
+}
+
+.person-activity-card__muted {
+  padding: 4.5px 0 3.5px;
+  color: var(--muted);
+  line-height: 1.42;
 }
 
 .person-activity-card__sessions {
   display: grid;
-  gap: 2px;
+  gap: 3px;
 }
 
 .person-activity-card__session {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px;
-  margin: 0 -6px;
-  border-radius: var(--radius-sm);
-  color: var(--text);
-}
-
-.person-activity-card__session-copy {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  align-items: start;
   gap: 10px;
-  width: 100%;
-  min-width: 0;
-  overflow-wrap: normal;
+  padding: 4.5px 6px;
+  margin: 0 -6px;
+  border-radius: var(--radius-sm);
+  color: var(--text-strong);
+  line-height: 1.42;
+  text-decoration: none;
 }
 
 .person-activity-card__session-name {
@@ -165,19 +146,11 @@
   font-weight: 500;
 }
 
-.person-activity-card__session-name--multiline {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow-wrap: anywhere;
-}
-
 .person-activity-card__session-name.hover-marquee {
   --hover-marquee-fade-width: 18px;
 
   white-space: nowrap;
-  color: var(--text);
+  color: var(--text-strong);
   text-overflow: clip;
 }
 
@@ -203,47 +176,39 @@
 }
 
 .person-activity-card__session-age {
-  justify-self: end;
+  color: var(--muted);
   font-size: calc(11px * var(--control-ui-text-scale));
+  font-variant-numeric: tabular-nums;
   font-weight: 400;
+  /* A short line box plus this offset shares the title's first baseline; baseline
+     alignment itself grows rows whose title is a marquee. */
+  margin-top: 3px;
+  line-height: 1.2;
   white-space: nowrap;
 }
 
-.person-activity-card__session-icon {
-  flex: none;
-  align-self: flex-start;
-  margin-top: 2px;
-  color: var(--muted);
-}
-
-.person-activity-card svg {
-  display: block;
-  width: 14px;
-  height: 14px;
-}
-
-.person-activity-card footer {
-  padding: 0;
-}
-
-.person-activity-card footer a {
+.person-activity-card__activity {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  min-height: 36px;
-  padding: 8px 16px;
-  color: var(--text);
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: var(--menu-item-radius);
+  background: var(--surface-selected);
+  color: var(--text-strong);
   font-weight: 500;
   text-decoration: none;
 }
 
-.person-activity-card a:hover {
-  background: var(--bg-hover);
+.person-activity-card__session:hover {
+  background: var(--surface-hover);
+}
+
+.person-activity-card__activity:hover {
+  background: var(--surface-selected-hover);
 }
 
 .person-activity-card a:focus-visible {
-  border-radius: var(--radius-sm);
   outline: none;
   box-shadow: var(--focus-ring);
 }

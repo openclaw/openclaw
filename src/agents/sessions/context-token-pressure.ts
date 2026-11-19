@@ -227,14 +227,64 @@ export function estimateRenderedPromptTokens(params: {
   );
 }
 
-/** Prepare fixed request costs before estimating its pending input or replacement history. */
-export function createFreshLlmBoundaryTokenEstimator(params: {
+export type MessageTokenPressureFact = {
+  tokens: number;
+  completionTokens?: number;
+  completionId?: string;
+  userIdempotencyKey?: string;
+};
+
+/** The scalar contribution of one decoded projection, not a substitute AgentMessage. */
+export function collectMessageTokenPressureFact(
+  message: AgentMessage,
+  retainCompletionUsage = false,
+): MessageTokenPressureFact {
+  const tokens = estimateMessageTokenPressure(message);
+  const fact: MessageTokenPressureFact = { tokens };
+  if (
+    message.role === "user" &&
+    "idempotencyKey" in message &&
+    typeof message.idempotencyKey === "string"
+  ) {
+    fact.userIdempotencyKey = message.idempotencyKey;
+  }
+  if (retainCompletionUsage && message.role === "assistant" && tokens !== 0) {
+    const usage = message.usage?.contextUsage;
+    const completion = usage?.state === "available" ? usage.totalTokens - usage.promptTokens : 0;
+    fact.completionTokens = Number.isFinite(completion) ? Math.max(0, completion) : 0;
+    fact.completionId = message.turnId?.trim() || message.responseId?.trim();
+  }
+  return fact;
+}
+
+function* collectMessageTokenPressureFacts(
+  messages: AgentMessage[],
+  retainCompletionUsage = false,
+) {
+  for (const message of messages) {
+    yield collectMessageTokenPressureFact(message, retainCompletionUsage);
+  }
+}
+
+type RequestEstimatorOptions = {
   systemPrompt?: string;
   tools?: readonly { name: string; description: string; parameters: unknown }[];
   retainCompletionUsage?: boolean;
   safetyMargin?: number;
   fixedTokenPressure?: FixedRequestTokenPressure;
-}) {
+};
+
+/** Prepare fixed request costs before estimating its pending input or replacement history. */
+export function createFreshLlmBoundaryTokenEstimator(params: RequestEstimatorOptions) {
+  const estimate = createLlmBoundaryTokenEstimatorFromFacts(params);
+  return (request: { messages: AgentMessage[]; prompt: string; imageCount?: number }): number =>
+    estimate({
+      ...request,
+      messages: collectMessageTokenPressureFacts(request.messages, params.retainCompletionUsage),
+    });
+}
+
+export function createLlmBoundaryTokenEstimatorFromFacts(params: RequestEstimatorOptions) {
   const safetyMargin = params.safetyMargin ?? SAFETY_MARGIN;
   const toolTokens =
     params.fixedTokenPressure?.toolTokens ?? estimateToolSchemaTokens(params.tools);
@@ -242,21 +292,27 @@ export function createFreshLlmBoundaryTokenEstimator(params: {
     ? params.fixedTokenPressure.systemTokens + MESSAGE_BOUNDARY_OVERHEAD_TOKENS
     : estimateRenderedPromptTokens({ systemPrompt: params.systemPrompt, prompt: "" });
   // Apply the safety margin once to the complete request before provider tokenization.
-  return (request: { messages: AgentMessage[]; prompt: string; imageCount?: number }): number => {
+  return (request: {
+    messages: Iterable<MessageTokenPressureFact>;
+    prompt: string;
+    imageCount?: number;
+  }): number => {
     let messageTokens = 0;
     const completions = new Map<string, { estimated: number; measured: number }>();
     for (const message of request.messages) {
-      const estimated = estimateMessageTokenPressure(message);
+      const estimated = message.tokens;
       messageTokens += estimated;
-      if (!params.retainCompletionUsage || message.role !== "assistant" || estimated === 0) {
+      if (
+        !params.retainCompletionUsage ||
+        message.completionTokens === undefined ||
+        estimated === 0
+      ) {
         continue;
       }
-      const usage = message.usage?.contextUsage;
-      const completion = usage?.state === "available" ? usage.totalTokens - usage.promptTokens : 0;
-      const measured = Number.isFinite(completion) ? Math.max(0, completion) / safetyMargin : 0;
+      const measured = message.completionTokens / safetyMargin;
       // Async prefixes share the local turn identity even when the provider ID arrives late.
       // Their visible content and terminal usage describe one completion, not extra occupancy.
-      const identity = message.turnId?.trim() || message.responseId?.trim();
+      const identity = message.completionId;
       if (identity) {
         const previous = completions.get(identity);
         completions.set(identity, {
@@ -287,30 +343,48 @@ export function estimateVariableRequestTokens(messages: AgentMessage[], prompt: 
   return estimateTokens({ messages, prompt }) - estimateTokens({ messages: [], prompt: "" });
 }
 
+type CompactionPendingBudget = {
+  pendingTokens: number;
+  pendingUserTokens?: number;
+  pendingUserIdempotencyKey?: string;
+};
+
 export function estimateCompactionHistoryTokens(
   messages: AgentMessage[],
-  budget?: {
-    pendingTokens: number;
-    pendingUserTokens?: number;
-    pendingUserIdempotencyKey?: string;
-  },
+  budget?: CompactionPendingBudget,
 ): number {
-  // A key identifies overlapping input, not proof that its content is replaced.
-  // A retained carrier can reuse a larger canonical user, so charge the larger representation.
-  const pending =
-    budget?.pendingTokens && budget.pendingUserIdempotencyKey
-      ? messages.findLast(
-          (message) =>
-            message.role === "user" &&
-            "idempotencyKey" in message &&
-            message.idempotencyKey === budget.pendingUserIdempotencyKey,
-        )
-      : undefined;
+  return estimateCompactionHistoryTokensFromFacts(
+    collectMessageTokenPressureFacts(messages),
+    budget,
+  );
+}
+
+export function estimateCompactionHistoryTokensFromFacts(
+  facts: Iterable<MessageTokenPressureFact>,
+  budget?: CompactionPendingBudget,
+): number {
+  const estimate = createLlmBoundaryTokenEstimatorFromFacts({});
+  const empty = estimate({ messages: [], prompt: "" });
+  let pending: MessageTokenPressureFact | undefined;
+  function* selectPending() {
+    for (const fact of facts) {
+      if (
+        budget?.pendingTokens &&
+        budget.pendingUserIdempotencyKey &&
+        fact.userIdempotencyKey === budget.pendingUserIdempotencyKey
+      ) {
+        pending = fact;
+      }
+      yield fact;
+    }
+  }
+  const total = estimate({ messages: selectPending(), prompt: "" }) - empty;
+  // Credit only the last matching user, capped at the recorded pending body, after rounding.
   const overlap = pending
     ? Math.min(
-        estimateCompactionHistoryTokens([pending]),
+        estimate({ messages: [pending], prompt: "" }) - empty,
         budget?.pendingUserTokens ?? budget?.pendingTokens ?? 0,
       )
     : 0;
-  return estimateVariableRequestTokens(messages, "") - overlap;
+  return total - overlap;
 }

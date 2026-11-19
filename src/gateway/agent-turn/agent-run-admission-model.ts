@@ -4,14 +4,10 @@ import { resolveSessionModelRef } from "../session-utils.js";
 import type { PrepareAgentRunDispatchParams } from "./agent-run-admission-types.js";
 
 export function resolveAgentRunAdmissionModel(params: PrepareAgentRunDispatchParams) {
-  const effectiveProviderOverride =
-    params.restoredCronContinuation?.provider ?? params.providerOverride;
-  const effectiveModelOverride = params.restoredCronContinuation?.model ?? params.modelOverride;
-  const effectiveThinking = params.restoredCronContinuation
-    ? params.restoredCronContinuation.thinking
-    : params.request.thinking;
-  const effectiveAllowModelOverride =
-    params.allowModelOverride || params.restoredCronContinuation !== undefined;
+  const effectiveProviderOverride = params.providerOverride;
+  const effectiveModelOverride = params.modelOverride;
+  const effectiveThinking = params.request.thinking;
+  const effectiveAllowModelOverride = params.allowModelOverride;
   const runtimeConfig = params.cfgForAgent ?? params.cfg;
   const sessionModel = resolveSessionModelRef(
     runtimeConfig,

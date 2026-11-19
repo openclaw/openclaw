@@ -72,6 +72,8 @@ export type SkillLibraryAuthoringCapability = {
    * requester. The definition stays; execution refuses before any library call.
    */
   turnRefusal?: string;
+  /** Set on a grant that only keeps the declaration of an earlier human turn. */
+  expired?: true;
   /** Gate for Workshop calls through the workspace-default wrapper, given the run's sandbox state. */
   assertWorkspaceCurrent?: (run?: { sandboxed?: boolean }) => void;
   bind: (context: AdmittedRunContext) => void;

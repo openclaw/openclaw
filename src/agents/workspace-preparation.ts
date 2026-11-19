@@ -1,17 +1,36 @@
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import path from "node:path";
+import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+import { resolveUserPath } from "../utils.js";
 import { DuplicateAgentError } from "./agent-create-error.js";
-import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
-import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
+import {
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_USER_FILENAME,
+} from "./workspace-bootstrap-policy.js";
+import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
+import {
+  captureWorkspaceFilesystemEvidence,
+  validateWorkspaceFilesystemEvidence,
+  type WorkspaceFilesystemEvidence,
+} from "./workspace-state-guard.js";
+import { readCanonicalWorkspaceStateSnapshot } from "./workspace-state-read.js";
 import {
   mergeWorkspaceSetupState,
   replaceWorkspaceAttestation,
   type WorkspaceAttestation,
 } from "./workspace-state-store.js";
 import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
+import { loadWorkspaceTemplate } from "./workspace-template-load.js";
 
-const preparationQueues = resolveGlobalMap<string, StoreWriterQueue>(
+const preparation = resolveGlobalSingleton(
   Symbol.for("openclaw.workspacePreparationQueues"),
+  () => ({
+    queues: new Map<string, StoreWriterQueue>(),
+    admissionTail: Promise.resolve(),
+  }),
 );
 
 // The initializer owns seeding even when ordinary turns use this workspace.
@@ -31,23 +50,67 @@ export async function settleWorkspaceBootstrapDeferral(
   await mergeWorkspaceSetupState(dir, { bootstrapDeferred: false }, undefined, options);
 }
 
-/** Keep host filesystem preparation and its worker writes in one directory's FIFO interval. */
-export function runWorkspacePreparation<T>(
+/**
+ * Give a kept agent whose initializer stopped early the ordinary default files.
+ * BOOTSTRAP.md and setup state stay with the initializer, so a later seed still applies.
+ */
+export async function seedDeferredWorkspaceDefaults(
   dir: string,
-  prepare: (assertFilesystem: () => void) => Promise<T>,
-): Promise<T> {
-  const assertFilesystem = captureWorkspaceStateFilesystemGuard(dir, false);
-  const canonicalDir = resolveCanonicalWorkspacePath(dir);
-  assertFilesystem();
-  return runQueuedStoreWrite({
-    queues: preparationQueues,
-    storePath: canonicalDir,
-    label: "Workspace preparation",
-    fn: async () => {
-      assertFilesystem();
-      return await prepare(assertFilesystem);
-    },
+  defaults?: {
+    skipBootstrap?: boolean;
+    skipOptionalBootstrapFiles?: readonly OptionalBootstrapFileName[];
+  },
+): Promise<void> {
+  const workspace = resolveUserPath(dir);
+  if (
+    defaults?.skipBootstrap ||
+    !(await readCanonicalWorkspaceStateSnapshot(workspace)).setup.bootstrapDeferred
+  ) {
+    return;
+  }
+  const skipped = new Set<string>(defaults?.skipOptionalBootstrapFiles);
+  await runWorkspacePreparation(workspace, async (filesystem) => {
+    for (const name of [
+      DEFAULT_AGENTS_FILENAME,
+      DEFAULT_SOUL_FILENAME,
+      DEFAULT_IDENTITY_FILENAME,
+      DEFAULT_USER_FILENAME,
+    ].filter((file) => !skipped.has(file))) {
+      await publishBootstrapFile(path.join(workspace, name), () => loadWorkspaceTemplate(name), {
+        filesystem: [filesystem],
+      });
+    }
   });
+}
+
+/** Keep host filesystem preparation and its worker writes in one directory's FIFO interval. */
+export async function runWorkspacePreparation<T>(
+  dir: string,
+  prepare: (filesystem: WorkspaceFilesystemEvidence) => Promise<T>,
+): Promise<T> {
+  const admission = preparation.admissionTail.then(async () => {
+    const filesystem = await captureWorkspaceFilesystemEvidence(dir);
+    // Preserve invocation order through discovery, but never hold other directories
+    // behind an admitted operation. The wrapper keeps promise adoption out of the tail.
+    return {
+      completion: runQueuedStoreWrite({
+        queues: preparation.queues,
+        storePath: filesystem.canonical,
+        label: "Workspace preparation",
+        fn: async () => {
+          await validateWorkspaceFilesystemEvidence(filesystem);
+          const result = await prepare(filesystem);
+          await validateWorkspaceFilesystemEvidence(filesystem);
+          return result;
+        },
+      }),
+    };
+  });
+  preparation.admissionTail = admission.then(
+    () => {},
+    () => {},
+  );
+  return (await admission).completion;
 }
 
 export async function maybeWriteWorkspaceAttestation(
@@ -85,6 +148,8 @@ export async function maybeWriteWorkspaceAttestation(
       assertCurrent: assertHost,
       recoveryHoldPredicate: guard?.recoveryHoldPredicate,
       beforeLegacyApply: guard?.beforeLegacyApply,
+      filesystem: guard?.filesystem,
+      stateOwnerPath: guard?.stateOwnerPath,
     });
   } catch (error) {
     if (error instanceof DuplicateAgentError) {

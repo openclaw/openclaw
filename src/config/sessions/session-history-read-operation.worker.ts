@@ -40,6 +40,43 @@ async function prepareHistoryRead(
   retainedDatabase?: OpenClawAgentReadOnlyDatabase,
 ): Promise<() => SessionTranscriptWorkerValues[SessionHistoryReadOperationRequest["kind"]]> {
   switch (request.kind) {
+    case "transcript-facts-discover": {
+      const [{ discoverTranscriptActiveFactsBackfillSessions }, { isPostgresSqlConnection }] =
+        await Promise.all([
+          import("./session-transcript-active-facts-backfill.worker.js"),
+          import("../../infra/sql-connection.js"),
+        ]);
+      const read = await prepareDatabaseRead(
+        { ...request.database, env: request.env },
+        ({ db }) =>
+          isPostgresSqlConnection(db)
+            ? { supported: false, sessions: [] }
+            : { supported: true, sessions: discoverTranscriptActiveFactsBackfillSessions(db) },
+        () => ({ supported: true, sessions: [] }),
+      );
+      return () => ({ kind: request.kind, result: read() });
+    }
+    case "transcript-facts-probe": {
+      const { probeTranscriptActiveFactsBackfill } =
+        await import("./session-transcript-active-facts-backfill.worker.js");
+      const read = await prepareDatabaseRead(
+        { ...request.database, env: request.env },
+        ({ db }) => probeTranscriptActiveFactsBackfill(db, request.cursor),
+        () => {
+          throw new Error("Transcript facts backfill database disappeared");
+        },
+        { snapshot: true },
+      );
+      return () => ({ kind: request.kind, result: read() });
+    }
+    case "agent-tool-usage": {
+      const { readAgentToolUsageInWorker } = await import("./tool-usage-read.worker.js");
+      return () => readAgentToolUsageInWorker(request);
+    }
+    case "agent-tool-usage-import": {
+      const { readAgentToolUsageImportInWorker } = await import("./tool-usage-read.worker.js");
+      return () => readAgentToolUsageImportInWorker(request);
+    }
     case "trajectory-events": {
       const { loadSqliteTrajectoryRuntimeEventRowsSync } =
         await import("../../trajectory/runtime-store.sqlite.js");

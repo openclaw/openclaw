@@ -312,8 +312,6 @@ export function createCodexAttemptServerRequestController(
           suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
           params.onToolOutcome?.({
             toolName: call.tool,
-            argsHash: "",
-            resultHash: "",
             toolCallOrdinal,
             terminalPresentation: undefined,
             presentationOnly: true,

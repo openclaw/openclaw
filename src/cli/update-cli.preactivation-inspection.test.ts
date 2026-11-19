@@ -12,6 +12,12 @@ import * as executionOwner from "./update-cli/update-command-execution.js";
 import * as contextOwner from "./update-cli/update-command-managed-context.js";
 import * as migratedOwner from "./update-cli/update-command-migrated.js";
 
+// These cases cover the in-place Git runner that Windows checkouts and package-to-Git switches use.
+vi.mock("../infra/git-release-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/git-release-paths.js")>()),
+  usesGitReleases: () => false,
+}));
+
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 const setup = createUpdateCliFixture();

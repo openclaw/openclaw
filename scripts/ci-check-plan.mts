@@ -189,6 +189,13 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
         ? [
             {
               ...row,
+              // This capability excludes frozen/release targets; downsize only measured serial graphs.
+              ...(hosted &&
+              input.extensionLintMode !== undefined &&
+              row.runner_label === "blacksmith-4vcpu-ubuntu-2404" &&
+              other.every(({ name }) => name === "extensions-test" || name === "scripts")
+                ? { runner_label: "blacksmith-2vcpu-ubuntu-2404" }
+                : {}),
               core_type_graph_names_json: JSON.stringify(centralCore.map(({ name }) => name)),
               core_type_concurrency: !hosted && input.changedCoreTestPaths ? 2 : 1,
               type_graph_names_json: JSON.stringify(other.map(({ name }) => name)),

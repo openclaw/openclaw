@@ -4,7 +4,10 @@ import type {
   GatewaySuspendHandoffResult,
   GatewaySuspendPrepareResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
+import {
+  GatewayMaintenanceResidentChangedError,
+  GatewayServiceStopUnsafeError,
+} from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { readSystemdGatewayStopTimeout } from "../../daemon/systemd-stop-policy.js";
 import { resolveReadOnlyLocalGatewayAuth } from "../../gateway/call-device-auth.js";
@@ -100,7 +103,7 @@ export async function withGatewayMaintenanceDrain<T>(
   const assertResidentCurrent = () => {
     params.assertCurrent();
     if (residentChanged) {
-      throw new Error("Gateway process changed during maintenance drain");
+      throw new GatewayMaintenanceResidentChangedError();
     }
   };
   let residentBudget: GatewayShutdownStatus | undefined;

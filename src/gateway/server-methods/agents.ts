@@ -295,9 +295,14 @@ export const agentsHandlers: GatewayRequestHandlers = {
           avatar: params.avatar,
           beforePersistentApply: () => {
             assertOwnerCurrent?.();
-            preparation?.assertCurrent();
+            preparation?.assertAuthorityCurrent();
           },
-          ...(preparation ? { expectedConfigHash: preparation.expectedConfigHash } : {}),
+          ...(preparation
+            ? {
+                expectedConfigHash: preparation.expectedConfigHash,
+                assertBeforePublish: preparation.assertCurrent,
+              }
+            : {}),
           assertIdentityInputAllowed: captureGatewayClientUploadCommitGuard({
             method: "agents.create",
             requestParams: params,

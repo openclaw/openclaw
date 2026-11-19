@@ -528,7 +528,7 @@ test.each([-3_600_000, 3_600_000])(
   },
 );
 
-test("ordinary tool default authority retains role revocation without main-thread SQL", () =>
+test("ordinary tool defaults keep admitted role policy without main-thread SQL", () =>
   withFixture(["operator.write", true, "agent"], async (fixture) => {
     const { personalAccountDefaults } = await accountAccess(fixture);
     const action = expectDefined(personalAccountDefaults, "operator default authority");
@@ -540,10 +540,10 @@ test("ordinary tool default authority retains role revocation without main-threa
       }
       sql.expectIdle();
       fixture.role.scopes = ["operator.read"];
-      expect(action.assertCurrent).toThrow(ModelAccountConnectAuthorityError);
-      // Restoring a role cannot revive the original revoked source capability.
+      expect(action.assertCurrent).not.toThrow();
+      expect(fixture.client.internal?.operatorRunAuthority?.reauthorize).toThrow();
       fixture.role.scopes = ["operator.write"];
-      expect(action.assertCurrent).toThrow(ModelAccountConnectAuthorityError);
+      expect(action.assertCurrent).not.toThrow();
     } finally {
       sql.restore();
     }

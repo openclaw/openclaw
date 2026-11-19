@@ -158,13 +158,13 @@ it("retires and restores an unavailable context-window control with its access g
     contextWindowMutationDisabledReason: "Admin only",
   });
   expect(
-    view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled,
+    view.container.querySelector<HTMLButtonElement>(".chat-controls__context-trigger")?.disabled,
   ).toBe(true);
   view.update({ contextWindowTarget: { contextWindows: [] } });
-  expect(view.container.querySelector("[data-chat-context-window-toggle]")).toBeNull();
+  expect(view.container.querySelector(".chat-controls__context-trigger")).toBeNull();
   view.update({ contextWindowTarget });
   expect(
-    view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled,
+    view.container.querySelector<HTMLButtonElement>(".chat-controls__context-trigger")?.disabled,
   ).toBe(true);
 });
 
@@ -180,22 +180,28 @@ it("refreshes context choices when a replaced session has unchanged model facts"
     contextWindowDefault: "standard",
     contextWindows,
   };
-  const onContextWindowSelect = vi.fn();
-  const view = await controls({ selectedSession, sessionsResult, onContextWindowSelect });
+  const view = await controls({ selectedSession, sessionsResult });
   const toggle = () =>
     expectDefined(
-      view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]"),
+      view.container.querySelector<HTMLButtonElement>(".chat-controls__context-trigger"),
       "context window toggle",
     );
-  expect(toggle().getAttribute("aria-checked")).toBe("false");
+  expect(toggle().getAttribute("aria-label")).toBe("Context window: Standard");
 
   view.update({ selectedSession: { ...selectedSession, contextWindow: "extended" } });
-  expect(toggle().getAttribute("aria-checked")).toBe("true");
-  toggle().click();
-  expect(onContextWindowSelect).toHaveBeenCalledExactlyOnceWith("standard", "main");
+  expect(toggle().getAttribute("aria-label")).toBe("Context window: Extended");
+  const choices = [
+    ...view.container.querySelectorAll('.chat-controls__context-options [role="menuitemradio"]'),
+  ];
+  expect(
+    choices.map((choice) => [choice.textContent, choice.getAttribute("aria-checked")]),
+  ).toEqual([
+    ["Standard", "false"],
+    ["Extended", "true"],
+  ]);
 
   view.update({ selectedSession: { ...selectedSession, contextWindows: [] } });
-  expect(view.container.querySelector("[data-chat-context-window-toggle]")).toBeNull();
+  expect(view.container.querySelector(".chat-controls__context-trigger")).toBeNull();
 });
 
 it("updates model selection against a retained and replaced catalog", async () => {
@@ -237,6 +243,53 @@ it("updates model selection against a retained and replaced catalog", async () =
   });
   expectDefined(option("other"), "refreshed model option").click();
   expect(view.onModelSelect).toHaveBeenCalledWith("example/other", "main", undefined);
+});
+
+it("prepares account headings only when the model picker opens", async () => {
+  let profileReads = 0;
+  installModelPickerLayout();
+  const sessions = createSessionsListResult({ model: "primary", modelProvider: "example" });
+  const props: Props = {
+    activeRunId: null,
+    connected: true,
+    gatewayAvailable: true,
+    loading: false,
+    modelSwitching: false,
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+    sending: false,
+    stream: null,
+    sessionKey: "main",
+    modelCatalog: [{ id: "primary", name: "Primary", provider: "example" }],
+    selectedSession: sessions.sessions[0],
+    sessionsResult: sessions,
+    modelAuthStatusResult: {
+      ts: 1,
+      providers: [
+        {
+          provider: "example",
+          displayName: "Example",
+          status: "ok",
+          get profiles() {
+            profileReads += 1;
+            return [{ profileId: "example:oauth", type: "oauth" as const, status: "ok" as const }];
+          },
+        },
+      ],
+    },
+  };
+  const [open, setOpen] = createSignal(false);
+  const view = mountSolid(() => <ChatModelControls {...props} modelPickerOpen={open()} />);
+  flush();
+  expect(profileReads).toBe(0);
+  setOpen(true);
+  await waitForSolid(() =>
+    expect(
+      view.container.querySelector(
+        '[data-chat-model-provider-group="example"] .chat-controls__auth-meta-label',
+      )?.textContent,
+    ).toBe("Subscription"),
+  );
+  expect(profileReads).toBeGreaterThan(0);
 });
 
 it("refreshes provider account labels when the locale changes without new props", async () => {
@@ -471,10 +524,14 @@ it.each(["api_key", "oauth"] as const)(
         ],
       },
     });
+    view.container
+      .querySelector<HTMLButtonElement>('[data-chat-model-provider-toggle="anthropic"]')!
+      .click();
+    flush();
     expect(
       view.container.querySelector(
-        '[data-chat-model-provider-group="claude-cli"] .chat-controls__auth-meta-label',
+        '[data-chat-model-provider-group="anthropic"] .chat-controls__auth-meta-label',
       )?.textContent,
-    ).toBe(type === "api_key" ? "API" : "Saved subscription");
+    ).toBe(type === "api_key" ? "API key" : "Saved subscription");
   },
 );

@@ -1,0 +1,2 @@
+# Regression: native transcript input stays nonblocking while sibling controls forward wheel scrolling.
+80

@@ -12,7 +12,8 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import * as coreCodingTools from "./core-coding-tools.js";
 import * as pluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import { prepareCoreToolPolicy, projectAgentToolDefinition } from "./prepared-tool-surface.js";
+import { projectAgentToolDefinition } from "./prepared-tool-definition.js";
+import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

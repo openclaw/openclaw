@@ -462,7 +462,8 @@ defineDiscordVoiceTests((harness) => {
         );
       } else if (dispatch === "control") {
         expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledExactlyOnceWith({
-          getToolAuthorityOverlay: expect.any(Function),
+          assertCurrent: expect.any(Function),
+          getToolAuthorityOverlayAsync: expect.any(Function),
           sessionKey,
           text: texts.join("\n"),
         });

@@ -14,7 +14,6 @@ import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configur
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 import { buildAgentHarnessBasePrompt } from "./system-prompt-harness-base.js";
-import * as systemPrompt from "./system-prompt.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 vi.mock("../tts/tts-settings.js", async (importOriginal) => ({
@@ -191,6 +190,70 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt.includes("/status shows when enabled.")).toBe(enabled);
   });
 
+  it.each([
+    { toolNames: ["exec"] },
+    { toolNames: ["exec", "openclaw"] },
+    { toolNames: ["exec", "gateway", "openclaw"] },
+    { toolNames: ["gateway", "openclaw"] },
+  ])(
+    "describes maintenance without forcing an update method with tools $toolNames",
+    async ({ toolNames }) => {
+      const config: OpenClawConfig = { commands: { restart: false } };
+      const prompts = [
+        await buildPrompt({ config, toolNames }),
+        buildAgentHarnessBasePrompt({ config, toolNames }),
+      ];
+      for (const prompt of prompts) {
+        expect(prompt).not.toContain("maintenance tools, not exec or detached jobs");
+        expect(prompt).not.toContain("perform the work with `gateway`");
+        expect(prompt).not.toContain("restart, config, channels");
+        expect(prompt).not.toContain("For an update request, use the Control UI");
+        expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
+        expect(prompt).toContain("The Gateway must retain a working restart path before it stops");
+        expect(prompt).toContain(
+          "If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization or retry the denied operation through exec",
+        );
+        expect(prompt.includes("`gateway`: update.run updates with supervised restart")).toBe(
+          toolNames.includes("gateway"),
+        );
+      }
+    },
+  );
+
+  it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
+    "keeps bounded local config recovery available with tools $toolNames",
+    async ({ toolNames }) => {
+      for (const prompt of [
+        await buildPrompt({ toolNames }),
+        buildAgentHarnessBasePrompt({ toolNames }),
+      ]) {
+        expect(prompt).toContain("blocks an explicitly requested local repair");
+        expect(prompt).toContain("use available file/exec tools within their existing permissions");
+        expect(prompt).toContain("preserve a rollback copy");
+        expect(prompt).toContain("validate and read back");
+        expect(prompt).toContain(
+          "Recovery must not override an approval decision, readonly config, containment, or disabled tools",
+        );
+        expect(prompt).toContain(
+          "Do not use this fallback to change access, approval, or ownership policies",
+        );
+        expect(prompt).not.toContain("These commands do not need helper inference");
+      }
+    },
+  );
+
+  it("teaches exact config recovery on regular and native harness surfaces", async () => {
+    const toolNames = ["openclaw", "exec"];
+    for (const prompt of [
+      await buildPrompt({ toolNames }),
+      buildAgentHarnessBasePrompt({ toolNames }),
+    ]) {
+      expect(prompt).toContain("config set <path> <value>");
+      expect(prompt).toContain("These commands do not need helper inference");
+      expect(prompt).toContain("existing approval and config-write checks still apply");
+    }
+  });
+
   it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
     "does not recommend disabled update or restart commands with tools $toolNames",
     async ({ toolNames }) => {
@@ -200,7 +263,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       });
       expect(disabled).not.toContain("`/update`");
       expect(disabled).not.toContain("`/restart`");
-      expect(disabled).toContain("maintenance tools, not exec or detached jobs");
+      expect(disabled).toContain("The Gateway must retain a working restart path before it stops");
       expect(disabled).toContain("Toggle /reasoning; /status shows when enabled.");
       const enabled = await buildPrompt({ toolNames, config: {} });
       expect(enabled).toContain("`/update`");
@@ -415,7 +478,6 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     { name: "absent", config: undefined },
     { name: "empty", config: {} },
   ])("preserves owner display semantics with $name config", async ({ config }) => {
-    const render = vi.spyOn(systemPrompt, "buildAgentSystemPrompt");
     const prompt = await buildPrompt({
       config,
       ownerNumbers: ["owner-a"],
@@ -423,17 +485,12 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       ownerDisplaySecret: "caller-secret", // pragma: allowlist secret
     });
 
-    expect(render).toHaveBeenCalledTimes(1);
-    const renderParams = render.mock.calls[0]?.[0];
-    expect(Object.hasOwn(renderParams ?? {}, "ownerDisplay")).toBe(true);
-    expect(Object.hasOwn(renderParams ?? {}, "ownerDisplaySecret")).toBe(true);
-    expect(renderParams?.ownerDisplay).toBe(config ? "raw" : "hash");
-    expect(renderParams?.ownerDisplaySecret).toBe(config ? undefined : "caller-secret");
-    expect(prompt).toMatch(
+    expect(prompt).toContain(
       config
-        ? /Allowlisted senders: owner-a\. Allowlisted != owner\./
-        : /Allowlisted senders: [a-f0-9]{12}\. Allowlisted != owner\./,
+        ? "Allowlisted senders: owner-a. Allowlisted != owner."
+        : "Allowlisted senders: 5e50de41a7a7. Allowlisted != owner.",
     );
+    expect(prompt).not.toContain("caller-secret");
   });
 
   const prefer = { subagents: { delegationMode: "prefer" as const } };

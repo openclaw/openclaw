@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
@@ -8,8 +7,6 @@ import {
   assertContextEngineHostSupport,
   buildGenericCliContextEngineHostSupport,
 } from "../../context-engine/host-compat.js";
-import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
-import { resolveContextEngine } from "../../context-engine/registry.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   bindMcpLoopbackClientGrantAdmission,
@@ -39,7 +36,6 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { readRunOperatorAuthority } from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
@@ -77,9 +73,6 @@ import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
 } from "../command/attempt-execution.helpers.js";
-import { resolveContextWindowInfo } from "../context-window-guard.js";
-import { resolveContextTokensForModel } from "../context.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import {
   resolvePromptBuildHookResult,
   type ResolvedPromptBuildHookResult,
@@ -89,14 +82,12 @@ import {
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skills.js";
-import { beginContextEngineLogicalTurn } from "../harness/context-engine-turn-begin.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
-import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
-import { resolveModelContextWindowProfile } from "../model-context-window.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
 import { createUnrecordedScheduledAccountRefusal } from "../scheduled-unrecorded-account.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
+import { resolveStableCliSkillAuthoring } from "../stable-skill-authoring.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { assertNativeCronCreatorCapabilities } from "../tools/cron-tool-creator-cap.js";
@@ -121,10 +112,11 @@ import {
 } from "./bundle-mcp-claude.js";
 import { prepareCliBundleMcpConfig, resolveCliNativeWebSearchEnabled } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
-import { runCliCleanup, sequenceCliCleanups, throwCliPreparationFailure } from "./cleanup.js";
+import { sequenceCliCleanups, throwCliPreparationFailure } from "./cleanup.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
 import { resolveCliSessionId } from "./cli-run-recovery.js";
+import { prepareCliContextEngine } from "./context-engine-turn.js";
 import {
   resolveCliExecutionTarget,
   retainCliPluginExecutionConsumer,
@@ -136,7 +128,7 @@ import { cliBackendLog } from "./log.js";
 import { prepareCliLoopbackBundleMcp } from "./loopback-bundle-mcp.js";
 import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
-import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
+import { resolveCliModelCapabilities } from "./model-capabilities.js";
 import { detectNodeClaudePlacement } from "./prepare-claude.js";
 import { prepareCliTurnHookContext, runCliAuthorizedPromptBuild } from "./prepare-hook-context.js";
 import * as mcp from "./prepare-mcp.js";
@@ -167,7 +159,6 @@ import {
   loadCliSessionPromptContext,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
-import { resolveStableCliSkillAuthoring } from "./stable-skill-authoring.js";
 import { captureCliRunToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
@@ -568,70 +559,15 @@ async function prepareCliRunContextWithinReadFence(
   // CLI's own menu resolves it to; OpenClaw keeps no alias table of its own.
   const requestedContextModelId = params.nativeModelId ?? modelId;
   const normalizedContextModelId = params.nativeModelId ?? normalizedCatalogModel;
-  // Aliases can map a canonical id to a CLI shorthand or a user shorthand to
-  // a canonical id. Resolve both identities and keep the safest owned limit.
-  const contextModelIds = uniqueStrings([requestedContextModelId, normalizedContextModelId]);
-  const contextTokenCandidates = contextModelIds
-    .map((model) =>
-      resolveContextTokensForModel({
-        cfg: params.config,
-        provider: params.provider,
-        modelProvider: backendResolved.modelProvider,
-        model,
-        modelContextWindow: params.modelContextWindow,
-        modelContextTokens: params.modelContextTokens,
-        allowAsyncLoad: false,
-        // A same-name API model may have a different native window from this CLI runtime.
-        allowUnscopedModelLookup: false,
-      }),
-    )
-    .filter((tokens) => tokens !== undefined);
-  let modelContextTokens = contextTokenCandidates.length
-    ? Math.min(...contextTokenCandidates)
-    : DEFAULT_CONTEXT_TOKENS;
-  // Session-selectable context windows (catalog `contextWindows`, e.g. Claude
-  // CLI 200k/1m) cap the resolved window here: the fixed provider contract in
-  // resolveAnthropicFixedContextWindow deliberately ignores catalog scalars,
-  // so the selected (or default) option must apply after it or a 200k session
-  // would auto-compact against a 1M budget.
-  const modelCatalog = overlayConfiguredModelCatalog({
-    catalog: loadManifestModelCatalog({ config: runConfig, workspaceDir }),
-    config: runConfig,
+  const { contextWindowInfo, providerThinkingLevel } = resolveCliModelCapabilities({
+    run: params,
+    runConfig,
     workspaceDir,
-  });
-  const { selectableContextEntry, providerThinkingLevel } = resolveCliCatalogCapabilities({
-    catalog: modelCatalog,
-    provider: params.provider,
-    modelProvider: backendResolved.modelProvider,
+    backend: backendResolved,
     modelId,
     normalizedModel: normalizedCatalogModel,
-    agentRuntime: backendResolved.id,
-    thinkLevel: params.thinkLevel,
+    contextModelIds: [requestedContextModelId, normalizedContextModelId],
   });
-  if (selectableContextEntry) {
-    const contextWindowProfile = resolveModelContextWindowProfile({
-      catalogEntry: selectableContextEntry,
-      selected: params.contextWindow,
-    });
-    // Only an effective option caps the window; the bare catalog scalar stays
-    // subordinate to the fixed provider contract above.
-    if (contextWindowProfile.contextWindow && contextWindowProfile.contextTokens !== undefined) {
-      modelContextTokens = Math.min(modelContextTokens, contextWindowProfile.contextTokens);
-    }
-  }
-  const resolvedContextWindowInfo = resolveContextWindowInfo({
-    cfg: params.config,
-    provider: params.provider,
-    modelId,
-    modelContextTokens,
-    defaultTokens: DEFAULT_CONTEXT_TOKENS,
-  });
-  // The generic guard rechecks the requested id in config. An alias target may
-  // have a tighter owned limit, so the alias-aware result remains an upper bound.
-  const contextWindowInfo =
-    resolvedContextWindowInfo.tokens > modelContextTokens
-      ? { tokens: modelContextTokens, source: "model" as const }
-      : resolvedContextWindowInfo;
   let openClawHistoryMessages: unknown[] | undefined;
   const { turnAudience, promptBuildHookContext } = await prepareCliTurnHookContext(
     { ...params, config: runConfig },
@@ -678,7 +614,7 @@ async function prepareCliRunContextWithinReadFence(
   const canonicalWorkspace = resolveUserPath(
     resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
   );
-  const bootstrapWorkspaceDir = resolveRunBootstrapWorkspaceDir(
+  const bootstrapWorkspaceDir = await resolveRunBootstrapWorkspaceDir(
     { ...params, ...workspaceResolution, sessionRoot: params.sessionEntry?.sessionRoot },
     params.bootstrapWorkspaceDir ?? canonicalWorkspace,
   );
@@ -1415,7 +1351,7 @@ async function prepareCliRunContextWithinReadFence(
             skillsPrompt: preparedSkills.prompt,
             tools: promptTools,
             contextFiles,
-            bootstrapMode,
+            bootstrap: bootstrapRouting,
             bootstrapTruncationNotice,
             modelDisplay,
             agentId: sessionAgentId,
@@ -1696,49 +1632,22 @@ async function prepareCliRunContextWithinReadFence(
       backendId: backendResolved.id,
       capabilities: backendResolved.contextEngineHostCapabilities,
     });
-    let resolvedContextEngine;
-    let deferContextEngineDisposalUntil: PreparedCliRunContext["deferContextEngineDisposalUntil"] =
-      params.contextEngineLogicalTurnLease?.deferDisposalUntil;
-    if (params.contextEngineLogicalTurnLease) {
-      const effective = await beginContextEngineLogicalTurn({
-        lease: params.contextEngineLogicalTurnLease,
-        host: contextEngineHostSupport,
-        recorder: params.userTurnTranscriptRecorder,
-        sessionTarget: params.sessionTarget,
-      });
-      resolvedContextEngine = effective.engine;
-    } else {
-      const trackDisposal = captureAsyncWorkTracker();
-      const ownedEngine = await resolveContextEngine(runConfig, {
-        initialize: ensureContextEnginesInitialized,
-        agentDir: contextEngineAgentDir,
-        workspaceDir,
-      });
-      resolvedContextEngine = ownedEngine;
-      const disposalHolds = new Set<Promise<void>>();
-      deferContextEngineDisposalUntil = (promise: Promise<void>) => {
-        disposalHolds.add(promise);
-        void promise.finally(() => disposalHolds.delete(promise)).catch(() => {});
-      };
-      cleanupPreparedResources = sequenceCliCleanups(async () => {
-        if (disposalHolds.size > 0) {
-          // Queued maintenance may need this foreground turn to release its lane first.
-          void trackDisposal(async () => {
-            await Promise.allSettled(disposalHolds);
-            await runCliCleanup(params, "cli-context-engine-release", async () => {
-              await ownedEngine.dispose?.();
-            });
-          }).catch((error: unknown) => {
-            cliBackendLog.warn(`CLI context engine cleanup failed: ${String(error)}`);
-          });
-        } else {
-          await ownedEngine.dispose?.();
-        }
-      }, cleanupPreparedResources);
+    const preparedContextEngine = await prepareCliContextEngine({
+      run: params,
+      config: runConfig,
+      agentDir: contextEngineAgentDir,
+      workspaceDir,
+      host: contextEngineHostSupport,
+    });
+    if (preparedContextEngine.cleanup) {
+      cleanupPreparedResources = sequenceCliCleanups(
+        preparedContextEngine.cleanup,
+        cleanupPreparedResources,
+      );
       preparedBackendFinal.cleanup = cleanupPreparedResources;
     }
     const contextEngine =
-      resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
+      preparedContextEngine.engine.info.id !== "legacy" ? preparedContextEngine.engine : undefined;
     if (contextEngine) {
       assertContextEngineHostSupport({
         contextEngine,
@@ -1755,7 +1664,7 @@ async function prepareCliRunContextWithinReadFence(
         : {}),
       hadSessionFile,
       contextEngine,
-      deferContextEngineDisposalUntil,
+      deferContextEngineDisposalUntil: preparedContextEngine.deferDisposalUntil,
       contextEngineTurnPrompt: params.transcriptPrompt ?? params.prompt,
       ...(promptContext ? { promptContext } : {}),
       ...(promptForHooks !== undefined ? { promptForHooks } : {}),

@@ -878,21 +878,7 @@ export function createPublicationObservations(source, observations) {
   });
 }
 
-export function createPublicationAdmission(
-  source,
-  observations,
-  artifact,
-  admittedAt,
-  { workflowPath = ".github/workflows/full-release-validation.yml" } = {},
-) {
-  if (
-    ![
-      ".github/workflows/full-release-validation.yml",
-      ".github/workflows/full-release-receipt-recovery.yml",
-    ].includes(workflowPath)
-  ) {
-    throw new Error("unsupported publication admission workflow");
-  }
+export function createPublicationAdmission(source, observations, artifact, admittedAt) {
   const admission = {
     observations,
     binding: {
@@ -902,7 +888,7 @@ export function createPublicationAdmission(
       parentRunId: source.runId,
       parentRunAttempt: source.runAttempt,
       workflow: {
-        path: workflowPath,
+        path: ".github/workflows/full-release-validation.yml",
         event: "workflow_dispatch",
         ...source.workflow,
       },
@@ -913,15 +899,12 @@ export function createPublicationAdmission(
       status: "admitted-for-validation",
     },
   };
-  return validatePublicationAdmissionBinding(
-    {
-      sourceAdmissionContract: FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
-      sourceAdmission: source,
-      publicationAdmissionContract: FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
-      publicationAdmission: admission,
-    },
-    { workflowPath },
-  );
+  return validatePublicationAdmissionBinding({
+    sourceAdmissionContract: FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
+    sourceAdmission: source,
+    publicationAdmissionContract: FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
+    publicationAdmission: admission,
+  });
 }
 
 export function validatePublicationAdmissionBinding(record, expected = {}) {
@@ -982,8 +965,7 @@ export function validatePublicationAdmissionBinding(record, expected = {}) {
     binding.repository !== source.repository ||
     binding.parentRunId !== source.runId ||
     binding.parentRunAttempt !== source.runAttempt ||
-    binding.workflow.path !==
-      (expected.workflowPath ?? ".github/workflows/full-release-validation.yml") ||
+    binding.workflow.path !== ".github/workflows/full-release-validation.yml" ||
     binding.workflow.event !== "workflow_dispatch" ||
     binding.workflow.ref !== source.workflow.ref ||
     binding.workflow.sha !== source.workflow.sha ||

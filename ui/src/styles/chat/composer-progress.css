@@ -451,17 +451,6 @@
   backdrop-filter: blur(8px);
 }
 
-.agent-chat__goal-float
-  :is(
-    .agent-chat__goal--blocked,
-    .agent-chat__goal--budget_limited,
-    .agent-chat__goal--usage_limited
-  ) {
-  color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 10%, var(--card));
-  border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
-}
-
 .agent-chat__goal-float .agent-chat__goal-row,
 .session-progress-card__summary {
   /* The surrounding card supplies the two border pixels. */
@@ -693,18 +682,6 @@
     .session-progress-card__summary-count:is([data-outcome="failed"], [data-outcome="timeout"]) {
     color: var(--danger);
   }
-}
-
-.agent-chat__goal-float .agent-chat__goal--blocked {
-  border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
-  background:
-    radial-gradient(
-      circle at 92% 0%,
-      color-mix(in srgb, var(--warn) 13%, transparent),
-      transparent 42%
-    ),
-    color-mix(in srgb, var(--warn) 8%, var(--composer-attached-surface));
-  box-shadow: 7px -7px 20px -18px color-mix(in srgb, var(--warn) 45%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {

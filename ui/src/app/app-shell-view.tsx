@@ -104,10 +104,29 @@ export function ApplicationShell(props: {
     };
   });
   const [navResizing, setNavResizing] = createSignal(false);
+  // Plugin pages decide their sidebar from plugin navigation, which arrives after the route.
+  const [pluginRevision, setPluginRevision] = createSignal(0);
+  onSettled(() =>
+    props.host.context?.plugins.subscribe(() => setPluginRevision((value) => value + 1)),
+  );
   const view = createMemo(() => {
     props.host.shellRevision();
+    pluginRevision();
     return readShellView(props.host);
   });
+  // A page with a sidebar opens it at once after a page without one. Its next collapse
+  // change clears this, so the explicit toggle keeps its motion.
+  const navPageShown = createMemo<{ hidden: boolean; collapsed: boolean; instant: boolean }>(
+    (previous) => {
+      const { navPageHidden: hidden, navCollapsed: collapsed } = view();
+      const opened = previous?.hidden === true && !hidden;
+      return {
+        hidden,
+        collapsed,
+        instant: opened || (previous?.collapsed === collapsed && previous.instant),
+      };
+    },
+  );
   // Single-attribute bindings lack an equality guard; resize-only updates keep inert unchanged.
   const navBackdropInert = createMemo(() => !view().navDrawerOpen);
   const settingsSaveStatusInert = createMemo(() => view().mobileNavLayout && view().navDrawerOpen);
@@ -117,7 +136,9 @@ export function ApplicationShell(props: {
   );
   const shellConnectionStatus = createMemo(() => view().shellConnectionStatus);
   const footerStatus = createMemo(() =>
-    shellConnectionStatus() || view().connectionRecovery ? view().gatewayStatus : null,
+    view().chromeGatewayStatus.kind && (shellConnectionStatus() || view().connectionRecovery)
+      ? view().chromeGatewayStatus
+      : null,
   );
   function NavigationFallback() {
     return (
@@ -134,6 +155,9 @@ export function ApplicationShell(props: {
     );
   }
   const connectionAnnouncement = createMemo(() => {
+    if (view().floatingUpdateCard.refreshRequired) {
+      return "";
+    }
     const kind = shellConnectionStatus();
     return kind
       ? gatewayStatusLabel(kind, view().gatewayStatus.queuedCount)
@@ -164,6 +188,8 @@ export function ApplicationShell(props: {
             "shell--chat": view().chatLikeRoute,
             "shell--session": view().sessionRoute,
             "shell--nav-collapsed": view().navCollapsed,
+            "shell--nav-page-hidden": view().navPageHidden,
+            "shell--nav-page-shown": navPageShown().instant,
             "shell--mobile-nav": view().mobileNavLayout,
             "shell--merged-chat-chrome": view().mergedChatChrome,
             "shell--floating-header": view().floatingHeader,
@@ -425,6 +451,7 @@ export function ApplicationShell(props: {
               "content--systems": view().activeRoute === "systems",
               "content--custodian": view().activeRoute === "custodian",
               "content--workboard": view().workboardLayout,
+              "content--refresh-notice": view().floatingUpdateCard.refreshRequired,
             },
           ]}
           ref={(element) => {

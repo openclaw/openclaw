@@ -64,7 +64,6 @@ import {
   getLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
-import { withCodexAppServerGitConfig } from "./transport-stdio.js";
 
 export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
   const attemptStartedAt = Date.now();
@@ -212,18 +211,12 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       : baseShellEnvironment;
     // Tool lookup must not reject native login requests. Codex owns profile and
     // snapshot startup; only the identity restrictions above disable login.
-    const prepared = shellEnvironment
+    return shellEnvironment
       ? {
           ...appServer,
           start: { ...appServer.start, env: { ...appServer.start.env, ...shellEnvironment } },
         }
       : appServer;
-    return shellGitConfigParameters
-      ? {
-          ...prepared,
-          start: withCodexAppServerGitConfig(prepared.start, shellGitConfigParameters),
-        }
-      : prepared;
   };
   let bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,

@@ -7,6 +7,7 @@ import {
   expectComplete,
 } from "../../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
 import { toPluginCronChangedEvent } from "../../gateway/server-cron-plugin-job.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -20,30 +21,17 @@ const runTurn = ({
   runCronIsolatedAgentTurn(
     makeIsolatedAgentParamsFixture({ ...overrides, job: makeIsolatedAgentJobFixture(job) }),
   );
-function mockAgentRun({
-  provider = "anthropic",
-  model = "claude-opus-4-8",
-  usage = { input: 10, output: 0 },
-  meta = {},
-  ...result
-}: {
-  provider?: string;
-  model?: string;
-  usage?: { input: number; output: number };
-  meta?: Record<string, unknown>;
-  [key: string]: unknown;
-} = {}) {
+function mockAgentRun(result: Record<string, unknown> = {}) {
   harness.runWithModelFallbackMock.mockResolvedValueOnce({
-    result: { result: { payloads: [], ...result, meta: { agentMeta: { usage }, ...meta } } },
-    provider,
-    model,
+    result: { result: { payloads: [], meta: {}, ...result } },
+    provider: "anthropic",
+    model: "claude-opus-4-8",
     attempts: [],
   });
 }
 function mockChildRun(payloads: unknown[] = [], collector = true, meta = {}) {
   mockAgentRun({
     payloads,
-    usage: { input: 10, output: 1 },
     meta,
     acceptedSessionSpawns: [
       { runId: "run-child", childSessionKey: "agent:default:child", collector },
@@ -162,22 +150,30 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     },
   );
 
-  it("preserves a run-level error with partial text when delivery is pending", async () => {
-    mockAgentRun({
-      provider: "openai",
-      model: "gpt-5.4",
-      usage: { input: 0, output: 0 },
-      payloads: [{ text: "Partial success-looking text" }],
-      meta: { error: { kind: "retry_limit", message: "retry limit exceeded" } },
+  it("publishes a failed recovery's error over the precheck's overflow and keeps it as the run error when delivery is pending", async () => {
+    harness.mockRunCronFallbackPassthrough();
+    const message = "Auto-compaction could not reach the model provider.";
+    harness.runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
+      const errorObservation = { failoverReason: "context_overflow" };
+      const data = { phase: "finishing", error: "context length exceeded", errorObservation };
+      params.onAgentEvent({ stream: "lifecycle", data });
+      return {
+        payloads: [{ text: "Partial success-looking text" }],
+        meta: { error: { kind: "compaction_failure", message } },
+      };
     });
+    const terminals: Record<string, unknown>[] = [];
+    const stop = onAgentEvent((evt) => evt.data.phase === "error" && terminals.push(evt.data));
     mockDelivery({
       disposition: { kind: "pending" },
       deliveryError: "delivery failed",
       summary: "Pending child summary",
       outputText: "Pending child output",
     });
-    const result = await runTurn();
-    const expectedError = "cron isolated run failed: retry limit exceeded";
+    const result = await runTurn().finally(stop);
+    const notice = { error: message, errorNotice: message, errorObservation: undefined };
+    expect(terminals).toEqual([expect.objectContaining(notice)]);
+    const expectedError = `cron isolated run failed: ${message}`;
     expectObjectFields(result, {
       status: "error",
       error: expectedError,
@@ -196,7 +192,6 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       await useRealOutcome();
       mockAgentRun({
         payloads: failed ? [{ text: "⚠️ 🛠️ Bash failed: mount unavailable", isError: true }] : [],
-        usage: { input: 10, output: failed ? 0 : 1 },
         meta: { terminalReply: { disposition: "silent" } },
       });
       const result = await runTurn();

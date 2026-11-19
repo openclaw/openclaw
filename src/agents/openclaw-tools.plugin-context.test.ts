@@ -52,7 +52,7 @@ it("forwards one host-minted memory audience and its currency assertion", async 
     "memory audience is bound to a different session",
   );
 
-  fakeSessionOwner.rows.set(sessionKey, { ...entry, sessionId: randomUUID() });
+  fakeSessionOwner.rows.set(sessionKey, { ...entry, lifecycleRevision: randomUUID() });
   expect(() => result.assertMemoryAudienceCurrent!()).toThrow(
     "memory audience is no longer current",
   );

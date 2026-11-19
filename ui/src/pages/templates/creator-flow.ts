@@ -13,7 +13,6 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import { registerTemplateCreatorEnglish } from "../../i18n/locales/en-template-creator.ts";
-import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -31,6 +30,7 @@ import {
   type TemplateReviewTarget,
 } from "./creator-publication.ts";
 import { canCreateTemplateDraft } from "./draft-navigation.ts";
+import { readTemplatePackagePreview } from "./template-package-preview.ts";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
 registerEnglishCatalog(registerTemplateCreatorEnglish);
@@ -510,53 +510,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
     if (!target || !review?.items.includes(item) || !item.requirement) {
       return null;
     }
-    const requirement = item.requirement;
-    if (requirement.source === "bundled") {
-      return {
-        content:
-          item.kind === "skill"
-            ? review.files.find((file) => file.path === `${requirement.path}/SKILL.md`)?.content
-            : undefined,
-      };
-    }
-    const { ref, version } = requirement;
-    let preview: TemplatePackagePreview;
-    if (item.kind === "skill") {
-      const result = await target.client.request<{
-        skill?: { summary?: string | null } | null;
-        card?: { status: "available"; content: string } | { status: "unavailable" };
-      }>("skills.detail", { slug: ref, version });
-      preview = {
-        description: result.skill?.summary,
-        content: result.card?.status === "available" ? result.card.content : undefined,
-      };
-    } else if (item.kind === "plugin") {
-      // Catalog IDs are the Gateway's ch_ + base64url encoding of the validated package ref.
-      const id =
-        "ch_" +
-        bytesToBase64(new TextEncoder().encode(ref))
-          .replaceAll("+", "-")
-          .replaceAll("/", "_")
-          .replace(/[=]+$/u, "");
-      const result = await target.client.request<{
-        plugin: { catalog: { summary?: string } };
-        detail: {
-          origin: string;
-          packageName?: string;
-          selectedRelease?: { version: string } | null;
-          remoteError?: string;
-        };
-      }>("plugins.catalog.get", { id, version });
-      preview =
-        result.detail.origin === "clawhub" &&
-        result.detail.packageName === ref &&
-        result.detail.selectedRelease?.version === version &&
-        !result.detail.remoteError
-          ? { description: result.plugin.catalog.summary }
-          : {};
-    } else {
-      return null;
-    }
+    const preview = await readTemplatePackagePreview(target.client, review.files, item);
     return this.current(target, generation) && this.review === review ? preview : null;
   }
 

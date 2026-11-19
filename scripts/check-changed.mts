@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import nodeModule from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -168,12 +169,6 @@ const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/(?:src\/.+|public\/themes\/[^/]+)\.css$/u;
 const TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
-const ANDROID_VERSION_SYNC_PATHS = new Set([
-  "apps/android/CHANGELOG.md",
-  "apps/android/Config/Version.properties",
-  "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
-  "apps/android/version.json",
-]);
 const SWIFT_BUILD_CACHE_METADATA_TEST_PATH = "test/scripts/swift-build-cache-metadata.test.ts";
 const MACOS_APP_CI_PATH_RE =
   /^(?:apps\/(?:macos\/(?!Tests\/.+\.swift$)|(?:macos-mlx-tts|shared|swabble)\/)|Swabble\/|src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$)/u;
@@ -193,10 +188,6 @@ async function ensureChangedCheckRuntimeDependencies(paths: string[]) {
 // delays package-backed imports until after lane and remote-routing selection.
 if (!isDirectRun()) {
   await ensureChangedCheckRuntimeDependencies(["package.json"]);
-}
-
-function hasAndroidVersionSyncPath(paths: string[]) {
-  return paths.some((changedPath) => ANDROID_VERSION_SYNC_PATHS.has(changedPath));
 }
 
 function hasMacosAppCiPath(paths: string[]) {
@@ -1013,7 +1004,6 @@ export function createChangedCheckPlan(
     !typecheckResult.paths.every((file) => getChangedPathFacts(file).surface === "docs")
       ? lanes
       : typecheckResult.lanes;
-  const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
 
   // Typechecking alone accepts extension imports; the graph guard also covers
   // shared test/tooling dependencies that core tests can pull into their graph.
@@ -1050,14 +1040,9 @@ export function createChangedCheckPlan(
     ]);
     // Metadata selectors bind Git/index bytes; artifact checks inspect the working tree.
     add("release changelog artifacts", ["changelog:check"]);
-    add("Android version sync", ["android:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
     add("root dependency ownership", ["deps:root-ownership:check"]);
     return finishPlan("release metadata");
-  }
-
-  if (shouldRunAndroidVersionSync) {
-    add("Android version sync", ["android:version:check"]);
   }
 
   if (runAll) {
@@ -1401,10 +1386,24 @@ export async function resolveChangedOxlintFileScope(
   if (!changedFiles.every((file) => isOxlintSourcePath(file, cwd) || rootTest(file))) {
     return undefined;
   }
-  // Declarations can affect consumers without import edges. Match the keyword
-  // so comments between declare and global/module cannot hide an augmentation.
-  const hasAmbientImpact = (file: string) =>
-    /\.d\.[cm]?ts$/u.test(file) || /\bdeclare\b/u.test(readFileSync(path.join(cwd, file), "utf8"));
+  // Declarations can affect consumers without import edges. Strip mode preserves
+  // offsets: erased matches stay conservative; comments and runtime strings do not.
+  const hasAmbientImpact = (file: string) => {
+    if (/\.d\.[cm]?ts$/u.test(file)) {
+      return true;
+    }
+    const source = readFileSync(path.join(cwd, file), "utf8");
+    const matches = [...source.matchAll(/\bdeclare\b/gu)];
+    if (matches.length === 0) {
+      return false;
+    }
+    try {
+      const stripped = nodeModule.stripTypeScriptTypes(source, { mode: "strip" });
+      return matches.some(({ index }) => stripped.slice(index, index + 7) !== "declare");
+    } catch {
+      return true;
+    }
+  };
   if (changedFiles.some(hasAmbientImpact)) {
     return undefined;
   }

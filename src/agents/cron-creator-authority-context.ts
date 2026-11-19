@@ -5,14 +5,17 @@ import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-polic
 import {
   CRON_MANAGEMENT_METHODS,
   createCronCreatorAuthorityRunScope,
-  hasCronChannelRequester,
+  hasCronAuthenticatedRequester,
   isCronModelManagementAllowed,
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
-  type CronCreatorAuthorityRunScope,
-  type CronManagementEntitlement,
 } from "../gateway/cron-creator-authority-grant.js";
-import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
+import type {
+  CronAuthenticatedChannelRequester,
+  CronCreatorAuthorityCapability,
+  CronCreatorAuthorityRunScope,
+  CronManagementEntitlement,
+} from "../gateway/cron-creator-authority-grant.types.js";
 import {
   getAgentRunContext,
   validateAgentRunDelegatedAuthority,
@@ -35,9 +38,6 @@ type CronCreatorAuthorityResolverScope = {
   resolve: CronCreatorAuthorityMaterializer;
   runId: string;
 };
-
-/** Opaque in-process capability minted only by an admitted exact run. */
-export type CronCreatorAuthorityCapability = CronCreatorAuthorityRunScope;
 
 export function createCronCreatorAuthorityCapability(
   runId: string,
@@ -301,13 +301,7 @@ export function captureCronRequesterGrantIssuer(runId: string | undefined) {
     getGatewayToolCallerIdentity()?.requesterOrigin,
   );
   const scope = activeCronCreatorAuthority.getStore();
-  if (
-    !scope ||
-    (scope.callerOrigin.kind !== "local" &&
-      !hasCronChannelRequester(scope) &&
-      !scope.callerScopedCreation) ||
-    scope.runId !== runId
-  ) {
+  if (!scope || !hasCronAuthenticatedRequester(scope) || scope.runId !== runId) {
     return undefined;
   }
   return (
