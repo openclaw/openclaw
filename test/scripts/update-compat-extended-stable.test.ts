@@ -11,6 +11,35 @@ import {
 
 const { createTempDir } = createScriptTestHarness();
 
+it("resolves the published lease dispatch through its extracted operation owner", async () => {
+  const release = previousReleaseInventory.releases.find(({ version }) => version === "2026.9.36")!;
+  const chunk = release.chunks.find(({ exports }) =>
+    exports.some(({ origin }) => origin.symbol === "runWithOpenClawStateLeaseWorker"),
+  )!;
+  const root = createTempDir("update-compat-lease-operation-");
+  fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+  const owner = "src/state/openclaw-state-lease-worker-operation.ts";
+  const previous = "src/state/openclaw-state-lease-worker-storage.ts";
+  for (const file of [owner, previous]) {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.copyFileSync(new URL("../../" + file, import.meta.url), path.join(root, file));
+  }
+  fs.mkdirSync(path.join(root, "dist"));
+  fs.writeFileSync(
+    path.join(root, "dist/current-lease.mjs"),
+    `//#region ${owner}
+export function runWithOpenClawStateLeaseWorker() { return "current lease owner"; }
+`,
+  );
+  writeUpdateCompatibilityChunks({
+    distDir: path.join(root, "dist"),
+    sourceDir: root,
+    inventory: { schemaVersion: 1, releases: [{ ...release, chunks: [chunk] }] },
+  });
+  const legacy = await import(pathToFileURL(path.join(root, "dist", chunk.path)).href);
+  expect(legacy.runWithOpenClawStateLeaseWorker()).toBe("current lease owner");
+});
+
 it("bridges the published 2026.9.36 deferred-migration import after package replacement", async () => {
   const release = previousReleaseInventory.releases.find(({ version }) => version === "2026.9.36");
   const chunk = release?.chunks.find(
