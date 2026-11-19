@@ -53,11 +53,14 @@ jobs:
           import { appendFileSync, readFileSync } from "node:fs";
           import { classifyReleaseTrain, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
           const targetContextRef = (process.env.TARGET_CONTEXT_REF ?? "").replace(/^refs\/heads\//u, "");
-          const frozenTarget = targetContextRef.startsWith("extended-stable/");
+          const candidateVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
+          const candidate = parseReleaseVersion(candidateVersion);
+          // PR-head dispatch refs need not carry the candidate's release line.
+          const frozenTarget = targetContextRef.startsWith("extended-stable/") ||
+            (candidate !== null && classifyReleaseTrain(candidate) === "extended-stable");
           let version;
           if (frozenTarget) {
             // Frozen lines must not create state with a newer, incompatible driver.
-            const candidateVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
             const args = ["scripts/lib/release-upgrade-baseline.mjs", "--candidate-version", candidateVersion, "--target-context-ref", targetContextRef];
             const captured = process.env.QUALIFICATION_BASELINES_JSON;
             if (captured) args.push("--qualification-baselines-json", captured);
