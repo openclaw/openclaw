@@ -166,9 +166,7 @@ it("keeps the session's tools listed on a scheduled run and refuses the rest vis
   const exec = run.tools.find((tool) => tool.name === "exec")!;
   const refused = await exec.execute("scheduled-exec", { command: "true" });
   expect(refused.details).toMatchObject({ gated: true });
-  expect(JSON.stringify(refused.content)).toContain(
-    "exec is outside the tools this scheduled run allows",
-  );
+  expect(JSON.stringify(refused.content)).toContain("exec is outside the tools this run allows");
   // A refused MCP tool keeps its provenance, so the catalog still treats it as MCP.
   const mcp = run.tools.find((tool) => tool.name === "world__calendar_list")!;
   expect(getPluginToolMeta(mcp)?.mcp?.serverName).toBe("world");

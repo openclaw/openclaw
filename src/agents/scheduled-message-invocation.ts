@@ -85,8 +85,9 @@ export function createEmbeddedMessageInvocationPolicy(params: {
         policies: {
           ...currentPolicies,
           // Resource and inherited ceilings belong to the assembled turn.
-          groupPolicy: policies.groupPolicy,
-          senderPolicy: policies.senderPolicy,
+          // A fixed listing never narrows by sender or group; the turn's own policy gates calls.
+          groupPolicy: listing ? undefined : policies.groupPolicy,
+          senderPolicy: listing ? undefined : policies.senderPolicy,
           sandboxPolicy: policies.sandboxPolicy,
           subagentPolicy: policies.subagentPolicy,
           runtimeToolPolicy: policies.runtimeToolPolicy,

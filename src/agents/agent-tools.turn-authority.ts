@@ -23,9 +23,9 @@ export function isHostSystemTurn(params: {
   return params.trigger === "event" && params.inputProvenance?.kind === "internal_system";
 }
 
-/** A scheduled run's allowlist refuses the listed tools it does not name. */
-export function formatScheduledRunToolRefusal(toolName: string): string {
-  return `${toolName} is outside the tools this scheduled run allows. Do not retry ${toolName}.`;
+/** A run's tool policy (allowlist, sender or group policy) refuses a listed tool. */
+export function formatRunToolRefusal(toolName: string): string {
+  return `${toolName} is outside the tools this run allows. Do not retry ${toolName}.`;
 }
 
 /**

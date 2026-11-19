@@ -23,7 +23,7 @@ import {
 import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import { createOpenClawCodingToolsInternalAsync } from "../../agent-tools.async.js";
 import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
-import { formatScheduledRunToolRefusal } from "../../agent-tools.turn-authority.js";
+import { formatRunToolRefusal } from "../../agent-tools.turn-authority.js";
 import { getChannelAgentToolMeta } from "../../channel-tool-metadata.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
@@ -51,6 +51,7 @@ import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import { listsFixedToolSet } from "../../tool-search-config.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-protocol.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
+import type { AnyAgentTool } from "../../tools/common.js";
 import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
 import type {
   CronCreatorToolAllowlistEntry,
@@ -157,16 +158,16 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     toolSearchControlsEnabled: toolSearchControlsEnabledForRun,
     toolSearchRuntimeConfig,
   } = toolSurfaceRuntime.plan;
-  // A scheduled allowlist refuses the calls it does not name instead of narrowing the listing.
-  const scheduledToolsAllowGated =
-    attempt.trigger === "cron" &&
+  // A run's allowlist (any trigger) refuses the calls it does not name instead of narrowing
+  // the listing, so every turn of the session sends the same tools.
+  const toolsAllowGated =
     attempt.toolsAllow !== undefined &&
     listsFixedToolSet(toolSearchConfig, toolSearchControlsEnabledForRun);
   const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
     disableTools: attempt.disableTools,
     isRawModelRun,
     toolsEnabled,
-    toolsAllow: scheduledToolsAllowGated ? undefined : toolsAllowWithForcedRuntimeTools,
+    toolsAllow: toolsAllowGated ? undefined : toolsAllowWithForcedRuntimeTools,
   });
   if (isCodeModeDiagnosticEnabled()) {
     logCodeModeDiagnostic(log, "activation", {
@@ -452,20 +453,18 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       // An allowlist that matches nothing keeps today's narrowed list, so the run still
       // fails with "No callable tools remain" instead of running with every tool refused.
       if (
-        scheduledToolsAllowGated &&
+        toolsAllowGated &&
         constructedToolsRaw.some((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name))
       ) {
         const allowed = new Set(constructedToolsRaw);
+        // The refusal is also an execution wrapper, so a catalog rewrap of the hook layer
+        // (dispatch_action) cannot restore the source executor. Provenance is kept too.
+        const refuse = (tool: AnyAgentTool) =>
+          gateAgentToolExecution(tool, formatRunToolRefusal(tool.name));
         constructedToolsRaw = boundTools.map((tool) =>
           allowed.has(tool)
             ? tool
-            : // Keep plugin and MCP provenance: the catalog classifies tools by it.
-              markAgentToolExecutionUnavailable(
-                copyAgentToolMetadata(
-                  tool,
-                  gateAgentToolExecution(tool, formatScheduledRunToolRefusal(tool.name)),
-                ),
-              ),
+            : markAgentToolExecutionUnavailable(copyAgentToolMetadata(tool, refuse(tool), refuse)),
         );
       }
       params.markCoreToolStage("attempt:tools-allow");

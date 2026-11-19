@@ -50,7 +50,7 @@ import {
   mergeAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
 import {
-  formatScheduledRunToolRefusal,
+  formatRunToolRefusal,
   isHostSystemTurn,
   resolveTurnToolSurface,
 } from "./agent-tools.turn-authority.js";
@@ -143,7 +143,7 @@ export function* assembleOpenClawCodingTools(
     : [];
   // One listing per session: `message` is always offered; a scheduled allowlist gates calls.
   const fixedListing = listsFixedToolSet(toolSearchConfig, toolSearchControlsEnabled)
-    ? { profileAlsoAllow: ["message"], includeRuntimeToolPolicy: options?.trigger !== "cron" }
+    ? { profileAlsoAllow: ["message"], includeRuntimeToolPolicy: false }
     : undefined;
   const runtimeToolAllowlistIncludesMessage = expandToolGroups(
     options?.runtimeToolAllowlist ?? [],
@@ -614,7 +614,7 @@ export function* assembleOpenClawCodingTools(
       : (name) =>
           name === "message"
             ? "message cannot send on this turn: its reply delivery or tool policy does not allow the message tool. Do not retry message."
-            : formatScheduledRunToolRefusal(name),
+            : formatRunToolRefusal(name),
     ownerOnlyDenied: new Set(ownerOnlyCoreToolDenylist),
     ownerToolCurrentAssertion: sessionToolAccess.ownerToolCurrentAssertion,
     hostSystemTurn: isHostSystemTurn(options ?? {}),
