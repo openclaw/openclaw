@@ -700,3 +700,42 @@ it.each([
     });
   },
 );
+
+it.each([undefined, "state-upgrade"] as const)(
+  "commits the version migration and copies only when Doctor owns the image (owner=%s)",
+  async (preImageOwner) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      openOpenClawStateDatabase({ env: state.env });
+      await closeOpenClawStateDatabaseAsync();
+      const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+      openLegacyDatabase(pathname).close();
+      const backups = () =>
+        fs
+          .readdirSync(state.stateDir, { recursive: true, encoding: "utf8" })
+          .filter((name) => name.endsWith(".bak"));
+
+      const result = await withMaintenance(() =>
+        prepareDoctorDatabaseMigrations({
+          ...migrationParams(state.env, [
+            {
+              kind: "agent",
+              agentId: "main",
+              path: pathname,
+              foundVersion: 26,
+              supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+            },
+          ]),
+          ...(preImageOwner ? { preImageOwner } : {}),
+        }),
+      );
+
+      expect(result.warnings).toEqual([]);
+      using agent = new DatabaseSync(pathname, { readOnly: true });
+      expect(agent.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
+      // Gateway start took the one image itself; a Doctor set would be a second copy.
+      expect(backups().length > 0).toBe(preImageOwner === undefined);
+    });
+  },
+);

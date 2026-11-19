@@ -14,7 +14,11 @@ export type StateUpgradeChain = (params: {
   logPath: string;
 }) => Promise<{ warnings: string[] }>;
 
-/** This build's Doctor, run against the shadow only, from the given CLI entry. */
+/**
+ * This build's Doctor on the live state, from the given CLI entry. Naming the live
+ * state directory as its own tells Doctor the caller took the pre-migration images,
+ * so it takes no original-state capture and no migration backup set of its own.
+ */
 export const createDoctorChain =
   (entry = process.argv[1], execArgv = process.execArgv): StateUpgradeChain =>
   async ({ stateDir, configPath, env, logPath }) => {

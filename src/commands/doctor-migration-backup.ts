@@ -159,6 +159,8 @@ export async function backupDoctorMigrationDatabases(params: {
   versionMigrationsOnly?: boolean;
   check?: "quick" | "full";
   repair?: { key: string; validate?: (database: DatabaseSync) => void };
+  /** Set in code by the Gateway-start state upgrade, which owns the pre-image decision. */
+  preImageOwner?: "state-upgrade";
 }): Promise<
   MigrationMessages & {
     versionMigrations?: NonNullable<OpenClawDatabaseSchemaPreflight["pendingMigrations"]>;
@@ -180,6 +182,23 @@ export async function backupDoctorMigrationDatabases(params: {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (!maintenance?.ownsSchemaMaintenance) {
     throw new Error("Pre-migration SQLite backups require Doctor maintenance ownership.");
+  }
+  if (params.preImageOwner === "state-upgrade") {
+    // Gateway start already took (or, without room, skipped) the one pre-migration
+    // image of each outdated database; a second full set protects nothing more.
+    return {
+      changes: [],
+      warnings: [],
+      ...(params.versionMigrationsOnly
+        ? {
+            versionMigrations: params.pendingMigrations?.filter((migration) =>
+              migration.kind === "state"
+                ? migration.path === sharedPath
+                : params.agentDatabaseTargets?.some((target) => target.path === migration.path),
+            ),
+          }
+        : {}),
+    };
   }
   // Archive-only coverage cannot serve a fresh credential capture inside its transaction.
   const verifiedSnapshots =

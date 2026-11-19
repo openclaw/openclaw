@@ -10,18 +10,24 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
+import { isStateUpgradeImageOwner } from "./doctor-state-upgrade-owner.js";
+import type { DoctorOptions } from "./doctor.types.js";
 
 /** Version migrations settle before retirement captures its same-schema rollback group. */
 export async function prepareDoctorMigrationBackups(params: {
   schemas: DoctorDatabasePreflight;
   env: NodeJS.ProcessEnv;
-  check: "quick" | "full";
+  options: Pick<DoctorOptions, "fullIntegrityCheck" | "stateUpgradeLiveStateDir">;
   verifiedSnapshots: readonly BackupSqliteSnapshotFact[];
   automaticRepair: boolean;
   runtime: Pick<RuntimeEnv, "log">;
   measure: DoctorProgressMeasure;
 }) {
-  const { schemas, env, check, verifiedSnapshots, automaticRepair, runtime, measure } = params;
+  const { schemas, env, verifiedSnapshots, automaticRepair, runtime, measure } = params;
+  const check = params.options.fullIntegrityCheck ? "full" : "quick";
+  const preImageOwner = isStateUpgradeImageOwner(params.options, env)
+    ? ("state-upgrade" as const)
+    : undefined;
   const { prepareDoctorDatabaseMigrations } = await import("./doctor-schema-migrations.js");
   const { createOpenClawAgentDatabasePathMatcher } =
     await import("../state/openclaw-agent-db.paths.js");
@@ -51,6 +57,7 @@ export async function prepareDoctorMigrationBackups(params: {
       pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
       pendingMigrations: schemas.pendingMigrations,
       verifiedSnapshots,
+      preImageOwner,
     }),
   );
   for (const message of [...backups.changes, ...backups.warnings]) {
@@ -68,6 +75,7 @@ export async function prepareDoctorMigrationBackups(params: {
       verifiedSnapshots,
       automaticRepair,
       schemaPreparationPending: hasUnpreparedSchemas(schemas, backups.versionMigrations),
+      preImageOwner,
     }),
   );
   for (const message of [...heartbeatBackups.changes, ...heartbeatBackups.warnings]) {
@@ -164,6 +172,7 @@ async function backupHeartbeatMigrationDatabases(
     databasePaths: params.databasePaths,
     agentDatabaseTargets: params.agentDatabaseTargets,
     verifiedSnapshots: params.verifiedSnapshots,
+    preImageOwner: params.preImageOwner,
     pendingDatabasePaths: [sharedPath, ...params.databasePaths].filter(
       (pathname) =>
         existsSync(pathname) ||

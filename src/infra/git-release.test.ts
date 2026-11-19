@@ -20,12 +20,21 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
-async function release(prefix: string, version: string, entry: string) {
+async function release(
+  prefix: string,
+  version: string,
+  entry: string,
+  schemaVersions?: { state: number; agent: number },
+) {
   const root = (await createGitReleaseDirs(prefix)).releaseRoot;
   await fs.mkdir(path.join(root, "dist"), { recursive: true });
   await fs.writeFile(
     path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version }),
+    JSON.stringify({
+      name: "openclaw",
+      version,
+      ...(schemaVersions ? { openclaw: { schemaVersions } } : {}),
+    }),
   );
   await fs.writeFile(path.join(root, "dist", "index.js"), entry);
   return root;
@@ -314,6 +323,97 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       expect(await fs.readlink(slot)).toBe(target);
       await fs.rm(stuck, { recursive: true });
       expect(startGateway(prefix).stdout).toContain("old");
+    });
+
+    describe("after a committed schema migration", () => {
+      /** The previous release opens state 36 and agent 38; the trial migrated past it. */
+      async function migratedTrial(options: { preImage: boolean; liveVersion: number }) {
+        const { stateDir, prefix } = await setup();
+        const good = await release(prefix, "1.0.0", 'console.log("old");\n', {
+          state: 36,
+          agent: 38,
+        });
+        await publishGitRelease({ prefix, releaseRoot: good, trial: false });
+        const previousLink = await fs.readlink(gitReleaseSlot(prefix));
+        const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n', {
+          state: 40,
+          agent: 43,
+        });
+        await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+        const db = path.join(stateDir, "state", "openclaw.sqlite");
+        await fs.mkdir(path.dirname(db), { recursive: true });
+        const write = (file: string, version: number) => {
+          using handle = new DatabaseSync(file);
+          handle.exec(
+            `PRAGMA user_version=${version}; CREATE TABLE witness(v); INSERT INTO witness VALUES (${version})`,
+          );
+        };
+        if (options.preImage) {
+          write(`${db}.pre-2.0.0`, 36);
+        }
+        write(db, options.liveVersion);
+        const slot = gitReleaseSlot(prefix);
+        return { prefix, db, slot, target: await fs.readlink(slot), previous: good, previousLink };
+      }
+      const witness = (file: string) => {
+        using handle = new DatabaseSync(file, { readOnly: true });
+        return handle.prepare("SELECT v FROM witness").get();
+      };
+
+      it("stays on the new release when no pre-image can restore the state", async () => {
+        const { prefix, db, slot, target, previousLink } = await migratedTrial({
+          preImage: false,
+          liveVersion: 40,
+        });
+
+        startGateway(prefix);
+        startGateway(prefix);
+        const third = startGateway(prefix);
+
+        // The new release still fails to boot, but nothing reverted onto a build that refuses.
+        expect(third.status).not.toBe(0);
+        expect(third.stdout).not.toContain("old");
+        expect(third.stderr).toContain(
+          `openclaw: release ${target} failed to start twice, but its database migration has committed and no pre-migration image restores it (state/openclaw.sqlite schema 40 (`,
+        );
+        expect(third.stderr).toContain(
+          `supports 36)). ${previousLink} cannot open this state, so the service stays on ${target}. Fix forward: run openclaw triage, or openclaw update once a fixed release is available.`,
+        );
+        expect(await fs.readlink(slot)).toBe(target);
+        expect(witness(db)).toEqual({ v: 40 });
+        await expect(fs.access(path.join(prefix, "releases", GIT_RELEASE_TRIAL))).rejects.toThrow();
+        // The decision is made once; later starts run the new release without counting.
+        expect(startGateway(prefix).stderr).not.toContain("failed to start twice");
+      });
+
+      it("switches back and restores the pre-image when one exists", async () => {
+        const { prefix, db, slot, previous } = await migratedTrial({
+          preImage: true,
+          liveVersion: 40,
+        });
+
+        startGateway(prefix);
+        startGateway(prefix);
+        const third = startGateway(prefix);
+
+        expect(third.status).toBe(0);
+        expect(third.stdout).toContain("old");
+        expect(third.stderr).toContain("switched back to");
+        expect(path.resolve(path.dirname(slot), await fs.readlink(slot))).toBe(previous);
+        expect(witness(db)).toEqual({ v: 36 });
+      });
+
+      it("switches back when the state never moved past the previous release", async () => {
+        const { prefix, db } = await migratedTrial({ preImage: false, liveVersion: 36 });
+
+        startGateway(prefix);
+        startGateway(prefix);
+        const third = startGateway(prefix);
+
+        expect(third.status).toBe(0);
+        expect(third.stdout).toContain("old");
+        expect(witness(db)).toEqual({ v: 36 });
+      });
     });
 
     it("stops counting once the trial release reports ready", async () => {

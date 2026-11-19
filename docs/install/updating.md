@@ -96,17 +96,38 @@ state directory and configuration parent without changing sealed capture bytes
 or following the final configuration entry. A different selected state directory
 or configuration entry remains rejected.
 
-On Gateway startup, an older supported SQLite schema is upgraded by copy and
-swap: Doctor runs on a private copy, then a durable plan publishes the changed
-files. Chain failure retains the generic rebuild and pins the previous files;
-invalid upgraded config still refuses publication. No live file is replaced or
-removed unless the upgrade copied it. If Doctor creates a template over an
-uncopied workspace file, startup leaves the original alone and reports a warning.
+On Gateway startup, an older supported SQLite schema is upgraded in place, under
+the start's exclusive ownership of the state. Nothing is copied except one
+pre-migration image of each outdated database and of the config:
 
-During copy-and-swap upgrades, Doctor records carried-over scheduled jobs against
-credential databases at their eventual live paths. Reads and repairs remain on
-the private copy. The updater passes this destination directly to Doctor; no
-additional environment variable or operator configuration is needed.
+- Each outdated database is checkpointed and kept as `<file>.pre-<buildId>` by a
+  copy-on-write clone where the filesystem supports one (APFS, and reflink-capable
+  Linux filesystems such as btrfs and XFS), which takes about no space.
+- Where the filesystem cannot clone, a byte copy is made only when it still leaves
+  the migration its own room (about one more database for its write-ahead log).
+- Otherwise the image is skipped and a warning names the database and why. The
+  start continues. Without that image, the previous release cannot be restored once
+  the migration commits: a Git release trial that fails twice stays on the new
+  release and asks you to fix forward (`openclaw triage`).
+
+Snapshot space never stops a start; only a disk too full for the migration itself
+can. Doctor then runs on the live state. Every schema step commits in one SQLite
+transaction with its version bump, so a killed or failed start leaves each database
+at its old or new version, and the next start resumes. Doctor takes no original-state
+capture and no pre-migration `.bak` set of its own in this run; the start's images
+are the only ones. A standalone `openclaw doctor --fix` keeps its own backups.
+
+If Doctor fails validation, the generic rebuild produces the outdated databases
+from their images (or, with no image, from the databases as Doctor left them),
+replaces them through a durable plan, and pins the generation. If the upgraded
+config is invalid, the start restores the images when every outdated database has
+one; otherwise the databases stay migrated and the start reports that. Files Doctor
+changes other than the databases and the config are not restored by a later trial
+revert. Files the run adds are recorded so a failed Git release trial removes them.
+
+During startup upgrades, Doctor records carried-over scheduled jobs against
+credential databases at their live paths. No environment variable or operator
+configuration is needed.
 
 If an earlier upgrade already broke a scheduled job, run `openclaw doctor --fix`.
 While the applied upgrade receipt remains, Doctor can verify the saved account at
@@ -115,35 +136,16 @@ replaying a missed run. If the receipt is gone or the account changed, Doctor
 leaves the job alone. To explicitly choose its account, use
 `openclaw automations edit <id> --model <provider/model>@<profileId>`.
 
-The copy excludes managed worktrees, configured agent workspaces, nested mounts
-and btrfs subvolumes, Knowledge stores, browser profiles, backups, and caches.
 Completed agent deletions whose journal retains files are excluded from startup
-upgrade discovery and copying; their retained files remain unchanged. Pending
-deletions keep their existing deletion-owner behavior.
-Media payloads are excluded; legacy `media/outgoing/records` JSON remains a
-migration input. Legacy session JSON/JSONL, identity, devices, credentials, push,
-exec approvals, audit logs, config, and installed extensions remain available.
-SQLite files above 64 MiB are copied only when their schema needs upgrading or
-they are the shared state database; smaller ancillary stores remain available for
-legacy imports. SQLite and retained WAL/journal content use byte copies, with
-NOCOW directories on btrfs, so the new database does not share extents with its
-preserved original. Committed WAL is recovered in the private copy.
+upgrade discovery; their retained files remain unchanged. Pending deletions keep
+their existing deletion-owner behavior.
 
-Before copying, startup checks free space against the selected file bytes plus
-an equal-sized scratch margin (at least 256 MiB). Ordinary files are included in
-that budget because a filesystem can decline reflinking. Insufficient space
-reports the exact required, available, and missing bytes. Copies of at least
-256 MiB log their byte count, file count, elapsed time, and throughput.
-
-Replaced files remain as `<file>.pre-<buildId>`, named after the build that replaced
-them, so two builds of one version each keep their own predecessor. Builds without a
-build ID, and earlier releases, wrote `<file>.pre-<version>`. Startup prunes older unpinned
+Images are named `<file>.pre-<buildId>`, after the build that took them, so two
+builds of one version each keep their own predecessor. Builds without a build ID,
+and earlier releases, wrote `<file>.pre-<version>`. Startup prunes older unpinned
 generations only for files it owns. It leaves retired startup-migration backups,
-SQLite `.bak` files, and media-persistence recovery images in place, reporting
-file counts and bytes within the inspected copy scope. These are operator or
-Doctor retention decisions: deleting large shared clones during startup can
-stall a copy-on-write filesystem. Skipped bulk trees are never walked to count
-or prune their contents.
+SQLite `.bak` files, and media-persistence recovery images in place. These are
+operator or Doctor retention decisions.
 
 Offline Doctor prepares no extra inspection image when its existing maintenance
 owner proves custody and the database has no WAL frames or rollback journal.

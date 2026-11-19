@@ -1,4 +1,4 @@
-// Gateway startup entry for the copy-and-swap state upgrade.
+// Gateway startup entry for the in-place state upgrade.
 import fs from "node:fs";
 import path from "node:path";
 import { parseConfigJson5 } from "../config/io.read-helpers.js";
@@ -9,6 +9,7 @@ import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache
 import {
   explainMachineFailure,
   isStateUpgradePending,
+  StateUpgradeCustodyLostError,
   upgradeStateDirectory,
 } from "./state-upgrade.js";
 
@@ -49,9 +50,27 @@ export async function upgradeStateOnGatewayStart(
   }
   try {
     const statePath = path.join(resolveStateDir(env), "state", "openclaw.sqlite");
+    const acquire = () => acquireGatewayLock({ env, databaseAccess: "none", allowInTests: true });
     await upgradeStateDirectory({
       env,
       log,
+      // The in-place Doctor takes this state's maintenance custody itself; hand it over
+      // and take it back before anything else here touches the state.
+      handOffCustody: async (run) => {
+        await closeOpenClawStateDatabaseByPathAsync(statePath);
+        await lock?.release();
+        lock = null;
+        try {
+          return await run();
+        } finally {
+          lock = await acquire().catch((error: unknown) => {
+            throw new StateUpgradeCustodyLostError(
+              "Another OpenClaw process took state ownership during the upgrade; this start stops and leaves the upgrade to it.",
+              { cause: error },
+            );
+          });
+        }
+      },
       // Selecting the environment read the config, which can leave a worker on a
       // current shared database; it must reopen the swapped file, not the old one.
       beforeSwap: async () => {
@@ -62,6 +81,7 @@ export async function upgradeStateOnGatewayStart(
       // Accepted edge case: plugin-owned config is validated later, at admission,
       // because its metadata lives in the upgraded state; a rollback is a rename.
       admitConfig: async (shadow) => {
+        // The live config and state, migrated in place.
         if (!fs.existsSync(shadow.configPath)) {
           return undefined;
         }

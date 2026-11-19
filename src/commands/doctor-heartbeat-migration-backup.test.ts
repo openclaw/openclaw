@@ -73,7 +73,7 @@ describe("prepareDoctorMigrationBackups", () => {
     prepareDoctorMigrationBackups({
       schemas,
       env: {},
-      check: "quick",
+      options: {},
       verifiedSnapshots: [],
       automaticRepair: false,
       runtime,

@@ -119,6 +119,65 @@ function retirePlans(stateDir, generation) {
   }
 }
 
+// A revert must never land on a build that refuses the state. The previous release
+// names the schemas it opens in its own package.json; each database records its own.
+// A database the rollback restores from a pre-image is not a reason to stay.
+// Unknown (no manifest, no node:sqlite, unreadable database) keeps the revert.
+async function newerThanPrevious(stateDir, previous, restored) {
+  let supported;
+  try {
+    supported = JSON.parse(fs.readFileSync(path.join(path.resolve(path.dirname(slot), previous), "package.json"), "utf8"))?.openclaw?.schemaVersions;
+  } catch {}
+  if (!Number.isInteger(supported?.state) || !Number.isInteger(supported?.agent)) {
+    return [];
+  }
+  let DatabaseSync;
+  try {
+    ({ DatabaseSync } = await import("node:sqlite"));
+  } catch {
+    return [];
+  }
+  const databases = [[path.join(stateDir, "state", "openclaw.sqlite"), supported.state]];
+  try {
+    for (const agent of fs.readdirSync(path.join(stateDir, "agents"))) {
+      databases.push([path.join(stateDir, "agents", agent, "agent", "openclaw-agent.sqlite"), supported.agent]);
+    }
+  } catch {}
+  const newer = [];
+  for (const [file, limit] of databases) {
+    if (restored.has(file) || !fs.existsSync(file)) {
+      continue;
+    }
+    let version;
+    try {
+      const db = new DatabaseSync(file, { readOnly: true });
+      try {
+        version = db.prepare("PRAGMA user_version").get()?.user_version;
+      } finally {
+        db.close();
+      }
+    } catch {
+      // A read-only open can fail without a writable -shm; the header still holds
+      // every checkpointed version (an uncheckpointed bump reads as older).
+      try {
+        const header = Buffer.alloc(64);
+        const fd = fs.openSync(file, "r");
+        try {
+          if (fs.readSync(fd, header, 0, 64, 0) === 64 && header.toString("latin1", 0, 15) === "SQLite format 3") {
+            version = header.readUInt32BE(60);
+          }
+        } finally {
+          fs.closeSync(fd);
+        }
+      } catch {}
+    }
+    if (Number.isInteger(version) && version > limit) {
+      newer.push(path.relative(stateDir, file) + " schema " + version + " (" + previous + " supports " + limit + ")");
+    }
+  }
+  return newer;
+}
+
 function switchLink(target) {
   const temporary = path.join(path.dirname(slot), ".openclaw.release-link-" + process.pid + "-" + Date.now());
   fs.symlinkSync(target, temporary);
@@ -151,8 +210,8 @@ if (trial && counts) {
       trial.restoring = [];
       // File timestamps come from a coarse kernel clock that can trail Date.now() by a tick.
       const since = trial.createdAt - 1000;
-      for (const generation of [trial.buildId, trial.version].filter(Boolean)) {
-        retirePlans(path.dirname(prefix), generation);
+      const generations = [trial.buildId, trial.version].filter(Boolean);
+      for (const generation of generations) {
         const suffix = ".pre-" + generation;
         const files = collectPreserved(path.dirname(prefix), suffix, since, 4, []);
         const config = trial.config;
@@ -161,14 +220,30 @@ if (trial && counts) {
         }
         trial.restoring.push({ suffix, files });
       }
-      writeTrial(trial);
+      const restored = new Set(trial.restoring.flatMap(({ files }) => files));
+      const newer = await newerThanPrevious(path.dirname(prefix), trial.previous, restored);
+      if (newer.length > 0) {
+        trial.forward = newer;
+      } else {
+        // Decided before anything changes: staying forward keeps what the upgrade added.
+        for (const generation of generations) {
+          retirePlans(path.dirname(prefix), generation);
+        }
+        writeTrial(trial);
+      }
     }
-    for (const { suffix, files } of trial.restoring) {
-      restoreState(files, suffix);
+    if (trial.forward) {
+      // The migration committed and nothing restores it: the service stays forward.
+      fs.rmSync(trialFile, { force: true });
+      console.error("openclaw: release " + trial.target + " failed to start twice, but its database migration has committed and no pre-migration image restores it (" + trial.forward.join("; ") + "). " + trial.previous + " cannot open this state, so the service stays on " + trial.target + ". Fix forward: run openclaw triage, or openclaw update once a fixed release is available.");
+    } else {
+      for (const { suffix, files } of trial.restoring) {
+        restoreState(files, suffix);
+      }
+      switchLink(trial.previous);
+      fs.rmSync(trialFile, { force: true });
+      console.error("openclaw: release " + trial.target + " failed to start twice; switched back to " + trial.previous);
     }
-    switchLink(trial.previous);
-    fs.rmSync(trialFile, { force: true });
-    console.error("openclaw: release " + trial.target + " failed to start twice; switched back to " + trial.previous);
   } else {
     writeTrial({ ...trial, attempts: trial.attempts + 1 });
   }

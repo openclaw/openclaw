@@ -5,7 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as diskSpace from "../infra/disk-space.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import * as sqliteFileCopy from "../infra/sqlite-file-copy.js";
+import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -18,11 +21,17 @@ import {
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { createDoctorChain } from "./state-upgrade-doctor.js";
-import { copyTree, pruneGenerations, writePlan } from "./state-upgrade-tree.js";
+import { pruneGenerations, writePlan } from "./state-upgrade-tree.js";
 import { ChainStepError } from "./state-upgrade-validate.js";
 import { isStateUpgradePending, upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
+/** The pre-migration image name this build gives a file. */
+const preImage = (file: string) => `${file}.pre-${resolveRuntimeServiceBuildId() ?? VERSION}`;
+const userVersion = (file: string) => {
+  using db = new DatabaseSync(file, { readOnly: true });
+  return db.prepare("PRAGMA user_version").get()?.user_version;
+};
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
@@ -32,7 +41,7 @@ afterEach(async () => {
 });
 
 describe("startup reader replacement", () => {
-  it("reopens shared-state workers after the copy-and-swap upgrade", async () => {
+  it("migrates in place, keeps the pre-image, and serves readers afterwards", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-readers-"));
     dirs.push(stateDir);
     const env = {
@@ -55,29 +64,32 @@ describe("startup reader replacement", () => {
         upgradeStateDirectory({
           env,
           log: { info() {}, warn() {} },
-          runChain: async ({ stateDir: shadow }) => {
-            using state = new DatabaseSync(path.join(shadow, "state", "openclaw.sqlite"));
+          runChain: async (chain) => {
+            // The chain runs on the live state, not a copy.
+            expect(chain.stateDir).toBe(stateDir);
+            using state = new DatabaseSync(path.join(chain.stateDir, "state", "openclaw.sqlite"));
             state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
             state.exec(
               `INSERT INTO config_machine_state VALUES ('plugins.bundledDiscovery', '"all"', 1)`,
             );
             return { warnings: [] };
           },
-          admitConfig: async ({ stateDir: shadow }) => {
+          admitConfig: async (live) => {
             await executeExistingOpenClawStateRead(
-              { env: { ...env, OPENCLAW_STATE_DIR: shadow } },
+              { env: { ...env, OPENCLAW_STATE_DIR: live.stateDir } },
               { type: "plugins.metadata.read", input: { stateKeys: ["plugins.bundledDiscovery"] } },
             );
-            return undefined;
-          },
-          beforeSwap: async () => {
             await closeOpenClawStateDatabaseByPathAsync(statePath);
+            return undefined;
           },
         }),
       ).resolves.toMatchObject({ status: "upgraded", mode: "chain" });
     } finally {
       await lock?.release();
     }
+    expect(userVersion(preImage(statePath))).toBe(OPENCLAW_STATE_SCHEMA_VERSION - 1);
+    expect(userVersion(statePath)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(fs.readFileSync(preImage(env.OPENCLAW_CONFIG_PATH), "utf8")).toBe("{}");
     // Startup's first writer switches the renamed rollback-journal database back to WAL.
     using state = new DatabaseSync(statePath);
     state.exec(`PRAGMA journal_mode = WAL;
@@ -165,10 +177,9 @@ describe("startup retained deletion", () => {
       const upgrade = upgradeStateDirectory({
         env,
         log,
-        runChain: async ({ stateDir: shadow }) => {
+        runChain: async (chain) => {
           if (upgradeShared) {
-            expect(fs.existsSync(path.join(shadow, "agents", "retired"))).toBe(false);
-            using state = new DatabaseSync(path.join(shadow, "state", "openclaw.sqlite"));
+            using state = new DatabaseSync(path.join(chain.stateDir, "state", "openclaw.sqlite"));
             state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
           }
           // Doctor leaves deleted agents to the deletion owner, including their old schemas.
@@ -186,8 +197,17 @@ describe("startup retained deletion", () => {
         expect(isStateUpgradePending(env)).toBe(true);
       }
       expect(fs.readFileSync(retainedPath)).toEqual(bytes);
-      expect(fs.readdirSync(retainedDir)).toEqual(["openclaw-agent.sqlite"]);
+      // A pending deletion is still an upgrade input: its pre-image stays for the next start.
+      expect(fs.readdirSync(retainedDir).toSorted()).toEqual(
+        cleanupCompleted
+          ? ["openclaw-agent.sqlite"]
+          : ["openclaw-agent.sqlite", path.basename(preImage(retainedPath))],
+      );
+      if (!cleanupCompleted) {
+        expect(fs.readFileSync(preImage(retainedPath))).toEqual(bytes);
+      }
       expect(fs.readFileSync(activePath)).toEqual(activeBytes);
+      expect(fs.existsSync(preImage(activePath))).toBe(false);
     },
   );
 });
@@ -224,7 +244,7 @@ describe("upgradeStateDirectory version zero", () => {
 });
 
 describe("createDoctorChain", () => {
-  it("points agent-directory selectors into the private copy and names its live directory", async () => {
+  it("runs Doctor on the live state and names it as its own directory", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-chain-"));
     dirs.push(root);
     const entry = path.join(root, "entry.mjs");
@@ -237,8 +257,8 @@ describe("createDoctorChain", () => {
       entry,
       [],
     )({
-      stateDir: path.join(root, "shadow"),
-      configPath: path.join(root, "shadow", "openclaw.json"),
+      stateDir: path.join(root, "live"),
+      configPath: path.join(root, "live", "openclaw.json"),
       logPath,
       env: {
         OPENCLAW_STATE_DIR: path.join(root, "live"),
@@ -246,8 +266,9 @@ describe("createDoctorChain", () => {
         PI_CODING_AGENT_DIR: path.join(root, "elsewhere"),
       },
     });
+    // Doctor reads "live directory = its own" as: the caller owns the pre-migration images.
     expect(JSON.parse(fs.readFileSync(logPath, "utf8"))).toEqual([
-      path.join(root, "shadow", "agents", "main", "agent"),
+      path.join(root, "live", "agents", "main", "agent"),
       null,
       [
         "doctor",
@@ -261,7 +282,7 @@ describe("createDoctorChain", () => {
 });
 
 describe("upgradeStateDirectory external config", () => {
-  it("publishes a config outside the state directory by a rename within its directory", async () => {
+  it("keeps a config outside the state directory as a pre-image beside it", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-config-"));
     dirs.push(root);
     const stateDir = path.join(root, "state");
@@ -272,48 +293,18 @@ describe("upgradeStateDirectory external config", () => {
     const configPath = path.join(root, "config", "openclaw.json");
     fs.mkdirSync(path.dirname(configPath));
     fs.writeFileSync(configPath, "{}");
-    const renames = vi.spyOn(fs, "renameSync");
-    try {
-      await upgradeStateDirectory({
-        env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
-        log: { info: () => {}, warn: () => {} },
-        runChain: async (chain) => {
-          fs.writeFileSync(chain.configPath, JSON.stringify({ migrated: true }));
-          throw new ChainStepError("injected", "fail after the config rewrite");
-        },
-      });
-      const publish = renames.mock.calls.find(([, to]) => to === configPath);
-      expect(path.dirname(String(publish?.[0]))).toBe(path.dirname(configPath));
-      expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual({ migrated: true });
-    } finally {
-      renames.mockRestore();
-    }
-  });
-});
-
-describe("upgradeStateDirectory code roots", () => {
-  it("leaves Git release installations out of the private copy", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-code-"));
-    dirs.push(root);
-    const stateDir = path.join(root, "state");
-    const corpus = fileURLToPath(
-      new URL("../../test/fixtures/state-corpus-populated/2026.10.10/state/", import.meta.url),
-    );
-    fs.cpSync(corpus, stateDir, { recursive: true });
-    const release = path.join(stateDir, "git-install", "releases", "r1", "package.json");
-    fs.mkdirSync(path.dirname(release), { recursive: true });
-    fs.writeFileSync(release, "{}");
-    const copied: boolean[] = [];
     await upgradeStateDirectory({
-      env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json") },
+      env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
       log: { info: () => {}, warn: () => {} },
       runChain: async (chain) => {
-        copied.push(fs.existsSync(path.join(chain.stateDir, "git-install")));
-        throw new ChainStepError("injected", "stop after the copy");
+        expect(chain.configPath).toBe(configPath);
+        fs.writeFileSync(chain.configPath, JSON.stringify({ migrated: true }));
+        throw new ChainStepError("injected", "fail after the config rewrite");
       },
     });
-    expect(copied).toEqual([false]);
-    expect(fs.readFileSync(release, "utf8")).toBe("{}");
+    // The failed chain's config migration stands; the original sits beside it for a revert.
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual({ migrated: true });
+    expect(fs.readFileSync(preImage(configPath), "utf8")).toBe("{}");
   });
 });
 
@@ -346,9 +337,10 @@ describe("upgradeStateDirectory resume", () => {
   });
 });
 
-describe("startup copy ownership", () => {
-  it("skips bulk and large unrelated SQLite, retains legacy inputs and retired backups", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-scope-"));
+describe("startup pre-images", () => {
+  /** The populated 2026.10.10 corpus: shared and agent databases older than this build. */
+  function corpus(prefix: string) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
     dirs.push(root);
     const stateDir = path.join(root, "state");
     fs.cpSync(
@@ -358,6 +350,29 @@ describe("startup copy ownership", () => {
       stateDir,
       { recursive: true },
     );
+    return { root, stateDir };
+  }
+  /** A stand-in chain that commits each outdated schema bump in place. */
+  const databases = (stateDir: string) => [
+    [path.join(stateDir, "state/openclaw.sqlite"), OPENCLAW_STATE_SCHEMA_VERSION] as const,
+    ...["main", "ops"].map(
+      (agent) =>
+        [
+          path.join(stateDir, "agents", agent, "agent/openclaw-agent.sqlite"),
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        ] as const,
+    ),
+  ];
+  const migrate = async ({ stateDir }: { stateDir: string }) => {
+    for (const [file, version] of databases(stateDir)) {
+      using db = new DatabaseSync(file);
+      db.exec(`PRAGMA user_version = ${version}`);
+    }
+    return { warnings: [] };
+  };
+
+  it("images only the outdated databases and the config, and walks no bulk tree", async () => {
+    const { stateDir } = corpus("openclaw-upgrade-scope-");
     const configPath = path.join(stateDir, "openclaw.json");
     fs.writeFileSync(
       configPath,
@@ -372,95 +387,99 @@ describe("startup copy ownership", () => {
       "custom-workspace",
       "knowledge",
       "media/inbound",
-      "media/outgoing/originals",
       "browser",
       "backups",
       "cache",
+      "git-install/releases/r1",
     ];
     for (const dir of bulk) {
       fs.mkdirSync(path.join(stateDir, dir), { recursive: true });
       fs.writeFileSync(path.join(stateDir, dir, "keep.sqlite.bak"), "operator data");
     }
-    const records = path.join(stateDir, "media/outgoing/records");
-    fs.mkdirSync(records, { recursive: true });
-    fs.writeFileSync(path.join(records, "legacy.json"), "{}");
     const archived = path.join(stateDir, "archive.sqlite");
-    const db = new DatabaseSync(archived);
-    db.exec("CREATE TABLE payload (value TEXT)");
-    db.close();
-    fs.truncateSync(archived, 64 * 1024 * 1024 + 1);
+    {
+      using db = new DatabaseSync(archived);
+      db.exec("CREATE TABLE payload (value TEXT)");
+    }
     const retired = path.join(stateDir, "state/openclaw.sqlite.pre-startup-migration-test.bak");
     fs.writeFileSync(retired, "operator recovery");
     const oldGeneration = path.join(stateDir, "state/openclaw.sqlite.pre-2026.1.1");
     fs.writeFileSync(oldGeneration, "prior upgrade");
-    const calls = vi.spyOn(fs, "readdirSync");
-    const log = { info: vi.fn(), warn: vi.fn() };
-    let observed:
-      | { bulk: boolean[]; archive: boolean; records: string; agent: boolean }
-      | undefined;
+    const before = new Map(databases(stateDir).map(([file]) => [file, userVersion(file)] as const));
+    const reads = vi.spyOn(fs, "readdirSync");
+
     const result = await upgradeStateDirectory({
       env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
-      log,
-      runChain: async ({ stateDir: shadow }) => {
-        observed = {
-          bulk: bulk.map((dir) => fs.existsSync(path.join(shadow, dir))),
-          archive: fs.existsSync(path.join(shadow, "archive.sqlite")),
-          records: fs.readFileSync(path.join(shadow, "media/outgoing/records/legacy.json"), "utf8"),
-          agent: fs.existsSync(path.join(shadow, "agents/main/agent/openclaw-agent.sqlite")),
-        };
-        throw new ChainStepError("injected", "exercise fallback retention");
-      },
+      log: { info: () => {}, warn: () => {} },
+      runChain: migrate,
     });
-    expect(result.status).toBe("upgraded");
-    expect(observed).toEqual({
-      bulk: bulk.map(() => false),
-      archive: false,
-      records: "{}",
-      agent: true,
-    });
+
+    expect(result).toMatchObject({ status: "upgraded", mode: "chain", pinned: false });
+    const generation = preImage("");
+    const images = fs
+      .readdirSync(stateDir, { recursive: true, encoding: "utf8" })
+      .filter((name) => name.endsWith(generation));
+    expect(images.toSorted()).toEqual(
+      [
+        "agents/main/agent/openclaw-agent.sqlite",
+        "agents/ops/agent/openclaw-agent.sqlite",
+        "openclaw.json",
+        "state/openclaw.sqlite",
+      ].map(preImage),
+    );
+    for (const [file, version] of before) {
+      expect(userVersion(preImage(file))).toBe(version);
+    }
+    expect(fs.existsSync(preImage(archived))).toBe(false);
     expect(fs.readFileSync(retired, "utf8")).toBe("operator recovery");
     expect(fs.existsSync(oldGeneration)).toBe(false);
     for (const dir of bulk) {
       expect(
-        calls.mock.calls.some(([file]) => file === path.join(stateDir, dir)),
+        reads.mock.calls.some(([file]) => file === path.join(stateDir, dir)),
         dir,
       ).toBe(false);
       expect(fs.readFileSync(path.join(stateDir, dir, "keep.sqlite.bak"), "utf8")).toBe(
         "operator data",
       );
     }
-    const state = new DatabaseSync(path.join(stateDir, "state/openclaw.sqlite"));
-    try {
-      const report = state
-        .prepare("SELECT payload_json FROM diagnostic_events WHERE scope = 'upgrade.report'")
-        .get();
-      expect(JSON.parse(String(report?.payload_json)).retiredBackups).toEqual({
-        count: 1,
-        bytes: 17,
-      });
-    } finally {
-      state.close();
-    }
-    expect(log.info).toHaveBeenCalledWith(
-      expect.stringContaining("retained 1 retired backup file(s), 17 bytes"),
-    );
   });
 
-  it("refuses insufficient space before copying with exact required and available bytes", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-space-"));
-    dirs.push(root);
-    const live = path.join(root, "live");
-    fs.mkdirSync(live);
-    fs.writeFileSync(path.join(live, "config.json"), "{}");
-    const statfs = fs.statfsSync(live, { bigint: true });
-    vi.spyOn(fs, "statfsSync").mockReturnValue({ ...statfs, bavail: 1n, bsize: 1n });
-    const shadow = path.join(root, "shadow");
-    await expect(copyTree(live, shadow, () => false, new Map())).rejects.toThrow(
-      "needs 2 bytes plus 268435456 bytes margin (268435458 bytes total); only 1 bytes available. Free 268435457 bytes",
+  it("migrates without an image when a copy would not leave the migration its room", async () => {
+    const { stateDir } = corpus("openclaw-upgrade-space-");
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json"),
+    };
+    // A filesystem that cannot clone, and a disk too full for a byte copy.
+    const copy = sqliteFileCopy.copySqliteFile;
+    vi.spyOn(sqliteFileCopy, "copySqliteFile").mockImplementation(
+      async (source, target, identity, options) => {
+        await options?.beforeByteCopy?.(Number(identity.size));
+        return copy(source, target, identity, { clone: "never" });
+      },
     );
-    expect(fs.existsSync(shadow)).toBe(false);
-    expect(fs.readdirSync(live)).toEqual(["config.json"]);
-    expect(fs.readFileSync(path.join(live, "config.json"), "utf8")).toBe("{}");
+    vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+      targetPath,
+      checkedPath: targetPath,
+      availableBytes: 1024 * 1024,
+      totalBytes: 1024 ** 3,
+    }));
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    const result = await upgradeStateDirectory({ env, log, runChain: migrate });
+
+    expect(result).toMatchObject({ status: "upgraded", mode: "chain" });
+    const shared = path.join(stateDir, "state/openclaw.sqlite");
+    expect(userVersion(shared)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(fs.existsSync(preImage(shared))).toBe(false);
+    expect(fs.readdirSync(path.dirname(shared)).some((name) => name.includes(".partial-"))).toBe(
+      false,
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^No pre-migration image of state\/openclaw\.sqlite: this filesystem cannot clone, and a copy needs \d+ MiB with the migration's room while 1 MiB is free\. It is migrated in place; once its migration commits, the previous release cannot open it, so a failed start stays on this release and is fixed forward\.$/u,
+      ),
+    );
   });
 
   it("prunes only owned file generations and never descends into unrelated trees", () => {

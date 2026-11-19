@@ -992,7 +992,7 @@ it("reports a moved partition, refuses --yes guessing, and binds only an explici
       await prepareDoctorMigrationBackups({
         schemas: { incompatible: [], indeterminate: [] },
         env: { ...process.env },
-        check: "quick",
+        options: {},
         verifiedSnapshots: [],
         automaticRepair: false,
         runtime: createNonExitingRuntime(),
