@@ -14,6 +14,11 @@ Add a saved Gateway to use its dashboard and native chat with your personal
 account. This connection stays separate from the primary Gateway that owns
 Mac node capabilities and Talk Mode.
 
+Browser sign-in is not available for the primary Gateway. If its direct URL
+redirects to Cloudflare Access, OpenClaw reports that sign-in is required instead
+of a certificate error. Add that URL as a saved Gateway for browser sign-in, and
+use SSH or a private Tailscale route for the primary Gateway.
+
 1. On first launch, choose **Connect to an existing Gateway**. In an already
    configured app, open **Connection… → Gateways → Add Gateway**.
 2. Enter the Gateway's address, such as `gateway.example.com` or
