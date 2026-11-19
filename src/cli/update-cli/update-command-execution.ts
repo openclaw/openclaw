@@ -239,11 +239,8 @@ export async function executeMutableUpdate(
           onStopped: (state) => {
             preManagedServiceStop = { ...state, ...(serviceIdentity ? { serviceIdentity } : {}) };
           },
-          handoffFromGateway: async (state) => {
-            // The handed-off update changes state in another process, which cannot capture.
-            await originalRun?.captureOriginal?.();
-            assertExecutionCurrent();
-            return await handoffUpdateFromGateway({
+          handoffFromGateway: (state) =>
+            handoffUpdateFromGateway({
               state,
               root: params.managedServiceRoot ? params.root : mutationRoot,
               opts,
@@ -259,8 +256,7 @@ export async function executeMutableUpdate(
               nodeRunner: params.packageUpdateNodeRunner,
               invocationCwd: params.invocationCwd,
               stopProgress: params.stop,
-            });
-          },
+            }),
         });
         if (serviceIdentity) {
           preManagedServiceStop.serviceIdentity = serviceIdentity;

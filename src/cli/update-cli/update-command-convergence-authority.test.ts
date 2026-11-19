@@ -256,6 +256,42 @@ describe("candidate convergence Doctor dispatch authority", () => {
     expect(resultWithPostUpdate.reason).not.toBe("post-core-update-failed");
     expect(mocks.convergeCandidate).toHaveBeenCalled();
   });
+  it("copies an already-current core's originals before a fresh process repairs it", async () => {
+    // The installed target differs from this updater, so post-core work runs in a fresh
+    // process that always runs Doctor repair and cannot copy the originals itself.
+    vi.mocked(shared.readPackageVersion).mockResolvedValue("2026.9.4");
+    const order: string[] = [];
+    vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockImplementationOnce(async () => {
+      order.push("fresh-process");
+      return { resumed: false, exitCode: 1, error: "fixture stop", failureFacts: [] };
+    });
+    await withOpenClawTestState({ label: "current-core-fresh-process" }, async (state) => {
+      const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+      await converge({
+        coreAlreadyCurrent: true,
+        result: {
+          status: "skipped",
+          reason: "already-current",
+          mode: "npm",
+          before: { version: VERSION },
+          after: { version: "2026.9.4" },
+        },
+        downgradeRisk: true,
+        opts: {
+          json: true,
+          yes: true,
+          run: {
+            runId,
+            env: state.env,
+            captureOriginal: async () => {
+              order.push("capture");
+            },
+          },
+        },
+      });
+    });
+    expect(order).toEqual(["capture", "fresh-process"]);
+  });
   it("records the failed post-core child even without supplied failure facts", async () => {
     vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockResolvedValueOnce({
       resumed: false,

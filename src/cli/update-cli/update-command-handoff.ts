@@ -183,6 +183,9 @@ export async function handoffUpdateFromGateway(params: {
   if (!parentPid || !ancestry.complete || !ancestry.pids.has(parentPid)) {
     return false;
   }
+  // The handed-off update changes state in a process that cannot capture; copy the
+  // originals here, while this updater still holds its executor.
+  await params.opts.run?.captureOriginal?.();
   const supervisor =
     detectRespawnSupervisor(process.env, process.platform, {
       includeLinuxOpenClawGatewayServiceMarker: true,

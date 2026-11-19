@@ -197,6 +197,9 @@ export async function convergeUpdatePlugins(params: {
         let targetRuntimeConverged = false;
         let maintenanceDeferred = false;
         if (shouldResumePostCoreInFreshProcess) {
+          // The fresh process always runs Doctor repair and cannot capture itself.
+          await params.opts.run?.captureOriginal?.();
+          assertCurrent?.();
           if (retainedDifferentRuntime && params.opts.run?.completionOwner === "gateway-restart") {
             await params.beforeDoctor?.();
             assertCurrent?.();
