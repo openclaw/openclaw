@@ -1,13 +1,21 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { resolveInstallMetadata } from "./candidate-install-owner.js";
 import { createPluginRecord, recordPluginError } from "./loader-records.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 
-function recordError(error: Error, origin: "global" | "bundled", missingDependencyHint?: string) {
+function recordError(
+  error: Error,
+  origin: "global" | "bundled",
+  missingDependencyHint?: string,
+  damagedNativeCaptureReinstall?: { packageName: string; packageVersion: string },
+) {
   const id = origin === "global" ? "broken-plugin" : "discord";
   const record = createPluginRecord({
     id,
     source: `/tmp/${id}/index.js`,
     origin,
+    packageName: "@untrusted/discovery-metadata",
+    packageVersion: "0.0.0",
     enabled: true,
     configSchema: false,
   });
@@ -19,9 +27,102 @@ function recordError(error: Error, origin: "global" | "bundled", missingDependen
     phase: "load",
     error,
     missingDependencyHint,
+    damagedNativeCaptureReinstall,
   });
   return record.error;
 }
+
+it("suggests exact-version reinstall for a missing managed native capture", () => {
+  const error = new Error(
+    "Cannot capture plugin source /state/tmp/plugin-captures/run/native/admission-id/content/README.md",
+    {
+      cause: Object.assign(new Error("missing capture bytes"), { code: "ENOENT" }),
+    },
+  );
+
+  expect(
+    recordError(error, "global", undefined, {
+      packageName: "@openclaw/codex",
+      packageVersion: "2026.10.9",
+    }),
+  ).toContain(
+    "reinstall it with `openclaw plugins install npm:@openclaw/codex@2026.10.9 --force --pin --no-enable`",
+  );
+});
+
+it.each([
+  {
+    name: "capture without retained install provenance",
+    error: new Error(
+      "Cannot capture plugin source /state/tmp/plugin-captures/run/native/admission-id/content/README.md",
+      { cause: Object.assign(new Error("missing capture bytes"), { code: "ENOENT" }) },
+    ),
+    reinstall: undefined,
+  },
+  {
+    name: "ordinary missing plugin source",
+    error: new Error("Cannot capture plugin source /plugins/codex/index.js", {
+      cause: Object.assign(new Error("missing source"), { code: "ENOENT" }),
+    }),
+    reinstall: { packageName: "@openclaw/codex", packageVersion: "2026.10.9" },
+  },
+  {
+    name: "non-missing managed capture failure",
+    error: new Error(
+      "Cannot capture plugin source /state/tmp/plugin-captures/run/native/admission-id/content/README.md",
+      { cause: Object.assign(new Error("permission denied"), { code: "EACCES" }) },
+    ),
+    reinstall: { packageName: "@openclaw/codex", packageVersion: "2026.10.9" },
+  },
+  {
+    name: "unsafe package metadata",
+    error: new Error(
+      "Cannot capture plugin source /state/tmp/plugin-captures/run/native/admission-id/content/README.md",
+      { cause: Object.assign(new Error("missing capture bytes"), { code: "ENOENT" }) },
+    ),
+    reinstall: { packageName: "@openclaw/codex;echo", packageVersion: "2026.10.9" },
+  },
+  {
+    name: "hostile error stringification",
+    error: new Error("capture failed", {
+      cause: Object.assign(new Error("missing capture bytes"), {
+        code: "ENOENT",
+        toString: () => {
+          throw new Error("stringification failed");
+        },
+      }),
+    }),
+    reinstall: { packageName: "@openclaw/codex", packageVersion: "2026.10.9" },
+  },
+])("does not suggest reinstall for $name", ({ error, reinstall }) => {
+  expect(recordError(error, "global", undefined, reinstall)).not.toContain(
+    "openclaw plugins install",
+  );
+});
+
+it("derives reinstall identity only from an integrity-backed managed npm install", () => {
+  const installs = {
+    codex: {
+      source: "npm" as const,
+      integrity: "sha512-fixture",
+      resolvedName: "@openclaw/codex",
+      resolvedVersion: "2026.10.9",
+    },
+    editable: {
+      source: "path" as const,
+      resolvedName: "@openclaw/editable",
+      resolvedVersion: "1.0.0",
+    },
+  };
+
+  expect(resolveInstallMetadata("global", "codex", installs).reinstall).toEqual({
+    packageName: "@openclaw/codex",
+    packageVersion: "2026.10.9",
+  });
+  expect(resolveInstallMetadata("global", "editable", installs).reinstall).toBeUndefined();
+  expect(resolveInstallMetadata("bundled", "codex", installs).reinstall).toBeUndefined();
+  expect(resolveInstallMetadata("global", "missing", installs).reinstall).toBeUndefined();
+});
 
 afterEach(() => vi.unstubAllEnvs());
 
