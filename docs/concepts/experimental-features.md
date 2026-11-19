@@ -549,7 +549,9 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   revokes the Gateway tokens issued to it, but the browser stays approved.
   Signing back in on the same browser reconnects with the access it was
   approved for, without a new device approval. Asking for more access than
-  that still needs approval.
+  that still needs approval. If the claw can't confirm the sign-out (for
+  example, it is offline), the browser still disconnects and goes on to end
+  its account session, but the tokens issued to it stay valid on the claw.
 - **Settings → Devices** and `openclaw devices list` mark browsers that connect
   through OpenClaw ID and link to **Access**. They can't be removed or have
   their tokens revoked as devices. To end someone's access, remove them on
