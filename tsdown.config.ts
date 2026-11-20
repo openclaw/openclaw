@@ -354,6 +354,8 @@ function workerDeployBuildConfig(
       WORKER_DEPLOY_VERSION: JSON.stringify(workerDeployVersion),
     },
     alias: {
+      // Template portrait review runs on the Gateway, not in the portable worker.
+      "@resvg/resvg-js": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
       bufferutil: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
       "chromium-bidi/lib/cjs/bidiMapper/BidiMapper": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
       "chromium-bidi/lib/cjs/cdp/CdpConnection": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,

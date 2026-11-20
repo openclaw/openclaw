@@ -203,6 +203,33 @@ describe("Templates discovery", () => {
     });
   });
 
+  it("lists the category chips in catalog order and filters by the selected slug", async () => {
+    const { page, request } = createPage({ templatesEnabled: true });
+    await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
+
+    const chips = [...page.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")];
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      "All",
+      "Engineering",
+      "Operations",
+      "Household",
+      "Entertainment",
+      "Travel",
+      "Productivity",
+      "Research",
+      "Health",
+      "Sales",
+      "Product",
+      "Other",
+    ]);
+    expect(chips.every((chip) => chip.querySelector("svg"))).toBe(true);
+
+    chips.find((chip) => chip.textContent === "Household")?.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("templates.catalog.search", { category: "household" }),
+    );
+  });
+
   it("updates Explore results when the search changes", async () => {
     const { page, request } = createPage({ templatesEnabled: true });
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));

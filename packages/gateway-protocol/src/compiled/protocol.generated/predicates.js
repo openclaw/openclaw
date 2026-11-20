@@ -741,7 +741,7 @@ var External = [
     /(^agentId$|^sessionKey$)/u,
     /(^runId$|^timeoutMs$)/u,
     /(^includeSessionPlacement$)/u,
-    /(^name$|^agentId$|^onboarding$|^expectedOwnerId$|^workspace$|^model$|^emoji$|^avatar$)/u,
+    /(^name$|^agentId$|^onboarding$|^locale$|^expectedOwnerId$|^workspace$|^model$|^emoji$|^avatar$)/u,
     /(^agentId$|^name$|^workspace$|^model$|^agentRuntime$|^emoji$|^avatar$)/u,
     /(^agentId$|^prompt$)/u,
     /\S/u,
@@ -1629,7 +1629,7 @@ var External = [
     /(^security$|^ask$|^askFallback$|^autoAllowSkills$)/u,
     /(^baseHashRequired$|^defaultAllowAllowed$|^broadAllowRulesAllowed$|^dangerousAllowRulesAllowed$)/u,
     /(^overview$|^query$|^category$|^featured$|^limit$)/u,
-    /(^name$|^description$|^version$|^scope$|^manifest$|^files$)/u,
+    /(^name$|^description$|^version$|^scope$|^manifest$|^files$|^avatar$)/u,
     /(^input$|^job$|^output$|^authority$)/u,
     /(^path$|^content$)/u,
     /(^agentId$|^sourceSessionKey$)/u,
@@ -4261,6 +4261,7 @@ var External = [
     check_6(value.name) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     (value.onboarding === void 0 || !("onboarding" in value) || check_181(value.onboarding)) &&
+    (value.locale === void 0 || !("locale" in value) || check_331(value.locale)) &&
     (value.expectedOwnerId === void 0 ||
       !("expectedOwnerId" in value) ||
       check_63(value.expectedOwnerId)) &&
@@ -19797,7 +19798,8 @@ var External = [
     check_22(value.version) &&
     check_2975(value.scope) &&
     check_2977(value.manifest) &&
-    check_2978(value.files),
+    check_2978(value.files) &&
+    (value.avatar === void 0 || !("avatar" in value) || check_94(value.avatar)),
   check_2974 = (value) =>
     typeof value == "string" &&
     (value.length <= 64e3 || (value.length <= 128e3 && CodePointCount(value) <= 64e3)),

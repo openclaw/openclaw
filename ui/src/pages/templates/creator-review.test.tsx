@@ -173,6 +173,32 @@ it.each(["skill", "plugin"] as const)("previews pinned and bundled %s", async (k
   }
 });
 
+it("shows the packaged avatar and lists its binary file without a text preview", async () => {
+  const plain = await fixture();
+  expect(plain.page.container.querySelector(".template-creator__art img")).toBeNull();
+  plain.page.unmount();
+
+  const iconUrl = "data:image/png;base64,iVBORw0KGgo=";
+  const { page } = await fixture({
+    ...reviewed,
+    iconUrl,
+    files: [...reviewed.files, { path: "assets/icon.png", workspacePaths: ["avatars/avatar.png"] }],
+  });
+  expect(page.container.querySelector(".template-creator__art img")?.getAttribute("src")).toBe(
+    iconUrl,
+  );
+  fireEvent.click(page.getByRole("button", { name: /Workspace files/ }));
+  await waitForSolid(() => expect(page.getByRole("button", { name: "View all" })).toBeTruthy());
+  fireEvent.click(page.getByRole("button", { name: "View all" }));
+  await waitForSolid(() =>
+    expect(page.getByRole("button", { name: "assets/icon.png" })).toBeTruthy(),
+  );
+  fireEvent.click(page.getByRole("button", { name: "assets/icon.png" }));
+  await waitForSolid(() =>
+    expect(page.getByText("Package preview is unavailable for this version.")).toBeTruthy(),
+  );
+});
+
 it("keeps the original card through a single explicit publication and pending receipt", async () => {
   const { page, request } = await fixture();
   expect(page.queryByText("Behavior and authority")).toBeNull();
