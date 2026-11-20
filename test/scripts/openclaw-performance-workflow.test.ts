@@ -222,6 +222,7 @@ describe("OpenClaw performance workflow", () => {
     expect(caps.if).toBe("${{ inputs.mode == 'gateway-memory-caps' }}");
     expect(caps.run).toContain("for cap in 2 4");
     expect(caps.run).toContain('--gateway-memory-gib "$cap"');
+    expect(caps.run).not.toContain("--provider");
     expect(findStep("Run live Gateway concurrency", job).if).toContain(
       "inputs.mode == 'gateway-concurrency'",
     );

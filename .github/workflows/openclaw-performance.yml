@@ -1752,7 +1752,7 @@ jobs:
               status=0
               for cap in 2 4; do
                 node --import ./scripts/tsx.mjs "$1/scripts/bench-gateway-concurrency.ts" \
-                  --entry dist/entry.js --runs 1 --warmup 0 --provider mock \
+                  --entry dist/entry.js --runs 1 --warmup 0 \
                   --control-ui-clients 4 --active-clients 2 --drivers 1 \
                   --duration-ms 15000 --timeout-ms 120000 --resource-cgroup "$parent" \
                   --transpiler-cache "$2/cache-$cap" --gateway-memory-gib "$cap" \
