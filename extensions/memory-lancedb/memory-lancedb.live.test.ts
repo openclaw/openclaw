@@ -1,11 +1,24 @@
 // Memory Lancedb tests cover memory lancedb plugin behavior.
-import { describe, expect, test } from "vitest";
+import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sdk/plugin-test-api";
+import { describe, expect, test, vi } from "vitest";
 import { installTmpDirHarness } from "./test-helpers.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
 const liveEnabled = HAS_OPENAI_KEY && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
+
+function createLiveMemoryPluginApi(overrides: TestPluginApiInput) {
+  const api = createTestPluginApi({
+    ...overrides,
+    config: {
+      plugins: { entries: { "memory-lancedb": { enabled: true, config: overrides.pluginConfig } } },
+    },
+  });
+  // Hooks read the current host config, not the registration-time pluginConfig.
+  api.runtime.config = { ...api.runtime.config, current: () => api.config };
+  return api;
+}
 
 // Count embedding HTTP requests without replacing the real client or database.
 class OpenAIEmbeddingCallCounter {
@@ -42,11 +55,10 @@ describeLive("memory plugin live tests", () => {
     const registeredHooks: Record<string, any[]> = {};
     const logs: string[] = [];
 
-    const mockApi = {
+    const mockApi = createLiveMemoryPluginApi({
       id: "memory-lancedb",
       name: "Memory (LanceDB)",
       source: "test",
-      config: {},
       pluginConfig: {
         embedding: {
           apiKey: liveApiKey,
@@ -56,7 +68,6 @@ describeLive("memory plugin live tests", () => {
         autoCapture: false,
         autoRecall: false,
       },
-      runtime: {},
       logger: {
         info: (msg: string) => logs.push(`[info] ${msg}`),
         warn: (msg: string) => logs.push(`[warn] ${msg}`),
@@ -79,10 +90,10 @@ describeLive("memory plugin live tests", () => {
         registeredHooks[hookName].push(handler);
       },
       resolvePath: (p: string) => p,
-    };
+    });
 
     // Register plugin
-    memoryPlugin.register(mockApi as unknown as Parameters<typeof memoryPlugin.register>[0]);
+    memoryPlugin.register(mockApi);
 
     // Check registration
     expect(registeredTools.length).toBe(3);
@@ -160,21 +171,19 @@ describeLive("memory plugin live tests", () => {
   test("skips retained user messages with real embeddings and LanceDB", async () => {
     const { default: memoryPlugin } = await import("./index.js");
 
-    const registeredHooks: Record<string, ((...args: unknown[]) => unknown)[]> = {};
-    const services: Array<{ stop?: () => Promise<void> }> = [];
+    const on = vi.fn();
+    const registerService = vi.fn<NonNullable<TestPluginApiInput["registerService"]>>();
     const logs: string[] = [];
-    const mockApi = {
+    const mockApi = createLiveMemoryPluginApi({
       id: "memory-lancedb",
       name: "Memory (LanceDB)",
       source: "test",
-      config: {},
       pluginConfig: {
         embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
         dbPath: getDbPath(),
         autoCapture: true,
         autoRecall: false,
       },
-      runtime: {},
       logger: {
         info: (msg: string) => logs.push(`[info] ${msg}`),
         warn: (msg: string) => logs.push(`[warn] ${msg}`),
@@ -183,15 +192,13 @@ describeLive("memory plugin live tests", () => {
       },
       registerTool: () => {},
       registerCli: () => {},
-      registerService: (service: { stop?: () => Promise<void> }) => services.push(service),
-      on: (hookName: string, handler: (...args: unknown[]) => unknown) => {
-        (registeredHooks[hookName] ??= []).push(handler);
-      },
+      registerService,
+      on,
       resolvePath: (p: string) => p,
-    };
+    });
 
-    memoryPlugin.register(mockApi as unknown as Parameters<typeof memoryPlugin.register>[0]);
-    const agentEnd = registeredHooks.agent_end?.[0];
+    memoryPlugin.register(mockApi);
+    const agentEnd = on.mock.calls.find(([hookName]) => hookName === "agent_end")?.[1];
     expect(agentEnd).toBeTypeOf("function");
 
     const counter = new OpenAIEmbeddingCallCounter();
@@ -225,8 +232,12 @@ describeLive("memory plugin live tests", () => {
       expect(counter.count).toBe(3);
     } finally {
       counter.restore();
-      for (const service of services) {
-        await service.stop?.();
+      for (const [service] of registerService.mock.calls) {
+        await service.stop?.({
+          config: mockApi.config,
+          stateDir: getDbPath(),
+          logger: mockApi.logger,
+        });
       }
     }
   }, 60000);
