@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #201645: an oversized chat.history placeholder keeps the channel transport identity.
+25

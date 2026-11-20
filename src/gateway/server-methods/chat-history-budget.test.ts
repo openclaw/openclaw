@@ -72,3 +72,28 @@ it("keeps oversized tool results recoverable with identity, error, and provenanc
   });
   expect(Buffer.byteLength(JSON.stringify(message))).toBeLessThan(1_000);
 });
+
+it("keeps the channel transport identity so a client can still find its own message", () => {
+  const [message] = replace([
+    {
+      role: "user",
+      timestamp: 1,
+      content: [{ type: "text", text: "u".repeat(4_000) }],
+      __openclaw: {
+        id: "turn-1",
+        idempotencyKey: "idem-1",
+        transport: { channel: "a2a", accountId: "acct-1", messageId: "msg-1", extra: "dropped" },
+      },
+    },
+  ]);
+  expect(message).toMatchObject({
+    __openclaw: {
+      id: "turn-1",
+      idempotencyKey: "idem-1",
+      transport: { channel: "a2a", accountId: "acct-1", messageId: "msg-1" },
+      truncated: true,
+      reason: "oversized",
+    },
+  });
+  expect(message).not.toHaveProperty("__openclaw.transport.extra");
+});

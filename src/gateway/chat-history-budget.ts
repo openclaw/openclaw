@@ -109,6 +109,23 @@ function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
   };
 }
 
+// A placeholder is bounded, so keep only the identifiers a client matches its
+// own message by: the channel, its account, and the transport message id.
+function projectHistoryTransportIdentity(value: unknown): Record<string, string> | undefined {
+  const transport = asOptionalRecord(value);
+  if (!transport) {
+    return undefined;
+  }
+  const projected: Record<string, string> = {};
+  for (const key of ["channel", "accountId", "messageId"]) {
+    const field = transport[key];
+    if (typeof field === "string") {
+      projected[key] = field;
+    }
+  }
+  return Object.keys(projected).length > 0 ? projected : undefined;
+}
+
 export function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
   const entry = asOptionalRecord(message) ?? {};
   const role = typeof entry.role === "string" ? entry.role : "assistant";
@@ -128,6 +145,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
     typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
   const turnBoundary = metadata.turnBoundary === true;
   const transcriptPosition = readTranscriptDisplayPosition(metadata.transcriptPosition);
+  const transportIdentity = projectHistoryTransportIdentity(metadata.transport);
   return {
     role,
     timestamp,
@@ -142,6 +160,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       ...(turnBoundary ? { turnBoundary: true } : {}),
       ...(transcriptPosition ? { transcriptPosition } : {}),
+      ...(transportIdentity ? { transport: transportIdentity } : {}),
       truncated: true,
       reason: "oversized",
     },
