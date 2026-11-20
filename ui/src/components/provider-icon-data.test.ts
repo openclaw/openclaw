@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { compareCloudProfiles } from "./cloud-profile-icon-data.ts";
-import { hasProviderBrandIcon, providerDisplayLabel } from "./provider-icon-data.ts";
+import {
+  hasProviderBrandIcon,
+  providerDisplayLabel,
+  resolveProviderIconName,
+} from "./provider-icon-data.ts";
 
 describe("model provider labels", () => {
   it.each([
@@ -14,8 +18,14 @@ describe("model provider labels", () => {
     ["acp-copilot", "GitHub Copilot CLI"],
     ["tencent-tokenhub", "Tencent TokenHub"],
     ["vllm", "vLLM"],
+    ["llmman", "llmman"],
   ])("renders provider %s as display text", (provider, label) => {
     expect(providerDisplayLabel(provider)).toBe(label);
+  });
+
+  it("ships the llmman brand mark", () => {
+    expect(hasProviderBrandIcon("llmman")).toBe(true);
+    expect(resolveProviderIconName("llmman")).toBe("llmman");
   });
 
   it("gives ACP harness groups their agent's brand mark", () => {

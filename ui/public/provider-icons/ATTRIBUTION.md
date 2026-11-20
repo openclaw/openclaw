@@ -196,3 +196,17 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## llmman icon
+
+`ProviderIcon-llmman.svg` wraps the llmman manatee mark in a square view box so it
+sizes like the other provider icons. The mark is the file llmman serves as its
+web UI icon and publishes at
+https://github.com/llmmanorg/llmman/releases/download/docs-assets/llmman-mark.png
+(SHA-256 `c6036711a349dc8f8b2b4405be90b342b477dbcf4a7d95eb7d05b42702a241d5`).
+llmman is licensed under Apache-2.0. The only changes are a resize to 196 px wide
+with an 8-bit palette, then embedding the PNG as a data URI in the SVG. Unlike
+the monochrome icons, it keeps its colors; see the `llmman` rule in
+`ui/src/styles/components.css`.
+
+The name and mark remain the property of the llmman project.

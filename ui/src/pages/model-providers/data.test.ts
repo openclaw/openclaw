@@ -420,6 +420,17 @@ it("offers only unconfigured providers with quick API-key setup", () => {
   ).toEqual([{ id: "anthropic", displayName: "Anthropic" }]);
 });
 
+it("offers llmman as a quick-setup provider until it is configured", () => {
+  const capabilities = [capability("llmman"), capability("openai")];
+  expect(buildUnconfiguredProviderOptions(capabilities, [])).toEqual([
+    { id: "llmman", displayName: "llmman" },
+    { id: "openai", displayName: "OpenAI" },
+  ]);
+  expect(buildUnconfiguredProviderOptions(capabilities, ["llmman"])).toEqual([
+    { id: "openai", displayName: "OpenAI" },
+  ]);
+});
+
 it("keeps the first usage alias label and the last alias payload", () => {
   const cards = build([], {
     providerUsage: {

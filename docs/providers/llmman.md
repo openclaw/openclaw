@@ -22,14 +22,14 @@ Three modes are supported:
 | Hybrid            | One `llmman.hybrid/<local>,<provider>/<model>` ref; llmman picks the local or hosted side per request            |
 | Hosted via llmman | `llmman.provider/<provider>/<model>` refs; llmman forwards to a hosted provider while keeping one local endpoint |
 
-| Property         | Value                                                                         |
-| ---------------- | ----------------------------------------------------------------------------- |
-| Provider id      | `llmman` (custom; configure under `models.providers.llmman`)                  |
-| Plugin           | none; not a bundled OpenClaw provider plugin, so models are listed explicitly |
-| API              | OpenAI-compatible (`api: "openai-completions"`)                               |
-| Default base URL | `http://127.0.0.1:17434/v1`                                                   |
-| Auth             | none on loopback; off loopback a key is required, sent as the `apiKey` bearer |
-| Reference model  | `qwen3.8` (Qwen3.8 27B, vision-capable, 262,144-token native context)         |
+| Property         | Value                                                                                         |
+| ---------------- | --------------------------------------------------------------------------------------------- |
+| Provider id      | `llmman` (bundled; manual config: `models.providers.llmman`)                                  |
+| Plugin           | bundled `llmman` provider plugin, enabled by default                                          |
+| API              | OpenAI-compatible (`api: "openai-completions"`)                                               |
+| Default base URL | `http://127.0.0.1:17434/v1`                                                                   |
+| Auth             | none on loopback (store `llmman-local`); off loopback a real key, sent as the `apiKey` bearer |
+| Reference model  | `qwen3.8` (Qwen3.8 27B, vision-capable, 262,144-token native context)                         |
 
 <Warning>
 On loopback with no keys configured, `llmman serve` needs no key. Bound anywhere else, llmman 0.1.386+ refuses to start without `LLMMAN_API_KEYS`. Never use `LLMMAN_AUTH=off` on a public interface.
@@ -57,6 +57,10 @@ Version scope: this page is verified against [llmman v0.1.334](https://github.co
 </AccordionGroup>
 
 ## Getting started
+
+<Note>
+llmman is a bundled provider, so it also appears in the Control UI under **Models** → **Add provider**. After you install llmman and start `llmman serve` (steps below), pick **llmman** there and enter `llmman-local` as the key, or the real key if the server was started with `LLMMAN_API_KEYS`. OpenClaw then lists the models the server reports at `http://127.0.0.1:17434/v1/models` on the Gateway host, using the ids llmman reports (for example `docker.io/ai/qwen3.8:latest`). The UI shows each name without the default `docker.io/` host, `ai/` namespace, and `:latest` tag (`qwen3.8`); a model from another host or namespace, or with another tag such as `:27b`, keeps it, and the id itself is unchanged. For a server on another host, or to pin a model list, use the manual config on this page.
+</Note>
 
 <Steps>
   <Step title="Install llmman">
@@ -157,7 +161,7 @@ Qwen3.8 on a local llmman server:
 
 ## Model discovery
 
-llmman is not a bundled OpenClaw plugin, so there is no implicit discovery. List every model you want under `models.providers.llmman.models` with a provider-local `id` (no `llmman/` prefix).
+With only a saved key (from **Models** → **Add provider**, or `LLMMAN_API_KEY` in the Gateway environment) and no `models.providers.llmman` entry, OpenClaw discovers models from `http://127.0.0.1:17434/v1/models`. If you set `models.providers.llmman` yourself, OpenClaw uses only the models you declare there, with the `baseUrl` you set. Add `"llmman/*": {}` to `agents.defaults.models` to also list every model that configured server reports. Declare models under `models.providers.llmman.models` with a provider-local `id` (no `llmman/` prefix).
 
 | Behavior     | Detail                                                                                                                                                                   |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

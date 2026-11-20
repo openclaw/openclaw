@@ -47,3 +47,41 @@ it("offers Meta API keys and Muse device sign-in before the Muse runtime is inst
     ],
   });
 });
+
+it("offers llmman a quick API-key setup and leaves the other providers' capabilities unchanged", () => {
+  const plugins = ["litellm", "vllm", "lmstudio", "llmman"].map((id) => {
+    const rootDir = path.resolve("extensions", id);
+    const loaded = loadPluginManifest(rootDir, false);
+    if (!loaded.ok) {
+      throw new Error(loaded.error);
+    }
+    return {
+      id: loaded.manifest.id,
+      rootDir,
+      origin: "bundled" as const,
+      providers: loaded.manifest.providers,
+      providerAuthChoices: loaded.manifest.providerAuthChoices,
+    };
+  });
+  const resolve = (selected: typeof plugins) =>
+    resolveModelProviderCapabilities({
+      config: {},
+      metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: selected }),
+      workspaceDir: path.resolve("workspace-fixture"),
+    }).capabilities;
+
+  const withLlmman = resolve(plugins);
+  const withoutLlmman = resolve(plugins.filter(({ id }) => id !== "llmman"));
+
+  expect(withLlmman).toContainEqual({
+    provider: "llmman",
+    apiKeySupported: true,
+    quickApiKeySetup: true,
+  });
+  expect(withLlmman.filter(({ provider }) => provider !== "llmman")).toEqual(withoutLlmman);
+  expect(withoutLlmman).toEqual([
+    { provider: "litellm", apiKeySupported: true, quickApiKeySetup: true },
+    { provider: "lmstudio", apiKeySupported: false, quickApiKeySetup: false },
+    { provider: "vllm", apiKeySupported: false, quickApiKeySetup: false },
+  ]);
+});
