@@ -31,7 +31,9 @@ function readTurns(api: Api, body: Record<string, unknown>): Turn[] {
     }
     const content = Array.isArray(record.content)
       ? (record.content as { text?: string }[]).map((block) => block.text ?? "").join("")
-      : String(record.content ?? "");
+      : typeof record.content === "string"
+        ? record.content
+        : "";
     return [{ role: record.role, text: content }];
   });
 }
@@ -133,7 +135,7 @@ describe.each<Api>(["openai-responses", "anthropic-messages"])("%s", (api) => {
         endpoint.close(() => resolve());
       });
       await state.cleanup();
-      await resetGatewayTestState();
+      resetGatewayTestState();
     }
   }, 60_000);
 
