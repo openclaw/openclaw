@@ -434,7 +434,7 @@ suite.define(() => {
             "openclaw.setup.auth.start": { sessionId: "recovery", done: true, status: "done" },
           },
         });
-        await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
+        await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=auto`);
         const card = page.locator(".custodian-setup");
         await card.getByRole("heading", { name: title }).waitFor();
         const failure = card.getByText(error, { exact: false });
