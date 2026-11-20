@@ -456,9 +456,9 @@ export class ManagedWorktreeService {
       configuredRoot: this.getConfig?.().worktreeRoot,
       repository,
       gitInventory: params.gitInventory,
-      owner: params,
       suppliedName,
       suggestedName: params.suggestedName ?? inferredName,
+      worktreeId: publication.id,
     });
     await params.retainSources([destination.worktreePath]);
     const createdAt = Date.now();
