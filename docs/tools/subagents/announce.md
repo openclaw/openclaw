@@ -70,7 +70,9 @@ Results that no turn committed stay owed. Cancellation before dispatch, worker
 timeout, preparation invalidation and other retryable refusals keep the wake pending
 with its last error, and the sweeper wakes it again. There is no attempt limit,
 retry ladder or expiry. A permanent refusal stops automatic dispatch and records a visible failure notice
-with captured child results. Expiry notices also include captured results. These
+with captured child results that owe a visible reply. Expiry notices include the
+same results. Private-only handoffs retain identity/status notices without exposing
+their captured answers; an admitted visible-final yield retains its fallback. These
 notices sort children by run ID, cap each result at 2,000 characters, and cap the
 entire notice at 32,000 characters including framing and recovery instructions.
 Oversized batches share the space between result heads; any omitted children are

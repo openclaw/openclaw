@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { truncateUtf16WithEllipsis } from "../../../shared/text-truncate.js";
 import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-request-failure-copy.js";
+import { hasPrivateRequesterInput } from "../registry/subagent-delivery-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 
@@ -42,7 +43,9 @@ export function buildSubagentCompletionFailureNotice(
         : outcome?.status;
     const identity = `Child ${child.childSessionKey} (run ${child.runId})\n${status ?? "unknown"}`;
     const header = truncateUtf16WithEllipsis(identity, 512);
-    const captured = resolveSubagentCompletionResultText(child) ?? "";
+    const captured = hasPrivateRequesterInput(child)
+      ? ""
+      : (resolveSubagentCompletionResultText(child) ?? "");
     const resultLimit = Math.min(MAX_RESULT_CHARS, perChild - header.length - 4);
     const result =
       captured.length > resultLimit

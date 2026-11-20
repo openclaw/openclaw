@@ -103,6 +103,41 @@ it("bounds oversized failure batches and identifies omitted children", async () 
   expect(text).not.toContain("TAIL-000");
 });
 
+it.each(["permanent_failure", "expiry"] as const)(
+  "keeps unconsumed private answers internal in a mixed %s notice",
+  async (suspendedReason) => {
+    const { batch, readNotice } = await fixture(4);
+    batch[1]!.completionTarget = "parent";
+    batch[2]!.requesterSettleWake = {
+      status: "pending",
+      attemptCount: 0,
+      privateInput: { runId: "private-wake", message: "private input" },
+    };
+    batch[3]!.completionTarget = "parent";
+    batch[3]!.requesterSettleWake = {
+      status: "pending",
+      attemptCount: 0,
+      afterRequesterYield: true,
+      yieldedFinalDeliverable: true,
+    };
+    await blockSubagentCompletionDelivery({
+      subagent: batch[0]!,
+      requesterBatch: batch,
+      suspendedReason,
+      reason: "Operator access was revoked; start a new user turn.",
+      databaseOptions: { database: db.value },
+    });
+    const { text } = await readNotice();
+    expect(text).toContain("answer-000");
+    expect(text).not.toContain("answer-001");
+    expect(text).not.toContain("answer-002");
+    expect(text).toContain("answer-003");
+    for (const child of batch) {
+      expect(text).toContain(child.runId);
+    }
+  },
+);
+
 it.each(["failed", "result"] as const)("preserves the %s result-size contract", async (kind) => {
   const { batch, readNotice } = await fixture(1);
   const child = batch[0]!;
