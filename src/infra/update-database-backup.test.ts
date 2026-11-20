@@ -1050,3 +1050,42 @@ it.each(["insufficient", "unknown"] as const)(
     expect(await readFiles([f.shared, ...f.external])).toEqual(originals);
   },
 );
+
+it("bounds concurrent payload fsync before sealing the recovery capture", async () => {
+  const f = await originalCaptureFixture();
+  for (let index = 0; index < 40; index++) {
+    await fs.writeFile(
+      path.join(path.dirname(f.applicationFile), "extra-" + index + ".txt"),
+      "payload",
+    );
+  }
+  const open = fs.open.bind(fs);
+  let active = 0;
+  let peak = 0;
+  vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+    const handle = await open(file, flags, mode);
+    if (
+      typeof file === "string" &&
+      file.includes("/payload/") &&
+      (flags === "wx+" || flags === "r+")
+    ) {
+      const sync = handle.sync.bind(handle);
+      vi.spyOn(handle, "sync").mockImplementation(async () => {
+        active++;
+        peak = Math.max(peak, active);
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          await sync();
+        } finally {
+          active--;
+        }
+      });
+    }
+    return handle;
+  });
+  const capture = await f.captureOriginal("bounded-fsync");
+  expect(active).toBe(0);
+  expect(peak).toBeGreaterThan(1);
+  expect(peak).toBeLessThanOrEqual(32);
+  expect((await readManifest(capture)).entries.length).toBeGreaterThan(40);
+});
