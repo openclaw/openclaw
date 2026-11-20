@@ -17,7 +17,8 @@ import {
   useTestTempDirs,
 } from "./test-support.js";
 
-vi.mock("openclaw/plugin-sdk/resource-profile", () => ({
+vi.mock("openclaw/plugin-sdk/resource-profile", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/resource-profile")>()),
   getResourceProfile: vi.fn(() => "standard"),
 }));
 
