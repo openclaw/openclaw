@@ -481,6 +481,46 @@ export async function requireOpenAIRealtimePlatformAuth(
   throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
 }
 
+export type OpenAIRealtimeSocketAuth =
+  | { type: "api-key"; token: string }
+  | { type: "oauth"; token: string; accountId: string };
+
+export const OPENAI_REALTIME_SOCKET_AUTH_REQUIRED =
+  "OpenAI Realtime voice requires an OpenAI Platform API key or a ChatGPT sign-in";
+export const OPENAI_REALTIME_CHATGPT_SIGN_IN_REJECTED =
+  "OpenAI Realtime rejected the ChatGPT sign-in. Sign in again or configure an OpenAI Platform API key";
+
+/**
+ * Auth for a direct GA socket to api.openai.com. Platform auth wins; the ChatGPT
+ * subscription profile is used only when no Platform source is configured, so an
+ * explicitly configured but unavailable key fails instead of switching accounts.
+ */
+export async function requireOpenAIRealtimeSocketAuth(
+  params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0],
+  runtime: OpenAIRealtimeHost,
+): Promise<OpenAIRealtimeSocketAuth> {
+  const platformAuth = await resolveOpenAIRealtimePlatformAuth(params, runtime);
+  if (platformAuth) {
+    return { type: "api-key", token: platformAuth };
+  }
+  if (await hasOpenAIRealtimePlatformAuthInputAsync(params, runtime)) {
+    throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
+  }
+  const { resolveAgentDir } = runtime;
+  const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
+    {
+      cfg: params.cfg,
+      agentDir:
+        params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
+    },
+    runtime,
+  );
+  if (subscriptionAuth) {
+    return subscriptionAuth;
+  }
+  throw new Error(OPENAI_REALTIME_SOCKET_AUTH_REQUIRED);
+}
+
 export async function resolveOpenAIQuicksilverBridgeAuth(
   params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0] & {
     model: string;

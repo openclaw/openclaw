@@ -48,12 +48,11 @@ sidebarTitle: "Voice and speech"
     <Note>
     Set `OPENAI_TTS_BASE_URL` to override the TTS base URL without affecting
     the chat API endpoint. OpenAI TTS requires an OpenAI Platform API key.
-    OAuth-only installs can use Codex-backed chat models and GA Realtime browser
-    Talk over a ChatGPT subscription when the account has access (see the
-    Realtime accordion).
-    OpenAI TTS and GA realtime Voice Call, Gateway relay, and Discord sessions
-    still require a Platform API key. Codex GPT-Live supports ChatGPT OAuth and
-    pasted ChatGPT access-token profiles through the shared Gateway-owned bridge,
+    OAuth-only installs can use Codex-backed chat models, GA Realtime browser
+    Talk, and GA realtime Voice Call, Gateway relay, and Discord sessions over a
+    ChatGPT subscription when the account has access (see the Realtime
+    accordion). Codex GPT-Live supports ChatGPT OAuth and pasted ChatGPT
+    access-token profiles through the shared Gateway-owned bridge,
     including Discord and Voice Call.
     </Note>
 
@@ -234,8 +233,13 @@ sidebarTitle: "Voice and speech"
     browser's SDP, and returns only the answer SDP. An explicitly configured but
     unavailable Platform credential fails instead of falling back to OAuth.
 
-    Gateway-controlled GA relay, iOS client-owned WebRTC, GA Voice Call, direct
-    backend sockets, and GA Discord realtime voice require Platform auth.
+    GA Voice Call, Gateway relay, and Discord realtime voice open a direct
+    backend WebSocket to `wss://api.openai.com/v1/realtime`. It uses the same
+    Platform auth order and falls back to the ChatGPT OAuth subscription profile
+    (sent with its `chatgpt-account-id`) only when no Platform credential source
+    is configured. A custom realtime `baseUrl` never receives the OAuth token and
+    still requires Platform auth. Gateway-controlled GA browser Talk and iOS
+    client-owned WebRTC require Platform auth.
 
     #### GPT-Live API
 
