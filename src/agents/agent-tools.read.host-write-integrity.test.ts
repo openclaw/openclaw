@@ -35,6 +35,69 @@ describe("unrestricted host tool writes", () => {
       : tools.edit(filePath, "original", "replacement");
   }
 
+  it.each([false, true])(
+    "refuses creation and removal after database retirement (workspace-only: %s)",
+    async (workspaceOnly) => {
+      const filePath = await createFile("original content\n");
+      const newPath = path.join(tempDir, "new.txt");
+      const prepareHostFileMutation = async () => {
+        throw new Error("Database retired");
+      };
+      await expect(
+        hostFileTools(tempDir, {
+          workspaceOnly,
+          prepareHostFileMutation,
+        }).write(newPath, "new content"),
+      ).rejects.toThrow("Database retired");
+      await expect(fs.access(newPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        createApplyPatchTool({
+          cwd: tempDir,
+          workspaceOnly,
+          prepareHostFileMutation,
+        }).execute("retired-database", {
+          input: `*** Begin Patch\n*** Delete File: ${filePath}\n*** End Patch`,
+        }),
+      ).rejects.toThrow("Database retired");
+      expect(await fs.readFile(filePath, "utf8")).toBe("original content\n");
+    },
+  );
+
+  it.each(["write", "edit", "apply_patch"] as const)(
+    "preserves the original when %s loses database custody during rollback preparation",
+    async (kind) => {
+      const filePath = await createFile("original content\n");
+      let current = true;
+      interceptOpen(filePath, (handle) => {
+        const read = handle.read.bind(handle);
+        handle.read = (async (...args: Parameters<typeof read>) => {
+          const result = await read(...args);
+          current = false;
+          return result;
+        }) as typeof handle.read;
+      });
+      const prepareHostFileMutation = async () => ({
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Database custody changed");
+          }
+        },
+      });
+      const pending =
+        kind === "apply_patch"
+          ? createApplyPatchTool({
+              cwd: tempDir,
+              workspaceOnly: false,
+              prepareHostFileMutation,
+            }).execute("replaced-database", {
+              input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-original content\n+replacement content\n*** End Patch`,
+            })
+          : mutate(kind, filePath, "replacement content\n", { prepareHostFileMutation });
+      await expect(pending).rejects.toThrow("Database custody changed");
+      expect(await fs.readFile(filePath, "utf8")).toBe("original content\n");
+    },
+  );
+
   it.each(["write", "apply_patch"] as const)(
     "preserves the original when %s is cancelled during rollback preparation",
     async (kind) => {

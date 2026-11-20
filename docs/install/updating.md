@@ -629,6 +629,11 @@ last commit checksum are unchanged, and automatic restoration stays available.
 Any commit after admission, including one that restores identical content, still
 refuses. The Doctor of the version being installed owns this check, so updates
 from older releases benefit once the target contains it.
+Each migration also needs every other connection to its database closed. Doctor
+waits up to 5 seconds for an outside reader or probe to close before it gives
+up; a tool that keeps the database open for the whole update still stops the
+migration, and the error names the database it could not take over. Close that
+tool, then run `openclaw update repair`.
 
 The post-plugin Doctor runs for plugin changes, deferred model retirement, and
 pending deferred plugin migrations. Before each Doctor, the updater observes its

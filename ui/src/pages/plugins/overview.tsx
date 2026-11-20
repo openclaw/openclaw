@@ -19,6 +19,7 @@ import type {
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { formatCompactCount } from "./catalog-results.tsx";
 import { ExtensionIcon } from "./extension-icons.tsx";
+import { MiddleTruncated, splitTail } from "./middle-truncated.tsx";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.tsx";
 import { renderPluginRowMessage } from "./plugin-row-message.tsx";
 
@@ -201,23 +202,6 @@ function securityVerdict(status: string) {
           ? t("pluginsPage.auditReview")
           : status,
   };
-}
-
-/** One line that keeps its end: the start gives way when the value does not fit. */
-function MiddleTruncated(props: { head: string; tail: string }) {
-  return (
-    <span class="plugin-metadata__middle" title={`${props.head}${props.tail}`}>
-      <span>{props.head}</span>
-      <span>{props.tail}</span>
-    </span>
-  );
-}
-
-function splitTail(value: string): { head: string; tail: string } {
-  const cut = value.lastIndexOf("/", value.length - 2);
-  return cut > 0
-    ? { head: value.slice(0, cut + 1), tail: value.slice(cut + 1) }
-    : { head: "", tail: value };
 }
 
 function renderPackageRail(
