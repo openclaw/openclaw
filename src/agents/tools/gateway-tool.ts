@@ -303,11 +303,7 @@ export function createGatewayTool(options?: {
         const { profile } = await callInProcessGatewayTool<UsersSetRoleResult>(
           "users.setRole",
           { profileId, role },
-          {
-            ...localGateway,
-            // A committed self-downgrade retires its own caller authority.
-            revalidateOnCompletion: false,
-          },
+          localGateway,
         );
         return jsonResult({ profileId: profile.id, role: profile.role ?? null });
       }

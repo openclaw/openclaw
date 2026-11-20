@@ -100,6 +100,18 @@ it("looks up, assigns and clears a profile role under the original operator", as
         `Role for profile ${profileId} cleared (was "administrator") by profile ${admin.id}`,
         `Role for profile ${profileId} changed from no role to "administrator" by profile ${admin.id}`,
       ]);
+      expect(
+        await run(adminClient, {
+          action: "users.setRole",
+          profileId: admin.id,
+          role: "reader",
+        }),
+      ).toEqual({ profileId: admin.id, role: "reader" });
+      expect((await ensureCanonicalUserProfileForEmail("admin@example.test")).role).toBe("reader");
+      await expect(run(adminClient, { ...setRole, role: "administrator" })).rejects.toThrow(
+        "Your operator role changed; reconnect before continuing.",
+      );
+      expect((await ensureCanonicalUserProfileForEmail(email)).role ?? null).toBeNull();
     },
   );
 });
