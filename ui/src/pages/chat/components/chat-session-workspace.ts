@@ -215,10 +215,7 @@ export function statSessionWorkspaceFileLinks(
   const agentId = request.sessionKey
     ? parseAgentSessionKey(request.sessionKey)?.agentId
     : workspace.agentId;
-  return state.sessions.statFiles(sessionKey, request.paths, {
-    agentId,
-    messageEntryId: request.messageEntryId,
-  });
+  return state.sessions.statFiles(sessionKey, request.files, { agentId });
 }
 
 /** Resolve a chat reference without moving the original attachment's history ownership. */

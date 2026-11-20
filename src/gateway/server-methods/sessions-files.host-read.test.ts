@@ -253,19 +253,22 @@ it("stats only the references a preview would open", async () => {
     "src/readme.md",
   ];
 
-  const full = await fixture.files.ok("stat", { paths });
+  const full = await fixture.files.ok("stat", {
+    files: paths.map((filePath) => ({ path: filePath, messageEntryId: "entry-1" })),
+  });
   expect(full).toEqual({
     sessionKey,
     files: [
-      { path: "readme.md", status: "file" },
-      { path: "twin.ts", status: "missing" },
-      { path: "src/readme.md", status: "file" },
-      { path: "./src/readme.md", status: "file" },
-      { path: outsidePath, status: "file" },
-      { path: `${outsidePath}.missing`, status: "missing" },
-      { path: "src/absent.md", status: "missing" },
-      { path: "src", status: "missing" },
-    ],
+      ["readme.md", "file"],
+      ["twin.ts", "missing"],
+      ["src/readme.md", "file"],
+      ["./src/readme.md", "file"],
+      [outsidePath, "file"],
+      [`${outsidePath}.missing`, "missing"],
+      ["src/absent.md", "missing"],
+      ["src", "missing"],
+      ["src/readme.md", "file"],
+    ].map(([filePath, status]) => ({ path: filePath, status })),
   });
   for (const file of full.files.filter((entry) => entry.path.includes("/"))) {
     const preview = await fixture.files.request("get", file.path);
@@ -273,7 +276,9 @@ it("stats only the references a preview would open", async () => {
   }
 
   fixture.entry.permissionMode = "read-only";
-  const contained = await fixture.files.ok("stat", { paths: [outsidePath, "src/readme.md"] });
+  const contained = await fixture.files.ok("stat", {
+    files: [{ path: outsidePath }, { path: "src/readme.md" }],
+  });
   expect(contained.files).toEqual([
     { path: outsidePath, status: "missing" },
     { path: "src/readme.md", status: "file" },

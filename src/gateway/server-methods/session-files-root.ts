@@ -141,6 +141,8 @@ export async function loadSessionFiles(
   assertSourceCurrent: () => void,
   assertReaderCurrent: () => void,
   filePath?: string,
+  /** Existence checks resolve paths directly and skip folding the transcript's touched files. */
+  options: { touchedFiles?: boolean } = {},
 ): Promise<
   LoadedSessionFiles & {
     repository?: Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>>;
@@ -163,6 +165,17 @@ export async function loadSessionFiles(
   });
   if (preparedPath.path === null) {
     return { files: [], readPath: preparedPath };
+  }
+  if (options.touchedFiles === false) {
+    return {
+      files: [],
+      repository: await resolveRepositoryWorkspaceAccess(loaded, context, assertSourceCurrent),
+      readPath: preparedPath,
+      readRoot: preparedPath.readRoot,
+      root: loaded.root,
+      fileRoot: loaded.fileRoot,
+      diffCwd: loaded.diffCwd,
+    };
   }
   const scope = {
     agentId,

@@ -108,18 +108,26 @@ const sessionFileStatPathSchema = Type.String({
   maxLength: SESSIONS_FILES_STAT_PATH_MAX_CHARS,
 });
 
+/** One transcript file reference; messageEntryId selects that message's historical workspace. */
+const SessionFileStatReferenceSchema = closedObject({
+  path: sessionFileStatPathSchema,
+  messageEntryId: Type.Optional(NonEmptyString),
+});
+
 /** Checks which transcript file references `sessions.files.get` would open, without reading them. */
 export const SessionsFilesStatParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
-  messageEntryId: Type.Optional(NonEmptyString),
-  paths: Type.Array(sessionFileStatPathSchema, {
+  files: Type.Array(SessionFileStatReferenceSchema, {
     minItems: 1,
     maxItems: SESSIONS_FILES_STAT_MAX_PATHS,
   }),
 });
 
-/** `unknown` means the Gateway cannot answer without reading the file; clients keep the link. */
+/**
+ * Index-aligned with the request. `unknown` means the Gateway cannot answer without reading
+ * the file; clients keep the link.
+ */
 export const SessionsFilesStatResultSchema = closedObject({
   sessionKey: NonEmptyString,
   files: Type.Array(

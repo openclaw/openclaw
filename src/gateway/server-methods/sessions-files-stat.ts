@@ -21,9 +21,20 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 import { getSessionWorkspaceFile, listSessionWorkspaceFiles } from "./workspace-files.js";
 
 type SessionFileStatStatus = SessionsFilesStatResult["files"][number]["status"];
+type SessionFileStatReference = SessionsFilesStatParams["files"][number];
+type LoadedSessionFileRoot = Parameters<Parameters<typeof withSessionFileRoot>[2]>[0];
+
+/** Mirrors prepareSessionFileWorkspace: only a carried-over prior workspace makes a message's root differ. */
+function mayResolveHistoricalWorkspace(entry: LoadedSessionFileRoot["entry"]) {
+  return Boolean(
+    entry?.sessionId &&
+    entry.priorWorkspace &&
+    entry.priorWorkspace.worktreeId === entry.worktree?.id,
+  );
+}
 
 /**
- * Answers whether `sessions.files.get` would open each path, using the same session root,
+ * Answers whether `sessions.files.get` would open each reference, using the same session root,
  * sandbox mapping, and host-read authority, but stopping at a metadata stat.
  */
 export async function handleSessionFilesStat(
@@ -46,21 +57,24 @@ export async function handleSessionFilesStat(
       !hasSessionReadAccessChanged(previous, current) &&
       sessionFileWorkspaceMatches(previous, current),
   });
-  const paths = [...new Set(params.paths)];
-  try {
-    await withSessionFileRoot(
+  const statuses = params.files.map((): SessionFileStatStatus => "unknown");
+
+  /** Stats one workspace's references; returns message-scoped references it must not answer. */
+  const statWorkspace = (messageEntryId: string | undefined, indices: number[]) =>
+    withSessionFileRoot(
       {
         sessionKey: params.sessionKey,
         agentId,
-        messageEntryId: params.messageEntryId,
+        messageEntryId,
         getRuntimeConfig: context.getRuntimeConfig,
         projection: "list",
         retained: read?.prepared,
       },
       context.getRuntimeConfig(),
       async (source, assertSourceCurrent, readEntry) => {
+        const deferred = new Map<string, number[]>();
         if (rejectDeviceFolderFiles(source.entry, respond)) {
-          return;
+          return null;
         }
         const hostRead = createSessionFileReadAuthority(options, {
           ...source,
@@ -86,6 +100,8 @@ export async function handleSessionFilesStat(
             context,
             assertSourceCurrent,
             assertReaderCurrent,
+            undefined,
+            { touchedFiles: false },
           );
           repository = loaded.repository;
           assertCurrent();
@@ -138,26 +154,56 @@ export async function handleSessionFilesStat(
                 : [];
             return matches.length === 1 ? "file" : "missing";
           };
-          const files: SessionsFilesStatResult["files"] = [];
-          for (const path of paths) {
-            files.push({ path, status: await statPath(path) });
+          const splitByMessage =
+            messageEntryId === undefined && mayResolveHistoricalWorkspace(source.entry);
+          const answered = new Map<string, SessionFileStatStatus>();
+          for (const index of indices) {
+            const reference: SessionFileStatReference = params.files[index]!;
+            if (splitByMessage && reference.messageEntryId) {
+              const group = deferred.get(reference.messageEntryId) ?? [];
+              group.push(index);
+              deferred.set(reference.messageEntryId, group);
+              continue;
+            }
+            let status = answered.get(reference.path);
+            if (!status) {
+              status = await statPath(reference.path);
+              answered.set(reference.path, status);
+            }
+            statuses[index] = status;
           }
           assertCurrent();
-          const publish = () => {
-            assertSourceCurrent();
-            respond(true, { sessionKey: params.sessionKey, files });
-          };
           if (hostRead.hasHostRead()) {
-            await hostRead.withCurrent(publish);
-          } else {
-            publish();
+            await hostRead.withCurrent(assertSourceCurrent);
           }
+          return deferred;
         } finally {
           repository?.[Symbol.dispose]();
           hostRead.release();
         }
       },
     );
+
+  try {
+    const deferred = await statWorkspace(
+      undefined,
+      params.files.map((_, index) => index),
+    );
+    if (!deferred) {
+      return;
+    }
+    for (const [messageEntryId, indices] of deferred) {
+      // A message that left the conversation is refused like a read; its links stay "unknown".
+      await statWorkspace(messageEntryId, indices).catch((error: unknown) => {
+        if (!(error instanceof SessionMutationAuthorizationChangedError)) {
+          throw error;
+        }
+      });
+    }
+    respond(true, {
+      sessionKey: params.sessionKey,
+      files: params.files.map(({ path }, index) => ({ path, status: statuses[index]! })),
+    });
   } catch (error) {
     if (!(error instanceof SessionMutationAuthorizationChangedError)) {
       throw error;

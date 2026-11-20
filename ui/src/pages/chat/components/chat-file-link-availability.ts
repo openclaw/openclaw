@@ -6,8 +6,7 @@ import {
 
 export type FileLinkStatRequest = {
   sessionKey?: string;
-  messageEntryId?: string;
-  paths: string[];
+  files: { path: string; messageEntryId?: string }[];
 };
 
 /** Resolves to null when the Gateway cannot answer, such as after a disconnect. */
@@ -20,7 +19,7 @@ type Availability = SessionWorkspaceStatResult["files"][number]["status"] | "pen
 const FILE_LINK_SELECTOR = "a[data-file-path]";
 const STREAMING_SELECTOR = '[data-chat-streaming="true"]';
 // Matches the Gateway's sessions.files.stat request bound.
-const MAX_PATHS_PER_REQUEST = 64;
+const MAX_FILES_PER_REQUEST = 64;
 
 function markUnavailable(anchor: HTMLAnchorElement) {
   anchor.setAttribute(MARKDOWN_FILE_LINK_UNAVAILABLE_ATTR, "");
@@ -68,7 +67,7 @@ export function observeFileLinkAvailability(
       }
     }
     queued.clear();
-    const requests = new Map<string, FileLinkStatRequest & { keys: Map<string, string> }>();
+    const requests = new Map<string, FileLinkStatRequest & { keys: string[] }>();
     for (const anchor of found) {
       if (
         anchor.hasAttribute(MARKDOWN_FILE_LINK_UNAVAILABLE_ATTR) ||
@@ -81,11 +80,8 @@ export function observeFileLinkAvailability(
       if (!target) {
         continue;
       }
-      const owner = JSON.stringify([
-        target.sessionKey ?? defaultSessionKey() ?? null,
-        target.messageEntryId ?? null,
-      ]);
-      const key = JSON.stringify([owner, target.path]);
+      const sessionKey = target.sessionKey ?? defaultSessionKey() ?? "";
+      const key = JSON.stringify([sessionKey, target.messageEntryId ?? null, target.path]);
       const known = availability.get(key);
       if (known === "missing") {
         markUnavailable(anchor);
@@ -100,30 +96,32 @@ export function observeFileLinkAvailability(
       }
       availability.set(key, "pending");
       waiting.set(key, new Set([anchor]));
-      let request = requests.get(owner);
+      let request = requests.get(sessionKey);
       if (!request) {
         request = {
           ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
-          ...(target.messageEntryId ? { messageEntryId: target.messageEntryId } : {}),
-          paths: [],
-          keys: new Map(),
+          files: [],
+          keys: [],
         };
-        requests.set(owner, request);
+        requests.set(sessionKey, request);
       }
-      request.paths.push(target.path);
-      request.keys.set(target.path, key);
+      request.files.push({
+        path: target.path,
+        ...(target.messageEntryId ? { messageEntryId: target.messageEntryId } : {}),
+      });
+      request.keys.push(key);
     }
-    for (const { keys, paths, ...owner } of requests.values()) {
-      for (let start = 0; start < paths.length; start += MAX_PATHS_PER_REQUEST) {
-        const batch = paths.slice(start, start + MAX_PATHS_PER_REQUEST);
+    for (const { keys, files, ...owner } of requests.values()) {
+      for (let start = 0; start < files.length; start += MAX_FILES_PER_REQUEST) {
+        const batch = files.slice(start, start + MAX_FILES_PER_REQUEST);
+        const batchKeys = keys.slice(start, start + MAX_FILES_PER_REQUEST);
         const settle = (result: SessionWorkspaceStatResult | null) => {
           if (disposed) {
             return;
           }
-          const statuses = new Map(result?.files.map((file) => [file.path, file.status]));
-          for (const path of batch) {
-            const key = keys.get(path)!;
-            const status = statuses.get(path);
+          for (const [index, key] of batchKeys.entries()) {
+            const answer = result?.files[index];
+            const status = answer?.path === batch[index]?.path ? answer?.status : undefined;
             const anchors = waiting.get(key);
             waiting.delete(key);
             if (!status) {
@@ -140,7 +138,7 @@ export function observeFileLinkAvailability(
             }
           }
         };
-        stat({ ...owner, paths: batch }).then(settle, () => settle(null));
+        stat({ ...owner, files: batch }).then(settle, () => settle(null));
       }
     }
   };

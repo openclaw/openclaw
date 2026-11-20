@@ -332,7 +332,10 @@ suite.define(() => {
       await polledAttribute(remoteLink, "data-file-unavailable").toBe("");
       expect(await localLink.getAttribute("data-file-unavailable")).toBeNull();
       const [stat] = await gateway.getRequests("sessions.files.stat");
-      expect(stat?.params).toMatchObject({ sessionKey, paths: [remote, local] });
+      expect(stat?.params).toMatchObject({
+        sessionKey,
+        files: [{ path: remote }, { path: local }],
+      });
       expect(await remoteLink.getAttribute("role")).toBeNull();
       expect(await remoteLink.evaluate((anchor) => getComputedStyle(anchor).cursor)).toBe("auto");
 

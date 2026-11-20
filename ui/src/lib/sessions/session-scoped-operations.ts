@@ -84,13 +84,12 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
 
   const statFiles = (
     key: string,
-    paths: string[],
-    options: { agentId?: string | null; messageEntryId?: string } = {},
+    files: { path: string; messageEntryId?: string }[],
+    options: { agentId?: string | null } = {},
   ) =>
     requestCurrent<SessionWorkspaceStatResult>("sessions.files.stat", {
       sessionKey: key,
-      paths,
-      ...(options.messageEntryId ? { messageEntryId: options.messageEntryId } : {}),
+      files,
       ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
     });
 

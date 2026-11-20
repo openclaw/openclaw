@@ -36,9 +36,9 @@ function statFrom(missing: ReadonlySet<string>) {
     requests.push(request);
     return {
       sessionKey: request.sessionKey ?? "agent:main:main",
-      files: request.paths.map((path) => ({
-        path,
-        status: missing.has(path) ? ("missing" as const) : ("file" as const),
+      files: request.files.map((file) => ({
+        path: file.path,
+        status: missing.has(file.path) ? ("missing" as const) : ("file" as const),
       })),
     };
   });
@@ -68,7 +68,12 @@ it("demotes links the Gateway cannot open and keeps the rest clickable", async (
   await settle();
 
   expect(requests).toEqual([
-    { messageEntryId: "e1", paths: ["~/crabbox-work/reset-profile.sh", "src/app.ts"] },
+    {
+      files: [
+        { path: "~/crabbox-work/reset-profile.sh", messageEntryId: "e1" },
+        { path: "src/app.ts", messageEntryId: "e1" },
+      ],
+    },
   ]);
   expect(unavailable(root)).toEqual(["~/crabbox-work/reset-profile.sh"]);
   const [missing, present] = root.querySelectorAll<HTMLAnchorElement>("a");
@@ -126,23 +131,41 @@ it("leaves links alone and asks again when the Gateway cannot answer", async () 
   expect(unavailable(root)).toEqual([]);
 });
 
-it("keys answers by the owning session and splits large batches", async () => {
+it("batches messages by owning session and splits large batches", async () => {
   const root = document.createElement("div");
   const paths = Array.from({ length: 70 }, (_, index) => `src/file-${index}.ts`);
   const subagent = message("e4", "src/shared.ts");
   subagent.dataset.fileSessionKey = "agent:main:subagent:child";
-  root.append(message("e5", ...paths), subagent);
+  root.append(message("e5", ...paths.slice(0, 40)), message("e6", ...paths.slice(40)), subagent);
   document.body.append(root);
   const { stat, requests } = statFrom(new Set(["src/shared.ts"]));
 
   observe(root, stat);
   await settle();
 
-  expect(requests.map((request) => request.paths.length)).toEqual([64, 6, 1]);
+  expect(requests.map((request) => request.files.length)).toEqual([64, 6, 1]);
+  expect(requests[0]?.files[39]).toEqual({ path: "src/file-39.ts", messageEntryId: "e5" });
+  expect(requests[0]?.files[40]).toEqual({ path: "src/file-40.ts", messageEntryId: "e6" });
   expect(requests[2]).toEqual({
     sessionKey: "agent:main:subagent:child",
-    paths: ["src/shared.ts"],
+    files: [{ path: "src/shared.ts" }],
   });
   expect(unavailable(root)).toEqual(["src/shared.ts"]);
-  expect(stat).toHaveBeenCalledTimes(3);
+});
+
+it("ignores answers that do not line up with the request", async () => {
+  const root = document.createElement("div");
+  root.append(message("e7", "src/a.ts", "src/b.ts"));
+  document.body.append(root);
+  const stat = vi.fn<FileLinkStat>(async (request) => ({
+    sessionKey: "agent:main:main",
+    files: request.files
+      .toReversed()
+      .map((file) => ({ path: file.path, status: "missing" as const })),
+  }));
+
+  observe(root, stat);
+  await settle();
+
+  expect(unavailable(root)).toEqual([]);
 });
