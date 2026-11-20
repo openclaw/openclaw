@@ -294,11 +294,16 @@ export class ProfileState {
       !client ||
       !profile ||
       !this.canWrite ||
-      this.identityBusy ||
-      this.identityLoading ||
       (change.kind === "git-coauthor" && !this.gitCoauthorAvailable) ||
       (change.kind === "git-coauthor" && profile.id === GATEWAY_OWNER_PROFILE_ID)
     ) {
+      return;
+    }
+    if (this.identityBusy || this.identityLoading) {
+      if (change.kind === "avatar") {
+        this.identityError = t("profilePage.identity.avatarErrors.busy");
+        this.publish();
+      }
       return;
     }
     this.identityBusy = change.kind;

@@ -105,6 +105,14 @@ export function ProfilePage(route: { routeData?: string | null }) {
   };
   const canWrite = createMemo(() => view().canWrite);
   const identityScope = createMemo(() => view().identityScope);
+  const identityError = createMemo(() => view().identityError);
+  const hasOwnProfile = createMemo(() => view().ownProfile !== null && Boolean(view().selfUser));
+  const configuration = createMemo(() => {
+    const source = context.config;
+    return source ? projectApplicationConfig(source) : null;
+  });
+  const canUpload = () => configuration()?.read().uploadsEnabled !== false;
+  let avatarInput: HTMLInputElement | undefined;
   const presentation = createMemo(() => {
     const scope = identityScope();
     const [saving, setSaving] = createOptimistic<IdentityChange["kind"] | null>(null);
@@ -284,11 +292,6 @@ export function ProfilePage(route: { routeData?: string | null }) {
       {(profile) => {
         function IdentitySection() {
           const busy = () => identityBusy() ?? (props.pending ? "loading" : null);
-          const configuration = createMemo(() => {
-            const source = context.config;
-            return source ? projectApplicationConfig(source) : null;
-          });
-          const canUpload = () => configuration()?.read().uploadsEnabled !== false;
           const canEditIdentity = () => latest(canWrite);
           const isOwnerProfile = () => profile().id === GATEWAY_OWNER_PROFILE_ID;
           return (
@@ -354,35 +357,22 @@ export function ProfilePage(route: { routeData?: string | null }) {
                           type="button"
                           class="btn btn--sm"
                           disabled={busy() !== null}
-                          onClick={(event) => {
-                            const input = event.currentTarget.nextElementSibling;
-                            if (
-                              canEditIdentity() &&
-                              uploadsEnabled(context.config) &&
-                              input instanceof HTMLInputElement
-                            ) {
-                              input.click();
+                          onClick={() => {
+                            if (canEditIdentity() && uploadsEnabled(context.config)) {
+                              avatarInput?.click();
                             }
                           }}
                         >
-                          {busy() === "avatar"
-                            ? t("profilePage.identity.processingAvatar")
-                            : t("profilePage.identity.chooseAvatar")}
+                          {t(
+                            busy() === "avatar"
+                              ? "profilePage.identity.processingAvatar"
+                              : busy() === "loading"
+                                ? "common.loading"
+                                : busy()
+                                  ? "common.saving"
+                                  : "profilePage.identity.chooseAvatar",
+                          )}
                         </button>
-                        <input
-                          type="file"
-                          accept="image/png,image/jpeg,image/webp"
-                          hidden
-                          disabled={busy() !== null}
-                          onChange={(event) => {
-                            const input = event.currentTarget;
-                            const file = input.files?.[0];
-                            input.value = "";
-                            if (file && canEditIdentity() && uploadsEnabled(context.config)) {
-                              void saveIdentity({ kind: "avatar", file });
-                            }
-                          }}
-                        />
                       </Show>
                     </span>
                   }
@@ -474,9 +464,9 @@ export function ProfilePage(route: { routeData?: string | null }) {
                 <Show when={!isOwnerProfile()}>
                   <OpenClawIdIdentity />
                 </Show>
-                <Show when={view().identityError}>
+                <Show when={latest(identityError)}>
                   <div class="settings-row identity-error" role="alert">
-                    <span class="settings-row__desc">{view().identityError}</span>
+                    <span class="settings-row__desc">{latest(identityError)}</span>
                   </div>
                 </Show>
               </SettingsSection>
@@ -490,6 +480,34 @@ export function ProfilePage(route: { routeData?: string | null }) {
 
   return (
     <openclaw-profile-page ref={(element) => (host = element)}>
+      <Show
+        when={latest(canWrite) && latest(hasOwnProfile) && canUpload() && latest(identityScope)}
+        keyed
+      >
+        {(scope) => (
+          <input
+            ref={(input) => {
+              avatarInput = input;
+            }}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            hidden
+            onChange={(event) => {
+              const input = event.currentTarget;
+              const file = input.files?.[0];
+              input.value = "";
+              if (
+                file &&
+                scope === state.identityScope &&
+                latest(canWrite) &&
+                uploadsEnabled(context.config)
+              ) {
+                void saveIdentity({ kind: "avatar", file });
+              }
+            }}
+          />
+        )}
+      </Show>
       <SettingsPageHeader
         title={titleForRoute("profile")}
         subtitle={
