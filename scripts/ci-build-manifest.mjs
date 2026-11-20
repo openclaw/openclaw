@@ -2,7 +2,10 @@ import { appendFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
 import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
-import { isTestFileTarget } from "./lib/changed-path-facts.mjs";
+import {
+  getChangedPathFacts as getHarnessChangedPathFacts,
+  isTestFileTarget,
+} from "./lib/changed-path-facts.mjs";
 import { blacksmithRunnerLabel } from "./lib/ci-blacksmith-capacity.mjs";
 import {
   formatIosSimulatorSelectionSummary,
@@ -2017,6 +2020,14 @@ const manifest = {
   run_pr_kysely_guardrails: runPrKyselyGuardrails,
   split_pr_guards: splitPrGuards,
   narrow_check_paths_json: runCheckPlan ? JSON.stringify(changedPaths) : "",
+  // Full lint shards exclude test/. Keep its changed inputs for the fallback
+  // lint step without changing compiler, guard, or extension planning.
+  changed_root_test_paths_json:
+    runCheck && runtimePullRequest && !frozenTarget && !compatibilityTarget
+      ? JSON.stringify(
+          (changedPaths ?? []).filter((file) => getHarnessChangedPathFacts(file).isRootTestSource),
+        )
+      : "[]",
   run_check_plan: runCheckPlan,
   check_plan_input_json: runCheckPlan
     ? JSON.stringify({
