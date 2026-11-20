@@ -3,8 +3,35 @@ import { posix } from "node:path";
 import { beforeAll, expect, it } from "vitest";
 import noForcedProcessExit from "../../scripts/lib/no-forced-process-exit.mjs";
 import noRecursiveReaddir from "../../scripts/lib/no-recursive-readdir.mjs";
+import boundaryGuards from "../../scripts/oxlint-boundary-guards.mjs";
 
 const FIXTURES = "test/fixtures/oxlint-boundary-guards";
+it.each(["TSUnknownKeyword", "TSAnyKeyword", "TSObjectKeyword"])(
+  "does not materialize scopes for an ignored %s assertion",
+  (type) => {
+    const listener = boundaryGuards.rules["no-widen-then-assert"].create({
+      cwd: process.cwd(),
+      physicalFilename: `${process.cwd()}/src/ignored-assertion.ts`,
+      sourceCode: {
+        get scopeManager() {
+          throw new Error("Ignored assertions must not materialize scopes");
+        },
+      },
+      report() {
+        throw new Error("Broad assertions must not report narrowing");
+      },
+    });
+    expect(() =>
+      listener.TSAsExpression?.({
+        type: "TSAsExpression",
+        parent: null,
+        expression: { type: "Identifier", name: "value" },
+        typeAnnotation: { type },
+      }),
+    ).not.toThrow();
+  },
+);
+
 const forcedExit = "no-forced-process-exit";
 const cases = [
   [

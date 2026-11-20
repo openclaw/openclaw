@@ -481,9 +481,6 @@ function resolveWidenedBinding(variable, scopes, boundary, assertedAt) {
 }
 
 function assertionIsNarrower(sourceText, broadKind, evidence, assertedType) {
-  if (broadTypeKind(assertedType) !== null) {
-    return false;
-  }
   if (broadKind === "top") {
     return true;
   }
@@ -517,7 +514,7 @@ function noWidenThenAssertRule({ roots }) {
 
       let scopes;
       const checkAssertion = (node) => {
-        if (isNestedAssertion(node)) {
+        if (isNestedAssertion(node) || broadTypeKind(node.typeAnnotation) !== null) {
           return;
         }
         const expression = assertedIdentifier(node);
