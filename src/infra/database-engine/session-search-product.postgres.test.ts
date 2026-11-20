@@ -15,9 +15,15 @@ import {
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
 import {
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceSqliteTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
+import {
   appendTranscriptEvent,
   appendTranscriptMessage,
 } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { sessionTranscriptIndexNeedsReconcile } from "../../config/sessions/session-transcript-index.js";
 import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
@@ -34,6 +40,7 @@ import {
 import { sessionReadHandlers } from "../../gateway/server-methods/sessions-read.js";
 import { retainSessionListForegroundWork } from "../../gateway/session-projection-work.js";
 import { appendSessionTranscriptMessagesByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -326,6 +333,35 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     expect(hits.map((hit) => hit.messageId)).toEqual(["filename-hit"]);
     expect(hits[0]!.snippet).toContain("fix to server.py landed");
     expect(hits[0]!.snippet).not.toContain("Opening");
+  });
+
+  it("indexes a small replacement before committing the transcript rewrite", async () => {
+    const target = scope("replacement");
+    await append(target.sessionId, "old-message", `outdated polaris ${"original ".repeat(6_000)}`);
+    expect(await hitIds("outdated polaris", { sessionId: target.sessionId })).toEqual([
+      "old-message",
+    ]);
+
+    withEngineStoreAdmission(() => {
+      const resolved = resolveSqliteTranscriptScope(target);
+      runOpenClawAgentWriteTransaction((writer) => {
+        replaceSqliteTranscriptEventsInTransaction(writer, resolved, [
+          {
+            type: "message",
+            id: "new-message",
+            parentId: null,
+            timestamp: "2026-01-01T00:00:00.000Z",
+            message: { role: "user", content: "replacement marker" },
+          },
+        ]);
+        // Reconciliation after commit cannot hide a deferred rebuild here.
+        expect(sessionTranscriptIndexNeedsReconcile(writer.db, target.sessionId)).toBe(false);
+      }, toDatabaseOptions(resolved));
+    });
+    expect(await hitIds("replacement marker", { sessionId: target.sessionId })).toEqual([
+      "new-message",
+    ]);
+    expect(await hitIds("outdated polaris", { sessionId: target.sessionId })).toEqual([]);
   });
 
   it("publishes appends, rebuilds the active branch and removes deleted transcripts", async () => {
