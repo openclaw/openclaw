@@ -33,11 +33,18 @@ export function renderPluginDetailBreadcrumb(props: {
   );
 }
 
-/** Plugin pages clamp a long README inside its surface, with the chat message's Show more toggle. */
-function PluginReadmeWell(props: { children: JSX.Element }): JSX.Element {
+/**
+ * Plugin and skill pages clamp a long README inside its surface, with the chat message's Show
+ * more toggle. `expanded` sets how it first shows; the toggle then owns it.
+ */
+export function PluginReadmeWell(props: {
+  children: JSX.Element;
+  expanded?: boolean;
+}): JSX.Element {
   let body!: HTMLDivElement;
   let well!: HTMLDivElement;
-  const [expanded, setExpanded] = createSignal(false);
+  const [toggled, setExpanded] = createSignal<boolean>();
+  const expanded = () => toggled() ?? Boolean(props.expanded);
   const [overflows, setOverflows] = createSignal(false);
   const bodyId = `plugin-readme-${createUniqueId()}`;
   createResizeObserver(
@@ -67,7 +74,7 @@ function PluginReadmeWell(props: { children: JSX.Element }): JSX.Element {
         hidden={!overflows()}
         aria-expanded={expanded() ? "true" : "false"}
         aria-controls={bodyId}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={() => setExpanded(!expanded())}
       >
         {t(expanded() ? "chat.messages.showLess" : "chat.messages.showMore")}
         <Icon name={expanded() ? "chevronUp" : "chevronDown"} />
