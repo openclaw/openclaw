@@ -1,7 +1,4 @@
-import {
-  projectUpdateRunHistory,
-  type UpdateRunServingIdentity,
-} from "../../../src/infra/update-run-history-projection.ts";
+import { projectUpdateRunHistory } from "../../../src/infra/update-run-history-projection.ts";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -32,11 +29,9 @@ export function isReleaseUpdateAvailable(
 export function isUpdateRunAttentionVisible(
   run: UpdateRunRecord | null,
   acknowledged: boolean,
-  serving?: UpdateRunServingIdentity,
 ): boolean {
   return Boolean(
     run &&
-    !projectUpdateRunHistory(run, serving) &&
     (run.status === "running" ||
       (!acknowledged &&
         run.finishedAtMs !== null &&
@@ -57,13 +52,7 @@ export function resolveSidebarUpdateAttention(
   const snapshot = context.overlays.snapshot;
   const campaign = snapshot.updateSchedule?.campaign;
   const run = snapshot.updateRun;
-  const runVisible = isUpdateRunAttentionVisible(
-    run,
-    snapshot.updateRunAcknowledged,
-    context.gateway.snapshot.phase === "connected"
-      ? context.gateway.snapshot.hello?.server
-      : undefined,
-  );
+  const runVisible = isUpdateRunAttentionVisible(run, snapshot.updateRunAcknowledged);
   const statusBanner =
     snapshot.updateStatusCheckBanner ?? (run ? null : snapshot.updateStatusBanner);
   const busy =
@@ -107,12 +96,20 @@ export function resolveSidebarUpdateAttention(
           updateSchedule: snapshot.updateSchedule,
         });
   const forced = busy || isUpdateAttentionForced(statusBanner?.tone);
+  const historical =
+    run &&
+    context.gateway.snapshot.phase === "connected" &&
+    projectUpdateRunHistory(run, context.gateway.snapshot.hello?.server);
   return {
     type: "update",
     category: "system",
     dismissal: canUpdate && !forced ? dismissal : null,
     retainedDismissal: finishing ? runDismissal : null,
     requiresAction: forced || (canUpdate && actionable),
-    severity: snapshot.updateStatusBanner?.tone === "danger" ? "error" : "warning",
+    severity:
+      statusBanner?.tone === "danger" ||
+      (!historical && snapshot.updateStatusBanner?.tone === "danger")
+        ? "error"
+        : "warning",
   };
 }

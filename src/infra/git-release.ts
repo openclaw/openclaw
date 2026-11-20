@@ -5,6 +5,7 @@ import { sleep } from "../utils/sleep.js";
 import { syncDirectoryIfSupported } from "./directory-durability.js";
 import { ignoreMissingPath } from "./errno.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
+import { GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS } from "./gateway-shutdown-budget.js";
 import { writeGitReleaseLauncher, type GitReleaseTrial } from "./git-release-launcher.js";
 import { GIT_RELEASE_TRIAL, gitReleaseSlot } from "./git-release-paths.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
@@ -24,6 +25,7 @@ import {
   sweepPackageReleaseTemporaryLinks,
   switchPackageReleaseLink,
 } from "./package-release-slot.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
 import {
   readBuiltGatewayBuildId,
   readBuiltRuntimeCommit,
@@ -370,34 +372,50 @@ export async function collectGitReleases(params: {
   return collected;
 }
 
-/**
- * The serving Gateway restarts itself once its maintenance tick (30 s) sees the link
- * move. Wait for a new Gateway owner before verifying; after 35 s, ask it to restart
- * (SIGUSR2), which also covers a plugin-only restart where the link did not move.
- */
+/** Let the watcher act first. While the update holds the installation lease the watcher
+ * defers, so request a cooperative restart once and allow its normal active-work budget.
+ * A new owner is not proof of a healthy release: the caller still verifies its exact build. */
 export async function waitForGitReleaseSuccessor(
   env: NodeJS.ProcessEnv,
   signal?: AbortSignal,
 ): Promise<void> {
-  const ownerPid = () => {
+  const readOwner = () => {
     try {
-      return readGatewayOwnerLease({ env, current: true })?.pid;
+      return readGatewayOwnerLease({ env, current: true });
     } catch {
       return undefined;
     }
   };
-  const servingPid = ownerPid();
-  for (let waited = servingPid ? 0 : 90; waited < 90; waited++) {
-    if (waited === 35) {
-      try {
-        process.kill(servingPid!, "SIGUSR2");
-      } catch {
-        // A Gateway that already exited has a successor coming.
+  const incumbent = readOwner();
+  if (!incumbent || incumbent.state !== "live") {
+    return;
+  }
+  const stillServing = async (timeoutMs: number) => {
+    const until = performance.now() + timeoutMs;
+    while (performance.now() < until) {
+      await sleep(Math.min(1_000, until - performance.now()), signal);
+      const current = readOwner();
+      if (
+        current?.owner !== incumbent.owner ||
+        current.state !== "live" ||
+        current.pid !== incumbent.pid
+      ) {
+        return false;
       }
     }
-    await sleep(1_000, signal);
-    if (ownerPid() !== servingPid) {
-      return;
-    }
+    return true;
+  };
+  // The maintenance tick runs every 30s. Do not signal a successor it already started.
+  if (!(await stillServing(35_000))) {
+    return;
   }
+  signal?.throwIfAborted();
+  try {
+    process.kill(incumbent.pid, "SIGUSR2");
+  } catch {
+    return;
+  }
+  await stillServing(
+    resolveGatewayRestartDeferralTimeoutMs() + GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS,
+  );
 }

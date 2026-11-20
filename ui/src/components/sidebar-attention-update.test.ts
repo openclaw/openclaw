@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
+import { createFailedVerificationRun } from "../test-helpers/update-run.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 
 function contextWithGitStatus(status: "behind" | "current" | "unavailable"): ApplicationContext {
@@ -68,31 +68,34 @@ it("keeps explicit dev update progress and errors visible", () => {
   expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
 });
 
-it.each([
-  ["installed ahead", "2026.10.1", "2026.9.4", "2026.9.4", false],
-  ["serving moved", "2026.9.4", "2026.10.1", "2026.9.4", true],
-  ["installed ahead, no observation", "2026.10.1", "2026.9.4", undefined, false],
-  ["newer Gateway, no observation", "2026.9.4", "2026.10.1", undefined, false],
-] as const)(
-  "keeps only current failed-run attention: %s",
-  (_name, installed, version, recorded, historical) => {
-    const context = contextWithGitStatus("current");
-    context.overlays.snapshot.updateRun = createUpdateRunFixture({
-      status: "failed",
-      before: { version: installed },
-      verification: recorded ? { serviceRunning: true, runningVersion: recorded } : {},
-      finishedAtMs: Date.now(),
-    });
-    context.gateway.snapshot.hello = {
-      type: "hello-ok",
-      protocol: 1,
-      server: { version },
-      auth: { role: "operator", scopes: ["operator.admin"] },
-      features: { methods: [] },
-    };
-    expect(resolveSidebarUpdateAttention(context) !== null).toBe(!historical);
-  },
-);
+it("retains the same failed outcome across reconnect until acknowledged or 24 hours old", () => {
+  const context = contextWithGitStatus("current");
+  const snapshot = context.overlays.snapshot;
+  const run = createFailedVerificationRun();
+  snapshot.updateRun = run;
+  snapshot.updateStatusBanner = { tone: "danger", text: "Update verification failed" };
+  context.gateway.snapshot.client = new GatewayBrowserClient({ url: "ws://gateway.test" });
+  context.gateway.snapshot.hello = {
+    type: "hello-ok",
+    protocol: 1,
+    server: { version: "1.0.0", buildId: "before-build" },
+    auth: { role: "operator", scopes: ["operator.admin"] },
+    features: { methods: ["update.run"] },
+  };
+  const dismissal = { kind: "updateAvailable", signature: JSON.stringify(["run", run.runId]) };
+  expect(resolveSidebarUpdateAttention(context)).toMatchObject({ dismissal, severity: "error" });
+  context.gateway.snapshot.hello.server!.buildId = "target-build";
+  expect(resolveSidebarUpdateAttention(context)).toMatchObject({
+    dismissal,
+    severity: "warning",
+    requiresAction: false,
+  });
+  snapshot.updateRunAcknowledged = true;
+  expect(resolveSidebarUpdateAttention(context)).toBeNull();
+  snapshot.updateRunAcknowledged = false;
+  snapshot.updateRun = { ...run, finishedAtMs: Date.now() - 24 * 60 * 60 * 1000 };
+  expect(resolveSidebarUpdateAttention(context)).toBeNull();
+});
 
 it.each([
   ["stable admin update", "operator.admin", false, true],

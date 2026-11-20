@@ -465,8 +465,8 @@ export async function maybeRestartService(
     defaultRuntime.log("");
     defaultRuntime.log(theme.heading("Restarting service..."));
   }
-  // A Git release's Gateway notices its link moved and restarts into the new release
-  // itself. A native restart from inside its service job (update.run) would end this updater.
+  // Give the serving Gateway time to complete its cooperative restart before verifying.
+  // A native restart from inside its service job (update.run) would end this updater.
   if (
     preserveDefinition &&
     activation.result.mode === "git" &&

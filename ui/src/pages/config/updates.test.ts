@@ -12,7 +12,10 @@ import {
   createNativeDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
+import {
+  createFailedVerificationRun,
+  createUpdateRunFixture,
+} from "../../test-helpers/update-run.ts";
 import {
   createUpdatesViewDom,
   nativeSettings,
@@ -549,6 +552,43 @@ describe("renderUpdates", () => {
     expect(row("Status").textContent).toContain(label);
     expect(row("Status").querySelector(".settings-status__dot")).toBeNull();
   });
+
+  it.each([
+    ["target-build", "1.0.0", false, true],
+    ["unrelated-build", "1.0.0", false, false],
+    ["unrelated-build", "2.0.0", false, false],
+    ["restored-build", "1.0.0", true, false],
+  ] as const)(
+    "separates serving %s / %s (rollback: %s) from recorded verification",
+    (buildId, version, restored, onTarget) => {
+      const run = createFailedVerificationRun();
+      if (restored) {
+        run.target = { kind: "git", channel: "dev" };
+        run.before = { version };
+        run.after = { version, buildId };
+        run.verification.rollbackOutcome = {
+          status: "succeeded",
+          reason: "Previous package restored",
+        };
+      }
+      renderUpdates({
+        gatewayVersion: version,
+        gatewayBuildId: buildId,
+        update: { ...gitUpdate({ status: "current" }), updateRun: run },
+      });
+      const attempt = container.querySelector('[data-run-status="failed"]')!;
+      const headline = attempt.querySelector("h3")!.textContent;
+      expect(headline).toContain("Last update run failed (post-update-failed)");
+      expect(headline).toContain(version === "1.0.0" ? buildId : version);
+      expect(headline.includes("now serving the target build")).toBe(onTarget);
+      expect(attempt.textContent).toContain("Recorded outcome: failed");
+      expect(attempt.textContent).toContain("Verification at the time of the update");
+      expect(attempt.querySelector('[data-oracle="version"]')?.getAttribute("data-state")).toBe(
+        "fail",
+      );
+      expect(container.textContent).not.toContain("Retry update");
+    },
+  );
 
   it.each([
     { status: "succeeded", reason: null, recovery: false, reconciled: false },

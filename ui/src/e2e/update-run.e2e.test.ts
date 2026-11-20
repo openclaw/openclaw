@@ -3,7 +3,8 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createFailedVerificationRun } from "../test-helpers/update-run.ts";
 import { configResponse } from "./chat-flow-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createUpdateRunFixture } from "./update-run.test-support.ts";
@@ -87,6 +88,57 @@ suite.define(() => {
       );
     },
   );
+
+  it("keeps a failed verification in the Inbox when the target build later starts serving", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const run = createFailedVerificationRun();
+      const schedule = {
+        channel: "dev",
+        autoEnabled: false,
+        install: { kind: "git", git: { status: "current" } },
+      } as const;
+      const gateway = await installMockGateway(page, {
+        communityInvite: false,
+        serverVersion: "1.0.0",
+        serverBuildId: "before-build",
+        controlUiBuildSource: "configured",
+        updateAvailable: null,
+        updateSchedule: schedule,
+        methodResponses: {
+          "config.get": configResponse({ update: { channel: "dev" } }, "build-recovery"),
+          "update.status": { lastRun: run, schedule },
+          "update.runs.get": { run },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/updates`);
+      const attempt = page.locator('openclaw-update-run-view [data-run-status="failed"]');
+      await attempt
+        .getByRole("status")
+        .filter({ hasText: /OpenClaw update failed/ })
+        .waitFor();
+      await gateway.setServerBuildId("target-build");
+      await reconnectMockGateway(page, gateway, "later-boot");
+      const recovered = /^Gateway is now serving the target build/;
+      await attempt.getByRole("status").filter({ hasText: recovered }).waitFor();
+      await page.locator(".sidebar-issues-button:visible").click();
+      const card = page.locator(
+        'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+      );
+      await card.locator("summary").filter({ hasText: recovered }).click();
+      await card.getByRole("button", { name: recovered }).click();
+      const report = page.locator("openclaw-modal-dialog");
+      await report
+        .locator("openclaw-update-run-view")
+        .getByRole("status")
+        .filter({ hasText: recovered })
+        .waitFor();
+      expect(await report.getByRole("button", { name: "Retry update" }).count()).toBe(0);
+      await report.locator("openclaw-modal-actions").getByRole("button", { name: "Close" }).click();
+      await card.waitFor({ state: "detached" });
+      expect(await gateway.getRequests("update.run")).toHaveLength(0);
+      expect(await attempt.getAttribute("data-run-id")).toBe(run.runId);
+    });
+  });
 
   it("labels a standalone repair and keeps the failed update it repaired visible", async () => {
     await suite.withPage(

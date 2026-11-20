@@ -119,6 +119,7 @@ export function projectUpdateRun(
   return {
     report,
     terminal,
+    historical: Boolean(historical),
     reconciled: isAcknowledgedAbandonedUpdateRun(run),
     headline:
       !connected &&
@@ -126,9 +127,11 @@ export function projectUpdateRun(
       (run.phase === "activating" || run.phase === "restarting" || run.phase === "verifying")
         ? t("updates.run.restarting")
         : report.headline,
-    compactLabel: managedByOcm
-      ? ""
-      : t("updates.run.progress", { completed: String(completed), total: String(total) }),
+    compactLabel: historical
+      ? t("updates.run.recordedFailure")
+      : managedByOcm
+        ? ""
+        : t("updates.run.progress", { completed: String(completed), total: String(total) }),
     phases: managedByOcm
       ? []
       : phases.map(({ step, status, label }) => ({

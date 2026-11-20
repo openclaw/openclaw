@@ -184,6 +184,9 @@ export function UpdateRunView(props: {
               </pre>
             </details>
             <Show when={current().oracles.length}>
+              <Show when={current().historical}>
+                <strong>{t("updates.run.recordedVerification")}</strong>
+              </Show>
               <ul class="update-run-view__oracles" aria-label={t("updates.run.verification")}>
                 <For each={current().oracles}>
                   {(oracle) => (

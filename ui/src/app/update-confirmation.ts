@@ -3,6 +3,7 @@
 // surface dispatches an unconfirmed update or drifts from the shared policy.
 // The dialog itself loads lazily: startup pays nothing for a confirmation the
 // operator has not opened.
+import type { UpdateRunServingIdentity } from "../../../src/infra/update-run-history-projection.ts";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 
@@ -12,6 +13,7 @@ export type UpdateProgress = {
   /** An update request, run, or outcome reconciliation is still pending. */
   busy: boolean;
   connected: boolean;
+  serving?: UpdateRunServingIdentity;
   /** Set once the update produced a definitive failure. */
   failure: string | null;
   /** Reading fresh progress failed; the retained run remains authoritative. */
@@ -21,7 +23,7 @@ export type UpdateProgress = {
 // Keep the lazy confirmation entry independent of the application context.
 export function createUpdateProgressWatcher(context: {
   gateway: {
-    snapshot: { phase: string };
+    snapshot: { phase: string; hello?: { server?: UpdateRunServingIdentity } | null };
     subscribe: (listener: () => void) => () => void;
   };
   overlays: {
@@ -39,10 +41,12 @@ export function createUpdateProgressWatcher(context: {
     const emit = () => {
       const update = context.overlays.snapshot;
       const banner = update.updateStatusBanner;
+      const gateway = context.gateway.snapshot;
       listener({
         run: update.updateRun,
         busy: update.updateRunning || update.updateReconciliationPending,
-        connected: context.gateway.snapshot.phase === "connected",
+        connected: gateway.phase === "connected",
+        serving: gateway.phase === "connected" ? gateway.hello?.server : undefined,
         failure: banner && banner.tone !== "info" && banner.source !== "read" ? banner.text : null,
         readError:
           update.updateStatusCheckBanner?.text ?? (banner?.source === "read" ? banner.text : null),

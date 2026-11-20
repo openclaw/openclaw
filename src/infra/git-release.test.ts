@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import * as gatewayOwner from "./gateway-owner-lease.js";
 import { writeGitReleaseLauncher } from "./git-release-launcher.js";
 import {
   GIT_RELEASE_TRIAL,
@@ -14,8 +15,14 @@ import {
   resolveGitReleaseLauncherForEntrypoint,
   usesGitReleases,
 } from "./git-release-paths.js";
-import { createGitReleaseDirs, publishGitRelease, settleGitReleaseTrial } from "./git-release.js";
+import {
+  createGitReleaseDirs,
+  publishGitRelease,
+  settleGitReleaseTrial,
+  waitForGitReleaseSuccessor,
+} from "./git-release.js";
 import { listPackageReleases } from "./package-release-retention.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -49,6 +56,43 @@ const startGateway = (prefix: string, env: NodeJS.ProcessEnv = {}) =>
 describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
   "git releases",
   () => {
+    it("does not verify the incumbent while its requested restart is deferred for active work", async () => {
+      vi.useFakeTimers();
+      try {
+        const incumbent = {
+          owner: "before",
+          host: os.hostname(),
+          pid: 1234,
+          startedAt: 1,
+          port: 18789,
+          mode: "supervised",
+          supervisor: { kind: "launchd", name: "test-gateway" },
+          state: "live",
+          expired: false,
+        } as const;
+        const owner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
+        const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+          // A busy Gateway schedules the restart; delivery does not mean it has exited.
+          setTimeout(
+            () => owner.mockReturnValue({ ...incumbent, owner: "after", pid: 2345 }),
+            resolveGatewayRestartDeferralTimeoutMs(),
+          );
+          return true;
+        });
+        const verified = vi.fn();
+        const wait = waitForGitReleaseSuccessor({}).then(() => verified(owner()?.pid));
+        await vi.advanceTimersByTimeAsync(90_000);
+        expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
+        expect(verified).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(resolveGatewayRestartDeferralTimeoutMs());
+        await wait;
+        expect(verified).toHaveBeenCalledExactlyOnceWith(2345);
+      } finally {
+        vi.restoreAllMocks();
+        vi.useRealTimers();
+      }
+    });
+
     it("loads a bundled plugin's source contract from the selected release (#201874)", async () => {
       const { prefix } = await setup();
       const root = (await createGitReleaseDirs(prefix)).releaseRoot;

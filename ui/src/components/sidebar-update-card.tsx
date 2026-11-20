@@ -165,22 +165,33 @@ export function SidebarUpdateCard(
 
   const openRun = () => props.updateRun && confirmUpdate(props.updateRun);
 
-  const visibleRun = createMemo(() =>
-    isUpdateRunAttentionVisible(
-      props.updateRun ?? null,
-      props.updateRunAcknowledged ?? false,
-      props.connected ? props.serving : undefined,
-    )
-      ? (props.updateRun ?? null)
-      : null,
-  );
+  const visibleRun = createMemo(() => {
+    const run = props.updateRun;
+    if (!run || !isUpdateRunAttentionVisible(run, props.updateRunAcknowledged ?? false)) {
+      return null;
+    }
+    const view = projectUpdateRun(run, props.connected ?? true, props.serving);
+    const icon = view.historical
+      ? "info"
+      : run.status === "running"
+        ? "refresh"
+        : run.status === "succeeded"
+          ? "check"
+          : "alertTriangle";
+    return {
+      title: view.headline,
+      detail: view.compactLabel,
+      timestampMs: view.terminal ? run.finishedAtMs : run.createdAtMs,
+      terminal: view.terminal,
+      icon,
+      error: run.status === "failed" && !view.historical,
+    } as const;
+  });
   // A finishing restart completes what the finished run left owed, so its countdown leads
   // and that outcome stays beside it. Release campaigns keep the recorded run first.
   const finishedRunBehindRestart = createMemo(() => {
     const run = visibleRun();
-    return run && run.status !== "running" && isFinishingUpdateCampaign(props.updateSchedule)
-      ? run
-      : null;
+    return run?.terminal && isFinishingUpdateCampaign(props.updateSchedule) ? run : null;
   });
   const leadingRun = () => (finishedRunBehindRestart() ? null : visibleRun());
 
@@ -301,30 +312,19 @@ export function SidebarUpdateCard(
         title: t("chat.sidebar.serverUpdatedTitle"),
       };
     }
-    const run = leadingRun();
-    if (run) {
-      const view = projectUpdateRun(run, props.connected ?? true);
+    const leading = leadingRun();
+    if (leading) {
       return {
-        title: view.headline,
+        title: leading.title,
         detail:
           props.statusBanner?.source === "read"
             ? props.statusBanner.text
             : !latest(targetReady)
               ? t("updates.sidebar.checkFailed")
-              : view.compactLabel,
-        timestampMs: run.status === "running" ? run.createdAtMs : run.finishedAtMs,
-        icon: (
-          <Icon
-            name={
-              run.status === "running"
-                ? "refresh"
-                : run.status === "succeeded"
-                  ? "check"
-                  : "alertTriangle"
-            }
-          />
-        ),
-        severity: run.status === "failed" ? ("error" as const) : ("warning" as const),
+              : leading.detail,
+        timestampMs: leading.timestampMs,
+        icon: <Icon name={leading.icon} />,
+        severity: leading.error ? ("error" as const) : ("warning" as const),
       };
     }
     const campaign = props.updateSchedule?.campaign;
@@ -353,7 +353,7 @@ export function SidebarUpdateCard(
             t("updates.sidebar.availableSummary")),
       icon: <Icon name={statusBanner ? "alertTriangle" : busy ? "refresh" : "download"} />,
       severity:
-        statusBanner?.tone === "danger" || finishedRunBehindRestart()?.status === "failed"
+        statusBanner?.tone === "danger" || finishedRunBehindRestart()?.error
           ? ("error" as const)
           : ("warning" as const),
       title: blocked
@@ -500,8 +500,10 @@ export function SidebarUpdateCard(
     );
   }
 
-  function RecordedRunCard(current: { run: UpdateRunRecord; beside?: boolean }) {
-    const view = createMemo(() => projectUpdateRun(current.run, props.connected ?? true));
+  function RecordedRunCard(current: {
+    run: NonNullable<ReturnType<typeof visibleRun>>;
+    beside?: boolean;
+  }) {
     return (
       <div class="sidebar-update-card" role="status" aria-live="polite">
         {/* Beside a campaign, that campaign's card owns the shared status. */}
@@ -513,20 +515,12 @@ export function SidebarUpdateCard(
           onClick={openRun}
         >
           <span class="sidebar-update-card__icon" aria-hidden="true">
-            <Icon
-              name={
-                current.run.status === "running"
-                  ? "refresh"
-                  : current.run.status === "succeeded"
-                    ? "check"
-                    : "alertTriangle"
-              }
-            />
+            <Icon name={current.run.icon} />
           </span>
           <span class="sidebar-update-card__text sidebar-update-card__text--stacked">
-            <span class="sidebar-update-card__title">{view().headline}</span>
-            {view().compactLabel ? (
-              <span class="sidebar-update-card__subtitle">{view().compactLabel}</span>
+            <span class="sidebar-update-card__title">{current.run.title}</span>
+            {current.run.detail ? (
+              <span class="sidebar-update-card__subtitle">{current.run.detail}</span>
             ) : null}
           </span>
         </button>
