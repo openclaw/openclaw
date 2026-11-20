@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -306,6 +307,76 @@ describe("managed local embedding setup health check", () => {
       await closed;
     }
   }, 30_000);
+
+  it.each([
+    ["provider", "space"],
+    ["space", "provider"],
+  ])(
+    "preserves confirmed provider failure around unavailable inspection (%j)",
+    async (first, second) => {
+      const order = [first, second];
+      const stateDir = await createState(false);
+      const originals = new Map<string, Buffer>();
+      for (const agentId of order) {
+        const file = await createSemanticIndex(stateDir, model, agentId);
+        originals.set(file, await fs.readFile(file));
+      }
+      const prepare = sqliteRuntime.prepareSqliteReadOnlyLocation;
+      const mkdtemp = fsSync.mkdtempSync.bind(fsSync);
+      const snapshot = vi
+        .spyOn(sqliteRuntime, "prepareSqliteReadOnlyLocation")
+        .mockImplementation(async (file, options) => {
+          if (file !== agentDatabasePath(stateDir, "space")) {
+            return prepare(file, options);
+          }
+          const allocation = vi.spyOn(fsSync, "mkdtempSync").mockImplementation((...args) => {
+            if (args[0].includes("openclaw-sqlite-readonly-")) {
+              throw Object.assign(new Error("Temporary inspection storage exhausted"), {
+                code: "ENOSPC",
+              });
+            }
+            return mkdtemp(...args);
+          });
+          try {
+            return await prepare(file, options);
+          } finally {
+            allocation.mockRestore();
+          }
+        });
+      try {
+        const findings = await captureCheck(async ({ provider }) => ({
+          provider,
+          ...setupFailure,
+        })).detect({
+          ...context(stateDir, "local"),
+          cfg: {
+            memory: { search: { provider: "local" } },
+            agents: { entries: Object.fromEntries(order.map((agentId) => [agentId, {}])) },
+          },
+        });
+        expect(findings).toHaveLength(2);
+        expect(findings).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              severity: "warning",
+              errorCode: "memory-index-inspection-unavailable",
+              target: "space",
+            }),
+            expect.objectContaining({
+              severity: "error",
+              requirement: "managed-llama-cpp-setup",
+              target: "provider/local",
+            }),
+          ]),
+        );
+        for (const [file, bytes] of originals) {
+          expect(await fs.readFile(file)).toEqual(bytes);
+        }
+      } finally {
+        snapshot.mockRestore();
+      }
+    },
+  );
 
   it("returns a structured non-ready result when an agent database cannot be inspected", async () => {
     const stateDir = await createState(false);

@@ -19,7 +19,7 @@ describePosix("artifact-build failure with successful primary CI", () => {
         {
           id: 3,
           suiteId: 20,
-          event: "workflow_dispatch",
+          event: "push",
           conclusion,
           status: conclusion === null ? "in_progress" : "completed",
         },
@@ -51,7 +51,7 @@ describePosix("artifact-build failure with successful primary CI", () => {
       // Final authority must hold after selecting one gate from both event lanes.
       state.priorCi.currentGateChecks = [
         { id: 1, suiteId: 30, event: "pull_request", conclusion: "success" },
-        { id: 3, suiteId: 20, event: "workflow_dispatch", conclusion: "success" },
+        { id: 3, suiteId: 20, event: "push", conclusion: "success" },
       ];
       state.priorCi.membership = "member";
       state.priorCi.rulesetBypass = "always";

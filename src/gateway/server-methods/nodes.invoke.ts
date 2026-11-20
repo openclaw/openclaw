@@ -386,7 +386,6 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         const runtimeAuthorityError = () =>
           resolveNodeInvokeRuntimeAuthorityError({
             context,
-            client,
             approvalAuthority: forwardedParams.approvalAuthority,
           });
         const isForwardedApprovalAuthorityActive = () =>
@@ -536,6 +535,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             // Pending actions outlive this RPC. Closure-bound agent or approval
             // authority cannot be transferred to a later device pull.
             !client?.internal?.agentRuntimeIdentity &&
+            !client?.internal?.operatorRunAuthority &&
             !forwardedParams.approvalAuthority
           ) {
             // Foreground-only iOS commands become pullable pending actions instead
@@ -547,6 +547,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               command,
               paramsJSON,
               idempotencyKey: p.idempotencyKey,
+              openclawIdPrincipal: client?.internal?.openclawIdPrincipal,
               ttlMs: nodeInvokePolicy.pendingActionTtlMs,
               maxPerNode: nodeInvokePolicy.pendingActionMaxPerNode,
             });

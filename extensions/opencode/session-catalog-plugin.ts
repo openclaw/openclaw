@@ -191,7 +191,7 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
       messages: {
         invalidNodeCursor: "OpenCode node returned an invalid cursor",
         invalidNodeSessionPage: "OpenCode node returned an invalid session page",
-        invalidNodeTranscriptPage: "OpenCode node returned an invalid transcript page",
+        invalidNodeTranscriptPage: "OpenCode node returned an invalid chat history page",
         invalidHostId: "OpenCode session catalog hostId is invalid",
         localReadFailed: "Local OpenCode sessions are unavailable",
         nodeInvokeFailed: "Paired node OpenCode sessions are unavailable",

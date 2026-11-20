@@ -117,8 +117,7 @@ it("clamps the confirmation inside shifted visual viewports", () => {
 
 it("exposes dialog semantics and keeps keyboard focus inside the confirmation", () => {
   const popover = fixture().open();
-  const check = element(".chat-confirm-popover__check", popover);
-  expect(check).toBeInstanceOf(HTMLInputElement);
+  const check = element('input[type="checkbox"]', popover);
   const cancel = button(".chat-confirm-popover__cancel", popover);
   const confirm = button(".chat-confirm-popover__yes", popover);
   expect([popover.getAttribute("role"), popover.getAttribute("aria-modal")]).toEqual([

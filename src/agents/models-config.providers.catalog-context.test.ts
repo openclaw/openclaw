@@ -230,6 +230,28 @@ it("bypasses a selected account's HTTP cache on explicit refresh", async () => {
   }
 });
 
+it("does not start OAuth refresh after catalog preparation closes during runtime loading", async () => {
+  let active = true;
+  await prepareProviderCatalogRun({
+    provider: catalogProvider("openai", "OpenAI", async () => null),
+    config: {},
+    env: {},
+    agentDir: tempDirs.make("catalog-oauth-closed-"),
+    authStore: createAuthProfileStoreFixture({
+      "openai:selected": createOAuthRefreshCredential({ expires: 1 }),
+    }),
+    resolveProviderAuth: () => {
+      queueMicrotask(() => {
+        active = false;
+      });
+      return { apiKey: undefined, profileId: "openai:selected", mode: "oauth", source: "profile" };
+    },
+    resolveProviderApiKey: () => ({ apiKey: undefined }),
+    isActive: () => active,
+  });
+  expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
+});
+
 it("passes refreshed OAuth grant metadata to the catalog", async () => {
   const agentDir = tempDirs.make("catalog-oauth-grant-");
   const profileId = "openai:sharing";

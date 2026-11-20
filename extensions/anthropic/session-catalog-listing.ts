@@ -125,9 +125,9 @@ export async function readLocalClaudeTranscriptPage(
   const handle = await fs.open(filePath, "r");
   try {
     const stat = await handle.stat();
-    const requestedEnd = params.cursor ? decodeOffset(params.cursor, "transcript") : stat.size;
+    const requestedEnd = params.cursor ? decodeOffset(params.cursor, "chat history") : stat.size;
     if (requestedEnd > stat.size) {
-      throw new ClaudeCatalogParamsError("transcript cursor is invalid");
+      throw new ClaudeCatalogParamsError("chat history cursor is invalid");
     }
     let position = requestedEnd;
     let scanned = 0;
@@ -143,7 +143,7 @@ export async function readLocalClaudeTranscriptPage(
       const chunk = Buffer.allocUnsafe(size);
       const filled = await readFileWindowFully(handle, chunk, position);
       if (filled !== size) {
-        throw new Error("Claude transcript changed while it was being read");
+        throw new Error("Claude chat history changed while it was being read");
       }
       scanned += filled;
       let right = filled;
@@ -185,7 +185,7 @@ export async function readLocalClaudeTranscriptPage(
       }
     }
     if (position > 0 && found.length < params.limit) {
-      throw new Error("Claude transcript page exceeded the safe scan limit");
+      throw new Error("Claude chat history page exceeded the safe scan limit");
     }
     const requested = found.slice(0, params.limit);
     const selected: typeof requested = [];
@@ -381,7 +381,7 @@ export async function readClaudeSessionTranscript(params: {
   limit: number;
   allowProcessHomeFallback?: boolean;
 }): Promise<ClaudeSessionTranscriptPage> {
-  const cursor = readOptionalCursor(params.cursor, "transcript");
+  const cursor = readOptionalCursor(params.cursor, "chat history");
   if (params.hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
     assertClaudeLocalAccess(params.hostId, params.allowProcessHomeFallback);
     return {
@@ -431,9 +431,9 @@ export async function readClaudeSessionTranscript(params: {
     page.threadId !== params.threadId ||
     Buffer.byteLength(JSON.stringify(page), "utf8") > MAX_TRANSCRIPT_PAGE_BYTES
   ) {
-    throw new Error("Claude node returned an invalid transcript page");
+    throw new Error("Claude node returned an invalid chat history page");
   }
-  const nextCursor = readNodePageCursor(page, "Claude node returned an invalid transcript page");
+  const nextCursor = readNodePageCursor(page, "Claude node returned an invalid chat history page");
   return {
     hostId: params.hostId,
     label: resolveNodeLabel(node),

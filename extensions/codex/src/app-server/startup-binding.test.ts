@@ -96,20 +96,14 @@ async function writeRollout(records: string | string[]) {
   await fs.writeFile(rolloutPath, Array.isArray(records) ? records.join("\n") : records);
 }
 
-it.each([
-  { pressure: "bytes", authority: "expected" },
-  { pressure: "bytes", authority: "ordinary" },
-  { pressure: "tokens", authority: "expected" },
-  { pressure: "tokens", authority: "revoked" },
-])(
-  "handles preserve-only $pressure pressure with $authority authority",
-  async ({ pressure, authority }) => {
+it.each(["expected", "ordinary", "revoked"])(
+  "handles preserve-only token pressure with %s authority",
+  async (authority) => {
     await writeExistingBinding({ preserveNativeModel: true });
     const before = await readCodexAppServerBinding(sessionFile);
     await writeRollout(tokenRecord(120_000, 128_000) + "\n");
     const operation = rotateBinding({
       binding: before,
-      config: pressure === "bytes" ? byteLimitConfig("1b") : undefined,
       expectedSessionRuntimeOwnership:
         authority === "expected" ? { model: "native", auth: "host" } : undefined,
       ...(authority === "revoked"
@@ -215,6 +209,20 @@ it.each([
     expectedContextTokens: 1_050_000,
   },
   {
+    name: "large saved rollout after native compaction",
+    records: [
+      tokenRecord(120_000, 128_000),
+      JSON.stringify({ type: "response_item", payload: { text: "x".repeat(2_100_000) } }),
+      JSON.stringify({
+        type: "compacted",
+        payload: { message: "summary", replacement_history: [] },
+      }),
+      tokenRecord(12_000, 128_000, 500_000),
+    ],
+    maxBytes: "2mb",
+    expectedContextTokens: 128_000,
+  },
+  {
     name: "materialized supervised native thread",
     records: [tokenRecord(120_000, 128_000)],
     maxBytes: "1b",
@@ -251,8 +259,8 @@ it.each(["outside file", "file symlink", "parent symlink"] as const)(
     const outsideDir = path.join(tempDir, "outside");
     const outsidePath = path.join(outsideDir, "rollout-thread-existing.jsonl");
     await fs.mkdir(outsideDir, { recursive: true });
-    await fs.writeFile(outsidePath, "x".repeat(2_000));
-    await fs.writeFile(rolloutPath, "x".repeat(2_000));
+    await fs.writeFile(outsidePath, tokenRecord(12_000, 128_000));
+    await fs.writeFile(rolloutPath, tokenRecord(120_000, 128_000));
     let storedPath = outsidePath;
     if (escape === "file symlink") {
       storedPath = path.join(rolloutDir, "symlink-rollout-thread-existing.jsonl");
@@ -273,12 +281,15 @@ it.each(["outside file", "file symlink", "parent symlink"] as const)(
   },
 );
 
-it("honors custom Codex home rollout files for native rollout limits", async () => {
+it("honors custom Codex home rollout files for native token pressure", async () => {
   const codexHome = path.join(tempDir, "custom-codex-home");
   await writeExistingBinding({ dynamicToolsFingerprint: "[]" });
   rolloutDir = path.join(codexHome, "sessions");
   await fs.mkdir(rolloutDir, { recursive: true });
-  await fs.writeFile(path.join(rolloutDir, "rollout-thread-existing.jsonl"), "x".repeat(2_000));
+  await fs.writeFile(
+    path.join(rolloutDir, "rollout-thread-existing.jsonl"),
+    tokenRecord(120_000, 128_000),
+  );
 
   await expectRotated({ codexHome, config: byteLimitConfig(1_000) });
 });

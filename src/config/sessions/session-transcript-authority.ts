@@ -286,6 +286,7 @@ function isTranscriptReceipt(value: unknown): value is SessionTranscriptAuthorit
       ![row.rawSeq, row.updatedAt, row.indexedSeq, row.activeMessageCount].every(nullableNumber) ||
       (row.needsRebuild !== null && row.needsRebuild !== 0 && row.needsRebuild !== 1) ||
       (row.projectionReady !== undefined && row.projectionReady !== true) ||
+      (row.hasMessages !== undefined && typeof row.hasMessages !== "boolean") ||
       (row.lastMessagePreview !== undefined &&
         row.lastMessagePreview !== null &&
         typeof row.lastMessagePreview !== "string") ||

@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 import { SettingsRow, SettingsSection } from "../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../i18n/locales/en-plugin-management.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
@@ -161,7 +162,7 @@ export function PluginManager() {
                 fallback={(error) => {
                   const message = () => {
                     const value = error();
-                    return value instanceof Error ? value.message : String(value);
+                    return formatUiError(value);
                   };
                   return <SettingsRow title={message()} role="alert" carapace />;
                 }}

@@ -117,7 +117,7 @@ export function registerServiceCollectionTests() {
           expect(running).toBe(false);
           expect(execution).toMatchObject({
             preManagedServiceStop: { stopped: true, running: true },
-            result: revoked ? { status: "error", reason: "requester-revoked" } : { status: "ok" },
+            result: revoked ? { status: "error", reason: "interrupted" } : { status: "ok" },
             mutationStarted: !revoked,
           });
           expect(published).toHaveBeenCalledTimes(revoked ? 0 : 1);

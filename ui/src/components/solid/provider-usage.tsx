@@ -1,6 +1,5 @@
-/// <reference lib="es2024.collection" />
-
 import type { JSX } from "@solidjs/web";
+/// <reference lib="es2024.collection" />
 import { createMemo, For, Repeat, Show } from "solid-js";
 import type {
   ProviderUsageSnapshot,
@@ -11,7 +10,11 @@ import type {
 import { registerProviderUsageEnglish } from "../../i18n/locales/en-provider-usage.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
-import { formatRelativeTimestamp } from "../../lib/reactive/format.ts";
+import {
+  formatDateTimeMs,
+  formatNumber,
+  formatRelativeTimestamp,
+} from "../../lib/reactive/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/provider-usage.css";
@@ -80,15 +83,14 @@ function groupUsageWindows(windows: UsageWindow[]): Map<string, UsageWindow[]> {
 function createProviderAmountFormatter(unit: string): (amount: number) => string {
   const normalizedUnit = unit.trim().toUpperCase();
   if (["USD", "EUR", "GBP", "CNY", "JPY"].includes(normalizedUnit)) {
-    const formatter = new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency: normalizedUnit,
-      maximumFractionDigits: normalizedUnit === "JPY" ? 0 : 2,
-    });
-    return (amount) => formatter.format(amount);
+    return (amount) =>
+      formatNumber(amount, {
+        style: "currency",
+        currency: normalizedUnit,
+        maximumFractionDigits: normalizedUnit === "JPY" ? 0 : 2,
+      });
   }
-  const formatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
-  return (amount) => `${formatter.format(amount)} ${unit}`;
+  return (amount) => `${formatNumber(amount, { maximumFractionDigits: 2 })} ${unit}`;
 }
 
 /** A reset as a calendar date plus "in 3 hours", or nothing when it is unknown or past. */
@@ -97,12 +99,12 @@ function resetText(window: UsageWindow): { date?: string; relative?: string } {
     return {};
   }
   return {
-    date: new Intl.DateTimeFormat(undefined, {
+    date: formatDateTimeMs(window.resetAt, {
       month: "short",
       day: "numeric",
       hour: "numeric",
       minute: "2-digit",
-    }).format(new Date(window.resetAt)),
+    }),
     relative: formatRelativeTimestamp(window.resetAt),
   };
 }
@@ -303,7 +305,7 @@ function BilledCost(props: { history: CostHistory }) {
           {[
             totals().requests > 0
               ? t("usage.providerUsage.requests", {
-                  count: new Intl.NumberFormat().format(totals().requests),
+                  count: formatNumber(totals().requests),
                 })
               : null,
             t("usage.providerUsage.inputTokens", {

@@ -1,14 +1,33 @@
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import * as approval from "./device-pairing-approval.kernel.js";
+import {
+  cancelBrowserPairRequestInWorker,
+  collectBrowserPairRequestInWorker,
+  decideBrowserPairRequestInWorker,
+  inspectBrowserPairRequestInWorker,
+  startBrowserPairRequestInWorker,
+} from "./device-pairing-browser-code.worker.js";
 import * as core from "./device-pairing-core.kernel.js";
 import { devicePairingMutation } from "./device-pairing-dispatch.worker.js";
 import {
   registerDevicePairingJoinCodeInWorker,
   redeemDevicePairingJoinCodeInWorker,
 } from "./device-pairing-join-code.worker.js";
+import {
+  approveOpenClawIdNodeInWorker,
+  consumeOpenClawIdNodePairingInWorker,
+  removeOpenClawIdNodePairingsInWorker,
+} from "./device-pairing-openclaw-id.worker.js";
 import * as tokens from "./device-pairing-tokens.kernel.js";
 
 export const devicePairingOperations = {
+  "devicePairing.approveOpenClawIdNode": devicePairingMutation(
+    (input: Parameters<typeof approveOpenClawIdNodeInWorker>[1], { database }) =>
+      approveOpenClawIdNodeInWorker(database.db, input),
+  ),
+  "devicePairing.removeOpenClawIdNodes": devicePairingMutation(
+    removeOpenClawIdNodePairingsInWorker,
+  ),
   "devicePairing.registerJoinCode": devicePairingMutation(
     (input: Parameters<typeof registerDevicePairingJoinCodeInWorker>[1], { database }) =>
       registerDevicePairingJoinCodeInWorker(database.db, input),
@@ -18,6 +37,30 @@ export const devicePairingOperations = {
     (input: Parameters<typeof redeemDevicePairingJoinCodeInWorker>[1], { database }) =>
       redeemDevicePairingJoinCodeInWorker(database.db, input),
     { publishPairing: false },
+  ),
+  "devicePairing.startBrowserRequest": devicePairingMutation(
+    (input: Parameters<typeof startBrowserPairRequestInWorker>[1], { database }) =>
+      startBrowserPairRequestInWorker(database.db, input),
+    { publishPairing: false },
+  ),
+  "devicePairing.cancelBrowserRequest": devicePairingMutation(
+    (input: Parameters<typeof cancelBrowserPairRequestInWorker>[1], { database }) =>
+      cancelBrowserPairRequestInWorker(database.db, input),
+    { publishPairing: false },
+  ),
+  "devicePairing.collectBrowserRequest": devicePairingMutation(
+    (input: Parameters<typeof collectBrowserPairRequestInWorker>[1], { database }) =>
+      collectBrowserPairRequestInWorker(database.db, input),
+    { publishPairing: false },
+  ),
+  "devicePairing.inspectBrowserRequest": devicePairingMutation(
+    (input: Parameters<typeof inspectBrowserPairRequestInWorker>[1], { database }) =>
+      inspectBrowserPairRequestInWorker(database.db, input),
+    { publishPairing: false },
+  ),
+  "devicePairing.decideBrowserRequest": devicePairingMutation(
+    (input: Parameters<typeof decideBrowserPairRequestInWorker>[1], { database }) =>
+      decideBrowserPairRequestInWorker(database.db, input),
   ),
   "devicePairing.request": devicePairingMutation(
     (input: { request: Parameters<typeof core.requestDevicePairingInWorker>[0]; nowMs: number }) =>
@@ -93,9 +136,17 @@ export const devicePairingOperations = {
   "devicePairing.verifyToken": devicePairingMutation(tokens.verifyDeviceTokenInWorker, {
     pairedDeviceId: (input) => input.deviceId,
   }),
-  "devicePairing.ensureToken": devicePairingMutation(tokens.ensureDeviceTokenInWorker, {
-    pairedDeviceId: (input) => input.deviceId,
-  }),
+  "devicePairing.ensureToken": devicePairingMutation(
+    (input: Parameters<typeof tokens.ensureDeviceTokenInWorker>[0], { database }) => {
+      const token = tokens.ensureDeviceTokenInWorker(input);
+      if (token?.role === "node" && token.approval) {
+        // Same transaction as issuance: explicit removal must not restore this listing's eligibility.
+        consumeOpenClawIdNodePairingInWorker(database.db, token.approval);
+      }
+      return token;
+    },
+    { pairedDeviceId: (input) => input.deviceId },
+  ),
   "devicePairing.rotateToken": devicePairingMutation(
     (input: Parameters<typeof tokens.rotateDeviceTokenInWorker>[0], { recordRetiredNodeToken }) =>
       tokens.rotateDeviceTokenInWorker(input, recordRetiredNodeToken),

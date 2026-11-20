@@ -89,6 +89,18 @@ const snapshotSchema = json.object(
           ),
           permissionMode: json.optional(permissionModeSchema),
           defaultPermissionMode: json.optional(permissionModeSchema),
+          contextWindowDisplay: json.optional(
+            json.object({
+              contextWindow: json.optional(json.text),
+              contextWindowDefault: json.optional(json.text),
+              contextWindows: json.optional(
+                json.array(
+                  json.object({ id: json.text, label: json.text, contextWindow: nonnegative }),
+                  30,
+                ),
+              ),
+            }),
+          ),
         }),
       ),
     ),
@@ -181,8 +193,8 @@ export async function parseSnapshotRecord(
   return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
 }
 
-// Refill rows whose automatic full-message recovery was not retained for reload.
-export const CHAT_SNAPSHOT_PROJECTION_VERSION = 14;
+// Refill history that omitted structured cancellation and subagent completion receipts.
+export const CHAT_SNAPSHOT_PROJECTION_VERSION = 16;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 
 export async function createSnapshotRecord(

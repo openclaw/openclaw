@@ -148,12 +148,34 @@ describe("persistUserTurnTranscript", () => {
     );
   });
 
+  it("keeps shared App references in saved history without changing user text", async () => {
+    const appContext = [
+      {
+        title: "Helmet shell",
+        uri: "shell://specimens/helmet",
+        icon: "https://example.test/shell.png",
+      },
+    ];
+    await writeInput(
+      { text: "Describe this shell.", appContext, timestamp: 123 },
+      { updateMode: "none" },
+    );
+    const displayed = stripEnvelopeFromMessages([await readMessage()])[0];
+    expect(displayed).toHaveProperty("content", "Describe this shell.");
+    expect(displayed).toHaveProperty("__openclaw.appContext", appContext);
+  });
+
   it("does not undo hook redaction when round-tripping captured context", async () => {
     const snapshot = { page: "chat", title: "Parser work", workspace: "/projects/parser" };
     const text = "Explain this task";
     const modelText = text + "\n\n" + formatChatWorkContext(snapshot);
     await writeInput(
-      { text: modelText, workContext: { snapshot, text }, timestamp: 123 },
+      {
+        text: modelText,
+        workContext: { snapshot, text },
+        appContext: [{ title: "Private reference" }],
+        timestamp: 123,
+      },
       {
         updateMode: "none",
         beforeMessageWrite: ({ message }) => ({ ...message, content: "[redacted]" }),
@@ -163,6 +185,7 @@ describe("persistUserTurnTranscript", () => {
     const displayed = stripEnvelopeFromMessages([stored])[0];
     expect(stored).toHaveProperty("content", "[redacted]");
     expect(displayed).toHaveProperty("content", "[redacted]");
+    expect(stored).not.toHaveProperty("__openclaw.appContext");
     expect(stored).not.toHaveProperty("__openclaw.workContext");
     expect(displayed).not.toHaveProperty("__openclaw.workContext.text");
   });
@@ -212,6 +235,31 @@ describe("persistUserTurnTranscript", () => {
       content: "approved continuation",
     });
     expect(persisted).not.toHaveProperty("__openclaw.workContext");
+  });
+
+  it("keeps the human-addressed marker when a write hook replaces metadata", async () => {
+    const recorder = makeRecorder({
+      input: {
+        text: "@Bob some of the stickers are cool",
+        timestamp: 123,
+        idempotencyKey: "addressed:user",
+        mentions: [{ profileId: "bob", start: 0, end: 4 }],
+        humanAddressed: true,
+      },
+      // A rewrite drops the selections with the text, never the admitted dispatch decision.
+      beforeMessageWrite: ({ message }) => ({
+        ...message,
+        content: "[redacted]",
+        __openclaw: {},
+      }),
+    });
+    await recorder.persistApproved();
+    const persisted = await readMessage();
+    expect(persisted).toMatchObject({
+      content: "[redacted]",
+      __openclaw: { humanAddressed: true },
+    });
+    expect(persisted).not.toHaveProperty("__openclaw.humanMentions");
   });
 
   it("resolves committed hook metadata and redacted content for runtime replay", async () => {

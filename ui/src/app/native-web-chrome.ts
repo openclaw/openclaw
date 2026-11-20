@@ -23,6 +23,14 @@ export function isNativeWebChromeHost(): boolean {
   return (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_WEB_CHROME__"] === true;
 }
 
+export function isNativeMacWebChromeHost(): boolean {
+  return (
+    isNativeWebChromeHost() &&
+    document.documentElement.classList.contains("openclaw-native-macos") &&
+    !isNativeEmbedHost()
+  );
+}
+
 export function nativeEmbedHost(): {
   platform: "ios" | "macos" | "android";
   formFactor: "phone" | "pad" | "desktop";

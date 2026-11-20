@@ -53,7 +53,8 @@ runs:
   using: composite
   steps:
     - name: Prepare Git owner
-      uses: openclaw/openclaw/.github/actions/git-owner@c30efcb58a050bc5c449381e732125662e87faae
+      # policy.py requires this owner's lifetime_fds contract for child processes.
+      uses: openclaw/openclaw/.github/actions/git-owner@8743f1bfafa41aebdb3a33a7137eaa6d70bd0eb7
 
     - name: Create generated PR tokens
       id: tokens

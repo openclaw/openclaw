@@ -22,22 +22,24 @@ export async function expectAttachmentErrorToast(toast: Locator, minimumContrast
     probe.style.color = "var(--popover)";
     const neutral = getComputedStyle(probe).color;
     probe.remove();
-    const dismiss = element.querySelector(".app-toast__dismiss");
-    if (!dismiss) {
-      throw new Error("Toast has no dismiss control");
+    const icon = element.querySelector(".app-toast__icon");
+    if (!icon || !element.querySelector(".app-toast__dismiss")) {
+      throw new Error("Error toast has no severity icon or dismiss control");
     }
     return {
       foreground: getComputedStyle(element).color,
       background: getComputedStyle(element).backgroundColor,
-      dismiss: getComputedStyle(dismiss).color,
+      icon: getComputedStyle(icon).color,
       danger,
       neutral,
     };
   });
   const colors = await toast.page().evaluate(resolveRenderedColors, raw);
-  expect(colors.foreground).toEqual(colors.danger);
-  expect(colors.dismiss).toEqual(colors.danger);
-  expect(colors.background).not.toEqual(colors.neutral);
+  // The icon carries the only error signal; the card keeps the neutral surface.
+  expect(colors.icon).toEqual(colors.danger);
+  expect(colors.foreground).not.toEqual(colors.danger);
+  expect(colors.background).toEqual(colors.neutral);
+  expect(await toast.getAttribute("role")).toBe("alert");
   const [a, b] = [luminance(colors.foreground), luminance(colors.background)];
   expect((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)).toBeGreaterThanOrEqual(minimumContrast);
 }

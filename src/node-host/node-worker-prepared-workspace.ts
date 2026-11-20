@@ -120,6 +120,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
           !source.baseCommit ||
           source.baseCommit !== prepared.baseCommit ||
           (await captureManifest({
+            mode: "eligible",
             workspaceDir: workspace.workspaceDir,
             manifestHome: workspace.homeDir,
             baseCommit: source.baseCommit,

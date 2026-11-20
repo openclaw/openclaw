@@ -50,6 +50,7 @@ FAQ: https://docs.openclaw.ai/start/faq
 }
 
 $script:InstallExitCode = 0
+$script:NodeSecurityWarningPrinted = $false
 
 function Fail-Install {
     param([int]$Code = 1)
@@ -331,8 +332,8 @@ function Test-NodeSqliteSupported {
 function Test-NodePackageEngine {
     param([string]$Version, [string]$Engine = $script:NodePackageEngine)
 
-    # Fallback covers latest and extended-stable until both publish relaxed engines.
-    if ([string]::IsNullOrWhiteSpace($Engine)) { $Engine = ">=24.22.1 <25 || >=26.12.1" }
+    # Unknown package metadata must not trigger a download for a recommendation alone.
+    if ([string]::IsNullOrWhiteSpace($Engine)) { $Engine = ">=24.16.0 <25 || >=26.1.0" }
     $versionMatch = [regex]::Match($Version, '^v?(\d+\.\d+\.\d+)')
     if (-not $versionMatch.Success) { return $false }
     $current = [version]$versionMatch.Groups[1].Value
@@ -351,7 +352,7 @@ function Test-NodePackageEngine {
 
 function Resolve-NodePackageEngine {
     param([string]$RepoDir)
-    $script:NodePackageEngine = ">=24.22.1 <25 || >=26.12.1"
+    $script:NodePackageEngine = ">=24.16.0 <25 || >=26.1.0"
     try {
         if ($InstallMethod -eq 'git') {
             $package = Get-Content -LiteralPath (Join-Path $RepoDir 'package.json') -Raw | ConvertFrom-Json
@@ -443,15 +444,23 @@ process.stdout.write(JSON.stringify(result));
                 $sqlite.text -and $sqlite.blob -and $sqlite.json -and -not $sqlite.error
             ) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
+                $release = [version]([regex]::Match($nodeVersion, '\d+\.\d+\.\d+').Value)
+                if (-not $script:NodeSecurityWarningPrinted -and (
+                    ($release.Major -eq 24 -and $release -lt [version]'24.22.1') -or
+                    ($release.Major -eq 26 -and $release -lt [version]'26.12.1')
+                )) {
+                    [Console]::Error.WriteLine("SECURITY WARNING: Node.js $nodeVersion may trust TLS certificates signed with keys compromised in the October 2026 eMudhra incident. Upgrade to Node 24.22.1+ on the 24.x line or Node 26.12.1+. Continuing with this compatible runtime.")
+                    $script:NodeSecurityWarningPrinted = $true
+                }
                 return $true
             } elseif (-not (Test-NodePackageEngine -Version $nodeVersion)) {
                 Write-Host "[!] Node.js $nodeVersion does not satisfy the target package; upgrading Node.js" -ForegroundColor Yellow
                 return $false
             } elseif ($sqlite.available -and -not $sqlite.text -and -not $sqlite.error) {
-                Write-Host "[!] Node $nodeVersion`: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.22.1+/26.12.1+ or a build with the fix" -ForegroundColor Yellow
+                Write-Host "[!] Node $nodeVersion`: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix" -ForegroundColor Yellow
                 return $false
             } elseif ($sqlite.error -or -not $sqlite.blob -or -not $sqlite.json) {
-                Write-Host "[!] Node $nodeVersion`: node:sqlite NUL round-trip capability check failed; use 24.22.1+/26.12.1+ or a build with the fix" -ForegroundColor Yellow
+                Write-Host "[!] Node $nodeVersion`: node:sqlite NUL round-trip capability check failed; use 24.16+/26.1+ or a build with the fix" -ForegroundColor Yellow
                 return $false
             } elseif (Test-NodeVersionSupported -Version $nodeVersion) {
                 $sqliteVersionLabel = if ([string]::IsNullOrWhiteSpace($sqliteVersion)) {

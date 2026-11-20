@@ -195,6 +195,18 @@ describe("run-oxlint", () => {
     [["--tsconfig=config/tsconfig/oxlint.core.json", "--tsconfig=extensions/tsconfig.json"], true],
     [["--tsconfig", "tsconfig.ui.json", "ui/src/main.ts"], false],
     [["--tsconfig=tsconfig.ui.json", "--tsconfig=config/tsconfig/oxlint.core.json"], false],
+    ...["tooling", "scripts", "other", "e2e"].flatMap<[string[], boolean]>((name) => [
+      [["--tsconfig", `test/tsconfig/tsconfig.test.root.${name}.json`], false],
+      [[`--tsconfig=test/tsconfig/tsconfig.test.root.${name}.json`], false],
+      [
+        [
+          `--tsconfig=test/tsconfig/tsconfig.test.root.${name}.json`,
+          "--tsconfig=extensions/tsconfig.json",
+        ],
+        true,
+      ],
+    ]),
+    [["--tsconfig", "test/tsconfig/tsconfig.test.root.unknown.json"], true],
     [["--help"], false],
   ] satisfies Array<[string[], boolean]>)(
     "prepares extension boundaries for %j: %s",

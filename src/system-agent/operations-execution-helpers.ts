@@ -129,7 +129,7 @@ export function formatConfigValidationLine(snapshot: ConfigFileSnapshot): string
 
 /** A CLI command already wrote its failure to the runtime before calling exit. */
 export class SystemAgentOperationExitError extends Error {
-  constructor(code: number | undefined) {
+  constructor(readonly code: number | undefined) {
     super(`operation exited with code ${code}`);
   }
 }
@@ -275,6 +275,9 @@ export async function applyPersistentOperation(params: {
     );
   }
   runtime.log(`[openclaw] done: ${auditOperation}`);
+  runtime.log(
+    `Completed only ${auditOperation}. Other requested actions are not done unless separately confirmed.`,
+  );
   return {
     applied: true,
     ...(outcome.bootstrapPending === undefined

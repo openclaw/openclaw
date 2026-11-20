@@ -28,15 +28,12 @@
   --oc-bg-elevated: var(--bg-elevated);
 
   --oc-accent-primary: var(--accent);
-  --oc-accent-primary-hover: var(--accent-hover);
   --oc-accent-primary-deep: var(--primary-hover);
   --oc-accent-secondary: var(--accent-2);
-  --oc-accent-secondary-deep: var(--accent-2-muted);
 
   --oc-text-primary: var(--text-strong);
   --oc-text-secondary: var(--text);
   --oc-text-muted: var(--muted);
-  --oc-text-on-accent: var(--primary-foreground);
 
   --oc-border-subtle: var(--border);
   --oc-border-strong: var(--border-strong);
@@ -47,16 +44,11 @@
   --oc-surface-interactive: var(--bg-elevated);
   --oc-surface-interactive-hover: var(--surface-hover);
   --oc-surface-accent-soft: var(--accent-subtle);
-  --oc-surface-secondary-soft: var(--accent-2-subtle);
-  --oc-selection-bg: var(--selection-bg);
   --oc-focus-ring: var(--ring);
 
-  --oc-status-success-bg: var(--ok-subtle);
   --oc-status-success-fg: var(--ok);
-  --oc-status-warning-bg: var(--warn-subtle);
   --oc-status-warning-fg: var(--warn);
   --oc-status-error-fg: var(--danger);
-  --oc-status-info-bg: var(--info-subtle);
   --oc-status-info-fg: var(--info);
 
   --oc-input-bg: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
@@ -66,23 +58,17 @@
   --oc-input-focus-ring: var(--focus);
 
   --oc-font-body: var(--font-body);
-  --oc-font-display: var(--font-display);
   --oc-font-mono: var(--mono);
   --oc-font-size-xs: var(--control-ui-text-xs);
   --oc-font-size-sm: var(--control-ui-text-sm);
   --oc-font-size-base: var(--control-ui-text-md);
-  --oc-font-size-md: var(--control-ui-text-md);
-  --oc-font-size-lg: var(--control-ui-text-lg);
 
   --oc-space-1: var(--space-1);
   --oc-space-2: var(--space-2);
   --oc-space-3: var(--space-3);
   --oc-space-4: var(--space-4);
   --oc-space-5: var(--space-5);
-  --oc-space-6: var(--space-6);
-  --oc-space-7: var(--space-7);
 
-  --oc-radius-full: var(--radius-full);
   --oc-radius-surface: var(--radius-lg);
   --oc-radius-control: var(--radius-md);
   --oc-radius-inset: var(--radius-sm);
@@ -352,11 +338,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   line-height: 1.45;
 }
 
-.oc-banner-action {
-  margin-left: auto;
-  flex: 0 0 auto;
-}
-
 .oc-empty {
   display: grid;
   min-height: 12rem;
@@ -551,7 +532,7 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .settings-page.oc-app-surface .btn.oc-action,
-.agents-home .btn:is(.agents-home__template-add, .agents-home__open).oc-action {
+.agents-home .btn.agents-home__template-add.oc-action {
   min-height: 0;
   gap: 6px;
   padding: 8px 14px;
@@ -576,15 +557,19 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   color: var(--primary-foreground);
 }
 
+.settings-page.oc-app-surface .btn.oc-action.primary:active:not(:disabled, [aria-disabled="true"]) {
+  background: var(--primary-active);
+  color: var(--primary-foreground);
+}
+
 .settings-page.oc-app-surface .btn.btn--sm.oc-action,
-.agents-home .btn.btn--sm:is(.agents-home__template-add, .agents-home__open).oc-action {
+.agents-home .btn.btn--sm.agents-home__template-add.oc-action {
   padding: 6px 10px;
   font-size: var(--oc-font-size-xs);
 }
 
 .settings-page.oc-app-surface .btn.oc-action:hover:not(:disabled),
-.agents-home
-  .btn:is(.agents-home__template-add, .agents-home__open).oc-action:hover:not(:disabled) {
+.agents-home .btn.agents-home__template-add.oc-action:hover:not(:disabled) {
   border-color: var(--oc-border-strong);
   background: var(--oc-surface-interactive-hover);
   color: var(--oc-text-primary);

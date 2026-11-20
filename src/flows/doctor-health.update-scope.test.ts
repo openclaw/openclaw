@@ -18,28 +18,20 @@ vi.mock("../agents/agent-scope.js", () => ({
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: obs.note }));
 vi.mock("../commands/backup-health.js", () => ({ noteBackupDoctorHint: () => {} }));
 vi.mock("../state/config-machine-state-write.js", () => ({ writeConfigMachineState: () => {} }));
-// mock-isolation: use a synthetic cloned project without querying operator project state.
-vi.mock("../projects/project-registry.js", () => ({
-  listProjectRegistry: async () => [{ repoRoot: "/synthetic/clone", source: "cloned" }],
-}));
-vi.mock("../agents/worktrees/git.js", () => ({ gitEnvironment: (env: unknown) => env }));
-vi.mock("../infra/git-exec.js", () => ({
-  executeGitCommand: async (_root: string, args: string[]) => {
-    obs.events.push("project-git");
-    return {
-      termination: "exit",
-      code: args[0] === "config" ? 1 : 0,
-      stdout: args[0] === "rev-parse" ? "false\n" : "",
-      stdoutTruncatedBytes: 0,
-    };
-  },
+// mock-isolation: observe selection without accessing project repositories or leases.
+vi.mock("../commands/doctor-project-clone-shape.js", () => ({
+  noteProjectCloneShape: async () => obs.record("project-clones", undefined),
 }));
 // mock-isolation: record advisory selection without opening operator databases.
 vi.mock("../commands/doctor-db-bloat.js", () => ({
   noteSqliteDatabaseBloat: () => obs.record("db-size-advice", undefined),
 }));
-vi.mock("../commands/doctor-sandbox.js", () => ({
+vi.mock("../commands/doctor-sandbox.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-sandbox.js")>()),
   noteCodexBwrapNamespaceWarnings: obs.codexBwrap,
+  maybeRepairSandboxImages: async () => ["Sandbox base image missing: synthetic-image."],
+  maybeRepairSandboxRegistryFiles: async () => {},
+  noteSandboxScopeWarnings: () => {},
 }));
 // mock-isolation: record advisory selection without reading real workspace bootstrap files.
 vi.mock("../commands/doctor-bootstrap-size.js", () => ({
@@ -66,6 +58,16 @@ import {
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
 afterEach(() => vi.unstubAllEnvs());
+it("retains missing sandbox images as warnings during post-update Doctor", async () => {
+  const ctx = createDoctorHealthFlowContext({
+    env: { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
+    options: { repair: true, yes: true, nonInteractive: true },
+  });
+  const sandbox = resolveDoctorHealthContributions().find((c) => c.id === "doctor:sandbox")!;
+  await runDoctorHealthContributionList(ctx, [sandbox]);
+  expect(ctx.updateWarnings).toContain("Sandbox base image missing: synthetic-image.");
+  expect(ctx.runtime.exit).not.toHaveBeenCalled();
+});
 it.each(["standalone", "post-core"])(
   "keeps standalone advisory work outside update: %s",
   async (mode) => {
@@ -100,9 +102,7 @@ it.each(["standalone", "post-core"])(
     expect(obs.events).toEqual(
       standalone
         ? [
-            "project-git",
-            "project-git",
-            "project-git",
+            "project-clones",
             "db-size-advice",
             "github-credential-advice",
             "bootstrap-size-advice",

@@ -3,7 +3,6 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
@@ -13,6 +12,7 @@ import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { OpenClawStateLeaseError } from "../state/openclaw-state-lease.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import {
@@ -172,8 +172,11 @@ describe("plugin lifecycle lease", () => {
   it.each(["native", "worker"] as const)(
     "releases retired cache facts while %s resources retain the expired lease",
     async (kind) => {
-      class CacheFacts {
-        readonly owner = "lifecycle-operation";
+      const references: WeakRef<object>[] = [];
+      function createCacheFacts() {
+        const facts = {};
+        references.push(new WeakRef(facts));
+        return facts;
       }
       await withOpenClawTestState({ label: "plugin-lifecycle-cache-retention" }, async (state) => {
         const withLease =
@@ -183,7 +186,7 @@ describe("plugin lifecycle lease", () => {
           for (let index = 0; index < 4; index++) {
             retained.push(
               await withLease({ env: state.env }, async (lease) => {
-                Object.assign(getPluginCache(), { facts: new CacheFacts() });
+                Object.assign(getPluginCache(), { facts: createCacheFacts() });
                 // A service drops caller cache scope but still inherits the lifecycle lease.
                 const resource = runOutsidePluginCache(
                   () => new AsyncResource("retained-plugin-lease", { requireManualDestroy: true }),
@@ -192,8 +195,7 @@ describe("plugin lifecycle lease", () => {
               }),
             );
           }
-          await nextTurn();
-          expect(queryObjects(CacheFacts)).toBe(0);
+          await expectCollected(...references);
           for (const { resource, lease } of retained) {
             await expect(
               writePersistedInstalledPluginIndexInstallRecordsWithLease(

@@ -20,7 +20,7 @@ const violation = (rule: string, reason = `Fixture violation of ${rule}`) => ({
 describe.skipIf(process.platform === "win32")("SwiftLint limit policy", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  function run(report: unknown, { github = true, exit = 2 } = {}) {
+  function run(report: unknown, { github = true, exit = 2, release = false } = {}) {
     const fixtureDir = tempDirs.make("openclaw-swiftlint-");
     const summary = path.join(fixtureDir, "summary.md");
     writeFileSync(
@@ -39,6 +39,7 @@ process.exitCode = Number(process.env.SWIFTLINT_TEST_EXIT);
         PATH: `${fixtureDir}${path.delimiter}${process.env.PATH}`,
         CI: "true",
         GITHUB_ACTIONS: github ? "true" : undefined,
+        OPENCLAW_RELEASE_CONTEXT_REF: release ? "release/2026.11.4" : "main",
         GITHUB_STEP_SUMMARY: summary,
         SWIFTLINT_TEST_REPORT: typeof report === "string" ? report : JSON.stringify(report),
         SWIFTLINT_TEST_EXIT: String(exit),
@@ -60,6 +61,19 @@ process.exitCode = Number(process.env.SWIFTLINT_TEST_EXIT);
   it("keeps local strict lint failures unchanged, even when a local tool sets CI", () => {
     const result = run([violation("line_length")], { github: false });
     expectNoWarnings(result, 2);
+  });
+
+  it("disables release line limits but retains correctness and complexity errors", () => {
+    const size = [
+      violation("file_length"),
+      violation("line_length"),
+      violation("function_body_length"),
+      violation("type_body_length"),
+    ];
+    expectNoWarnings(run(size, { github: false, release: true }), 0);
+    for (const rule of ["force_try", "cyclomatic_complexity"]) {
+      expect(run([...size, violation(rule)], { github: false, release: true }).status).toBe(2);
+    }
   });
 
   it("reports numeric limits as CI warnings with repository-relative paths", () => {

@@ -229,6 +229,7 @@ it.each(["writable sandbox", "cloud"])(
       await fs.writeFile(path.join(remote, inputs[0]!), edited);
       await fs.writeFile(path.join(remote, inputs[1]!), "edited private source text");
       const manifestRef = await captureManifest({
+        mode: "all",
         workspaceDir: remote,
         manifestHome: home,
         baseCommit: base.manifest.baseCommit,

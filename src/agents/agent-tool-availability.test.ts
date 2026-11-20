@@ -1,6 +1,9 @@
 import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   bindAgentToolAvailability,
+  gateAgentToolExecution,
+  isAgentToolExecutionAvailable,
+  resolveAgentToolExecutionSchema,
   finalizeAgentToolAvailability as finalize,
   markAgentToolExecutionUnavailable as denyExecution,
 } from "./agent-tool-availability.js";
@@ -12,6 +15,7 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { SWARM_CODE_MODE_IDEMPOTENCY_KEY } from "./subagents/swarm/swarm-code-mode.js";
+import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import {
   applyToolSearchCatalog as applyCatalog,
   clearToolSearchCatalog,
@@ -104,6 +108,14 @@ function expectSpawned(details: Record<string, unknown>) {
     expect.anything(),
   );
 }
+
+it("retains denial and schema fallback without an availability callback", () => {
+  const tool = gateAgentToolExecution(createStubTool("plain"), "not authorized");
+  const schema = tool.parameters;
+  expect(isAgentToolExecutionAvailable(tool)).toBe(false);
+  expect(isAgentToolExecutionAvailable(copyMetadata(tool, { ...tool }))).toBe(false);
+  expect(resolveAgentToolExecutionSchema(tool, schema)).toBe(schema);
+});
 
 beforeEach(() => {
   spawn.mockReset().mockResolvedValue({

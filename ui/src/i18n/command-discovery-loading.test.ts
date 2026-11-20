@@ -6,6 +6,21 @@ import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 const loadI18n = useLazyEnglishTest();
 
 describe("command discovery English loading", () => {
+  it("loads slash-command titles without session-management copy", async () => {
+    const { manager } = await loadI18n();
+    const { getSlashCommandTitle } = await import("../lib/chat/commands.ts");
+    for (const [key, title] of [
+      ["name", "Rename session"],
+      ["verbose", "Verbose"],
+      ["reasoning", "Reasoning"],
+    ] as const) {
+      expect(getSlashCommandTitle({ key, name: key, description: "" })).toBe(title);
+    }
+    expect(manager.t("sessionsView.personalGroupScopeMine")).toBe(
+      "sessionsView.personalGroupScopeMine",
+    );
+  });
+
   it.each([
     {
       surface: "palette search",
@@ -34,13 +49,13 @@ describe("command discovery English loading", () => {
   it.each<[key: string, expected: string, load: () => Promise<unknown>]>([
     [
       "sessionsView.transcriptSearchTitle",
-      "Search transcripts",
+      "Search chats",
       () => import("../pages/sessions/view.tsx"),
     ],
     ["chat.commands.menu", "Slash commands", () => import("../lib/chat/commands.ts")],
     [
       "chat.welcome.recentSessions",
-      "Recent chats",
+      "Recent sessions",
       () => import("../pages/chat/components/chat-welcome.tsx"),
     ],
   ])("loads only %s copy before discovery opens", async (key, expected, load) => {

@@ -6,20 +6,20 @@ const enDreaming = {
     header: {
       refresh: "Refresh",
       toggle: "Dreaming",
-      engineOff: "Memory engine is Off. Choose an engine in Settings to enable dreaming.",
+      engineOff: "Memory engine is off. Choose an engine in Settings to turn on Dreaming.",
     },
     toggleConfirmation: {
-      subtitle: "Dreaming is a global setting; it is not scoped to this agent.",
-      enableTitle: "Turn on dreaming for all agents",
+      subtitle: "Dreaming applies to all agents.",
+      enableTitle: "Turn on dreaming for all agents?",
       enableDetail:
-        "The nightly dreaming sweep will run across every configured agent workspace, promoting short-term recalls into long-term memory. This applies right away.",
+        "The nightly dreaming sweep will run for every agent, promoting short-term recalls into long-term memory. This applies right away.",
       enableConfirm: "Turn on dreaming",
-      disableTitle: "Turn off dreaming for all agents",
+      disableTitle: "Turn off dreaming for all agents?",
       disableDetail:
-        "The nightly dreaming sweep will stop for every configured agent, not just this one. Memories already written stay; nothing new gets promoted. This applies right away.",
+        "The nightly dreaming sweep will stop for every agent, not only this agent. Existing memories stay; nothing new gets promoted. This applies right away.",
       disableConfirm: "Turn off dreaming",
       saving: "Saving…",
-      failed: "Could not apply change. Check your connection and try again.",
+      failed: "Couldn’t change dreaming settings. Check your connection and try again.",
     },
     status: {
       promotedSuffix: "promoted today",
@@ -93,10 +93,10 @@ const enDreaming = {
       confirmDedupeDescription:
         "This rewrites DREAMS.md and removes only exact duplicate diary entries.",
       archivePathCopied: "Archive path copied.",
-      archivePathCopyFailed: "Could not copy archive path.",
-      updateFailed: "Could not update dreaming settings.",
+      archivePathCopyFailed: "Couldn’t copy the archive path. Try again.",
+      updateFailed: "Couldn’t update dreaming settings. Try again.",
       unsupportedPlugin: 'Selected memory plugin "{pluginId}" does not support dreaming settings.',
-      configHashMissing: "Config hash missing; refresh and retry.",
+      configHashMissing: "Couldn’t save settings. Refresh and try again.",
     },
     wiki: {
       previewFallbackTitle: "Wiki page",
@@ -105,7 +105,7 @@ const enDreaming = {
       insightsTab: "Imported insights",
       wikiTab: "Memory wiki",
       insightsExplainer:
-        "Imported chats by topic, to review before any of it becomes durable memory.",
+        "Imported conversations by topic, to review before any of it becomes durable memory.",
       wikiExplainer:
         "Compiled pages, claims, open questions, and contradictions the system can search.",
       copyArchivePath: "Copy archive path",
@@ -148,8 +148,8 @@ const enDreaming = {
         openQuestions: "{count} open questions",
         contradictionOne: "{count} contradiction",
         contradictions: "{count} contradictions",
-        chatOne: "{count} chat",
-        chats: "{count} chats",
+        chatOne: "{count} conversation",
+        chats: "{count} conversations",
         sensitive: "{count} sensitive",
         signalOne: "{count} signal",
         signals: "{count} signals",

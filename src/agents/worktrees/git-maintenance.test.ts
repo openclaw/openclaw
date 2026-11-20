@@ -1,0 +1,233 @@
+import { createCipheriv, createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { deflateSync } from "node:zlib";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { WorktreeGcProgress } from "./gc-progress.js";
+import { createWorktreeGitMaintenance } from "./git-maintenance.js";
+import { requireGit, requireGitBuffer } from "./git.js";
+import { insertRegistryWorktree } from "./registry.js";
+import { makeWorktreeRecord, useManagedWorktreeTestRepository } from "./service.test-support.js";
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
+let env: NodeJS.ProcessEnv;
+const initRepo = useManagedWorktreeTestRepository();
+const git = (repo: string, ...args: string[]) =>
+  requireGit(repo, args, {
+    env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+    executionIntent: "agent-tool",
+  });
+beforeEach(() => {
+  env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-pack-state-") };
+  setRuntimeConfigSnapshot({});
+});
+afterEach(() => clearRuntimeConfigSnapshot());
+
+it.each([false, true])(
+  "converges overlapping history packs and bounds hourly writes (promisor=%s)",
+  async (promisor) => {
+    const repo = await initRepo(tempDirs.make("worktree-geometric-packs-"));
+    await insertRegistryWorktree(env, makeWorktreeRecord(repo, `geometry-${promisor}`));
+    const directory = path.join(repo, ".git", "objects", "pack");
+    const payload = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16)).update(
+      Buffer.alloc(32 * 4096),
+    );
+    const objects: string[] = [];
+    const blob = async (contents: Buffer) => {
+      const oid = await requireGit(repo, ["hash-object", "-w", "--stdin"], { input: contents });
+      objects.push(oid);
+      return oid;
+    };
+    const pack = async (oids: string[]) => {
+      const hash = await requireGit(
+        repo,
+        ["pack-objects", "--window=0", path.join(directory, "pack")],
+        { input: `${oids.join("\n")}\n` },
+      );
+      if (promisor) {
+        await fs.writeFile(path.join(directory, `pack-${hash}.promisor`), "");
+      }
+    };
+    const stat = fs.stat;
+    const inventory = async () =>
+      Promise.all(
+        (await fs.readdir(directory))
+          .filter((name) => name.endsWith(".pack"))
+          .map(async (name) => [name, (await stat(path.join(directory, name))).size] as const),
+      );
+    const base = [];
+    for (let i = 0; i < 32; i++) {
+      base.push(await blob(payload.subarray(i * 4096, (i + 1) * 4096)));
+    }
+    await pack(base);
+    for (let i = 0; i < 6; i++) {
+      await pack([...base, await blob(Buffer.from(`history-${i}`))]);
+    }
+    // Scale only admission bytes to exercise the 16 GiB limit with tiny real Git packs.
+    using sizes = vi.spyOn(fs, "stat");
+    sizes.mockImplementation(async (...args) => {
+      const result = await stat(...args);
+      if (result && String(args[0]).startsWith(directory) && String(args[0]).endsWith(".pack")) {
+        result.size = Number(result.size) * 32768;
+      }
+      return result;
+    });
+    // The retirement deadline has independent coverage in service.gc-performance.test.ts.
+    using clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(0);
+    const rows = [];
+    for (let cycle = 0; cycle < 9; cycle++) {
+      const revisions = [];
+      for (let i = 0; i < 8; i++) {
+        const contents = Buffer.from(payload.subarray(0, 4096));
+        contents.writeUInt32LE(cycle * 8 + i);
+        revisions.push(await blob(contents));
+      }
+      for (let i = 0; i < 8; i++) {
+        await pack([...revisions, await blob(Buffer.from(`cycle-${cycle}-${i}`))]);
+      }
+      await git(repo, "prune-packed");
+      const before = new Set((await inventory()).map(([name]) => name));
+      const progress = new WorktreeGcProgress();
+      // Recreating the owner also exercises restart re-arming without persistent scheduling.
+      await createWorktreeGitMaintenance(env)({ progress });
+      expect(progress.result.gitMaintenance?.stage).toBe("completed");
+      const after = await inventory();
+      rows.push({
+        cycle,
+        rewritten: after
+          .filter(([name]) => !before.has(name))
+          .reduce((sum, [, bytes]) => sum + bytes, 0),
+        packs: after.length,
+        bytes: after.reduce((sum, [, bytes]) => sum + bytes, 0),
+      });
+    }
+    console.table(rows);
+    const converged = rows.slice(-3);
+    expect(converged.every((row) => row.rewritten < payload.length / 3)).toBe(true);
+    expect(converged.every((row) => row.packs <= 4)).toBe(true);
+    expect(converged.every((row) => row.bytes < payload.length * 2)).toBe(true);
+    expect((await fs.readdir(directory)).filter((name) => name.endsWith(".promisor"))).toHaveLength(
+      promisor ? rows.at(-1)!.packs : 0,
+    );
+    expect(
+      await requireGit(repo, ["cat-file", "--batch-check=%(objecttype)"], {
+        input: `${objects.join("\n")}\n`,
+      }),
+    ).toBe(objects.map(() => "blob").join("\n"));
+  },
+);
+
+it("compacts committed loose packs while retaining unpublished temporary packs", async () => {
+  const repo = await initRepo(tempDirs.make("worktree-loose-packs-"));
+  await insertRegistryWorktree(env, makeWorktreeRecord(repo, "loose-pack-family"));
+  await git(repo, "repack", "-a", "-d");
+  const directory = path.join(repo, ".git", "objects", "pack");
+  const canonical = (await fs.readdir(directory)).find((name) => name.endsWith(".pack"));
+  expect(canonical).toMatch(/^pack-[a-f0-9]+\.pack$/);
+  const hash = canonical!.slice("pack-".length, -".pack".length);
+  const loose = "loose-" + hash;
+  const temporary = ".tmp-123-pack-" + hash;
+  for (const extension of ["pack", "idx"]) {
+    const source = path.join(directory, "pack-" + hash + "." + extension);
+    await fs.copyFile(source, path.join(directory, loose + "." + extension));
+    await fs.copyFile(source, path.join(directory, temporary + "." + extension));
+  }
+  const progress = new WorktreeGcProgress();
+  await createWorktreeGitMaintenance(env)({ progress });
+  expect(progress.result.gitMaintenance).toMatchObject({
+    packsBefore: 3,
+    packsAfter: 2,
+    stage: "completed",
+  });
+  for (const extension of ["pack", "idx"]) {
+    await expect(fs.access(path.join(directory, `${loose}.${extension}`))).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
+    await fs.access(path.join(directory, `${temporary}.${extension}`));
+  }
+  await git(repo, "fsck", "--no-reflogs");
+});
+
+it("drains a 600-pack burst during hourly throttling only when eligible packs are backlogged", async () => {
+  const repo = await initRepo(tempDirs.make("worktree-pack-burst-"));
+  await insertRegistryWorktree(env, makeWorktreeRecord(repo, "burst"));
+  await git(repo, "config", "remote.origin.promisor", "true");
+  await git(repo, "remote", "set-url", "origin", path.join(repo, "unavailable.git"));
+  const maintain = createWorktreeGitMaintenance(env);
+  await maintain({});
+  const directory = path.join(repo, ".git", "objects", "pack");
+  const objects: Array<{ oid: string; contents: Buffer; stem: string }> = [];
+  const sha1 = (bytes: Buffer) => createHash("sha1").update(bytes).digest();
+  for (let i = 0; i < 600; i++) {
+    const contents = Buffer.from(`blob-${String(i).padStart(3, "0")}`);
+    const oid = sha1(Buffer.concat([Buffer.from("blob 8\0"), contents]));
+    // A single-blob Git pack; Git itself builds and validates the indexes below.
+    const entry = Buffer.concat([Buffer.from([0x38]), deflateSync(contents)]);
+    const pack = Buffer.concat([Buffer.from("5041434b0000000200000001", "hex"), entry]);
+    const hash = sha1(pack);
+    const stem = path.join(directory, `pack-${hash.toString("hex")}`);
+    await Promise.all([
+      fs.writeFile(`${stem}.pack`, Buffer.concat([pack, hash])),
+      fs.writeFile(`${stem}.promisor`, ""),
+    ]);
+    objects.push({ oid: oid.toString("hex"), contents, stem });
+  }
+  await git(
+    repo,
+    "-c",
+    'alias.openclaw-test-index-burst=!for pack in .git/objects/pack/pack-*.pack; do git index-pack "$pack" || exit; done',
+    "openclaw-test-index-burst",
+  );
+  const packNames = async () =>
+    (await fs.readdir(directory)).filter((name) => name.endsWith(".pack")).toSorted();
+  const burst = await packNames();
+  expect(burst).toHaveLength(600);
+  const throttled = new WorktreeGcProgress();
+  await maintain({ progress: throttled });
+  expect(throttled.result.gitMaintenance?.stage).toBe("throttled");
+  for (const object of objects.slice(0, 90)) {
+    await fs.writeFile(`${object.stem}.keep`, "");
+  }
+  await maintain({ checkBacklog: true });
+  expect(await packNames()).toEqual(burst);
+  for (const object of objects.slice(1, 90)) {
+    await fs.unlink(`${object.stem}.keep`);
+  }
+  const progress = new WorktreeGcProgress();
+  await maintain({ checkBacklog: true, progress });
+  expect(progress.result.issues).toEqual([]);
+  expect(progress.result.gitMaintenance?.packsBefore).toBe(600);
+  expect(progress.result.gitMaintenance?.packsAfter).toBeLessThan(600);
+  await fs.access(`${objects[0]!.stem}.pack`);
+  expect(
+    await requireGitBuffer(repo, ["cat-file", "--batch"], {
+      input: `${objects.map(({ oid }) => oid).join("\n")}\n`,
+      env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+    }),
+  ).toEqual(
+    Buffer.concat(
+      objects.flatMap(({ oid, contents }) => [
+        Buffer.from(`${oid} blob 8\n`),
+        contents,
+        Buffer.from("\n"),
+      ]),
+    ),
+  );
+});

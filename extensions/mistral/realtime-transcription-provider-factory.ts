@@ -1,4 +1,4 @@
-import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   measureTranscriptDeltaBytes,
   type RealtimeTranscriptionProviderConfig,
@@ -130,9 +130,13 @@ function readErrorDetail(event: MistralRealtimeTranscriptionEvent): string {
 
 export function buildMistralRealtimeTranscriptionProvider({
   createRealtimeTranscriptionWebSocketSession,
+  isProviderAuthProfileConfiguredAsync,
+  resolveProviderAuthProfileApiKey,
 }: Pick<
-  PluginCapabilityCatalogContext,
-  "createRealtimeTranscriptionWebSocketSession"
+  PluginCapabilityCatalogHostContext,
+  | "createRealtimeTranscriptionWebSocketSession"
+  | "isProviderAuthProfileConfiguredAsync"
+  | "resolveProviderAuthProfileApiKey"
 >): RealtimeTranscriptionProviderPlugin {
   const isConfigured: NonNullable<RealtimeTranscriptionProviderPlugin["isConfigured"]> = ({
     providerConfig,
@@ -150,13 +154,20 @@ export function buildMistralRealtimeTranscriptionProvider({
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured,
-    isConfiguredAsync: async (ctx) => isConfigured(ctx),
+    // A Mistral key saved in Models counts when the Voice Call config
+    // and the environment have none, and only for the provider that config or the
+    // request names. Automatic selection ranks providers as it does without one.
+    isConfiguredAsync: async (ctx) =>
+      isConfigured(ctx) ||
+      (ctx.selectedExplicitly === true &&
+        (await isProviderAuthProfileConfiguredAsync({
+          provider: "mistral",
+          cfg: ctx.cfg,
+          profileTypes: ["api_key"],
+        }))),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey = config.apiKey || normalizeMistralApiKey(process.env.MISTRAL_API_KEY);
-      if (!apiKey) {
-        throw new Error("Mistral API key missing");
-      }
+      const directApiKey = config.apiKey || normalizeMistralApiKey(process.env.MISTRAL_API_KEY);
       const baseUrl = normalizeMistralRealtimeBaseUrl(config.baseUrl);
       let partialText = "";
       let partialBytes = 0;
@@ -199,7 +210,22 @@ export function buildMistralRealtimeTranscriptionProvider({
           );
           return url.toString();
         },
-        headers: { Authorization: `Bearer ${apiKey}` },
+        // createSession stays synchronous; the saved key is read for each (re)connect.
+        headers: async () => {
+          const apiKey =
+            directApiKey ||
+            normalizeMistralApiKey(
+              await resolveProviderAuthProfileApiKey({
+                provider: "mistral",
+                cfg: req.cfg,
+                profileTypes: ["api_key"],
+              }),
+            );
+          if (!apiKey) {
+            throw new Error("Mistral API key missing");
+          }
+          return { Authorization: `Bearer ${apiKey}` };
+        },
         connectTimeoutMessage: "Mistral realtime transcription connection timeout",
         reconnectLimitMessage: "Mistral realtime transcription reconnect limit reached",
         sendAudio: (audio, transport) => {

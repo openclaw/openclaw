@@ -23,6 +23,7 @@ import { setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import { PUBLICATION_READ_SCOPE } from "./operator-scopes.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -91,7 +92,7 @@ describe("gateway shared auth rotation", () => {
   async function connect(
     options: Pick<
       GatewayClientOptions,
-      "token" | "deviceToken" | "deviceIdentity" | "clientName" | "mode" | "origin"
+      "token" | "deviceToken" | "deviceIdentity" | "clientName" | "mode" | "origin" | "scopes"
     >,
   ) {
     const connected = createDeferredCore<HelloOk>();
@@ -131,8 +132,9 @@ describe("gateway shared auth rotation", () => {
   }
 
   async function openDeviceTokenClient(
-    params: { issuerGeneration?: string; browserClient?: boolean } = {},
+    params: { issuerGeneration?: string; browserClient?: boolean; scopes?: string[] } = {},
   ) {
+    const scopes = params.scopes ?? ["operator.admin"];
     const identity = loadOrCreateDeviceIdentity({
       path: state.path("device-identity", "client", "credentials.sqlite"),
     });
@@ -144,7 +146,7 @@ describe("gateway shared auth rotation", () => {
       clientId: clientName,
       clientMode: mode,
       role: "operator",
-      scopes: ["operator.admin"],
+      scopes,
     });
     await approveDevicePairing(pending.request.requestId, { callerScopes: ["operator.admin"] });
     let issued;
@@ -152,14 +154,14 @@ describe("gateway shared auth rotation", () => {
       issued = await ensureDeviceToken({
         deviceId: identity.deviceId,
         role: "operator",
-        scopes: ["operator.admin"],
+        scopes,
         issuer: { kind: "shared-gateway-auth", generation: params.issuerGeneration },
       });
     } else {
       const rotated = await rotateDeviceToken({
         deviceId: identity.deviceId,
         role: "operator",
-        scopes: ["operator.admin"],
+        scopes,
       });
       expect(rotated.ok).toBe(true);
       issued = rotated.ok ? rotated.entry : undefined;
@@ -173,6 +175,7 @@ describe("gateway shared auth rotation", () => {
       mode,
       deviceIdentity: identity,
       deviceToken: issued.token,
+      scopes,
       ...(params.browserClient ? { origin: `http://127.0.0.1:${port}` } : {}),
     });
     return { ...connection, deviceId: identity.deviceId };
@@ -264,6 +267,21 @@ describe("gateway shared auth rotation", () => {
       await expectAuthChangedClose(connection);
     },
   );
+
+  it("revokes established publication readers when their shared-auth issuer rotates", async () => {
+    await startGateway();
+    const reader = await openDeviceTokenClient({
+      issuerGeneration: requiredSharedGeneration(),
+      scopes: [PUBLICATION_READ_SCOPE],
+    });
+    expect(reader.hello.auth?.scopes).toEqual([PUBLICATION_READ_SCOPE]);
+    const admin = await connect({ token: OLD_TOKEN });
+    await rotateSharedToken(admin.client);
+    await expectAuthChangedClose(reader);
+    await expect(
+      reader.client.request("publication-proof.read", {}, { timeoutMs: 1_000 }),
+    ).rejects.toThrow();
+  });
 
   it("disconnects shared-auth websocket sessions when config.apply rewrites a SecretRef token", async () => {
     setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);

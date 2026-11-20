@@ -47,7 +47,6 @@ export function ChatPaneMobileComposition(props: {
   header: ChatPaneHeaderProps;
   project?: Element;
   details: Component<{ placement: ChatPanePlacementProps; onOpenMachine: () => void }>;
-  notice: Element;
   fallback: (
     sessionMenu: Element,
     machineName: () => string | undefined,
@@ -586,7 +585,6 @@ export function ChatPaneMobileComposition(props: {
       header={props.header}
       project={props.project}
       details={details}
-      notice={props.notice}
       sessionMenu={sessionMenu}
       mobile={mobile()}
       presented={presented()}

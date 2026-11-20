@@ -17,7 +17,11 @@ import {
   postgresBridgeReuseKey,
   takePreparedPostgresBridge,
 } from "./bridge-prestart.js";
-import { takeIdlePostgresBridge, retainIdlePostgresBridge } from "./idle-bridges.js";
+import {
+  takeIdlePostgresBridge,
+  retainIdlePostgresBridge,
+  POSTGRES_IDLE_VALIDATION_MS,
+} from "./idle-bridges.js";
 import { recordPostgresPoolFailure } from "./pool-state.js";
 import {
   decodePostgresError,
@@ -39,6 +43,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   readonly advisoryLockKey: bigint;
   private bridge?: PostgresBridge;
   private idleCheckout?: "reconnect" | "validate";
+  private lastResponseAt = Date.now();
   private readonly bridgeParameters: Parameters<typeof createPostgresBridge>[0];
   private failure: Error | undefined;
   private outcomeUnknown = true;
@@ -47,6 +52,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private pendingWrite = false;
   private readonly mainThread = threadId === 0;
   private readonly reuseKey?: string;
+  private readonly admissionReadOnly: boolean;
 
   constructor(
     url: string,
@@ -57,9 +63,11 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       lockTimeoutMs?: number;
       statementTimeoutMs?: number;
       reuse?: boolean;
+      readOnly?: boolean;
     },
   ) {
     assertEngineStoreExecutionAllowed();
+    this.admissionReadOnly = options?.readOnly === true;
     Object.defineProperty(this, Symbol.for("openclaw.postgres-sync-connection"), { value: true });
     this.advisoryLockKey = createHash("sha256").update(storeId).digest().readBigInt64BE();
     this.bridgeParameters = { url, schema, storeId, ...options };
@@ -96,7 +104,13 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     options?: { withCommit?: (commit: () => void) => void },
     ...modes: [readOnly?: boolean, reserved?: boolean]
   ): T {
-    return runPostgresTransactionSync(this, operation, options, ...modes);
+    return runPostgresTransactionSync(
+      this,
+      operation,
+      options,
+      this.admissionReadOnly || modes[0],
+      modes[1],
+    );
   }
 
   readRecoveryGeneration(lock = false): string {
@@ -170,12 +184,17 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       throw this.loseConnection();
     }
     const deadline = performance.now() + 120_000;
+    const retainedIdle = bridge.inTransaction === false;
+    const reconnectIfIdle =
+      (this.idleCheckout !== undefined || retainedIdle) &&
+      (request.operation === "query" || request.operation === "recovery-generation");
+    // Wall time includes suspension, unlike the monotonic request deadline clock.
+    const validateIfIdle =
+      reconnectIfIdle &&
+      (this.idleCheckout === "validate" ||
+        (retainedIdle && Date.now() - this.lastResponseAt >= POSTGRES_IDLE_VALIDATION_MS));
     // A failed or unsettled request cannot reuse an earlier idle observation.
     bridge.inTransaction = undefined;
-    const reconnectIfIdle =
-      this.idleCheckout !== undefined &&
-      (request.operation === "query" || request.operation === "recovery-generation");
-    const validateIfIdle = reconnectIfIdle && this.idleCheckout === "validate";
     this.idleCheckout = undefined;
     bridge.port.postMessage(
       {
@@ -224,6 +243,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       }
       throw decodePostgresError(reply.error);
     }
+    this.lastResponseAt = Date.now();
     if ("reusable" in reply) {
       bridge.inTransaction = !reply.reusable;
       return reply.reusable;

@@ -7,13 +7,9 @@ import {
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { NodeSystemRunEventSource } from "../node-invoke.types.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { captureGatewayOperatorContinuation } from "../operator-run-recovery.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlerOptions,
-} from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 type ForwardedNodeInvokeApprovalAuthority = {
   recordId: string;
@@ -33,20 +29,9 @@ export function isForwardedNodeInvokeApprovalAuthorityActive(params: {
 }
 
 export function resolveNodeInvokeRuntimeAuthorityError(params: {
-  context: Pick<
-    GatewayRequestContext,
-    "execApprovalManager" | "validateAgentRuntimeApprovalAuthority"
-  >;
-  client: GatewayClient | null;
+  context: Pick<GatewayRequestContext, "execApprovalManager">;
   approvalAuthority?: ForwardedNodeInvokeApprovalAuthority;
 }): string | undefined {
-  const callerIdentity = params.client?.internal?.agentRuntimeIdentity;
-  if (
-    callerIdentity &&
-    params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
-  ) {
-    return "agent runtime approval authority closed before node dispatch";
-  }
   if (
     !isForwardedNodeInvokeApprovalAuthorityActive({
       manager: params.context.execApprovalManager,
@@ -63,10 +48,7 @@ export async function captureNodeSystemRunEventSource(
   input: Pick<GatewayRequestHandlerOptions, "client" | "context" | "hasCurrentClientAuthority">,
   sessionKey: string,
 ): Promise<NodeSystemRunEventSource | undefined> {
-  const captured = await captureGatewayOperatorRunAuthority({
-    ...input,
-    independentContinuation: true,
-  });
+  const captured = await captureGatewayOperatorContinuation(input);
   if (!captured && !getGatewayToolCallerIdentity()) {
     return undefined;
   }

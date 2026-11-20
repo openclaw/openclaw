@@ -4,10 +4,15 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path
 import { assertNoSymlinkParents, readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
+import { CRON_JOB_SCRATCH_MAX_BYTES } from "../cron/scratch-contract.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
+import { resolveFilesystemPath } from "../infra/home-dir.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
+import { inspectTemplateBundledPlugin } from "./bundled-plugin-metadata.js";
+import { inspectTemplateBundledSkill } from "./bundled-skill-metadata.js";
+import { snapshotTemplateDependencyDirectory } from "./dependency-directory.js";
+import { templateDependencyInventory } from "./dependency-inventory.js";
 import { digestTemplateBytes } from "./digest.js";
-import { readTemplateOpenClawProfile } from "./openclaw-profile.js";
 import {
   isCanonicalClawHubPackageName,
   isExactSemVer,
@@ -17,12 +22,14 @@ import { templateManifestWorkspaceConflictsWithPath, parseTemplateManifest } fro
 import { templateWorkspaceSourceFailure } from "./source-diagnostics.js";
 import {
   MAX_TEMPLATE_MANIFEST_BYTES,
+  MAX_TEMPLATE_DIRECTORY_BYTES,
+  MAX_TEMPLATE_DIRECTORY_ENTRIES,
   MAX_MANAGED_FILE_BYTES,
   MAX_MANAGED_WORKSPACE_BYTES,
 } from "./source-limits.js";
 import type {
   TemplateDiagnostic,
-  TemplateManifest,
+  TemplateBundledSourceSnapshot,
   TemplateReadResult,
   TemplateSourceIdentity,
   TemplateWorkspaceSourceSnapshot,
@@ -134,7 +141,7 @@ export function parseTemplateMarkdown(
   } catch {
     return fileFailure("invalid_template_markdown_utf8", `${path} must contain valid UTF-8.`);
   }
-  const parsed = parseTemplateYaml(frontmatter, path, "frontmatter");
+  const parsed = parseTemplateYaml(frontmatter, path);
   return parsed.ok ? { ...parsed, body } : parsed;
 }
 
@@ -231,7 +238,12 @@ async function resolveSource(
 ): Promise<
   { ok: true; source: ResolvedTemplateSource } | { ok: false; diagnostics: TemplateDiagnostic[] }
 > {
-  const inputPath = resolve(path);
+  let inputPath: string;
+  try {
+    inputPath = resolveFilesystemPath(path);
+  } catch {
+    return fileFailure("read_failed", `Could not resolve Template source ${path}.`);
+  }
   const inputStat = await stat(inputPath).catch(() => undefined);
   if (!inputStat) {
     return fileFailure("read_failed", `Could not resolve Template source ${inputPath}.`);
@@ -270,19 +282,7 @@ async function resolveSource(
   };
 }
 
-export async function readTemplateManifestFile(
-  path: string,
-  options: {
-    allowLegacyDynamicToolProfile?: boolean;
-    authorizeLegacyLocalUpdateHostSettings?: (params: {
-      manifest: TemplateManifest;
-      source: Pick<
-        TemplateSourceIdentity,
-        "kind" | "name" | "version" | "packageRoot" | "manifestPath"
-      >;
-    }) => boolean | Promise<boolean>;
-  } = {},
-): Promise<TemplateReadResult> {
+export async function readTemplateManifestFile(path: string): Promise<TemplateReadResult> {
   const sourceResult = await resolveSource(path);
   if (!sourceResult.ok) {
     return sourceResult;
@@ -309,28 +309,13 @@ export async function readTemplateManifestFile(
       "$.workspace",
     );
   }
-  const legacyAuthorizationContext = {
-    manifest: parsed.manifest,
-    source: {
-      kind: sourceResult.source.kind,
-      name: sourceResult.source.name,
-      version: sourceResult.source.version,
-      packageRoot: sourceResult.source.packageRoot,
-      manifestPath: sourceResult.source.manifestPath,
-    },
-  };
-  const allowLegacyDynamicToolProfile = options.allowLegacyDynamicToolProfile === true;
-  const allowLegacyLocalUpdateHostSettings = options.authorizeLegacyLocalUpdateHostSettings
-    ? await options.authorizeLegacyLocalUpdateHostSettings(legacyAuthorizationContext)
-    : false;
-  const profile = await readTemplateOpenClawProfile({
-    packageRoot: sourceResult.source.packageRoot,
-    metadata: parsed.manifest.metadata,
-    ...(allowLegacyDynamicToolProfile ? { allowLegacyDynamicToolProfile: true } : {}),
-    ...(allowLegacyLocalUpdateHostSettings ? { allowLegacyLocalUpdateHostSettings: true } : {}),
-  });
-  if (!profile.ok) {
-    return profile;
+  const packageFiles = await fsSafeRoot(sourceResult.source.packageRoot);
+  if (await packageFiles.exists("profiles")) {
+    return fileFailure(
+      "retired_template_configuration",
+      "Move supported settings from profiles into CLAW.md agent, and plugin references into plugins; remove the profiles directory and keep schemaVersion: 1.",
+      "$.profiles",
+    );
   }
   const resolvedSource = sourceResult.source;
   const hash = createHash("sha256");
@@ -344,18 +329,8 @@ export async function readTemplateManifestFile(
     digest: digestTemplateBytes(bytes),
   });
   const manifestSnapshot = snapshotFile(manifestResult.raw);
-  const profileSnapshot =
-    profile.raw && profile.path
-      ? {
-          sourcePath: profile.path.replaceAll("\\", "/"),
-          ...snapshotFile(profile.raw),
-        }
-      : undefined;
   add("canonical-source", Buffer.from(resolvedSource.manifestPath, "utf8"));
   add("manifest", manifestResult.raw);
-  if (profile.raw && profile.path) {
-    add(`profile:${profile.path.replaceAll("\\", "/")}`, profile.raw);
-  }
 
   if (resolvedSource.kind === "package") {
     const packageJson = resolvedSource.packageJsonRaw;
@@ -408,6 +383,12 @@ export async function readTemplateManifestFile(
       .map((entry) => entry.source),
     ...parsed.manifest.workspace.files.map((entry) => entry.source),
   ].toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
+  const heartbeatSources = new Set(
+    [
+      parsed.manifest.workspace.bootstrapFiles["HEARTBEAT.md"],
+      ...parsed.manifest.workspace.files.filter((entry) => entry.path === "HEARTBEAT.md"),
+    ].flatMap((entry) => (entry ? [entry.source] : [])),
+  );
 
   const openedSources: Array<{ sourcePath: string; opened: OpenResult }> = [];
   const workspaceSources: TemplateWorkspaceSourceSnapshot[] = [];
@@ -466,6 +447,26 @@ export async function readTemplateManifestFile(
           "$.workspace",
         );
       }
+      if (heartbeatSources.has(sourcePath)) {
+        // Add imports HEARTBEAT.md as cron scratch, which has its own size and encoding contract.
+        const label = `HEARTBEAT.md source ${JSON.stringify(sourcePath)}`;
+        if (bytes.byteLength > CRON_JOB_SCRATCH_MAX_BYTES) {
+          return fileFailure(
+            "heartbeat_too_large",
+            `${label} is ${bytes.byteLength} bytes; the limit is ${CRON_JOB_SCRATCH_MAX_BYTES} bytes.`,
+            "$.workspace",
+          );
+        }
+        try {
+          decodeUtf8Input(bytes, label);
+        } catch (error) {
+          return fileFailure(
+            "heartbeat_invalid",
+            error instanceof Error ? error.message : String(error),
+            "$.workspace",
+          );
+        }
+      }
       const digest = digestTemplateBytes(bytes);
       add(`workspace:${sourcePath}`, bytes);
       workspaceSources.push({
@@ -477,6 +478,54 @@ export async function readTemplateManifestFile(
     }
   } finally {
     await Promise.all(openedSources.map(({ opened }) => opened[Symbol.asyncDispose]()));
+  }
+  const bundledSources: TemplateBundledSourceSnapshot[] = [];
+  let bundledByteLength = 0;
+  let bundledFileCount = 0;
+  for (const dependency of templateDependencyInventory(parsed.manifest)) {
+    if (dependency.source !== "bundled") {
+      continue;
+    }
+    try {
+      const snapshot = await snapshotTemplateDependencyDirectory({
+        rootDir: resolvedSource.packageRoot,
+        path: dependency.path,
+      });
+      const identity =
+        dependency.kind === "skill"
+          ? inspectTemplateBundledSkill(resolvedSource.packageRoot, dependency.path, snapshot)
+          : await inspectTemplateBundledPlugin(
+              resolvedSource.packageRoot,
+              dependency.path,
+              snapshot,
+            );
+      bundledSources.push({
+        kind: dependency.kind,
+        path: dependency.path,
+        snapshot,
+        ...(identity ? { name: identity.name } : {}),
+      });
+      add(`bundled:${dependency.path}`, Buffer.from(snapshot.digest));
+      byteLength += snapshot.byteLength;
+      bundledByteLength += snapshot.byteLength;
+      bundledFileCount += snapshot.files.length;
+      if (bundledFileCount > MAX_TEMPLATE_DIRECTORY_ENTRIES) {
+        throw new Error("Bundled dependencies exceed their aggregate file limit.");
+      }
+      if (bundledByteLength > MAX_TEMPLATE_DIRECTORY_BYTES) {
+        throw new Error("Bundled dependencies exceed their aggregate byte limit.");
+      }
+    } catch (error) {
+      const collection = dependency.kind === "skill" ? "skills" : "plugins";
+      const index = parsed.manifest[collection].findIndex(
+        (entry) => "path" in entry && entry.path === dependency.path,
+      );
+      return fileFailure(
+        "bundled_dependency_invalid",
+        error instanceof Error ? error.message : String(error),
+        `$.${collection}[${index}].path`,
+      );
+    }
   }
   const source: TemplateSourceIdentity = {
     kind: resolvedSource.kind,
@@ -493,14 +542,13 @@ export async function readTemplateManifestFile(
     manifest: parsed.manifest,
     ...(hasMarkdownBody ? { templateMarkdownBody: manifestResult.body } : {}),
     ...(packageBootstrap ? { packageBootstrap } : {}),
-    ...(profile.profile ? { openClawProfile: profile.profile } : {}),
     source,
     snapshot: {
       manifest: manifestSnapshot,
-      ...(profileSnapshot ? { openClawProfile: profileSnapshot } : {}),
+      bundledSources,
       workspaceSources,
       ...(packageBootstrap ? { packageBootstrap } : {}),
     },
-    diagnostics: [...parsed.diagnostics, ...(profile.diagnostics ?? [])],
+    diagnostics: parsed.diagnostics,
   };
 }

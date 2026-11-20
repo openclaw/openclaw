@@ -42,7 +42,7 @@ function defaultParameters(): Record<string, unknown> {
   return { type: "object", properties: {}, additionalProperties: true };
 }
 
-export function createRegisteredNodePluginToolDescriptorMap(
+function createRegisteredNodePluginToolDescriptorMap(
   commands?: readonly RegisteredNodePluginToolCommand[],
 ): Map<string, NodePluginToolDescriptor> {
   const descriptors = new Map<string, NodePluginToolDescriptor>();
@@ -68,7 +68,7 @@ export function createRegisteredNodePluginToolDescriptorMap(
   return descriptors;
 }
 
-export type NormalizedNodePluginTool = {
+type NormalizedNodePluginTool = {
   descriptor: NodePluginToolDescriptor;
   /**
    * True when a gateway-side plugin registration backs this descriptor.
@@ -78,7 +78,7 @@ export type NormalizedNodePluginTool = {
   registered: boolean;
 };
 
-export function normalizeNodePluginToolDescriptors(params: {
+function normalizeNodePluginToolDescriptors(params: {
   nodeId: string;
   tools?: readonly NodePluginToolDescriptor[];
   allowedCommands: readonly string[];
@@ -160,7 +160,7 @@ export function normalizeNodePluginToolDescriptors(params: {
   return entries.slice(0, NODE_PLUGIN_TOOL_MAX_DESCRIPTORS);
 }
 
-export function replaceConnectedNodePluginTools(params: {
+function replaceConnectedNodePluginTools(params: {
   nodeId: string;
   displayName?: string;
   tools: readonly NormalizedNodePluginTool[];

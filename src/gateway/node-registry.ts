@@ -34,7 +34,7 @@ import { isSerializedEventPayload, type SerializedEventPayload } from "./node-ev
 import { sendNodeWebSocketEvent } from "./node-event-send.js";
 import { serializeNodeEvent } from "./node-invoke-request.js";
 import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
-import { NodeMcpElicitationRegistry } from "./node-mcp-elicitation.js";
+import { NodeMcpPolicy } from "./node-mcp-policy.js";
 import {
   publishNodeSessionPluginTools,
   removeConnectedNodePluginTools,
@@ -141,7 +141,6 @@ export type NodeRegistryOptions = {
 };
 
 export class NodeRegistry {
-  readonly mcpElicitation = new NodeMcpElicitationRegistry();
   private nodesById = new Map<string, PairingBoundNodeSession>();
   private nodesByConn = new Map<string, string>();
   private eventTransportsByConn = new Map<string, NodeEventTransport>();
@@ -185,9 +184,9 @@ export class NodeRegistry {
           })
         : false;
     },
-    onFailedResult: (pending) => {
+    onSettledResult: (pending, delivered) => {
       if (pending.systemRunEvent) {
-        this.systemRunEvents.forget({
+        this.systemRunEvents.settle(delivered, {
           nodeId: pending.nodeId,
           connId: pending.connId,
           ...pending.systemRunEvent,
@@ -211,6 +210,11 @@ export class NodeRegistry {
     this.nodesById.get(nodeId),
   );
   private pairingGenerationEventChains = new Map<string, Promise<void>>();
+  private readonly mcpPolicy = new NodeMcpPolicy(
+    this.nodesById,
+    this.sendEventToSession.bind(this),
+  );
+  readonly mcpElicitation = this.mcpPolicy.elicitation;
   private committedConfig: OpenClawConfig | undefined;
   private hostStatsCheckpoints: NodeHostStatsCheckpoints;
 
@@ -246,6 +250,7 @@ export class NodeRegistry {
           ? this.sendEventToSession(current, event, payload)
           : false;
       },
+      setLocalMcpAvailable: this.mcpPolicy.setAvailableForConnection,
       rememberAuthorizedSystemRunEvent: (event) => this.systemRunEvents.remember(event),
       publishActiveNodeContext: () => this.publishActiveNodeContext(),
       closeHostStats: () => this.hostStatsCheckpoints.close(),
@@ -358,9 +363,6 @@ export class NodeRegistry {
       caps: node.caps,
       computerUse: node.computerUse,
     });
-    if (!cfg?.mcp?.apps?.enabled || !node.commands.includes(NODE_MCP_TOOLS_CALL_COMMAND)) {
-      this.mcpElicitation.retire(node);
-    }
     publishNodeSessionPluginTools(
       node,
       cfg?.gateway?.nodes?.pluginTools?.enabled,
@@ -373,6 +375,7 @@ export class NodeRegistry {
       displayName: node.displayName,
       skills: node.nodeSkills,
     });
+    this.mcpPolicy.refresh(node, cfg?.mcp?.apps?.enabled === true);
   }
 
   private isCommandAllowed(nodeId: string, command: string, liveConfig?: OpenClawConfig): boolean {
@@ -496,7 +499,7 @@ export class NodeRegistry {
       skills: [],
       withheldCommands: connect.withheldCommands ?? [],
     });
-    this.mcpElicitation.retire(previousSession);
+    this.mcpPolicy.retire(previousSession);
     const replacesPresence = previousSession?.lastActiveAtMs !== undefined;
     forgetNodeRunnerInventory(this, client.connId);
     this.nodesById.set(nodeId, session);
@@ -541,13 +544,13 @@ export class NodeRegistry {
     if (!nodeId) {
       return null;
     }
+    const node = this.nodesById.get(nodeId);
+    const unregistersCurrentNode = node?.connId === connId;
+    this.mcpPolicy.retire(unregistersCurrentNode ? node : undefined);
     this.nodesByConn.delete(connId);
     this.eventTransportsByConn.delete(connId);
     forgetNodeRunnerInventory(this, connId);
-    const node = this.nodesById.get(nodeId);
-    const unregistersCurrentNode = node?.connId === connId;
     if (unregistersCurrentNode) {
-      this.mcpElicitation.retire(node);
       this.hostStatsCheckpoints.forget(node);
       invalidateNodeCatalog(this);
       const hadPresence = node.lastActiveAtMs !== undefined;
@@ -646,7 +649,7 @@ export class NodeRegistry {
     if (this.nodesById.get(node.nodeId) !== node || node.client.invalidated === true) {
       return false;
     }
-    this.mcpElicitation.retire(node);
+    this.mcpPolicy.retire(node);
     node.client.invalidated = true;
     this.hostStatsCheckpoints.forget(node);
     invalidateNodeCatalog(this);
@@ -991,11 +994,11 @@ export class NodeRegistry {
 
     const previousPairingGeneration = node.pairingGeneration;
     if (generationTransition) {
-      this.mcpElicitation.retire(node);
       // Policy refresh can synchronously notify readers of this committed surface.
       this.hostStatsCheckpoints.forget(node);
       node.hostStats = undefined;
       node.pairingGeneration = generationTransition.nextPairingGeneration;
+      this.mcpPolicy.retire(node);
     }
     this.refreshSessionPolicy(node);
 

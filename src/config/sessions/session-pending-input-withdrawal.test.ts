@@ -57,7 +57,7 @@ async function withInputs(
     try {
       await run(inputs);
     } finally {
-      inputs.receipts.forEach((receipt) => receipt.finish("cancelled"));
+      inputs.receipts.forEach((receipt) => receipt.finish("cancelled", "failed"));
       await Promise.all(inputs.receipts.map(async (receipt) => receipt.settled?.()));
     }
   });
@@ -97,7 +97,12 @@ function createInputs(database: OpenClawAgentDatabase, scope: WithdrawalScope) {
 
 type PendingRow = ReturnType<ReturnType<typeof createInputs>["read"]>;
 function expectWithdrawn(original: PendingRow, withdrawn: PendingRow) {
-  expect(withdrawn).toEqual({ ...original, state: "cancelled", message_json: expect.any(String) });
+  expect(withdrawn).toEqual({
+    ...original,
+    state: "cancelled",
+    end_cause: "delete",
+    message_json: expect.any(String),
+  });
   expect(parseSessionPendingInputMessage(withdrawn.message_json)).toEqual({
     ...parseSessionPendingInputMessage(original.message_json),
     display: false,
@@ -209,7 +214,7 @@ it.each(["queued", "retired"] as const)(
     await withInputs(async ({ scope, stage, read, discard }) => {
       const receipt = await stage("lost-result");
       if (kind === "retired") {
-        receipt.finish("cancelled");
+        receipt.finish("cancelled", "failed");
         await receipt.settled?.();
       }
       const outcome =
