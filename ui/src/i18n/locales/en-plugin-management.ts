@@ -442,6 +442,8 @@ const enPluginManagement = {
     discoveryOffline: "Reconnect to browse plugins from ClawHub.",
     noDiscoveryResults: "No plugins match your search.",
     noDiscoveryResultsHint: "Try a different search or choose another filter.",
+    allDiscoveryInstalled: "Everything here is already installed.",
+    allDiscoveryInstalledHint: "Installed plugins are listed under Installed.",
     searchClawHub: "Search ClawHub plugins",
     searchPlugins: "Search plugins",
     viewsLabel: "Catalog views",
