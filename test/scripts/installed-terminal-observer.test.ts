@@ -516,6 +516,27 @@ it("distinguishes real empty Worker drains from early terminal output bytes", ()
   );
 });
 
+it("reports a final failure for driver and shell preflight rejection without starting Docker", () => {
+  const driver = runProcess(
+    node,
+    [path.resolve("scripts/e2e/lib/upgrade-survivor/installed-terminal.mjs")],
+    process.env,
+    10_000,
+  );
+  expect(driver.status).toBe(1);
+  expect(driver.stderr.trimEnd().split("\n").at(-1)).toBe("[installed-terminal] FAILED (exit 1)");
+  expect(driver.stderr).toContain("[installed-terminal] terminal-error");
+  const shell = runProcess(
+    "/bin/bash",
+    [path.resolve("scripts/e2e/installed-terminal-docker.sh")],
+    { ...process.env, CELL_DEADLINE_EPOCH_SECONDS: "invalid" },
+    10_000,
+  );
+  expect(shell.status).toBe(2);
+  expect(shell.stderr.trimEnd().split("\n").at(-1)).toBe("[installed-terminal] FAILED (exit 2)");
+  expect(shell.stdout).toBe("");
+});
+
 function fixture() {
   const root = fs.realpathSync(dirs.make("installed-terminal-observer-"));
   const directory = path.join(root, "events");

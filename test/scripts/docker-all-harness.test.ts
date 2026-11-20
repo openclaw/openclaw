@@ -1558,12 +1558,18 @@ describe("Docker scheduler trusted harness execution", () => {
     }
   });
 
-  posixIt.for(["wrapper-cleanup-failure", "timeout", "daemon-query-failure"])(
-    "settles the independent evidence producer before publication: %s",
+  posixIt.for(
+    ["wrapper-cleanup-failure", "timeout", "daemon-query-failure"].flatMap((mode) =>
+      ["package-installed-recovery-partial-previous", "installed-terminal"].map((name) => ({
+        mode,
+        name,
+      })),
+    ),
+  )(
+    "settles the independent evidence producer before publication: $name/$mode",
     { timeout: 30_000 },
-    async (mode, { signal }) => {
+    async ({ mode, name }, { signal }) => {
       const fixture = setupFixture("split", false, true);
-      const name = "package-installed-recovery-partial-previous";
       const cid = "a".repeat(64);
       const published = path.join(fixture.root, "published");
       const producer = spawn(
@@ -1686,7 +1692,12 @@ fs.writeFileSync(${JSON.stringify(published)}, 'producer settled before evidence
               lane.publicationStatus,
               readFileSync(path.join(fixture.root, "logs", `${name}.log`), "utf8"),
             ).toBe(mode === "daemon-query-failure" ? 1 : 0);
-            expect(existsSync(published)).toBe(mode !== "daemon-query-failure");
+            expect(existsSync(published)).toBe(
+              name !== "installed-terminal" && mode !== "daemon-query-failure",
+            );
+            if (mode !== "daemon-query-failure") {
+              expect(isProcessAlive(producer.pid!)).toBe(false);
+            }
           },
           () =>
             runQaGatewayFixture(
@@ -1709,7 +1720,7 @@ fs.writeFileSync(${JSON.stringify(published)}, 'producer settled before evidence
   );
 
   posixIt(
-    "owns a separate private producer CID for every recovery cut and clears inherited CIDs",
+    "owns a separate private producer CID for every installed proof and clears inherited CIDs",
     () => {
       const fixture = setupFixture("split", false, true);
       const names = [
@@ -1720,7 +1731,9 @@ fs.writeFileSync(${JSON.stringify(published)}, 'producer settled before evidence
         "helper-before",
         "helper-after",
         "helper-sync",
-      ].map((cut) => `package-installed-recovery-${cut}`);
+      ]
+        .map((cut) => `package-installed-recovery-${cut}`)
+        .concat("installed-terminal");
       const handoffs = path.join(fixture.root, "producer-handoffs.jsonl");
       const marker = path.join(fixture.root, "producer-handoff.cjs");
       writeFileSync(
@@ -1763,7 +1776,7 @@ for (const lane of mainLanes) if (${JSON.stringify([...names, "gateway-concurren
       expect(rows.map((row) => row.name).toSorted((a, b) => a.localeCompare(b))).toEqual(
         [...names, "gateway-concurrency"].toSorted((a, b) => a.localeCompare(b)),
       );
-      expect(new Set(rows.flatMap((row) => (row.cid ? [row.cid] : []))).size).toBe(7);
+      expect(new Set(rows.flatMap((row) => (row.cid ? [row.cid] : []))).size).toBe(8);
       expect(readFileSync(foreign, "utf8")).toBe("foreign producer must stay untouched");
     },
   );
