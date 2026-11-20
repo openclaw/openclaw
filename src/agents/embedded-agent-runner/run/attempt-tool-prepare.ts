@@ -151,8 +151,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     toolSearchControlsEnabled: toolSearchControlsEnabledForRun,
     toolSearchRuntimeConfig,
   } = toolSurfaceRuntime.plan;
-  // A run's allowlist (any trigger) refuses the calls it does not name instead of narrowing
-  // the listing, so every turn of the session sends the same tools.
+  // A run's allowlist refuses what it does not name instead of narrowing a fixed listing.
   const fixedListing = listsFixedToolSet(
     toolSearchConfig,
     toolSearchControlsEnabledForRun,

@@ -6,22 +6,9 @@ import { MAX_TOOL_SEARCH_RESULTS, type ToolSearchConfig } from "./tool-search-pr
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 20;
 
-/**
- * In `tools` mode without selectors, a session lists one tool set; turn facts only gate calls.
- * An isolated cron session runs once, so it keeps the narrowed list: there is no series to share.
- */
-export function listsFixedToolSet(
-  config: ToolSearchConfig,
-  controlsEnabled: boolean,
-  sessionKey: string | undefined,
-): boolean {
-  return (
-    controlsEnabled &&
-    config.mode === "tools" &&
-    !config.include &&
-    !config.exclude &&
-    !isCronRunSessionKey(sessionKey)
-  );
+/** In `tools` mode without selectors a session lists one set; an isolated cron run has none to share. */
+export function listsFixedToolSet(c: ToolSearchConfig, on: boolean, sessionKey?: string): boolean {
+  return on && c.mode === "tools" && !c.include && !c.exclude && !isCronRunSessionKey(sessionKey);
 }
 
 export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConfig {

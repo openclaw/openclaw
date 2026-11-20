@@ -339,8 +339,7 @@ export function* assembleOpenClawCodingTools(
   const ownerOnlyCoreToolDenylist = automationsScope.denied
     ? [...sessionToolAccess.ownerOnlyCoreToolDenylist, AUTOMATIONS_TOOL_NAME]
     : sessionToolAccess.ownerOnlyCoreToolDenylist;
-  // A fixed listing keeps every grant and also builds the default plugin tools a narrowing
-  // sender, group or run allowlist would skip; policy still filters the list and gates calls.
+  // A fixed listing also builds the default plugin tools a narrowing allowlist would skip.
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
     fixedListing
       ? [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, ...capabilityProfile.policy.explicitToolAllowlist]

@@ -253,8 +253,7 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     const explicitlyAllowedClientTool = (clientTools ?? []).some(({ function: fn }) =>
       Boolean(fn?.name?.trim() && clientToolMatchers.some((matches) => matches(fn.name))),
     );
-    // Tools a run allowlist or sender/group policy refuses were absent on main; they cannot
-    // conceal an allowlist that matched nothing. Auto-added controls cannot either.
+    // Run-policy refusals (absent on main) and auto-added controls cannot hide an empty allowlist.
     const runPolicyDenied = collectAllowedToolNames({
       tools: uncompactedEffectiveTools.filter(isAgentToolRunPolicyDenied),
     });
