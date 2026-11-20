@@ -1,7 +1,7 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
-import { webPushCompletionMessageId } from "../../../../../src/shared/web-push-completion.js";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, createSignal, useContext } from "solid-js";
+import { webPushCompletionMessageId } from "../../../../../src/shared/web-push-completion.js";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { createIntersectionObserver } from "../../../lib/reactive/observers.ts";
@@ -28,12 +28,18 @@ export function createChatCompletionReadRef(
     const opts = options();
     const metadata = asNullableRecord(asNullableRecord(value)?.["__openclaw"]);
     if (
-      !app || !opts.agentId || !opts.sessionKey ||
-      opts.isStreaming || opts.isForwarded || opts.searchResult ||
+      !app ||
+      !opts.agentId ||
+      !opts.sessionKey ||
+      opts.isStreaming ||
+      opts.isForwarded ||
+      opts.searchResult ||
       metadata?.catalogTruncated === true ||
       (opts.assistantMessageDisclosure && !opts.assistantMessageDisclosure.expanded) ||
-      identity?.role !== "assistant" || identity.isImported ||
-      !webPushCompletionMessageId(identity) || !identity.runId ||
+      identity?.role !== "assistant" ||
+      identity.isImported ||
+      !webPushCompletionMessageId(identity) ||
+      !identity.runId ||
       resolveAssistantReplyPhase(value) === "commentary" ||
       !hasTerminalRunOutcome(value, identity.runId)
     ) {
@@ -47,8 +53,10 @@ export function createChatCompletionReadRef(
     };
   });
   const presented = () =>
-    parentPresented() && transcriptPresented() &&
-    options().presented === true && visible() &&
+    parentPresented() &&
+    transcriptPresented() &&
+    options().presented === true &&
+    visible() &&
     document.visibilityState === "visible";
   createIntersectionObserver(
     () => {
@@ -63,20 +71,29 @@ export function createChatCompletionReadRef(
       if (!entry) {
         return;
       }
-      intersectingTarget = entry.isIntersecting &&
-        entry.intersectionRect.width > 0 && entry.intersectionRect.height > 0
+      intersectingTarget =
+        entry.isIntersecting &&
+        entry.intersectionRect.width > 0 &&
+        entry.intersectionRect.height > 0
           ? target
           : undefined;
       if (
-        !identity || !target || !target.isConnected || !presented() ||
+        !identity ||
+        !target ||
+        !target.isConnected ||
+        !presented() ||
         intersectingTarget !== target
       ) {
         return;
       }
-      app?.webPush.viewed(identity, () =>
-        presented() && target.isConnected && element() === target &&
-        intersectingTarget === target &&
-        completion() === identity,
+      app?.webPush.viewed(
+        identity,
+        () =>
+          presented() &&
+          target.isConnected &&
+          element() === target &&
+          intersectingTarget === target &&
+          completion() === identity,
       );
     },
   );

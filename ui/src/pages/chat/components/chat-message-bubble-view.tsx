@@ -123,7 +123,10 @@ export function GroupedMessage(props: {
         fallback={
           <Show when={!state().empty}>
             {(_visible) => {
-              const completionRead = createChatCompletionReadRef(() => state().message, () => props.options);
+              const completionRead = createChatCompletionReadRef(
+                () => state().message,
+                () => props.options,
+              );
               const entryRef = messageElements?.forKey(initialMessageKey);
               const bindEntry = elementRef((element) => {
                 entryRef?.(element);

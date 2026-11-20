@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { WebPushCompletion } from "../shared/web-push-completion.js";
 import path from "node:path";
 import { expectDefined, normalizeOptionalString } from "@openclaw/normalization-core";
 import {
@@ -11,6 +10,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { WebPushCompletion } from "../shared/web-push-completion.js";
 import { pathMayExistSync } from "./path-existence.js";
 import {
   WebPushSubscriptionBindingError,

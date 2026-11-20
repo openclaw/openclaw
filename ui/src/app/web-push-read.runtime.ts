@@ -4,8 +4,8 @@ import {
   type WebPushCompletion,
 } from "../../../src/shared/web-push-completion.js";
 import { listen } from "../lib/reactive/listener.ts";
-import type { ApplicationGateway } from "./gateway.ts";
 import { isSameOriginGateway } from "./gateway-control-ui-reload.ts";
+import type { ApplicationGateway } from "./gateway.ts";
 
 // Push TTL is five minutes. A small margin covers an already queued display.
 // Closing all pages forgets receipts: a later delivery waits for another view.
@@ -66,16 +66,20 @@ export function createWebPushReadRuntime(gateway: ApplicationGateway) {
       const root = registered.pathname.replace(/\/$/u, "");
       if (
         gatewayUrl.origin !== registered.origin ||
-        gatewayUrl.search || gatewayUrl.hash ||
+        gatewayUrl.search ||
+        gatewayUrl.hash ||
         ![root || "/", root + "/", root + "/ws"].includes(gatewayUrl.pathname)
       ) {
         return;
       }
       const notifications = await registration.getNotifications();
       if (
-        disposed || scope() !== admitted || generation !== admittedGeneration ||
+        disposed ||
+        scope() !== admitted ||
+        generation !== admittedGeneration ||
         gateway.snapshot.client !== client ||
-        document.visibilityState !== "visible" || !stillPresented()
+        document.visibilityState !== "visible" ||
+        !stillPresented()
       ) {
         return;
       }

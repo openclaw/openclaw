@@ -16,45 +16,70 @@ afterEach(() => {
 it("admits a persisted final only when its source bubble is presented and intersecting", async () => {
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   const deliveries: Array<(visible: boolean) => void> = [];
-  vi.stubGlobal("IntersectionObserver", class implements IntersectionObserver {
-    readonly root = null;
-    readonly rootMargin = "0px";
-    readonly scrollMargin = "0px";
-    readonly thresholds = [0];
-    targets = new Set<Element>();
-    constructor(readonly callback: IntersectionObserverCallback) {}
-    observe(target: Element) {
-      this.targets.add(target);
-      deliveries.push((visible) => {
-        if (this.targets.has(target)) {
-          this.callback([{
-            target, isIntersecting: visible,
-            intersectionRect: { width: visible ? 20 : 0, height: visible ? 20 : 0 },
-          } as IntersectionObserverEntry], this);
-        }
-      });
-    }
-    unobserve(target: Element) { this.targets.delete(target); }
-    disconnect() { this.targets.clear(); }
-    takeRecords() { return []; }
-  });
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class implements IntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "0px";
+      readonly scrollMargin = "0px";
+      readonly thresholds = [0];
+      targets = new Set<Element>();
+      constructor(readonly callback: IntersectionObserverCallback) {}
+      observe(target: Element) {
+        this.targets.add(target);
+        deliveries.push((visible) => {
+          if (this.targets.has(target)) {
+            this.callback(
+              [
+                {
+                  target,
+                  isIntersecting: visible,
+                  intersectionRect: { width: visible ? 20 : 0, height: visible ? 20 : 0 },
+                } as IntersectionObserverEntry,
+              ],
+              this,
+            );
+          }
+        });
+      }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
+      takeRecords() {
+        return [];
+      }
+    },
+  );
   const viewed = vi.fn();
   const app = { webPush: { viewed } } as unknown as ApplicationContext;
   const [presented, setPresented] = createSignal(false);
   const [restrictions, setRestrictions] = createSignal<Partial<GroupedMessageOptions>>({});
   const [message, setMessage] = createSignal({
-    role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }],
+    role: "assistant",
+    stopReason: "stop",
+    content: [{ type: "text", text: "Done" }],
     __openclaw: { id: "row-1", runId: "run-1", idempotencyKey: "final-key" },
   });
   const Bubble = () => {
     const ref = createChatCompletionReadRef(message, () => ({
-      agentId: "a", sessionKey: "agent:a:s", isStreaming: false, showReasoning: false,
-      presented: presented(), transcriptVisible: presented(),
+      agentId: "a",
+      sessionKey: "agent:a:s",
+      isStreaming: false,
+      showReasoning: false,
+      presented: presented(),
+      transcriptVisible: presented(),
       ...restrictions(),
     }));
     return <div ref={ref}>Done</div>;
   };
-  const mounted = mountSolid(() => <ApplicationProvider value={app}><Bubble /></ApplicationProvider>);
+  const mounted = mountSolid(() => (
+    <ApplicationProvider value={app}>
+      <Bubble />
+    </ApplicationProvider>
+  ));
   try {
     await flush();
     expect(deliveries).toHaveLength(0);
@@ -64,9 +89,15 @@ it("admits a persisted final only when its source bubble is presented and inters
     deliveries.at(-1)!(false);
     expect(viewed).not.toHaveBeenCalled();
     deliveries.at(-1)!(true);
-    expect(viewed).toHaveBeenCalledWith({
-      agentId: "a", sessionKey: "agent:a:s", runId: "run-1", messageId: "key:final-key",
-    }, expect.any(Function));
+    expect(viewed).toHaveBeenCalledWith(
+      {
+        agentId: "a",
+        sessionKey: "agent:a:s",
+        runId: "run-1",
+        messageId: "key:final-key",
+      },
+      expect.any(Function),
+    );
     const stillPresented = viewed.mock.calls[0][1];
     deliveries.at(-1)!(false);
     expect(stillPresented()).toBe(false);

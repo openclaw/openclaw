@@ -299,13 +299,19 @@ describe("Control UI service worker notification scope", () => {
 
   it("announces a completion only after display, and only within its registration scope", async () => {
     const worker = createNotificationServiceWorker(nestedScope, [
-      nestedScope + "chat", "https://other.example/chat", rootScope + "elsewhere",
+      nestedScope + "chat",
+      "https://other.example/chat",
+      rootScope + "elsewhere",
     ]);
     const displayed = Promise.withResolvers<void>();
     worker.showNotification.mockImplementationOnce(() => displayed.promise);
     const completion = {
-      version: 1, agentId: "a", sessionKey: "agent:a:s", runId: "r",
-      messageId: "m", profileId: null,
+      version: 1,
+      agentId: "a",
+      sessionKey: "agent:a:s",
+      runId: "r",
+      messageId: "m",
+      profileId: null,
     };
     const pending = worker.dispatchPush({ title: "Done", body: "", completion });
     expect(worker.clients.matchAll).not.toHaveBeenCalled();

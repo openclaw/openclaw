@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import { readSessionMessageIdentity } from "../../packages/gateway-client/src/session-projection-message-identity.js";
-import { readWebPushCompletion, webPushCompletionMessageId, type WebPushCompletion } from "../shared/web-push-completion.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core";
 import {
   extractErrorCode,
@@ -9,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
+import { readSessionMessageIdentity } from "../../packages/gateway-client/src/session-projection-message-identity.js";
 import type { WebPushNotificationCategory } from "../../packages/gateway-protocol/src/schema/push.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCronExecutionId } from "../cron/run-id.js";
@@ -25,6 +24,11 @@ import {
 } from "../infra/push-web.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
+import {
+  readWebPushCompletion,
+  webPushCompletionMessageId,
+  type WebPushCompletion,
+} from "../shared/web-push-completion.js";
 import { resolveControlUiWebPushUrl } from "./control-ui-shared.js";
 import { QUESTIONS_SCOPE } from "./method-scopes.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
@@ -277,9 +281,10 @@ export function createEventWebPushDelivery(
             // Do not derive identity from the display-normalized tag or a session URL.
             const final = event === "chat" && isRecord(payload) ? payload : null;
             const identity = readSessionMessageIdentity(final?.message);
-            const authorized = sessionKeys.length === 1 && sessionKey
-              ? authority.sessions.get(sessionKey)?.target
-              : undefined;
+            const authorized =
+              sessionKeys.length === 1 && sessionKey
+                ? authority.sessions.get(sessionKey)?.target
+                : undefined;
             const completion =
               notification.category === "agent-finished" &&
               authorized &&
@@ -287,14 +292,14 @@ export function createEventWebPushDelivery(
               !identity.isImported &&
               webPushCompletionMessageId(identity) &&
               identity.runId === final?.runId
-                ? readWebPushCompletion({
+                ? (readWebPushCompletion({
                     version: 1,
                     agentId: authorized.agentId,
                     sessionKey: authorized.canonicalKey,
                     runId: identity.runId,
                     messageId: webPushCompletionMessageId(identity),
                     profileId: target.userProfileId,
-                  }) ?? undefined
+                  }) ?? undefined)
                 : undefined;
             const key = JSON.stringify({ title, body, icon, completion });
             const group = groups.get(key) ?? { title, body, icon, completion, subscriptions: [] };

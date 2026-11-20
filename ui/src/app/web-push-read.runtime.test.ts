@@ -20,19 +20,27 @@ function harness() {
     getRegistration: vi.fn(),
   });
   vi.stubGlobal("navigator", { serviceWorker });
-  const fixture = createApplicationGateway(createApplicationGatewaySnapshot({
-    phase: "connected", client: {} as GatewayBrowserClient, selfUser: null,
-  }));
+  const fixture = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client: {} as GatewayBrowserClient,
+      selfUser: null,
+    }),
+  );
   fixture.gateway.connection.gatewayUrl = location.origin.replace(/^http/u, "ws");
   const notifications: ReturnType<typeof notification>[] = [];
   const getNotifications = vi.fn(async () => notifications);
   serviceWorker.getRegistration.mockResolvedValue({
-    scope: location.origin + "/", getNotifications,
+    scope: location.origin + "/",
+    getNotifications,
   });
   const runtime = createWebPushReadRuntime(fixture.gateway);
-  const delivered = () => serviceWorker.dispatchEvent(new MessageEvent("message", {
-    data: { type: "openclaw-completion-delivered" },
-  }));
+  const delivered = () =>
+    serviceWorker.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: "openclaw-completion-delivered" },
+      }),
+    );
   return { ...fixture, runtime, notifications, getNotifications, serviceWorker, delivered };
 }
 afterEach(() => {
@@ -48,7 +56,13 @@ describe("browser completion read dismissal", () => {
     const other = notification({ sessionKey: "agent:a:other" });
     const otherProfile = notification({ profileId: "another-reader" });
     const legacy = { data: {}, close: vi.fn() };
-    h.getNotifications.mockResolvedValue([seen, newer, other, otherProfile, legacy] as typeof h.notifications);
+    h.getNotifications.mockResolvedValue([
+      seen,
+      newer,
+      other,
+      otherProfile,
+      legacy,
+    ] as typeof h.notifications);
     try {
       h.runtime.viewed(viewed, () => true);
       await vi.waitFor(() => expect(seen.close).toHaveBeenCalledOnce());
@@ -65,34 +79,37 @@ describe("browser completion read dismissal", () => {
     }
   });
 
-  it.each(["navigation", "disconnect", "client", "identity-unresolved", "dispose"])("does not apply a stale enumeration: %s", async (change) => {
-    const h = harness();
-    const entry = notification();
-    const enumerated = Promise.withResolvers<typeof h.notifications>();
-    h.getNotifications.mockReturnValue(enumerated.promise);
-    let presented = true;
-    try {
-      h.runtime.viewed(viewed, () => presented);
-      await vi.waitFor(() => expect(h.getNotifications).toHaveBeenCalledOnce());
-      if (change === "navigation") {
-        presented = false;
-      } else if (change === "disconnect") {
-        h.publish({ ...h.gateway.snapshot, phase: "offline" });
-      } else if (change === "client") {
-        h.publish({ ...h.gateway.snapshot, client: {} as GatewayBrowserClient });
-      } else if (change === "identity-unresolved") {
-        h.publish({ ...h.gateway.snapshot, selfUser: undefined });
-      } else {
+  it.each(["navigation", "disconnect", "client", "identity-unresolved", "dispose"])(
+    "does not apply a stale enumeration: %s",
+    async (change) => {
+      const h = harness();
+      const entry = notification();
+      const enumerated = Promise.withResolvers<typeof h.notifications>();
+      h.getNotifications.mockReturnValue(enumerated.promise);
+      let presented = true;
+      try {
+        h.runtime.viewed(viewed, () => presented);
+        await vi.waitFor(() => expect(h.getNotifications).toHaveBeenCalledOnce());
+        if (change === "navigation") {
+          presented = false;
+        } else if (change === "disconnect") {
+          h.publish({ ...h.gateway.snapshot, phase: "offline" });
+        } else if (change === "client") {
+          h.publish({ ...h.gateway.snapshot, client: {} as GatewayBrowserClient });
+        } else if (change === "identity-unresolved") {
+          h.publish({ ...h.gateway.snapshot, selfUser: undefined });
+        } else {
+          h.runtime.dispose();
+        }
+        enumerated.resolve([entry]);
+        await enumerated.promise;
+        await Promise.resolve();
+        expect(entry.close).not.toHaveBeenCalled();
+      } finally {
         h.runtime.dispose();
       }
-      enumerated.resolve([entry]);
-      await enumerated.promise;
-      await Promise.resolve();
-      expect(entry.close).not.toHaveBeenCalled();
-    } finally {
-      h.runtime.dispose();
-    }
-  });
+    },
+  );
 
   it("does not clear on a delivery hint without an actual view or after receipts expire", async () => {
     const h = harness();

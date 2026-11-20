@@ -51,6 +51,10 @@ export function webPushCompletionMessageId(identity: {
 
 export function webPushCompletionKey(value: WebPushCompletion): string {
   return JSON.stringify([
-    value.agentId, value.sessionKey, value.runId, value.messageId, value.profileId,
+    value.agentId,
+    value.sessionKey,
+    value.runId,
+    value.messageId,
+    value.profileId,
   ]);
 }

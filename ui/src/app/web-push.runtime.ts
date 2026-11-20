@@ -1,5 +1,4 @@
 import { raceWithTimeout } from "@openclaw/retry";
-import { createWebPushReadRuntime, type ViewedWebPushCompletion } from "./web-push-read.runtime.ts";
 import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
@@ -10,6 +9,7 @@ import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { openClawIdDocumentConfig } from "./openclaw-id-document.ts";
 import { readWebPushAccess, type WebPushAccess } from "./web-push-access.ts";
+import { createWebPushReadRuntime, type ViewedWebPushCompletion } from "./web-push-read.runtime.ts";
 
 const SW_READY_TIMEOUT = 10_000;
 

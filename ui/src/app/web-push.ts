@@ -1,8 +1,8 @@
-import type { ViewedWebPushCompletion } from "./web-push-read.runtime.ts";
 import { isIosBrowserPlatform } from "../lib/browser-platform.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { readWebPushAccess, type WebPushAccess } from "./web-push-access.ts";
+import type { ViewedWebPushCompletion } from "./web-push-read.runtime.ts";
 import type {
   WebPushCapabilityAction,
   WebPushCapabilityPatch,

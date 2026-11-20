@@ -13,7 +13,10 @@ const owners = vi.hoisted(() => ({
 }));
 vi.mock("./web-push.runtime.ts", () => ({
   createWebPushCapabilityRuntime: () => ({
-    viewed: owners.viewed, dispose: owners.dispose, pending: false, run: async () => {},
+    viewed: owners.viewed,
+    dispose: owners.dispose,
+    pending: false,
+    run: async () => {},
   }),
 }));
 
@@ -28,11 +31,20 @@ it.each(["stable", "client", "unresolved-profile", "url", "dispose"])(
     vi.stubGlobal("navigator", { userAgent: "", serviceWorker: {} });
     vi.stubGlobal("PushManager", {});
     vi.stubGlobal("Notification", { permission: "granted" });
-    const h = createApplicationGateway(createApplicationGatewaySnapshot({
-      phase: "connected", client: {} as GatewayBrowserClient, selfUser: null,
-    }));
+    const h = createApplicationGateway(
+      createApplicationGatewaySnapshot({
+        phase: "connected",
+        client: {} as GatewayBrowserClient,
+        selfUser: null,
+      }),
+    );
     const capability = createWebPushCapability(h.gateway);
-    const completion = { agentId: "a", sessionKey: "agent:a:s", runId: "run", messageId: "key:final" };
+    const completion = {
+      agentId: "a",
+      sessionKey: "agent:a:s",
+      runId: "run",
+      messageId: "key:final",
+    };
     const presented = vi.fn(() => true);
     capability.viewed(completion, presented);
     if (change === "client") {
