@@ -114,6 +114,10 @@ Materialized skill files are temporary turn inputs in a private directory separa
 from worker state and its GitHub credentials. Their directory is scoped to the
 session and workspace, and each skill path uses a short readable name with a digest
 of its name, source, and verified content.
+When the Gateway authorizes a skill read and the worker has the matching bundle,
+the worker returns the delivered instructions and local `SKILL.md` path. Skill
+search results likewise point to matching local copies, so relative resources
+resolve on the worker.
 Unchanged deliveries recreate the same paths in a fixed prompt order, so
 later turns can reuse the provider's prompt prefix and read references from earlier
 turns without rewriting transcript history. Changed skill content receives a new

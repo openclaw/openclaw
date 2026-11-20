@@ -1,13 +1,65 @@
+import { readFile } from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import type { AgentToolResult } from "../../packages/agent-core/src/types.js";
+import type {
+  WorkerGatewayToolResult,
+  WorkerToolSurface,
+} from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { bindBeforeToolCallMetadata } from "../agents/before-tool-call-metadata.js";
+import { formatSkillInstructions } from "../agents/skill-instruction-result.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { jsonResult, textResult } from "../agents/tools/tool-results.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { WorkerConnection } from "./worker-connection.js";
+
+type ResolveSkillLocation = (name: string, location: string) => string | undefined;
+
+async function projectSkillResult(
+  toolName: string,
+  result: WorkerGatewayToolResult & { details: unknown },
+  resolveSkillLocation: ResolveSkillLocation,
+  signal?: AbortSignal,
+): Promise<AgentToolResult<unknown>> {
+  const { details } = result;
+  if (result.isError || !isRecord(details)) {
+    return result;
+  }
+  if (
+    toolName === "skills_read" &&
+    typeof details.name === "string" &&
+    typeof details.location === "string" &&
+    typeof details.content === "string"
+  ) {
+    const location = resolveSkillLocation(details.name, details.location);
+    if (location) {
+      // The Gateway authorizes the read; only this turn's delivered copy supplies the bytes.
+      const content = await readFile(location, { encoding: "utf8", signal });
+      signal?.throwIfAborted();
+      const instructions = { name: details.name, location, content };
+      return { ...result, ...textResult(formatSkillInstructions(instructions), instructions) };
+    }
+  }
+  if (toolName === "skills_search" && Array.isArray(details.skills)) {
+    const skills = details.skills.map((skill: unknown) => {
+      if (
+        !isRecord(skill) ||
+        typeof skill.name !== "string" ||
+        typeof skill.location !== "string"
+      ) {
+        return skill;
+      }
+      const location = resolveSkillLocation(skill.name, skill.location);
+      return location ? { ...skill, location } : skill;
+    });
+    return { ...result, ...jsonResult({ ...details, skills }) };
+  }
+  return result;
+}
 
 export function createWorkerGatewayToolProxies(
   surface: WorkerToolSurface,
   client: Pick<WorkerConnection, "invokeGatewayTool" | "cancelGatewayTool">,
+  resolveSkillLocation?: ResolveSkillLocation,
 ): AnyAgentTool[] {
   const tools: AnyAgentTool[] = [];
   for (const entry of surface.tools) {
@@ -51,7 +103,11 @@ export function createWorkerGatewayToolProxies(
           if (!response.ok) {
             throw new Error(response.error.message);
           }
-          return { ...response.payload, details: response.payload.details };
+          const result = { ...response.payload, details: response.payload.details };
+          return resolveSkillLocation &&
+            (entry.definition.name === "skills_read" || entry.definition.name === "skills_search")
+            ? await projectSkillResult(entry.definition.name, result, resolveSkillLocation, signal)
+            : result;
         } finally {
           signal?.removeEventListener("abort", cancel);
         }

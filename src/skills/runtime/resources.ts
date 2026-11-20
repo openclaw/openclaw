@@ -458,6 +458,19 @@ export async function materializeSkillResources(
           preserveOrder: true,
         }),
       },
+      resolveSkillLocation: (name: string, location: string) => {
+        let resolved: string | undefined;
+        for (const [source, target, mappedName] of pathMappings) {
+          if (mappedName !== name || source !== location) {
+            continue;
+          }
+          if (resolved !== undefined && resolved !== target) {
+            return undefined;
+          }
+          resolved = target;
+        }
+        return resolved;
+      },
       rewriteReferences: (text: string) => {
         let cursor = Math.max(0, text.indexOf("<available_skills>\n"));
         const parts = [rewritePaths(text.slice(0, cursor))];

@@ -107,7 +107,21 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     if (params.operationalRunInstance.runId !== params.runId) {
       throw new Error("worker operational run instance disagrees with the admitted turn");
     }
-    const toolSurface = params.toolSurface;
+    const surface = params.toolSurface;
+    const toolSurface =
+      resources && surface.presentation.skills
+        ? {
+            ...surface,
+            presentation: {
+              ...surface.presentation,
+              skills: surface.presentation.skills.map((skill) => ({
+                ...skill,
+                location:
+                  resources.resolveSkillLocation(skill.name, skill.location) ?? skill.location,
+              })),
+            },
+          }
+        : surface;
     const model =
       params.nativeInference?.model ??
       createNativeModelOwnedRuntimeModel({
@@ -264,10 +278,11 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           ].map((tool) => [tool.name, tool]),
         );
         const gatewayTools = new Map(
-          createWorkerGatewayToolProxies(toolSurface, params.gatewayTools).map((tool) => [
-            tool.name,
-            tool,
-          ]),
+          createWorkerGatewayToolProxies(
+            toolSurface,
+            params.gatewayTools,
+            resources?.resolveSkillLocation,
+          ).map((tool) => [tool.name, tool]),
         );
         const tools = toolSurface.tools.map((entry) => {
           if (entry.execution === "gateway") {

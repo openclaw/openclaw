@@ -131,4 +131,41 @@ describe("worker Gateway tool transport", () => {
     });
     await expect(tool!.execute("stale", {})).rejects.toThrow("no longer current");
   });
+
+  it("preserves denied and undelivered skill reads", async () => {
+    const { surface, client } = fixture();
+    surface.tools[0]!.definition.name = "skills_read";
+    const resolveSkillLocation = vi.fn(() => undefined);
+    const [tool] = createWorkerGatewayToolProxies(surface, client, resolveSkillLocation);
+    client.invokeGatewayTool.mockResolvedValueOnce({
+      type: "res",
+      id: "denied",
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Skill read denied",
+        details: { reason: "method-not-allowed" },
+      },
+    });
+    await expect(tool!.execute("denied", { name: "guide" })).rejects.toThrow("Skill read denied");
+    const details = { name: "guide", location: "/gateway/guide/SKILL.md", content: "Instructions" };
+    const payload = { content: [{ type: "text" as const, text: details.content }], details };
+    const failed = { ...payload, isError: true };
+    client.invokeGatewayTool.mockResolvedValueOnce({
+      type: "res",
+      id: "failed",
+      ok: true,
+      payload: failed,
+    });
+    await expect(tool!.execute("failed", { name: "guide" })).resolves.toEqual(failed);
+    expect(resolveSkillLocation).not.toHaveBeenCalled();
+    client.invokeGatewayTool.mockResolvedValueOnce({
+      type: "res",
+      id: "unmapped",
+      ok: true,
+      payload,
+    });
+    await expect(tool!.execute("unmapped", { name: "guide" })).resolves.toEqual(payload);
+    expect(resolveSkillLocation).toHaveBeenCalledExactlyOnceWith(details.name, details.location);
+  });
 });

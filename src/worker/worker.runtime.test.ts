@@ -30,6 +30,7 @@ import type { WorkerComputerParams } from "../../packages/gateway-protocol/src/s
 import {
   validateWorkerGatewayToolInvokeParams,
   type WorkerGatewayToolInvokeParams,
+  type WorkerGatewayToolResult,
   type WorkerToolSurface,
 } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
@@ -66,6 +67,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { prepareSkillBundle } from "../skills/library/bundle.js";
 import * as workerTranscriptRuntime from "./embedded-agent-transcript.runtime.js";
 import {
   buildWorkerConnectParams,
@@ -173,6 +175,7 @@ type FakeGatewayOptions = {
   silenceFirstLiveEvent?: boolean;
   silenceFirstInference?: boolean;
   dropSessionToolResponses?: number;
+  gatewayToolResults?: Record<string, WorkerGatewayToolResult>;
   transcriptFailureAtRequest?: number;
   liveResyncAckedSeq?: number;
   liveResyncResponses?: number;
@@ -250,8 +253,8 @@ class FakeWorkerGateway {
 
   async start(): Promise<void> {
     // Leave room for the isolated test temp root within macOS Unix socket limits.
-    this.rootDir = await mkdtemp(path.join(tmpdir(), "oc-wg-"));
-    this.socketPath = path.join(this.rootDir, "gateway.sock");
+    this.rootDir = await mkdtemp(path.join(tmpdir(), "w"));
+    this.socketPath = path.join(this.rootDir, "s");
     const listening = once(this.webSocketServer, "listening");
     this.httpServer.listen(this.socketPath);
     await listening;
@@ -478,7 +481,8 @@ class FakeWorkerGateway {
       id,
       ok: true,
       payload:
-        request.toolId === "presence"
+        this.options.gatewayToolResults?.[request.toolId] ??
+        (request.toolId === "presence"
           ? {
               content: [{ type: "text", text: "Ada is online" }],
               details: { status: "ok", people: [{ name: "Ada" }] },
@@ -486,7 +490,7 @@ class FakeWorkerGateway {
           : {
               content: [{ type: "text", text: "child accepted" }],
               details: { status: "accepted", childSessionKey: "agent:main:cloud-child" },
-            },
+            }),
     });
   }
 
@@ -1320,6 +1324,126 @@ describe("worker runtime", () => {
   });
 
   registerWorkerGatewayToolRpcTests({ setup });
+
+  it("returns delivered skill instructions and their worker location to the model", async () => {
+    const name = "bundle-proof";
+    const sourcePath = "/gateway/skills/bundle-proof/SKILL.md";
+    const delivered =
+      "---\nname: bundle-proof\ndescription: Worker bundle proof\n---\nUse reference.txt.\n";
+    const instructions = {
+      name,
+      location: sourcePath,
+      content: "Different Gateway bytes.",
+      locationNote: "Gateway-specific location note.",
+    };
+    const metadata = { name, location: sourcePath, description: "Worker bundle proof" };
+    const search = { skills: [metadata], hasMore: false };
+    const { gateway, launch } = await setup({
+      inferencePlans: [
+        { toolName: "skills_read", toolCallId: "read-skill", args: { name } },
+        { toolName: "skills_search", toolCallId: "find-skill", args: { query: name } },
+        "text",
+      ],
+      gatewayToolResults: {
+        skills_read: {
+          content: [
+            { type: "text", text: "Skill location: " + sourcePath + "\n\n" + instructions.content },
+          ],
+          details: instructions,
+        },
+        skills_search: {
+          content: [{ type: "text", text: JSON.stringify(search) }],
+          details: search,
+        },
+      },
+    });
+    const files = [
+      { path: "SKILL.md", content: delivered },
+      { path: "reference.txt", content: "Delivered resource." },
+    ];
+    launch.assignment.skillResources = {
+      version: 1,
+      skills: [
+        {
+          name,
+          sourcePath,
+          description: "Worker bundle proof",
+          revision: prepareSkillBundle(files).revision,
+          files,
+        },
+      ],
+    };
+    launch.assignment.toolAuthority.allowedToolNames = [];
+    const surface = gateway.toolSurface();
+    surface.presentation.skills = [metadata];
+    surface.tools.push({
+      id: "skills_read",
+      execution: "gateway",
+      definition: {
+        name: "skills_read",
+        label: "Read Installed Skill",
+        description: "Read the named skill.",
+        parameters: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
+      },
+    });
+    surface.tools.push({
+      id: "skills_search",
+      execution: "gateway",
+      definition: {
+        name: "skills_search",
+        label: "Search Installed Skills",
+        description: "Find installed skills.",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    });
+    gateway.toolSurface = () => surface;
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    expect(gateway.gatewayToolRequests).toMatchObject([
+      { toolId: "skills_read", arguments: { name } },
+      { toolId: "skills_search", arguments: { query: name } },
+    ]);
+    type InferenceToolResult = Extract<
+      WorkerInferenceStartParams["context"]["messages"][number],
+      { role: "toolResult" }
+    >;
+    const result = gateway.inferenceRequests[1]?.context.messages.find(
+      (message): message is InferenceToolResult =>
+        message.role === "toolResult" && message.toolCallId === "read-skill",
+    );
+    const part = result?.content[0];
+    const location =
+      part?.type === "text" ? /^Skill location: (.+)$/mu.exec(part.text)?.[1] : undefined;
+    expect(location).toEqual(
+      expect.stringMatching(/[/\\]skill-resources-[a-f0-9]+[/\\][^\n]+[/\\]SKILL\.md$/u),
+    );
+    expect(part).toEqual({
+      type: "text",
+      text: [
+        "Skill location: " + location,
+        "Resolve relative resource paths from the directory containing this SKILL.md.",
+        "",
+        delivered,
+      ].join("\n"),
+    });
+    const found = gateway.inferenceRequests[2]?.context.messages.find(
+      (message): message is InferenceToolResult =>
+        message.role === "toolResult" && message.toolCallId === "find-skill",
+    )?.content[0];
+    expect(found?.type === "text" && JSON.parse(found.text)).toEqual({
+      skills: [{ ...metadata, location }],
+      hasMore: false,
+    });
+  });
 
   it.each([
     { name: "spawn", toolId: "sessions_spawn", arguments: { task: "start a nested cloud child" } },
