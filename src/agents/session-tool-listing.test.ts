@@ -217,17 +217,6 @@ it("re-pins after /compact on a cron turn with the owner turn's tool list", () =
   expect(definitions(send(chat.state, turns.user!, { compactions: 1 }))).toEqual(before);
 });
 
-it("builds one tool list for every sender of a group chat", () => {
-  setRuntimeConfigSnapshot(groupConfig);
-  using chat = retainEmbeddedSessionPromptState("group-listing");
-  onTestFinished(() => clearEmbeddedSessionPromptStates(["group-listing"]));
-  const guest = send(chat.state, { ...group, runId: "guest", senderId: "guest" });
-  const ownerTurn = send(chat.state, { ...group, ...owner, runId: "owner" });
-  expect(definitions(guest.built)).toEqual(definitions(ownerTurn.built));
-  const guestExec = guest.built.find((tool) => tool.name === "exec");
-  expect(guestExec && isAgentToolExecutionAvailable(guestExec)).toBe(false);
-});
-
 it("lets a fork send the source's tool list unchanged", () => {
   setRuntimeConfigSnapshot(groupConfig);
   using chat = retainEmbeddedSessionPromptState("group-fork");

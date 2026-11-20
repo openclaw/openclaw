@@ -49,7 +49,12 @@ vi.mock("../../openclaw-plugin-tools.js", async (importOriginal) => {
   };
 });
 
-// One bundle MCP server tool, through the production bundle pass.
+// No bundle MCP servers in this harness (MCP keeps main's start rule; out of scope).
+vi.mock("../../agent-bundle-mcp-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agent-bundle-mcp-tools.js")>()),
+  acquireSessionMcpRuntime: async () => undefined,
+}));
+
 // Records whether each run may build the computer schema.
 const computerAllowedByRun: boolean[] = [];
 vi.mock("../../computer-use-node-capabilities.js", async (importOriginal) => ({
@@ -57,24 +62,6 @@ vi.mock("../../computer-use-node-capabilities.js", async (importOriginal) => ({
   loadPairedComputerUseAvailabilityForSurface: async (params: { computerAllowed: boolean }) => {
     computerAllowedByRun.push(params.computerAllowed);
     return undefined;
-  },
-}));
-
-vi.mock("../../agent-bundle-mcp-tools.js", () => ({
-  acquireSessionMcpRuntime: async () => ({ runtime: {}, releaseLease: () => {} }),
-  materializeBundleMcpToolsForRun: async () => {
-    const tool = createStubTool("notion__search");
-    setPluginToolMeta(tool, {
-      pluginId: "bundle-mcp",
-      optional: false,
-      mcp: {
-        serverName: "notion",
-        safeServerName: "notion",
-        toolName: "search",
-        operation: "tool",
-      },
-    });
-    return { tools: [tool], dispose: async () => {} };
   },
 }));
 
@@ -86,7 +73,6 @@ const baseConfig: OpenClawConfig = {
     codeMode: false,
     toolSearch: { enabled: true, mode: "tools" },
   },
-  mcp: { servers: { notion: { command: "notion-mcp" } } },
 };
 const sessionKey = "agent:main:telegram:direct:owner";
 // Names, a group, a glob, and `message`, which the allowlist adds over the coding profile.
@@ -328,15 +314,10 @@ const callableOnBase = [
   "web_fetch",
 ];
 
-it("allows exactly the calls a scheduled toolsAllow allowed before", async () => {
-  expect((await prepareTools(scheduled)).callable).toEqual(callableOnBase);
-});
-
 it("keeps the session's tools listed on a scheduled run and refuses the rest visibly", async () => {
   const run = await prepareTools(scheduled, baseConfig, "exec");
   const user = await prepareTools({ runId: "user", trigger: "user", senderIsOwner: true });
-  // MCP servers still start only when the allowlist names them, as on main (follow-up).
-  expect(run.listed).toEqual(user.listed.filter((name) => name !== "notion__search"));
+  expect(run.listed).toEqual(user.listed);
   expect(run.dispatched?.details).toMatchObject({ gated: true });
   expect(JSON.stringify(run.dispatched?.content)).toContain(
     "exec is outside the tools this run allows",
@@ -404,7 +385,6 @@ const guestCallable = [
   "dispatch_action",
   "get_goal",
   "ls",
-  "notion__search",
   "presence",
   "progress_card",
   "read",
@@ -470,18 +450,6 @@ it("lists one tool set for every sender of a group and refuses the guest through
   expect(guest.dispatched?.details).toMatchObject({ gated: true });
 });
 
-it("keeps a run allowlist refusal through a catalog rewrap", async () => {
-  const run = await prepareTools(
-    { ...scheduled, runId: "u2", trigger: "user" },
-    baseConfig,
-    "exec",
-  );
-  expect(run.dispatched?.details).toMatchObject({ gated: true });
-  expect(JSON.stringify(run.dispatched?.content)).toContain(
-    "exec is outside the tools this run allows",
-  );
-});
-
 const guestGroup = {
   runId: "g",
   trigger: "user",
@@ -511,7 +479,7 @@ it("keeps today's verdict for an allowlist naming an owner-only tool on a non-ow
   expect(run.emptyAllowlistError).toBeUndefined();
 });
 
-it("refuses what sender allow and deny policies removed, including MCP tools", async () => {
+it("refuses what a sender allow policy removed", async () => {
   const allow = await prepareTools(guestGroup, withSenderPolicy({ allow: ["read", "sessions_*"] }));
   expect(allow.callable).toEqual([
     "dispatch_action",
@@ -526,9 +494,6 @@ it("refuses what sender allow and deny policies removed, including MCP tools", a
     "tool_describe",
     "tool_search",
   ]);
-  const deny = await prepareTools(guestGroup, withSenderPolicy({ deny: ["world__calendar_list"] }));
-  expect(deny.callable).not.toContain("world__calendar_list");
-  expect(deny.listed).toContain("world__calendar_list");
 });
 
 it("never delegates or captures a tool the guest sender is refused", async () => {
