@@ -74,6 +74,7 @@ import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new
 import { registerOpenClawIdDialogsEnglish } from "../../ui/src/i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../ui/src/i18n/locales/en-openclaw-id.ts";
 import { registerPermissionErrorsEnglish } from "../../ui/src/i18n/locales/en-permission-errors.ts";
+import { registerPermissionPickerEnglish } from "../../ui/src/i18n/locales/en-permission-picker.ts";
 import { registerPersonalInstructionsEnglish } from "../../ui/src/i18n/locales/en-personal-instructions.ts";
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
@@ -200,6 +201,7 @@ const sourceFiles = [
   "en-model-account-list.ts",
   "en-model-accounts.ts",
   "en-model-controls.ts",
+  "en-permission-picker.ts",
   "en-model-favorites.ts",
   "en-model-provider-auth.ts",
   "en-model-setup.ts",
@@ -699,7 +701,41 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerMemoryImportEnglish.catalog,
     registerModelAccountsEnglish.catalog,
     registerCronScheduleEnglish.catalog,
-    registerModelControlsEnglish.catalog,
+    {
+      chat: {
+        ...registerModelControlsEnglish.catalog.chat,
+        permissionControls: {
+          setByCreator: registerModelControlsEnglish.catalog.chat.permissionControls.setByCreator,
+          creator: registerModelControlsEnglish.catalog.chat.permissionControls.creator,
+          label: registerModelControlsEnglish.catalog.chat.permissionControls.label,
+          help: registerModelControlsEnglish.catalog.chat.permissionControls.help,
+          default: registerModelControlsEnglish.catalog.chat.permissionControls.default,
+          agentDefault:
+            registerPermissionPickerEnglish.catalog.chat.permissionControls.agentDefault,
+          agentDefaultWithMode:
+            registerPermissionPickerEnglish.catalog.chat.permissionControls.agentDefaultWithMode,
+          defaultDescription:
+            registerPermissionPickerEnglish.catalog.chat.permissionControls.defaultDescription,
+          defaultWithMode:
+            registerModelControlsEnglish.catalog.chat.permissionControls.defaultWithMode,
+          fullRequiresAdmin:
+            registerPermissionPickerEnglish.catalog.chat.permissionControls.fullRequiresAdmin,
+          requiresAdmin:
+            registerPermissionPickerEnglish.catalog.chat.permissionControls.requiresAdmin,
+          updateFailed: registerModelControlsEnglish.catalog.chat.permissionControls.updateFailed,
+          refreshFailed: registerModelControlsEnglish.catalog.chat.permissionControls.refreshFailed,
+          modes: Object.fromEntries(
+            (["read-only", "guarded", "workspace", "full"] as const).map((mode) => [
+              mode,
+              {
+                ...registerModelControlsEnglish.catalog.chat.permissionControls.modes[mode],
+                ...registerPermissionPickerEnglish.catalog.chat.permissionControls.modes[mode],
+              },
+            ]),
+          ),
+        },
+      },
+    },
     registerModelFavoritesEnglish.catalog,
     registerModelSetupEnglish.catalog,
     registerPersonalInstructionsEnglish.catalog,

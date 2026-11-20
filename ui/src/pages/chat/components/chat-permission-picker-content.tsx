@@ -2,13 +2,16 @@ import { createMemo, onSettled } from "solid-js";
 import type { SessionPermissionMode } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuItem } from "../../../components/solid/menu.tsx";
+import { registerPermissionPickerEnglish } from "../../../i18n/locales/en-permission-picker.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../../lib/external-link.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   modeLabel,
   permissionIcon,
   type ChatPermissionPickerContentProps,
 } from "./chat-permission-picker.tsx";
+
+registerEnglishCatalog(registerPermissionPickerEnglish);
 
 const PERMISSION_MODES_DOCS_URL = "https://docs.openclaw.ai/gateway/permission-modes";
 const DEFAULT_PERMISSION_VALUE = "default";
