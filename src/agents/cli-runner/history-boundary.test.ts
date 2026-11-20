@@ -21,8 +21,8 @@ import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/tran
 import type { CliSessionBinding } from "../../config/sessions/types.js";
 import { commitCronConversationResult } from "../../cron/conversation-result.js";
 import { runInAgentRunWriteContext } from "../../infra/agent-run-terminal-writes.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { buildPersistedVoiceMessage } from "../../talk/voice-transcript.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";

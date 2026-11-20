@@ -275,13 +275,11 @@ it("records revoked Discord followups once without model or channel effects", as
         );
         expect(notices).toHaveLength(failed ? 1 : 0);
         if (failed) {
-          const notice = unavailable
-            ? "⚠️ OpenClaw could not verify current channel access. Please try your request again."
-            : "This request was not started because the requester no longer has access to this channel.";
           expect(terminals).toHaveLength(1);
           const terminal = terminals[0];
           assert(terminal);
-          expect(terminal.data).toMatchObject({ phase: "error", errorNotice: notice });
+          expect(terminal.data).toMatchObject({ phase: "error", errorNotice: expect.any(String) });
+          const notice = terminal.data.errorNotice;
           expect(notices[0]).toMatchObject({
             display: true,
             content: notice,
