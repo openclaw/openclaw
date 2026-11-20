@@ -117,6 +117,34 @@ describe("ModelSetupWizardRunner", () => {
     }
   });
 
+  it("reads the terminal receipt when cancellation skips a client text step", async () => {
+    const client = new GatewayBrowserClient({ url: "ws://gateway.example.test" });
+    const request = vi.spyOn(client, "request").mockResolvedValueOnce({ done: false });
+    request.mockResolvedValueOnce({
+      done: false,
+      step: { id: "name", type: "text", executor: "client" },
+    });
+    request.mockResolvedValueOnce({ status: "running" });
+    request.mockResolvedValueOnce({ done: true, status: "done" });
+    const publish = vi.fn(async () => {});
+    const runner = createRunner({ getClient: () => client, onBackgroundCompletion: publish });
+
+    await runner.start("provider-auth", "models.authLogin");
+    expect(runner.state.phase).toBe("step");
+    await runner.requestCancellation();
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "models.authLogin",
+      "wizard.next",
+      "wizard.cancel",
+      "wizard.next",
+    ]);
+    expect(runner.state.phase).toBe("done");
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ startMethod: "models.authLogin" }),
+    );
+  });
+
   it("shares a failed in-flight cancellation with teardown", async () => {
     const pending = createDeferred<unknown>();
     const request = vi.fn(async (method: string) => {

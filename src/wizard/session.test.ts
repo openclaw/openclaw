@@ -1,7 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, onTestFinished, test, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { DEVICE_CODE_PHISHING_WARNING, type WizardPrompter } from "./prompts.js";
+import {
+  DEVICE_CODE_PHISHING_WARNING,
+  WizardCancelledError,
+  type WizardPrompter,
+} from "./prompts.js";
 import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "./session.js";
 
 async function nextStep(session: WizardSession, expected: Partial<WizardStep> = {}) {
@@ -39,6 +43,24 @@ function textSession(options: Parameters<WizardPrompter["text"]>[0] = { message:
 }
 
 describe("WizardSession", () => {
+  test("dismissing optional text does not cancel a completed operation", async () => {
+    let skipped = false;
+    const session = new WizardSession(async (prompter, signal, runner) => {
+      runner.lockCancellationForPreparation();
+      const ask = expectDefined(prompter.optionalText, "optional wizard text input");
+      await expect(
+        ask({ message: "Name the account", initialValue: "Example" }),
+      ).rejects.toBeInstanceOf(WizardCancelledError);
+      expect(signal.aborted).toBe(false);
+      skipped = true;
+    });
+    cleanupSession(session);
+    await nextStep(session, { type: "text", initialValue: "Example" });
+    session.cancel();
+    await expectTerminal(session);
+    expect(skipped).toBe(true);
+  });
+
   test.each([true, "false"])("only literal true confirms a wire answer (%j)", async (answer) => {
     let confirmed: boolean | undefined;
     const session = new WizardSession(async (prompter) => {

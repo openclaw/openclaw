@@ -2,6 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type {
   SystemAgentSetupAuthStartParams,
   WizardNextResult,
+  WizardStatusResult,
   WizardStep,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
@@ -215,7 +216,14 @@ export async function runGatewayLoginWizard(
     runtime.log("Provider sign-in saved and connection update confirmed by the Gateway.");
   } catch (error) {
     if (!done && !signal.aborted) {
-      await request("wizard.cancel", { sessionId, closeInput: true });
+      const closure = await request<WizardStatusResult>("wizard.cancel", {
+        sessionId,
+        closeInput: true,
+      });
+      if (closure.status === "done") {
+        runtime.log("Provider sign-in saved by the Gateway. The remaining input was skipped.");
+        return;
+      }
     }
     if (error instanceof WizardCancelledError) {
       runtime.log("Login session closed. Credentials already saved were not undone.");

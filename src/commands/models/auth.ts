@@ -55,6 +55,7 @@ import {
   text as clackText,
 } from "../configure.shared.js";
 import { repairModelSelectionRuntimePlugins } from "../runtime-plugin-install.js";
+import { offerSavedAuthProfileName } from "./auth-account-name.js";
 import { saveModelProviderApiKey } from "./auth-api-key.js";
 import { tryImportProviderCredential } from "./auth-credential-import.js";
 import {
@@ -314,7 +315,20 @@ async function runProviderAuthMethod(
     matchesPersonalAccount: params.method.matchesPersonalAccount,
     allowMissingReusedProfile: params.allowMissingReusedProfile,
   });
-  const profiles = resolvedIdentity.profiles;
+  const previousProfile = (profileId: string) =>
+    store.profiles[profileId] ?? params.existingProfiles?.[profileId];
+  const profiles = resolvedIdentity.profiles.map((profile) => {
+    const previous = previousProfile(profile.profileId);
+    const credential = profile.credential;
+    if (
+      previous?.provider === credential.provider &&
+      previous.type === credential.type &&
+      previous.displayName
+    ) {
+      return { ...profile, credential: { ...credential, displayName: previous.displayName } };
+    }
+    return profile;
+  });
 
   const login = {
     ...params,
@@ -449,6 +463,28 @@ async function runProviderAuthMethod(
     persistedProfiles.length > 0
       ? await allowLoginProviderModels(params, params.agentId, params.provider.id)
       : undefined;
+  const [saved] = persistedProfiles;
+  if (
+    login.prompter.optionalText &&
+    saved &&
+    persistedProfiles.length === 1 &&
+    !previousProfile(saved.profileId) &&
+    !normalizeOptionalString(login.config.auth?.profiles?.[saved.profileId]?.displayName) &&
+    Object.values(store.profiles).some(
+      (credential) => credential.provider === saved.credential.provider,
+    )
+  ) {
+    await offerSavedAuthProfileName({
+      profile: saved,
+      providerLabel: login.provider.label,
+      prompter: login.prompter,
+      runtime: login.runtime,
+      agentDir: login.agentDir,
+      stateDir: login.env.OPENCLAW_STATE_DIR,
+      signal: login.signal,
+      assertCurrent: login.assertCurrent,
+    });
+  }
   return { result: connectionResult, profiles: persistedProfiles, authRefresh, modelAccess };
 }
 
@@ -838,6 +874,7 @@ async function runModelsAuthLoginFlow(
   const existingProfiles = await snapshotReloginAuthProfiles({
     agentDir: context.agentDir,
     matchesPersonalAccount: chosenMethod.matchesPersonalAccount,
+    force: opts.force,
   });
   const imported =
     !opts.credentialOnly && !opts.force && !opts.profileId && !opts.setDefault

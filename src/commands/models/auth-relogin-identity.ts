@@ -11,8 +11,9 @@ type AccountMatcher = ProviderAuthMethod["matchesPersonalAccount"];
 export async function snapshotReloginAuthProfiles(params: {
   agentDir: string;
   matchesPersonalAccount?: AccountMatcher;
+  force?: boolean;
 }): Promise<Readonly<Record<string, AuthProfileCredential>> | undefined> {
-  if (!params.matchesPersonalAccount) {
+  if (!params.matchesPersonalAccount && !params.force) {
     return undefined;
   }
   // Main-agent OAuth writes are redirected to the shared owner. Read that owner

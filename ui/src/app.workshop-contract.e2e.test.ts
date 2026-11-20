@@ -282,7 +282,7 @@ suite.define(() => {
       });
       await retained.getByRole("button", { name: "Compare", exact: true }).click();
       await expect
-        .poll(() => page.locator(".sw-detail__desc").textContent())
+        .poll(() => page.locator(".plugin-catalog-detail__summary").textContent())
         .toBe("Old deployment procedure");
       expect(await page.locator(".sw-diff__line--remove").textContent()).toContain(
         "description: Old deployment procedure",
@@ -290,6 +290,12 @@ suite.define(() => {
       expect(await page.locator(".sw-diff__line--add").textContent()).toContain(
         "description: Current deployment procedure",
       );
+      // Learning mode sits behind the start page's gear.
+      await page
+        .locator(".plugins-settings-breadcrumb")
+        .getByRole("link", { name: "Skill workshop", exact: true })
+        .click();
+      await page.getByRole("button", { name: "Skill Workshop learning mode", exact: true }).click();
       await page.getByRole("button", { name: "Off", exact: true }).click();
       const patch = await gateway.waitForRequest("config.patch");
       expect(patch.params).toMatchObject({
@@ -299,6 +305,7 @@ suite.define(() => {
         baseHash: "workshop-contract-config",
         note: "Disable Skill Workshop learning",
       });
+      await page.keyboard.press("Escape");
       await page.getByRole("button", { name: /^Archived/ }).click();
       await page.locator(".sw-row").filter({ hasText: archivedName }).waitFor();
       expect(await page.locator(".sw-row").filter({ hasText: skillName }).count()).toBe(0);
@@ -347,19 +354,16 @@ suite.define(() => {
         .poll(() => page.locator(".sw-diff__line--add").allTextContents())
         .toContainEqual(expect.stringContaining("Check the rollback first."));
       expect(await page.locator(".sw-diff__key--remove").textContent()).toBe("Live skill");
-      await page.getByRole("button", { name: "Apply", exact: true }).click();
+      await first.getByRole("button", { name: "Apply", exact: true }).click();
       expect((await gateway.waitForRequest("skills.workshop.applyDraft")).params).toEqual({
         agentId: "main",
         name: skillName,
         draftId: "deploy-staging-1a2b3c4d",
       });
       await page.getByRole("button", { name: /^Drafts/ }).click();
-      await page
-        .locator(".sw-row")
-        .filter({ hasText: "Unused idea" })
-        .locator(".sw-row__main")
-        .click();
-      await page.getByRole("button", { name: "Discard", exact: true }).click();
+      const unused = page.locator(".sw-row").filter({ hasText: "Unused idea" });
+      await unused.locator(".sw-row__main").click();
+      await unused.getByRole("button", { name: "Discard", exact: true }).click();
       expect((await gateway.waitForRequest("skills.workshop.discardDraft")).params).toEqual({
         agentId: "main",
         name: skillName,
@@ -393,12 +397,18 @@ suite.define(() => {
       expect(await workshop.getByRole("button", { name: /^(Archive|Restore|Undo)$/ }).count()).toBe(
         0,
       );
+      await page
+        .locator(".plugins-settings-breadcrumb")
+        .getByRole("link", { name: "Skill workshop", exact: true })
+        .click();
+      await page.getByRole("button", { name: "Skill Workshop learning mode", exact: true }).click();
       expect(await workshop.getByRole("button", { name: "Off", exact: true }).isDisabled()).toBe(
         true,
       );
       expect(await workshop.getByRole("button", { name: "Auto", exact: true }).isDisabled()).toBe(
         true,
       );
+      await page.keyboard.press("Escape");
       await page.getByRole("button", { name: /^Active/ }).click();
       await page.locator(".sw-row__main").filter({ hasText: skillName }).click();
       await page

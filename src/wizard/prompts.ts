@@ -76,6 +76,8 @@ export type WizardPrompter = {
   select: <T>(params: WizardSelectParams<T>) => Promise<T>;
   multiselect: <T>(params: WizardMultiSelectParams<T>) => Promise<T[]>;
   text: (params: WizardTextParams) => Promise<string>;
+  /** Present nonessential text input without requiring it to complete the operation. */
+  optionalText?: (params: WizardTextParams) => Promise<string>;
   confirm: (params: WizardConfirmParams) => Promise<boolean>;
   progress: (label: string) => WizardProgress;
   /** Queue an explicit browser destination for the next client step or browser-wait progress. */
