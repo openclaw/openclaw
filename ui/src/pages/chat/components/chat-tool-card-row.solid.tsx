@@ -33,7 +33,11 @@ import { ChatToolIcon, ToolIcon, syncToolDisclosureOverflow } from "./chat-tool-
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
-import { resolveToolOperationLabel, resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
+import {
+  formatSessionLaunchLimit,
+  resolveToolOperationLabel,
+  resolveToolRowVerb,
+} from "./chat-tool-row-presentation.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -188,10 +192,17 @@ function SessionLaunchRowContent(props: {
   );
   return (
     <>
-      <span class="chat-tool-row__verb">
-        {t(`chat.toolCards.launch.${props.launch.kind}.${props.launch.phase}`)}
-      </span>
-      <Show when={props.launch.label}>
+      <Show
+        when={formatSessionLaunchLimit(props.launch)}
+        fallback={
+          <span class="chat-tool-row__verb">
+            {t(`chat.toolCards.launch.${props.launch.kind}.${props.launch.phase}`)}
+          </span>
+        }
+      >
+        {(message) => <span class="chat-tool-row__launch-limit">{message()}</span>}
+      </Show>
+      <Show when={props.launch.label && !props.launch.capacity}>
         <Show
           when={props.onOpen}
           fallback={<span class="chat-tool-row__title chat-tool-row__subagent-name">{name()}</span>}
@@ -323,7 +334,7 @@ export function ToolCardRow(props: ToolCardProps) {
       <Show when={props.options.interrupted && outcome() === "unrecorded"}>
         <span class="muted">{t("chat.toolCards.interrupted")}</span>
       </Show>
-      <Show when={!props.options.expanded}>
+      <Show when={!props.options.expanded && !launch()?.capacity}>
         <ToolOutcomeSummary card={card()} />
       </Show>
       <span class="chat-tool-row__chevron" aria-hidden="true">

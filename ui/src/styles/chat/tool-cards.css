@@ -146,6 +146,11 @@
   white-space: nowrap;
 }
 
+.chat-tool-row__launch-limit {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .chat-tool-row__chevron {
   opacity: 0;
   transition:
