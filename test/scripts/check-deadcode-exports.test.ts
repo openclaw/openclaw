@@ -664,6 +664,38 @@ const unrelatedArgs = [
     expect(withoutCall).toContain("observeNativeMcpProbe");
   });
 
+  it("models selected-checkout generation reads only through their live import and call", () => {
+    const consumerPath = path.resolve("scripts/perf/update-doctor-generation-measure.ts");
+    const source = fs.readFileSync(consumerPath, "utf8");
+    const compile = createDynamicConsumerCompiler();
+    const project = (consumer: string) =>
+      compile(new Map([[consumerPath, consumer]]))
+        .split("\n")
+        .filter((line) =>
+          line.endsWith('from "../src/infra/update-physical-database-generations.ts";'),
+        )
+        .join("\n");
+    expect(project(source)).toContain("readUpdatePhysicalDatabaseGenerations as");
+    expect(
+      project(
+        source.replaceAll("readUpdatePhysicalDatabaseGenerations(", "otherGenerationReader("),
+      ),
+    ).toBe("");
+    for (const [from, to] of [
+      ["  readUpdatePhysicalDatabaseGenerations,", ""],
+      [
+        'path.join(sourceRoot, "src/infra/update-physical-database-generations.ts")',
+        'path.join(sourceRoot, "src/other.ts")',
+      ],
+      [
+        "const {\n  readUpdatePhysicalDatabaseGenerations,",
+        "// const {\n  readUpdatePhysicalDatabaseGenerations,",
+      ],
+    ] as const) {
+      expect(project(replaceFixture(source, from, to))).toBe("");
+    }
+  });
+
   it("follows PR cache named imports only through their supplying heredoc argument", () => {
     const wrapperPath = path.resolve("scripts/pr");
     const wrapper = fs.readFileSync(wrapperPath, "utf8");

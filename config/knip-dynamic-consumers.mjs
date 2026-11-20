@@ -207,6 +207,32 @@ function computedCheckoutNamespaceMemberEdges(source) {
   return edges;
 }
 
+function selectedCheckoutNamedImportEdges(source) {
+  const edges = new Map();
+  // The type annotation describes the module but is not itself a runtime edge.
+  for (const match of source.matchAll(
+    /^[ \t]*const\s*\{([^{}]+)\}\s*(?::\s*typeof\s+import\(\s*["'][^"'\r\n]+["']\s*\))?\s*=\s*await\s+import\(\s*pathToFileURL\(\s*path\.join\(\s*sourceRoot\s*,\s*["']([^"'\r\n]+)["']\s*\)\s*\)\.href\s*\)\s*;/gmu,
+  )) {
+    const target = match[2];
+    if (path.isAbsolute(target) || target.split(/[\\/]/u).includes("..")) {
+      continue;
+    }
+    const names = match[1].split(",").flatMap((binding) => {
+      const parts = binding.trim().match(/^([A-Za-z_$][\w$]*)(?:\s*:\s*([A-Za-z_$][\w$]*))?$/u);
+      if (!parts) {
+        return [];
+      }
+      const local = (parts[2] ?? parts[1]).replaceAll("$", "\\$");
+      const call = new RegExp("^[^\r\n/\"']*\\b" + local + "\\s*\\(", "mu");
+      return call.test(source.slice(match.index + match[0].length)) ? [parts[1]] : [];
+    });
+    if (names.length > 0) {
+      edges.set(path.resolve(target), names);
+    }
+  }
+  return edges;
+}
+
 function emittedNamedImportEdges(source) {
   const transforms = new Map(
     [
@@ -554,6 +580,14 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   }
   for (const [targetFile, names] of lazyRuntimeEdges) {
     imports.push(namedImport([...names], targetFile, filePath, imports.length));
+  }
+
+  const generationMeasure = fs.readFileSync(
+    "scripts/perf/update-doctor-generation-measure.ts",
+    "utf8",
+  );
+  for (const [targetFile, names] of selectedCheckoutNamedImportEdges(generationMeasure)) {
+    addNamedImport(names, targetFile);
   }
 
   for (const [targetFile, names] of prToolingNamedImportEdges(
