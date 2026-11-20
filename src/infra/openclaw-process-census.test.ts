@@ -257,6 +257,47 @@ it("releases runtimes from non-updater processes without artifact evidence", () 
   expectPids([peer, peer + 1, peer + 2, peer + 3, ...parented.map(([pid]) => pid), ...holders]);
 });
 
+it("holds a runtime whose creating updater exited only through paths into it", () => {
+  const runtime = "/tmp/openclaw-update-runtime-Held01";
+  const alias = "/tmp/runtime-alias/preload.js";
+  realpath.mockImplementation((file: string) => {
+    if (file.startsWith("/container/") || file.includes("require(")) {
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    }
+    return file === alias ? `${runtime}/preload.js` : file;
+  });
+  const released: string[][] = [
+    // Another update, Doctor, and Gateway children name no runtime.
+    ["node", "/app/dist/index.js", "update", "--yes"],
+    ["node", "/app/dist/index.js", "doctor"],
+    ["node", "/app/dist/process/supervisor/service-child-group-anchor.js"],
+    ["openclaw"],
+    // A containerized installation's script does not resolve on the host.
+    ["node", "/container/node_modules/openclaw/dist/process/spawn-broker/worker.js"],
+    // A preload outside every runtime.
+    ["node", "--import", "file:///app/scripts/tsx.mjs", "/app/dist/index.js", "agent"],
+    ["node", "/tmp/openclaw-update-runtime-Other1/dist/worker.js"],
+  ];
+  const held: [string[], string?][] = [
+    [["node", `${runtime}/dist/worker.js`]],
+    [["node", "--import", alias, "/app/dist/index.js", "gateway"]],
+    [["node", "dist/worker.js"], `${runtime}/tree`],
+    [["node", "-e", `require('${runtime}/worker.js')`]],
+  ];
+  released.forEach((argv, index) => processRow(peer + index, argv, { cwd: "/" }));
+  const holders = held.map(([argv, cwd = "/"], index) => {
+    processRow(peer + 20 + index, argv, { cwd });
+    return peer + 20 + index;
+  });
+  expect(inspectOtherOpenClawProcesses(runtime)).toMatchObject({
+    pids: [...released.slice(0, 6).map((_argv, index) => peer + index), ...holders],
+  });
+  expect(inspectOtherOpenClawProcesses(runtime, { creatorExited: true })).toEqual({
+    pids: holders,
+    warnings: [expect.stringContaining(`PID ${holders[3]}: could not resolve script`)],
+  });
+});
+
 it.each([
   ["the update it launched", ["node", "/app/dist/index.js", "update", "--yes"], []],
   ["a nested worker", ["node", "/app/dist/infra/update-migrated-finalize.worker.js"], [launcher]],
