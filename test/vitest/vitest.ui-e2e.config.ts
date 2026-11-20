@@ -120,6 +120,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
   "ui/src/e2e/theme-startup.real-gateway.e2e.test.ts",
   "ui/src/e2e/toast-page-offset.e2e.test.ts",
+  "ui/src/e2e/unknown-route.real-gateway.e2e.test.ts",
   "ui/src/pages/plugins/plugins-base-path.e2e.test.ts",
   "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
