@@ -393,6 +393,99 @@ export async function listSessionWorkspaceFiles(
   };
 }
 
+/**
+ * Returns the bare filenames whose Files search would list exactly one file of that name in a
+ * complete result, which is the Control UI's bare-name reader fallback. One ordered walk serves
+ * every name; each name stops where its own `listSessionWorkspaceFiles` search would.
+ */
+export async function findUniqueWorkspaceFileNames(
+  params: LoadedSessionFiles & { names: readonly string[]; assertCurrent?: () => void },
+): Promise<Set<string>> {
+  const unique = new Set<string>();
+  const root = params.root;
+  const queries = [...new Set(params.names)].flatMap((name) => {
+    const search = normalizeOptionalString(name);
+    return search
+      ? [{ name, query: foldSearchCase(search).normalize("NFC"), matches: 0, exact: 0, open: true }]
+      : [];
+  });
+  if (!root || queries.length === 0) {
+    return unique;
+  }
+  const workspaceRoot = await openWorkspaceRoot(params.readRoot ?? root);
+  const readRoot = workspaceRoot ?? root;
+  let visited = 0;
+  let openQueries = queries.length;
+  const close = (query: (typeof queries)[number], complete: boolean) => {
+    query.open = false;
+    openQueries -= 1;
+    if (complete && query.exact === 1) {
+      unique.add(query.name);
+    }
+  };
+  // A search stops, incomplete, before its next entry once it holds MAX_SEARCH_ENTRIES
+  // matches or the walk has visited MAX_SEARCH_VISITED_ENTRIES.
+  const shouldStop = () => {
+    for (const query of queries) {
+      if (
+        query.open &&
+        (query.matches >= MAX_SEARCH_ENTRIES || visited >= MAX_SEARCH_VISITED_ENTRIES)
+      ) {
+        close(query, false);
+      }
+    }
+    return openQueries === 0;
+  };
+  const visit = async (dir: string): Promise<void> => {
+    if (shouldStop()) {
+      return;
+    }
+    const dirents = await listWorkspacePath(readRoot, dir, params.assertCurrent);
+    if (!dirents) {
+      return;
+    }
+    for (const dirent of sortDirents(dirents)) {
+      if (shouldStop()) {
+        return;
+      }
+      visited += 1;
+      const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
+      if (dirent.isFile || dirent.isDirectory) {
+        const folded = foldSearchCase(browserPath).normalize("NFC");
+        for (const query of queries) {
+          if (query.open && folded.includes(query.query)) {
+            query.matches += 1;
+            if (dirent.isFile && dirent.name === query.name) {
+              query.exact += 1;
+            }
+          }
+        }
+      }
+      if (dirent.isDirectory) {
+        if (SEARCH_INCOMPLETE_DIRS.has(dirent.name)) {
+          // A skipped directory makes every still-running search incomplete.
+          for (const query of queries) {
+            if (query.open) {
+              close(query, false);
+            }
+          }
+          return;
+        }
+        if (!SEARCH_IGNORED_DIRS.has(dirent.name)) {
+          await visit(browserPath);
+        }
+      }
+    }
+  };
+  await visit("");
+  for (const query of queries) {
+    if (query.open) {
+      close(query, true);
+    }
+  }
+  return unique;
+}
+
 export async function getSessionWorkspaceFile(
   params: LoadedSessionFiles & {
     path: string;

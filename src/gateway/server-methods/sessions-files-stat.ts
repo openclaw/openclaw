@@ -18,7 +18,7 @@ import {
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-import { getSessionWorkspaceFile, listSessionWorkspaceFiles } from "./workspace-files.js";
+import { findUniqueWorkspaceFileNames, getSessionWorkspaceFile } from "./workspace-files.js";
 
 type SessionFileStatStatus = SessionsFilesStatResult["files"][number]["status"];
 type SessionFileStatReference = SessionsFilesStatParams["files"][number];
@@ -134,25 +134,7 @@ export async function handleSessionFilesStat(
               },
               authorizeHostRead: hostRead.authorizeHostRead,
             });
-            if (file && !file.missing) {
-              return "file";
-            }
-            if (!loaded.root || !/^[^\\/]+$/u.test(path)) {
-              return "missing";
-            }
-            // Mirrors the Control UI's bare-name reader fallback: one complete, unique match opens.
-            const { browser } = await listSessionWorkspaceFiles({
-              ...loaded,
-              path: "",
-              search: path,
-              assertCurrent,
-              authorizeHostRead: hostRead.authorizeHostRead,
-            });
-            const matches =
-              browser && !browser.truncated
-                ? browser.entries.filter((entry) => entry.kind === "file" && entry.name === path)
-                : [];
-            return matches.length === 1 ? "file" : "missing";
+            return file && !file.missing ? "file" : "missing";
           };
           const splitByMessage =
             messageEntryId === undefined && mayResolveHistoricalWorkspace(source.entry);
@@ -171,6 +153,22 @@ export async function handleSessionFilesStat(
               answered.set(reference.path, status);
             }
             statuses[index] = status;
+          }
+          // Mirrors the Control UI's bare-name reader fallback: one complete, unique match opens.
+          const bareMisses = [...answered]
+            .filter(([path, status]) => status === "missing" && /^[^\\/]+$/u.test(path))
+            .map(([path]) => path);
+          if (loaded.root && bareMisses.length > 0) {
+            const found = await findUniqueWorkspaceFileNames({
+              ...loaded,
+              names: bareMisses,
+              assertCurrent,
+            });
+            for (const index of indices) {
+              if (statuses[index] === "missing" && found.has(params.files[index]!.path)) {
+                statuses[index] = "file";
+              }
+            }
           }
           assertCurrent();
           if (hostRead.hasHostRead()) {
