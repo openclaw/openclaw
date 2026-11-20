@@ -487,7 +487,7 @@ function createRootTestLintCommands(
   paths: readonly string[],
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
-): ChangedCheckCommand[] {
+) {
   let targets = paths.filter(
     (file) => getChangedPathFacts(file).isRootTestSource && existsSync(file),
   );
