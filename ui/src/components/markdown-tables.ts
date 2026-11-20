@@ -1,4 +1,5 @@
 import type { MarkdownIt } from "markdown-it";
+import { lazyModule } from "solid-js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
 import { formatUiError, UserFacingError } from "../lib/format-error.ts";
@@ -10,6 +11,8 @@ import { copyMarkdownText } from "./markdown-copy.ts";
 import { createIconElement } from "./markdown-icon.ts";
 import { registerSessionTitleTarget } from "./markdown-link-display.ts";
 import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
+
+const loadTableDialog = lazyModule(() => import("./markdown-table-dialog.ts"));
 
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
@@ -307,7 +310,7 @@ async function showTableDialog(
   try {
     let mountExpandedMarkdownTable: typeof import("./markdown-table-dialog.ts").mountExpandedMarkdownTable;
     try {
-      ({ mountExpandedMarkdownTable } = await import("./markdown-table-dialog.ts"));
+      ({ mountExpandedMarkdownTable } = await loadTableDialog());
     } catch (cause) {
       throw new UserFacingError(`${t("lazyView.errorTitle")} ${t("lazyView.staleSubtitle")}`, {
         cause,
