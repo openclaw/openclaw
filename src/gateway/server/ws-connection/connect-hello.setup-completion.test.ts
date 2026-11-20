@@ -278,7 +278,7 @@ it.each([
       isDeviceTokenSubjectCurrent: () => false,
     });
     await expect(sendGatewayHello(context as never, state as never, {})).rejects.toThrow(
-      "membership changed before credential delivery",
+      "Credential delivery requires current profile membership",
     );
     expect(close).not.toHaveBeenCalled();
     expect(context.sendFrame).not.toHaveBeenCalled();
