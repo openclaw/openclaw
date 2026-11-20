@@ -714,7 +714,7 @@ it.each(["card", "detail"])(
     expect(withoutArtwork.querySelector(`${selector} img`)).toBeNull();
     const fallback = withoutArtwork.querySelector<SVGSVGElement>(blobster)!;
     expect(fallback.style.strokeWidth).toBe("1.55px");
-    expect(fallback.style.color.startsWith("var(--template-avatar-")).toBe(true);
+    expect(fallback.style.color).toBe("rgb(156, 111, 62)");
 
     const container = create(templateIconUrl);
     await waitForSolid(() =>
