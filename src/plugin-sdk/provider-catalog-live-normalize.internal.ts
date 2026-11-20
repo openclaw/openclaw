@@ -200,7 +200,20 @@ export function readLiveModelChatCapability(row: unknown): boolean | undefined {
   if (explicitChatCapability !== undefined) {
     return explicitChatCapability;
   }
-  return chatKind || chatEndpoint || outputModalities.includes("text") ? true : undefined;
+  if (
+    chatKind ||
+    chatEndpoint ||
+    outputModalities.includes("text") ||
+    capabilityStrings.includes("text")
+  ) {
+    return true;
+  }
+  // Explicit non-chat endpoints take precedence over model-name guesses. A
+  // generic feature such as "tools" alone does not describe the output kind.
+  if (capabilityStrings.some((value) => NON_TEXT_MODEL_ID_PATTERN.test(value))) {
+    return false;
+  }
+  return undefined;
 }
 
 function findLiveModelTemplate(
