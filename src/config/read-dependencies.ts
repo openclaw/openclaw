@@ -3,23 +3,23 @@ import { resolveChannelConfigActivationFacts } from "./channel-config-activation
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 type Reader = "metadata" | "sessions";
-type Dependency = Reader | "both" | "presentation" | "unknown";
+type Dependency = Reader | "both" | "other" | "unknown";
 
-// Metadata includes catalog/auth/runtime resolution, commands and swarm policy.
+// Model metadata reads catalog/auth/runtime resolution and agent policy.
 // Session rows also read workspace, sandbox, execution and response presentation.
 // Exhaustiveness makes a new schema root require an explicit reader decision;
 // unknown dependencies (including plugin-owned settings) retain invalidation.
 const dependencies: Record<string, Dependency> = {
-  $schema: "presentation",
+  $schema: "other",
   meta: "metadata",
   env: "both",
-  wizard: "presentation",
-  diagnostics: "presentation",
-  logging: "presentation",
-  update: "presentation",
-  telemetry: "presentation",
-  browser: "presentation",
-  ui: "presentation",
+  wizard: "other",
+  diagnostics: "other",
+  logging: "other",
+  update: "other",
+  telemetry: "other",
+  browser: "other",
+  ui: "other",
   secrets: "both",
   auth: "both",
   accessGroups: "unknown",
@@ -38,7 +38,7 @@ const dependencies: Record<string, Dependency> = {
   attachments: "unknown",
   messages: "both",
   tts: "both",
-  commands: "metadata",
+  commands: "other",
   approvals: "unknown",
   session: "both",
   cron: "unknown",
@@ -54,7 +54,9 @@ const dependencies: Record<string, Dependency> = {
   desktop: "unknown",
   memory: "unknown",
   mcp: "unknown",
-  skills: "metadata",
+  // refreshConfigReloadSkills publishes command eligibility after every commit,
+  // including arbitrary requires.config paths; metadata consumes its skills version.
+  skills: "other",
   // Plugin-derived rows follow completed catalog publications.
   plugins: "metadata",
   surfaces: "unknown",

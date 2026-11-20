@@ -526,6 +526,31 @@ describe("gateway chat metadata runtime", () => {
     expect(onChanged).not.toHaveBeenCalled();
   });
 
+  test("refreshes command eligibility through skills publication without announcing changed models", async () => {
+    const onChanged = vi.fn();
+    const harness = createChatMetadataHarness(undefined, { onChanged });
+    await harness.refresh();
+    const first = await harness.read();
+    onChanged.mockClear();
+    harness.setConfig({
+      agents: { entries: { main: {} } },
+      commands: { text: false },
+      skills: { allowBundled: ["fixture"] },
+      browser: { enabled: false },
+    });
+    // The config reload owner always publishes completed skill eligibility.
+    harness.setSkillsVersion(2);
+    await harness.refresh();
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+      agentId: "main",
+      modelCatalogChanged: false,
+      authChanged: false,
+    });
+    const next = await harness.read();
+    expect(next.commands).not.toEqual(first.commands);
+    expect(next.models).toEqual(first.models);
+  });
+
   test("rebuilds after an auth store publishes a newer revision", async () => {
     const harness = createChatMetadataHarness();
     harness.setAuthStore(undefined);
