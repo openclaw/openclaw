@@ -1448,7 +1448,8 @@
   }
 }
 
-.plugin-catalog-detail--loading .skeleton {
+.plugin-catalog-detail--loading .skeleton,
+.plugin-catalog-detail__loading-card {
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
 }
