@@ -133,6 +133,7 @@ export async function captureOpenClawAgentDatabaseExecutionAsync(
   const creationClaim = creationClaims.captureAgentCreationClaim(options);
   const cleanup = getAgentDeletionDatabaseCleanup(options);
   const previous = executions.get(pathname);
+  let releaseRetained: (() => Promise<void>) | undefined;
   let revoked = false;
   const unregister = registerOpenClawAgentDatabaseAsyncResource(
     {
@@ -146,6 +147,7 @@ export async function captureOpenClawAgentDatabaseExecutionAsync(
     options,
   );
   try {
+    releaseRetained = previous?.retain();
     const identity = await readDatabasePathIdentity(pathname);
     state.admission.assertCurrent();
     (cleanup?.ownsDatabase ? cleanup.assertCurrentHost : assertAgentCurrent)();
@@ -167,6 +169,7 @@ export async function captureOpenClawAgentDatabaseExecutionAsync(
     );
   } finally {
     unregister();
+    await releaseRetained?.();
   }
 }
 

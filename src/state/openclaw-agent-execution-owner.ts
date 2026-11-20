@@ -352,6 +352,77 @@ export function createAgentDatabaseExecution(
       throw error;
     }
   }
+  // Captures retain logical custody while asynchronously observing physical identity.
+  const releaseBorrower = async (creatingTarget?: DatabasePathIdentity) => {
+    if (
+      creatingTarget &&
+      --creationBorrowers === 0 &&
+      !fileIdentity &&
+      !nativeClosing &&
+      !cleanupFailure
+    ) {
+      if (generation) {
+        // Source refusal can leave an unaccepted generation allocated before native open.
+        await closeNative(generation).catch(reportCleanupFailure);
+      }
+      if (!creationBorrowers && !generation && !nativeClosing && !cleanupFailure) {
+        creationIdentity = undefined;
+      }
+    }
+
+    borrowers -= 1;
+    if (borrowers !== 0 || !lifetime.open || cleanupFailure || cleanupOwner) {
+      return;
+    }
+    const cleanupSignal = getGatewayShutdownCleanupSignal();
+    // An absent read has no admitted file to keep warm and must release creation.
+    const canRetain = () => generation && fileIdentity && !nativeClosing && !cleanupSignal.aborted;
+    try {
+      for (const idle of executionState.idle) {
+        if (!canRetain() || executionState.idle.size < MAX_IDLE_EXECUTORS) {
+          break;
+        }
+        if (borrowers !== 0 || !lifetime.open || executionState.idle.has(owner)) {
+          return;
+        }
+        await idle.closeIdle();
+      }
+    } catch (error) {
+      reportCleanupFailure(error);
+    }
+    if (borrowers !== 0 || !lifetime.open || executionState.idle.has(owner)) {
+      return;
+    }
+    if (canRetain() && executionState.idle.size < MAX_IDLE_EXECUTORS) {
+      executionState.idle.add(owner);
+      const timer = runInDetachedAsyncContext(() =>
+        setTimeout(() => {
+          if (idleTimer !== timer || !executionState.idle.has(owner)) {
+            return;
+          }
+          void owner.closeIdle().catch(reportCleanupFailure);
+        }, resolveAgentDatabaseIdleHandleTtlMs()),
+      );
+      idleTimer = timer;
+      timer.unref();
+      return;
+    }
+    // The completed command stays acknowledged; the resource owner retains cleanup.
+    await owner.closeIdle().catch(reportCleanupFailure);
+  };
+  const retainBorrower = (creatingTarget?: DatabasePathIdentity) => {
+    assertCurrent();
+    borrowers += 1;
+    clearIdleTimer();
+    if (!nativeClosing && !cleanupFailure) {
+      executionState.idle.delete(owner);
+    }
+    if (creatingTarget) {
+      creationIdentity ??= creatingTarget;
+      creationBorrowers += 1;
+    }
+    return () => releaseBorrower(creatingTarget);
+  };
   const owner: AgentDatabaseFileExecutionOwner = {
     kind: "file",
     agentId,
@@ -362,6 +433,7 @@ export function createAgentDatabaseExecution(
       return creationIdentity;
     },
     getPendingPreparation: () => generation?.getPendingPreparation(),
+    retain: () => retainBorrower(creationIdentity),
     borrow(borrowedPath, expected, creating, requestedPath, observedIdentity) {
       const cleanup = getAgentDeletionDatabaseCleanup({ ...executionOptions, path: borrowedPath });
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
@@ -388,15 +460,7 @@ export function createAgentDatabaseExecution(
         retainAlias(path.resolve(requestedPath));
       }
       observeOpenClawDatabaseMaintenanceResource(aliases.get(pathname));
-      borrowers += 1;
-      clearIdleTimer();
-      if (!nativeClosing && !cleanupFailure) {
-        executionState.idle.delete(owner);
-      }
-      if (creatingTarget) {
-        creationIdentity ??= creatingTarget;
-        creationBorrowers += 1;
-      }
+      const releaseReference = retainBorrower(creatingTarget);
       const assertCreationReference = (create: boolean) => {
         if (creatingTarget && !fileIdentity && !create) {
           throw new Error("Originally observed agent target requires creating admission first");
@@ -554,61 +618,7 @@ export function createAgentDatabaseExecution(
           acceptedWork.cancelReadAdmissions(borrower);
           return (release ??= (async () => {
             await acceptedWork.settleBorrower(borrower);
-            if (
-              creatingTarget &&
-              --creationBorrowers === 0 &&
-              !fileIdentity &&
-              !nativeClosing &&
-              !cleanupFailure
-            ) {
-              if (generation) {
-                // Source refusal can leave an unaccepted generation allocated before native open.
-                await closeNative(generation).catch(reportCleanupFailure);
-              }
-              if (!creationBorrowers && !generation && !nativeClosing && !cleanupFailure) {
-                creationIdentity = undefined;
-              }
-            }
-            borrowers -= 1;
-            if (borrowers !== 0 || !lifetime.open || cleanupFailure || cleanupOwner) {
-              return;
-            }
-            const cleanupSignal = getGatewayShutdownCleanupSignal();
-            // An absent read has no admitted file to keep warm and must release creation.
-            const canRetain = () =>
-              generation && fileIdentity && !nativeClosing && !cleanupSignal.aborted;
-            try {
-              for (const idle of executionState.idle) {
-                if (!canRetain() || executionState.idle.size < MAX_IDLE_EXECUTORS) {
-                  break;
-                }
-                if (borrowers !== 0 || !lifetime.open || executionState.idle.has(owner)) {
-                  return;
-                }
-                await idle.closeIdle();
-              }
-            } catch (error) {
-              reportCleanupFailure(error);
-            }
-            if (borrowers !== 0 || !lifetime.open || executionState.idle.has(owner)) {
-              return;
-            }
-            if (canRetain() && executionState.idle.size < MAX_IDLE_EXECUTORS) {
-              executionState.idle.add(owner);
-              const timer = runInDetachedAsyncContext(() =>
-                setTimeout(() => {
-                  if (idleTimer !== timer || !executionState.idle.has(owner)) {
-                    return;
-                  }
-                  void owner.closeIdle().catch(reportCleanupFailure);
-                }, resolveAgentDatabaseIdleHandleTtlMs()),
-              );
-              idleTimer = timer;
-              timer.unref();
-              return;
-            }
-            // The completed command stays acknowledged; the resource owner retains cleanup.
-            await owner.closeIdle().catch(reportCleanupFailure);
+            await releaseReference();
           })());
         },
       };

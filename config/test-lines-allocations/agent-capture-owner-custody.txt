@@ -1,0 +1,3 @@
+18
+# Real-owner regression: async capture must survive ordinary last-borrower release.
+# Existing creation-witness fixture; no mock ownership or production test seam.

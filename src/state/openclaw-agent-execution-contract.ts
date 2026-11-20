@@ -62,6 +62,8 @@ export type AgentDatabaseFileExecutionOwner = {
   readonly sharedDatabaseKey: string;
   readonly creationIdentity?: DatabasePathIdentity;
   getPendingPreparation(): Promise<void> | undefined;
+  /** Hold logical custody during asynchronous capture without admitting database work. */
+  retain(): () => Promise<void>;
   borrow(
     pathname: string,
     expectedIdentity?: AgentDatabaseExecutionFileIdentity,
