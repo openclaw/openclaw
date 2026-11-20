@@ -22,6 +22,7 @@ const enUpdateActions = {
     reviewUpdate: "Review update",
     run: {
       title: "Update progress",
+      viewDetails: "View update details",
       phases: "Update phases",
       steps: "Installation steps",
       details: "Step details",
