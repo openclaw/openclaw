@@ -405,6 +405,7 @@ export async function waitForGitReleaseSuccessor(params: {
   let until = start + 90_000; // Old residents do not publish a receipt.
   let sentAt: number | undefined;
   let previousReceipt: string | undefined;
+  let maySignal = params.allowGitReleaseRestartSignal === true;
   while (performance.now() < until) {
     await sleep(Math.min(1_000, until - performance.now()), signal);
     const current = readOwner();
@@ -421,7 +422,10 @@ export async function waitForGitReleaseSuccessor(params: {
       return { status: "changed" };
     }
     if (current === undefined || current?.state === "dead") {
-      return unverified;
+      // Supervised replacement normally has a gap between leases. Never nudge the
+      // departed owner, but keep looking for its successor within the same budget.
+      maySignal = false;
+      continue;
     }
     const now = performance.now();
     if (
@@ -430,16 +434,13 @@ export async function waitForGitReleaseSuccessor(params: {
       current.pid !== incumbent.pid ||
       current.port !== incumbent.port ||
       current.owner !== incumbent.owner ||
-      current.startedAt !== incumbent.startedAt
+      (incumbent.startedAt !== null && current.startedAt !== incumbent.startedAt)
     ) {
       // A transient inconclusive poll at the watcher boundary must not signal an
       // unknown owner. A subsequent fresh live match may still receive our one request.
       continue;
     }
-    if (sentAt === undefined && now >= signalAt) {
-      if (!params.allowGitReleaseRestartSignal) {
-        return unverified;
-      }
+    if (maySignal && sentAt === undefined && now >= signalAt) {
       signal?.throwIfAborted();
       previousReceipt = current.externalRestartReceipt;
       try {

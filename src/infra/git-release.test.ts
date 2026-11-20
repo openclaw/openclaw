@@ -82,16 +82,20 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         vi.useFakeTimers();
         const owner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
         const start = performance.now();
+        owner.mockReturnValueOnce({ ...incumbent, state: "unknown", startedAt: null });
         owner.mockImplementation(() =>
           performance.now() - start === 35_000 ? { ...incumbent, state: "unknown" } : incumbent,
         );
         const kill = vi.spyOn(process, "kill").mockImplementation(() => {
           expect(performance.now() - start).toBeGreaterThan(35_000);
           owner.mockReturnValue({ ...incumbent, externalRestartReceipt: "new-receipt" });
-          setTimeout(
-            () => owner.mockReturnValue({ ...incumbent, owner: "after", pid: 2345 }),
-            resolveGatewayRestartDeferralTimeoutMs(),
-          );
+          setTimeout(() => {
+            owner.mockReturnValue(undefined);
+            setTimeout(
+              () => owner.mockReturnValue({ ...incumbent, owner: "after", pid: 2345 }),
+              2_000,
+            );
+          }, resolveGatewayRestartDeferralTimeoutMs());
           return true;
         });
         const verified = vi.fn();
@@ -125,14 +129,16 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       );
       it("does not signal or spend the deferral budget when external restarts are disabled", async () => {
         vi.useFakeTimers();
-        vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
+        const owner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
         const kill = vi.spyOn(process, "kill").mockReturnValue(true);
         const wait = waitForGitReleaseSuccessor({
           ...options,
           allowGitReleaseRestartSignal: false,
         });
-        await vi.advanceTimersByTimeAsync(35_000);
-        await wait;
+        await vi.advanceTimersByTimeAsync(50_000);
+        owner.mockReturnValue({ ...incumbent, owner: "watcher-successor", pid: 2345 });
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(wait).resolves.toEqual({ status: "changed" });
         expect(kill).not.toHaveBeenCalled();
       });
       it("honors command-scope cancellation without an explicit update deadline", async () => {
