@@ -394,7 +394,6 @@ export async function updateGitRelease(params: {
     if (current.status !== "ok") {
       return result("error", `git-release-current-failed: ${current.reason}`);
     }
-    await publishGitRelease({ prefix, releaseRoot: current.releaseRoot, trial: false });
     previousRelease = current.releaseRoot;
   }
 
@@ -488,6 +487,11 @@ export async function updateGitRelease(params: {
     timeoutMs,
     beforeGitMutation: opts.beforeGitMutation,
   });
+  // Publishing even the fallback changes what the unchanged launcher resolves to.
+  // Keep the serving slot intact through admission, validation and ownership revalidation.
+  if (previousRelease) {
+    await publishGitRelease({ prefix, releaseRoot: previousRelease, trial: false });
+  }
   if (target.status === "ok") {
     if (releaseRoot !== unserved?.root) {
       await supersedeUnserved();
@@ -512,11 +516,6 @@ export async function updateGitRelease(params: {
       trial: true,
       pending: opts.deferReleaseActivation,
     });
-  }
-  if (serving !== slot && !opts.deferReleaseActivation) {
-    // The old link under lib/node_modules goes; its Gateway sees its installation replaced
-    // and restarts through the launcher, which now starts the link above.
-    await fs.rm(serving, { force: true });
   }
   const collected = await collectGitReleases({
     prefix,

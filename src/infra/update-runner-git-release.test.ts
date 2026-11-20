@@ -3,12 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { inspectManagedGatewayServiceBeforeUpdate } from "../cli/update-cli/update-command-service-plan.js";
+import { revalidateManagedGatewayServiceAfterUpdate } from "../cli/update-cli/update-command-service-revalidation.js";
+import type { GatewayServiceState } from "../daemon/service-types.js";
+import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { GIT_RELEASE_LAUNCHER, GIT_RELEASE_TRIAL, gitReleaseSlot } from "./git-release-paths.js";
 import { collectGitReleases, createGitReleaseDirs, publishGitRelease } from "./git-release.js";
 import { readPackageVersion } from "./package-json.js";
 import { acquirePackageReleaseLease } from "./package-release-lease.js";
 import { PACKAGE_RELEASES_DIR } from "./package-release-slot-path.js";
+import type { UpdateRunnerOptions } from "./update-runner-types.js";
 
 const target = vi.hoisted(() => ({
   beforeRuntimeVerified: [] as boolean[],
@@ -146,6 +151,7 @@ const roots: string[] = [];
 const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
 afterEach(async () => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   target.beforeRuntimeVerified.length = 0;
   target.conversionTargets.length = 0;
   target.runtimeVerified = false;
@@ -181,7 +187,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     return { slot: gitReleaseSlot(prefix), running: await fs.realpath(running) };
   }
 
-  const convert = (gitRoot: string) =>
+  const convert = (gitRoot: string, opts: Partial<UpdateRunnerOptions> = {}) =>
     updateGitRelease({
       gitRoot,
       runCommand: (argv, options) =>
@@ -196,6 +202,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
         inspectGitTarget: async () => {},
         validateCandidate: async () => [],
         beforeGitMutation: async () => {},
+        ...opts,
       },
     });
 
@@ -640,7 +647,81 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     expect(await fs.realpath(install.slot)).toBe(install.unserved);
   });
 
-  it("moves a release under node_modules out of it on its next update (#201874)", async () => {
+  it.each([false, true])(
+    "converts a launcher-backed legacy slot without losing ownership (deferred: %s)",
+    async (deferReleaseActivation) => {
+      const { dir, checkout, serving } = await checkoutWithTwoCommits();
+      vi.stubEnv("HOME", dir);
+      mockSystemAccountHome();
+      const prefix = path.join(dir, "state", "git-install");
+      const legacy = path.join(prefix, "lib", "node_modules", "openclaw");
+      const legacyRelease = path.join(
+        prefix,
+        "releases",
+        "git-old",
+        "lib",
+        "node_modules",
+        "openclaw",
+      );
+      await fs.mkdir(path.dirname(legacyRelease), { recursive: true });
+      await git(checkout, "worktree", "add", "-q", "--detach", legacyRelease, serving);
+      await fs.mkdir(path.join(legacyRelease, "dist"));
+      await fs.writeFile(path.join(legacyRelease, "dist", "index.js"), "");
+      await fs.mkdir(path.dirname(legacy), { recursive: true });
+      await fs.symlink(path.relative(path.dirname(legacy), legacyRelease), legacy);
+      const state: GatewayServiceState = {
+        installed: true,
+        running: false,
+        loadState: { status: "loaded" },
+        env: { HOME: dir },
+        command: {
+          programArguments: [process.execPath, path.join(prefix, GIT_RELEASE_LAUNCHER), "gateway"],
+        },
+        runtime: { status: "stopped", systemd: { managerUid: 1000 } },
+      };
+      const verdict = await inspectManagedGatewayServiceBeforeUpdate({ root: legacy, state });
+      expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: false });
+      const revalidate = async () => {
+        await revalidateManagedGatewayServiceAfterUpdate({
+          root: legacy,
+          state,
+          preManagedServiceStop: {
+            serviceEnv: state.env,
+            serviceManagerUid: 1000,
+            serviceUpdateVerdict: verdict,
+          },
+        });
+      };
+      target.runtimeVerified = false;
+      const result = await convert(legacy, {
+        deferReleaseActivation,
+        inspectGitTarget: revalidate,
+        beforeGitMutation: revalidate,
+      });
+
+      expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+      expect(target.conversionTargets).toEqual([serving]);
+      const served = await fs.realpath(gitReleaseSlot(prefix));
+      expect(served.split(path.sep)).not.toContain("node_modules");
+      // Old PATH entries keep working, but cannot select a release independently.
+      expect(path.resolve(path.dirname(legacy), await fs.readlink(legacy))).toBe(
+        gitReleaseSlot(prefix),
+      );
+      expect(await fs.realpath(legacy)).toBe(served);
+      if (deferReleaseActivation) {
+        const trial = JSON.parse(
+          await fs.readFile(path.join(prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL), "utf8"),
+        ) as Trial & { pending: boolean };
+        expect(trial.pending).toBe(true);
+        const candidate = path.resolve(prefix, trial.target);
+        expect(candidate).not.toBe(served);
+        await publishGitRelease({ prefix, releaseRoot: candidate, trial: false });
+        expect(await fs.realpath(legacy)).toBe(candidate);
+      }
+    },
+  );
+
+  it("leaves the legacy slot selected when conversion fails before activation", async () => {
     const { dir, checkout, serving } = await checkoutWithTwoCommits();
     const prefix = path.join(dir, "state", "git-install");
     // Main builds since #199706 kept the link and its releases under lib/node_modules.
@@ -658,13 +739,12 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     await fs.mkdir(path.dirname(legacy), { recursive: true });
     await fs.symlink(path.relative(path.dirname(legacy), legacyRelease), legacy);
 
+    target.runtimeVerified = false;
+    target.targetFails = true;
     const result = await convert(legacy);
 
-    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
-    // The serving commit is rebuilt where it stays, and the old link no longer serves.
-    expect(target.conversionTargets).toEqual([serving]);
-    const served = await fs.realpath(gitReleaseSlot(prefix));
-    expect(served.split(path.sep)).not.toContain("node_modules");
-    await expect(fs.lstat(legacy)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
+    expect(await fs.realpath(legacy)).toBe(legacyRelease);
+    await expect(fs.lstat(gitReleaseSlot(prefix))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
