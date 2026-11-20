@@ -164,3 +164,21 @@ it.each([
     expect(await f.items()).toEqual([]);
   }),
 );
+
+it("counts a posted assistant message as session activity", () =>
+  withMentionInbox(async (f) => {
+    const before =
+      (await loadSessionEntry({ ...scope, sessionId: SESSION_ID }))?.lastActivityAt ?? 0;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
+    const posted = await injectGatewayAssistantMessage(contextFor(f), {
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      message: "posted by a guest",
+    });
+    expect(posted.ok).toBe(true);
+    const after =
+      (await loadSessionEntry({ ...scope, sessionId: SESSION_ID }))?.lastActivityAt ?? 0;
+    expect(after).toBeGreaterThan(before);
+  }));
