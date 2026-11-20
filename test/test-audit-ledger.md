@@ -1091,6 +1091,22 @@ Instrumentation is removed afterward. The clean staging and shared-helper suites
 pass 16 cases with the existing Windows-only case skipped on Linux. This does
 not establish real macOS compilation or SQLite capability qualification.
 
+### Boat release-runner fixture cleanup (beta.3 preparation)
+
+At `0959d86e27c8097db5cfe4d137803dc8077292df`, the registered Boat test cleanup
+clears its tracker before removal. Reuse the existing shared cleanup owner;
+preserve all six declarations / nine expanded cases, executable fixture bytes,
+environment, receipt assertions, Windows skip, and synchronous child settlement.
+Production and shared helpers are unchanged.
+
+Temporary registered-hook fault injection reproduces lost failed ownership and
+an unremoved healthy root. With shared cleanup, the same injected error is
+preserved, the healthy root is removed, and the failed root remains tracked;
+a retry removes it. The control routes the original removal through the
+equivalent namespace export so its spy intercepts it. All instrumentation is
+removed from the final patch. Local provider fixtures do not qualify live Boat
+provisioning.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
