@@ -4,6 +4,7 @@ import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -21,8 +22,10 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import * as sqliteArchive from "./session-accessor.sqlite-archive.js";
+import { readExactSessionEntryFactsInDatabase } from "./session-accessor.sqlite-entry-facts.worker.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import { createSessionMaintenanceFinalizationOperation as finalization } from "./session-accessor.sqlite-reclamation.js";
+import { readSessionMembershipFactsInDatabase } from "./session-membership-facts.js";
 import { readSessionMembersInWorker } from "./session-sharing-store.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
@@ -356,4 +359,48 @@ it("rejects stale member writes after entry-only deletion leaves a placeholder",
     },
     { sessionId: "session-a", updatedAt: 1 },
   );
+});
+
+it("round-trips optional member access through the writer, worker, and replacement receipts", async () => {
+  await withSharingState(async (scope, operations) => {
+    addSessionMember(scope, {
+      identityId: "reader",
+      addedBy: "owner",
+      addedAt: 2,
+      access: "suggest",
+    });
+    addSessionMember(scope, { identityId: "legacy", addedBy: "owner", addedAt: 2 });
+    const expected = [
+      { identityId: "legacy", addedBy: "owner", addedAt: 2 },
+      { identityId: "reader", addedBy: "owner", addedAt: 2, access: "suggest" },
+    ];
+    expect(await operations.read()).toEqual(expected);
+    const database = openOpenClawAgentDatabase(scope);
+    expect(
+      readExactSessionEntryFactsInDatabase(database, [scope.sessionKey]).members[scope.sessionKey],
+    ).toEqual(expected);
+    const initial = readSessionMembershipFactsInDatabase(database);
+    expect(initial.facts[0]?.[5]).toEqual({ reader: "suggest" });
+    const projection = createSessionMembershipProjection();
+    projection.updateTargets([
+      {
+        agentId: scope.agentId,
+        storePath: database.path,
+        identity: initial.identity!,
+        birthtime: initial.birthtime,
+      },
+    ]);
+    await projection.prepare();
+    const stop = sessionChanges.subscribeFacts((change) => projection.invalidate(change));
+    try {
+      await operations.update("session-main", 3, "read-only");
+      expect(await operations.read()).toEqual(expected);
+      expect(projection.access(database.path, scope.sessionKey, "reader")).toBe("suggest");
+      expect(removeSessionMember(scope, "reader")).toEqual(expected[1]);
+      expect(projection.access(database.path, scope.sessionKey, "reader")).toBeUndefined();
+    } finally {
+      stop();
+      projection.dispose();
+    }
+  });
 });

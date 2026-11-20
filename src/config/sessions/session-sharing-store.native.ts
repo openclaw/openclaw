@@ -72,11 +72,18 @@ function publishCommittedSessionMembership(
   sessionId: string,
   identityId: string,
   present: boolean,
+  access?: SessionMember["access"],
 ): void {
   publishSessionSharingMemberChange(
     database,
     sessionKey,
-    { kind: "member", sessionId, identityId: toUSVString(identityId), present },
+    {
+      kind: "member",
+      sessionId,
+      identityId: toUSVString(identityId),
+      present,
+      ...(access !== undefined ? { access } : {}),
+    },
     agentId,
   );
 }
@@ -123,6 +130,7 @@ export function addSessionMemberInTransaction(
           identity_id: identityId,
           added_by: addedBy,
           added_at: addedAt,
+          access: params.access ?? null,
         })
         .onConflict((conflict) => conflict.columns(["session_key", "identity_id"]).doNothing()),
     ),
@@ -133,12 +141,33 @@ export function addSessionMemberInTransaction(
     if (actor) {
       actor.hot.members = [
         ...actor.hot.members,
-        { identityId: toUSVString(identityId), addedBy: toUSVString(addedBy), addedAt },
+        {
+          identityId: toUSVString(identityId),
+          addedBy: toUSVString(addedBy),
+          addedAt,
+          ...(params.access !== undefined ? { access: params.access } : {}),
+        },
       ];
     }
-    publishCommittedSessionMembership(database, agentId, sessionKey, sessionId, identityId, true);
+    publishCommittedSessionMembership(
+      database,
+      agentId,
+      sessionKey,
+      sessionId,
+      identityId,
+      true,
+      params.access,
+    );
   }
-  return { member: { identityId, addedBy, addedAt }, inserted: changed };
+  return {
+    member: {
+      identityId,
+      addedBy,
+      addedAt,
+      ...(params.access !== undefined ? { access: params.access } : {}),
+    },
+    inserted: changed,
+  };
 }
 
 export function removeSessionMember(
@@ -179,7 +208,7 @@ export function removeSessionMember(
       const row = withSqliteDatabaseWriteScope(database.db, [sessionKey], () =>
         executeSqliteQueryTakeFirstSync(
           database.db,
-          removal.returning(["identity_id", "added_by", "added_at"]),
+          removal.returning(["identity_id", "added_by", "added_at", "access"]),
         ),
       );
       if (!row) {
@@ -199,7 +228,12 @@ export function removeSessionMember(
         normalizedIdentityId,
         false,
       );
-      return { identityId: row.identity_id, addedBy: row.added_by, addedAt: row.added_at };
+      return {
+        identityId: row.identity_id,
+        addedBy: row.added_by,
+        addedAt: row.added_at,
+        ...(row.access !== null ? { access: row.access } : {}),
+      };
     },
     toDatabaseOptions(resolved),
     { operationLabel: "session.sharing.remove-member" },

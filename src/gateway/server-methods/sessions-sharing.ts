@@ -107,7 +107,11 @@ function sharingActorStorageRef(facts: SharingActorFacts): string {
 function projectSessionMemberEvidence(member: StoredSessionMember): SessionMemberEvidence {
   // Sentinel ids satisfy the existing non-null storage contract only. Project
   // actor evidence here so persistence markers never become protocol identities.
-  const common = { identityId: member.identityId, addedAt: member.addedAt };
+  const common = {
+    identityId: member.identityId,
+    addedAt: member.addedAt,
+    ...(member.access !== undefined ? { access: member.access } : {}),
+  };
   if (member.addedBy === UNKNOWN_SHARING_ACTOR_STORAGE_REF) {
     return { ...common, addedByState: "unknown" };
   }
@@ -130,6 +134,7 @@ function projectLegacySessionMember(member: SessionMemberEvidence): SessionMembe
     identityId: member.identityId,
     addedBy: member.addedBy,
     addedAt: member.addedAt,
+    ...(member.access !== undefined ? { access: member.access } : {}),
   };
 }
 
