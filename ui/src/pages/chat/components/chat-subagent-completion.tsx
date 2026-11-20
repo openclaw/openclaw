@@ -4,21 +4,24 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { groupSubagentCompletions, subagentCompletionNames } from "../chat-spawned-subagent.ts";
+import { ChatContinuationDelay } from "./chat-handoff-sessions.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 export function ChatSubagentCompletion(props: {
   completions: readonly SubagentCompletion[];
+  elapsed?: number;
   onOpenSession?: (key: string) => void;
 }) {
   // A batch can settle with mixed outcomes; each outcome reads as its own sentence.
   return (
     <For each={groupSubagentCompletions(props.completions)} keyed={(group) => group.key}>
-      {(group) => (
+      {(group, index) => (
         <CompletionSentence
           completions={group().entries}
           sentenceKey={group().key}
           failed={group().failed}
+          elapsed={index() === 0 ? props.elapsed : undefined}
           onOpenSession={props.onOpenSession}
         />
       )}
@@ -30,6 +33,7 @@ function CompletionSentence(props: {
   completions: readonly SubagentCompletion[];
   sentenceKey: string;
   failed: boolean;
+  elapsed?: number;
   onOpenSession?: (key: string) => void;
 }) {
   const names = createMemo(() => subagentCompletionNames(props.completions));
@@ -98,6 +102,7 @@ function CompletionSentence(props: {
             {sentence()[1]}
           </span>
         </span>
+        <ChatContinuationDelay elapsed={props.elapsed} />
       </div>
     </div>
   );

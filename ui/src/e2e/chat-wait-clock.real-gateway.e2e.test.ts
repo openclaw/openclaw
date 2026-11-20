@@ -134,14 +134,16 @@ async function clocks(parent: Locator) {
   );
 }
 async function resumedContinuation(parent: Locator) {
-  const rule = parent.locator(".chat-handoff-resume__rule").filter({ hasText: "Agent finished" });
-  await expect.poll(() => rule.count()).toBe(1);
-  await rule.waitFor();
-  const label = ((await rule.textContent()) ?? "").replace(/\s+/gu, " ").trim();
-  expect(label).toMatch(/^Resumed · \d+[ms](?: \d+s)? later · Agent finished$/u);
+  const activity = parent
+    .locator(".chat-tool-row--subagent, .chat-continuation-activity[data-source=subagent]")
+    .filter({ hasText: /finished.*later/u });
+  await expect.poll(() => activity.count()).toBe(1);
+  await activity.waitFor();
+  const delay = (await activity.locator(".chat-tool-row__detail").textContent())?.trim() ?? "";
+  expect(delay).toMatch(/^· \d+[ms](?: \d+s)? later$/u);
   // An interrupted yield is not a new confirmed handoff with a child list.
   expect(await parent.locator(".chat-handoff-sessions").count()).toBe(0);
-  return label;
+  return delay;
 }
 async function capture(page: Page, parent: Locator, name: string, content: Locator[]) {
   const text = (await page.locator("body").textContent()) ?? "";
@@ -337,7 +339,7 @@ suite.define(() => {
           expect(completed.child.endedAt).toBeGreaterThanOrEqual(initial.child.startedAt!);
           expect(await clocks(parent)).toEqual([]);
           const completedResume = await resumedContinuation(parent);
-          const duration = /Resumed · (.*?) later/u.exec(completedResume)![1]!;
+          const duration = completedResume;
           const displayedMs = [...duration.matchAll(/(\d+)([ms])/gu)].reduce(
             (sum, match) => sum + Number(match[1]) * (match[2] === "m" ? 60_000 : 1_000),
             0,
