@@ -104,6 +104,21 @@ function render(patch: Partial<ReportRecord>) {
 
 afterEach(() => vi.restoreAllMocks());
 
+it("labels standalone repair and leads with the update it repaired", () => {
+  const detail =
+    "Update 2b6f7c1e-9a41-4c2d-8f3e-5d6a7b8c9d0e to 2026.11.5 failed at activating: post-update-failed. finalize:doctor: database is locked";
+  const report = render({
+    after: { version: "2026.11.5" },
+    steps: [
+      { step: "requested", status: "completed" },
+      { step: "repairing", status: "completed" },
+      { step: "finalize:repaired-run", status: "completed", detail },
+    ],
+  });
+  expect(report.headline).toBe("✅ OpenClaw repair completed for 2026.11.5.");
+  expect(report.lines[0]).toBe(`Repaired update: ${detail}`);
+});
+
 it("reports repeated database-path advisories once across Doctor phases", () => {
   const detail =
     "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.";

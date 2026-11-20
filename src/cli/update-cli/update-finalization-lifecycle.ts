@@ -24,12 +24,15 @@ import {
   createUpdateRun,
   finishUpdateRun,
   heartbeatUpdateRun,
+  listUpdateRuns,
   recordUpdateRunDiagnostic,
   recordUpdateRunPhase,
   recordUpdateRunRepairContinuation,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { isUpdateRepairRun, UPDATE_RUN_REPAIRED_STEP } from "../../infra/update-run-record.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
+import { formatRepairedUpdateRun } from "../../infra/update-run-report.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
   UPDATE_RUN_HEARTBEAT_MS,
@@ -138,6 +141,23 @@ export class UpdateFinalizationLifecycle {
     this.ownsRepairRun = repair && this.ownsRun;
     if (this.ownsRepairRun) {
       recordUpdateRunRepairContinuation(this.runId, this.runId, this.ledgerOptions);
+      // Keep the latest failed update visible after this repair becomes the newest run.
+      const prior = listUpdateRuns({ limit: 8, excludeReason: "dry-run" }, this.ledgerOptions).find(
+        (run) =>
+          run.runId !== this.runId && !run.steps.some((step) => step.step === "reconcile:settle"),
+      );
+      if (prior?.status === "failed" && !isUpdateRepairRun(prior)) {
+        recordUpdateRunStep(
+          this.runId,
+          {
+            step: UPDATE_RUN_REPAIRED_STEP,
+            status: "completed",
+            endedAtMs: Date.now(),
+            detail: formatRepairedUpdateRun(prior),
+          },
+          this.ledgerOptions,
+        );
+      }
     }
     if (this.active) {
       recordUpdateRunStep(

@@ -83,6 +83,44 @@ it("reports standalone repair as repairing before Doctor maintenance", () => {
   });
 });
 
+it.each(["failed", "succeeded"] as const)(
+  "links standalone repair only when the newest prior update %s",
+  (status) => {
+    const prior = ledger.createUpdateRun({
+      trigger: "cli",
+      target: { kind: "package", version: "2026.11.5" },
+    });
+    ledger.recordUpdateRunPhase(prior.runId, "staging");
+    ledger.recordUpdateRunPhase(prior.runId, "activating", {
+      step: {
+        step: "finalize:doctor",
+        status: "failed",
+        detail: "SQLite migration publication could not be verified: database is locked",
+      },
+    });
+    ledger.finishUpdateRun(prior.runId, { status: "failed", reason: "post-update-failed" });
+    if (status === "succeeded") {
+      vi.advanceTimersByTime(1);
+      const newer = ledger.createUpdateRun({ trigger: "cli" });
+      ledger.finishUpdateRun(newer.runId, { status: "succeeded" });
+    }
+
+    vi.advanceTimersByTime(1);
+    const lifecycle = new UpdateFinalizationLifecycle(false, undefined, () => {});
+    const repair = getUpdateRun(lifecycle.attachLedger(true))!;
+    const link = repair.steps.find((step) => step.step === "finalize:repaired-run");
+    if (status === "succeeded") {
+      expect(link).toBeUndefined();
+    } else {
+      expect(link).toMatchObject({
+        status: "completed",
+        endedAtMs: expect.any(Number),
+        detail: `Update ${prior.runId} to 2026.11.5 failed at activating: post-update-failed. finalize:doctor: SQLite migration publication could not be verified: database is locked`,
+      });
+    }
+  },
+);
+
 it("writes successful finalization progress to stderr and failures as errors", async () => {
   const info = vi.spyOn(getLogger(), "info");
   const warn = vi.spyOn(getLogger(), "warn");
