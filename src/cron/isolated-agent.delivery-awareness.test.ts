@@ -130,18 +130,27 @@ it("links each execution of a job to its own recorded run, not its transient ses
   expect(new Set(links).size).toBe(runs.length);
 });
 
-// Hook, plugin and channel-join jobs are never persisted and are never claimed by the scheduler.
-it("keeps the run session link for a synthetic hook job", async () => {
-  const { result, deps } = await announce([{ text: "digest" }], {
-    gateway: CONTROL_UI_GATEWAY,
-    job: {
+it.each([
+  // Hook, plugin and channel-join jobs are never persisted and are never claimed by the scheduler.
+  [
+    "a synthetic hook job",
+    {
       schedule: { kind: "at", at: new Date().toISOString() },
       state: { nextRunAtMs: Date.now() },
     },
-  });
-  expect(result).toMatchObject({ status: "ok", delivered: true });
-  expect(lastTelegramText(deps)).toBe(`digest\n[Inspect run](${sessionLink(result.sessionKey)})`);
-});
+  ],
+  ["a job without state", { state: undefined } as unknown as Partial<CronJob>],
+] satisfies [string, Partial<CronJob>][])(
+  "keeps the run session link for %s",
+  async (_name, job) => {
+    const { result, deps } = await announce([{ text: "digest" }], {
+      gateway: CONTROL_UI_GATEWAY,
+      job,
+    });
+    expect(result).toMatchObject({ status: "ok", delivered: true });
+    expect(lastTelegramText(deps)).toBe(`digest\n[Inspect run](${sessionLink(result.sessionKey)})`);
+  },
+);
 
 it.each([
   ["no public origin", {}],

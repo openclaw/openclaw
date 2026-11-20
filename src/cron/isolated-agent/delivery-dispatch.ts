@@ -360,7 +360,7 @@ export async function dispatchCronDelivery(
         // Run history outlives the run's session alias, so a scheduler-claimed run links to its
         // recorded run; unclaimed synthetic jobs (hooks, plugin triggers) keep the session link.
         inspectionUrl:
-          params.job.state.runningAtMs === undefined
+          params.job.state?.runningAtMs === undefined
             ? resolveControlUiSessionUrl(params.cfgWithAgentDefaults, {
                 sessionKey: params.runSessionKey,
                 fallbackAgentId: params.agentId,
