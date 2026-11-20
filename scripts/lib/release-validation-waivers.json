@@ -1,4 +1,12 @@
 {
   "schema": "openclaw.release-validation-waivers/v1",
-  "waivers": []
+  "waivers": [
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "productPerformance",
+      "jobName": "Kova mock provider performance",
+      "reason": "Operator accepts Kova performance threshold findings, including memory, for this release; retain raw results and require execution and evidence integrity.",
+      "aggregates": []
+    }
+  ]
 }
