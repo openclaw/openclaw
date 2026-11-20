@@ -131,6 +131,8 @@ export async function occupyWorkers(
     createDueIsolatedJob({ id: `capacity-${index}`, nowMs: now, nextRunAtMs: now }),
   );
   await saveCronStore(fixture.storePath, { version: 1, jobs: [...blockerJobs, job] });
+  // No spare memory, so exactly the default run slots fill.
+  vi.spyOn(process, "availableMemory").mockReturnValue(0);
   const held = createHeldCronRunner(blockerJobs.length);
   vi.mocked(fixture.runIsolatedAgentJob).mockImplementation((input) =>
     input.job.id === job.id ? runTarget(input) : held.runner(input),

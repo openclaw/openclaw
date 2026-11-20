@@ -11,7 +11,7 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
+import { isLocalPortalHostname } from "../../lib/gateway-locality.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
@@ -361,8 +361,8 @@ export function createPortals(
     const portalAddress = new URL(url);
     // A remote Gateway's loopback endpoint points at the browser, not the Gateway.
     if (
-      isLoopbackHostname(portalAddress.hostname) &&
-      !isLoopbackHostname(new URL(context.gateway.connection.gatewayUrl).hostname)
+      isLocalPortalHostname(portalAddress.hostname) &&
+      !isLocalPortalHostname(new URL(context.gateway.connection.gatewayUrl).hostname)
     ) {
       state.portalProbeState = { key, status: "ingress-required", result: Promise.resolve() };
       notify();

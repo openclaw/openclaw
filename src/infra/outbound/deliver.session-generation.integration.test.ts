@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -25,13 +26,7 @@ function fixture() {
   const sessionKey = "agent:main:result-generation";
   const entry = { sessionId: "result-generation", lifecycleRevision: "original", updatedAt: 1 };
   writeSessionEntry(database, sessionKey, entry);
-  const generation = {
-    agentId: "main",
-    storePath: database.path,
-    sessionKey,
-    sessionId: entry.sessionId,
-    lifecycleRevision: entry.lifecycleRevision,
-  };
+  const generation = chatRef({ agentId: "main", storePath: database.path, sessionKey });
   const update = (revision: string) =>
     replaceSessionEntrySync(
       { agentId: "main", storePath: database.path, sessionKey },
@@ -99,7 +94,7 @@ it("retains a completed result through temporary lifecycle unavailability", asyn
     const mutation = runSessionMutation({
       kind: "reset",
       scope: generation.storePath,
-      identities: [generation.sessionKey, generation.sessionId],
+      identities: [generation.sessionKey, "result-generation"],
       prepare: gate.hold,
       run: () => Promise.resolve(update("original")),
     });
@@ -148,7 +143,7 @@ it("retains a completed result through temporary lifecycle unavailability", asyn
   });
 });
 
-it("replays every same-generation result and terminalizes only revoked unsent results", async () => {
+it("replays queued results to the conversation key across a reset", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { generation, update, send } = fixture();
     const enqueue = (id: string) =>
@@ -177,10 +172,10 @@ it("replays every same-generation result and terminalizes only revoked unsent re
     await replay();
     expect(send.mock.calls.map((call) => call[1])).toEqual(ids);
     expect(await Promise.all(ids.map((id) => loadPendingDelivery(id)))).toEqual([null, null]);
-    await enqueue("sessions-send:revoked");
+    await enqueue("sessions-send:after-reset");
     update("reset");
     await replay();
-    expect(send).toHaveBeenCalledTimes(2);
-    expect(queueStatus("sessions-send:revoked")).toBe("failed");
+    expect(send.mock.calls.map((call) => call[1])).toEqual([...ids, "sessions-send:after-reset"]);
+    expect(await loadPendingDelivery("sessions-send:after-reset")).toBeNull();
   });
 });

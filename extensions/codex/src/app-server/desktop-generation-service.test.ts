@@ -20,10 +20,13 @@ const mocks = vi.hoisted(() => ({
     >(),
   read: vi.fn<() => Promise<string>>(),
 }));
-vi.mock("node:fs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs")>()),
-  watch: mocks.watch,
-}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { watch: mocks.watch };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 // mock-isolation: use controlled generations without inspecting the installed macOS application.
 vi.mock("./desktop-generation-fingerprint.js", () => ({
   readMacOSDesktopGenerationFingerprint: mocks.read,

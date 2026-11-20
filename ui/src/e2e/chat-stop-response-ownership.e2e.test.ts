@@ -47,7 +47,9 @@ async function verifyStopResponse(page: Page, scenario: (typeof scenarios)[numbe
   }
   const abort = await gateway.waitForRequest(abortMethod);
   expect(abort.params).toEqual(
-    scenario === "command" ? { key: sessionKey, clearQueued: true } : { sessionKey, runId },
+    scenario === "command"
+      ? { key: sessionKey, clearQueued: true, userInitiated: true }
+      : { sessionKey, runId, userInitiated: true },
   );
 
   if (scenario !== "current") {

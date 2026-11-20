@@ -13,7 +13,7 @@ on:
           - prepare
           - admit-qualification
       qualification_request:
-        description: Exact reviewed C=Q qualification request from full-release-validation-at-sha
+        description: Exact reviewed C/Q qualification request from full-release-validation-at-sha
         required: false
         type: string
       publish_inputs:

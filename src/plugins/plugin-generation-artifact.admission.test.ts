@@ -12,7 +12,6 @@ import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-sto
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { createFixture, nativeSize } from "./plugin-generation-artifact.admission.test-support.js";
-import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import {
   captureResources,
   createSdkHost,
@@ -23,8 +22,10 @@ import {
   type Cache,
 } from "./plugin-generation-capture.test-support.js";
 import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
+import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import {
+  nativeAdmissionStateFor,
   preparePluginNativeAdmissions,
   settlePluginNativeAdmissions,
 } from "./plugin-native-admission-state.js";
@@ -238,9 +239,15 @@ it("pins a custody fork's publisher before deferred native materialization", asy
     await withPluginCache(cache, () =>
       withPluginGenerationSourceCustody(async () => {
         const artifact = resources.keep(
-          withPluginSourceAdmissionPublisher(original, () =>
-            capturePluginGenerationArtifact(fixture.root, fixture.entry, (run) => run()),
-          ),
+          (
+            await withPluginSourceAdmissionPublisher(original, () =>
+              preparePluginGenerationArtifact({
+                rootDir: fixture.root,
+                source: fixture.entry,
+                standalone: true,
+              }),
+            )
+          ).artifact,
         );
         expect(original).not.toHaveBeenCalled();
         await withPluginSourceAdmissionPublisher(replacement, async () => {
@@ -721,3 +728,33 @@ it("snapshots a mutable native edit once while retained generations keep their p
     }
   });
 });
+
+it.each(["companion", "source-path"] as const)(
+  "keeps only the current namespace after a %s edit releases retired generations",
+  async (change) => {
+    await withOpenClawTestState({ label: "native-admission-retention" }, async (state) => {
+      await using resources = captureResources();
+      const fixture = createFixture(state.path("source"), false);
+      const helper = path.join(fixture.root, "helper.cjs");
+      fs.writeFileSync(helper, "module.exports = 0;");
+      await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+      const cache = resources.cache();
+      preparePluginNativeAdmissions(fixture.index, cache);
+      let filename = fixture.filename;
+      for (let edit = 1; edit <= 4; edit += 1) {
+        const generation = resources.capture(cache, fixture.root);
+        await generation.disposeAsync();
+        if (change === "source-path") {
+          const next = path.join(fixture.root, `native-${edit}.so`);
+          fs.renameSync(filename, next);
+          filename = next;
+        }
+        fs.writeFileSync(helper, `module.exports = ${edit};`);
+      }
+      const current = resources.capture(cache, fixture.root);
+      expect(nativeAdmissionStateFor(cache).namespaces.size).toBe(1);
+      expect([...nativeAdmissionStateFor(cache).files.keys()]).toEqual([filename]);
+      expectBytes(current.resolve(filename), fixture.bytes);
+    });
+  },
+);

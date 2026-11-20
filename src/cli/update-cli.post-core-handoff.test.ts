@@ -23,10 +23,18 @@ import {
   writeOpenClawPackageFixture,
 } from "./update-cli/update-cli-package.test-support.js";
 
+// These cases cover the in-place Git runner that Windows checkouts and package-to-Git switches use.
+vi.mock("../infra/git-release-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/git-release-paths.js")>()),
+  usesGitReleases: () => false,
+}));
+
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 const nodeExecutable = resolveTestNodeExecPath();
-const f = createUpdateCliFixture();
+// These handoffs target the current runtime; omitted engines model a legacy target.
+const databaseEngines = ["sqlite", "postgres"];
+const f = createUpdateCliFixture({ databaseEngines });
 
 const profileEnv = (profile: string, state: string, port: string) => ({
   OPENCLAW_PROFILE: profile,
@@ -181,7 +189,10 @@ it("keeps foreign-service updates in the caller profile", async () => {
       root,
       before: { sha: "old-caller-sha", version: "2026.4.26" },
       after: { sha: "new-caller-sha", version: VERSION },
+      databaseEngines,
     }),
+    false,
+    { databaseEngines },
   );
   mocks.serviceReadCommand.mockResolvedValue({
     programArguments: [nodeExecutable, foreignEntrypoint, "gateway", "run"],

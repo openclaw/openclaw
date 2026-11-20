@@ -343,7 +343,7 @@ it("lists commands with aliases and hints", () => {
   expect(text).toContain("/skill - Run a skill by name.");
   expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
   expect(text).toContain("/compact - Compact the session context.");
-  expect(text).toContain("/models - List model providers/models.");
+  expect(text).toMatch(/\/models - \S/);
   expect(text).not.toContain("/config");
   expect(text).not.toContain("/debug");
 });

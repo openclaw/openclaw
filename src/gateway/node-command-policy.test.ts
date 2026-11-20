@@ -19,7 +19,6 @@ import {
   isNodeCommandAllowed,
   listDangerousPluginNodeCommands,
   normalizeDeclaredNodeCommands,
-  requiresGatewayNodeInvokePolicy,
   resolveNodeCommandAllowlist,
   resolveNodePairingCommandAllowlist,
   resolveRequiredNodeCommandAuthority,
@@ -52,12 +51,6 @@ describe("gateway/node-command-policy", () => {
     setActivePluginRegistry(registry);
     return registry;
   }
-
-  it("preserves the registered invocation policy when a node tool could execute locally", () => {
-    installCanvasPluginDefaults();
-    expect(requiresGatewayNodeInvokePolicy("canvas.snapshot")).toBe(true);
-    expect(requiresGatewayNodeInvokePolicy("mcp.tools.call.v1")).toBe(false);
-  });
 
   it("allows paired desktop streaming without a persistent allow and keeps deny-wins", () => {
     const node = {

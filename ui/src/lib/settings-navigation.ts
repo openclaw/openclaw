@@ -34,8 +34,8 @@ export function settingsParentRoute(
   return owner === routeId ? null : owner;
 }
 
-/** Where the phone header's Back lands; plugin details step through their own levels. */
-export function settingsBackTarget(
+/** The location one level up for Back and Escape, including plugin detail subviews. */
+export function settingsParentTarget(
   routeId: NavigationRouteId,
   location: { pathname: string; search: string } | undefined,
   basePath = "",

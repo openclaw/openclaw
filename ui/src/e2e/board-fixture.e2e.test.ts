@@ -475,7 +475,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           await page.screenshot({ path: path.join(artifacts, "chat.png") });
         }
         expect(await page.locator(".community-invite-card").count()).toBe(0);
-        expect(await page.getByText("Server updated", { exact: true }).count()).toBe(0);
+        expect(await page.getByText("OpenClaw was updated", { exact: true }).count()).toBe(0);
         const paneState = await page
           .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
           .evaluate(async (pane) => {
@@ -679,8 +679,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         const isolated = await isolatedPage(attachments.url, { serviceWorkers: "block" });
         context = isolated.context;
         const { page, origin, escaped } = isolated;
-        await page.goto(`${origin}/chat`, { waitUntil: "domcontentloaded" });
-        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+        await page.goto(attachments.url, { waitUntil: "domcontentloaded" });
+        await page.locator('[data-test-id="board-widget"]').first().waitFor();
         const result = await page.evaluate(async () => {
           const response = await fetch("/__fixtures/chat-attachments/sample-image.svg");
           const blob = await response.blob();

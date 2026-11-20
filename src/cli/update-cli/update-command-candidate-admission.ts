@@ -1,10 +1,12 @@
 import os from "node:os";
 import path from "node:path";
+import { resolveStateDir } from "../../config/paths.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import {
   runUpdateCandidateAdmission,
   type UpdateCandidateAdmissionResult,
 } from "../../infra/update-candidate-admission.js";
+import { resolveUpdateCandidateAdmissionTimeoutMs } from "../../infra/update-candidate-snapshot.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
@@ -113,7 +115,14 @@ export async function inspectStagedUpdateCandidateAdmission(
       assertCurrent: params.assertCurrent,
       nodeRunner,
       env: process.env,
-      timeoutMs: prepared.timeoutMs,
+      timeoutMs:
+        prepared.timeoutMs ??
+        (await resolveUpdateCandidateAdmissionTimeoutMs({
+          config: target.configSnapshot.config,
+          stateDir: resolveStateDir(process.env),
+          env: process.env,
+          stepTimeoutMs: params.timeoutMs,
+        })),
       admission: opts.admission,
       context: {
         protocol: 1,

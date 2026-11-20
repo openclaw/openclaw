@@ -28,11 +28,10 @@ import {
 } from "./client-thread-owner.js";
 import {
   prepareCodexWorkspaceReferenceState,
-  readCodexWorkspaceSessionMeta,
   type CodexClientWorkspaceState,
 } from "./client-workspace-state.js";
 import type { CodexAppServerClient } from "./client.js";
-import { isJsonObject, type CodexServiceTier, type JsonObject } from "./protocol.js";
+import { isJsonObject, type CodexServiceTier } from "./protocol.js";
 import { mergeCodexRateLimitsUpdate } from "./rate-limit-cache.js";
 import { withTimeout } from "./timeout.js";
 
@@ -101,21 +100,12 @@ export function prepareCodexWorkspaceReferences(
   return prepareCodexWorkspaceReferenceState(configuredClients.get(client), threadId, reference);
 }
 
-/** Immutable declarations are data owned by this physical client, never retained executors. */
-export async function readCodexClientSessionMeta(
+/** Native rollout records are data owned by this physical client, never retained executors. */
+export function withCodexClientWorkspace<T>(
   client: CodexAppServerClient,
-  sessionsRoot: string,
-  boundRolloutPath: string | undefined,
-  threadId: string,
-): Promise<JsonObject> {
-  return readCodexWorkspaceSessionMeta(
-    client,
-    configuredClients.get(client),
-    sessionsRoot,
-    boundRolloutPath,
-    threadId,
-    CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE,
-  );
+  read: (state: CodexClientWorkspaceState | undefined, maxCachedSessions: number) => Promise<T>,
+): Promise<T> {
+  return read(configuredClients.get(client), CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE);
 }
 
 /** Installs one auth-refresh handler and one rate-limit observer per physical client. */
@@ -143,6 +133,7 @@ export function ensureCodexAppServerClientRuntime(
     releasingThreads: new Map(),
     protectedThreads: new Map(),
     sessionMetadata: new Map(),
+    modelContextScans: new Map(),
     workspaceReferences: new Map(),
   };
   configuredClients.set(client, runtime);
@@ -163,6 +154,7 @@ export function ensureCodexAppServerClientRuntime(
     }
     runtime.protectedThreads.clear();
     runtime.sessionMetadata.clear();
+    runtime.modelContextScans.clear();
     runtime.workspaceReferences.clear();
     forgetCodexClientForkSettings(client);
     updateThreadOwnership(client, runtime);

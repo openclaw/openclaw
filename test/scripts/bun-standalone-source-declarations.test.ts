@@ -5,12 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { writeStandaloneSourceDeclarations } from "../../scripts/lib/bun-standalone-source-declarations.mjs";
 import { collectNativeTypeScriptDiagnostics } from "../../scripts/lib/native-typescript-diagnostics.mts";
 import { createNativeTypeScriptProject } from "../../scripts/lib/native-typescript.mts";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 const temporary: string[] = [];
 afterEach(() => {
-  for (const directory of temporary.splice(0)) {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  cleanupTempDirs(temporary);
 });
 
 describe("standalone source declaration projections", () => {

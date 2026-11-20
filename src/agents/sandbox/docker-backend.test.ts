@@ -458,7 +458,7 @@ it("binds Podman provisioning and later execs to the resolved target", async () 
   );
   expect(execSpec.argv.slice(0, 6)).toEqual(["podman", ...podmanTarget.globalArgs, "exec"]);
   expect(execSpec.stdinMode).toBe("pipe-closed");
-  expect(execSpec.argv.at(-1)).toBe("true");
+  expect(execSpec.argv.at(-1)).toBe('mkdir -p -- "$TMPDIR" || exit; true');
   expect(fs.readFileSync(envFile(execSpec), "utf8")).not.toContain("OPENCLAW_PREPEND_PATH=");
   await finalize(backend, execSpec.finalizeToken);
 });
@@ -471,6 +471,87 @@ it("admits explicit piped input without enabling a PTY", async () => {
   expect(spec.argv).not.toContain("-t");
   await finalize(backend, spec.finalizeToken);
 });
+
+it.skipIf(process.platform === "win32").each(["docker", "podman"] as const)(
+  "%s keeps temporary files writable with read-only workspace access",
+  async (engine) => {
+    provision();
+    const cfg = resolveSandboxConfigForAgent(createConfig(engine, false));
+    cfg.workspaceAccess = "ro";
+    cfg.docker.workdir = tempDirs.make("sandbox-readonly-workspace-");
+    fs.chmodSync(cfg.docker.workdir, 0o555);
+    const backend = await (
+      engine === "docker" ? createDockerSandboxBackend : createPodmanSandboxBackend
+    )(backendParams({ cfg }));
+    const spec = await backend.buildExecSpec({
+      command: 'temporary=$(mktemp -d "$TMPDIR/proof.XXXXXXXX") && rmdir "$temporary"',
+      env: {},
+      usePty: false,
+    });
+    try {
+      const child = spawnSync("/bin/sh", ["-c", spec.argv.at(-1)!], {
+        env: { PATH: "/usr/bin:/bin", ...backend.env },
+        encoding: "utf8",
+      });
+      expect(child.stderr).toBe("");
+      expect(child.status).toBe(0);
+      assertStaged(fs.readFileSync(envFile(spec), "utf8"), {
+        TMPDIR: "/tmp",
+        TMP: "/tmp",
+        TEMP: "/tmp",
+      });
+    } finally {
+      fs.chmodSync(cfg.docker.workdir, 0o755);
+      await finalize(backend, spec.finalizeToken);
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
+  "prepends the mounted Git shim after shell startup (requested PATH=%s)",
+  async (requestedPath) => {
+    provision();
+    const cfg = resolveSandboxConfigForAgent();
+    cfg.docker.workdir = tempDirs.make("sandbox-shell-workspace-");
+    const backend = await createDockerSandboxBackend(
+      backendParams({
+        cfg,
+        readOnlyResourceMounts: [
+          { hostPath: "/host/git-tools", containerPath: "/openclaw/git-tools" },
+        ],
+      }),
+    );
+    const spec = await backend.buildExecSpec({
+      command: 'printf "%s\\n" "$PATH"; mktemp -d "$TMPDIR/proof.XXXXXXXX"',
+      env: requestedPath ? { PATH: requestedPath } : {},
+      usePty: false,
+    });
+    try {
+      const staged = Object.fromEntries(
+        fs
+          .readFileSync(envFile(spec), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
+      const child = spawnSync("/bin/sh", ["-c", spec.argv.at(-1)!], {
+        env: { PATH: "/usr/bin:/bin", ...staged },
+        encoding: "utf8",
+      });
+      expect(child.status).toBe(0);
+      const [toolPath, temporary] = child.stdout.trim().split("\n");
+      expect(path.dirname(temporary!)).toBe(path.join(cfg.docker.workdir, ".openclaw/tmp"));
+      expect(staged.TMP).toBe(path.dirname(temporary!));
+      expect(staged.TEMP).toBe(path.dirname(temporary!));
+      expect(toolPath).toBe(
+        `/openclaw/git-tools:${requestedPath ? `${requestedPath}:` : ""}/usr/bin:/bin`,
+      );
+      expect(child.stderr).toBe("");
+    } finally {
+      await finalize(backend, spec.finalizeToken);
+    }
+  },
+);
 
 it.skipIf(process.platform === "win32").each([
   { engine: "docker", host: "github.com" },
@@ -486,6 +567,8 @@ it.skipIf(process.platform === "win32").each([
     vi.stubEnv("INVOCATION_ID", "gateway-invocation");
     vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus");
     vi.stubEnv("OPENCLAW_TEST_USER_SCOPE", undefined);
+    vi.stubEnv("LD_PRELOAD", "/synthetic/libjemalloc.so.2");
+    vi.stubEnv("MALLOC_CONF", "background_thread:true");
     const requestedPath = "$(touch /tmp/openclaw-path-injection)";
     const root = tempDirs.make("github-sandbox-launch-");
     writeFakeSystemdScope(root);
@@ -506,6 +589,8 @@ process.stdout.write(JSON.stringify({
   scoped: process.env.OPENCLAW_TEST_USER_SCOPE === "true",
   invocation: process.env.INVOCATION_ID,
   userBus: process.env.DBUS_SESSION_BUS_ADDRESS,
+  preload: process.env.LD_PRELOAD ?? null,
+  allocator: process.env.MALLOC_CONF ?? null,
   selected: process.env[${JSON.stringify(host === "ghe.example.test" ? "GH_ENTERPRISE_TOKEN" : "GH_TOKEN")}] === "synthetic-after-preparation",
   cleared: !process.env.GITHUB_TOKEN && !process.env.GITHUB_ENTERPRISE_TOKEN && !process.env[${JSON.stringify(host === "ghe.example.test" ? "GH_TOKEN" : "GH_ENTERPRISE_TOKEN")}],
   staged: fs.readFileSync(args[args.indexOf("--env-file") + 1], "utf8"),
@@ -561,6 +646,8 @@ process.stdout.write(JSON.stringify({
         scoped: engine === "podman" && process.getuid?.() !== 0,
         invocation: "gateway-invocation",
         userBus: "unix:path=/run/user/1000/bus",
+        preload: null,
+        allocator: null,
       });
       expect(process.env.INVOCATION_ID).toBe("gateway-invocation");
       expect(spec.stdinMode).toBe("pipe-open");
@@ -572,7 +659,7 @@ process.stdout.write(JSON.stringify({
       expect(delivered.args).toEqual(expect.arrayContaining(["-t", "-w", "/workspace/project"]));
       expect(delivered.args.slice(-4, -1)).toEqual([containerId, "/bin/sh", "-lc"]);
       expect(delivered.args.at(-1)).toBe(
-        "export PATH=\"${OPENCLAW_PREPEND_PATH}:$PATH\"; unset OPENCLAW_PREPEND_PATH; printf '%s' '$HOME space \"quotes\" ${HOME}'",
+        'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; mkdir -p -- "$TMPDIR" || exit; printf \'%s\' \'$HOME space "quotes" ${HOME}\'',
       );
       expect(delivered.args.slice(delivered.args.indexOf("--env-file") + 2, -4)).toEqual(
         ["GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_TOKEN", "GITHUB_ENTERPRISE_TOKEN"].flatMap(
@@ -661,22 +748,39 @@ it.each([
   }
 });
 
-it.each(["describeRuntime", "removeRuntime"] as const)(
+it.each([false, true])("stops an idle Podman runtime (paused=%s)", async (paused) => {
+  mocks.containerState.mockResolvedValue({
+    exists: true,
+    running: !paused,
+    id: containerId,
+    paused,
+  });
+  await podmanSandboxBackendManager.stopRuntime(runtimeEntry("podman"), () => {});
+  expect(mocks.execContainer.mock.calls.map(([, args]) => args)).toEqual([
+    ...(paused ? [["unpause", containerId]] : []),
+    ["stop", "--time", "0", containerId],
+  ]);
+});
+
+it.each(["describeRuntime", "removeRuntime", "stopRuntime"] as const)(
   "rejects a stale Podman registry target before %s",
   async (operation) => {
     const targetError = new Error("active Podman connection changed");
     mocks.validateSandboxContainerEngineTarget.mockRejectedValueOnce(targetError);
+    const entry = {
+      ...runtimeEntry("podman"),
+      backendTarget: {
+        key: `machine:${"a".repeat(32)}`,
+        globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
+      },
+    };
     await expect(
-      podmanSandboxBackendManager[operation]({
-        entry: {
-          ...runtimeEntry("podman"),
-          backendTarget: {
-            key: `machine:${"a".repeat(32)}`,
-            globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
-          },
-        },
-        config: createConfig(),
-      }),
+      operation === "stopRuntime"
+        ? podmanSandboxBackendManager.stopRuntime(entry, () => {})
+        : podmanSandboxBackendManager[operation]({
+            entry,
+            config: createConfig(),
+          }),
     ).rejects.toBe(targetError);
     expect(mocks.containerState).not.toHaveBeenCalled();
     expect(mocks.execContainer).not.toHaveBeenCalled();

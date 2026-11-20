@@ -1,4 +1,4 @@
-import { createRoot, createSignal, flush } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createIntersectionObserver, createResizeObserver, observeResize } from "./observers.ts";
@@ -53,19 +53,6 @@ it.each([
   expect(instances[1]?.targets).toEqual(new Set([second]));
   view.unmount();
   expect(instances[1]?.targets.size).toBe(0);
-});
-
-it("does not require browser observers when they are unavailable", () => {
-  vi.stubGlobal("ResizeObserver", undefined);
-  vi.stubGlobal("IntersectionObserver", undefined);
-  const dispose = createRoot((stop) => {
-    const targets = () => [document.body];
-    createResizeObserver(targets, () => {});
-    createIntersectionObserver(targets, () => {});
-    return stop;
-  });
-  onTestFinished(dispose);
-  expect(() => flush()).not.toThrow();
 });
 
 it("shares resize delivery without mixing subscribers or retaining retired targets", async () => {

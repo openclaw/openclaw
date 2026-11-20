@@ -64,5 +64,9 @@
         "channelId": "whatsapp"
       }
     ]
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan a WhatsApp connection and choose who can access this agent.",
+    "Draft a WhatsApp message for my chosen contact or group without sending it."
+  ]
 }

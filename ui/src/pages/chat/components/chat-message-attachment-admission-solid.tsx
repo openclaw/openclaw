@@ -60,7 +60,7 @@ export function createChatAttachmentAdmission(scope: () => string, immediate: ()
 }
 
 function createAdmission(immediate = false, retainedElement?: () => Element | undefined) {
-  let didAdmit = immediate || typeof IntersectionObserver !== "function";
+  let didAdmit = immediate;
   const [admitted, setAdmitted] = createSignal(didAdmit);
   let active = false;
   let currentElement: Element | undefined;

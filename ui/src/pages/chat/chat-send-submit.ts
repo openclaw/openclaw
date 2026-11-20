@@ -1,5 +1,4 @@
 import { shouldForwardModelCommandToServer } from "../../../../src/auto-reply/commands-registry.shared.js";
-import { isAbortTrigger } from "../../../../src/auto-reply/reply/abort-trigger-text.js";
 import {
   captureChatWorkContext,
   formatChatWorkContext,
@@ -15,6 +14,7 @@ import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import { captureMcpAppContext } from "../../lib/mcp-app-context.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -52,11 +52,12 @@ import {
 } from "./chat-send-eligibility.ts";
 import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import {
+  acceptsChatAmbientContext,
   chatSendAdmissionHoldReason,
   chatSendHoldReason,
   formatChatQueueAdmissionError,
   isChatResetCommand,
-  OFFLINE_QUEUE_STORAGE_ERROR,
+  chatOfflineQueueStorageError,
   prependReplyQuote,
   annotationMessageContext,
 } from "./chat-send-support.ts";
@@ -74,6 +75,7 @@ import {
   prepareOutboxPayload,
   retireOutboxPayload,
 } from "./outbox-payloads.ts";
+import { foldPastedTextAttachments } from "./pasted-text-card.ts";
 import { activeQueuedMessageEdit, retireEditedQueuedMessageSource } from "./queued-message-edit.ts";
 import {
   handleAbortChat,
@@ -129,17 +131,20 @@ export async function handleSendChat(
   const intent = opts?.intent;
   const rawMessage = messageOverride ?? host.chatMessage;
   const draftMentions = messageOverride == null ? previousMentions : opts?.mentionsOverride;
-  const submitted = trimHumanMentions(rawMessage, draftMentions);
-  const userMessage = intent ? rawMessage : submitted.text;
+  const attachmentsToSend = snapshotChatAttachments(
+    messageOverride == null ? host.chatAttachments : (opts?.attachmentsOverride ?? []),
+  );
+  // Pasted-text cards are composer presentation: submit as if "Show in text field" ran first,
+  // so commands, recipients and delivery treat the paste exactly like typed text.
+  const draft = foldPastedTextAttachments(rawMessage, attachmentsToSend);
+  const submitted = trimHumanMentions(draft.text, draftMentions);
+  const userMessage = intent ? draft.text : submitted.text;
   const submittedAtMs = performance.now();
   const submittedSessionKey = host.sessionKey;
   const submittedSessionId = host.currentSessionId;
   const submittedConnectionIsCurrent = captureChatConnectionOwner(host, false);
   const submittedOwnerIsCurrent = captureOutboxPayloadOwner(host);
   let expectedLeafEntryId = resolveDisplayedLeafEntryId(host);
-  const attachmentsToSend = snapshotChatAttachments(
-    messageOverride == null ? host.chatAttachments : (opts?.attachmentsOverride ?? []),
-  );
   const submitGuardOptions = {
     attachments: messageOverride == null ? attachmentsToSend : [],
     scope: resolveUiConversationIdentity(host, submittedSessionKey),
@@ -159,10 +164,10 @@ export async function handleSendChat(
           retainAttachments,
         )
       : {};
-  const hasAttachments = attachmentsToSend.length > 0;
-  // Selection comments travel as message text, so only real files need uploads.
+  const hasAttachments = draft.attachments.length > 0;
+  // Selection comments and pasted text travel as message text, so only real files need uploads.
   if (
-    attachmentsToSend.some((item) => !item.selectionAnnotation) &&
+    draft.attachments.some((item) => !item.selectionAnnotation) &&
     !uploadsEnabled(host.uploadConfig)
   ) {
     setChatError(host, uploadsDisabledMessage());
@@ -177,7 +182,7 @@ export async function handleSendChat(
       setChatError(host, t("chat.goals.offline"));
       return undefined;
     }
-    if (attachmentsToSend.some((item) => item.browserAnnotation || item.selectionAnnotation)) {
+    if (draft.attachments.some((item) => item.browserAnnotation || item.selectionAnnotation)) {
       setChatError(host, t("chat.goals.annotationUnsupported"));
       return undefined;
     }
@@ -239,12 +244,12 @@ export async function handleSendChat(
   const message =
     rawParsedCommand || intent
       ? userMessage
-      : [...attachmentsToSend.map(annotationMessageContext), userMessage]
+      : [...draft.attachments.map(annotationMessageContext), userMessage]
           .filter(Boolean)
           .join("\n\n");
   // Slash commands may use ordinary files, but annotations belong to the next model prompt.
   // Selection comments are already message text and never upload as files.
-  const deliveredAttachments = attachmentsToSend.filter(
+  const deliveredAttachments = draft.attachments.filter(
     (item) => !item.selectionAnnotation && !(rawParsedCommand && item.browserAnnotation),
   );
   const rejectOversizedAttachments = () => {
@@ -408,7 +413,7 @@ export async function handleSendChat(
               host.chatAttachments = attachmentsToSend;
               host.composerDraftChanged?.();
             }
-            setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+            setChatError(host, chatOfflineQueueStorageError());
             return;
           }
           // Submission resumes follow; delayed command results respect later reader input.
@@ -494,19 +499,18 @@ export async function handleSendChat(
     : replyTarget?.sourceMessageId?.trim() || undefined;
   const quotedMessage =
     replyTarget && !replyToId && !intent ? prependReplyQuote(message, replyTarget) : message;
-  // Edits retain the original snapshot only while the edited text remains
-  // ordinary model input; commands and Goals never acquire ambient context.
-  const acceptsWorkContext =
-    !intent &&
-    !userMessage.startsWith("/") &&
-    !userMessage.startsWith("!") &&
-    !isAbortTrigger(quotedMessage);
-  const context = acceptsWorkContext
+  const acceptsAmbientContext = acceptsChatAmbientContext(userMessage, quotedMessage, intent);
+  const context = acceptsAmbientContext
     ? isInlineEditSubmission
       ? inlineEdit.source.workContext
       : host.getWorkContext?.()
     : undefined;
   const workContext = context ? captureChatWorkContext(context) : undefined;
+  const appContext = acceptsAmbientContext
+    ? isInlineEditSubmission
+      ? inlineEdit.source.appContext
+      : captureMcpAppContext(host.client, submittedSessionKey, submitGuardOptions.scope.agentId)
+    : undefined;
   // Annotation and fallback-reply prefixes shift mentions; structured work context never does.
   const mentionOffset = quotedMessage.length - userMessage.length;
   const effectiveMentions = submitted.mentions?.map((mention) => ({
@@ -597,6 +601,7 @@ export async function handleSendChat(
       text: intent ? quotedMessage : queuedText.text,
       ...(queuedText.mentions ? { mentions: queuedText.mentions } : {}),
       ...(workContext ? { workContext } : {}),
+      ...(appContext ? { appContext } : {}),
       createdAt: Date.now(),
       ...(resumedEdit?.orderKey !== undefined ? { orderKey: resumedEdit.orderKey } : {}),
       attachments: deliveredAttachments.length ? deliveredAttachments : undefined,

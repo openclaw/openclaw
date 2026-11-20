@@ -20,6 +20,10 @@ when `gateway.publicOrigin` is configured, including its
 `gateway.controlUi.basePath`. This keeps links shareable when the desktop app
 connects through a local SSH tunnel. Without a public origin, copied links use
 the connected Gateway's HTTP(S) address; a tunnel-only address remains local.
+When you reach the claw through OpenClaw ID remote access, **Copy link** uses the
+claw's own address instead, so it opens for members who reach it the same way.
+Preview and public links keep the public address, because only members can use
+the claw's address.
 Normal navigation and **Open in** continue using the current UI. Copied links
 contain no connection credentials. Recipients need Gateway access unless the
 thread has [public access](/web/urls#public-session-transcripts) enabled.
@@ -308,6 +312,8 @@ The handoff rechecks that conversation's current access after preparing the app
 document. Activity in other conversations does not restart navigation. If access
 changes during preparation, the handoff stops with a visible error and offers
 reload or login; it does not redirect back into another automatic probe.
+An agent's main chat, `/chat/<agentId>`, opens the same way for a signed-in
+operator before the agent's first message, as it does when the app opens from `/`.
 The anonymous private-thread document initially returns `404`, then an admitted
 browser opens the app through the session-entry handoff with a `200` response. No extra
 **Log in** click is needed. Without a saved credential, **Log in** opens the normal
@@ -326,9 +332,9 @@ roster, send messages, invoke tools, or open private dashboards. It shows every 
 The latest public view checks for updates approximately every 15 seconds while
 visible and catches up when the tab returns or the connection comes back online.
 Updates follow the conversation when you are at its latest message, but preserve
-your place and expanded tool steps when you scroll back. **Top** and **Latest**
-let you jump without reloading; **Refresh now** checks in place and shows retry
-status if the connection fails. **Older messages** opens earlier pages without
+your place and expanded tool steps when you scroll back. The circular down-arrow
+button jumps to the end of the displayed conversation without reloading.
+**Refresh now** appears when updates are delayed or fail and retries in place. **Older messages** opens earlier pages without
 automatic refresh; **Back to latest** returns to the live view. Pages contain approximately 50 visible messages and tool-step groups, newest pages first and chronological within each page. Read and message size limits still apply, with visible omission notices. The initial conversation and social metadata
 work without JavaScript.
 
@@ -599,7 +605,7 @@ no route-specific URL parameters.
 | Labs                | `/settings/labs`                               | -                         | Shared settings parameters below                                                  |
 | About               | `/settings/about`                              | -                         | Shared settings parameters below                                                  |
 | AI and agents       | `/settings/ai-agents`                          | `/ai-agents`              | Shared settings parameters below                                                  |
-| Model setup         | `/settings/model-setup`                        | `/model-setup`            | `?firstRun=1`                                                                     |
+| Models              | `/settings/model-setup`                        | `/model-setup`            | `?firstRun=1`                                                                     |
 | Model providers     | `/settings/model-providers`                    | `/model-providers`        | Shared settings parameters below                                                  |
 | Import memory       | `/memory-import`                               | `/settings/memory-import` | -                                                                                 |
 | Workboard           | `/workboard`                                   | -                         | `/workboard/<boardId>`                                                            |

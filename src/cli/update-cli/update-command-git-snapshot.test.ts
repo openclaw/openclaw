@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as diskSpace from "../../infra/disk-space.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import * as gitRunner from "../../infra/update-runner-git.js";
 import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -30,12 +31,9 @@ const snapshotCases = [
   { current: true, runtimeReady: false, noOp: false, reportingFails: false },
   { current: false, runtimeReady: true, noOp: false, reportingFails: true },
 ];
-it.each([
-  ...snapshotCases.map((entry) => Object.assign({ backupShortfall: false }, entry)),
-  { current: false, runtimeReady: true, noOp: false, reportingFails: false, backupShortfall: true },
-])(
-  "checks snapshot space after the Git no-op decision (current=$current, runtimeReady=$runtimeReady, reportingFails=$reportingFails, backupShortfall=$backupShortfall)",
-  async ({ current, runtimeReady, noOp, reportingFails, backupShortfall }) => {
+it.each(snapshotCases)(
+  "checks database backup space after the Git no-op decision (current=$current, runtimeReady=$runtimeReady, reportingFails=$reportingFails)",
+  async ({ current, runtimeReady, noOp, reportingFails }) => {
     await withTestDir({ prefix: "git-update-snapshot-" }, async (base) => {
       const root = path.join(base, "checkout");
       const stateDir = path.join(base, "state");
@@ -71,7 +69,7 @@ it.each([
         target = await git(root, "rev-parse", "HEAD");
         await git(root, "checkout", "--detach", before);
       }
-      if (backupShortfall) {
+      {
         const file = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
         await fs.mkdir(path.dirname(file), { recursive: true });
         using db = openNodeSqliteDatabase(file);
@@ -82,9 +80,7 @@ it.each([
       const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
         targetPath,
         checkedPath: targetPath,
-        availableBytes: backupShortfall
-          ? (targetPath === path.join(root, ".artifacts") ? 100 : 160) * 1024 ** 2
-          : 0,
+        availableBytes: 0,
         totalBytes: 1024 ** 3,
       }));
       const runCommand = processRunner.runCommandWithTimeout;
@@ -135,16 +131,8 @@ it.each([
             expect.objectContaining({
               exitCode: 1,
               stderrTail: expect.stringMatching(
-                /snapshot-capacity-insufficient[\s\S]*Initial snapshot needs/,
+                /^Update refused: A database migration may need up to [\s\S]*nothing has changed\./u,
               ),
-              snapshotCapacity: expect.objectContaining({
-                reason: "snapshot-capacity-insufficient",
-                requiredBytes: expect.any(Number),
-                selection: null,
-                candidates: expect.arrayContaining([
-                  expect.objectContaining({ availableBytes: 0 }),
-                ]),
-              }),
             }),
           );
         } else {
@@ -177,12 +165,59 @@ it.each([
           [candidateCommand, beforeGitMutation, validateCandidate].map((fn) => fn.mock.calls),
         ).toEqual([[], [], []]);
         expect(await git(root, "rev-parse", "HEAD")).toBe(before);
-        expect((await fs.readdir(stateDir)).toSorted()).toEqual(
-          backupShortfall ? ["agents", "openclaw.json"] : ["openclaw.json"],
-        );
+        expect((await fs.readdir(stateDir)).toSorted()).toEqual(["agents", "openclaw.json"]);
       } finally {
         process.argv = originalArgv;
       }
+    });
+  },
+);
+
+it.each([false, true])(
+  "hands Git staging a snapshot-space check only outside release mode (release=%s)",
+  async (gitReleases) => {
+    await withTestDir({ prefix: "git-update-release-snapshot-" }, async (base) => {
+      const root = path.join(base, "checkout");
+      await fs.mkdir(root);
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.9.1" }),
+      );
+      // The runner owns everything after this boundary; it reports what it was handed.
+      const runner = vi.spyOn(gitRunner, "updateGitCheckout").mockResolvedValue({
+        status: "skipped",
+        mode: "git",
+        root,
+        reason: "already-current",
+        steps: [],
+        durationMs: 0,
+      });
+      const getSnapshotSource = vi.fn(async () => ({ config: {}, env: { HOME: base } }));
+
+      await updateGitInstall({
+        root,
+        switchToGit: false,
+        installKind: "git",
+        gitReleases,
+        timeoutMs: undefined,
+        startedAt: Date.now(),
+        progress: {},
+        channel: "dev",
+        beforeGitMutation: async () => {},
+        validateCandidate: async () => [],
+        inspectGitTarget: async () => {},
+        getManagedServiceEnv: () => undefined,
+        getSnapshotSource,
+        jsonMode: true,
+      });
+
+      const staging = runner.mock.calls[0]?.[0].opts.beforeGitStaging;
+      // A release takes no database image, so nothing measures space for one.
+      expect(staging === undefined).toBe(gitReleases);
+      // Running what the runner would run at staging measures the in-place image.
+      const admission = await staging?.();
+      expect(admission?.step.name).toBe(gitReleases ? undefined : "snapshot-space-preflight");
+      expect(getSnapshotSource).toHaveBeenCalledTimes(gitReleases ? 0 : 1);
     });
   },
 );

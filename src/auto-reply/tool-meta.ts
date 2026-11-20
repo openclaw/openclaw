@@ -95,6 +95,7 @@ function isPathLike(value: string): boolean {
     !value.includes("·") &&
     !value.includes("&&") &&
     !value.includes("||") &&
-    /^~?(\/[^\s]+)+$/.test(value)
+    // One `\S+` spans every later `/`. Repeating the group only adds exponential backtracking.
+    /^~?\/\S+$/.test(value)
   );
 }

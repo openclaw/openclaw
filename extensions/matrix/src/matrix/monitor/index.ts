@@ -593,6 +593,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       await cleanup("stop");
       return;
     }
+    statusController.markStartupComplete();
 
     await Promise.race([
       waitUntilAbort(monitorLifecycleSignal, async () => {

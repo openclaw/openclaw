@@ -145,6 +145,9 @@ export function createVeniceStreamWrapper(
           historicalCall.name === describedCall.name
             ? historicalCall.thoughtSignature
             : undefined;
+        // Venice reads its own top-level field, matched per occurrence above; drop the
+        // transport's id-keyed generic copy so reused ids cannot carry another turn's signature.
+        delete toolCallRecord.provider_specific_fields;
         if (signature) {
           toolCallRecord.thought_signature = signature;
         } else if (requiresUnsignedCallFallback) {

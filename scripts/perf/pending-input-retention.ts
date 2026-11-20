@@ -75,7 +75,7 @@ async function stageTurn(index: number) {
 }
 async function settledTurn(index: number) {
   const { receipt, reference } = await stageTurn(index);
-  receipt.finish("cancelled");
+  receipt.finish("cancelled", "user-stop");
   await receipt.settled?.();
   assert.throws(() => receipt.run(() => {}), /ownership ended/);
   references.push(reference);

@@ -6,7 +6,7 @@ import re
 import subprocess
 import tempfile
 
-from ci_git_owner import run_git, GitFailure, FetchTimeout, check_cancelled
+from ci_git_owner import run_git, GitFailure, FetchTimeout, check_cancelled, lifetime_fds
 
 workspace = os.getcwd()
 base_branch = os.environ["BASE_BRANCH"]
@@ -67,6 +67,7 @@ def gh(function, *arguments, capture=False, tolerate_failure=False):
          (f'if {function} "$@"; then exit 0; else exit $?; fi'
           if function == "read_auto_merge_record_for_head" else f'{function} "$@"'), function, *arguments],
         stdout=subprocess.PIPE if capture else None,
+        pass_fds=lifetime_fds(os.environ),
     )
     check_cancelled()
     if result.returncode and not tolerate_failure:
@@ -277,7 +278,7 @@ def verify_publication(published_commit):
                 summary(f"Generated pull request: {final_pr_url}")
                 return final_pr_url
             print("::notice::Generated pull request head has not converged yet; rechecking.", flush=True)
-        subprocess.run(["sleep", str(attempt)], check=True)
+        subprocess.run(["sleep", str(attempt)], check=True, pass_fds=lifetime_fds(os.environ))
         check_cancelled()
     fetch_base()
     if desired_matches_tree(base_ref):

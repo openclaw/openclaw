@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { captureEnvironmentKey, resolveEnvironmentKey } from "../shared/environment-key.js";
 import type {
   ProviderResolveSyntheticAuthContext,
   ProviderSyntheticAuthResult,
@@ -41,7 +42,7 @@ function scopeFor(config: object | undefined, options: ScopeOptions, create = fa
     environments = new WeakMap();
     scopes.set(owner, environments);
   }
-  const env = options.env ?? process.env;
+  const env = create ? captureEnvironmentKey(options.env) : resolveEnvironmentKey(options.env);
   let workspaces = environments?.get(env);
   if (!workspaces && create) {
     workspaces = new Map();
@@ -69,13 +70,28 @@ export function readPreparedSyntheticAuthFact(
 
 /** Read-only workers receive a closed generation: missing facts never start external work. */
 export function restorePreparedSyntheticAuthFacts(
-  config: object,
   facts: PreparedSyntheticAuthFacts,
-  options: ScopeOptions = {},
+  targets: readonly (ScopeOptions & { config: object })[],
 ): void {
-  const scope = scopeFor(config, options, true)!;
-  restoredConfigs.add(config);
-  scope.restored = new Map(facts.map((fact) => [normalizeProviderId(fact.providerRef), fact]));
+  const restored = new Map(facts.map((fact) => [normalizeProviderId(fact.providerRef), fact]));
+  for (const { config, ...options } of targets) {
+    const scope = scopeFor(config, options, true)!;
+    restoredConfigs.add(config);
+    scope.restored = restored;
+  }
+}
+
+/** Policy overlays and registration captures share their admission's closed scopes. */
+export function inheritPreparedSyntheticAuthScope(
+  source: object | undefined,
+  derived: object | undefined,
+): void {
+  if (!source || !derived || !restoredConfigs.has(source)) {
+    return;
+  }
+  // Share scopes, not the current facts map: later refreshes must reach retained callbacks.
+  scopes.set(derived, scopes.get(source)!);
+  restoredConfigs.add(derived);
 }
 
 export function resolveSyntheticAuthWithProvider(

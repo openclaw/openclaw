@@ -23,6 +23,14 @@ CREATE TABLE "acp_parent_stream_events" (
   PRIMARY KEY ("session_id", "run_id", "seq")
 );
 
+CREATE TABLE "agent_tool_usage" (
+  "tool_id" text COLLATE "C" NOT NULL,
+  "score" double precision NOT NULL,
+  "updated_at" bigint NOT NULL,
+  PRIMARY KEY ("tool_id"),
+  CHECK (("score" >= 0))
+);
+
 CREATE TABLE "auth_profile_state" (
   "state_key" text COLLATE "C" NOT NULL,
   "state_json" text COLLATE "C" NOT NULL,
@@ -429,6 +437,8 @@ CREATE TABLE "session_pending_inputs" (
   "state" text COLLATE "C" NOT NULL,
   "accepted_at" bigint NOT NULL,
   "consumed_event_id" text COLLATE "C",
+  "end_cause" text COLLATE "C",
+  "origin_source_json" text COLLATE "C",
   PRIMARY KEY ("seq"),
   CHECK (("state" IN ('queued', 'interrupted', 'cancelled'))),
   UNIQUE ("input_id"),
@@ -471,6 +481,15 @@ CREATE TABLE "session_suggestions" (
   CHECK (("state" IN ('pending', 'accepted', 'dismissed'))),
   CHECK (("dispatch_resolution" IN ('send', 'queue', 'edit', 'dismiss'))),
   CHECK (("dispatch_token" IS NULL AND "dispatch_started_at" IS NULL AND "dispatch_resolution" IS NULL) OR ("dispatch_token" IS NOT NULL AND "dispatch_started_at" IS NOT NULL AND "dispatch_resolution" IS NOT NULL))
+);
+
+CREATE TABLE "session_transcript_active_event_facts" (
+  "session_id" text COLLATE "C" NOT NULL,
+  "seq" bigint NOT NULL,
+  "serialized_bytes" bigint NOT NULL,
+  "dependency_navigation_json" text COLLATE "C" NOT NULL,
+  PRIMARY KEY ("session_id", "seq"),
+  CHECK (("serialized_bytes" >= 1))
 );
 
 CREATE TABLE "session_transcript_active_events" (
@@ -835,6 +854,8 @@ ALTER TABLE "session_progress_cards" ADD FOREIGN KEY ("session_key") REFERENCES 
 ALTER TABLE "session_reactions" ADD FOREIGN KEY ("session_key") REFERENCES "session_nodes" ("session_key") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
 ALTER TABLE "session_suggestions" ADD FOREIGN KEY ("session_key") REFERENCES "session_nodes" ("session_key") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
+
+ALTER TABLE "session_transcript_active_event_facts" ADD FOREIGN KEY ("session_id", "seq") REFERENCES "session_transcript_active_events" ("session_id", "event_seq") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
 ALTER TABLE "session_transcript_active_events" ADD FOREIGN KEY ("session_id", "event_seq") REFERENCES "transcript_events" ("session_id", "seq") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 

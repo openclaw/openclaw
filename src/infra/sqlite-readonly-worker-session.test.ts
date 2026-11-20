@@ -1,18 +1,21 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { readChildRuntimeViability } from "./child-runtime-viability.js";
 import { onDiagnosticEvent, setDiagnosticsEnabledForProcess } from "./diagnostic-events.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
-import { captureSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker-context.js";
+import {
+  captureSqliteReadOnlyWorkerScope,
+  resolveSqliteInspectionSignal,
+} from "./sqlite-readonly-worker-context.js";
 import { createSqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session.js";
 import {
   createSqliteReadOnlyWorkerScope,
-  resolveSqliteInspectionSignal,
   createScopedSqliteReadOnlyWorker,
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
@@ -32,17 +35,20 @@ class MockChild extends EventEmitter {
   kill = vi.fn<(_signal?: NodeJS.Signals) => boolean>(() => true);
 }
 const mock = vi.hoisted(() => ({ spawn: vi.fn<(executable: string) => MockChild>() }));
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: mock.spawn,
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const mocked = { ...actual, spawn: mock.spawn };
+  return { ...mocked, default: mocked };
+});
 
 type Session = ReturnType<typeof createSqliteReadOnlyWorkerSession>;
 const sessions: Array<{ session: Session; child: MockChild }> = [];
-function createSession() {
+function createSession(deadlineOwnedByCaller = () => true) {
   const child = new MockChild();
   mock.spawn.mockReturnValueOnce(child);
-  const readBudget = vi.fn(() => ({ timeoutMs: 60_000, size: "fixture" }));
+  const readBudget = vi.fn<Parameters<typeof createSqliteReadOnlyWorkerSession>[0]["readBudget"]>(
+    async () => ({ timeoutMs: 60_000, size: "fixture" }),
+  );
   const requestArgs = vi.fn((file: string, { mode }: { mode: string }) => [mode, file]);
   const env = { OPENCLAW_STATE_DIR: "/fixture/state" };
   const session = createSqliteReadOnlyWorkerSession({
@@ -54,7 +60,7 @@ function createSession() {
     retainOnOperationError: true,
     requestArgs,
     readBudget,
-    deadlineOwnedByCaller: () => true,
+    deadlineOwnedByCaller,
     timeoutError: () => new Error("fixture budget expired"),
     closeTimeoutMs: 60_000,
   });
@@ -244,6 +250,7 @@ it("keeps detached staging budget inside a caller-owned deadline", async () => {
       sessions.push({ session, child });
       timer.mockClear();
       const result = session.run("/fixture/staging", { mode: "staging-create" });
+      await vi.waitFor(() => expect(child.send).toHaveBeenCalledOnce());
       const budgeted = timer.mock.calls.some(([, delay]) => typeof delay === "number" && delay > 0);
       reply(child, { ok: true, location: "/fixture/staged" });
       await expect(result).resolves.toBe("/fixture/staged");
@@ -254,9 +261,28 @@ it("keeps detached staging budget inside a caller-owned deadline", async () => {
   );
 });
 
+it("does not send a request when its worker closes during budget preparation", async () => {
+  const { session, child, readBudget, requestArgs } = createSession(() => false);
+  const budget = createDeferredCore<{ timeoutMs: number; size: string }>();
+  readBudget.mockReturnValueOnce(budget.promise);
+  const result = session.run("/fixture/source.sqlite", { mode: "staging-create" });
+  const rejected = expect(result).rejects.toThrow("exited with code 0");
+  expect(child.send).not.toHaveBeenCalled();
+  const closing = session.close();
+  child.emit("close", 0, null);
+  await closing;
+  budget.resolve({ timeoutMs: 60_000, size: "fixture" });
+  await nextTurn();
+  await rejected;
+  expect(requestArgs).not.toHaveBeenCalled();
+  expect(child.send).toHaveBeenCalledExactlyOnceWith("close", expect.any(Function));
+});
+
 it("captures only read scope and refuses callbacks after owner retirement", async () => {
   const caller = new AsyncLocalStorage<string>();
   const withoutOwner = captureSqliteReadOnlyWorkerScope();
+  const explicit = new AbortController().signal;
+  expect(resolveSqliteInspectionSignal(explicit)).toBe(explicit);
   const controller = new AbortController();
   const owner = createSqliteReadOnlyWorkerScope({
     signal: controller.signal,
@@ -265,9 +291,12 @@ it("captures only read scope and refuses callbacks after owner retirement", asyn
   const other = createSqliteReadOnlyWorkerScope();
   const run = owner.run(() => caller.run("startup", captureSqliteReadOnlyWorkerScope));
   const signal = owner.run(() => resolveSqliteInspectionSignal());
+  const otherSignal = other.run(() => resolveSqliteInspectionSignal());
+  expect(signal).toBeDefined();
   try {
-    await other.run(() =>
-      caller.run("request", () =>
+    await other.run(async () => {
+      expect(resolveSqliteInspectionSignal()).toBe(otherSignal);
+      await caller.run("request", () =>
         run(async () => {
           await Promise.resolve();
           expect(resolveSqliteInspectionSignal()).toBe(signal);
@@ -275,13 +304,15 @@ it("captures only read scope and refuses callbacks after owner retirement", asyn
           expect(withoutOwner(() => resolveSqliteInspectionSignal())).toBeUndefined();
           expect(resolveSqliteInspectionSignal()).toBe(signal);
         }),
-      ),
-    );
+      );
+      expect(resolveSqliteInspectionSignal()).toBe(otherSignal);
+    });
     const late = vi.fn();
     const aborted = new Error("captured owner cancelled");
     controller.abort(aborted);
     expect(() => run(late)).toThrow(aborted);
     await owner.close();
+    expect(owner.run(() => resolveSqliteInspectionSignal())).toBe(signal);
     expect(() => other.run(() => run(late))).toThrow(
       expect.objectContaining({
         message: "SQLite read-only worker scope closed",
@@ -294,13 +325,45 @@ it("captures only read scope and refuses callbacks after owner retirement", asyn
   }
 });
 
+it.each(["caller", "scope", "both already aborted"] as const)(
+  "preserves %s cancellation in the read scope",
+  async (source) => {
+    const caller = new AbortController();
+    const scope = new AbortController();
+    const callerReason = new Error("caller cancelled");
+    const scopeReason = new Error("scope cancelled");
+    const owner = createSqliteReadOnlyWorkerScope({
+      signal: scope.signal,
+      deadlineOwnedByCaller: false,
+    });
+    try {
+      if (source === "both already aborted") {
+        scope.abort(scopeReason);
+        caller.abort(callerReason);
+      }
+      const signal = owner.run(() => resolveSqliteInspectionSignal(caller.signal));
+      if (source === "caller") {
+        caller.abort(callerReason);
+      } else if (source === "scope") {
+        scope.abort(scopeReason);
+      }
+      expect(signal?.aborted).toBe(true);
+      expect(signal?.reason).toBe(source === "scope" ? scopeReason : callerReason);
+    } finally {
+      await owner.close();
+    }
+  },
+);
+
 it("releases callers of close while retired read scopes remain reachable", async () => {
   class RetiredCaller {
     closed = false;
   }
+  const callers: WeakRef<RetiredCaller>[] = [];
   async function retire() {
     const owner = createSqliteReadOnlyWorkerScope();
     const caller = new RetiredCaller();
+    callers.push(new WeakRef(caller));
     const beforeCleanup = () => {
       caller.closed = true;
       return owner.close();
@@ -312,8 +375,7 @@ it("releases callers of close while retired read scopes remain reachable", async
   for (let generation = 0; generation < 20; generation++) {
     retired.push(await retire());
   }
-  await nextTurn();
-  expect(queryObjects(RetiredCaller)).toBe(0);
+  await expectCollected(...callers);
   for (const owner of retired) {
     const signal = owner.run(() => resolveSqliteInspectionSignal());
     expect(signal?.aborted).toBe(true);

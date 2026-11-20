@@ -41,7 +41,7 @@ import {
 } from "../cli-credentials.js";
 import { buildSessionContext, SessionManager } from "../sessions/session-manager.js";
 import { resolveCliChildEnv } from "./execution-env.js";
-import { createCliRunCurrentAssertion, resolveCliExecutionTarget } from "./execution-target.js";
+import { resolveCliExecutionTarget } from "./execution-target.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 /**
@@ -203,7 +203,6 @@ async function prepareCliHistoryBoundaryOnce(
   const requested = { ...source, storePath: resolveSessionTranscriptDatabasePath(source) };
   const admission = resolveSessionTranscriptReadFence(requested);
   const capturedAdmission = admission && structuredClone(admission);
-  const assertRunCurrent = createCliRunCurrentAssertion(params);
   const assertOwned = captureOwnedTranscriptWriteAssertion(requested);
   const { credential, preparedBackend } = identity;
   const childEnv =
@@ -222,13 +221,10 @@ async function prepareCliHistoryBoundaryOnce(
     resolveCliExecutionTarget({ params, backendId: provider }).kind === "node"
       ? undefined
       : await resolveNativeCliLoginOwner(provider, childEnv);
-  if (nativeLogin) {
-    assertRunCurrent();
-  }
   const nativeLoginOwner = nativeLogin?.owner;
   const owner = { credential, nativeLoginOwner };
   const memory = captureSessionActorStorageOwner(requested, {
-    assertCurrent: assertRunCurrent,
+    assertCurrent: assertOwned,
     authorize() {},
   });
   let assertPhysicalSource = () => {
@@ -241,7 +237,7 @@ async function prepareCliHistoryBoundaryOnce(
         owner,
         { ...requested, storePath: memory.path },
         capturedAdmission,
-        assertRunCurrent,
+        assertOwned,
       )
     : await withSessionTranscriptReadSource(
         requested,
@@ -256,10 +252,13 @@ async function prepareCliHistoryBoundaryOnce(
               );
             }
           };
-          return planCliHistoryBoundary(params, owner, target, capturedAdmission, () => {
-            assertReaderCurrent();
-            assertRunCurrent();
-          });
+          return planCliHistoryBoundary(
+            params,
+            owner,
+            target,
+            capturedAdmission,
+            assertReaderCurrent,
+          );
         },
         params.abortSignal,
       );
@@ -267,7 +266,7 @@ async function prepareCliHistoryBoundaryOnce(
     return undefined;
   }
   const { target, snapshot, watermark, boundary, allowed, writerRunId } = plan;
-  const assertCurrent = composeSessionSourceAssertion([assertRunCurrent], (assertSource) => {
+  const assertCurrent = composeSessionSourceAssertion([assertOwned], (assertSource) => {
     assertSource();
     memory?.authority.assertCurrent();
     assertPhysicalSource();
@@ -569,7 +568,19 @@ async function planCliHistoryBoundary(
     assertCurrent();
     // Bookkeeping is not a conversation. Retained reset rows, summaries, custom
     // context, missing anchors and bounded cuts must never look like a fresh start.
-    allowed = !truncated && buildSessionContext(branch).messages.length === 0;
+    // The bounded read keeps the newest rows. When it holds a row before the latest
+    // boundary and that boundary is a reset that keeps nothing, every row it cut
+    // precedes that reset, so `/new` on a long session is still an empty start.
+    const boundaryIndex = branch.findLastIndex(
+      (entry) => entry.type === "reset" || entry.type === "compaction",
+    );
+    const latestBoundary = branch[boundaryIndex];
+    const cutPrecedesEmptyReset =
+      boundaryIndex > 0 &&
+      latestBoundary?.type === "reset" &&
+      latestBoundary.firstKeptEntryId === undefined;
+    allowed =
+      (!truncated || cutPrecedesEmptyReset) && buildSessionContext(branch).messages.length === 0;
   }
   allowed &&= watermark.maxSeq === null || typeof watermark.generation === "string";
   if (!allowed && !stored) {

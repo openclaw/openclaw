@@ -125,8 +125,8 @@ for (const routeId of APP_ROUTE_IDS) {
 
 const NATIVE_ROUTE_SEGMENTS = new Set(APP_ROUTE_PATHS.map((path) => path.split("/")[1]));
 
-export const INTERNAL_PLUGIN_PATH_PARAM = "__openclawPluginPath";
-type PluginTab = { pluginId: string; id: string; slug?: string };
+const INTERNAL_PLUGIN_PATH_PARAM = "__openclawPluginPath";
+export type PluginTab = { pluginId: string; id: string; slug?: string; placement?: string };
 const tabsBySlug = new Map<string, PluginTab>();
 const warnedSlugs = new Set<string>();
 
@@ -173,6 +173,36 @@ export function pluginTabSlugFromPath(pathname: string, basePath = ""): PluginTa
   return tabsBySlug.get(pluginSlugCandidate(pathname, basePath) ?? "") ?? null;
 }
 
+export function pluginTabRefFromSearch(
+  search: string,
+  pathname = "",
+  basePath = "",
+): Pick<PluginTab, "pluginId" | "id"> {
+  const params = new URLSearchParams(search);
+  const tab = pluginTabSlugFromPath(params.get(INTERNAL_PLUGIN_PATH_PARAM) ?? pathname, basePath);
+  return {
+    pluginId: tab?.pluginId ?? params.get("plugin")?.trim() ?? "",
+    id: tab?.id ?? params.get("id")?.trim() ?? "",
+  };
+}
+
+/** Stable key for one tab; ids are only unique per plugin, so both parts matter. */
+export function pluginTabKey(ref: Pick<PluginTab, "pluginId" | "id">): string {
+  return `${ref.pluginId}/${ref.id}`;
+}
+
+/** The advertised tab owns navigation placement, including direct sign-in links. */
+export function pluginTabForLocation<T extends PluginTab>(
+  tabs: readonly T[] | undefined,
+  location: Pick<RouteLocation, "pathname" | "search"> | undefined,
+  basePath = "",
+): T | undefined {
+  const key = pluginTabKey(
+    pluginTabRefFromSearch(location?.search ?? "", location?.pathname, basePath),
+  );
+  return tabs?.find((tab) => pluginTabKey(tab) === key);
+}
+
 export function pluginTabLocation(tab: PluginTab, basePath = ""): RouteLocation {
   const slug = pluginTabSlug(tab);
   return {
@@ -215,6 +245,17 @@ export function routePageSpec<Id extends RouteId>(
 }
 
 export { normalizeBasePath };
+
+export function isApplicationEntryPath(pathname: string, basePath: string): boolean {
+  const path = normalizePath(pathname);
+  const base = normalizeBasePath(basePath);
+  // The served index document and mount root share startup ownership. Other
+  // index.html suffixes remain explicit destinations within this configured mount.
+  return (
+    path === (base || "/") ||
+    (path.startsWith(`${base}/`) && path.slice(base.length).toLowerCase() === "/index.html")
+  );
+}
 
 export function pathForRoute(routeId: RouteId, basePath = ""): string {
   return `${normalizeBasePath(basePath)}${APP_ROUTE_DEFINITIONS[routeId].path}`;

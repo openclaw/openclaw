@@ -125,7 +125,9 @@ export async function prepareManagedHandoffLeaseDatabaseIdentity(
 ) {
   const withDatabase = await prepareManagedHandoffLeaseDatabase(databasePath);
   assertCurrent?.();
-  return withDatabase(true, () => captureManagedUpdateLeaseDatabaseIdentity(databasePath));
+  return withDatabase(true, () =>
+    captureManagedUpdateLeaseDatabaseIdentity(withDatabase.databasePath),
+  );
 }
 
 const text = z.string().min(1).max(4096);

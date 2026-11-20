@@ -566,7 +566,7 @@ describe("hosted creation transfers accepted child input", () => {
       human: true,
     },
     { name: "canonical historical alias", options: { mergedParentCreator: true }, human: true },
-    { name: "different human owner", options: { mismatchedParentOwner: true }, human: false },
+    { name: "different human owner", options: { mismatchedParentOwner: true }, human: true },
   ])("assigns child ownership for a $name", async ({ options, human }) => {
     await using fixture = await createHostedChildFixture(options);
     await fixture.send();
@@ -649,11 +649,7 @@ describe("hosted creation transfers accepted child input", () => {
           runError: { code: "UNAVAILABLE", message: "Error: inherited tool invocation closed" },
         });
       } else {
-        await expect(creating).rejects.toThrow(
-          system
-            ? "agent tool caller authority is no longer active"
-            : "operator execution authority is no longer active",
-        );
+        await expect(creating).rejects.toThrow("agent tool caller authority is no longer active");
       }
       expect(fixture.beforeInputCommit).toHaveBeenCalledOnce();
       expect(await listSessionPendingInputs(fixture.scope())).toEqual({ items: [], total: 0 });
