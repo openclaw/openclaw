@@ -33,6 +33,8 @@ suite.define(() => {
         },
         {
           role: "assistant",
+          provider: "openai",
+          model: "gpt-4.1",
           content: [
             { type: "text", text: "Preparing the interactive preview." },
             { type: "toolCall", id: "show-preview", name: "show_widget", arguments: {} },
@@ -99,6 +101,8 @@ suite.define(() => {
       const finalText = "The interactive preview is ready.";
       const finalMessage = {
         role: "assistant",
+        provider: "openai",
+        model: "gpt-4.1",
         idempotencyKey: runId,
         stopReason: "stop",
         content: [

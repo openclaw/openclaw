@@ -417,6 +417,8 @@ describe("chat transcript invalidation", () => {
           },
           {
             role: "assistant",
+            provider: "openai",
+            model: "gpt-5.5",
             content: "Workspace checked",
             phase: "final_answer",
             stopReason: "stop",

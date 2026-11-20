@@ -14,6 +14,7 @@ import {
   expectRequestCountStable,
   installMockGateway,
   requireRecord,
+  openAiAuthor,
 } from "./chat-flow.test-support.ts";
 import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -340,6 +341,7 @@ suite.define(() => {
       const sessionKey = "agent:main:dashboard:async-question-proof";
       const followUpTitle = "What should I emphasize?";
       const multipleQuestions = {
+        ...(!active ? openAiAuthor : {}),
         ...questionMessage,
         runId: "working-run",
         __openclaw: { id: "audience-prompt", seq: 2 },
@@ -436,6 +438,7 @@ suite.define(() => {
         if (!active) {
           const finalMessage = {
             role: "assistant",
+            ...openAiAuthor,
             content: "I finished the draft.",
             runId: "working-run",
             phase: "final_answer",

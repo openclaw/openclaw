@@ -105,6 +105,8 @@ describe("chat transcript message controls", () => {
     };
     const answer = {
       role: "assistant",
+      provider: "openai",
+      model: "gpt-5.5",
       content: text,
       timestamp: answeredAt,
       stopReason: "stop",
@@ -113,6 +115,8 @@ describe("chat transcript message controls", () => {
     const work = [
       {
         role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
         content: [{ type: "toolCall", id: "audience", name: "ask_user", arguments: {} }],
         timestamp: startedAt,
         stopReason: "toolUse",

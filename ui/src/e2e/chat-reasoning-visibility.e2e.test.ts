@@ -33,6 +33,8 @@ suite.define(() => {
           { role: "user", content: "Check the evidence.", timestamp: 1_000 },
           {
             role: "assistant",
+            provider: "openai",
+            model: "gpt-4.1",
             content: [
               {
                 type: "thinking",
@@ -45,6 +47,8 @@ suite.define(() => {
             ? [
                 {
                   role: "assistant",
+                  provider: "openai",
+                  model: "gpt-4.1",
                   content: [
                     {
                       type: "toolCall",
@@ -64,7 +68,13 @@ suite.define(() => {
                 },
               ]
             : []),
-          { role: "assistant", content: [{ type: "text", text: finalText }], timestamp: 4_000 },
+          {
+            role: "assistant",
+            provider: "openai",
+            model: "gpt-4.1",
+            content: [{ type: "text", text: finalText }],
+            timestamp: 4_000,
+          },
         ],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));

@@ -14,7 +14,7 @@ beforeEach(() => {
 });
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
-import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { openAiAuthor, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 declare global {
@@ -38,6 +38,48 @@ async function captureProof(page: import("playwright").Page, name: string) {
 
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
+  it("keeps completed non-OpenAI progress inline", async () => {
+    await suite.withPage({ viewport: { width: 1200, height: 840 } }, async ({ page }) => {
+      const sessionKey = "agent:main:dashboard:inline-progress";
+      const model = { provider: "anthropic", model: "claude-sonnet" };
+      await installMockGateway(page, {
+        sessionKey,
+        historyMessages: projectChatDisplayMessages([
+          { role: "user", content: "Check the example report.", timestamp: 1_000 },
+          {
+            role: "assistant",
+            ...model,
+            content: "Reading the example report.",
+            timestamp: 2_000,
+          },
+          {
+            role: "toolResult",
+            toolName: "read",
+            toolCallId: "read-example",
+            content: "Example report checked.",
+            timestamp: 3_000,
+          },
+          {
+            role: "assistant",
+            ...model,
+            phase: "final_answer",
+            content: "The example report is ready.",
+            timestamp: 4_000,
+          },
+        ]),
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const answer = page.getByText("The example report is ready.", { exact: true });
+      await answer.waitFor({ state: "attached" });
+      await waitForChatScrollIdle(page);
+      await captureProof(page, "non-openai-completed");
+      expect(await page.locator(".chat-work-group").count()).toBe(0);
+      expect(await answer.isVisible()).toBe(true);
+      expect(await page.getByText("Reading the example report.", { exact: true }).isVisible()).toBe(
+        true,
+      );
+    });
+  });
   it.each([
     { scenario: "widget first", browserFirst: false, framed: false },
     { scenario: "browser first", browserFirst: true, framed: false },
@@ -79,6 +121,7 @@ suite.define(() => {
             return [
               {
                 role: "assistant",
+                ...openAiAuthor,
                 content: [{ type: "toolCall", id, name: "exec", arguments: {} }],
                 timestamp,
               },
@@ -115,6 +158,7 @@ suite.define(() => {
             ),
             {
               role: "assistant",
+              ...openAiAuthor,
               content: `[embed ref="${viewId}" title="Release confidence" height="1000" /]`,
               timestamp: browserFirst ? 4_000 : 3_000,
             },
@@ -145,6 +189,7 @@ suite.define(() => {
             ),
             {
               role: "assistant",
+              ...openAiAuthor,
               content: "The widget and release reference are ready.",
               timestamp: 6_000,
             },
@@ -270,6 +315,7 @@ suite.define(() => {
           { role: "user", content: "Check it.", timestamp: 1_000 },
           {
             role: "assistant",
+            ...openAiAuthor,
             content: [
               { type: "text", text: "Here is the visualization." },
               {
@@ -290,6 +336,7 @@ suite.define(() => {
           },
           {
             role: "assistant",
+            ...openAiAuthor,
             content: [{ type: "text", text: "Checking." }],
             openclawStreamFallback: {
               itemId: "worked-for-checking",
@@ -307,6 +354,7 @@ suite.define(() => {
           },
           {
             role: "assistant",
+            ...openAiAuthor,
             content: [{ type: "text", text: "Done." }],
             timestamp: 4_000,
           },

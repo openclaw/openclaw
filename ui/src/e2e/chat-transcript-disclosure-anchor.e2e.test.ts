@@ -646,6 +646,8 @@ suite.define(() => {
         },
         {
           role: "assistant",
+          provider: "openai",
+          model: "gpt-4.1",
           content: [
             {
               type: "text",
@@ -662,6 +664,8 @@ suite.define(() => {
           },
           {
             role: "assistant",
+            provider: "openai",
+            model: "gpt-4.1",
             content: [{ type: "text", text: `Observation ${index + 1} recorded.` }],
             timestamp: 105 + index * 2,
           },
@@ -673,6 +677,8 @@ suite.define(() => {
         },
         {
           role: "assistant",
+          provider: "openai",
+          model: "gpt-4.1",
           content: [
             {
               type: "toolCall",
@@ -694,6 +700,8 @@ suite.define(() => {
         },
         {
           role: "assistant",
+          provider: "openai",
+          model: "gpt-4.1",
           content: [{ type: "text", text: "The sibling tool check passed." }],
           timestamp: 113,
         },

@@ -69,7 +69,11 @@ function assistantMessage(
   timestamp?: number,
   overrides?: Record<string, unknown>,
 ): Record<string, unknown> {
-  return chatMessage("assistant", content, timestamp, overrides);
+  return chatMessage("assistant", content, timestamp, {
+    provider: "openai",
+    model: "gpt-5.5",
+    ...overrides,
+  });
 }
 
 function senderProfile(id: string, name: string) {

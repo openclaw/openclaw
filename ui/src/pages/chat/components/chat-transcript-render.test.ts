@@ -453,7 +453,13 @@ describe("chat transcript rendering", () => {
             },
           },
         },
-        { role: "assistant", content: "Done.", timestamp: 3_000 },
+        {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: "Done.",
+          timestamp: 3_000,
+        },
       ];
       const props = {
         ...threadProps("pane-browser-work", "agent:main:dashboard:browser", messages),

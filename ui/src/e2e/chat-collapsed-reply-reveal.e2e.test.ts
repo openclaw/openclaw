@@ -44,7 +44,7 @@ suite.define(() => {
           ? Array.from({ length: 32 }, (_, index) => ({
               role: index % 2 === 0 ? "assistant" : "toolResult",
               ...(index % 2 === 0
-                ? {}
+                ? { provider: "openai", model: "gpt-4.1" }
                 : { toolName: "read", toolCallId: `inventory-read-${index}` }),
               content: `Inspecting museum room ${index + 1}.`,
               timestamp: 1_800_000_000_001 + index,
@@ -69,6 +69,8 @@ suite.define(() => {
             ...earlierWork,
             {
               role: "assistant",
+              provider: "openai",
+              model: "gpt-4.1",
               ...(!deepWork ? { runId: settledRunId } : {}),
               content: "I am checking the lunar exhibit inventory.",
               timestamp: 1_800_000_000_001 + earlierWork.length,
@@ -76,6 +78,8 @@ suite.define(() => {
             },
             {
               role: "assistant",
+              provider: "openai",
+              model: "gpt-4.1",
               phase: "final_answer",
               stopReason: "stop",
               ...(!deepWork ? { runId: settledRunId } : {}),

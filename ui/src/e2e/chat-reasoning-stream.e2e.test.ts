@@ -75,6 +75,8 @@ suite.define(() => {
             const messageSeq = index + 2;
             const message = {
               role: "assistant",
+              provider: "openai",
+              model: "gpt-4.1",
               content: [
                 { type: "thinking", thinking: thoughts[index] },
                 isFinal

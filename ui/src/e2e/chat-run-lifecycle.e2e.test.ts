@@ -132,6 +132,8 @@ suite.define(() => {
     await currentPage.clock.setFixedTime(firstStartedAt + 994_000);
     const reply = {
       role: "assistant",
+      provider: "openai",
+      model: "gpt-4.1",
       content: "Success after the earlier failure.",
       // Creation precedes the long final request; lifecycle owns completion.
       timestamp: firstStartedAt + 983_000,

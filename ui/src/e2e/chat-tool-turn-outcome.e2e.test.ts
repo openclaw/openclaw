@@ -261,6 +261,8 @@ suite.define(() => {
         failedTool(3),
         {
           role: "assistant",
+          provider: "openai",
+          model: "gpt-4.1",
           content: [{ type: "text", text: "Recovered on the next autonomous turn." }],
           timestamp: 4,
         },

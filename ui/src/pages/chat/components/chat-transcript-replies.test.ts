@@ -239,9 +239,16 @@ describe("chat transcript replies", () => {
             timestamp: 0,
             ...(framed ? { __openclaw: { idempotencyKey: "source-run:user" } } : {}),
           },
-          { ...sourceMessage, ...(framed ? { runId: "source-run" } : {}) },
+          {
+            ...sourceMessage,
+            provider: "openai",
+            model: "gpt-5.5",
+            ...(framed ? { runId: "source-run" } : {}),
+          },
           {
             role: "assistant",
+            provider: "openai",
+            model: "gpt-5.5",
             phase: "final_answer",
             content: "Final answer",
             timestamp: 1_500,

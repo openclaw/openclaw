@@ -1,4 +1,7 @@
+import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isLegacyCodexProviderId } from "../../../../src/config/legacy-codex-provider.js";
 import {
   extractAssistantTextForPhase,
   resolveAssistantMessagePhase,
@@ -63,4 +66,35 @@ export function assistantMessageCanOwnTurnActions(message: unknown, explicitOnly
     return false;
   }
   return !explicitOnly || phase === "final_answer" || stopReason === "stop";
+}
+
+// The saved response identifies the author, not the current model picker or an
+// OpenAI-compatible API. Native imports may record only the upstream provider.
+export function isRecordedOpenAIModel(record: Record<string, unknown>): boolean {
+  const model = normalizeLowercaseStringOrEmpty(record.model);
+  const provider = normalizeLowercaseStringOrEmpty(record.provider);
+  if (!provider || !model) {
+    return false;
+  }
+  const served = normalizeLowercaseStringOrEmpty(record.responseModel);
+  const direct = provider === "openai" || isLegacyCodexProviderId(provider);
+  const upstream = (id: string) =>
+    parseProviderModelRef(
+      !direct && id.startsWith(provider + "/") ? id.slice(provider.length + 1) : id,
+    );
+  const requested = upstream(model);
+  const actual = upstream(served);
+  if (actual) {
+    return actual.provider === "openai";
+  }
+  if (direct) {
+    return !requested || requested.provider === "openai";
+  }
+  // An unrelated bare response ID cannot confirm the requested upstream vendor.
+  return (
+    requested?.provider === "openai" &&
+    (!served ||
+      served === requested.model ||
+      served.replace(/-\d{4}-\d{2}-\d{2}$/, "") === requested.model)
+  );
 }

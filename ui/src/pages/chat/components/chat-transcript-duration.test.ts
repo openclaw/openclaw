@@ -36,7 +36,14 @@ describe("completed-work duration", () => {
           timestamp: 2_000,
           runId,
         },
-        { role: "assistant", content: "Report checked", timestamp: 508_000, runId },
+        {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: "Report checked",
+          timestamp: 508_000,
+          runId,
+        },
       ];
       const props = threadProps("pane-duration-" + status, sessionKey, messages);
       props.showToolCalls = true;
@@ -120,7 +127,14 @@ describe("completed-work duration", () => {
         timestamp: 2_000,
         runId,
       },
-      { role: "assistant", content: "Inspection complete", timestamp: 3_000, runId },
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: "Inspection complete",
+        timestamp: 3_000,
+        runId,
+      },
     ]);
     props.showToolCalls = true;
     const transcript = createTestTranscript();
@@ -189,6 +203,8 @@ describe("completed-work duration", () => {
       });
       const reply = (runId: string, timestamp: number) => ({
         role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
         content: "Finished " + runId,
         timestamp,
         runId,
@@ -257,6 +273,8 @@ describe("live progress placement", () => {
       prompt("latest-steer", 3, runId),
       {
         role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
         content: "Latest assistant update",
         timestamp: 4_000,
         __openclaw: { id: "latest-answer", seq: 4, runId },

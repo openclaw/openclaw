@@ -173,6 +173,8 @@ describe("completed reply frame ownership", () => {
       })),
       {
         role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
         phase: "final_answer",
         stopReason: "stop",
         content: "Verified answer",
@@ -214,6 +216,8 @@ describe("completed reply frame ownership", () => {
       const messages = replyHistory(workRunIds, prompt);
       const failure = {
         role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
         content: "Interrupted attempt",
         stopReason: "error",
         timestamp: 25,
@@ -284,6 +288,8 @@ describe("completed reply frame ownership", () => {
       const messages = replyHistory(prompt ? ["run-u", "run-1"] : ["run-1", "run-1"], prompt);
       const inserted = {
         role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
         phase,
         ...(forwarded
           ? { senderSession: { sessionKey: "agent:other:main", agentId: "other" } }
@@ -561,6 +567,8 @@ describe("incremental stream projection", () => {
       ...["user", "assistant", "toolResult", "assistant"].map((role, index) => ({
         role,
         content: ["Earlier question", "Checking", "Evidence", "Earlier answer"][index],
+        provider: role === "assistant" ? "openai" : undefined,
+        model: role === "assistant" ? "gpt-5.5" : undefined,
         toolName: role === "toolResult" ? "read" : undefined,
         toolCallId: role === "toolResult" ? "earlier-tool" : undefined,
         phase: index === 1 ? "commentary" : index === 3 ? "final_answer" : undefined,

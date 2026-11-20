@@ -23,6 +23,8 @@ export {
   pauseVirtualClock,
 };
 
+export const openAiAuthor = { provider: "openai", model: "gpt-4.1" } as const;
+
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 export async function captureUiProof(

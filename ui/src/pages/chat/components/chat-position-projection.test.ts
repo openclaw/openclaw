@@ -84,6 +84,7 @@ describe("chat position projection", () => {
     ];
     const props = {
       ...threadProps("rail-folded", "agent:main:dashboard:audit", messages),
+      chatBubbleMode: true,
       showToolCalls: true,
       persistCommentary: true,
       runWorking: false,

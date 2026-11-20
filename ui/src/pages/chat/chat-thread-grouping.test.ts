@@ -16,7 +16,13 @@ const sessionKey = "agent:main:dashboard:answers";
 const cli: MessageClientSource = { id: "cli", mode: "cli", displayName: "Release helper" };
 const web: MessageClientSource = { id: "openclaw-control-ui", mode: "webchat" };
 function message(role: string, content: unknown, timestamp: number, extra: object = {}) {
-  return { role, content, timestamp, ...extra };
+  return {
+    role,
+    content,
+    timestamp,
+    ...(role === "assistant" ? { provider: "openai", model: "gpt-5.5" } : {}),
+    ...extra,
+  };
 }
 function forwarded(
   senderSession: { sessionKey: string; agentId: string; label?: string },
@@ -58,6 +64,58 @@ function signed(text: string, phase: string) {
   return { type: "text", text, textSignature: JSON.stringify({ v: 1, id: text, phase }) };
 }
 beforeEach(() => resetChatThreadState());
+
+it.each([
+  ["OpenAI", { provider: "openai", model: "gpt-5.5" }, {}, true],
+  ["native OpenAI history", { provider: "openai", model: "native-history" }, {}, true],
+  [
+    "routed OpenAI",
+    { provider: "clawrouter", model: "clawrouter/openai/gpt-5.5" },
+    { responseModel: "gpt-5.5-2026-08-01" },
+    true,
+  ],
+  [
+    "rerouted from OpenAI",
+    { provider: "clawrouter", model: "openai/gpt-5.5" },
+    { responseModel: "anthropic/claude-sonnet" },
+    false,
+  ],
+  [
+    "unknown actual model",
+    { provider: "clawrouter", model: "openai/gpt-5.5" },
+    { responseModel: "unidentified" },
+    false,
+  ],
+  [
+    "mixed authors",
+    { provider: "openai", model: "gpt-5.5" },
+    { provider: "anthropic", model: "claude-sonnet" },
+    false,
+  ],
+  ["OpenAI-compatible API", { provider: "anthropic", model: "claude-sonnet" }, {}, false],
+  ["unknown history", {}, {}, false],
+] as const)("uses saved author metadata for %s", (_name, progress, answer, folds) => {
+  const messages = [
+    message("user", "Check the file", 1),
+    message("assistant", "Reading it", 2, {
+      provider: undefined,
+      model: undefined,
+      ...progress,
+      phase: "commentary",
+    }),
+    tool("read-file", 3),
+    message("assistant", "File checked", 4, {
+      provider: undefined,
+      model: undefined,
+      ...progress,
+      ...answer,
+      api: "openai-responses",
+      phase: "final_answer",
+    }),
+  ];
+  expect(work(projected(messages))).toEqual(folds ? messages.slice(1, 3) : []);
+  expect(visible(projected(messages))).toEqual(folds ? [messages[0], messages[3]] : messages);
+});
 
 describe("queued input group continuity", () => {
   it("keeps each queued message in the same row through acceptance and persistence", () => {

@@ -920,9 +920,12 @@ other runs are not included. Source cards require run identity in the transcript
 and follow tool-activity visibility. They are hidden while a run is active or
 transcript search is filtering messages.
 
-In completed dashboard turns, commentary, reasoning-only messages, and tool activity
-share one **Worked for…** disclosure above the answers. Expanding it shows the
-activity in its original order; explicit answer segments and visual results stay
+In completed dashboard turns answered by recorded OpenAI models, commentary,
+reasoning-only messages, and tool activity can share one **Worked for…** disclosure
+above the answers. Other models, mixed-model work, and history without model
+metadata keep their work inline. Switching the selected model does not change
+earlier turns. Expanding the disclosure shows the activity in its original order;
+explicit answer segments and visual results stay
 visible below it. Browser tab previews keep their execution order relative to those
 visible results, so a page opened after an inline widget appears after that widget.
 Failed tool results after the last answer stay visible outside

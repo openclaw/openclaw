@@ -1,6 +1,7 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER } from "../../../../src/shared/transcript-only-openclaw-assistant.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
@@ -14,11 +15,15 @@ import {
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
   assistantMessageIsInterrupted,
+  isRecordedOpenAIModel,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
 import { userTurnRunId } from "./chat-thread-items.ts";
-import { transcriptRunId } from "./chat-thread-run-identity.ts";
+import {
+  isKeyedAssistantStreamFallbackMessage,
+  transcriptRunId,
+} from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsForwardedBoundary,
   chatItemStartsDisplayTurn,
@@ -462,6 +467,31 @@ function isFinalReplyGroup(item: TurnRenderItem): item is MessageGroup {
   );
 }
 
+function isOpenAIWorkSegment(turn: TurnRenderItem[], start: number, end: number): boolean {
+  let foundAuthor = false;
+  for (let index = start; index <= end; index++) {
+    const item = turn[index]!;
+    if (item.kind !== "group") {
+      continue;
+    }
+    for (const { message } of item.messages) {
+      const record = asRecord(message);
+      if (
+        record?.role !== "assistant" ||
+        record.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER ||
+        isKeyedAssistantStreamFallbackMessage(record)
+      ) {
+        continue;
+      }
+      if (!isRecordedOpenAIModel(record)) {
+        return false;
+      }
+      foundAuthor = true;
+    }
+  }
+  return foundAuthor;
+}
+
 function turnUserMessages(turn: TurnRenderItem[]): unknown[] {
   const boundary = turn[0];
   if (!boundary || boundary.kind === "stream-run") {
@@ -597,6 +627,11 @@ export function collapseCompletedTurnWork(
         break;
       }
       segmentEnd += 1;
+    }
+    // One disclosure can span multiple runs; do not hide another author's work.
+    if (!isOpenAIWorkSegment(turn, segmentStart, segmentEnd)) {
+      result.push(...turn);
+      continue;
     }
     const groups: MessageGroup[] = [];
     const answers: TurnRenderItem[] = [];

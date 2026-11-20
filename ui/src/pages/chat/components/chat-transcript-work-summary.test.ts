@@ -24,7 +24,13 @@ it("keeps the focused work summary toggle through expansion updates", async () =
         content: "Read complete",
         timestamp: 2_000,
       },
-      { role: "assistant", content: "Workspace checked", timestamp: 3_000 },
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: "Workspace checked",
+        timestamp: 3_000,
+      },
     ]),
     showToolCalls: true,
   };
