@@ -91,6 +91,7 @@ function CatalogIcon(props: {
   );
   return (
     <PluginArtTile
+      neutralFallback
       registerIcon={props.state.registerIcon}
       slug={props.plugin.local.pluginId ?? props.plugin.id}
       name={props.plugin.catalog.name}
@@ -138,10 +139,7 @@ function CatalogCard(props: {
     !busy() &&
     !props.state.messages?.[`install:${props.plugin.id}`]?.savedInstall;
   return (
-    <article
-      class="plugin-catalog-card oc-card oc-card-interactive"
-      data-plugin-id={props.plugin.id}
-    >
+    <article class="plugin-catalog-card plugin-catalog-row" data-plugin-id={props.plugin.id}>
       <a
         class="plugin-catalog-card__primary-link"
         href={props.state.entryHref(props.plugin.id)}
@@ -151,45 +149,43 @@ function CatalogCard(props: {
         }
       />
       <div class="plugin-catalog-card__content" ref={props.contentRef}>
-        <div class="plugin-catalog-card__head">
-          <div class="installed-plugins-card__head">
-            <span
-              class="installed-plugins-card__art plugin-catalog-card__art"
-              aria-hidden="true"
-              data-plugin-icon-id={props.plugin.local.pluginId ?? undefined}
-            >
-              <CatalogIcon plugin={props.plugin} state={props.state} />
-            </span>
-            <div class="installed-plugins-card__identity">
-              <div class="plugin-card-title-row">
-                <h3>{props.plugin.catalog.name}</h3>
-                {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
-                <div class="plugin-catalog-card__action">
-                  {installed() ? (
-                    renderPluginStateStatus(installedState()!, "plugin-catalog-card__status")
-                  ) : (
-                    <PluginInstallAction
-                      registerInstallAction={props.state.registerInstallAction}
-                      buttonClass={
-                        "btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
-                      }
-                      pluginName={props.plugin.catalog.name}
-                      busy={busy()}
-                      title={props.state.installTitle}
-                      disabled={!canInstall()}
-                      progress={progress()}
-                      onInstall={() => props.state.onInstall(props.plugin.id)}
-                    />
-                  )}
-                </div>
-              </div>
+        <div class="plugin-catalog-row__main">
+          <span
+            class="installed-plugins-card__art plugin-catalog-card__art"
+            aria-hidden="true"
+            data-plugin-icon-id={props.plugin.local.pluginId ?? undefined}
+          >
+            <CatalogIcon plugin={props.plugin} state={props.state} />
+          </span>
+          <div class="plugin-catalog-row__text">
+            <div class="plugin-card-title-row">
+              <h3>{props.plugin.catalog.name}</h3>
+              {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
               {renderPluginAuthor(props.plugin.catalog.author)}
             </div>
+            <PluginCardSummary
+              summary={props.plugin.catalog.summary || t("pluginsPage.optionalCapability")}
+            />
+          </div>
+          <div class="plugin-catalog-card__action">
+            {installed() ? (
+              renderPluginStateStatus(installedState()!, "plugin-catalog-card__status")
+            ) : (
+              <PluginInstallAction
+                registerInstallAction={props.state.registerInstallAction}
+                buttonClass={
+                  "btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
+                }
+                pluginName={props.plugin.catalog.name}
+                busy={busy()}
+                title={props.state.installTitle}
+                disabled={!canInstall()}
+                progress={progress()}
+                onInstall={() => props.state.onInstall(props.plugin.id)}
+              />
+            )}
           </div>
         </div>
-        <PluginCardSummary
-          summary={props.plugin.catalog.summary || t("pluginsPage.optionalCapability")}
-        />
         {renderPluginRowMessage(props.state.messages?.[`install:${props.plugin.id}`], {
           busy: busy(),
           onContinue:
@@ -539,7 +535,10 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
     return null;
   };
   return (
-    <section class="plugin-catalog-results" aria-label={t("pluginsPage.exploreTitle")}>
+    <section
+      class="plugin-catalog-results plugin-catalog-results--rows"
+      aria-label={t("pluginsPage.exploreTitle")}
+    >
       <CatalogDiscoverySearch>
         <input
           type="search"
