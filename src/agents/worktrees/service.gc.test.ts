@@ -296,10 +296,10 @@ describe("ManagedWorktreeService garbage collection", () => {
     const removal = vi
       .spyOn(retiredCleanup, "deleteRetiredCheckout")
       .mockImplementationOnce(async (target) => {
-        if (!String(target).startsWith(path.dirname(orphan))) {
+        if (!target.startsWith(path.dirname(orphan))) {
           return await remove(target);
         }
-        orphan = String(target);
+        orphan = target;
         await fs.rename(orphan, retained);
         await fs.mkdir(orphan);
         await fs.writeFile(path.join(orphan, "replacement.txt"), "new incarnation\n");
