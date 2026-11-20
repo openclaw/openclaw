@@ -19,6 +19,16 @@ export type PublicationTransportAdmission = Readonly<
   }
 >;
 
+export class PublicationTransportAdmissionError extends Error {
+  constructor(
+    readonly failure:
+      | { reason: "purpose-disabled"; scope: PublicationTransportScope }
+      | { reason: "invalid-admission" },
+  ) {
+    super(failure.reason);
+  }
+}
+
 export function isPublicationTransportScope(scope: string): scope is PublicationTransportScope {
   return scope === PUBLICATION_READ_SCOPE || scope === PUBLICATION_STEER_SCOPE;
 }
@@ -29,7 +39,9 @@ function capturePublicationEnablement(scope: PublicationTransportScope): () => v
   const reader = scope === PUBLICATION_READ_SCOPE;
   const config = readRuntimeConfig().gateway?.sessionControl;
   if ((reader ? config?.publicationReadEnabled : config?.publicationWriteEnabled) !== true) {
-    throw new Error("Gateway publication purpose is disabled");
+    return () => {
+      throw new PublicationTransportAdmissionError({ reason: "purpose-disabled", scope });
+    };
   }
   if (!reader) {
     return () => {};
@@ -40,7 +52,7 @@ function capturePublicationEnablement(scope: PublicationTransportScope): () => v
       epoch !== runtimeConfigPublication.publicationReadDisableEpoch ||
       readRuntimeConfig().gateway?.sessionControl?.publicationReadEnabled !== true
     ) {
-      throw new Error("Gateway publication purpose is disabled or this admission was revoked");
+      throw new PublicationTransportAdmissionError({ reason: "invalid-admission" });
     }
   };
 }
@@ -115,7 +127,7 @@ export async function preparePublicationTransportAdmission(input: {
     !isSingleton(input.scopes, scope) ||
     !isSingleton(storedScopes, scope)
   ) {
-    throw new Error("publication transport requires an exact singleton paired device token");
+    throw new PublicationTransportAdmissionError({ reason: "invalid-admission" });
   }
   const identity = resolveAuthenticatedDeviceTokenIdentity(device, {
     role: input.role,
@@ -124,7 +136,7 @@ export async function preparePublicationTransportAdmission(input: {
     scopes: input.scopes,
   });
   if (!identity) {
-    throw new Error("publication transport device authority changed");
+    throw new PublicationTransportAdmissionError({ reason: "invalid-admission" });
   }
   const admission = Object.freeze({ ...identity, scope });
   assertEnabled();
@@ -137,6 +149,8 @@ export function isPublicationTransportMethod(
   method: string,
   scope: PublicationTransportScope,
 ): boolean {
+  // The fixed writer surface is documented in docs/gateway/protocol/rpc-session-control.md.
+  // Only Session Share owns those methods; other plugins cannot claim its writer scope.
   if (
     scope === PUBLICATION_STEER_SCOPE &&
     method !== "session-share.steer.target" &&

@@ -485,7 +485,15 @@ describe.each([PUBLICATION_READ_SCOPE, PUBLICATION_STEER_SCOPE])(
         await withGatewayServer(async ({ port }) => {
           publishReaderOptIn(enabled);
           const { ws, connected } = await connectReader(port, device);
-          expect(connected.ok).toBe(false);
+          expect(connected).toMatchObject({
+            ok: false,
+            error: {
+              code: "FORBIDDEN",
+              message: writer
+                ? "publication transport is disabled; enable gateway.sessionControl.publicationWriteEnabled"
+                : "publication transport is disabled; enable gateway.sessionControl.publicationReadEnabled",
+            },
+          });
           ws.close();
           // The new reader gate must not disable ordinary authenticated clients.
           const ordinary = await openWs(port);

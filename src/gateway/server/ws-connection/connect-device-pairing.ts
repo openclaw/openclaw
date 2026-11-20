@@ -33,9 +33,13 @@ import { isScopelessNodePairingRequest } from "../../node-pairing-auto-approve.j
 import { recordDeviceTokenPeer } from "../../openclaw-id/device-token-binding.js";
 import { approveOpenClawIdNodePairing } from "../../openclaw-id/node-pairing.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../../operator-role-enforcement.js";
+import { PUBLICATION_READ_SCOPE } from "../../operator-scopes.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { broadcastRejectedDevicePairing } from "../../pairing-events.js";
-import { preparePublicationTransportAdmission } from "../../publication-reader.js";
+import {
+  preparePublicationTransportAdmission,
+  PublicationTransportAdmissionError,
+} from "../../publication-reader.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import {
@@ -85,9 +89,22 @@ export async function authorizeGatewayConnectDevice(
         state.remoteIngressPrincipal,
       ),
     });
-  } catch {
-    const message = "publication transport requires an exact singleton paired device token";
-    context.markHandshakeFailure("publication-transport-denied");
+  } catch (error) {
+    const disabled =
+      error instanceof PublicationTransportAdmissionError &&
+      error.failure.reason === "purpose-disabled"
+        ? error.failure
+        : undefined;
+    const message = disabled
+      ? `publication transport is disabled; enable gateway.sessionControl.${
+          disabled.scope === PUBLICATION_READ_SCOPE
+            ? "publicationReadEnabled"
+            : "publicationWriteEnabled"
+        }`
+      : "publication transport requires an exact singleton paired device token";
+    context.markHandshakeFailure(
+      disabled ? "publication-transport-purpose-disabled" : "publication-transport-denied",
+    );
     context.sendHandshakeErrorResponse(ErrorCodes.FORBIDDEN, message);
     context.handler.close(1008, message);
     return undefined;
