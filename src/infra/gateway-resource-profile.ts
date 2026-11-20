@@ -3,7 +3,7 @@ import type { GatewayConfig } from "../config/types.gateway.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readEffectiveMemoryLimit } from "./host-memory.js";
 
-export const LEAN_PROFILE_MEMORY_THRESHOLD_BYTES = 8 * 1024 ** 3;
+const LEAN_PROFILE_MEMORY_THRESHOLD_BYTES = 8 * 1024 ** 3;
 
 export type GatewayResourceProfile = {
   configured: "auto" | "standard" | "lean";
