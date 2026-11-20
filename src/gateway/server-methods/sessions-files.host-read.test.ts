@@ -285,6 +285,39 @@ it("stats only the references a preview would open", async () => {
   ]);
 });
 
+it("stats a reference as openable only when the reader would open it", async () => {
+  fs.mkdirSync(path.join(workspaceRoot, "docs"), { recursive: true });
+  fs.mkdirSync(path.join(workspaceRoot, "sub"), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, "docs/report.md"), "# Report\n");
+  fs.writeFileSync(path.join(workspaceRoot, "docs/other.md"), "# Other\n");
+  fs.writeFileSync(path.join(workspaceRoot, "docs/source.md"), "# Source\n");
+  fs.linkSync(
+    path.join(workspaceRoot, "docs/source.md"),
+    path.join(workspaceRoot, "docs/linked.md"),
+  );
+  // A touched path resolves only from the session cwd; an untouched one also tries the root.
+  const fixture = prepareHostFileRead({
+    permissionMode: "full",
+    spawnedWorkspaceDir: workspaceRoot,
+    spawnedCwd: path.join(workspaceRoot, "sub"),
+  });
+  mockVisibleMessages([assistantToolCall("read", { path: "docs/report.md" })]);
+  const references = ["docs/report.md", "docs/other.md", "docs/linked.md"];
+
+  const stat = await fixture.files.ok("stat", {
+    files: references.map((reference) => ({ path: reference })),
+  });
+  expect(stat.files).toEqual([
+    { path: "docs/report.md", status: "missing" },
+    { path: "docs/other.md", status: "file" },
+    { path: "docs/linked.md", status: "missing" },
+  ]);
+  for (const file of stat.files) {
+    const preview = await fixture.files.request("get", file.path);
+    expect(preview[0]?.ok).toBe(file.status === "file");
+  }
+});
+
 it("canonicalizes host previews and lists outside touched-file metadata without edit tokens", async () => {
   const outsidePath = outsideFile("outside\n");
   const aliasPath = path.join(path.dirname(outsidePath), "alias.txt");

@@ -1,3 +1,4 @@
+import { resolve as resolvePath } from "node:path";
 import type {
   SessionsFilesStatParams,
   SessionsFilesStatResult,
@@ -101,7 +102,14 @@ export async function handleSessionFilesStat(
             assertSourceCurrent,
             assertReaderCurrent,
             undefined,
-            { touchedFiles: false },
+            // Touched files change candidate resolution only when the session cwd is not the root.
+            {
+              touchedFiles: Boolean(
+                source.root &&
+                source.fileRoot &&
+                resolvePath(source.fileRoot) !== resolvePath(source.root),
+              ),
+            },
           );
           repository = loaded.repository;
           assertCurrent();
@@ -128,6 +136,7 @@ export async function handleSessionFilesStat(
               readRoot: prepared.readRoot ?? loaded.readRoot,
               path: prepared.path ?? path,
               includeContent: false,
+              admitRead: true,
               assertCurrent: () => {
                 assertCurrent();
                 prepared.assertCurrent?.();
@@ -158,7 +167,15 @@ export async function handleSessionFilesStat(
           const bareMisses = [...answered]
             .filter(([path, status]) => status === "missing" && /^[^\\/]+$/u.test(path))
             .map(([path]) => path);
-          if (loaded.root && bareMisses.length > 0) {
+          // The reader searches the current workspace even for a historical message, so a
+          // historical miss cannot be answered from either root alone.
+          if (source.fileWorkspace?.historical) {
+            for (const index of indices) {
+              if (statuses[index] === "missing" && bareMisses.includes(params.files[index]!.path)) {
+                statuses[index] = "unknown";
+              }
+            }
+          } else if (loaded.root && bareMisses.length > 0) {
             const found = await findUniqueWorkspaceFileNames({
               ...loaded,
               names: bareMisses,

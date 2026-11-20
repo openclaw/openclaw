@@ -163,6 +163,8 @@ async function toSessionFileEntry(
   fileRoot: string | undefined,
   opts: {
     includeContent?: boolean;
+    /** Without content, still open the file so the reader's admission rules decide "missing". */
+    admitRead?: boolean;
     workspaceRoot?: WorkspaceRoot;
     readRoot?: string;
     assertCurrent?: () => void;
@@ -211,6 +213,9 @@ async function toSessionFileEntry(
     updatedAtMs: toUpdatedAtMs(stat.mtimeMs),
   };
   if (!opts.includeContent) {
+    if (opts.admitRead && !(await readWorkspaceFilePrefix(readRoot, browserPath, 1))) {
+      return { ...base, missing: true };
+    }
     return entry;
   }
   const inline = stat.size <= WORKSPACE_PREVIEW_MAX_BYTES;
@@ -491,12 +496,14 @@ export async function getSessionWorkspaceFile(
     path: string;
     assertCurrent?: () => void;
     includeContent?: boolean;
+    admitRead?: boolean;
   },
 ): Promise<{ root?: string; file?: SessionFileEntry; reason?: "outside_session_boundary" }> {
   let outsideBoundary = false;
   const options = {
     readRoot: params.readRoot,
     includeContent: params.includeContent !== false,
+    admitRead: params.admitRead,
     assertCurrent: params.assertCurrent,
     authorizeHostRead: params.authorizeHostRead,
     onOutsideBoundary: () => {
