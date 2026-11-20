@@ -20,10 +20,10 @@ import { readPersistedMediaFacts } from "../../media/media-facts.js";
 import * as mediaReferences from "../../media/media-reference.js";
 import { cleanOldMedia, getMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
+import type { UserTurnInput } from "../../sessions/user-turn-input.types.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
-  type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";

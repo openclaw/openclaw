@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { z } from "zod";
 import { isAvatarWorkspacePath } from "../shared/avatar-policy.js";
 import { sha256Hex } from "./crypto-digest.js";
@@ -11,6 +12,19 @@ export const UpdateStateDatabaseOwnerSchema = z.discriminatedUnion("role", [
   z.object({ role: z.literal("agent"), agentId: z.string().min(1) }),
 ]);
 export type UpdateStateDatabaseOwner = z.infer<typeof UpdateStateDatabaseOwnerSchema>;
+
+/**
+ * Recovery manifests name agents by canonical id while discovery keeps folder spellings: a
+ * folder differing only in case (BA-EA beside ba-ea on a case-insensitive disk) is recorded as
+ * that agent, and a name that would normalize to another id is captured without an owner.
+ */
+export function recoveryOwner(owner: UpdateStateDatabaseOwner): UpdateStateDatabaseOwner[] {
+  if (owner.role !== "agent") {
+    return [owner];
+  }
+  const agentId = normalizeAgentId(owner.agentId);
+  return agentId === owner.agentId.toLowerCase() ? [{ role: "agent", agentId }] : [];
+}
 /** Every raw spelling discovered for one database, grouped by projection identity. */
 export const StateDatabaseDiscoverySchema = z.object({
   spellings: z.tuple([z.string()], z.string()),

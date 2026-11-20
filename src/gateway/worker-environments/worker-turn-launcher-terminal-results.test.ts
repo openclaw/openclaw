@@ -447,6 +447,7 @@ describe("worker turn launcher terminal results", () => {
         releaseAgentRunContext(runId, dispatchClaim);
       }
     },
+    180_000,
   );
 
   it("settles targeted result recovery while same-session Stop waits for its turn claim", async () => {

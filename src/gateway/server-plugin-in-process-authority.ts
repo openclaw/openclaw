@@ -58,6 +58,7 @@ import {
   mergePluginRuntimeClientInternal,
   projectPluginRuntimeClientExecution,
 } from "./server-plugin-runtime-client.js";
+import { createSessionContinuationLifetime } from "./session-continuation-lifetime.js";
 import { resolveSessionRuntimeAuthority } from "./session-runtime-authority.js";
 import {
   cancelSubagentCompletionToolHandoff,
@@ -218,7 +219,7 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         captured?.authority.signal,
         gatewayOwner && getGatewayContextLifetime(gatewayOwner).signal,
       ].filter((signal): signal is AbortSignal => Boolean(signal));
-      const lifetime = new AbortController();
+      const lifetime = createSessionContinuationLifetime(target, gatewayOwner);
       const release = () => {
         if (lifetime.signal.aborted) {
           return;
@@ -243,7 +244,6 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         } else {
           resolved.assertSourceCurrent();
         }
-        lifetime.signal.throwIfAborted();
       };
       const runInScope = <T>(run: () => T): T => {
         assertCurrent();
@@ -363,7 +363,6 @@ export function resolveInProcessGatewayDispatch(
     : resolveSessionRuntimeAuthority({
         method,
         runtimeIdentity: agentRuntimeIdentity ?? scope?.client?.internal?.agentRuntimeIdentity,
-        context,
       });
   const assertCallerCurrent = captureGatewayToolCallerAssertion(method);
   const transfersCreatedInput =

@@ -3668,3 +3668,12 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+.scribe-schedule-custom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.scribe-schedule-custom[hidden],
+.scribe-schedule-custom .knowledge-field[hidden] {
+  display: none;
+}

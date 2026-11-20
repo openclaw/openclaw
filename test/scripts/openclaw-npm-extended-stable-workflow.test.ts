@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
-import { resolveOxlintShardConcurrency } from "../../scripts/run-oxlint-shards.mts";
+import {
+  createOxlintShards,
+  filterOxlintShards,
+  parseShardRunnerArgs,
+  resolveOxlintShardConcurrency,
+} from "../../scripts/run-oxlint-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const workflowPath = ".github/workflows/openclaw-npm-release.yml";
@@ -24,7 +29,7 @@ type Job = {
   if?: string;
   needs?: string[];
   outputs?: Record<string, string>;
-  strategy?: { "fail-fast"?: boolean; matrix?: { stage?: string[] } };
+  strategy?: { "fail-fast"?: boolean; "max-parallel"?: number; matrix?: { stage?: string[] } };
   steps?: Step[];
   uses?: string;
   with?: Record<string, unknown>;
@@ -433,13 +438,28 @@ it("publishes only the tarball path verified from the preflight manifest", () =>
   );
 });
 
-function runSourceWorker(stage: string, help: string, probeStatus = 0, checkStatus = 0) {
+const sourceStages = ["guards", "types", "lint-core", "lint-extensions", "lintformat"];
+
+function runSourceWorker(
+  stage: string,
+  help: string,
+  probeStatus = 0,
+  checkStatus = 0,
+  selectors = true,
+) {
   const root = tempDirs.make("npm-source-stage-");
   const bin = join(root, "bin");
   const trace = join(root, "trace");
   mkdirSync(bin);
   mkdirSync(join(root, ".release-harness"));
   mkdirSync(join(root, "temp"));
+  mkdirSync(join(root, "scripts"));
+  if (selectors) {
+    writeFileSync(
+      join(root, "scripts/run-oxlint-shards.mts"),
+      readFileSync("scripts/run-oxlint-shards.mts"),
+    );
+  }
   writeFileSync(join(root, "help"), help);
   writeFileSync(
     join(bin, "pnpm"),
@@ -451,6 +471,16 @@ if [[ "$*" == 'check --help' ]]; then
   cat help
   exit "$PROBE_STATUS"
 fi
+exit "$CHECK_STATUS"
+`,
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    join(bin, "node"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+[[ ! -e .release-harness ]]
+printf '%s\\n' "node $*" >> "$TRACE"
 exit "$CHECK_STATUS"
 `,
     { mode: 0o755 },
@@ -476,62 +506,74 @@ exit "$CHECK_STATUS"
   return { result, calls: existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n") : [] };
 }
 
-it("runs only the two canonical source stage selections outside the harness", () => {
-  const help = "Options:\n  --stage <name>          Select stages (repeatable).\n";
-  const nonlint = runSourceWorker("nonlint", help);
-  const lint = runSourceWorker("lintformat", help);
-  expect(nonlint.result.status, nonlint.result.stderr).toBe(0);
-  expect(lint.result.status, lint.result.stderr).toBe(0);
-  expect(nonlint.calls).toEqual([
-    "check --help",
-    "check --include-test-types --include-architecture --stage preflight --stage typecheck --stage policy",
-  ]);
-  expect(lint.calls).toEqual([
-    "check --help",
-    "check --include-test-types --include-architecture --stage lint",
-  ]);
+it("partitions the complete source inventory across five isolated workers", () => {
+  const expected = [
+    ["check --include-test-types --include-architecture --stage preflight --stage policy"],
+    ["check --include-test-types --include-architecture --stage typecheck"],
+    ["node --import tsx scripts/run-oxlint-shards.mts --only=core"],
+    ["node --import tsx scripts/run-oxlint-shards.mts --only=extensions"],
+    ["lint --only=scripts", "format:check"],
+  ];
+  const selections: Set<string>[] = [];
+  sourceStages.forEach((stage, index) => {
+    const run = runSourceWorker(stage, "  --stage <name>\n");
+    expect(run.result.status, run.result.stderr).toBe(0);
+    expect(run.calls).toEqual(["check --help", ...expected[index]!]);
+    for (const command of run.calls.filter((call) => call.includes("--only="))) {
+      selections.push(parseShardRunnerArgs(command.split(" ")).only);
+    }
+  });
+  // Check actual checkout targets through the canonical selector on both runner classes.
+  for (const memoryGiB of [15, 31]) {
+    const shards = createOxlintShards({
+      env: { CI: "true", OPENCLAW_OXLINT_SHARD_CONCURRENCY: "1" },
+      platform: "linux",
+      hostResources: { logicalCpuCount: 8, totalMemoryBytes: memoryGiB * 1024 ** 3 },
+    });
+    const partitions = selections.flatMap((only) => filterOxlintShards(shards, only));
+    expect(partitions).toEqual(shards);
+    expect(partitions.some((shard) => shard.name === "scripts:resource-safety")).toBe(true);
+  }
 });
 
-it("runs the frozen pre-selector target once, with an intentional lint worker no-op", () => {
-  // v2026.11.3, 847611dcaa3bf0e2783335f961dd1fd0580e4d9f: historical CLI help.
-  const help = [
-    "Usage: node --import tsx scripts/check.mts [--base <ref>] [--timed] [--include-architecture] [--include-test-types]",
-    "  --include-test-types    Typecheck production and test sources.",
-    "  -h, --help              Show this help.",
-  ].join("\n");
-  const nonlint = runSourceWorker("nonlint", help);
-  const lint = runSourceWorker("lintformat", help);
-  expect(nonlint.result.status, nonlint.result.stderr).toBe(0);
-  expect(lint.result.status, lint.result.stderr).toBe(0);
-  expect([...nonlint.calls, ...lint.calls]).toEqual([
-    "check --help",
-    "check --include-test-types --include-architecture",
-    "check --help",
-  ]);
-  expect(lint.result.stdout).toContain("nonlint owns the full check");
-});
-
-it.each(["nonlint", "lintformat"])(
-  "does not turn a %s probe error into legacy fallback",
-  (stage) => {
-    const run = runSourceWorker(stage, "  --stage <name>\n", 9);
-    expect(run.result.status).toBe(9);
-    expect(run.calls).toEqual(["check --help"]);
+it.each([
+  { help: "  --include-test-types  Typecheck production and test sources.\n", selectors: true },
+  { help: "  --stage <name>\n", selectors: false },
+])(
+  "runs the full frozen check once when a partition interface is absent: %j",
+  ({ help, selectors }) => {
+    const runs = sourceStages.map((stage) => runSourceWorker(stage, help, 0, 0, selectors));
+    runs.forEach(({ result }) => expect(result.status, result.stderr).toBe(0));
+    expect(runs.flatMap(({ calls }) => calls.filter((call) => call !== "check --help"))).toEqual([
+      "check --include-test-types --include-architecture",
+    ]);
+    expect(runs[1]!.result.stdout).toContain("guards owns the full check");
   },
 );
 
-it("does not retry a selected check failure as a full legacy check", () => {
-  const run = runSourceWorker("lintformat", "  --stage <name>\n", 0, 7);
-  expect(run.result.status).toBe(7);
-  expect(run.calls).toEqual([
-    "check --help",
-    "check --include-test-types --include-architecture --stage lint",
-  ]);
+it.each(sourceStages)("does not turn a %s probe error into legacy fallback", (stage) => {
+  const run = runSourceWorker(stage, "  --stage <name>\n", 9);
+  expect(run.result.status).toBe(9);
+  expect(run.calls).toEqual(["check --help"]);
 });
 
-it.each(["success", "failure", "cancelled", "skipped"])(
-  "seals source evidence only after the matrix succeeds: %s",
-  (outcome) => {
+it.each(sourceStages)("fails the %s row without retrying the complete check", (stage) => {
+  const run = runSourceWorker(stage, "  --stage <name>\n", 0, 7);
+  expect(run.result.status).toBe(7);
+  expect(run.calls).toHaveLength(2);
+  expect(run.calls).not.toContain("check --include-test-types --include-architecture");
+});
+
+it.each([
+  ["success", "clean", true],
+  ["failure", "clean", false],
+  ["cancelled", "clean", false],
+  ["skipped", "clean", false],
+  ["success", "dirty", false],
+  ["success", "wrong-sha", false],
+] as const)(
+  "seals source evidence only after successful workers and an exact clean harness: %s/%s",
+  (outcome, harness, accepted) => {
     const root = tempDirs.make("npm-source-reducer-");
     const seal = step(preflight.jobs?.check_openclaw_npm, "Seal source-check evidence");
     const run = spawnSync(
@@ -539,7 +581,14 @@ it.each(["success", "failure", "cancelled", "skipped"])(
       [
         "-c",
         `
-      git() { if [[ "$*" == *'rev-parse HEAD' ]]; then printf '%s\\n' "$PREFLIGHT_WORKFLOW_SHA"; fi; }
+      git() {
+        case "$*" in
+          "rev-parse HEAD") printf '%s\\n' "$SOURCE_SHA" ;;
+          "-C .release-harness rev-parse HEAD") printf '%s\\n' "$HARNESS_SHA" ;;
+          "-C .release-harness status --porcelain") printf '%s' "$HARNESS_DIRTY" ;;
+          *) return 1 ;;
+        esac
+      }
       node() { printf '%s\\n' "$*" > sealed; }
       ${seal.run}
     `,
@@ -550,13 +599,16 @@ it.each(["success", "failure", "cancelled", "skipped"])(
         env: {
           ...process.env,
           SOURCE_STAGE_RESULT: outcome,
-          PREFLIGHT_WORKFLOW_SHA: "a".repeat(40),
+          SOURCE_SHA: "a".repeat(40),
+          PREFLIGHT_WORKFLOW_SHA: "b".repeat(40),
+          HARNESS_SHA: (harness === "wrong-sha" ? "c" : "b").repeat(40),
+          HARNESS_DIRTY: harness === "dirty" ? " M scripts/npm-prepared-bundle.mjs" : "",
         },
       },
     );
-    expect(run.status, run.stderr).toBe(outcome === "success" ? 0 : 1);
-    expect(existsSync(join(root, "sealed"))).toBe(outcome === "success");
-    if (outcome === "success") {
+    expect(run.status, run.stderr).toBe(accepted ? 0 : 1);
+    expect(existsSync(join(root, "sealed"))).toBe(accepted);
+    if (accepted) {
       expect(readFileSync(join(root, "sealed"), "utf8")).toBe(
         `.release-harness/scripts/npm-prepared-bundle.mjs source-evidence --source-sha ${"a".repeat(40)}\n`,
       );
@@ -564,16 +616,38 @@ it.each(["success", "failure", "cancelled", "skipped"])(
   },
 );
 
-it("keeps one aggregate receipt producer and requires both isolated workers", () => {
+it("keeps one aggregate receipt producer and requires every isolated worker", () => {
   const workers = preflight.jobs?.check_openclaw_npm_stage;
   const aggregate = preflight.jobs?.check_openclaw_npm;
   expect(workers?.strategy).toEqual({
     "fail-fast": false,
-    matrix: { stage: ["nonlint", "lintformat"] },
+    "max-parallel": 5,
+    matrix: { stage: sourceStages },
   });
   expect(workers?.outputs).toBeUndefined();
+  expect(step(aggregate, "Checkout").with).toEqual({
+    ref: "${{ inputs.tag }}",
+    "fetch-depth": 1,
+    filter: "blob:none",
+    "sparse-checkout": "package.json",
+    "sparse-checkout-cone-mode": false,
+    "persist-credentials": false,
+  });
+  for (const job of [
+    workers,
+    preflight.jobs?.prepare_openclaw_npm,
+    preflight.jobs?.check_sdk_npm,
+    preflight.jobs?.check_dependencies_npm,
+    preflight.jobs?.check_contents_npm,
+  ]) {
+    expect(step(job, "Checkout").with).toEqual({
+      ref: "${{ inputs.tag }}",
+      "fetch-depth": 1,
+      filter: "blob:none",
+    });
+  }
   expect(sourceStep("Enforce plugin compatibility release readiness").if).toBe(
-    "${{ matrix.stage == 'nonlint' }}",
+    "${{ matrix.stage == 'guards' }}",
   );
   expect(aggregate?.name).toBe("Check npm release source");
   expect(aggregate?.needs).toEqual(["validate_npm_request", "check_openclaw_npm_stage"]);

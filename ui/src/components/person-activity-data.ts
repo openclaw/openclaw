@@ -4,11 +4,12 @@ import { readPresenceEntries } from "../app/user-profile.ts";
 import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 
-export type PersonActivityData = Readonly<
-  Pick<SessionDataOwner, "sessionsResult" | "presencePayload">
->;
+type SessionPreview =
+  | { status: "loading" | "unavailable" }
+  | { status: "ready"; result: NonNullable<SessionListSnapshot["result"]> };
 
-type PersonPresenceData = Pick<PersonActivityData, "presencePayload">;
+type PersonPresenceData = Pick<SessionDataOwner, "presencePayload">;
+export type PersonActivityData = Readonly<PersonPresenceData & { sessions: SessionPreview }>;
 const sources = new WeakMap<ApplicationContext, PersonPresenceData>();
 
 /** Late-open cards read the current owner's snapshot, not the initial hello. */
@@ -25,9 +26,9 @@ export function observePersonActivityData(context: ApplicationContext, changed: 
   const sessions = context.sessions;
   const scope = sessions.captureConnectionScope();
   let disposed = false;
-  let ready = false;
+  let initialReadSettled = false;
   let snapshot: SessionListSnapshot | undefined;
-  let result: PersonActivityData["sessionsResult"] = null;
+  let acceptedResult: SessionListSnapshot["result"] = null;
   const initialPresence = readPresenceEntries(context.gateway.snapshot.hello?.snapshot);
   const source = sources.get(context);
   let presencePayload = source
@@ -39,13 +40,13 @@ export function observePersonActivityData(context: ApplicationContext, changed: 
   const notify = () => {
     if (current()) {
       if (
-        ready &&
-        snapshot &&
+        initialReadSettled &&
+        snapshot?.result &&
         !snapshot.loading &&
         !snapshot.error &&
         snapshot.readSucceeded === true
       ) {
-        result = snapshot.result;
+        acceptedResult = snapshot.result;
       }
       changed();
     }
@@ -68,14 +69,14 @@ export function observePersonActivityData(context: ApplicationContext, changed: 
         },
         (next) => {
           snapshot = next;
-          if (ready) {
+          if (initialReadSettled) {
             notify();
           }
         },
       )
     : undefined;
   const settled = () => {
-    ready = true;
+    initialReadSettled = true;
     notify();
   };
   // Do not freeze Recent sessions from a retained snapshot before this open's
@@ -88,12 +89,21 @@ export function observePersonActivityData(context: ApplicationContext, changed: 
   });
   return {
     get data(): PersonActivityData | undefined {
-      return current()
-        ? {
-            presencePayload,
-            sessionsResult: result,
-          }
-        : undefined;
+      if (!current()) {
+        return undefined;
+      }
+      // Keep accepted links during refresh. No accepted result is not an empty result.
+      return {
+        presencePayload,
+        sessions: acceptedResult
+          ? { status: "ready", result: acceptedResult }
+          : {
+              status:
+                !initialReadSettled || snapshot?.loading || snapshot?.startupPending
+                  ? "loading"
+                  : "unavailable",
+            },
+      };
     },
     dispose: () => {
       disposed = true;

@@ -4,7 +4,7 @@ import type { AgentMessage, SessionTreeEntry } from "../runtime/index.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   buildPreservedTurnsSectionFromFacts,
-  buildSplitTurnContextSectionFromFacts,
+  buildSplitTurnContextSection,
   collectCompactionContextMessageFact,
   selectPreservedRecentTurnIndexes,
 } from "./compaction-safeguard-context.js";
@@ -114,7 +114,7 @@ describe("canonical safeguard preparation", () => {
     expect(section.text).toBe(
       "\n\n## Recent turns preserved verbatim\n- User: new\n- Assistant: Checking\n[non-text content: toolCall]\n- Tool result (exec): latest result",
     );
-    expect(buildSplitTurnContextSectionFromFacts(selected.slice(2)).text).toBe("");
+    expect(buildSplitTurnContextSection(messages.slice(5)).text).toBe("");
     expect(buildPreservedTurnsSectionFromFacts(selected, 100).truncatedLoss).toBe(
       "preserved-turn-head",
     );

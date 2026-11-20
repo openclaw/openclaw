@@ -46,11 +46,10 @@ function deferred<T>(fallback: T) {
 
 const gate = () => deferred<void>(undefined);
 
-async function openDraft(page: CronTestPage, name: string, prompt: string) {
+async function openDraft(page: CronTestPage, prompt: string) {
   click(page, testId("cron-new-task"));
   await import("./view-detail.tsx");
   await waitForElement(page, "fieldset.cron-editor");
-  fillInput(page, "#cron-name", name);
   fillInput(page, "#cron-payload-text", prompt);
   await page.settle();
 }
@@ -190,7 +189,7 @@ it("shows an unusual reasoning level beside the levels its model offers", async 
     },
   ];
   const { page } = mountCronPage(cronRpc({ "models.list": () => ({ models }) }));
-  await openDraft(page, "Unusual reasoning", "Think in turbo");
+  await openDraft(page, "Think in turbo");
   await expectModels(page, ["alpha/deep"]);
   page.patchForm({ payloadModel: "alpha/deep", payloadThinking: "turbo" });
   await page.settle();
@@ -209,7 +208,7 @@ it.each([false, true])(
       refreshFailed: false,
     };
     const { page, gateway } = mountCronPage(modelClient(() => result));
-    await openDraft(page, "Catalogue recovery", "Keep this draft");
+    await openDraft(page, "Keep this draft");
     await expectModels(page, ["fixture/obsolete"]);
     result = {
       models: hasRows ? [{ provider: "fixture", id: "current", name: "Current model" }] : [],
@@ -242,7 +241,7 @@ it.each(["agent", "connection", "detach", "panel close"])(
       .mockReturnValue({ models: [catalogModel("current-model")] });
     const client = modelClient(read);
     const { page, gateway, context } = mountCronPage(client);
-    await openDraft(page, "Catalogue retirement", "Keep current owner");
+    await openDraft(page, "Keep current owner");
     await expectModels(page, ["fixture/initial-model"]);
     emitEvent(gateway, "config.changed");
     await waitForCronPage(() => expect(read).toHaveBeenCalledTimes(2));
@@ -270,7 +269,7 @@ it.each(["agent", "connection", "detach", "panel close"])(
         await page.settle();
         expect(read).toHaveBeenCalledTimes(readsBeforeCompletion);
         expect(page.textContent).not.toContain("Retired catalog error");
-        await openDraft(page, "Current catalogue", "Use the current owner");
+        await openDraft(page, "Use the current owner");
       }
       await expectModels(page, ["fixture/current-model"]);
       await page.settle();
@@ -316,7 +315,7 @@ it("scopes the model catalog to the draft agent and ignores the sidebar agent on
     { render: true },
   );
   cleanups.push(() => agentSelection.dispose());
-  await openDraft(page, "Same-scope selection", "Retain this draft");
+  await openDraft(page, "Retain this draft");
   await expectModels(page, ["fixture/main-model"]);
   const cron = page.cron;
   emitEvent(gateway, "chat.metadata.changed");

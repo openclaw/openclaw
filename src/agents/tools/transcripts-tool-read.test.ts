@@ -10,12 +10,10 @@ import {
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createTranscriptCaptureAppends } from "../../transcripts/capture-appends.js";
 import { activeSessions } from "../../transcripts/capture-startup.js";
-import type {
-  TranscriptSessionDescriptor,
-  TranscriptSourceProvider,
-} from "../../transcripts/provider-types.js";
+import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { type TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
+import type { TranscriptSessionDescriptor } from "../../transcripts/types.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 import { useTranscriptTestState } from "./transcripts-tool.test-support.js";
 

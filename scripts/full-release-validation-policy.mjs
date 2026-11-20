@@ -14,7 +14,10 @@ import {
 import { compareAscii, sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { hasRequiredCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
 import { candidateArtifactJsonFromBinding } from "./lib/full-release-candidate-reuse.mjs";
-import { releaseChildReuseSha256 } from "./lib/full-release-child-request.mjs";
+import {
+  releaseChildDispatchInputs,
+  releaseChildReuseSha256,
+} from "./lib/full-release-child-request.mjs";
 import {
   FULL_RELEASE_CHILD_EVIDENCE_JOB,
   MAX_RELEASE_ARTIFACT_BYTES,
@@ -25,6 +28,7 @@ import {
   releaseManifestChildEvidence,
 } from "./lib/full-release-manifest.mjs";
 import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
+import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { validateQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
 import {
   evaluateReleaseChildPolicy,
@@ -523,6 +527,54 @@ function positiveInteger(value) {
 
 function booleanValue(value) {
   return value === true || value === "true";
+}
+
+// Qualification and receipt recovery must derive the same scope from the
+// original version/context, not confuse a validation profile with a track.
+export function resolveReleaseQualificationScope(input) {
+  const version = parseReleaseVersion(input.targetVersion);
+  if (!version) {
+    throw new Error("Invalid release package version.");
+  }
+  const train = classifyReleaseTrain(version);
+  if (train === "unsupported-extended-stable-correction") {
+    throw new Error("Extended-stable releases do not allow correction suffixes.");
+  }
+  if (train === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease.");
+  }
+  const context = resolveReleaseContextIdentity(input.targetContextRef || "", version.version);
+  const releaseContext = ["release branch", "release tag"].includes(context?.kind);
+  const beta =
+    input.releaseProfile === "beta" &&
+    !booleanValue(input.runReleaseSoak) &&
+    input.rerunGroup === "all";
+  const stable =
+    input.releaseProfile === "stable" &&
+    booleanValue(input.runReleaseSoak) &&
+    input.rerunGroup === "all";
+  const coveragePolicy = normalizeReleaseCoveragePolicy({
+    ...input,
+    coveragePolicy:
+      releaseContext && beta && train === "beta"
+        ? "npm-beta-v1"
+        : releaseContext && stable && train === "stable"
+          ? "npm-stable-v1"
+          : undefined,
+  });
+  return {
+    coveragePolicy,
+    ciReleaseScope:
+      coveragePolicy === "npm-beta-v1"
+        ? "npm-beta"
+        : coveragePolicy === "npm-stable-v1"
+          ? "npm-stable"
+          : "full",
+    skipPackageTelegramE2e: beta || booleanValue(input.skipPackageTelegramE2e),
+    npmDistTag: train === "stable" ? "beta" : train,
+    releaseCandidateBranch:
+      train === "extended-stable" ? `extended-stable/${version.year}.${version.month}.33` : "",
+  };
 }
 
 // Omission retains the historical full inventory. Reduced coverage is an
@@ -2789,4 +2841,105 @@ export function affectedActiveRunIds(children, blockers, cancelledRunIds = new S
         !cancelledRunIds.has(String(child.runId)),
     )
     .map((child) => String(child.runId));
+}
+
+export function resolveAdmittedQualificationScope(admission) {
+  const input = admission.request.inputs;
+  const releaseProfile = input.release_profile;
+  const runReleaseSoak =
+    input.run_release_soak === "true" || ["stable", "full"].includes(releaseProfile);
+  return {
+    releaseProfile,
+    runReleaseSoak,
+    ...resolveReleaseQualificationScope({
+      releaseProfile,
+      runReleaseSoak,
+      rerunGroup: input.rerun_group,
+      targetVersion: admission.baselinePolicy.candidateVersion,
+      targetContextRef: input.target_context_ref || input.ref,
+      crossOsSuiteFilter: input.cross_os_suite_filter,
+      skipPackageTelegramE2e: input.skip_package_telegram_e2e,
+    }),
+  };
+}
+
+// Derive operands from the independently admitted request, not caller-supplied
+// receipt.inputs. The immutable Q workflow supplies all unsupplied defaults.
+export function qualificationChildDispatchInputs(role, admission, binding, workflowSource) {
+  const input = admission.request.inputs;
+  const lane = JSON.parse(input.trusted_workflow_json).laneInputs ?? {};
+  const target = admission.request.candidateSha;
+  const context = input.target_context_ref || "";
+  const scope = resolveAdmittedQualificationScope(admission);
+  const args = [];
+  const add = (key, value) => args.push("-f", key + "=" + String(value));
+  const optional = (key, value) => {
+    if (value) {
+      add(key, value);
+    }
+  };
+  if (role === "normalCi") {
+    add("target_ref", target);
+    add("release_scope", scope.ciReleaseScope);
+    add("include_android", scope.ciReleaseScope === "full");
+    const ref = (context || input.ref).replace(/^refs\/(?:heads|tags)\//u, "");
+    if (/^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-beta\.[0-9]+|-[1-9][0-9]*)?$/u.test(ref)) {
+      add("historical_target_tag", ref);
+    } else if (
+      /^(?:release\/[0-9]{4}\.[0-9]+\.[0-9]+(?:-[1-9][0-9]*)?|extended-stable\/[0-9]{4}\.[0-9]+\.33)$/u.test(
+        ref,
+      )
+    ) {
+      add("target_context_ref", ref);
+    }
+  } else if (role === "productPerformance") {
+    add("target_ref", target);
+    add("profile", "release");
+    add("repeat", 3);
+    add("deep_profile", false);
+    add("live_openai_candidate", false);
+    add("fail_on_regression", scope.releaseProfile !== "beta");
+    add("publish_reports", false);
+    return releaseChildDispatchInputs(workflowSource, args);
+  } else {
+    const phase = role.endsWith("Independent") ? "independent" : "candidate";
+    if (role.startsWith("pluginPrerelease")) {
+      add("target_ref", target);
+      add("expected_sha", target);
+      add("full_release_validation", true);
+      add("phase", phase);
+      add("node_test_exclude_patterns_json", input.plugin_prerelease_node_exclude_patterns_json);
+      add(
+        "extension_test_exclude_patterns_json",
+        lane.extension_test_exclude_patterns_json ?? "[]",
+      );
+    } else {
+      add("ref", target);
+      add("expected_sha", target);
+      add("provider", input.provider);
+      add("mode", input.mode);
+      add("release_profile", scope.releaseProfile);
+      add("run_release_soak", scope.runReleaseSoak);
+      add("fail_fast", input.fail_fast);
+      add("phase", phase);
+      add("allow_unreleased_changelog", input.allow_unreleased_changelog);
+      add("skip_package_telegram_e2e", scope.skipPackageTelegramE2e);
+      add("rerun_group", "all");
+      for (const key of [
+        "live_suite_filter",
+        "cross_os_suite_filter",
+        "release_package_spec",
+        "package_acceptance_package_spec",
+        "codex_plugin_spec",
+      ]) {
+        optional(key, input[key]);
+      }
+    }
+    optional("target_context_ref", context);
+    if (phase === "candidate") {
+      add("candidate_artifact_json", candidateArtifactJsonFromBinding(binding));
+    }
+  }
+  optional("qualification_baselines_json", lane.qualification_baselines_json);
+  return releaseChildDispatchInputs(workflowSource, args);
 }

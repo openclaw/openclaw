@@ -83,8 +83,8 @@ export function pluginButton(
 const count = (n: number, one: string, many = `${one}s`) =>
   `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
-// Modal frame shared by both dialogs: head with close, body, feedback line and actions.
-function dialogFrame(title: string, lead?: HTMLElement) {
+/** Modal frame shared by the scribe dialogs: head with close, body, feedback line and actions. */
+export function dialogFrame(title: string, lead?: HTMLElement) {
   const dialog = el("dialog", undefined, "knowledge-store-dialog knowledge-surface scribe-dialog");
   // SAFETY: only focus() is called on it, which every focusable HTML or SVG element implements.
   const previousFocus = document.activeElement as HTMLElement | null;
@@ -119,8 +119,8 @@ function dialogFrame(title: string, lead?: HTMLElement) {
   return { dialog, body, feedback, footer, close };
 }
 
-// Open inside the page so its styles apply; the modal top layer handles stacking.
-function show(dialog: HTMLDialogElement) {
+/** Open inside the page so its styles apply; the modal top layer handles stacking. */
+export function show(dialog: HTMLDialogElement) {
   (document.querySelector(".knowledge-page") ?? document.body).append(dialog);
   dialog.showModal();
 }

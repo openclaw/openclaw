@@ -1,7 +1,13 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import type { ControlUiAction, ControlUiSession } from "../../../src/plugin-sdk/control-ui.js";
+import type {
+  ControlUiAction,
+  ControlUiDraftProposal,
+  ControlUiSession,
+} from "../../../src/plugin-sdk/control-ui.js";
 import type { PluginSessionMenuAction } from "../components/session-menu-solid.tsx";
 import { i18n } from "../i18n/lib/translate.ts";
+import type { ComposerTasks } from "../lib/chat/composer-tasks.runtime.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
 
@@ -10,6 +16,9 @@ export type ControlUiComposerDraft = {
   draft: string;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
+  /** The pane's task owner once loaded; it refuses tasks where no card can show them. */
+  tasks: () => ComposerTasks | null;
+  loadTasks: () => Promise<ComposerTasks>;
 };
 
 export function pluginSessionMenuActions(
@@ -51,6 +60,10 @@ export async function runControlUiPluginAction(
     composer?: ControlUiComposerDraft;
     signal: AbortSignal;
     isCurrent?: () => boolean;
+    /** Runs this action again, for a failed task's Try again. */
+    retry?: () => void;
+    /** `attach` resumes earlier work when a composer shows the chat; it needs no enabled state. */
+    phase?: "run" | "attach";
   },
 ): Promise<void> {
   // The lazy native-plugin loader installs action copy before exposing registrations.
@@ -84,10 +97,18 @@ export async function runControlUiPluginAction(
     agentId: params.agentId ?? params.session?.agentId,
     session: params.session ? structuredClone(params.session) : undefined,
   };
-  const state = entry.value.resolve?.(context);
+  const composer = params.placement === "composer" ? params.composer : undefined;
+  const state = entry.value.resolve?.({
+    ...context,
+    draft: composer && (composer.getDraft?.() ?? composer.draft),
+  });
   // A resolver can synchronously withdraw its registration or remove the view.
   check();
-  if (state?.hidden || state?.disabled) {
+  const invoke = params.phase === "attach" ? entry.value.attach : entry.value.run;
+  if (!invoke) {
+    return;
+  }
+  if (state?.hidden || (state?.disabled && params.phase !== "attach")) {
     throw new Error(
       i18n.t(
         params.placement === "session"
@@ -96,7 +117,6 @@ export async function runControlUiPluginAction(
       ),
     );
   }
-  const composer = params.placement === "composer" ? params.composer : undefined;
   // Like replacement composer operations, a retired handle throws instead of touching
   // whichever draft its pane presents next.
   const checkComposer = () => {
@@ -104,20 +124,56 @@ export async function runControlUiPluginAction(
       throw new Error("This plugin UI view has ended.");
     }
   };
-  await entry.value.run({
-    ...context,
-    host: scopeControlUiHost(entry.host, signal, params.isCurrent),
-    signal,
-    composer: composer && {
-      get draft() {
-        checkComposer();
-        return composer.getDraft?.() ?? composer.draft;
-      },
-      setDraft: (text: string) => {
-        checkComposer();
-        composer.onDraftChange(text);
-      },
-    },
-  });
+  // Tasks this invocation started. A rejection fails the latest one, so its card never stays
+  // working after the action has ended; a cancelled or retired latest task expects the error.
+  const tasks: ReturnType<ComposerTasks["start"]>[] = [];
+  const owner = composer ? await composer.loadTasks() : undefined;
+  try {
+    await invoke({
+      ...context,
+      host: scopeControlUiHost(entry.host, signal, params.isCurrent),
+      signal,
+      composer: composer &&
+        owner && {
+          get draft() {
+            checkComposer();
+            return composer.getDraft?.() ?? composer.draft;
+          },
+          setDraft: (text: string) => {
+            checkComposer();
+            composer.onDraftChange(text);
+          },
+          startTask: ({ title, startedAt }: { title: string; startedAt?: number }) => {
+            checkComposer();
+            const task = owner.start({
+              title,
+              startedAt,
+              signal,
+              actionKey: entry.key,
+              retry: params.retry,
+            });
+            tasks.push(task);
+            return task;
+          },
+          propose: async (text: string, proposal: ControlUiDraftProposal) => {
+            checkComposer();
+            return owner.offer(text, proposal, signal);
+          },
+        },
+    });
+  } catch (error) {
+    // Only the latest task matters: starting a newer one retires the earlier ones.
+    const latest = tasks.at(-1);
+    if (!latest) {
+      throw error;
+    }
+    if (latest.signal.aborted) {
+      return;
+    }
+    // A settled task cannot show it; the error then reaches the inline alert.
+    if (!latest.fail(formatUiError(error))) {
+      throw error;
+    }
+  }
   check();
 }

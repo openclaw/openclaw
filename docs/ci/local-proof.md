@@ -155,11 +155,18 @@ keeps canonical order and runs each selected stage once. Omitting the option
 retains the complete check. `--base`, `--include-test-types`, and
 `--include-architecture` keep their usual meaning.
 
-The npm source preflight runs `preflight`, `typecheck`, and `policy` in one
-worker and `lint` (including formatting) in another. The aggregate source receipt
-requires both workers to succeed. Frozen sources whose successful help output
-does not advertise `--stage` run the original complete check once instead; they
-do not gain stage parallelism. Capability-probe failures remain failures.
+The npm source preflight uses five isolated workers: ordered `preflight` and
+`policy` in one invocation, full production/test `typecheck`, core lint, plugin
+lint, and scripts lint with controller, i18n, stylesheet, and formatting checks.
+The lint workers reuse the canonical `--only` selectors; per-runner shard and
+memory limits stay unchanged. The aggregate source receipt requires every
+worker to succeed. This trades three extra checkout/install setups for overlap,
+not less source coverage or guaranteed full-release wall-time savings.
+
+Frozen sources whose successful help output does not advertise `--stage`, or
+whose lint runner lacks `--only` selectors, run the original complete check
+once in the guards worker instead. The other workers report an intentional
+no-op. Capability-probe failures remain failures.
 
 ### Delegating changed compilers in CI
 

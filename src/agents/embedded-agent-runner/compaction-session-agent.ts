@@ -30,7 +30,7 @@ import {
 } from "./stream-resolution.js";
 import { mapThinkingLevelForProvider } from "./utils.js";
 
-export async function prepareCompactionSessionAgent(params: {
+async function prepareCompactionSessionAgent(params: {
   session: { agent: { streamFn?: StreamFn } };
   llmRuntime: LlmRuntime;
   providerStreamFn: StreamFn | undefined;
@@ -141,7 +141,28 @@ export async function prepareCompactionSessionAgent(params: {
 
 /** Build transport state without constructing an AgentSession or transcript manager. */
 export async function prepareCompactionSessionStream(
-  runtime: PreparedCompactionRuntime,
+  runtime: Pick<
+    PreparedCompactionRuntime,
+    | "effectiveModel"
+    | "authStorage"
+    | "provider"
+    | "modelId"
+    | "sessionAgentId"
+    | "effectiveWorkspace"
+    | "agentDir"
+    | "contextTokenBudget"
+    | "runtimePlan"
+    | "resolvedMessageProvider"
+    | "modelRegistry"
+    | "hasRuntimeAuthExchange"
+    | "apiKeyInfo"
+    | "trigger"
+  > & {
+    params: Pick<
+      PreparedCompactionRuntime["params"],
+      "sessionId" | "sessionKey" | "config" | "modelCallUrgency"
+    >;
+  },
   settingsManager: SettingsManager,
   assertActive: () => void,
   thinkLevel: ThinkLevel,

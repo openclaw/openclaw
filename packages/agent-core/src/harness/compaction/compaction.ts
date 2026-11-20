@@ -11,12 +11,7 @@ import { runSummarizationCompletion } from "./summarization-completion.js";
 import { prepareCompactionSummaryRequest } from "./summary-checkpoint-prompt.js";
 import type { FileOperations } from "./utils.js";
 
-export {
-  compactFromSource,
-  compactWithoutSummary,
-  compactWithoutSummaryFromFacts,
-  formatRequiredAskContext,
-} from "./compaction-assembly.js";
+export { compactFromSource, compactWithoutSummary } from "./compaction-assembly.js";
 
 export {
   calculateContextTokens,

@@ -43,7 +43,7 @@ export function getResponsesCompactionInputIdentity(item: object): object | unde
   return preparedCompactionInputs.get(item);
 }
 
-export function publishResponsesCompactionInput<T extends object[]>(
+function publishResponsesCompactionInput<T extends object[]>(
   source: object,
   input: T,
   immutable?: AiTransportHost["immutableData"],

@@ -66,6 +66,7 @@ it
     let announcing = false;
     let completedReplies = 0;
     let rootReceivedRecovery = false;
+    let rootReceivedChildError = false;
     let resumedChildRequests = 0;
     const reservation = await reserveTestPortListener({
       offsets: [0],
@@ -103,6 +104,7 @@ it
             }
             if (text.includes("CUSTODY_ROOT_TASK")) {
               rootReceivedRecovery ||= text.includes("Child runs do not resume independently.");
+              rootReceivedChildError ||= text.includes("Gateway stopped");
               const receipts = input.flatMap((item) =>
                 isRecord(item) && item.type === "function_call_output"
                   ? findSubagentRecords(
@@ -564,7 +566,7 @@ it
         if (interruptAnnounce) {
           expect(completedReplies).toBe(1);
         } else if (kind === "captured") {
-          expect(rootReceivedRecovery).toBe(true);
+          expect(rootReceivedChildError).toBe(true);
           expect(resumedChildRequests).toBe(0);
         }
       },

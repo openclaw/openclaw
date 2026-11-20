@@ -2,13 +2,16 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasRuntimeContextMarker } from "../../llm/types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { isThinkingLikeBlock } from "../thinking-block.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import type { TranscriptPolicy } from "../transcript-policy.types.js";
 import { isAnthropicApi } from "./anthropic-api.js";
+
+/** Projection-only: a prompt update sent as user text is a sent turn that later turns never merge into. */
+export const PROJECTED_PROMPT_UPDATE = Symbol("openclaw.projectedPromptUpdate");
 
 const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);
 
@@ -262,7 +265,7 @@ function validateTurnsWithConsecutiveMerge<T, B>(params: {
   return result.length === messages.length ? messages : result;
 }
 
-export function validateGeminiTurnsWithAdapter<T, B>(
+function validateGeminiTurnsWithAdapter<T, B>(
   messages: T[],
   adapter: ReplayTurnAdapter<T, B>,
 ): T[] {
@@ -274,7 +277,7 @@ export function validateGeminiTurnsWithAdapter<T, B>(
   });
 }
 
-export function mergeConsecutiveUserMessagesWithAdapter<T, B>(
+function mergeConsecutiveUserMessagesWithAdapter<T, B>(
   messages: T[],
   adapter: ReplayTurnAdapter<T, B>,
   options: { preserveContextBoundaries?: boolean } = {},
@@ -290,7 +293,7 @@ export function mergeConsecutiveUserMessagesWithAdapter<T, B>(
   });
 }
 
-export function validateAnthropicTurnsWithAdapter<T, B>(
+function validateAnthropicTurnsWithAdapter<T, B>(
   messages: T[],
   adapter: ReplayTurnAdapter<T, B>,
   options: { mergeConsecutiveTurns?: boolean; mergeConsecutiveUserTurns?: boolean } = {},
@@ -432,7 +435,8 @@ const agentMessageReplayTurnAdapter: ReplayTurnAdapter<AgentMessage, ReplayConte
       message.role === "user" &&
       !hasRuntimeContextMarker(message) &&
       !message.operatorMessage &&
-      !message.synthetic
+      !message.synthetic &&
+      !(PROJECTED_PROMPT_UPDATE in message)
     );
   },
 };

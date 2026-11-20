@@ -184,18 +184,6 @@ export function commitSessionCompactionSummary(
   );
 }
 
-export function assertCompactionRequestCanFit(
-  messages: AgentMessage[],
-  budget: CompactionRequestBudget | undefined,
-  hasCompactableHistory: boolean,
-): void {
-  assertCompactionRequestCanFitFromTokens(
-    () => estimateCompactionHistoryTokens(messages, budget),
-    budget,
-    hasCompactableHistory,
-  );
-}
-
 /** Lazy scalar estimates preserve the public array estimator's short-circuit call order. */
 export function assertCompactionRequestCanFitFromTokens(
   historyTokens: number | (() => number),
@@ -217,18 +205,6 @@ export function assertCompactionRequestCanFitFromTokens(
       );
     }
   }
-}
-
-export function resolveCompactionRetentionBudget(
-  budget: CompactionRequestBudget,
-  messages: AgentMessage[],
-  maxSummaryChars = MAX_COMPACTION_SUMMARY_CHARS,
-) {
-  return resolveCompactionRetentionBudgetFromTokens(
-    budget,
-    () => estimateCompactionHistoryTokens(messages, budget),
-    maxSummaryChars,
-  );
 }
 
 export function resolveCompactionRetentionBudgetFromTokens(

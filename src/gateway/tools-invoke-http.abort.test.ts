@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
+import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeScopedGatewayHttpRequestOrReply as authorizeHttpRequest } from "./http-auth-utils.js";
@@ -406,6 +407,7 @@ describe("POST /tools/invoke request cancellation", () => {
         const person = await ensureCanonicalUserProfileForOpenClawIdIdentity({
           accountId: principal.accountId,
         });
+        await setCanonicalUserProfileRole(person.id, "operator");
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const context = createGatewayRequestContext(makeContextParams());
         resolveGatewayContext = () => context;
