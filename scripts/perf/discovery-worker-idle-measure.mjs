@@ -29,13 +29,15 @@ const skillCount = values.size === "small" ? 8 : 100;
 const pluginCount = values.size === "small" ? 4 : 100;
 const scansPerBurst = 101;
 const idleMs = 5_000;
-const state = path.resolve(values["state-dir"]);
+const statePath = path.resolve(values["state-dir"]);
 const entry = path.resolve(values["build-dir"], "dist/skills/runtime/discovery.worker.js");
 assert((await fs.stat(entry)).isFile());
 const entrySha256 = createHash("sha256")
   .update(await fs.readFile(entry))
   .digest("hex");
-await fs.mkdir(state);
+await fs.mkdir(statePath);
+// Generated skill records use canonical paths even when the supplied parent is a symlink.
+const state = await fs.realpath(statePath);
 for (const name of ["home", "state"]) {
   await fs.mkdir(path.join(state, name));
 }
