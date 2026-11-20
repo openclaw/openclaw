@@ -19,6 +19,7 @@ import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js"
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.start.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
+import type { QuestionInputAuthority as InputAuthority } from "../../harness/host-private-capabilities.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
 import { bindAgentHarnessHookMessages } from "../../harness/lifecycle-hook-messages.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
@@ -79,7 +80,7 @@ function prepareStream(
   input: PrepareEmbeddedAttemptStreamInput,
   admission: EmbeddedAttemptSteeringAdmission,
 ) {
-  const { attempt, agentSession, recoverStalledModelCall } = input;
+  const { attempt, agentSession, recoverStalledModelCall, applyPermissionMode } = input;
   const { activeSession, hookRunner } = agentSession;
   let stalledModelRecoveryAccepted = false;
   let beforeAgentFinalizeRevisionReason: string | undefined;
@@ -460,7 +461,8 @@ function prepareStream(
     registration?.toolAuthority?.assertActive();
     return isCurrentRegistration();
   };
-  const canInject = () => isSteeringAdmissionOpen() && hasCurrentRegistration();
+  const canInject = () =>
+    !attempt.participationCeiling && isSteeringAdmissionOpen() && hasCurrentRegistration();
   const instance = attempt.admittedRunContext?.operationalRunInstance;
   const runContext = getAgentRunContext(attempt.runId);
   const supportsUserReplyPromotion =
@@ -484,9 +486,6 @@ function prepareStream(
           : "required",
     };
   };
-  type InputAuthority = NonNullable<
-    Parameters<typeof cancelPendingAgentQuestionForSession>[0]["authority"]
-  >;
   const composeInjectionGuard = (assertCurrent?: () => void) => () => {
     assertCurrent?.();
     return canInject();
@@ -569,11 +568,8 @@ function prepareStream(
     });
   const messageInjection = {
     version: 2 as const,
-    isAvailable: isSteeringAdmissionOpen,
-    steerNow: createPendingSteerToolControl(
-      activeSession,
-      () => isSteeringAdmissionOpen() && isCurrentRegistration(),
-    ),
+    isAvailable: canInject,
+    steerNow: createPendingSteerToolControl(activeSession, canInject),
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
@@ -593,7 +589,6 @@ function prepareStream(
   } satisfies NonNullable<AttemptStreamQueueHandle["messageInjectionV2"]>;
   const canApplyPermissionMode = () =>
     admission.accepting && !input.runAbortController.signal.aborted && isCurrentRegistration();
-  const applyPermissionMode = input.applyPermissionMode;
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
     runId: attempt.runId,

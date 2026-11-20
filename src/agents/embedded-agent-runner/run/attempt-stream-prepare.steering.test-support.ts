@@ -22,6 +22,24 @@ import { prepareCatalogExecutor } from "./attempt-stream-prepare.test-support.js
 
 /** Uses the owning stream suite's registration and session lifecycle. */
 export function registerPreparationSteeringTests() {
+  it("does not inject an owner's message into a participating turn", async () => {
+    const prepared = prepareCatalogExecutor({
+      attempt: {
+        participationCeiling: {
+          kind: "send",
+          profileId: "guest",
+          sessionKey: "agent:main:participant",
+        },
+      },
+    });
+    try {
+      expect(prepared.queueHandle.messageInjectionV2?.isAvailable()).toBe(false);
+      await expect(prepared.queueHandle.queueMessage("owner input")).rejects.toThrow();
+    } finally {
+      prepared.subscription.unsubscribe();
+    }
+  });
+
   it("steers at the next model boundary past a source committed to a separate turn", async () => {
     const sessionKey = "agent:main:queued-native-predecessor";
     const fingerprint = "synthetic-compatible-steering-tools";

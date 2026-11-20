@@ -20,11 +20,15 @@ import {
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
 import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-target.js";
+import { PARTICIPATION_EXEC_CEILING, type ParticipationCeiling } from "./participation-ceiling.js";
 import {
   resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
 } from "./sandbox/runtime-status.js";
-import { resolveSessionPermissionExecPolicy } from "./session-permission-exec-mode.js";
+import {
+  applyExecModeCeiling,
+  resolveSessionPermissionExecPolicy,
+} from "./session-permission-exec-mode.js";
 
 /** Session-scoped exec fields that may be carried across an isolated runtime boundary. */
 export type ExecSessionDefaults = Pick<
@@ -108,6 +112,7 @@ export async function resolveNodeExecEligibilityAsync(
 }
 
 export type ResolveExecDefaultsParams = {
+  participationCeiling?: ParticipationCeiling;
   cfg?: OpenClawConfig;
   execApprovals?: ExecApprovalsFile;
   sessionEntry?: ExecSessionDefaults | null;
@@ -178,7 +183,9 @@ export function prepareExecDefaults(
   // Full sessions bypass host floors only while effective security remains full;
   // ask-only tightening still applies without restoring those floors.
   const bypassHostApprovalFloors =
-    params.sessionEntry?.permissionMode === "full" && sessionPermissionPolicy?.security === "full";
+    !params.participationCeiling &&
+    params.sessionEntry?.permissionMode === "full" &&
+    sessionPermissionPolicy?.security === "full";
   const resolve = (
     approvalDefaults: ReturnType<typeof resolveExecApprovalsFromFile>["agent"] | undefined,
   ): ResolvedExecDefaults => {
@@ -193,17 +200,22 @@ export function prepareExecDefaults(
     }
     const modePolicy = resolveExecModePolicy(layeredPolicy);
     // Approval files bound every policy source except explicit admin-only full sessions.
-    const security =
+    let security =
       approvalDefaults?.security !== undefined
         ? minSecurity(modePolicy.security, approvalDefaults.security)
         : modePolicy.security;
-    const ask =
+    let ask =
       approvalDefaults?.ask !== undefined
         ? maxAsk(modePolicy.ask, approvalDefaults.ask)
         : modePolicy.ask;
+    const capped = params.participationCeiling
+      ? applyExecModeCeiling({ ...modePolicy, security, ask }, PARTICIPATION_EXEC_CEILING)
+      : { ...modePolicy, security, ask };
+    security = capped.security ?? security;
+    ask = capped.ask ?? ask;
     const mode =
       security === modePolicy.security && ask === modePolicy.ask
-        ? modePolicy.mode
+        ? (capped.mode ?? resolveExecModeFromPolicy({ security, ask }))
         : resolveExecModeFromPolicy({ security, ask });
     return {
       host: resolved.configuredTarget,

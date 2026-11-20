@@ -132,7 +132,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     model: attempt.model,
     modelProvider: attempt.provider,
     modelId: attempt.modelId,
-    codeModeOverride: attempt.codeModeOverride,
+    codeModeOverride: attempt.participationCeiling ? false : attempt.codeModeOverride,
+    participationCeiling: attempt.participationCeiling,
     disableToolSearch: attempt.disableToolSearch,
     modelToolsEnabled: toolsEnabled,
     disableTools: attempt.disableTools,
@@ -496,7 +497,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         sessionKey: params.setup.sandboxSessionKey,
         sessionId: attempt.sessionId,
         runId: attempt.runId,
-        approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
+        approvalReviewerDeviceId: attempt.participationCeiling
+          ? undefined
+          : attempt.approvalReviewerDeviceId,
         channelId: attempt.currentChannelId,
         trace: params.runTrace,
         onToolOutcome: attempt.onToolOutcome,

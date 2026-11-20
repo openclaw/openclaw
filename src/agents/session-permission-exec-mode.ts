@@ -7,6 +7,7 @@ import {
 } from "../infra/exec-approvals-core.js";
 import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+import { PARTICIPATION_EXEC_CEILING, type ParticipationCeiling } from "./participation-ceiling.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
@@ -97,7 +98,7 @@ type ExecPolicyFields = { mode?: ExecMode; security?: ExecSecurity; ask?: ExecAs
  * only when it describes the result exactly; otherwise raw fields stay so mode
  * normalization cannot loosen them, and human `ask` outranks reviewer `auto`.
  */
-function applyExecModeCeiling<T extends ExecPolicyFields>(
+export function applyExecModeCeiling<T extends ExecPolicyFields>(
   policy: T,
   ceiling: ExecMode,
 ): T | ExecPolicyFields {
@@ -128,8 +129,12 @@ export function projectEffectiveExecPolicy(params: {
   scheduledExecTarget?: ScheduledToolPolicyContext["execTarget"];
   /** `tools.byProvider[...].exec.mode` entries for the turn's model; applied after every other layer. */
   modelExecCeilings?: readonly ExecMode[];
+  participationCeiling?: ParticipationCeiling;
 }) {
-  const policy = (params.modelExecCeilings ?? []).reduce<ExecPolicyFields>(
+  const ceilings = params.participationCeiling
+    ? [...(params.modelExecCeilings ?? []), PARTICIPATION_EXEC_CEILING]
+    : (params.modelExecCeilings ?? []);
+  const policy = ceilings.reduce<ExecPolicyFields>(
     (current, ceiling) => applyExecModeCeiling(current, ceiling),
     params.permissionPolicy
       ? resolveSessionPermissionExecPolicy(params.permissionPolicy, params.overrides)
@@ -143,6 +148,7 @@ export function projectEffectiveExecPolicy(params: {
     security: policy.security,
     ask: target?.ask ?? policy.ask,
     bypassHostApprovalFloors:
+      !params.participationCeiling &&
       target?.ask !== "always" &&
       params.permissionPolicy?.mode === "full" &&
       policy.security === "full",

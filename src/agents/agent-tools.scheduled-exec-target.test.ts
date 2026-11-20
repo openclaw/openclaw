@@ -4,12 +4,14 @@ import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const shellSpies = vi.hoisted(() => ({
   defaults: vi.fn<(defaults?: ExecToolDefaults) => void>(),
+  processDefaults: vi.fn<(defaults?: ProcessToolDefaults) => void>(),
   exec: vi.fn(async () => ({ content: [], details: {} })),
   process: vi.fn(async () => ({ content: [], details: {} })),
 }));
@@ -35,12 +37,15 @@ vi.mock("./bash-tools.js", () => ({
       execute: shellSpies.exec,
     };
   },
-  createProcessTool: () => ({
-    name: "process",
-    description: "process test double",
-    parameters: { type: "object", properties: {} },
-    execute: shellSpies.process,
-  }),
+  createProcessTool: (defaults?: ProcessToolDefaults) => {
+    shellSpies.processDefaults(defaults);
+    return {
+      name: "process",
+      description: "process test double",
+      parameters: { type: "object", properties: {} },
+      execute: shellSpies.process,
+    };
+  },
 }));
 
 const scheduledToolPolicy = {
@@ -59,6 +64,31 @@ function scheduledExec(options: Parameters<typeof createOpenClawCodingTools>[0] 
 
 describe("createOpenClawCodingTools scheduled exec target", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("keeps participation exec approvals in-turn, disables exit wakes, and makes process observational", async () => {
+    const tools = createOpenClawCodingTools({
+      participationCeiling: { kind: "send", profileId: "guest", sessionKey: "agent:main:test" },
+      sessionPermissionPolicy: { mode: "full", root: process.cwd() },
+      exec: { notifyOnExit: true, approvalFollowupMode: "agent" },
+    });
+    await tools
+      .find((tool) => tool.name === "exec")!
+      .execute("participation-exec", { command: "true" });
+    await tools
+      .find((tool) => tool.name === "process")!
+      .execute("participation-process", { action: "list" });
+    expect(shellSpies.defaults).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        notifyOnExit: false,
+        approvalFollowupMode: undefined,
+        mode: "ask",
+        bypassHostApprovalFloors: false,
+      }),
+    );
+    expect(shellSpies.processDefaults).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: true }),
+    );
+  });
 
   it("uses the scheduled Gateway pin when no target is requested", async () => {
     const execTool = scheduledExec();

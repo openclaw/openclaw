@@ -52,6 +52,8 @@ import { ToolInputError, type AgentToolWithMeta } from "./tools/common.js";
 import { failText, textResult } from "./tools/tool-results.js";
 
 export type ProcessToolDefaults = {
+  /** Observe existing processes without inheriting their launch authority. */
+  readOnly?: boolean;
   hasCronTool?: boolean;
   inputWaitIdleMs?: number;
   scopeKey?: string;
@@ -297,6 +299,11 @@ export function createProcessTool(
       if (!PROCESS_TOOL_ACTIONS.includes(action as ProcessToolAction)) {
         return failText(
           `Invalid process action. Expected one of: ${PROCESS_TOOL_ACTIONS.join(", ")}`,
+        );
+      }
+      if (defaults?.readOnly && !isProcessObservationAction(args)) {
+        return failText(
+          "This turn can only list, poll, or log processes. Start a separately approved exec command instead of controlling an existing process.",
         );
       }
       const params = args as Omit<Static<typeof processSchema>, "timeout"> & {
