@@ -156,7 +156,7 @@ export function prepareCompactionSafeguardSections(params: {
 }
 
 /** Kept separate so a custom provider still runs before any recent-turn splitting. */
-export function prepareCompactionSafeguardContext(params: {
+function prepareCompactionSafeguardContext(params: {
   messagesToSummarize: AgentMessage[];
   recentTurnsPreserve?: number;
   splitTurnContextChars: number;
@@ -180,7 +180,7 @@ export function prepareCompactionSafeguardContext(params: {
 }
 
 /** Final scalar policy shared by array preparation and a selected compaction view. */
-export function prepareCompactionSafeguardSummaryFacts(params: {
+function prepareCompactionSafeguardSummaryFacts(params: {
   previousSummary: string | undefined;
   requestSelection: CompactionPreparation["requestSelection"];
   latestUnresolvedUserRequest: string | undefined;

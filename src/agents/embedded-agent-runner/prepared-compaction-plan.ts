@@ -178,7 +178,7 @@ export function prepareCompactionPlan(
 }
 
 /** Use the canonical context projector for reset, retained tools, and prompt retirement. */
-export function projectPreparedCompactionReplacement(
+function projectPreparedCompactionReplacement(
   retained: SessionEntry[],
   result: Pick<CompactionResult, "firstKeptEntryId" | "tokensBefore">,
   itemId: string,
