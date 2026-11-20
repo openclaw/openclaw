@@ -558,6 +558,8 @@ export function isPrimarySessionListQuery(options: SessionListScope): boolean {
     !query.search &&
     !query.ownerId &&
     query.involvingMe !== true &&
+    // Gateway-owned participation: events cannot certify this membership.
+    query.promptedByMe !== true &&
     query.includeOwnerSessionCounts !== true &&
     query.excludeSubagents !== true &&
     query.excludeCron !== true &&

@@ -206,6 +206,11 @@ export function filterSessionEntries(
       }
     : undefined;
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
+  // Recorded prompts only: ownership, mentions, and activity timestamps are not participation.
+  // Without an authenticated viewer (null), `promptedByMe` matches no rows.
+  const promptedBy =
+    opts.promptedByMe === true &&
+    (params.viewerProfileId ? resolveSessionProfileId(params.viewerProfileId, identities) : null);
 
   // Person references resolve before candidate filters; ordinary reads need no roster copy.
   const visibleEntries: SessionEntryPair[] = [];
@@ -439,6 +444,16 @@ export function filterSessionEntries(
       opts.requireLastInteraction === true &&
       (!isFinitePositiveTimestamp(entry.lastInteractionAt) ||
         normalizeOptionalString(entry.heartbeatIsolatedBaseSessionKey))
+    ) {
+      continue;
+    }
+    if (
+      promptedBy !== false &&
+      !entry.participants?.some(
+        ({ identity }) =>
+          identity.type === "profile" &&
+          resolveSessionProfileId(identity.id, identities) === promptedBy,
+      )
     ) {
       continue;
     }

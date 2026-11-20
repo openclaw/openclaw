@@ -82,6 +82,8 @@ export const SessionsListParamsSchema = closedObject({
   ownerFirst: Type.Optional(Type.Boolean()),
   /** Limit rows to sessions owned by or previously prompted by the authenticated viewer. */
   involvingMe: Type.Optional(Type.Boolean()),
+  /** Limit rows to sessions the authenticated viewer's profile has prompted; ownership alone never matches. */
+  promptedByMe: Type.Optional(Type.Boolean()),
   /** Qualified human-profile relationship, independent of id-only actor filters. */
   profileRelation: Type.Optional(
     closedObject({

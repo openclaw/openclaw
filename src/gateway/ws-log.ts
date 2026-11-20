@@ -45,6 +45,7 @@ const SESSION_LIST_FILTERS = [
   "creatorId",
   "ownerId",
   "involvingMe",
+  "promptedByMe",
   "profileRelation",
   "involvingProfileId",
   "spawnedBy",

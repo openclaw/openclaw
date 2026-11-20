@@ -1353,9 +1353,9 @@ var External = [
     /(^sessionKey$|^agentId$|^environmentId$)/u,
     /(^environmentId$|^port$|^title$|^description$|^path$|^sessionKey$|^agentId$)/u,
     /(^id$|^environmentId$|^sessionKey$|^agentId$)/u,
-    /(^source$|^ifRowsRevision$|^rowMode$|^limit$|^offset$|^activeMinutes$|^activityPulseBoundaries$|^activeOnly$|^requireLastInteraction$|^sortBy$|^includeGlobal$|^includeUnknown$|^excludeSubagents$|^excludeCron$|^excludeSystem$|^excludeDock$|^configuredAgentsOnly$|^includeDerivedTitles$|^includeLastMessage$|^includeActivitySummary$|^label$|^projectId$|^workspaceDir$|^group$|^pinned$|^boardFace$|^hasBoard$|^creatorId$|^ownerId$|^ownerFirst$|^involvingMe$|^profileRelation$|^involvingProfileId$|^includePeople$|^includeOwnerSessionCounts$|^spawnedBy$|^agentId$|^search$|^archived$)/u,
+    /(^source$|^ifRowsRevision$|^rowMode$|^limit$|^offset$|^activeMinutes$|^activityPulseBoundaries$|^activeOnly$|^requireLastInteraction$|^sortBy$|^includeGlobal$|^includeUnknown$|^excludeSubagents$|^excludeCron$|^excludeSystem$|^excludeDock$|^configuredAgentsOnly$|^includeDerivedTitles$|^includeLastMessage$|^includeActivitySummary$|^label$|^projectId$|^workspaceDir$|^group$|^pinned$|^boardFace$|^hasBoard$|^creatorId$|^ownerId$|^ownerFirst$|^involvingMe$|^promptedByMe$|^profileRelation$|^involvingProfileId$|^includePeople$|^includeOwnerSessionCounts$|^spawnedBy$|^agentId$|^search$|^archived$)/u,
     /(^profileId$|^relationship$)/u,
-    /(^source$|^ifRowsRevision$|^rowMode$|^limit$|^offset$|^activeMinutes$|^activityPulseBoundaries$|^activeOnly$|^requireLastInteraction$|^sortBy$|^includeGlobal$|^includeUnknown$|^excludeSubagents$|^excludeCron$|^excludeSystem$|^excludeDock$|^configuredAgentsOnly$|^includeDerivedTitles$|^includeLastMessage$|^includeActivitySummary$|^label$|^projectId$|^workspaceDir$|^group$|^pinned$|^boardFace$|^hasBoard$|^creatorId$|^ownerId$|^ownerFirst$|^involvingMe$|^profileRelation$|^involvingProfileId$|^includePeople$|^includeOwnerSessionCounts$|^spawnedBy$|^agentId$|^search$|^archived$|^includeMessageBodies$)/u,
+    /(^source$|^ifRowsRevision$|^rowMode$|^limit$|^offset$|^activeMinutes$|^activityPulseBoundaries$|^activeOnly$|^requireLastInteraction$|^sortBy$|^includeGlobal$|^includeUnknown$|^excludeSubagents$|^excludeCron$|^excludeSystem$|^excludeDock$|^configuredAgentsOnly$|^includeDerivedTitles$|^includeLastMessage$|^includeActivitySummary$|^label$|^projectId$|^workspaceDir$|^group$|^pinned$|^boardFace$|^hasBoard$|^creatorId$|^ownerId$|^ownerFirst$|^involvingMe$|^promptedByMe$|^profileRelation$|^involvingProfileId$|^includePeople$|^includeOwnerSessionCounts$|^spawnedBy$|^agentId$|^search$|^archived$|^includeMessageBodies$)/u,
     /(^kind$|^routeSegment$|^hostId$|^identifierAlphabet$|^fullLength$|^minPrefixLength$|^lookup$|^ambiguity$)/u,
     /^[a-z][a-z0-9-]*$/u,
     /(^catalogId$|^metadataOnly$|^cursors$|^agentId$|^progressId$|^allowPartialResults$|^search$|^limitPerHost$|^hostIds$)/u,
@@ -14575,6 +14575,9 @@ var External = [
     (value.ownerId === void 0 || !("ownerId" in value) || check_63(value.ownerId)) &&
     (value.ownerFirst === void 0 || !("ownerFirst" in value) || check_181(value.ownerFirst)) &&
     (value.involvingMe === void 0 || !("involvingMe" in value) || check_181(value.involvingMe)) &&
+    (value.promptedByMe === void 0 ||
+      !("promptedByMe" in value) ||
+      check_181(value.promptedByMe)) &&
     (value.profileRelation === void 0 ||
       !("profileRelation" in value) ||
       check_2198(value.profileRelation)) &&
@@ -14691,6 +14694,9 @@ var External = [
     (value.ownerId === void 0 || !("ownerId" in value) || check_63(value.ownerId)) &&
     (value.ownerFirst === void 0 || !("ownerFirst" in value) || check_181(value.ownerFirst)) &&
     (value.involvingMe === void 0 || !("involvingMe" in value) || check_181(value.involvingMe)) &&
+    (value.promptedByMe === void 0 ||
+      !("promptedByMe" in value) ||
+      check_181(value.promptedByMe)) &&
     (value.profileRelation === void 0 ||
       !("profileRelation" in value) ||
       check_2198(value.profileRelation)) &&

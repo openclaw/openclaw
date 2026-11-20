@@ -354,6 +354,7 @@ export function createGatewayRpcDiagnostics(
             : params?.ownerId !== undefined
               ? "owner"
               : params?.involvingMe === true ||
+                  params?.promptedByMe === true ||
                   params?.involvingProfileId !== undefined ||
                   params?.profileRelation !== undefined
                 ? "involving"

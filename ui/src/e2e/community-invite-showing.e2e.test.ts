@@ -1,11 +1,12 @@
 import { expect, it } from "vitest";
+import { sessionListResult } from "../test-helpers/chat-model.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
+import { seedChatSettings, sessionResponseCase } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
@@ -22,7 +23,38 @@ const sessions = Array.from({ length: 32 }, (_, index) =>
   ),
 );
 
+function promptedSessions(totalCount: number) {
+  return {
+    "sessions.list": sessionResponseCase(
+      { promptedByMe: true },
+      {
+        ...sessionListResult(1, []),
+        totalCount,
+      },
+    ),
+  };
+}
+
 suite.define(() => {
+  it("keeps the first openings quiet until the Gateway counts three prompted sessions", async () =>
+    suite.withPage({ viewport: { width: 1280, height: 540 } }, async ({ page }) => {
+      await seedChatSettings(page, suite.server.baseUrl, { sidebarAgentsMode: "chip" });
+      const gateway = await installMockGateway(page, {
+        communityInvite: true,
+        methodResponses: promptedSessions(2),
+        sessions,
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+      await gateway.waitForRequest("sessions.list", { match: { promptedByMe: true } });
+      await page.locator('[data-session-key="agent:main:task-1"]').waitFor();
+      // Let the settled count publish before asserting the card's absence.
+      for (let frame = 0; frame < 3; frame += 1) {
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+      }
+      expect(await page.locator(".community-invite-card").count()).toBe(0);
+      expect(await page.getByRole("dialog").count()).toBe(0);
+    }));
+
   for (const [mobile, mode] of [
     [false, "dark"],
     [true, "light"],
@@ -40,7 +72,11 @@ suite.define(() => {
             sidebarAgentsMode: "chip",
             navWidth: 320,
           });
-          await installMockGateway(page, { communityInvite: true, sessions });
+          await installMockGateway(page, {
+            communityInvite: true,
+            methodResponses: promptedSessions(3),
+            sessions,
+          });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           if (mobile) {
             await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();

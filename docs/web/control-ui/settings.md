@@ -105,6 +105,8 @@ The choice is saved to your authenticated profile on the connected Gateway and h
 
 The **Community** card at the bottom of the expanded sidebar links to Discord, Reddit, and X in new tabs. On phones, a compact card sits at the bottom of the navigation drawer without covering the session list.
 
+The card does not appear when you first open the app. It appears in the sidebar, never as a pop-up, once you have sent messages in at least three different conversations; several messages in one conversation count once. Conversations count only when your signed-in profile sent a message there, so imported history, automations, system probes, subagents, and conversations only someone else used do not count. Until the Gateway confirms three conversations, including while it is unreachable, the card stays hidden. **Help** in the profile menu keeps its Discord link available at any time.
+
 Select **Dismiss and don't show again** to hide the card in that browser. Existing saved dismissals continue to apply across navigation, reloads, and interface updates. Dismissal is browser-local and does not sync to other browsers. If a dismissal cannot be saved, the card stays hidden for the current page and a message explains that the preference could not be saved.
 
 To hide Community for everyone using a Control UI deployment, run this on the Gateway serving that UI:

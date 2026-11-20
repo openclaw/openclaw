@@ -440,6 +440,23 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expect(JSON.stringify(await fixture.transcript())).toContain("Synthetic imported question");
     }));
 
+  it("never counts imported history as the importer's prompted session", () =>
+    withCatalog(async (fixture) => {
+      expectSuccess(await fixture.call(), { created: true, importedItems: 2 });
+      const list = (opts: { involvingMe?: boolean; promptedByMe?: boolean }) =>
+        listProjectedSessions({
+          projection: fixture.projection,
+          context: fixture.context,
+          client: fixture.client,
+          opts: { agentId: "main", ...opts },
+        });
+      expect((await list({ involvingMe: true })).sessions.map((row) => row.key)).toContain(
+        fixture.key,
+      );
+      expect(JSON.stringify(await fixture.transcript())).toContain("Synthetic imported question");
+      expect((await list({ promptedByMe: true })).totalCount).toBe(0);
+    }));
+
   it("keeps a copied draft hidden from another viewer until publication and preserves publication on re-import", () =>
     withCatalog(async (fixture) => {
       await fixture.updateNative({ visibility: "draft" });

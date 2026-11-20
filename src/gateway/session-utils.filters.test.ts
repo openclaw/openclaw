@@ -374,6 +374,58 @@ it.each([true, false])("filters canonical pin state before pagination: %s", asyn
   expect(result).toMatchObject({ totalCount: pinned ? 1 : 4, hasMore: !pinned });
 });
 
+it("counts only sessions the authenticated viewer prompted", async () => {
+  const ada = actor(adaId);
+  const bob = actor(bobId);
+  const store = rows({
+    "owned-prompted": { ...owned(ada, ada), participants: people(adaId) },
+    shared: { createdActor: bob, participants: people(bobId, adaId) },
+    "merged-alias": { createdActor: bob, participants: people(mergedAdaId) },
+    "owned-only": owned(ada, ada),
+    "assigned-only": owned(bob, ada),
+    "active-only": { createdActor: ada, lastInteractionAt: now },
+    mentioned: {
+      createdActor: bob,
+      participants: people(bobId),
+      profileInvolvement: {
+        profiles: {
+          [adaId]: {
+            hidden: false,
+            updatedAt: now,
+            lastMention: { generation: "g", sequence: 1, timestamp: now },
+          },
+        },
+      },
+    },
+    "other-person": { createdActor: bob, participants: people(bobId) },
+    "agent-prompted": {
+      createdActor: ada,
+      participants: [{ identity: { type: "agent", id: "main" } }],
+    },
+    "subagent:child": { createdActor: ada, participants: people(adaId) },
+    "cron:job": { participants: people(adaId) },
+  });
+  const opts = {
+    promptedByMe: true,
+    archived: "all",
+    excludeSubagents: true,
+    excludeCron: true,
+    excludeSystem: true,
+    excludeDock: true,
+  } satisfies SessionsListParams;
+  const viewer = await listSessionFixture({ cfg, storePath, store, opts, viewerProfileId: adaId });
+  expect(viewer.sessions.map((row) => row.key)).toEqual(
+    ["owned-prompted", "shared", "merged-alias"].map(sessionKey),
+  );
+  expect(viewer.totalCount).toBe(3);
+  const other = await listSessionFixture({ cfg, storePath, store, opts, viewerProfileId: bobId });
+  expect(other.sessions.map((row) => row.key)).toEqual(
+    ["shared", "mentioned", "other-person"].map(sessionKey),
+  );
+  // Without an authenticated profile there is no participation evidence.
+  expect((await list(store, opts)).totalCount).toBe(0);
+});
+
 it("keeps profile selectors, authenticated involvement, and their owner facets distinct", async () => {
   const ada = actor(adaId);
   const bob = actor(bobId);

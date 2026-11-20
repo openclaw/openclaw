@@ -2,13 +2,15 @@ import { createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
+import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
   COMMUNITY_INVITE_KEY,
   dismissCommunityInvite,
-  isCommunityInviteEligible,
+  isCommunityInviteDismissed,
+  observeCommunityInviteSessionUse,
 } from "../community-invite-state.ts";
 import { BrandIcon, Icon } from "./icon.tsx";
 import "../../styles/community-invite-card.css";
@@ -44,25 +46,37 @@ const communityLinks = [
 ] as const;
 
 export function SidebarCommunityInvite(props: { onDismiss: () => void; mode: "light" | "dark" }) {
-  const [eligible, setEligible] = createSignal(isCommunityInviteEligible());
+  const app = useApplication();
+  const [dismissed, setDismissed] = createSignal(isCommunityInviteDismissed());
+  // First-run quiet period: the card appears in place, never as a modal, once used.
+  const [sessionsUsed, setSessionsUsed] = createSignal(false);
   const titleId = createUniqueId();
-  onSettled(() =>
-    listen(window, "storage", (event) => {
+  let stopSessionUse: (() => void) | undefined;
+  onSettled(() => {
+    const stopStorage = listen(window, "storage", (event) => {
       if (event.key === COMMUNITY_INVITE_KEY || event.key === null) {
-        setEligible(isCommunityInviteEligible());
+        setDismissed(isCommunityInviteDismissed());
       }
-    }),
-  );
+    });
+    if (!isCommunityInviteDismissed()) {
+      stopSessionUse = observeCommunityInviteSessionUse(app, () => setSessionsUsed(true));
+    }
+    return () => {
+      stopStorage();
+      stopSessionUse?.();
+    };
+  });
   const dismiss = () => {
     const result = dismissCommunityInvite();
-    setEligible(false);
+    setDismissed(true);
+    stopSessionUse?.();
     props.onDismiss();
     if (!result.ok) {
       showToast({ severity: "error", message: t("communityInvite.dismissFailed") });
     }
   };
   return (
-    <Show when={eligible()}>
+    <Show when={sessionsUsed() && !dismissed()}>
       <div class="community-invite-card">
         <aside class="invite" role="complementary" aria-labelledby={titleId}>
           <div class="invite__header">
