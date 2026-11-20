@@ -4,6 +4,7 @@ import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/sr
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { SkillCategoryDirectory } from "../../lib/skills/clawhub-search.ts";
 import type {
   ClawHubSkillDetail,
   ClawHubSkillSecurityVerdict,
@@ -53,7 +54,7 @@ export type SkillsProps = {
   readClawHubDetail: () => ClawHubSkillDetail | null;
   readClawHubVerdicts: () => Record<string, ClawHubSkillSecurityVerdict>;
   readClawHubSearch: () => boolean;
-  readCategories: () => SkillsCategoriesResult["categories"];
+  readCategories: () => SkillCategoryDirectory | null;
   onRetryCategories: () => void;
   onCategoryChange: (category: SkillsPresentation["clawhubCategory"]) => void;
   hasNextPage: boolean;

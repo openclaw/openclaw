@@ -27,6 +27,7 @@ export function CatalogDiscoveryChips(props: {
 }
 
 export function CatalogDiscoveryChip(props: {
+  ref?: (button: HTMLButtonElement) => void;
   active: boolean;
   icon?: JSX.Element;
   onClick: () => void;
@@ -35,6 +36,7 @@ export function CatalogDiscoveryChip(props: {
   return (
     <button
       type="button"
+      ref={(button) => props.ref?.(button)}
       class={["plugin-catalog-chip", { "is-active": props.active }]}
       aria-pressed={props.active ? "true" : "false"}
       onClick={() => props.onClick()}

@@ -154,7 +154,7 @@ describe("unified skill discovery", () => {
     const categories = Promise.withResolvers<{ categories: { slug: string; label: string }[] }>();
     const request = vi.fn(async (method: string) => {
       if (method === "skills.search") {
-        return { results: [remoteSkill()] };
+        return { results: [{ ...remoteSkill(), categories: ["research"] }] };
       }
       if (method === "skills.categories") {
         return categories.promise;
@@ -183,6 +183,9 @@ describe("unified skill discovery", () => {
         "Category directory unavailable",
       ),
     );
+    expect(feed()?.closest("[data-catalog-section]")?.getAttribute("data-catalog-section")).toBe(
+      "clawhub",
+    );
     const before = request.mock.calls.filter(([method]) => method === "skills.search").length;
     request.mockResolvedValueOnce({ categories: [{ slug: "research", label: "Research" }] });
     mounted.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
@@ -191,7 +194,9 @@ describe("unified skill discovery", () => {
         "Research",
       ),
     );
-    expect(feed()).not.toBeNull();
+    expect(feed()?.closest("[data-catalog-section]")?.getAttribute("data-catalog-section")).toBe(
+      "category-research",
+    );
     expect(request.mock.calls.filter(([method]) => method === "skills.search")).toHaveLength(
       before,
     );
@@ -237,6 +242,56 @@ describe("unified skill discovery", () => {
     expect(container.querySelector(".settings-empty")?.textContent).toBe(
       "No skills match your filters.",
     );
+  });
+
+  it("previews only advertised memberships in taxonomy order, with a flat remainder", () => {
+    const alpha = { slug: "lab-a", label: "Field work" };
+    const beta = { slug: "lab-b", label: "On call" };
+    const tagged = Array.from({ length: 6 }, (_, index) => ({
+      ...remoteSkill("alice", "row-" + index, "Row " + index),
+      categories: index ? [alpha.slug] : [alpha.slug, beta.slug, beta.slug],
+    }));
+    const uncategorized = [
+      remoteSkill("alice", "old"),
+      { ...remoteSkill("alice", "unknown"), categories: ["unadvertised"] },
+    ];
+    const onCategoryChange = vi.fn();
+    const container = renderDiscovery({
+      readCategories: () => ({ categories: [beta, alpha, { slug: "empty", label: "Empty" }] }),
+      clawhubResults: [...tagged, ...uncategorized],
+      onCategoryChange,
+    });
+    const sections = [...container.querySelectorAll("[data-catalog-section]")];
+    expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
+      "On call",
+      "Field work",
+      "ClawHub",
+    ]);
+    const ids = (section: Element) =>
+      [...section.querySelectorAll("[data-skill-id]")].map((el) =>
+        el.getAttribute("data-skill-id"),
+      );
+    expect(ids(sections[0]!)).toEqual(["remote:@alice/row-0"]);
+    expect(ids(sections[1]!)).toEqual(tagged.slice(0, 4).map((row) => "remote:" + row.installRef));
+    expect(ids(sections[2]!)).toEqual(uncategorized.map((row) => "remote:" + row.installRef));
+    const chip = [...container.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")].find(
+      (button) => button.textContent === alpha.label,
+    )!;
+    const focus = vi.spyOn(chip, "focus");
+    sections[1]!.querySelector<HTMLButtonElement>(".plugin-catalog-section__view-all")!.click();
+    expect(focus).toHaveBeenCalledOnce();
+    expect(onCategoryChange).toHaveBeenCalledExactlyOnceWith(alpha);
+    expect(sections[2]!.querySelector(".plugin-catalog-section__view-all")).toBeNull();
+  });
+
+  it("keeps text search ranked and flat even when every row has an advertised category", () => {
+    const container = renderDiscovery({
+      readCategories: () => ({ categories: [{ slug: "research", label: "Research" }] }),
+      clawhubQuery: "citations",
+      clawhubResults: [{ ...remoteSkill(), categories: ["research"] }],
+    });
+    expect(container.querySelector("[data-catalog-section=clawhub] h3")?.textContent).toBe("Repo");
+    expect(container.querySelector(".plugin-catalog-section__view-all")).toBeNull();
   });
 
   it("does not mistake an invalid namesake for a ClawHub install", () => {

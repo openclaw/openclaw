@@ -25,7 +25,7 @@ import {
   verdictForSkill,
 } from "./skill-status.tsx";
 import "../../styles/skills-discovery.css";
-import type { SkillsProps } from "./view-types.ts";
+import type { SkillsPresentation, SkillsProps } from "./view-types.ts";
 
 registerSkillsBrowserEnglish();
 
@@ -41,6 +41,37 @@ type SkillDiscoveryEntry = {
   remote?: ClawHubSearchResult;
 };
 
+type SkillCategory = NonNullable<SkillsPresentation["clawhubCategory"]>;
+const OVERVIEW_PREVIEW_SIZE = 4;
+
+/** A shelf previews this page in feed order. Its action starts a separate category browse. */
+function groupOverview(rows: SkillDiscoveryEntry[], taxonomy: SkillCategory[]) {
+  if (!taxonomy.length || !rows.length) {
+    return { shelves: [], ungrouped: rows };
+  }
+  const buckets = new Map<string, { category: SkillCategory; rows: SkillDiscoveryEntry[] }>();
+  for (const category of taxonomy) {
+    buckets.set(category.slug, { category, rows: [] });
+  }
+  const ungrouped: SkillDiscoveryEntry[] = [];
+  for (const row of rows) {
+    let matched = false;
+    for (const slug of new Set(row.remote?.categories)) {
+      const bucket = buckets.get(slug);
+      if (bucket) {
+        matched = true;
+        if (bucket.rows.length < OVERVIEW_PREVIEW_SIZE) {
+          bucket.rows.push(row);
+        }
+      }
+    }
+    if (!matched) {
+      ungrouped.push(row);
+    }
+  }
+  return { shelves: [...buckets.values()].filter((bucket) => bucket.rows.length), ungrouped };
+}
+
 function linkedOwner(skill: SkillStatusEntry): string | null {
   const link = skill.clawhub;
   return link?.valid && link.ownerHandle ? `@${link.ownerHandle}` : null;
@@ -49,7 +80,7 @@ function linkedOwner(skill: SkillStatusEntry): string | null {
 function DiscoveryRow(props: {
   entry: SkillDiscoveryEntry;
   skills: SkillsProps;
-  contentRef: (element: HTMLDivElement) => void;
+  contentRef?: (element: HTMLDivElement) => void;
 }) {
   const reference = () => props.entry.remote?.installRef ?? "";
   const installed = () => Boolean(props.entry.skill || props.entry.library);
@@ -80,7 +111,7 @@ function DiscoveryRow(props: {
           }}
         />
       )}
-      <div class="plugin-catalog-card__content" ref={props.contentRef}>
+      <div class="plugin-catalog-card__content" ref={(element) => props.contentRef?.(element)}>
         <div class="plugin-catalog-row__main">
           <SkillTile imageUrl={icon()} emoji={props.entry.skill?.emoji} />
           <div class="plugin-catalog-row__text">
@@ -259,6 +290,16 @@ export function SkillDiscovery(props: SkillsProps) {
     setScope(next);
     props.onCategoryChange(null);
   };
+  const categoryChips = new Map<string, HTMLButtonElement>();
+  const selectCategory = (next: SkillCategory) => {
+    setScope("all");
+    props.onCategoryChange(next);
+  };
+  const sections = createMemo(() =>
+    !category() && !query().trim() && scope() === "all"
+      ? groupOverview(remoteRows(), props.readCategories()?.categories ?? [])
+      : { shelves: [], ungrouped: remoteRows() },
+  );
   const remoteTitle = () => category()?.label ?? t("skillsPage.clawHub");
   const inventoryReady = () =>
     props.libraryEntries !== undefined &&
@@ -344,43 +385,35 @@ export function SkillDiscovery(props: SkillsProps) {
             {t("skillsPage.installed")}
           </CatalogDiscoveryChip>
         </Show>
-        <Errored
-          fallback={(error, reset) => (
+        <Show when={props.readCategories()?.error}>
+          {(message) => (
             <InlineAlert tone="warning" role="alert">
-              {formatUiError(error())}{" "}
-              <button
-                type="button"
-                class="btn btn--sm"
-                onClick={() => {
-                  props.onRetryCategories();
-                  reset();
-                }}
-              >
+              {message()}{" "}
+              <button type="button" class="btn btn--sm" onClick={() => props.onRetryCategories()}>
                 {t("common.retry")}
               </button>
             </InlineAlert>
           )}
+        </Show>
+        <Show
+          when={props.readCategories()}
+          fallback={<span class="skeleton plugin-catalog-chip--skeleton" aria-hidden="true" />}
         >
-          <Loading
-            on={epoch()}
-            fallback={<span class="skeleton plugin-catalog-chip--skeleton" aria-hidden="true" />}
-          >
-            <For each={props.readCategories()} keyed={(item) => item.slug}>
+          {(directory) => (
+            <For each={directory().categories} keyed={(item) => item.slug}>
               {(item) => (
                 <CatalogDiscoveryChip
+                  ref={(button) => categoryChips.set(item().slug, button)}
                   icon={registryCategoryIcon(item().icon)}
                   active={category()?.slug === item().slug}
-                  onClick={() => {
-                    setScope("all");
-                    props.onCategoryChange(item());
-                  }}
+                  onClick={() => selectCategory(item())}
                 >
                   {item().label}
                 </CatalogDiscoveryChip>
               )}
             </For>
-          </Loading>
-        </Errored>
+          )}
+        </Show>
       </CatalogDiscoveryChips>
       <div class="plugin-catalog-results__body">
         <Show when={shelf()}>
@@ -405,13 +438,40 @@ export function SkillDiscovery(props: SkillsProps) {
             </Show>
           }
         >
-          <CatalogDiscoverySection id="clawhub" title={remoteTitle()}>
-            <PluginCatalogGrid items={remoteRows()} results busy={props.loading || pending()}>
-              {(entry, contentRef) => (
-                <DiscoveryRow entry={entry()} skills={props} contentRef={contentRef} />
-              )}
-            </PluginCatalogGrid>
-          </CatalogDiscoverySection>
+          <For each={sections().shelves} keyed={(section) => section.category.slug}>
+            {(section) => (
+              <CatalogDiscoverySection
+                id={"category-" + section().category.slug}
+                title={section().category.label}
+                viewAllLabel={t("skillsPage.viewAll")}
+                onViewAll={() => {
+                  // The shelf button leaves the DOM; keep keyboard navigation on its matching chip.
+                  const next = section().category;
+                  categoryChips.get(next.slug)?.focus();
+                  selectCategory(next);
+                }}
+              >
+                <div class="plugin-catalog-grid">
+                  <For each={section().rows} keyed={(entry) => entry.id}>
+                    {(entry) => <DiscoveryRow entry={entry()} skills={props} />}
+                  </For>
+                </div>
+              </CatalogDiscoverySection>
+            )}
+          </For>
+          <Show when={sections().ungrouped.length}>
+            <CatalogDiscoverySection id="clawhub" title={remoteTitle()}>
+              <PluginCatalogGrid
+                items={sections().ungrouped}
+                results
+                busy={props.loading || pending()}
+              >
+                {(entry, contentRef) => (
+                  <DiscoveryRow entry={entry()} skills={props} contentRef={contentRef} />
+                )}
+              </PluginCatalogGrid>
+            </CatalogDiscoverySection>
+          </Show>
         </Show>
         <Show when={scope() === "all" && props.hasNextPage}>
           <div class="plugin-catalog-load-more">

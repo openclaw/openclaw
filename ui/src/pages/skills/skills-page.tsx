@@ -26,7 +26,10 @@ import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { loadSkillCategories } from "../../lib/skills/clawhub-search.ts";
+import {
+  loadSkillCategories,
+  type SkillCategoryDirectory,
+} from "../../lib/skills/clawhub-search.ts";
 import {
   closeClawHubDetail,
   createSkillsChangeReloader,
@@ -167,11 +170,14 @@ export function SkillsPage(props: SkillsPageProps) {
       ? gateway.client
       : null,
   );
-  const readCategories = createMemo(async () => {
-    detailEpoch();
-    const client = categoryClient();
-    return client ? (await loadSkillCategories(client)).categories : [];
-  });
+  const readCategories = createMemo<SkillCategoryDirectory | null>(
+    () => {
+      detailEpoch();
+      const client = categoryClient();
+      return client ? loadSkillCategories(client) : { categories: [] };
+    },
+    { loadingValue: null },
+  );
   const detailRef = createMemo(() => skills.read().clawhubDetailRef);
   const detailSnapshot = createMemo(() => skills.read().clawhubDetail);
   const detailError = createMemo(() => skills.read().clawhubDetailError);
@@ -370,22 +376,26 @@ export function SkillsPage(props: SkillsPageProps) {
     lastSearchScope = scope;
     // A category and its cursor belong to the registry on the previous connection.
     setLocal((state) => void (state.clawhubCategory = null));
+    // The raw gateway may be connected before this page has admitted that connection.
+    if (!scope[0] || !scope[1]) {
+      search.reset();
+      return;
+    }
     performSearch({ query });
   }
 
   function performSearch(params: SkillsSearchParams, debounce = false) {
-    const snapshot = context.gateway.snapshot;
-    const client = snapshot.client;
+    const snapshot = gateway.snapshot;
     if (
-      snapshot.phase !== "connected" ||
-      !canReadSkills() ||
+      snapshot?.phase !== "connected" ||
+      !hasOperatorReadAccess(snapshot.hello?.auth ?? null) ||
       admittedSurface !== "discovery" ||
-      !client
+      !snapshot.client
     ) {
       search.reset();
       return;
     }
-    search.run(client, params, debounce);
+    search.run(snapshot.client, params, debounce);
   }
 
   function agentSelection() {

@@ -18,6 +18,7 @@ const catalog = {
     searching: "Searching…",
     categories: "Skill categories",
     loadMore: "Load more",
+    viewAll: "View all",
     loadingMore: "Loading more…",
     disconnected: "Disconnected",
     empty: "No skills yet. Search ClawHub to add one.",

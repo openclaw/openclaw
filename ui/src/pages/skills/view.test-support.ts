@@ -84,7 +84,7 @@ export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
     saving: false,
     readClawHubDetail: () => read(state.clawhubDetail, state.clawhubDetailError),
     clawhubSearchEpoch: 0,
-    readCategories: () => [],
+    readCategories: () => ({ categories: [] }),
     onRetryCategories: () => undefined,
     onCategoryChange: () => undefined,
     hasNextPage: false,

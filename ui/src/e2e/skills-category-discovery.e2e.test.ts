@@ -10,15 +10,16 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Skills category discovery" });
 const viewport = { width: 1280, height: 900 };
-const categories = [
+const taxonomy = [
   { slug: "research", label: "Research", icon: "search" },
   { slug: "development", label: "Development", icon: "wrench" },
 ];
-function listing(slug: string, displayName: string, summary: string) {
+function listing(slug: string, displayName: string, summary: string, categories: string[] = []) {
   return {
     slug,
     displayName,
     summary,
+    categories,
     score: 1,
     registry: "https://clawhub.ai",
     ownerHandle: "fieldnotes",
@@ -29,12 +30,32 @@ const index = listing(
   "release-digest",
   "Release Digest",
   "Turn release notes into a short weekly digest.",
+  ["development"],
 );
 const notebook = listing(
   "field-notebook",
   "Field Notebook",
   "Collect citations and notes in one place.",
+  ["research"],
 );
+const readingRoom = listing(
+  "reading-room",
+  "Reading Room",
+  "Organize papers into a reading list.",
+  ["research"],
+);
+const changelog = listing(
+  "change-review",
+  "Change Review",
+  "Summarize changes for a code review.",
+  ["development"],
+);
+const handoff = listing(
+  "team-handoff",
+  "Team Handoff",
+  "Prepare a concise handoff for a teammate.",
+);
+const overview = [index, notebook, readingRoom, changelog, handoff];
 const atlas = listing(
   "archive-atlas",
   "Archive Atlas",
@@ -55,9 +76,9 @@ function openCatalog(page: Page) {
   return installMockGateway(page, {
     featureMethods: [...defaultControlUiFeatureMethods, "skills.categories", "skills.detail"],
     methodResponses: {
-      "skills.categories": { categories },
+      "skills.categories": { categories: taxonomy },
       "skills.status": createReport([installed]),
-      "skills.search": { results: [index, notebook] },
+      "skills.search": { results: overview },
       "skills.detail": {
         skill: {
           slug: ledger.slug,
@@ -87,23 +108,77 @@ async function capture(page: Page, name: string, title: string) {
   await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
 }
 
+const shelf = (page: Page, title: string) =>
+  page.locator("[data-catalog-section]").filter({ has: row(page, title) });
+
 suite.define(() => {
-  it("browses native category results beyond the default page and resumes the exact cursor on retry", () =>
+  for (const [size, dimensions] of [
+    ["desktop", viewport],
+    ["narrow", { width: 390, height: 844 }],
+  ] as const) {
+    it(`groups the overview from one unfiltered page without horizontal overflow (${size})`, () =>
+      suite.withPage({ viewport: dimensions, locale: "en-US" }, async ({ page }) => {
+        const gateway = await openCatalog(page);
+        await page.goto(suite.server.baseUrl + "skills");
+        await row(page, notebook.displayName).waitFor();
+        await button(page, "Research").waitFor();
+        await capture(page, `overview-${size}`, notebook.displayName);
+
+        const research = shelf(page, "Research");
+        const development = shelf(page, "Development");
+        for (const [section, name] of [
+          [research, notebook.displayName],
+          [development, index.displayName],
+        ] as const) {
+          expect(await section.getByRole("heading", { name }).isVisible()).toBe(true);
+          expect(
+            await section.getByRole("button", { name: "View all", exact: true }).isVisible(),
+          ).toBe(true);
+        }
+        const uncategorized = page.locator('[data-catalog-section="clawhub"]');
+        expect(
+          await uncategorized.getByRole("heading", { name: handoff.displayName }).isVisible(),
+        ).toBe(true);
+        expect(
+          await uncategorized.getByRole("heading", { name: notebook.displayName }).count(),
+        ).toBe(0);
+        expect((await gateway.getRequests("skills.search")).map(({ params }) => params)).toEqual([
+          { limit: 20 },
+        ]);
+        expect(await gateway.getRequests("skills.categories")).toHaveLength(1);
+        const bounds = await page
+          .locator("[data-catalog-section] :is(h2, article, button)")
+          .evaluateAll((elements) => ({
+            viewport: document.documentElement.clientWidth,
+            document: document.documentElement.scrollWidth,
+            leaking: elements
+              .map((element) => ({
+                label: element.textContent?.trim(),
+                rect: element.getBoundingClientRect(),
+              }))
+              .filter(
+                ({ rect }) =>
+                  rect.width > 0 &&
+                  (rect.left < -1 || rect.right > document.documentElement.clientWidth + 1),
+              )
+              .map(({ label }) => label),
+          }));
+        expect(bounds.document).toBe(bounds.viewport);
+        expect(bounds.leaking).toEqual([]);
+      }));
+  }
+
+  it("opens the complete category from View all and resumes its exact cursor on retry", () =>
     suite.withPage({ viewport, locale: "en-US" }, async ({ page }) => {
       const gateway = await openCatalog(page);
       await page.goto(suite.server.baseUrl + "skills");
       await row(page, index.displayName).waitFor();
-      await button(page, "Installed").waitFor();
-      expect((await gateway.waitForRequest("skills.categories")).params).toEqual({});
-      expect((await gateway.waitForRequest("skills.search")).params).toEqual({ limit: 20 });
-      const chip = button(page, "Research");
-      await chip.waitFor();
-      await capture(page, "all-skills", index.displayName);
+      expect(await row(page, atlas.displayName).count()).toBe(0);
       await gateway.setMethodResponse("skills.search", {
         results: [atlas],
         nextCursor: "research:page-2",
       });
-      await chip.click();
+      await shelf(page, "Research").getByRole("button", { name: "View all", exact: true }).click();
       const category = { category: "research", limit: 20 };
       expect((await gateway.waitForRequest("skills.search", { match: category })).params).toEqual(
         category,
@@ -141,7 +216,7 @@ suite.define(() => {
       expect(await gateway.getRequests("skills.install")).toHaveLength(0);
     }));
 
-  it("discards a late category page when returning to All, without filtering installed inventory", () =>
+  it("keeps focus through search and discards retired category pages across All and Installed", () =>
     suite.withPage({ viewport }, async ({ page }) => {
       const gateway = await openCatalog(page);
       await page.goto(suite.server.baseUrl + "skills");
@@ -149,7 +224,14 @@ suite.define(() => {
       const scoped = { category: "research", limit: 20 };
       // Clearing text keeps the category, but returning to All retires its in-flight read.
       const search = page.getByRole("searchbox", { name: "Search skills" });
-      await search.fill("citations");
+      await search.focus();
+      await page.keyboard.type("cit");
+      await gateway.waitForRequest("skills.search", { match: { query: "cit" } });
+      await shelf(page, "ClawHub").getByRole("heading", { name: notebook.displayName }).waitFor();
+      // Use the keyboard, not locator.fill/type: those would silently refocus a replacement input.
+      await page.keyboard.type("ations");
+      expect(await search.inputValue()).toBe("citations");
+      expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
       await gateway.waitForRequest("skills.search", { match: { query: "citations" } });
       // The registry found this semantic match even though neither its copy nor the category contains the query.
       await gateway.setMethodResponse("skills.search", { results: [atlas] });
@@ -164,7 +246,7 @@ suite.define(() => {
       await gateway.deferNext("skills.search", scoped, { exactParams: true });
       await search.fill("");
       await gateway.waitForRequest("skills.search", { match: scoped, exactParams: true });
-      await gateway.setMethodResponse("skills.search", { results: [index, notebook] });
+      await gateway.setMethodResponse("skills.search", { results: overview });
       await button(page, "All").click();
       await row(page, index.displayName).waitFor();
       await gateway.resolveDeferred(
@@ -176,7 +258,7 @@ suite.define(() => {
       await button(page, "Open Daily Brief details").waitFor();
       expect(await row(page, index.displayName).count()).toBe(0);
       await button(page, "All").click();
-      await row(page, index.displayName).waitFor();
+      await shelf(page, "Development").getByRole("heading", { name: index.displayName }).waitFor();
       expect(await row(page, ledger.displayName).count()).toBe(0);
       expect(await button(page, "Load more").count()).toBe(0);
     }));
