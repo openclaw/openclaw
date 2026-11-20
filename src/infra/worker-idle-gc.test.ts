@@ -27,12 +27,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("lets task bursts finish and only schedules collection after heap or external growth", async () => {
+it("lets task bursts finish and only collects after used heap, capacity, or external growth", async () => {
   vi.useFakeTimers();
   const memory = process.memoryUsage();
   let heapUsed = 64 * 1024 * 1024;
+  let heapTotal = memory.heapTotal;
   let external = memory.external;
-  vi.spyOn(process, "memoryUsage").mockImplementation(() => ({ ...memory, heapUsed, external }));
+  vi.spyOn(process, "memoryUsage").mockImplementation(() => ({
+    ...memory,
+    heapUsed,
+    heapTotal,
+    external,
+  }));
 
   for (const pauseMs of [250, 750, 999]) {
     scheduleWorkerIdleGc();
@@ -87,6 +93,56 @@ it("lets task bursts finish and only schedules collection after heap or external
   expect(vi.getTimerCount()).toBe(1);
   await vi.advanceTimersByTimeAsync(1_000);
   expect(collect).toHaveBeenCalledTimes(4);
+
+  // Capacity alone can grow while live heap and external allocations stay low.
+  heapUsed = 8 * 1024 * 1024;
+  external = memory.external;
+  const collectedHeapTotal = heapTotal;
+  heapTotal += 32 * 1024 * 1024;
+  scheduleWorkerIdleGc();
+  expect(vi.getTimerCount()).toBe(0);
+  heapTotal++;
+  scheduleWorkerIdleGc();
+  expect(
+    vi.getTimerCount(),
+    "heap capacity above the growth threshold must schedule collection",
+  ).toBe(1);
+  await vi.advanceTimersByTimeAsync(999);
+  cancelWorkerIdleGc();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(collect).toHaveBeenCalledTimes(4);
+
+  scheduleWorkerIdleGc();
+  heapTotal = collectedHeapTotal;
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(collect).toHaveBeenCalledTimes(4);
+
+  heapTotal += 32 * 1024 * 1024 + 1;
+  scheduleWorkerIdleGc();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(collect).toHaveBeenCalledTimes(5);
+  // A successful collection may keep its capacity; that is the next baseline.
+  scheduleWorkerIdleGc();
+  expect(vi.getTimerCount()).toBe(0);
+
+  if (!process.versions.bun) {
+    const pendingCollection = Promise.withResolvers<undefined>();
+    collect.mockImplementationOnce(() => pendingCollection.promise);
+    heapTotal += 32 * 1024 * 1024 + 1;
+    scheduleWorkerIdleGc();
+    try {
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(collect).toHaveBeenCalledTimes(6);
+      heapTotal += 32 * 1024 * 1024 + 1;
+      scheduleWorkerIdleGc();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      pendingCollection.resolve(undefined);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    scheduleWorkerIdleGc();
+    expect(vi.getTimerCount()).toBe(0);
+  }
 });
 
 it("names a forced collection slow enough to delay requests posted to the worker", async () => {

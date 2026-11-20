@@ -7,23 +7,25 @@ const IDLE_GC_DELAY_MS = 1_000;
 const IDLE_GC_GROWTH_BYTES = 32 * 1024 * 1024;
 const SLOW_IDLE_GC_MS = 1_000;
 const bun = typeof Bun === "object" ? Bun : undefined;
-let collectedMemory = { heapUsed: 0, external: 0 };
+let collectedMemory = { heapUsed: 0, heapTotal: 0, external: 0 };
 let session: Session | undefined;
 let pending: NodeJS.Timeout | undefined;
 let collecting = false;
 
-function hasIdleGarbageGrowth(): boolean {
+function hasIdleMemoryGrowth(): boolean {
   // These isolate-local counters avoid heap walks; external already includes ArrayBuffers.
+  // Heap capacity can stay high after live objects are collected.
   const memory = process.memoryUsage();
   return (
     memory.heapUsed > collectedMemory.heapUsed + IDLE_GC_GROWTH_BYTES ||
+    memory.heapTotal > collectedMemory.heapTotal + IDLE_GC_GROWTH_BYTES ||
     memory.external > collectedMemory.external + IDLE_GC_GROWTH_BYTES
   );
 }
 
 async function collectWorkerIdleGarbage(): Promise<void> {
   pending = undefined;
-  if (!hasIdleGarbageGrowth()) {
+  if (!hasIdleMemoryGrowth()) {
     return;
   }
   collecting = true;
@@ -76,7 +78,7 @@ export function scheduleWorkerIdleGc(): void {
   if (isMainThread || pending || collecting) {
     return;
   }
-  if (!hasIdleGarbageGrowth()) {
+  if (!hasIdleMemoryGrowth()) {
     return;
   }
   // A reply can immediately trigger another task; allow that burst to finish first.
