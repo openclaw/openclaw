@@ -210,8 +210,9 @@ native session is not kept.
 
 - The fork reads through a finished reply that the CLI recorded in the
   session's current native session. When the anchored turn has no such reply
-  (it is still running, it ran on another runtime, or a newer native session
-  replaced it), the fork fails before any CLI or provider I/O.
+  (it is still running, its reply went out through the message tool, it ran on
+  another runtime, or a newer native session replaced it), the fork fails
+  before any CLI or provider I/O.
 - The source session's account boundary applies: a native session bound to
   another auth profile or account is refused, as it is for the session's next
   turn.

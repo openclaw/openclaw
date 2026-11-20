@@ -45,7 +45,7 @@ export function resolveCliSessionForkAnchor(params: {
   const resumeAt = typeof meta?.externalId === "string" ? meta.externalId : "";
   if (!cliSessionId || !resumeAt) {
     throw new Error(
-      `Session forks on CLI runtime ${provider} read through a finished ${provider} reply; the anchored turn has none. Fork after the turn finishes.`,
+      `Session forks on CLI runtime ${provider} branch at a ${provider} reply recorded in the transcript; the anchored turn has none (it is still running, its reply went out through the message tool, or it ran on another runtime). Fork through a turn with a recorded reply.`,
     );
   }
   const binding = getCliSessionBinding(params.entry, provider);

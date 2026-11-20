@@ -174,7 +174,7 @@ it.each([
   {
     name: "a reply the CLI session did not record",
     options: { nativeReply: false },
-    error: "read through a finished claude-cli reply",
+    error: "branch at a claude-cli reply recorded in the transcript; the anchored turn has none",
   },
   {
     name: "a reply from an earlier native session",
