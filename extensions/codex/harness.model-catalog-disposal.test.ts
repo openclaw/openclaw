@@ -12,6 +12,7 @@ const dirs = useSessionStoreTempDirs(afterAll, "codex-catalog-disposal-");
 
 it("cancels a cold catalog before client admission when its harness is disposed", async ({
   signal,
+  onTestFinished,
 }) => {
   const root = dirs.make();
   const executable = path.join(root, "catalog.mjs");
@@ -24,6 +25,7 @@ import { createInterface } from "node:readline";
 const receipt = (method) => fs.appendFileSync(${JSON.stringify(receipts)}, JSON.stringify({ pid: process.pid, method }) + "\\n");
 receipt("started");
 let account = null;
+let authenticatedAccountRead = false;
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
   if (message.id === undefined) return;
@@ -32,11 +34,19 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (message.method === "initialize") {
     result = { userAgent: "codex-cli/${CODEX_APP_SERVER_VERSION}", codexHome: process.env.CODEX_HOME };
   } else if (message.method === "account/login/start") {
+    if (message.params?.type !== "apiKey" || message.params?.apiKey !== "synthetic-catalog-key") {
+      throw new Error("Catalog fixture received an invalid API-key login");
+    }
     account = { type: "apiKey" };
+    authenticatedAccountRead = false;
     result = { type: "apiKey" };
   } else if (message.method === "account/read") {
+    if (account) authenticatedAccountRead = true;
     result = { account, requiresOpenaiAuth: true };
   } else if (message.method === "model/list") {
+    if (!authenticatedAccountRead) {
+      throw new Error("Catalog fixture requires an authenticated account read before model listing");
+    }
     result = { data: [{ id: "synthetic-model", model: "synthetic-model", displayName: "Synthetic model", description: "Fixture", hidden: false, isDefault: true, defaultReasoningEffort: "medium", inputModalities: ["text"], supportedReasoningEfforts: [] }], nextCursor: null };
   }
   process.stdout.write(JSON.stringify({ id: message.id, result }) + "\\n");
@@ -44,7 +54,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 process.stdin.on("end", () => process.exit(0));
 `,
   );
-  const { stdout } = await promisify(execFile)(
+  const execution = promisify(execFile)(
     resolveTestNodeExecPath(),
     [
       "--import",
@@ -158,5 +168,17 @@ process.stdin.on("end", () => process.exit(0));
     ],
     { cwd: process.cwd(), signal, timeout: 90_000, maxBuffer: 1024 * 1024 },
   );
+  const child = execution.child;
+  // Abort rejection can precede close; the test hook must join before fixture teardown.
+  const closed = new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
+  });
+  onTestFinished(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+    return closed;
+  });
+  const { stdout } = await execution;
   expect(stdout).toContain("cold catalog disposal and fresh admission passed");
 });
