@@ -10,7 +10,6 @@ import {
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
-import { SettingsSection, SettingsUnavailable } from "../../components/solid/settings-ui.tsx";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PageReadResult } from "../../lib/page-request.ts";
@@ -428,11 +427,7 @@ function RawResults(props: CatalogResultsState): JSX.Element {
   const community = createMemo(() => items().filter((plugin) => !plugin.catalog.official));
   return (
     <>
-      {!props.connected ? (
-        <SettingsSection>
-          <SettingsUnavailable message={t("pluginsPage.discoveryOffline")} />
-        </SettingsSection>
-      ) : items().length === 0 && !props.result?.nextCursor ? (
+      {items().length === 0 && !props.result?.nextCursor ? (
         !props.remoteError && renderCatalogEmptyState(Boolean(props.result?.items.length))
       ) : (
         <>
@@ -604,7 +599,9 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
       {/* First results enter below the settled categories; later reads keep their own boundaries. */}
       <Reveal collapsed>
         <CategoryChips {...props} />
-        {props.remoteError ? renderError(props.remoteError, props.onRetry, true) : undefined}
+        {connected() && props.remoteError
+          ? renderError(props.remoteError, props.onRetry, true)
+          : undefined}
         <Loading
           on={[
             query(),
@@ -638,17 +635,25 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
             class="plugin-catalog-results__body"
             style={{ "overflow-anchor": windowed() ? "none" : undefined }}
           >
-            <Errored
-              fallback={(error, reset) =>
-                renderError(formatUiError(error()), () => {
-                  props.onRetry();
-                  reset();
-                })
-              }
-            >
-              {readCatalog()}
-            </Errored>
-            {grouped() ? (
+            {connected() && (
+              <Errored
+                fallback={(error, reset) =>
+                  renderError(formatUiError(error()), () => {
+                    props.onRetry();
+                    reset();
+                  })
+                }
+              >
+                {readCatalog()}
+              </Errored>
+            )}
+            {!connected() ? (
+              <PanelEmptyState
+                icon={<Icon name="plug" />}
+                heading={t("pluginsPage.discoveryDisconnectedTitle")}
+                description={t("pluginsPage.discoveryDisconnectedHint")}
+              />
+            ) : grouped() ? (
               <GroupedCatalog
                 {...props}
                 installedByCatalogId={installedByCatalogId()}
