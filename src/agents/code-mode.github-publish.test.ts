@@ -25,14 +25,12 @@ it.each(["node", "quickjs"] as const)(
     const started = createDeferred();
     const release = createDeferred();
     const parked = createDeferred();
-    if (executor === "quickjs") {
-      const waitForSettlement = codeModeState.waitForPendingBridgeSettlement;
-      vi.spyOn(codeModeState, "waitForPendingBridgeSettlement").mockImplementation((...args) => {
-        const waiting = waitForSettlement(...args);
-        parked.resolve();
-        return waiting;
-      });
-    }
+    const waitForSettlement = codeModeState.waitForPendingBridgeSettlement;
+    vi.spyOn(codeModeState, "waitForPendingBridgeSettlement").mockImplementation((...args) => {
+      const waiting = waitForSettlement(...args);
+      parked.resolve();
+      return waiting;
+    });
     // Stall the entire Gateway request, including preparation before handler dispatch.
     const request = vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(async () => {
       started.resolve();
@@ -67,10 +65,8 @@ it.each(["node", "quickjs"] as const)(
     });
     try {
       await started.promise;
-      // QuickJS publishes its parked frontier after dispatch; only then is guest time paused.
-      if (executor === "quickjs") {
-        await parked.promise;
-      }
+      // Both executors must publish their parked frontier before advancing host deadlines.
+      await parked.promise;
       await vi.advanceTimersByTimeAsync(600_001);
       expect(harness.replyOperation.abortSignal.reason).toBeUndefined();
       await vi.waitFor(() =>
