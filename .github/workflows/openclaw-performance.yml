@@ -1147,6 +1147,11 @@ jobs:
             title: mock deep profile
           - lane: live-openai-candidate
             title: live OpenAI candidate
+    # Serialize each lane through merge so its shared latest pointer cannot race.
+    concurrency:
+      group: ${{ format('openclaw-performance-publish-{0}', matrix.lane) }}
+      cancel-in-progress: false
+      queue: max
     env:
       LANE_ID: ${{ matrix.lane }}
       PERFORMANCE_PUBLISHER_HELPER: ${{ github.workspace }}/scripts/lib/kova-report-publish-files.mjs

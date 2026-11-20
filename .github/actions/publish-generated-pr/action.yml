@@ -74,7 +74,7 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        PUBLISH_REPOSITORY: ${{ github.repository_owner }}/${{ inputs.repository || github.event.repository.name }}
+        PUBLISH_REPOSITORY: ${{ inputs.repository && format('{0}/{1}', github.repository_owner, inputs.repository) || github.repository }}
         PUBLISH_ACTION_PATH: ${{ github.action_path }}
         CONTENTS_TOKEN: ${{ steps.tokens.outputs.contents-token }}
         GH_TOKEN: ${{ steps.tokens.outputs.pull-request-token }}

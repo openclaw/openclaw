@@ -16,7 +16,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
+import { evaluateWorkflow, evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const WORKFLOW = ".github/workflows/openclaw-performance.yml";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -36,6 +36,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  concurrency?: { group: string; "cancel-in-progress": boolean; queue: string };
   env?: Record<string, string>;
   if?: string;
   needs?: string | string[];
@@ -937,6 +938,19 @@ describe("OpenClaw performance workflow", () => {
     expect(verify.env?.PUBLISH_RESULT).toBe("${{ needs.publish.result }}");
     expect(verify.run).toContain('[[ "$PUBLISH_RESULT" != "skipped" ]]');
     expect(verify.run).toContain("Artifact-only performance mode requires");
+  });
+
+  it("serializes report publishers across runs without blocking other lanes", () => {
+    const concurrency = expectDefined(
+      readWorkflow().jobs?.publish?.concurrency,
+      "publisher concurrency",
+    );
+    const group = (runId: number, lane: string) =>
+      evaluateWorkflow(concurrency.group, { runId, matrix: { lane } });
+    expect(group(1, "mock-provider")).toBe(group(2, "mock-provider"));
+    expect(group(1, "mock-provider")).not.toBe(group(1, "mock-deep-profile"));
+    expect(concurrency["cancel-in-progress"]).toBe(false);
+    expect(concurrency.queue).toBe("max");
   });
 
   it("publishes reports through repository-scoped pull requests", () => {
