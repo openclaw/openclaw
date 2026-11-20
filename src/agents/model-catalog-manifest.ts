@@ -26,9 +26,9 @@ export function resolveEligibleManifestCatalogPlugins(
 }
 
 /**
- * Manifest rows that declare existence for the caller's admitted providers: only static
- * providers, whose catalog is the list. A runtime or refreshable provider's models come only
- * from its account listing; its manifest and hosted rows describe, never list.
+ * Manifest rows that declare existence for the caller's admitted providers. A runtime or
+ * refreshable provider's models come only from its account listing; its manifest and hosted
+ * rows describe those models, never list them.
  */
 export function loadManifestModelProviderConfigs(params: {
   config: OpenClawConfig;
@@ -38,18 +38,22 @@ export function loadManifestModelProviderConfigs(params: {
   if (params.config.models?.mode === "replace" || params.providerIds.length === 0) {
     return {};
   }
-  const { rows } = planEffectiveModelCatalogRows({
+  const { rows, entries } = planEffectiveModelCatalogRows({
     registry: {
       plugins: resolveEligibleManifestCatalogPlugins(params.metadataSnapshot, params.config),
     },
     config: params.config,
     providerFilters: params.providerIds,
-    selection: "static",
   });
+  const listedProviders = new Set(
+    entries.flatMap(({ provider, discovery }) =>
+      discovery === "runtime" || discovery === "refreshable" ? [provider] : [],
+    ),
+  );
   const rowsByProvider = new Map<string, NormalizedModelCatalogRow[]>();
   for (const row of rows) {
     // Typed-only declarations have no conversational Model defaults or registry entry.
-    if (row.inference?.chat === false) {
+    if (row.inference?.chat === false || listedProviders.has(row.provider)) {
       continue;
     }
     const providerRows = rowsByProvider.get(row.provider) ?? [];
