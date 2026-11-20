@@ -70,6 +70,7 @@ export type SidebarAttentionPanelParams = {
   overflowBelow: boolean;
   panelPosition: SidebarAttentionPanelPosition;
   selectedTab: IssueTab;
+  showMentionsTab: boolean;
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
 };
 
@@ -248,7 +249,10 @@ export function SidebarAttentionPanel(
   let backdrop: HTMLElement | undefined;
   let grabber: HTMLElement | undefined;
   let closing = false;
-  let headerMenuOpen = false;
+  // A bulk action opened on one tab must not silently apply to a different tab.
+  const [headerMenuTab, setHeaderMenuTab] = createSignal<IssueTab | null>((previous = null) =>
+    previous === props.selectedTab ? previous : null,
+  );
   const focus = createSidebarAttentionFocus(() => panel);
   // On phones the panel is a bottom sheet: tapping outside or swiping the grabber
   // slides it away before it closes.
@@ -332,7 +336,8 @@ export function SidebarAttentionPanel(
   const mentionsShown = createMemo(
     () =>
       gateway.read().snapshot.phase === "connected" &&
-      (mentionsTab() || props.selectedTab === "all"),
+      (mentionsTab() ||
+        (props.selectedTab === "all" && (props.showMentionsTab || visibleMentions().length > 0))),
   );
   // Loading stands in only for an empty list; loaded rows stay put while mentions refresh.
   const mentionsLoading = createMemo(
@@ -398,7 +403,7 @@ export function SidebarAttentionPanel(
           style={panelStyle()}
           onKeyDown={(event) => {
             // The overlay registry listens past this panel; an open menu closes alone.
-            if (event.key !== "Escape" || !headerMenuOpen) {
+            if (event.key !== "Escape" || !headerMenuTab()) {
               props.onKeydown(event);
             }
           }}
@@ -426,12 +431,11 @@ export function SidebarAttentionPanel(
                     focus.add(handle.overlay.trigger);
                   }
                 }}
-                onOpenChange={(open) => {
-                  headerMenuOpen = open;
-                }}
+                open={headerMenuTab() !== null}
+                onOpenChange={(open) => setHeaderMenuTab(open ? props.selectedTab : null)}
                 onNavigate={() => props.onNavigate("notifications")}
                 onSelect={(item) => {
-                  if (item.id === "dismiss-shown") {
+                  if (item.id === "dismiss-shown" && headerMenuTab() === props.selectedTab) {
                     dismissShown();
                   }
                 }}
@@ -455,11 +459,13 @@ export function SidebarAttentionPanel(
             panelId="sidebar-issues-tabpanel"
             class="sidebar-issues-panel__tabs"
             variant="sub"
-            tabs={ISSUE_TABS.map((tab) => ({
-              value: tab,
-              label: t(`attention.tabs.${tab}`),
-              count: tabCounts()[tab] || undefined,
-            }))}
+            tabs={ISSUE_TABS.filter((tab) => tab !== "mentions" || props.showMentionsTab).map(
+              (tab) => ({
+                value: tab,
+                label: t(`attention.tabs.${tab}`),
+                count: tabCounts()[tab] || undefined,
+              }),
+            )}
             onSelect={(tab) => props.onSelectTab(tab)}
           />
           <div class="sidebar-issues-panel__list-wrap">

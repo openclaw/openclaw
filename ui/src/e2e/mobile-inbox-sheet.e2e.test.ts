@@ -29,6 +29,7 @@ suite.define(() => {
       { viewport, reducedMotion: "reduce", serviceWorkers: "block" },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
+          hasMultipleSessionSharingIdentities: true,
           presenceUsers: [
             {
               self: true,

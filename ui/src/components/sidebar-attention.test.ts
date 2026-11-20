@@ -461,7 +461,42 @@ describe("sidebar attention refresh ownership", () => {
     },
   );
 
-  it("updates cross-agent mentions and opens them through shell navigation", async () => {
+  it("does not show a Mentions tab or an empty mention error on a solo Gateway", async () => {
+    const request = respond({
+      "mentions.list": () => {
+        throw new Error("Mentions could not be loaded");
+      },
+    });
+    const harness = createGatewayHarness(mockClient(request));
+    harness.update({
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        server: { bootId: "boot-a", connId: "connection-a" },
+        auth: { role: "operator", scopes: ["operator.sessions.read"] },
+        features: { methods: ["mentions.list"] },
+        policy: { hasMultipleSessionSharingIdentities: false },
+      },
+      selfUser: { id: "bob", identity: { type: "profile", id: "bob" }, name: "Bob" },
+    });
+    const { element, store, trigger } = await mountAttention({ gateway: harness.gateway });
+    const mentions = store.activate(SidebarAttentionStoreOwner);
+    await waitForFast(() => expect(mentions.snapshot.phase).toBe("error"));
+    await openPanel(element, trigger);
+    expect(
+      Array.from(element.querySelectorAll<HTMLElement>('[role="tab"]'), (tab) =>
+        tab.getAttribute("data-tab-value"),
+      ),
+    ).toEqual(["all", "approvals", "system"]);
+    expect(element.querySelector('[role="tab"][aria-selected="true"]')?.id).toBe(
+      "sidebar-issues-tab-all",
+    );
+    expect(issues(element, "panel__mentions-note")).toBeNull();
+    expect(issues(element, "panel__empty")).not.toBeNull();
+    expect(element.querySelector('[data-value="notifications"]')).not.toBeNull();
+  });
+
+  it("returns an open Mentions tab to All on solo reconnect without losing retained mentions", async () => {
     let result = { gatewayInstanceId: "boot-a", revision: 1, items: [mentionItem("first")] };
     const request = respond({
       "cron.list": cronResponse(),
@@ -470,14 +505,16 @@ describe("sidebar attention refresh ownership", () => {
       "mentions.list": () => result,
     });
     const harness = createGatewayHarness(mockClient(request));
+    const hello = {
+      type: "hello-ok",
+      protocol: 1,
+      server: { bootId: "boot-a", connId: "connection-a" },
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["mentions.list", "mentions.dismiss"] },
+      policy: { hasMultipleSessionSharingIdentities: true },
+    } satisfies NonNullable<ApplicationGateway["snapshot"]["hello"]>;
     harness.update({
-      hello: {
-        type: "hello-ok",
-        protocol: 1,
-        server: { bootId: "boot-a", connId: "connection-a" },
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["mentions.list", "mentions.dismiss"] },
-      },
+      hello,
       selfUser: { id: "bob", identity: { type: "profile", id: "bob" }, name: "Bob" },
     });
     const { element } = await mountAttention({
@@ -498,9 +535,15 @@ describe("sidebar attention refresh ownership", () => {
     element.onNavigate = onNavigate;
     issues(element, "button")!.click();
     await waitForFast(() => expect(element.querySelector(".sidebar-mention-row a")).not.toBeNull());
+    const panel = issues(element, "panel");
+    const mentionsTab = element.querySelector<HTMLButtonElement>("#sidebar-issues-tab-mentions")!;
+    mentionsTab.focus();
+    mentionsTab.click();
+    flush();
     const connected = harness.gateway.snapshot;
     harness.update({ phase: "reconnecting", hello: null, selfUser: null });
     flush();
+    expect(mentionsTab.getAttribute("aria-selected")).toBe("true");
     expect(element.querySelectorAll(".sidebar-mention-row")).toHaveLength(2);
     expect(
       element.querySelector<HTMLButtonElement>(
@@ -508,10 +551,35 @@ describe("sidebar attention refresh ownership", () => {
       )?.disabled,
     ).toBe(true);
     expect(element.querySelector('[data-value="dismiss-shown"]')).toBeNull();
+    harness.update({
+      ...connected,
+      hello: { ...hello, policy: { hasMultipleSessionSharingIdentities: false } },
+    });
+    flush();
+    expect(issues(element, "panel")).toBe(panel);
+    expect(mentionsTab.isConnected).toBe(false);
+    expect(issues(element, "panel__list")?.getAttribute("aria-labelledby")).toBe(
+      "sidebar-issues-tab-all",
+    );
+    expect(element.querySelectorAll(".sidebar-mention-row")).toHaveLength(2);
+    expect(element.querySelector('[data-value="dismiss-shown"]')).not.toBeNull();
+    await waitForFast(() => expect(document.activeElement).toBe(issues(element, "panel__list")));
     harness.update(connected);
     await waitForFast(() =>
-      expect(element.querySelector('[data-value="dismiss-shown"]')).not.toBeNull(),
+      expect(element.querySelector("#sidebar-issues-tab-mentions")).not.toBeNull(),
     );
+    expect(issues(element, "panel__list")?.getAttribute("aria-labelledby")).toBe(
+      "sidebar-issues-tab-all",
+    );
+    element.querySelector<HTMLButtonElement>("#sidebar-issues-tab-mentions")!.click();
+    const actionMenu = element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__more")!;
+    actionMenu.click();
+    await waitForFast(() => expect(actionMenu.getAttribute("aria-expanded")).toBe("true"));
+    harness.update({
+      ...connected,
+      hello: { ...hello, policy: { hasMultipleSessionSharingIdentities: false } },
+    });
+    await waitForFast(() => expect(actionMenu.getAttribute("aria-expanded")).toBe("false"));
     element.querySelector<HTMLAnchorElement>(".sidebar-mention-row a")!.click();
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith(
       "chat",

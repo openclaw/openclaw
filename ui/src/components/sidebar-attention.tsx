@@ -11,8 +11,10 @@ import { projectGateway, projectSidebarAttention } from "../lib/reactive/applica
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import { createScrollStateRef } from "../lib/reactive/scroll-state.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { activeElementFor } from "../lib/tabs.ts";
 import { showToast } from "../lib/toast.ts";
 import "../styles/sidebar-attention-floating.css";
 import { createApprovalDecisionPresentation } from "./approval-decision-presentation.ts";
@@ -59,7 +61,13 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     anchor: "bottom",
     bottom: 8,
   });
-  const [selectedTab, setSelectedTab] = createSignal<IssueTab>("all");
+  const showMentionsTab = createMemo(
+    () => gateway.read().snapshot.hello?.policy?.hasMultipleSessionSharingIdentities !== false,
+  );
+  // Retire a hidden selection rather than reviving it when the tab comes back.
+  const [selectedTab, setSelectedTab] = createSignal<IssueTab>((previous = "all") =>
+    !showMentionsTab() && previous === "mentions" ? "all" : previous,
+  );
   const [overflowAbove, setOverflowAbove] = createSignal(false);
   const [overflowBelow, setOverflowBelow] = createSignal(false);
   const Panel = lazy(() => import("./sidebar-attention-panel.runtime.tsx"), {
@@ -76,6 +84,24 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     t(count() === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count()),
     }),
+  );
+
+  createPendingFocus(
+    () => {
+      if (showMentionsTab()) {
+        return false;
+      }
+      const focused = activeElementFor(host);
+      return focused?.id === "sidebar-issues-tab-mentions" && host.contains(focused);
+    },
+    {
+      requested: (removedFocusedTab) => removedFocusedTab,
+      focus: () => {
+        if (list?.isConnected && activeElementFor(host) === document.body) {
+          list.focus({ preventScroll: true });
+        }
+      },
+    },
   );
 
   function isCurrentPanel(generation: number, scope: ReturnType<typeof routeScope>) {
@@ -374,6 +400,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
             overflowBelow={overflowBelow()}
             panelPosition={panelPosition()}
             selectedTab={selectedTab()}
+            showMentionsTab={showMentionsTab()}
             watchUpdateProgress={props.watchUpdateProgress}
           />
         </Loading>

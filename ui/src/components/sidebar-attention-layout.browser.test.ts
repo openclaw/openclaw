@@ -133,6 +133,7 @@ function panelParams(entries: readonly SidebarInboxEntry[]): PanelFixtureParams 
     overflowBelow: false,
     panelPosition: { left: 0, anchor: "top", top: 0 },
     selectedTab: "all",
+    showMentionsTab: true,
   };
 }
 

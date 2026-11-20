@@ -255,7 +255,7 @@ Mentions work for ordinary messages, queued or steered input, and the first mess
 
 ## Mentions Inbox
 
-Open **Inbox → Mentions** to see messages addressed to your signed-in profile across accessible agents. Opening a mention opens its session without dismissing it. Select **Dismiss** to remove the entry from your Inbox. That change follows the same profile across connected browsers, without deleting the chat message.
+Open **Inbox → Mentions** to see messages addressed to your signed-in profile across accessible agents. On a solo Gateway, the **Mentions** tab is hidden, but any retained mentions you can still access appear under **Inbox → All**. Opening a mention opens its session without dismissing it. Select **Dismiss** to remove the entry from your Inbox. That change follows the same profile across connected browsers, without deleting the chat message.
 
 Mentions and dismissals survive Gateway restarts and upgrades. Entries keep their original identifiers and expiry times: **up to seven days**, with at most **100 entries per profile** and **10,000 across the Gateway**. Older entries can be evicted earlier by capacity limits. Refreshing or reconnecting reloads the retained Inbox without resending old browser alerts. Old transcript messages are not scanned to rebuild missing entries.
 
