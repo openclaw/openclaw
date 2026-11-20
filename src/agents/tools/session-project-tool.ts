@@ -76,19 +76,19 @@ export function createSessionProjectTool(options: {
         return jsonResult({ projects: await listSessionProjects(context, currentRequester()) });
       }
       const { projectId } = input;
-      if (!projectId || !options.sessionId) {
+      const { sessionId } = options;
+      if (!projectId || !sessionId) {
         throw new ToolInputError("move requires a projectId from list.");
       }
       const sandbox = options.sandbox?.enabled ? options.sandbox : undefined;
       const session = {
         agentId: caller.agentId,
         sessionKey: caller.sessionKey,
-        sessionId: options.sessionId,
       };
       const { handoffSessionTool } = await import("./session-tool-handoff.js");
       return handoffSessionTool({
         name: "Project move",
-        sessionId: options.sessionId,
+        sessionId,
         runId: options.runId,
         operation,
         requestOwners,
@@ -122,7 +122,7 @@ export function createSessionProjectTool(options: {
           const branch = await openMovedSession({
             context,
             session,
-            runId: options.runId ?? `session-project:${session.sessionId}`,
+            runId: options.runId ?? `session-project:${sessionId}`,
             runSetupScript: !requester || requester.scopes.includes(ADMIN_SCOPE),
             assertCurrent,
             signal: handoffSignal,

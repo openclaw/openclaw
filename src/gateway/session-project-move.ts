@@ -69,7 +69,7 @@ function isUnbound(entry: Partial<InternalSessionEntry>, workspaceDir: string) {
  */
 export async function moveSessionIntoProject(params: {
   context: GatewayRequestContext;
-  session: { agentId: string; sessionKey: string; sessionId: string };
+  session: { agentId: string; sessionKey: string };
   /** Where the conversation's files live; the checkout's Git commands run there. */
   carrySource: CarrySource;
   projectId: string;
@@ -88,8 +88,8 @@ export async function moveSessionIntoProject(params: {
     projection: "full",
   });
   const entry = loaded.entry;
-  if (!entry || entry.sessionId !== params.session.sessionId) {
-    throw new Error("The conversation changed before the project move; nothing was moved.");
+  if (!entry) {
+    throw new Error("This conversation could not be found; nothing was moved.");
   }
   const target = {
     agentId: loaded.agentId,
@@ -172,12 +172,8 @@ export async function moveSessionIntoProject(params: {
     target,
     (current) => {
       assertCurrent();
-      if (
-        current.sessionId !== entry.sessionId ||
-        current.lifecycleRevision !== entry.lifecycleRevision ||
-        !isUnbound(current, workspaceDir)
-      ) {
-        throw new Error("The conversation changed during the project move; nothing was moved.");
+      if (!isUnbound(current, workspaceDir)) {
+        throw new Error("This conversation already has a project or workspace; nothing was moved.");
       }
       oldFiles.assertCurrent(context.getRuntimeConfig(), current);
       return {
@@ -220,7 +216,7 @@ export async function moveSessionIntoProject(params: {
  */
 export async function openMovedSession(params: {
   context: GatewayRequestContext;
-  session: { agentId: string; sessionKey: string; sessionId: string };
+  session: { agentId: string; sessionKey: string };
   runId: string;
   runSetupScript: boolean;
   assertCurrent: () => void;
@@ -234,8 +230,8 @@ export async function openMovedSession(params: {
     projection: "full",
   });
   const entry = loaded.entry;
-  if (!entry || entry.sessionId !== params.session.sessionId) {
-    throw new Error("The conversation changed before its project opened.");
+  if (!entry) {
+    throw new Error("This conversation could not be found.");
   }
   if (entry.pendingWorktree) {
     await prepareSessionWorkspaceForRun({

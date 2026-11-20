@@ -135,7 +135,7 @@ it.each(["sandbox", "host"] as const)(
       const move = (projectId = project.id) =>
         moveSessionIntoProject({
           context,
-          session: { ...target, sessionId: "carry" },
+          session: target,
           carrySource: source,
           projectId,
           checkout: "work",
