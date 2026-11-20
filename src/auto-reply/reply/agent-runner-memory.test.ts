@@ -55,7 +55,6 @@ import {
 } from "../../plugins/memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
