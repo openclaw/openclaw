@@ -14,7 +14,6 @@ import {
   hasOperatorReadAccess,
   hasOperatorWriteAccess,
 } from "../../app/operator-access.ts";
-import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
@@ -46,7 +45,7 @@ import {
 import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
 import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
 import { createSkillLibrary } from "./library-state.ts";
-import { SkillLibraryNavigation, SkillLibraryPageMenu } from "./library-toolbar.tsx";
+import { SkillLibraryNavigation, SkillLibraryPageActions } from "./library-toolbar.tsx";
 import { SkillLibrary, SkillLibraryDialogs, SkillLibraryFeedback } from "./library-view.tsx";
 import { createSkillsMutationPresentation } from "./mutation-presentation.ts";
 import { SkillsHeader } from "./skills-header.tsx";
@@ -589,10 +588,9 @@ export function SkillsPage(props: SkillsPageProps) {
     onSearch: () => navigateSkills("skills"),
     onWorkshop: () => context.navigate("skill-workshop"),
   };
-  const libraryPageMenu = () => {
-    const menu = () => <SkillLibraryPageMenu library={library} {...libraryNavigation} />;
-    return <FloatingHeaderActions fallback={menu()}>{menu()}</FloatingHeaderActions>;
-  };
+  const libraryPageMenu = () => (
+    <SkillLibraryPageActions library={library} {...libraryNavigation} />
+  );
   function navigateSkills(route: "skills" | "skill-settings") {
     context.navigate(route, {
       search: data.skillsAgentId ? `?agent=${encodeURIComponent(data.skillsAgentId)}` : "",

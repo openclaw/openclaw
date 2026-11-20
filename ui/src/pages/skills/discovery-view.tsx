@@ -11,6 +11,7 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsEmpty, SettingsGroup } from "../../components/solid/settings-ui.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { formatNumber } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import { PluginCatalogGrid } from "../plugins/catalog-grid.tsx";
@@ -139,8 +140,11 @@ function InstalledShelf(props: { entries: SkillDiscoveryEntry[]; onOpen: () => v
         </For>
       </span>
       <span class="skill-installed-shelf__text">
-        <strong>{t("skillGroups.installed")}</strong>
-        <span class="skill-installed-shelf__names">
+        <strong>
+          {t("skillGroups.installed")} (
+          <data value={props.entries.length}>{formatNumber(props.entries.length)}</data>)
+        </strong>
+        <span class="skill-installed-shelf__names" aria-hidden="true">
           {props.entries
             .slice(0, 12)
             .map((entry) => entry.name)

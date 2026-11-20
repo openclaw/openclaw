@@ -134,12 +134,15 @@ describe("unified skill discovery", () => {
     try {
       await waitForFast(() => expect(shelfText(mounted.container)).toContain(entry.slug));
       expect(shelfText(mounted.container)).not.toContain("Prefetched status");
+      expect(mounted.container.querySelector(".skill-installed-shelf data")?.textContent).toBe("1");
     } finally {
       status.resolve(report);
       await route;
     }
     await waitForFast(() => expect(shelfText(mounted.container)).toContain("Prefetched status"));
-    showInstalled(mounted.container);
+    expect(mounted.container.querySelector(".skill-installed-shelf data")?.textContent).toBe("2");
+    mounted.container.querySelector<HTMLButtonElement>(".skill-installed-shelf")!.click();
+    flush();
     expect(
       mounted.container.querySelector('[data-skill-id="library:' + entry.skillId + '"]'),
     ).not.toBeNull();

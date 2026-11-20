@@ -6,7 +6,10 @@ import { startControlUiBenchGatewayServer } from "../../../scripts/lib/control-u
 import "../../../src/test-utils/prepare-compiled-subprocesses.ts";
 // Scenario probes use the action-timing owner's optional Window hook.
 import "../../../scripts/lib/control-ui-engine-action-timing.ts";
-import { createEnginePageScenarios } from "../../../scripts/lib/control-ui-engine-page-scenarios.ts";
+import {
+  createEnginePageScenarios,
+  filterInstalledDiscoverySkills,
+} from "../../../scripts/lib/control-ui-engine-page-scenarios.ts";
 import { frames } from "../../../scripts/lib/control-ui-interaction-navigation.ts";
 import {
   createScenarioFixture,
@@ -151,10 +154,12 @@ suite.define(() => {
           expect(readerRequests).toBe(0);
         }
         if (route === "skills") {
+          await filterInstalledDiscoverySkills(page);
+          expect(readerRequests, "Browsing the full inventory must not preload the reader").toBe(0);
           const held = await holdModuleResponse(page, reader);
           try {
             await page
-              .getByRole("button", { name: "Open Data skill 0000 details", exact: true })
+              .getByRole("button", { name: "Open Data skill 0999 details", exact: true })
               .click();
             await held.request;
             expect(held.requests()).toBeGreaterThan(0);
@@ -162,7 +167,8 @@ suite.define(() => {
             held.release();
             const dialog = page.locator("openclaw-modal-dialog .skill-reader-dialog");
             await dialog.waitFor({ state: "visible" });
-            expect(await dialog.locator(".oc-dialog__title").textContent()).toBe("Data skill 0000");
+            expect(await dialog.locator(".oc-dialog__title").textContent()).toBe("Data skill 0999");
+            await dialog.getByRole("heading", { name: "Data skill 0999 instructions", exact: true }).waitFor();
           } finally {
             held.release();
           }
