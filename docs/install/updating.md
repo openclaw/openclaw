@@ -2495,14 +2495,24 @@ progress report remains available through that Gateway's restart. The dialog sho
 a temporary disconnect.
 
 Ask the agent to update OpenClaw, or send `/update` from Discord or another
-connected chat. Natural-language requests use the existing `gateway` tool's
-`update.run` action. The same tool exposes `restart` for a runtime-coordinated safe
-restart and `update.cleanup` for explicit recovery cleanup without stopping the
-Gateway. The minimal, coding, and messaging profiles expose these maintenance
-actions without granting configuration reads. Explicit tool restrictions still apply.
+connected chat. For natural-language owner requests on standard installations,
+the agent uses the built-in updater through the `gateway` tool’s `update.run`
+action. If the running Gateway is served directly from a Git checkout, the
+agent can use the host’s documented in-place procedure without an exact
+revision, but only if the host independently authorizes maintenance for that
+caller. Otherwise, Git on a source install still requires an explicitly
+requested exact revision and host maintenance authorization. If the agent
+can’t identify the serving installation or confirm an authorized procedure,
+it reports the blocker instead of guessing. A request to update does not by
+itself authorize switching installation methods.
 
-On an explicit owner request, the agent performs the supported action itself; it
-does not send the owner to a slash command or terminal. Restart requests can be
+The `gateway` tool also exposes `restart` for a runtime-coordinated safe restart
+and `update.cleanup` for explicit recovery cleanup without stopping the Gateway.
+The minimal, coding, and messaging profiles expose these maintenance actions
+without granting configuration reads. Explicit tool restrictions still apply.
+
+On an explicit owner request, the agent performs the supported, authorized
+action itself when available. Restart requests can be
 deferred until active work settles; an accepted schedule is not a completed restart.
 Cleanup uses the serving Gateway's owner-bound worker and the existing manual
 verification, eligibility, and dependency checks. It permanently removes eligible
@@ -2516,8 +2526,9 @@ by external chat users and webhook turns do not gain this authority. External
 chat update requests still require current command-owner authority.
 
 `/update` is the model-independent fallback: it works without a functioning model
-or access to the `gateway` tool. The tool, slash command, and Control UI all use
-the same Gateway update handler and current authorization checks.
+or access to the `gateway` tool. The tool’s `update.run` action, the slash
+command, and the Control UI all use the same built-in update handler and
+current authorization checks; they don’t choose a host-specific procedure.
 
 The new version is checked while the old Gateway serves. An already-current
 update restarts a running Gateway when plugins change or its service points at a

@@ -137,7 +137,7 @@ export type ScribeDetection = {
 };
 
 /** Whether a channel account has a usable bot token and user token. */
-export type AccountTokens = { bot?: boolean; user?: boolean };
+type AccountTokens = { bot?: boolean; user?: boolean };
 
 /** The Gateway access scribe reads need: the page host's authenticated request. */
 type ScribeReader = Pick<ControlUiHost, "request">;
