@@ -17,7 +17,7 @@ import { isRecord } from "../lib/record-shared.mjs";
 import { resolveRepoRoot } from "../lib/repo-root.mjs";
 
 const root = resolveRepoRoot(import.meta.url);
-const revision = process.argv[2] ?? "-";
+const revision = process.argv.slice(2).find((arg) => arg !== "--count-relative-paths") ?? "-";
 const countRelativePaths = process.argv.includes("--count-relative-paths");
 const sources = new Map<string, string>();
 if (revision !== "-") {
