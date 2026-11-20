@@ -712,12 +712,13 @@ it("publishes padding changes when either viewport box stays the same size", asy
 it("keeps a shrinking end target smooth during a native scroll", async () => {
   const { host, thread, extent, distance } = await mountEndFollowFixture(800);
   await expect.poll(() => thread.scrollTop).toBe(800);
-  const writes: Array<{ behavior?: ScrollBehavior; jump: number }> = [];
+  const originalEnd = thread.scrollHeight - thread.clientHeight;
+  const writes: Array<ScrollToOptions & { before: number; jump: number }> = [];
   let shrinking = false;
   observeNativeScroll(thread, (options, scroll) => {
     const before = thread.scrollTop;
     scroll();
-    writes.push({ behavior: options?.behavior, jump: thread.scrollTop - before });
+    writes.push({ ...options, before, jump: thread.scrollTop - before });
     if (options?.behavior === "smooth" && !shrinking) {
       shrinking = true;
       host.lastRowHeight -= 17;
@@ -727,7 +728,17 @@ it("keeps a shrinking end target smooth during a native scroll", async () => {
   host.transcript.scrollToEnd({ behavior: "smooth" });
   await expect.poll(() => extent.offsetHeight).toBe(1283);
   await expect.poll(distance).toBe(0);
-  expect(writes.filter((write) => write.behavior === "smooth").length).toBeGreaterThan(1);
+  expect(writes.find((write) => write.top === originalEnd)?.behavior).toBe("smooth");
+  const end = thread.scrollHeight - thread.clientHeight;
+  expect(end).toBe(originalEnd - 17);
+  // Chromium can reach the shorter end before the virtualizer reconciles. An
+  // already-landed retarget is a no-op; a travelling retarget must stay smooth.
+  await expect
+    .poll(() => {
+      const retarget = writes.find((write) => write.top === end);
+      return retarget?.before === end || retarget?.behavior === "smooth";
+    })
+    .toBe(true);
   expect(writes.every((write) => Math.abs(write.jump) <= 1)).toBe(true);
 });
 
