@@ -92,6 +92,32 @@ honor caller cancellation and disable SDK retries. AWS environment credentials,
 profiles and `AWS_BEDROCK_SKIP_AUTH` cannot change proxy authentication or destination.
 Direct Amazon Bedrock configuration keeps its existing behavior.
 
+## PixVerse image-to-video
+
+Select `clawrouter/pixverse/v6` or `clawrouter/pixverse/c1` only when the
+current key's catalog offers `video.generate` with the native
+`clawrouter.pixverse-image-input.v1` input profile. Client support does not
+activate that route or establish live provider entitlement.
+
+The client sends one local PNG, JPEG or WebP image of at most 8 MiB, with at
+most 32 KiB of multipart framing and scalar fields, to
+`/v1/native/pixverse/openapi/v2/video/img/generate`. It accepts a prompt of
+at most 2,048 UTF-8 bytes, integer duration from 1 to 15 seconds, quality
+`360p`, `540p`, `720p` or `1080p`, audio, and the bounded `seed`,
+`negative_prompt`, `camera_movement`, `template_id` and `motion_mode` options.
+Caller image URLs, uploaded IDs, receipts and grants are not accepted.
+The manifest JSON route is not interchangeable with this native profile.
+
+ClawRouter owns the upload and generation, their separate explicit fixed-cost
+policies, and the original job's credential and retention checks. OpenClaw
+submits once with an operation-owned idempotency key, then reads only that
+video's fixed status path with the original selected Router key. After
+submission becomes uncertain, failures do not replay the create or fall back
+to direct provider credentials. Returned video URLs remain opaque; the client
+does not download them. The operation has a total deadline, but the current
+video request API does not expose caller cancellation. Direct `pixverse`
+configuration retains its existing upload-then-JSON behavior.
+
 ## Vercel native Messages
 
 The frozen `vercel-ai-gateway/anthropic/claude-sonnet-4.6` row uses OpenClaw's

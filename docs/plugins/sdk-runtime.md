@@ -46,6 +46,23 @@ surface and session root. Channels may use this capability to enable helper
 tools for restricted senders. Core remains responsible for authorization and
 containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
 
+## Terminal media submission failures
+
+`createMediaGenerationTerminalError(reason)` from
+`openclaw/plugin-sdk/media-generation-runtime` stops automatic image, music or
+video fallback after a submission or cleanup failure is no longer known to be
+unsent. Complete credential, capability and input validation before entering
+that boundary. Mark every escaping failure after submission starts, including
+polling, response validation and release failures, and validate the final asset
+before returning it to the host.
+
+The helper retains an original `Error` by identity, including frozen errors.
+For other thrown values it returns a marked error whose `cause` is the exact
+original value, including `undefined`. The media runner rethrows a marked error
+before reporting it or selecting another provider; it also recognizes marked
+nested causes. This does not assert that the provider accepted the request or
+authorize a retry. Unmarked failures retain their existing fallback behavior.
+
 ## Settled agent lifecycle events
 
 Use `api.agent.events.registerAgentEventSubscription` with `streams: ["lifecycle"]`
