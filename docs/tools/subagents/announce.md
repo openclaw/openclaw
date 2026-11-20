@@ -236,6 +236,11 @@ rather than asking a notification-only turn to acquire owner privileges.
 Use `sessions_send` with `mode: "notify"` for context-only updates; a normal peer
 follow-up still follows the destination conversation’s reply requirements.
 
+Child follow-up results retain access to the same requester session when its
+lifecycle revision advances. Each delivery attempt still checks current session
+access and requester authority; revoked authority cannot receive the continuation.
+Private completions continue to wait behind an active requester turn.
+
 Use a build that supports this option throughout the run. Older builds cannot
 resume private completion handoffs and may discard them after a downgrade;
 existing session transcripts remain separate.
