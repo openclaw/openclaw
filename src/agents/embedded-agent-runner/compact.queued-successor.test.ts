@@ -36,7 +36,7 @@ const [
   },
   { closeOpenClawAgentDatabasesAsync, closeOpenClawAgentDatabasesForTest },
   { SessionManager: PersistentSessionManager },
-  { sessionManagerReadTranscriptBranch },
+  sessionManagerViews,
   safetyTimeout,
   realSafetyTimeout,
   { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot },
@@ -160,11 +160,14 @@ async function transcriptFixture() {
   const hooks: { beforeBranchRead?: () => void } = {};
   openAsync.mockImplementation(async (...args) => {
     const manager = await originalOpenAsync(...args);
-    const readBranch = manager[sessionManagerReadTranscriptBranch].bind(manager);
-    vi.spyOn(manager, sessionManagerReadTranscriptBranch).mockImplementation((...branchArgs) => {
-      hooks.beforeBranchRead?.();
-      return readBranch(...branchArgs);
-    });
+    const readBranch =
+      manager[sessionManagerViews.sessionManagerReadTranscriptBranch].bind(manager);
+    vi.spyOn(manager, sessionManagerViews.sessionManagerReadTranscriptBranch).mockImplementation(
+      (...branchArgs) => {
+        hooks.beforeBranchRead?.();
+        return readBranch(...branchArgs);
+      },
+    );
     return manager;
   });
   restoreTranscriptBridge = () => openAsync.mockRestore();
