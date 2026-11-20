@@ -58,6 +58,7 @@ it.each([true, false])("shows device settings only with the capability, admin=%s
   expect(catalog(capability)).toContain("nav:updates");
   expect(browserGroups.some((group) => group.labelKey === "nav.settingsGroupDevice")).toBe(false);
   expect(deviceGroup(capability.snapshot)).toEqual({
+    key: "device",
     labelKey: "nav.settingsGroupDevice",
     routes: ["device", "device-permissions"],
   });
@@ -67,6 +68,7 @@ it.each([true, false])("shows device settings only with the capability, admin=%s
       snapshot: createTauriDeviceSettingsSnapshot(platform),
     };
     expect(deviceGroup(desktopCapability.snapshot)).toEqual({
+      key: "device",
       labelKey: "nav.settingsGroupThisComputer",
       routes: ["device"],
     });

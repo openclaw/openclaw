@@ -273,8 +273,10 @@ export function deviceSettingsGroupLabelKey(
 export function visibleSettingsNavigationGroups(
   canAdmin: boolean,
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
-): readonly SettingsNavigationGroup[] {
+): readonly (SettingsNavigationGroup & { key: NavigationRouteId })[] {
   return SETTINGS_NAVIGATION_GROUPS.map((group) => ({
+    // Keep the group identity independent of permission filtering and device-specific labels.
+    key: group.routes[0],
     labelKey:
       group.labelKey === "nav.settingsGroupDevice"
         ? deviceSettingsGroupLabelKey(nativeDeviceSettings?.snapshot)
