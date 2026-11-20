@@ -110,6 +110,7 @@ export async function dispatchCronDelivery(
     };
   };
   // Commits the settled result into a persistent execution conversation; returns an error.
+  // The execution's own reply already holds the result in that conversation's model context.
   const commitExecutionResult = async (
     payloads: ReplyPayload[],
     sessionKey = params.agentSessionKey,
@@ -122,6 +123,7 @@ export async function dispatchCronDelivery(
       jobId: params.job.id,
       runStartedAt: params.runStartedAt,
       conversation: { sessionKey },
+      displayOnly: true,
       payloads,
       signal: params.abortSignal,
       deliveryAttemptFence: params.deliveryAttemptFence,
