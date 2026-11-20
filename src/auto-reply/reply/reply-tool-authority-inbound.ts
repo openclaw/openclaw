@@ -82,6 +82,7 @@ export function captureReplyToolAuthorityContinuation({
   requesterPrincipalKey,
   requesterProfileId,
   channelOwner,
+  requesterOwner,
   inputChannel,
 }: {
   snapshot: ReplyToolAuthorityInput;
@@ -89,6 +90,7 @@ export function captureReplyToolAuthorityContinuation({
   requesterPrincipalKey: string | undefined;
   requesterProfileId: string | undefined;
   channelOwner: ReturnType<typeof getCommandOwnerAuthority>;
+  requesterOwner?: { principalKey: string; isCurrent: () => boolean };
   inputChannel: string | undefined;
 }): Pick<
   ReplyToolAuthorityCallerBinding,
@@ -115,6 +117,26 @@ export function captureReplyToolAuthorityContinuation({
           provenance.sourceTool === CRON_EXECUTION_SOURCE_TOOL))) &&
     continuation.caller.operatorAuthority?.scopes.includes("operator.admin")
       ? continuation.caller.operatorAuthority
+      : undefined;
+  // A helper result resumed after sessions_yield has no requester of its own; the channel
+  // owner whose turn yielded may guide it without lending it their identity.
+  const ingress =
+    continuation && normalizeChatChannelId(readReplyInputChannel(continuation.caller));
+  const yieldingOwner =
+    requesterOwner &&
+    continuation &&
+    ingress &&
+    !requesterPrincipalKey &&
+    provenance?.kind === "inter_session" &&
+    provenance.sourceTool === "subagent_settle" &&
+    requesterOwner.principalKey ===
+      resolveRequesterPrincipalKey({
+        ...continuation.caller,
+        requesterOrigin: undefined,
+        messageProvider: ingress,
+      }) &&
+    requesterOwner.isCurrent()
+      ? requesterOwner
       : undefined;
   // A profile link records attribution; only host-attested human ingress can
   // use it to continue another transport's execution.
@@ -176,7 +198,9 @@ export function captureReplyToolAuthorityContinuation({
       ? "verified-profile"
       : sharedOwner
         ? "shared-owner"
-        : undefined;
+        : yieldingOwner
+          ? "requester-owner"
+          : undefined;
   // Continuation permits guidance across scopes, not automatic question
   // answers or image cancellation under the incumbent's question authority.
   const allowPendingUserInputAnswer: false | undefined =
@@ -185,6 +209,7 @@ export function captureReplyToolAuthorityContinuation({
     "kind" in caller &&
     (backgroundOwner ||
       sharedOwner ||
+      yieldingOwner ||
       !isSameReplyToolAuthorityConversation(snapshot, caller.caller) ||
       requesterPrincipalKey !==
         resolveRequesterPrincipalKey({
@@ -207,6 +232,11 @@ export function captureReplyToolAuthorityContinuation({
         });
       }
       sharedOwner?.();
+      if (yieldingOwner && !yieldingOwner.isCurrent()) {
+        throw new MessageInjectionAuthorityError({
+          cause: new Error("Yielding requester owner is no longer current"),
+        });
+      }
     },
   };
 }
