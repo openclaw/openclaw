@@ -654,6 +654,7 @@ export function applyConfiguredProviderOverrides(params: {
             (catalogModel && modelTransportRoutesMatch(catalogModel, resolvedTransport)
               ? catalogModel.parameterCount
               : undefined),
+          modelSizeClass: metadataOverrideModel?.modelSizeClass ?? discoveredModel?.modelSizeClass,
           // An unknown wire cap stays omitted; the context window is not an output limit.
           ...(normalizedResolvedMaxTokens !== undefined
             ? {

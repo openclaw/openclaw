@@ -17,6 +17,7 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
 import { resolveAgentProfile, resolveAgentProfilePreserveToolNames } from "../../agent-profiles.js";
+import { resolveProfileModelSizeClass } from "../../agent-profiles/model-size-class.js";
 import { createOpenClawCodingToolsInternalAsync } from "../../agent-tools.async.js";
 import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
 import { getChannelAgentToolMeta } from "../../channel-tool-metadata.js";
@@ -125,6 +126,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     config: attempt.config,
     agentId: params.setup.sessionAgentId,
     sessionKey: attempt.sessionKey,
+    modelSizeClass: resolveProfileModelSizeClass(attempt.model),
   });
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({
     config: attempt.config,

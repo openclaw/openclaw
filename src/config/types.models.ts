@@ -20,6 +20,10 @@ export {
 
 type ModelsSchemaInput = NonNullable<z.input<typeof ModelsConfigSchema>>;
 
+/** Trusted total-parameter size classes used for Agent Profile selection. */
+export const MODEL_SIZE_CLASSES = ["tiny", "small", "medium", "large"] as const;
+export type ModelSizeClass = (typeof MODEL_SIZE_CLASSES)[number];
+
 type ModelProviderSchemaInput = NonNullable<ModelsSchemaInput["providers"]>[string];
 
 type ModelDefinitionSchemaInput = NonNullable<ModelProviderSchemaInput["models"]>[number];

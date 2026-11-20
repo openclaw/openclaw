@@ -48,6 +48,11 @@ describe("configured overrides and synthetic context provenance", () => {
     expect(resolve({ baseUrl: configuredBaseUrl })?.parameterCount).toBe(expected);
   });
 
+  it("carries configured model-size metadata onto the resolved model", () => {
+    expect(resolve({ modelSizeClass: "small" })?.modelSizeClass).toBe("small");
+    expect(resolve({ reasoning: false })?.modelSizeClass).toBeUndefined();
+  });
+
   it("drops the synthetic marker when config authors the context window", () => {
     const model = resolve({ contextWindow: 64_000 });
     expect(model?.contextWindow).toBe(64_000);

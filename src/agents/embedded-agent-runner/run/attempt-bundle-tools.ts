@@ -8,6 +8,7 @@ import {
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
 import { filterToolsByAgentProfile } from "../../agent-profiles.js";
+import { resolveProfileModelSizeClass } from "../../agent-profiles/model-size-class.js";
 import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
@@ -234,6 +235,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         ),
         config: params.attempt.config,
         agentId: params.setup.sessionAgentId,
+        modelSizeClass: resolveProfileModelSizeClass(params.attempt.model),
         resolvedProfile: agentProfile,
         preserveToolNames: agentProfilePreserveToolNames,
       });

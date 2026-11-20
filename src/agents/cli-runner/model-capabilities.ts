@@ -1,6 +1,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderThinkingLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveProfileModelSizeClass } from "../agent-profiles/model-size-class.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
@@ -44,6 +45,7 @@ function resolveCliCatalogCapabilities(params: {
   }
   return {
     selectableContextEntry,
+    modelSizeClass: resolveProfileModelSizeClass(thinkingEntry),
     providerThinkingLevel: resolveProviderThinkingLevel({
       provider: thinkingEntry?.provider ?? params.modelProvider ?? params.provider,
       model: thinkingEntry?.id ?? params.normalizedModel,
@@ -106,15 +108,16 @@ export function resolveCliModelCapabilities(params: {
     config: params.runConfig,
     workspaceDir: params.workspaceDir,
   });
-  const { selectableContextEntry, providerThinkingLevel } = resolveCliCatalogCapabilities({
-    catalog: modelCatalog,
-    provider: params.run.provider,
-    modelProvider: params.backend.modelProvider,
-    modelId: params.modelId,
-    normalizedModel: params.normalizedModel,
-    agentRuntime: params.backend.id,
-    thinkLevel: params.run.thinkLevel,
-  });
+  const { selectableContextEntry, providerThinkingLevel, modelSizeClass } =
+    resolveCliCatalogCapabilities({
+      catalog: modelCatalog,
+      provider: params.run.provider,
+      modelProvider: params.backend.modelProvider,
+      modelId: params.modelId,
+      normalizedModel: params.normalizedModel,
+      agentRuntime: params.backend.id,
+      thinkLevel: params.run.thinkLevel,
+    });
   if (selectableContextEntry) {
     const contextWindowProfile = resolveModelContextWindowProfile({
       catalogEntry: selectableContextEntry,
@@ -139,5 +142,5 @@ export function resolveCliModelCapabilities(params: {
     resolvedContextWindowInfo.tokens > modelContextTokens
       ? { tokens: modelContextTokens, source: "model" as const }
       : resolvedContextWindowInfo;
-  return { contextWindowInfo, providerThinkingLevel };
+  return { contextWindowInfo, providerThinkingLevel, modelSizeClass };
 }

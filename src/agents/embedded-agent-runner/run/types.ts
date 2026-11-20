@@ -5,6 +5,7 @@ import type {
   SessionContextBudgetStatus,
   SessionSystemPromptReport,
 } from "../../../config/sessions/types.js";
+import type { ModelSizeClass } from "../../../config/types.models.js";
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { MessagePresentation } from "../../../interactive/payload.js";
@@ -289,7 +290,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   };
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
-  model: Model & { requestTimeoutMs?: number };
+  model: Model & { requestTimeoutMs?: number; modelSizeClass?: ModelSizeClass };
   authStorage: AuthStorage;
   /** Auth profile store already resolved during startup for this attempt. */
   authProfileStore: AuthProfileStore;

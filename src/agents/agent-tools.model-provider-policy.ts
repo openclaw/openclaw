@@ -1,3 +1,4 @@
+import type { ModelSizeClass } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import { filterToolsByAgentProfile, type ResolvedAgentProfile } from "./agent-profiles.js";
@@ -20,6 +21,7 @@ export function applyModelProviderToolPolicy(
     agentDir?: string;
     preparedModelRuntime?: Pick<PreparedModelRuntimeSnapshot, "metadataSnapshot">;
     modelCompat?: ModelCompatConfig;
+    modelSizeClass?: ModelSizeClass;
     resolvedAgentProfile?: ResolvedAgentProfile;
     suppressManagedWebSearch?: boolean;
     runtimeToolAllowlist?: string[];
@@ -32,6 +34,7 @@ export function applyModelProviderToolPolicy(
     config: params?.config,
     agentId: params?.agentId,
     sessionKey: params?.sessionKey,
+    modelSizeClass: params?.modelSizeClass,
     resolvedProfile: params?.resolvedAgentProfile,
     preserveToolNames: params?.agentProfilePreserveToolNames ?? params?.runtimeToolAllowlist,
   });
