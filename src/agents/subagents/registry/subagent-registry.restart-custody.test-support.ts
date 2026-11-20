@@ -1,5 +1,5 @@
-// Continuation (karmaterminal): the registry world restart custody suites share (🌊's rulings on
-// #1727 and on upstream #201544, openclaw/openclaw#129388). Real: the registry, its SQLite rows,
+// Continuation (karmaterminal): the registry world restart custody runs in (🌊's rulings on #1727
+// and on upstream #201544, openclaw/openclaw#129388). Real: the registry, its SQLite rows,
 // startup's root resume and restart completion recovery, the announce flow and its return routing.
 // Recorded: what each recipient would receive at the delivery seams.
 // Preserve module setup before modules that consume it.
@@ -194,14 +194,8 @@ export function useRestartCustodyWorld() {
     return row;
   }
 
-  /**
-   * Graceful shutdown of the current lifecycle, with `live` holding a running execution. `terminate`
-   * is the shutdown's kill; an older Gateway's differs.
-   */
-  async function shutDownGracefully(
-    live: SubagentRunRecord[],
-    terminate: () => Promise<unknown> = () => terminateLiveSubagentsForShutdown(resolveGateway),
-  ) {
+  /** Graceful shutdown of the current lifecycle, with `live` holding a running execution. */
+  async function shutDownGracefully(live: SubagentRunRecord[]) {
     const claims = live.map((row) =>
       claimAgentRunContext(
         row.runId,
@@ -214,7 +208,7 @@ export function useRestartCustodyWorld() {
         expect(isSubagentRunLive(row)).toBe(true);
       }
       await persistRunningSessionsForRestart({ cfg: {} });
-      await terminate();
+      await terminateLiveSubagentsForShutdown(resolveGateway);
     } finally {
       live.forEach((row, index) => releaseAgentRunContext(row.runId, claims[index]));
     }

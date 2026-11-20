@@ -165,8 +165,6 @@ openclaw [--dev] [--profile <name>] <command>
   continuations
     fence-status
     interrupt-fenced
-    shutdown-notices
-    settle-shutdown-notices
   completion
   doctor
   triage
@@ -653,26 +651,6 @@ is refused (`error.code` `OWNER_UNAVAILABLE`, for example a running Gateway),
 and 1 otherwise, including `STATE_DATABASE_MISSING` when the selected state root
 has no database. `openclaw --version --json` lists the build's `capabilities`;
 `continuation-turn-start-fence` marks a build with the fence.
-
-```bash
-openclaw continuations shutdown-notices [--json]
-openclaw continuations settle-shutdown-notices --ended-before <time> [--json]
-openclaw continuations settle-shutdown-notices --undo <backup> [--json]
-```
-
-Gateways before the graceful-shutdown outcome recorded a stopped sub-agent as
-a quiet kill. On its first boot, a newer Gateway delivers each such outcome
-still pending, including ones left by much older restarts. `shutdown-notices`
-counts those rows read-only and lists each run, its requester, and when it
-ended. `settle-shutdown-notices --ended-before <time>` closes the rows that
-ended before an ISO-8601 time as intentional non-delivery, so they are not
-delivered late. It never deletes a row, and the runs stay inspectable by run
-ID. It first writes a backup under
-`backups/subagent-shutdown-notices/` in the state directory and reports its
-path. Pick a cutoff before the deploy's own stop, so the children that stop
-interrupted still get their outcome after startup. `--undo <backup>` puts back
-every row that is still exactly as the settle wrote it. Exit codes match the
-commands above.
 
 ## Chat slash commands
 
