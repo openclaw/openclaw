@@ -989,7 +989,7 @@ describe("CLI message authority integration", () => {
 
         const result = await pending;
         if (revoke === "source") {
-          expectDenied(result, /agent runtime authority is no longer active/);
+          expectDenied(result, /authority is no longer active/);
         } else {
           expectSuccess(result);
         }

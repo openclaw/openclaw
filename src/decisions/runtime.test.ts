@@ -1,6 +1,4 @@
 import { AsyncResource } from "node:async_hooks";
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
@@ -25,9 +23,11 @@ import {
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { waitForAbort } from "./contract.test-support.js";
+import { prepareDecisionProviderReload } from "./provider-reload.js";
 import type { DecisionProviderV1 } from "./provider-types.js";
-import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
+import { evaluateDecisionInRegistry } from "./runtime.js";
 import { answer, batch, config, options, registered } from "./runtime.test-support.js";
 import { validateDecisionBatch, validateDecisionResult } from "./validation.js";
 
@@ -199,17 +199,16 @@ describe("registered decision capability", () => {
     const instance = getPluginInstance(host.record)!;
     setRuntimeConfigSnapshot(config);
     const current = { ...host.registry };
-    const resource = (() => {
+    const { resource, retired } = (() => {
       const previous = Object.assign(new RetiredRegistry(), host.registry);
       markPluginRegistryActive(previous);
       const retained = instance.run(() => new AsyncResource("retired-decision-scope"));
       markPluginRegistryActive(current);
       markPluginRegistryRetired(previous);
-      return retained;
+      return { resource: retained, retired: new WeakRef(previous) };
     })();
     try {
-      await setImmediate();
-      expect(queryObjects(RetiredRegistry)).toBe(0);
+      await expectCollected(retired);
       const invoke = () => resource.runInAsyncScope(() => sdk(host));
       await expectOk(invoke());
       expect(evaluate).toHaveBeenCalledOnce();

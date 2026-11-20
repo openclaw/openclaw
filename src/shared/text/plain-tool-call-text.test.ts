@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as toolCallRepair from "../../../packages/tool-call-repair/src/payload.js";
 import { assistantVisibleTextFilters, plainToolCallTextFilter } from "./assistant-visible-text.js";
 import * as codeRegions from "./code-ranges.js";
-import { findCodeRegions } from "./code-regions.js";
+import { createCodeRegionResolver, findCodeRegions } from "./code-regions.js";
 import { createTextProjection, type TextFilter } from "./text-projection.js";
 
 const reference = (text: string) =>
@@ -17,6 +17,21 @@ function appendChunks(chunks: readonly string[], filters: readonly TextFilter[])
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+it("retains indentation and reference ownership across interleaved snapshot tails", () => {
+  const resolve = createCodeRegionResolver();
+  const list = "  - first\n\n  - second\n\n";
+  const image = "![label `code`][id]\n\nNext\n\n";
+  expect(resolve(list)).toEqual([]);
+  expect(resolve(image)).toEqual([{ start: 8, end: 14, block: false }]);
+  expect(resolve(list + "      code\n")).toEqual([]);
+  expect(resolve(image + "[id]: /url")).toEqual([]);
+  expect(resolve("`replacement`")).toEqual([{ start: 0, end: 13, block: false }]);
+  expect(resolve(image)).toEqual([{ start: 8, end: 14, block: false }]);
+  const definition = "-   first\n\n    [id]: /url\n\nTail\n\n";
+  expect(resolve(definition)).toEqual([]);
+  expect(resolve(definition + "![`x`][id]\n")).toEqual([]);
+});
 
 const samples = [
   '[tool:read] {}\n\n[outer [inner]\nmore\nlabel](/url "title\n`x\n[tool:read] {}\nx`")',

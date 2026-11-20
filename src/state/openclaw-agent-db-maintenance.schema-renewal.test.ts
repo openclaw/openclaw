@@ -20,6 +20,8 @@ import {
 } from "./openclaw-state-db.js";
 import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
 
+const leaseMs = 3_000;
+
 const observer = vi.hoisted(() => ({
   driver: undefined as URL | undefined,
   port: undefined as MessagePort | undefined,
@@ -152,7 +154,7 @@ it.each([true, false])(
             .get(AGENT_DATABASE_MAINTENANCE_LEASE.scope, AGENT_DATABASE_MAINTENANCE_LEASE.key);
         try {
           const outcome = await withAgentDatabaseMaintenanceLease(
-            { env: state.env, leaseMs: 10_000, processBound: true },
+            { env: state.env, leaseMs, processBound: true },
             async () => {
               entered = true;
               const provenance = hasProvenance(reader);
@@ -169,7 +171,7 @@ it.each([true, false])(
                 new Int32Array(new SharedArrayBuffer(4)),
                 0,
                 0,
-                Number(before.expires_at) - Date.now() + 10_000 + 250,
+                Number(before.expires_at) - Date.now() + leaseMs + 250,
               );
               const observedAt = Date.now();
               const requests = takeRequests(observations.port1);
@@ -208,7 +210,7 @@ it.each([true, false])(
           expect(snapshot.before).toBeDefined();
           expect(snapshot.after).toBeDefined();
           const { before, after, requests, observedAt } = snapshot;
-          expect(observedAt).toBeGreaterThan(Number(before!.heartbeat_at) + 20_000);
+          expect(observedAt).toBeGreaterThan(Number(before!.heartbeat_at) + 2 * leaseMs);
           expect(requests).toEqual([]);
           // More than two original TTLs rules out one renewal followed by a
           // blocked cache-publication acknowledgement on the next interval.

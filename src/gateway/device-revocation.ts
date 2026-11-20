@@ -256,6 +256,14 @@ export function readGatewayDeviceRevocationGuard(
   return guard ? captures.get(guard)?.isRevocationCurrent : undefined;
 }
 
+/** New starts check committed source policy, never the fallback transport callback. */
+export function readGatewayDeviceCommittedSourceAuthority(
+  guard: (() => unknown) | undefined,
+): CurrentCaller | undefined {
+  const capture = guard ? captures.get(guard) : undefined;
+  return capture?.hasSourceAuthority ? capture.isSourceCurrent : undefined;
+}
+
 /** Original committed source authority, excluding tentative transport and later request lifetimes. */
 export function readGatewayDeviceSourceAuthority(
   guard: (() => unknown) | undefined,
@@ -338,6 +346,18 @@ export function retainGatewayDeviceRevocation(
   }
   if (!capture.isCurrent() || capture.state.references === 0) {
     throw new Error("Gateway caller authority is no longer active.");
+  }
+  capture.state.references += 1;
+  return releaseHold(capture);
+}
+
+/** Keep a retained capture indexed for a later start check; never checks caller authority. */
+export function retainGatewayDeviceRevocationIndex(
+  guard: (() => unknown) | undefined,
+): (() => void) | undefined {
+  const capture = guard ? captures.get(guard) : undefined;
+  if (!capture || capture.state.references === 0) {
+    return undefined;
   }
   capture.state.references += 1;
   return releaseHold(capture);

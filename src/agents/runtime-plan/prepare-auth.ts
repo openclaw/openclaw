@@ -3,6 +3,7 @@
  * Callers supply an already loaded credential snapshot; this module never
  * resolves secrets or loads a provider runtime.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import {
   pluginProviderAuthUnavailable,
@@ -18,6 +19,7 @@ import { resolveStoredCredentialReadOnlyAvailability } from "../auth-profiles/re
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
+  getSoonestCooldownExpiry,
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
 } from "../auth-profiles/usage-state.js";
@@ -35,6 +37,7 @@ import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js"
 import { prepareNativeCommandAuth } from "../model-native-command-auth.js";
 import { resolveDefaultModelForAgent } from "../model-selection-config.js";
 import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "../openai-model-routes.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {
   buildProviderModelAuthDirectSource,
   buildProviderModelAuthSourcePlan,
@@ -72,6 +75,12 @@ function createAuthProfileCooldownError(
       reason,
       status: resolveFailoverStatus(reason),
       code: AUTH_PROFILE_COOLDOWN_ERROR_CODE,
+      rateLimitResetAt:
+        reason === "rate_limit" && params.authProfileStore
+          ? (getSoonestCooldownExpiry(params.authProfileStore, [profileId], {
+              forModel: params.modelId,
+            }) ?? undefined)
+          : undefined,
       provider: params.provider,
       model: params.modelId,
       profileId,
@@ -232,7 +241,26 @@ function resolvePreparedProviderEntryApiKeyProfileReference(
 export function prepareAgentRuntimeAuth(
   input: PrepareAgentRuntimeAuthPlanParams,
 ): PreparedAgentRuntimeAuth {
-  const native = prepareNativeCommandAuth(input);
+  const harnessOwnsOpenAIAuth =
+    input.harnessId?.trim().toLowerCase() === "codex" ||
+    input.harnessRuntime?.trim().toLowerCase() === "codex";
+  const authProfileSelectionProvider = harnessOwnsOpenAIAuth ? "openai" : input.provider;
+  const sessionProfileId = input.sessionAuthProfileId?.trim();
+  const profileProvider =
+    sessionProfileId &&
+    (input.config?.auth?.profiles?.[sessionProfileId]?.provider ??
+      input.authProfileStore?.profiles[sessionProfileId]?.provider);
+  // Session pins follow their provider across model retries, not cross-provider fallbacks.
+  // Compare logical scopes so same-provider endpoint incompatibility still fails closed.
+  const sessionAuthProfileId =
+    profileProvider &&
+    normalizeProviderId(profileProvider) !== normalizeProviderId(input.provider) &&
+    normalizeProviderId(profileProvider) !== normalizeProviderId(authProfileSelectionProvider) &&
+    resolveProviderIdForAuth(profileProvider, { ...input, storedCredential: true }) !==
+      resolveProviderIdForAuth(authProfileSelectionProvider, input)
+      ? undefined
+      : input.sessionAuthProfileId;
+  const native = prepareNativeCommandAuth({ ...input, sessionAuthProfileId });
   if (native) {
     return native;
   }
@@ -245,7 +273,7 @@ export function prepareAgentRuntimeAuth(
       pluginMetadataSnapshot: input.metadataSnapshot,
     }) === "plugin"
   ) {
-    if (input.requiredAuthProfileId !== undefined || input.sessionAuthProfileId !== undefined) {
+    if (input.requiredAuthProfileId !== undefined || sessionAuthProfileId !== undefined) {
       throw pluginProviderAuthUnavailable(
         input.provider,
         "agent profile pins cannot select plugin credentials",
@@ -277,16 +305,13 @@ export function prepareAgentRuntimeAuth(
       ],
     };
   }
-  const params = { ...input, config: resolveModelProviderAuthConfig(input) };
+  const params = { ...input, sessionAuthProfileId, config: resolveModelProviderAuthConfig(input) };
   const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
   const lockedProfileId =
     params.requiredAuthProfileId ??
     (params.sessionAuthProfileSource === "user" || params.sessionAuthProfileSource === "user-link"
       ? requestedProfileId
       : undefined);
-  const harnessOwnsOpenAIAuth =
-    params.harnessId?.trim().toLowerCase() === "codex" ||
-    params.harnessRuntime?.trim().toLowerCase() === "codex";
   const harnessAuthOwnerId = params.harnessId?.trim() || params.harnessRuntime?.trim();
   const runtimeAuthOwner =
     harnessOwnsOpenAIAuth && params.harnessAuthBootstrap === "harness" && harnessAuthOwnerId
@@ -299,7 +324,6 @@ export function prepareAgentRuntimeAuth(
     );
   }
   const store = params.authProfileStore;
-  const authProfileSelectionProvider = harnessOwnsOpenAIAuth ? "openai" : params.provider;
   if (lockedProfileId) {
     const eligibility = store
       ? resolveAuthProfileEligibility({

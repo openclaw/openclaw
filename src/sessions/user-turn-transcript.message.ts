@@ -23,6 +23,25 @@ import type {
   UserTurnMessagePersistenceParams,
 } from "./user-turn-transcript.types.js";
 
+/** Approved text replacement invalidates annotations tied to the prior text. */
+export function applyUserTurnReplacementText(
+  candidate: PersistedUserTurnMessage | undefined,
+  replacementText: string | undefined,
+): PersistedUserTurnMessage | undefined {
+  if (!candidate || replacementText === undefined) {
+    return candidate;
+  }
+  const metadata = { ...candidate["__openclaw"] };
+  if (candidate.content !== replacementText) {
+    delete metadata.humanMentions;
+    delete metadata.workContext;
+    delete metadata.appContext;
+  }
+  const next = { ...candidate, content: replacementText };
+  delete next["__openclaw"];
+  return Object.keys(metadata).length > 0 ? { ...next, __openclaw: metadata } : next;
+}
+
 const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
 const MIME_TYPE_PATTERN = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/iu;
 
@@ -145,6 +164,18 @@ export function readModelPromptProjection(message: unknown): string | undefined 
   return projection.text;
 }
 
+/** For a reader that uses visible content, such as a side question. */
+export function omitRecordedModelPrompt<T extends Extract<AgentMessage, { role: "user" }>>(
+  message: T,
+): T {
+  const metadata = readOpenClawMessageMeta(message);
+  if (!metadata || !Object.hasOwn(metadata, "modelPromptProjection")) {
+    return message;
+  }
+  const { modelPromptProjection: _projection, ...retained } = metadata;
+  return { ...message, __openclaw: retained };
+}
+
 export function prepareModelPromptProjection(
   message: unknown,
   text: string,
@@ -183,12 +214,17 @@ export function projectRecordedModelPrompt(
   if (!isUserMessage(message)) {
     return message;
   }
-  const text = readModelPromptProjection(transcript) ?? readModelPromptProjection(message);
-  if (text === undefined) {
-    return message;
+  let text: string | undefined;
+  try {
+    text = readModelPromptProjection(transcript) ?? readModelPromptProjection(message);
+    if (text === undefined) {
+      return message;
+    }
+  } catch {
+    // An unreadable historical hint must not hide the original user input.
   }
   let content = message.content;
-  if (Array.isArray(content)) {
+  if (text !== undefined && Array.isArray(content)) {
     let replaced = false;
     content = content.map((block) => {
       if (block.type !== "text" || replaced) {
@@ -200,7 +236,7 @@ export function projectRecordedModelPrompt(
     if (!replaced) {
       content = [{ type: "text", text }, ...content];
     }
-  } else {
+  } else if (text !== undefined) {
     content = text;
   }
   const metadata = { ...message["__openclaw"] };

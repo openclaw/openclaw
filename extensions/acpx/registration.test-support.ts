@@ -13,7 +13,7 @@ export function createRegisteredAcpxService(
       runtime: createPluginRuntimeMock(),
       ...options,
       registerService: (registered) => {
-        if (registered.apiVersion === 2) {
+        if (registered.apiVersion === 2 || registered.apiVersion === 3) {
           throw new Error("Expected ACPX runtime service API version 1");
         }
         service = registered;

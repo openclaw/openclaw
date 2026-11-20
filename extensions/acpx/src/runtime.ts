@@ -643,9 +643,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         record.name !== sessionKey ||
         record.acpSessionId !== (persistedHandle?.backendSessionId ?? decoded?.backendSessionId) ||
         (!record.agentCapabilities?.loadSession &&
-          !record.agentCapabilities?.sessionCapabilities?.resume) ||
-        record.lastPromptAt !== undefined ||
-        record.messages.some((message) => typeof message !== "string" && "User" in message))
+          !record.agentCapabilities?.sessionCapabilities?.resume))
     ) {
       return undefined;
     }

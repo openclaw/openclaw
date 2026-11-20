@@ -15,9 +15,12 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "./agent-run-registry.js";
 import { refreshCostUsageCacheForAgent as refreshAgent } from "./session-cost-usage-aggregation.js";
 import { requestCostUsageCacheRefresh as requestRefresh } from "./session-cost-usage-cache-runtime.js";
+import { acquireUsageLock } from "./session-cost-usage-cache.fixtures.test-support.js";
 import {
   loadCostUsageSummaryFromCache as loadSummary,
+  loadSessionCostSummary,
   loadSessionCostSummariesFromCache as loadSessions,
+  loadSessionUsageOverviewFromCache as loadOverview,
 } from "./session-cost-usage.js";
 
 const config = {};
@@ -221,6 +224,49 @@ async function withRefreshFixture(
 
 const test = it.extend<{ usage: ReturnType<typeof makeRefreshFixture> }>({
   usage: async ({ task: _task }, use) => withRefreshFixture(use),
+});
+
+it("returns marked stale session costs when another direct refresh stays busy", async () => {
+  const actual = await vi.importActual<typeof import("./session-cost-usage-aggregation.js")>(
+    "./session-cost-usage-aggregation.js",
+  );
+  await withRefreshFixture(
+    async ({ agentId, files: [sessionFile], refresh, scope }) => {
+      refresh.mockImplementation(actual.refreshCostUsageCacheForAgent);
+      await actual.refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+      await fs.appendFile(sessionFile, usageLine("later"));
+      await using lock = await acquireUsageLock(agentId);
+      vi.useFakeTimers();
+      const reading = scope.track(() => loadSessionCostSummary({ config, agentId, sessionFile }));
+      const settled = vi.fn();
+      void reading.then(settled, settled);
+      try {
+        await vi.waitFor(() => expect(refresh).toHaveBeenCalled(), {
+          timeout: 10_000,
+          interval: 1,
+        });
+        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.waitFor(
+          () => expect(settled, "session-cost report wait budget").toHaveBeenCalled(),
+          {
+            timeout: 1_000,
+          },
+        );
+        expect(await reading).toMatchObject({
+          totalTokens: 10,
+          totalCost: 1,
+          staleSince: expect.any(Number),
+          refreshing: true,
+        });
+        expect(scope.hasPendingWork).toBe(true);
+      } finally {
+        await lock.release();
+        vi.useRealTimers();
+        await reading;
+      }
+    },
+    { fileCount: 1, fakeTimers: false, firstRecord: usageLine("first") },
+  );
 });
 
 test("keeps per-session quiet gaps across wall-clock rollback and unrelated reads", async ({
@@ -445,6 +491,35 @@ test.for(["completes", "slow", "cancelled", "rollback"] as const)(
   },
 );
 
+test("returns the committed overview while its refresh is still pending", async ({
+  usage: { agentId, files, refresh, hold, request, newScope },
+}) => {
+  const refreshOwner = newScope();
+  const release = hold("refreshed");
+  refresh.mockReturnValue(release.promise);
+  request({ sessionFiles: [files[0]] }, refreshOwner);
+  await tick(0, 1);
+  const settled = vi.fn();
+  const reading = newScope().track(() =>
+    loadOverview({
+      config,
+      agentId,
+      families: [[{ sessionFile: files[0] }]],
+      startMs: Date.UTC(2026, 8, 18),
+      endMs: Date.UTC(2026, 8, 19) - 1,
+    }),
+  );
+  void reading.then(settled, settled);
+  // A report must return its explicit partial state without waiting for a transcript scan.
+  await vi.waitFor(() => expect(settled).toHaveBeenCalled(), { timeout: 1_000 });
+  expect(await reading).toMatchObject({
+    computing: [true],
+    summarizing: 1,
+    cacheStatus: { status: "refreshing", pendingFiles: 1 },
+  });
+  expect(refreshOwner.signal.aborted).toBe(false);
+});
+
 test("keeps an exact logical-selector read pending across a deferred rebuild", async ({
   usage: { agentId, storePath, refresh, hold, read, request },
 }) => {
@@ -464,7 +539,7 @@ test("keeps an exact logical-selector read pending across a deferred rebuild", a
   await vi.advanceTimersByTimeAsync(0);
   const reading = read(logical);
   const settled = vi.fn();
-  void reading.then(settled);
+  void reading.then(settled, settled);
   releaseFirst.resolve("refreshed");
   await vi.advanceTimersByTimeAsync(1);
   expect(refresh.mock.calls[1]?.[0]).toMatchObject({

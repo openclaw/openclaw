@@ -2,6 +2,7 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
@@ -104,11 +105,16 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
     fixture.announce.mockImplementation(async (params) => {
       const retained =
         getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
-      expect(retained).toMatchObject({
-        source: source.authority.source,
-        scopes: ["operator.write"],
-      });
-      retained?.assertCurrent();
+      // A revoked owner's result is still delivered, at the System baseline.
+      if (ownerState === "revoked") {
+        expect(retained).toBeUndefined();
+      } else {
+        expect(retained).toMatchObject({
+          source: source.authority.source,
+          scopes: ["operator.write"],
+        });
+        retained?.assertCurrent();
+      }
       if (ownerState === "replaced Gateway") {
         announcementEntered.resolve();
         await continueAnnouncement.promise;
@@ -136,6 +142,8 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
             runId,
             childSessionKey,
             childAgentId: "main",
+            agentDir: path.join(fixture.stateDir, "agents", "main", "agent"),
+            workspaceDir: path.join(fixture.stateDir, "workspace"),
             task: "unstarted operation",
             requester: {
               sessionKey: "agent:main:main",
@@ -178,17 +186,9 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
         ...rejectedRun,
         requesterSessionKey: "agent:main:main",
       });
-      if (ownerState !== "revoked") {
-        expect(fixture.announce).toHaveBeenCalledOnce();
-        if (ownerState !== "replaced Gateway") {
-          expect(loadSubagentRegistryFromSqlite().get(runId)?.delivery?.status).toBe("delivered");
-        }
-      } else {
-        expect(fixture.announce).not.toHaveBeenCalled();
-        const entry = expectDefined(subagentRuns.get(runId), "failed registration");
-        expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
-          /authority/,
-        );
+      expect(fixture.announce).toHaveBeenCalledOnce();
+      if (ownerState !== "replaced Gateway") {
+        expect(loadSubagentRegistryFromSqlite().get(runId)?.delivery?.status).toBe("delivered");
       }
       if (ownerState === "replaced child") {
         expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).toBe(

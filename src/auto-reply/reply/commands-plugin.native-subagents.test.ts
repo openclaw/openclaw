@@ -20,6 +20,10 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
 import {
@@ -81,7 +85,11 @@ async function withCommandPlugin(
   run: (fixture: Fixture) => Promise<void>,
   options: { commands?: CommandMetadata[]; manifestCapabilities?: unknown } = {},
 ) {
-  await withAdminIngress(async ({ cfg, state, admins, context, gateway }) => {
+  await withAdminIngress(async (ingress) => {
+    const { cfg, state, admins, context, gateway, resolveGatewayContext } = ingress;
+    const sdkResources = new LegacyPluginSdkResourceHost();
+    bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResources);
+    gateway.resolveGatewayContext = resolveGatewayContext;
     const bridge = Symbol.for(`openclaw.command-native-test.${randomUUID()}`);
     const handler = vi.fn<Handler>((ctx) => ({
       text: JSON.stringify({
@@ -172,7 +180,7 @@ async function withCommandPlugin(
       await withPluginRuntimeGatewayRequestScope(
         {
           context: gateway,
-          resolveGatewayContext: () => gateway,
+          resolveGatewayContext,
           pluginRegistry: registry,
           isWebchatConnect: () => false,
         },
@@ -196,6 +204,7 @@ async function withCommandPlugin(
         });
       }
       await expect(waitForPluginCacheRetirement()).resolves.toMatchObject({ failures: [] });
+      await sdkResources.close();
     }
   });
 }

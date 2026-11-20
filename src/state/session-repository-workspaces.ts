@@ -35,6 +35,8 @@ import type {
   RepositoryWorkspaceBase,
   RepositoryWorkspaceCheckpoint,
   RepositoryWorkspaceCreate,
+  RepositoryWorkspaceDiskBinding,
+  RepositoryWorkspaceDiskRetirement,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
   SessionRepositoryWorkspaceRecord,
@@ -290,6 +292,7 @@ export function createSessionRepositoryWorkspaceStore(
               url: input.url,
               requestedRef: input.requestedRef,
               runSetupScript: input.runSetupScript,
+              branchPrefix: input.branchPrefix,
               branch: input.branch,
             },
           },
@@ -311,6 +314,28 @@ export function createSessionRepositoryWorkspaceStore(
           },
           input.assertCurrent,
         ),
+      );
+    },
+    // Internal prerequisite only: no session/profile selector activates disk authority yet.
+    async bindDisk(input: Guarded<RepositoryWorkspaceDiskBinding>) {
+      return requireWorkspace(
+        await mutate(
+          {
+            type: "repositoryWorkspaces.bindDisk",
+            input: {
+              workspaceId: input.workspaceId,
+              expectedRevision: input.expectedRevision,
+              diskAuthority: input.diskAuthority,
+            },
+          },
+          input.assertCurrent,
+        ),
+      );
+    },
+    async retireDisk(input: Guarded<RepositoryWorkspaceDiskRetirement>) {
+      const { assertCurrent, ...request } = input;
+      return requireWorkspace(
+        await mutate({ type: "repositoryWorkspaces.retireDisk", input: request }, assertCurrent),
       );
     },
     async acceptCheckpoint(input: Guarded<RepositoryWorkspaceCheckpoint>) {

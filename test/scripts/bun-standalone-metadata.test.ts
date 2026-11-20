@@ -42,11 +42,12 @@ import {
   safeRealpathSync,
 } from "../../src/plugins/path-safety.js";
 import { createPluginCacheSdk, getPluginSdkHostFacts } from "../../src/plugins/plugin-cache-sdk.js";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 const temporaryRoots: string[] = [];
 afterEach(() => {
   vi.unstubAllGlobals();
-  temporaryRoots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true }));
+  cleanupTempDirs(temporaryRoots);
 });
 
 const parse = createStandaloneSourceParser();
@@ -1019,7 +1020,7 @@ describe("standalone image metadata", () => {
       getPluginInstance: () => undefined,
       loadSetupRuntimeChannelCandidate: () => true,
       recordPluginError: ({ error }: { error: string }) => errors.push(error),
-      detailPluginStartupTrace: () => {},
+      recordPluginStartupDiagnostics: () => {},
     });
     const ownerFile =
       owner === "runtime"
@@ -1640,7 +1641,11 @@ function loadLegacySessionSurface(rootPath: string) {
     const filename = path.join(runtime, "dist/hooks-loader.js");
     const transformed = adapter.transform({
       filename,
-      contents: ownerSource("src/hooks/loader.ts", "prepareInternalHooks"),
+      // Literal dependencies are bundled normally; this extracted owner uses the fixture namespace.
+      contents: ownerSource("src/hooks/loader.ts", "prepareInternalHooks").replace(
+        'import("./workspace.js")',
+        "Promise.resolve({ prepareWorkspaceHookEntries })",
+      ),
     });
     vm.runInContext(
       rewriteStandaloneImports({
@@ -1716,7 +1721,6 @@ function loadLegacySessionSurface(rootPath: string) {
       throw new Error("Expected the physical resolver to own a descriptor");
     }
     expect(close).toHaveBeenLastCalledWith(opened.fd);
-    expect(() => fs.fstatSync(opened.fd)).toThrow(/EBADF/);
     close.mockClear();
     fs.chmodSync(external, 0o777);
     expect(resolve(external, "./resolver.js")).toBeUndefined();

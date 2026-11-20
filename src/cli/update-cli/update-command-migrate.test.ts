@@ -4,13 +4,23 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import * as terminalNote from "../../../packages/terminal-core/src/note.js";
 import * as databaseEngine from "../../commands/doctor-database-engine.js";
+import { completeDoctorMigrationBackups } from "../../commands/doctor-migration-backup-artifacts.js";
+import { backupDoctorSqliteDatabases } from "../../commands/doctor-migration-backup.js";
+import { withDoctorSqliteMaintenanceLock } from "../../commands/doctor-sqlite-maintenance-lock.js";
 import * as doctorUi from "../../commands/doctor-ui.js";
 import * as doctor from "../../flows/doctor-health.js";
 import * as jsonFiles from "../../infra/json-files.js";
+import * as coldNavigation from "../../infra/state-migrations.cold-navigation.js";
+import * as databaseBackup from "../../infra/update-database-backup.js";
 import { recordUpdateDoctorDeferredInspectionChecks } from "../../infra/update-doctor-result.js";
 import * as updateHistory from "../../infra/update-run-ledger.js";
 import { listUpdateRuns } from "../../infra/update-run-reader.js";
+import { defaultRuntime } from "../../runtime.js";
+import * as snapshotBackup from "../../snapshot/database-backup.js";
+import { completeDeletion } from "../../state/agent-deletion-journal.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
@@ -29,6 +39,173 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 const readText = (file: string) => fs.readFile(file, "utf8");
+
+it.each(["current", "old-schema", "wrong-owner", "unregistered-old-schema"] as const)(
+  "verifies startup stores before accepting native migration (%s)",
+  async (condition) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await state.writeConfig({ agents: { entries: { main: {} } } });
+      const agentPath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+      const heldDir = state.agentDir("retired");
+      const heldPath = path.join(heldDir, "openclaw-agent.sqlite");
+      for (const [agentId, pathname] of [
+        ["main", agentPath],
+        ["retired", heldPath],
+      ] as const) {
+        openOpenClawAgentDatabase({ agentId, path: pathname, env: state.env });
+      }
+      let inspectedPath = agentPath;
+      if (condition === "unregistered-old-schema") {
+        inspectedPath = path.join(state.agentDir("discovered"), "openclaw-agent.sqlite");
+        const target = { agentId: "discovered", path: inspectedPath, env: state.env };
+        openOpenClawAgentDatabase(target);
+        unregisterOpenClawAgentDatabase(target);
+      }
+      await closeOpenClawAgentDatabasesAsync(state.stateDir);
+      {
+        using held = new DatabaseSync(heldPath);
+        held.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
+      }
+      completeDeletion(state, "retired", state.path("retired-workspace"));
+      await closeOpenClawStateDatabaseAsync();
+      const heldBytes = await fs.readFile(heldPath);
+      const heldTime = (await fs.stat(heldPath)).mtimeMs;
+      vi.spyOn(doctor, "runDoctorHealthFlow").mockImplementation(async () => {
+        using database = new DatabaseSync(inspectedPath);
+        if (condition === "old-schema" || condition === "unregistered-old-schema") {
+          database.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
+        } else if (condition === "wrong-owner") {
+          database.exec("UPDATE schema_meta SET agent_id='another' WHERE meta_key='primary'");
+        }
+      });
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const backupRoot = state.path("startup-verification", "native");
+      if (condition === "current") {
+        await updateMigrateCommand(backupRoot);
+        expect(output).toHaveBeenCalledWith(expect.objectContaining({ status: "migrated" }));
+      } else {
+        await expect(updateMigrateCommand(backupRoot)).rejects.toThrow(
+          "Doctor did not complete the candidate database migrations",
+        );
+        expect(output).not.toHaveBeenCalled();
+      }
+      const receipt = JSON.parse(await readText(`${backupRoot}.receipt.json`));
+      expect(receipt.status).toBe(condition === "current" ? "migrated" : "failed");
+      expect((await fs.stat(receipt.backup.directory)).isDirectory()).toBe(true);
+      expect(await fs.readFile(heldPath)).toEqual(heldBytes);
+      expect((await fs.stat(heldPath)).mtimeMs).toBe(heldTime);
+    });
+  },
+);
+
+it("retires verified migration originals only after a later native update is accepted", async () => {
+  await withOpenClawTestState(
+    {
+      scenario: "minimal",
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_SUPERVISOR_MODE: "external" },
+    },
+    async (state) => {
+      vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
+      vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      vi.spyOn(readiness, "waitForGatewayHttpReadiness").mockResolvedValue({
+        healthz: null,
+        readyz: null,
+        coreReady: false,
+      });
+      const first = state.path("first-update", "native");
+      await updateMigrateCommand(first);
+      await closeOpenClawStateDatabaseAsync();
+      const source = state.statePath("state", "openclaw.sqlite");
+      const backup = await withDoctorSqliteMaintenanceLock({
+        env: state.env,
+        operation: "migration backup retention proof",
+        run: async (authority) => {
+          const result = await backupDoctorSqliteDatabases({
+            env: state.env,
+            pendingDatabasePaths: [source],
+            databasePaths: [source],
+            authority,
+          });
+          completeDoctorMigrationBackups(state.env, [source]);
+          return result.snapshots![0]!.path;
+        },
+      });
+      await updateFinishCommand(first);
+      expect((await fs.stat(backup)).size).toBeGreaterThan(0);
+      const second = state.path("second-update", "native");
+      await updateMigrateCommand(second);
+      // Migration alone must not release originals while the supervisor can roll back.
+      expect((await fs.stat(backup)).size).toBeGreaterThan(0);
+      await updateFinishCommand(second);
+      await expect(fs.stat(backup)).rejects.toMatchObject({ code: "ENOENT" });
+      const latest = listUpdateRuns({}, { env: state.env })[0]!;
+      expect(latest.steps).toContainEqual(
+        expect.objectContaining({
+          step: "diagnostic:recovery-artifact-cleanup",
+          detail: expect.stringContaining("Update backup cleanup removed 1 item ("),
+        }),
+      );
+      await updateFinishCommand(second);
+      expect(listUpdateRuns({}, { env: state.env })).toHaveLength(2);
+    },
+  );
+});
+
+it("preserves a recoverable cold-navigation deadline in native update receipts", async () => {
+  await withOpenClawTestState(
+    {
+      scenario: "minimal",
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_SUPERVISOR_MODE: "external" },
+    },
+    async (state) => {
+      vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
+      const warning =
+        "Cold transcript navigation: migrated 2, pending 3; resumes on the next doctor run. Pending archives keep the existing cold-restore path.";
+      const migrate = vi.spyOn(coldNavigation, "migrateSessionColdNavigation").mockResolvedValue({
+        changes: [],
+        warnings: [warning],
+        warningDisposition: "recoverable",
+      });
+      const note = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const backupRoot = state.path("cold-navigation-recovery", "native");
+      await updateMigrateCommand(backupRoot);
+      expect(note).toHaveBeenCalledWith(expect.stringContaining(warning), "Doctor warnings");
+      expect(JSON.parse(await readText(`${backupRoot}.receipt.json`))).toMatchObject({
+        status: "migrated",
+        warnings: expect.arrayContaining([warning]),
+      });
+      expect(output).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "migrated",
+          warnings: expect.arrayContaining([warning]),
+        }),
+      );
+      await updateMigrateCommand(state.path("next-deploy", "native"));
+      expect(migrate).toHaveBeenCalledTimes(2);
+      vi.spyOn(readiness, "waitForGatewayHttpReadiness").mockResolvedValue({
+        healthz: null,
+        readyz: null,
+        coreReady: false,
+      });
+      await updateFinishCommand(backupRoot);
+      expect(listUpdateRuns({}, { env: state.env })).toContainEqual(
+        expect.objectContaining({
+          status: "succeeded",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: expect.stringMatching(/^warning:doctor:/u),
+              detail: warning,
+            }),
+          ]),
+        }),
+      );
+      expect(output).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: "finished", warning: expect.stringContaining(warning) }),
+      );
+    },
+  );
+});
 
 it("migrates the Claws preference through candidate Doctor with a rollback original", async () => {
   await withOpenClawTestState(
@@ -431,3 +608,114 @@ it("refuses a future database before capture or Doctor mutation", async () => {
     await expect(fs.stat(`${backupRoot}.receipt.json`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
+
+it.each([false, true])(
+  "retires server captures before removing supervised backups (cleanup fails: %s)",
+  async (failCleanup) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config = { database: { postgres: { recoveryCaptures: "server" as const } } };
+      await state.writeConfig(config);
+      const backupRoot = state.path("server-captures", "native");
+      const directory = `${backupRoot}.databases`;
+      const exportDirectories = ["agent.postgres", "workboard.postgres"].map((name) =>
+        path.join(directory, name),
+      );
+      const manifest =
+        '{"carrier":"postgres-schema","schema":"restore_11111111111111111111111111111111"}';
+      // The backup owner supplies server-capture entries; migrate persists the real receipt.
+      vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockImplementation(async () => {
+        for (const exported of exportDirectories) {
+          await fs.mkdir(exported, { recursive: true });
+          await fs.writeFile(path.join(exported, "manifest.json"), manifest);
+        }
+        return {
+          directory,
+          databases: exportDirectories.map((exportDirectory) => ({
+            path: `${exportDirectory}.sqlite`,
+            snapshotPath: path.join(exportDirectory, "anchor.sqlite"),
+            engine: "postgres",
+            exportDirectory,
+            userVersion: 1,
+            sha256: "0".repeat(64),
+            sizeBytes: 0,
+          })),
+          missingPaths: [],
+          sourcePaths: [],
+          sourceGenerations: {},
+          warnings: [],
+        };
+      });
+      vi.spyOn(doctor, "runDoctorHealthFlow").mockResolvedValue();
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      await updateMigrateCommand(backupRoot);
+      const discard = vi
+        .spyOn(snapshotBackup, "discardPostgresSchemaCaptures")
+        .mockImplementation(async () => {
+          for (const exported of exportDirectories) {
+            expect(await readText(path.join(exported, "manifest.json"))).toBe(manifest);
+          }
+          if (failCleanup && discard.mock.calls.length === 1) {
+            throw new Error("synthetic schema drop failure");
+          }
+        });
+
+      await updateFinishCommand(backupRoot);
+      expect(discard).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining(config),
+        exportDirectories,
+      );
+      if (failCleanup) {
+        expect((await fs.stat(directory)).isDirectory()).toBe(true);
+        expect(output).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            status: "finished",
+            warning: expect.stringMatching(/cleanup remains pending.*retry update finish/su),
+          }),
+        );
+        await updateFinishCommand(backupRoot);
+        expect(discard).toHaveBeenCalledTimes(2);
+      }
+      await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(output).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: "finished", receipt: `${backupRoot}.receipt.json` }),
+      );
+      expect(output.mock.lastCall?.[0]).not.toHaveProperty("warning");
+      // Finished receipts also retry after their manifests have already been removed.
+      await updateFinishCommand(backupRoot);
+      expect(discard).toHaveBeenCalledTimes(failCleanup ? 2 : 1);
+      expect(output.mock.lastCall?.[0]).not.toHaveProperty("warning");
+    });
+  },
+);
+
+it.each(["server", "portable"] as const)(
+  "honors the configured recovery captures in the migration database backup (%s)",
+  async (recoveryCaptures) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await state.writeConfig({ database: { postgres: { recoveryCaptures } } });
+      vi.spyOn(doctor, "runDoctorHealthFlow").mockImplementation(async () => {});
+      vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const captured: Array<{
+        stopped: boolean | undefined;
+        postgresSchemaCaptures: boolean | undefined;
+      }> = [];
+      const backupSpy = vi
+        .spyOn(databaseBackup, "createUpdateDatabaseBackup")
+        .mockImplementation(async (input) => {
+          captured.push({
+            stopped: input.stopped,
+            postgresSchemaCaptures: input.postgresSchemaCaptures,
+          });
+          throw new Error("stop migration after the backup input is captured");
+        });
+      const backupRoot = state.path("recovery-capture-policy", "native");
+      await expect(updateMigrateCommand(backupRoot)).rejects.toThrow(
+        "stop migration after the backup input is captured",
+      );
+      expect(backupSpy).toHaveBeenCalledOnce();
+      expect(captured).toEqual([
+        { stopped: true, postgresSchemaCaptures: recoveryCaptures === "server" },
+      ]);
+    });
+  },
+);

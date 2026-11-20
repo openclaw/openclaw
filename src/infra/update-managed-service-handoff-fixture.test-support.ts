@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import * as artifacts from "./update-managed-service-handoff-artifacts.test-support.js";
@@ -6,10 +7,11 @@ import { createManagedServiceManagerBoundary as managerBoundary } from "./update
 import { createManagedServiceChildMock as childMock } from "./update-managed-service-handoff-command.test-support.js";
 import { signalMockManagedUpdateHandoffReady as signalReady } from "./update-managed-service-handoff.test-support.js";
 
-const { kill, tmp, spawn } = vi.hoisted(() => ({
+const { kill, tmp, spawn, worker } = vi.hoisted(() => ({
   kill: vi.fn(),
   tmp: vi.fn(),
   spawn: vi.fn(),
+  worker: { real: false },
 }));
 
 const mockedChildren = new Set<ReturnType<typeof createSpawnMock>>();
@@ -35,15 +37,48 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
   resolvePreferredOpenClawTmpDir: tmp,
 }));
 
-export function useManagedServiceHandoffLifecycleFixture() {
+vi.mock("./update-managed-service-handoff-worker.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./update-managed-service-handoff-worker.js")>();
+  const { prepareManagedHandoffParentStoreForTest } =
+    await import("./update-managed-service-handoff-worker.test-support.js");
+  return {
+    ...actual,
+    prepareManagedHandoffParentStore: (
+      options: Parameters<typeof actual.prepareManagedHandoffParentStore>[0],
+    ) =>
+      (worker.real
+        ? actual.prepareManagedHandoffParentStore
+        : prepareManagedHandoffParentStoreForTest)({
+        ...options,
+        databasePath: options.databasePath ?? path.join(tmp(), "managed-update-handoffs.sqlite"),
+      }),
+  };
+});
+
+export function useManagedServiceHandoffLifecycleFixture(
+  nativeCoordinator = false,
+  realLeaseWorker = false,
+) {
+  const originalTempDir = process.env.TMPDIR;
   const tempDirs = artifacts.createManagedHandoffTempDirTracker();
   const processCleanups = new Set<() => Promise<void>>();
   const leaseCleanups = new Set<() => void>();
   const handoffs = new Map<string, string>();
 
   beforeEach(() => {
+    worker.real = realLeaseWorker;
     // Helpers in one fixture share a coordinator without touching the operator's database.
-    tmp.mockReturnValue(tempDirs.make("openclaw-handoff-coordinator-"));
+    let coordinator = tempDirs.make("openclaw-handoff-coordinator-");
+    if (nativeCoordinator) {
+      process.env.TMPDIR = coordinator;
+      coordinator = path.join(
+        coordinator,
+        process.getuid ? `openclaw-${process.getuid()}` : "openclaw",
+      );
+      mkdirSync(coordinator, { mode: 0o700 });
+    }
+    tmp.mockReturnValue(coordinator);
     kill.mockReset();
     spawn.mockReset();
     spawn.mockImplementation((_command: string, args: string[]) => {
@@ -86,6 +121,13 @@ export function useManagedServiceHandoffLifecycleFixture() {
       mockedChildren.clear();
       await closeStateDatabaseForTest();
       await tempDirs.cleanup();
+      if (nativeCoordinator) {
+        if (originalTempDir === undefined) {
+          delete process.env.TMPDIR;
+        } else {
+          process.env.TMPDIR = originalTempDir;
+        }
+      }
     }
   });
 

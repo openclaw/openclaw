@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.js";
+import type { SessionPendingInputEndCause } from "../../config/sessions/session-pending-input-end-cause.types.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -20,6 +21,8 @@ export type ChatSendRetryComparison = {
   submitted: Awaited<ReturnType<typeof readSessionSubmittedInput>>;
   source?: "pending" | "transcript";
   messageSeq?: number;
+  state?: string;
+  endCause?: SessionPendingInputEndCause;
 };
 
 export function chatSendRequestConflictError(unverifiable = false) {
@@ -54,6 +57,8 @@ export function readChatSendRetryComparison(session: ComparisonSession) {
       submitted: submitted?.message,
       source: submitted?.source,
       messageSeq: submitted?.messageSeq,
+      state: submitted?.state,
+      endCause: submitted?.endCause,
     };
   });
 }
@@ -61,7 +66,7 @@ export function readChatSendRetryComparison(session: ComparisonSession) {
 export function compareChatSendSubmittedInput(
   request: Pick<
     NormalizedChatSendRequest,
-    "requestIdentity" | "rawMessage" | "mentions" | "workContext"
+    "requestIdentity" | "rawMessage" | "mentions" | "workContext" | "appContext"
   >,
   session: ComparisonSession,
   comparison?: ChatSendRetryComparison,
@@ -83,7 +88,9 @@ export function compareChatSendSubmittedInput(
   }
   const submitted = comparison?.submitted;
   if (!submitted) {
-    return request.mentions?.length || request.workContext ? "unverifiable" : false;
+    return request.mentions?.length || request.workContext || request.appContext
+      ? "unverifiable"
+      : false;
   }
   const storedIdentity = submitted["__openclaw"]?.chatRequestIdentity;
   if (typeof storedIdentity === "string") {
@@ -106,13 +113,16 @@ export function compareChatSendSubmittedInput(
     !request.mentions?.length &&
     !storedMentions?.length &&
     !request.workContext &&
-    !storedContext
+    !storedContext &&
+    !request.appContext &&
+    !submitted["__openclaw"]?.appContext
   ) {
     return false;
   }
   return (
     storedText !== request.rawMessage ||
     !isDeepStrictEqual(storedMentions ?? [], request.mentions ?? []) ||
-    !isDeepStrictEqual(storedContext, request.workContext)
+    !isDeepStrictEqual(storedContext, request.workContext) ||
+    !isDeepStrictEqual(submitted["__openclaw"]?.appContext, request.appContext)
   );
 }

@@ -2,26 +2,28 @@ export type { SpeechProviderPlugin } from "../plugins/types.js";
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "../tts/tts-types.js";
 export type {
   SpeechDirectiveTokenParseContext,
-  SpeechDirectiveTokenParseResult,
   SpeechListVoicesRequest,
   SpeechModelOverridePolicy,
-  SpeechProviderConfig,
   SpeechProviderConfiguredContext,
-  SpeechProviderPreparedSynthesis,
   SpeechProviderPrepareSynthesisContext,
   SpeechProviderResolveConfigContext,
   SpeechProviderResolveTalkConfigContext,
   SpeechProviderResolveTalkOverridesContext,
-  SpeechProviderOverrides,
   SpeechSynthesisRequest,
   SpeechSynthesisStreamRequest,
-  SpeechSynthesisStreamResult,
-  SpeechSynthesisTarget,
   SpeechTelephonySynthesisRequest,
+} from "../tts/provider-types.js";
+export type {
+  SpeechDirectiveTokenParseResult,
+  SpeechProviderConfig,
+  SpeechProviderPreparedSynthesis,
+  SpeechProviderOverrides,
+  SpeechSynthesisTarget,
   SpeechVoiceOption,
   TtsDirectiveOverrides,
   TtsDirectiveParseResult,
-} from "../tts/provider-types.js";
+  SpeechSynthesisStreamResult,
+} from "../tts/tts-runtime-types.js";
 
 export {
   scheduleCleanup,

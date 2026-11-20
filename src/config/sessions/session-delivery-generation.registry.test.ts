@@ -4,7 +4,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { prepareSessionGenerationFacts } from "./session-delivery-generation.js";
+import { prepareLeaseFacts } from "./session-delivery-generation.js";
 
 it.each([
   ...(["same", "unrelated"] as const).map((change) => ({
@@ -31,7 +31,7 @@ it.each([
         { ...target, storePath },
         { sessionId: "registry-sharing", lifecycleRevision: "first", updatedAt: 1 },
       );
-      const prepared = await prepareSessionGenerationFacts({
+      const prepared = await prepareLeaseFacts({
         ...target,
         storePath,
         sessionId: "registry-sharing",

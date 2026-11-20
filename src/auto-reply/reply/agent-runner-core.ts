@@ -343,6 +343,7 @@ export async function handleReplyAgentRunError(
     resolvedVerboseLevel: VerboseLevel;
     returnWithQueuedFollowupDrain: <T>(value: T) => T;
     sessionCtx: TemplateContext;
+    config?: OpenClawConfig;
   },
 ): Promise<ReplyPayload | undefined> {
   const {
@@ -376,6 +377,7 @@ export async function handleReplyAgentRunError(
   }
   const knownFailurePayload = buildKnownAgentRunFailureReplyPayload({
     err: error,
+    config: context.config,
     sessionCtx,
     resolvedVerboseLevel,
   });

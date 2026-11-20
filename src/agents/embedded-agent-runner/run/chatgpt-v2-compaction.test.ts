@@ -276,6 +276,8 @@ async function fixture(
     session,
     contextTokenBudget,
     reserveTokens: 2_000,
+    // The fixture's foreground batch has settled; soft fallbacks may stop here.
+    isToolBoundarySafe: () => true,
     timeoutMs: 30_000,
     authProfileId: "fixture-profile",
     assertActive: () => {},
@@ -484,6 +486,33 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       "message",
       "function_call_output",
     ]);
+    expect(f.onFallback).not.toHaveBeenCalled();
+  });
+
+  it("sends a fitting request over the client threshold while its tool batch is open", async () => {
+    const f = await fixture(SessionManager.inMemory(), false);
+    const boundary = createChatGPTV2CompactionBoundary({
+      ...f.boundaryParams,
+      contextTokenBudget: 500_000,
+      reserveTokens: 20_000,
+      isToolBoundarySafe: () => false,
+    });
+    let normal = 0;
+    respond = () => (++normal === 1 ? toolEvents() : textEvents());
+    f.execute.mockImplementation(async () => {
+      // 485k is past the 480k client threshold but inside the 500k window.
+      await expect(
+        boundary(
+          f.session.agent.streamFn,
+          { ...model, contextWindow: 500_000 },
+          { messages: [] },
+          { sessionId: f.session.sessionId },
+          { requestIndex: 1, messageCount: 0, contextTokens: 485_000 },
+        ),
+      ).resolves.toBeUndefined();
+      return { content: [{ type: "text", text: "settled" }], details: {} };
+    });
+    await f.submit();
     expect(f.onFallback).not.toHaveBeenCalled();
   });
 

@@ -3,11 +3,16 @@ import type { SessionTranscriptContextVersion } from "../../config/sessions/sess
 import type { readSessionTranscriptModelContext } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import type {
+  SessionContextSeedRequest,
   SessionModelContextLimits,
   SessionTranscriptContextSelection,
   SessionTranscriptContextSnapshot,
 } from "../../config/sessions/session-history-read.types.js";
 import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-context-read.js";
+import {
+  withSessionTranscriptHydrationCaller,
+  type SessionTranscriptHydrationCaller,
+} from "../../config/sessions/session-transcript-hydration-caller.js";
 import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import {
   resolveSessionTranscriptReadFence,
@@ -68,6 +73,7 @@ export function readSessionManagerActorTranscript(
 export function prepareSessionManagerHydration(
   source: SessionTranscriptRuntimeTarget,
   options: {
+    caller?: SessionTranscriptHydrationCaller;
     limits?: SessionTranscriptContextSelection;
     signal?: AbortSignal;
     manager?: object;
@@ -79,7 +85,12 @@ export function prepareSessionManagerHydration(
   const target = captureSessionTranscriptTargetBinding(source);
   const incognitoBinding = captureSessionManagerIncognitoBinding(target, manager, retarget);
   if (!incognitoBinding) {
-    return { ...prepareSessionTranscriptHydration(target, limits, signal, lane), incognitoBinding };
+    const prepare = () => prepareSessionTranscriptHydration(target, limits, signal, lane);
+    const caller = limits && "compaction" in limits ? "compaction" : options.caller;
+    return {
+      ...(caller ? withSessionTranscriptHydrationCaller(caller, prepare) : prepare()),
+      incognitoBinding,
+    };
   }
   return {
     ...prepareSessionManagerMemoryHydration(incognitoBinding, limits, signal),
@@ -135,9 +146,18 @@ export async function readSessionManagerModelContextAsync<T>(
 
 export async function readSessionManagerContextAsync<T>(
   target: SessionTranscriptRuntimeTarget,
-  read: (messages: Iterable<AgentMessage>, header: unknown) => T | Promise<T>,
-  options: { admission?: UserTurnTranscriptAdmissionReceipt; signal?: AbortSignal },
+  read: (
+    messages: Iterable<AgentMessage>,
+    header: unknown,
+    seed?: SessionTranscriptContextSnapshot["seed"],
+  ) => T | Promise<T>,
+  options: {
+    admission?: UserTurnTranscriptAdmissionReceipt;
+    signal?: AbortSignal;
+    seed?: SessionContextSeedRequest;
+  },
 ): Promise<T> {
+  const seed = options.seed ? { ...options.seed } : undefined;
   const captured = captureSessionTranscriptTargetBinding(target);
   const receipt = options.admission ?? resolveSessionTranscriptReadFence(captured);
   const admission = receipt ? { ...receipt } : undefined;
@@ -151,6 +171,7 @@ export async function readSessionManagerContextAsync<T>(
     const snapshot = await reader.read("session.history.context-messages", {
       sessionId: captured.sessionId,
       admission,
+      seed,
     });
     const messages = (function* () {
       for (const message of snapshot.messages) {
@@ -160,7 +181,7 @@ export async function readSessionManagerContextAsync<T>(
     })();
     try {
       reader.assertCurrent();
-      const value = await read(messages, snapshot.header);
+      const value = await read(messages, snapshot.header, snapshot.seed);
       reader.assertCurrent();
       return value;
     } finally {
@@ -184,7 +205,7 @@ export async function readSessionManagerContextAsync<T>(
         }
       })();
       try {
-        return await read(messages, snapshot.header);
+        return await read(messages, snapshot.header, snapshot.seed);
       } finally {
         messages.return(undefined);
       }
@@ -213,6 +234,7 @@ export async function readSessionManagerContextAsync<T>(
           admission,
           signal,
           expectedIdentity,
+          seed,
         );
         assertDurable();
         const result = await consumeSnapshot(snapshot, () => owner.assertCurrent());

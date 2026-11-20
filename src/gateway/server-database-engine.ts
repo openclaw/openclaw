@@ -8,6 +8,7 @@ import {
   type DatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
 import { assertDatabasePortStartupAllowed } from "../infra/database-port-recovery.js";
+import { setGatewayCredentialEnvKeys } from "../infra/host-env-security.js";
 
 /** Direct servers and embedded kernels enter before locks, state reads, or plugin config. */
 export async function installGatewayDatabaseEngine(
@@ -30,6 +31,10 @@ export async function installGatewayDatabaseEngine(
     selected = await resolveDatabaseEngineSelection(source.config);
     installDatabaseEngineSelection(selected);
   }
+  setGatewayCredentialEnvKeys(
+    "database.postgres.connection",
+    selected.postgres?.connectionEnvKey ? [selected.postgres.connectionEnvKey] : [],
+  );
   if (Object.values(selected.effectiveEngines).includes("postgres")) {
     // Overlap service imports with subsequent Gateway config and plugin preparation.
     const { getPostgresPool } = await import("../infra/postgres-sync/pool.js");

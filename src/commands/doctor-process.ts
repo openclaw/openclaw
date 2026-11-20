@@ -19,6 +19,7 @@ const MAX_OUTPUT_BYTES = 1024 * 1024;
 export async function runDoctorProcess(runtime: RuntimeEnv): Promise<void> {
   const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
   signal?.throwIfAborted();
+  const cancellation = new AbortController();
   const workerUrl = resolveRuntimeProcessEntrypointUrl("doctor");
   const output = {
     stdout: { decoder: new StringDecoder("utf8"), pending: "", write: runtime.log },
@@ -34,8 +35,8 @@ export async function runDoctorProcess(runtime: RuntimeEnv): Promise<void> {
     try {
       output[stream].write(text);
     } catch (error) {
-      // A failed output consumer must not interrupt Doctor's private-state cleanup.
       outputFailure = { error };
+      cancellation.abort(error);
     }
   };
   const append = (stream: keyof typeof output, text: string) => {
@@ -47,12 +48,13 @@ export async function runDoctorProcess(runtime: RuntimeEnv): Promise<void> {
       state.pending = state.pending.slice(newline + 1);
     }
   };
-  // Cancellation stops admission, but accepted inspection and its private-state
-  // cleanup must settle before the caller releases custody.
+  // Hosted diagnosis is read-only. Bound its lifetime, then join process-tree cleanup.
   const worker = trackAsyncWork(() =>
     runOutsideCommandProcessScope(() =>
       runUtf8CommandWithTimeout([process.execPath, ...resolveRuntimeWorkerArgv(workerUrl)], {
         input: "",
+        timeoutMs: 120_000,
+        signal: signal ? AbortSignal.any([signal, cancellation.signal]) : cancellation.signal,
         cwd: process.cwd(),
         baseEnv: process.env,
         ...(/\.[cm]?ts$/.test(fileURLToPath(workerUrl))
@@ -77,7 +79,7 @@ export async function runDoctorProcess(runtime: RuntimeEnv): Promise<void> {
   });
   void settlement.catch(() => {});
   retainCommandProcessCleanup(settlement);
-  const releaseExitGate = registerSignalExitGate(settlement);
+  const releaseExitGate = registerSignalExitGate(settlement, () => cancellation.abort());
   try {
     const result = await worker;
     for (const stream of ["stdout", "stderr"] as const) {
@@ -104,7 +106,9 @@ export async function runDoctorProcess(runtime: RuntimeEnv): Promise<void> {
       throw new Error(`Doctor ${result.outputErrorStream} output could not be read.`);
     }
     if (result.termination !== "exit") {
-      throw new Error(`Doctor process stopped unexpectedly (${result.termination}).`);
+      throw new Error(
+        `Doctor diagnosis did not complete (${result.termination}); no repairs were applied.`,
+      );
     }
     if (result.code !== 0) {
       runtime.exit(result.code ?? 1);

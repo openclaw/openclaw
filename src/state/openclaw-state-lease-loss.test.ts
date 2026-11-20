@@ -86,6 +86,7 @@ it.each([
           ? { reason, owner: "[redacted]" }
           : { reason };
     expect(lost).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST", loss });
+    expect(lost).toHaveProperty("message", expect.stringContaining("retry the operation"));
     const transported = new Error("worker envelope");
     retainOpenClawStateWorkerErrorPayload(transported, encodeOpenClawStateWorkerError(lost));
     const hydrated = hydrateOpenClawStateWorkerError(transported);
@@ -125,7 +126,7 @@ it("preserves the generic loss when the diagnostic row cannot be read", () => {
   ).toThrowError(
     expect.objectContaining({
       code: "OPENCLAW_STATE_LEASE_LOST",
-      message: "state lease synthetic/diagnostics was lost",
+      message: "state lease synthetic/diagnostics was lost; retry the operation",
     }),
   );
 });

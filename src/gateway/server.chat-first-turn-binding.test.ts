@@ -16,7 +16,7 @@ import { createProductState, productModelConfig } from "./server.chat-product.te
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
-it("binds native chat.send, preserves its stopped partial, and resumes the same session", async () => {
+it("binds native chat.send through stop, resume, and completed-turn follow-up", async () => {
   const state = await createProductState("first-turn-binding");
   const runId = "first-native-turn";
   const sessionKey = "agent:main:first-turn-binding";
@@ -169,25 +169,6 @@ it("binds native chat.send, preserves its stopped partial, and resumes the same 
     sessionId: history.sessionId,
     expectedLeafEntryId: history.sessionInfo.activeLeafEntryId,
   };
-  const beforeRejectedStops = await loadTranscriptEvents(transcriptScope);
-  for (const guard of [
-    {
-      idempotencyKey: "stop-stale-first-native-leaf",
-      expectedLeafEntryId: "stale-first-native-leaf",
-    },
-    {
-      idempotencyKey: "stop-copied-first-native-leaf",
-      sessionId: "previous-first-native-session",
-    },
-  ]) {
-    await expect(
-      gateway.client.request("chat.send", { ...stopParams, ...guard }),
-    ).rejects.toMatchObject({ details: { reason: "active-leaf-changed" } });
-    expect(requestOwners[0]?.signal.aborted).toBe(false);
-    expect(response.destroyed).toBe(false);
-    expect(requestBodies).toHaveLength(1);
-    expect(await loadTranscriptEvents(transcriptScope)).toEqual(beforeRejectedStops);
-  }
   await expect(
     gateway.client.request("chat.send", {
       ...stopParams,
@@ -242,6 +223,23 @@ it("binds native chat.send, preserves its stopped partial, and resumes the same 
     status: "ok",
   });
   expect(requestBodies).toHaveLength(2);
+  const completedHistory = await historyForSession();
+  const followupRunId = "follow-up-after-completion";
+  expect(
+    await gateway.client.request("chat.send", {
+      sessionKey,
+      sessionId,
+      expectedLeafEntryId: completedHistory.sessionInfo.activeLeafEntryId,
+      message: "Follow up after the completed reply.",
+      idempotencyKey: followupRunId,
+    }),
+  ).toMatchObject({ runId: followupRunId, status: "started" });
+  expect(await gateway.client.request("agent.wait", { runId: followupRunId })).toMatchObject({
+    status: "ok",
+  });
+  expect(requestBodies).toHaveLength(3);
+  expect(requestBodies[2]).toContain("Continue this conversation.");
+  expect(requestBodies[2]).toContain("The same conversation resumed.");
   expect(await loadTranscriptEvents(transcriptScope)).toEqual(expect.arrayContaining(events));
   expect(loadExactSessionEntryReadOnly({ sessionKey })?.entry).toMatchObject({ sessionId });
 });

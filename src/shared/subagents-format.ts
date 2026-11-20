@@ -1,5 +1,6 @@
 import { formatCompactTokenCount } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 
 function formatTokenShort(value?: number) {
   if (!value || !Number.isFinite(value) || value <= 0) {
@@ -41,7 +42,7 @@ export function resolveTotalTokens(entry?: TokenUsageLike) {
     typeof entry.totalTokens === "number" &&
     Number.isFinite(entry.totalTokens) &&
     entry.totalTokensFresh === true &&
-    entry.totalTokensVersion === 1
+    entry.totalTokensVersion === SESSION_TOTAL_TOKENS_VERSION
   ) {
     return entry.totalTokens;
   }
@@ -65,17 +66,17 @@ export function formatTokenUsageDisplay(entry?: TokenUsageLike) {
       : 0;
   const total = inputTokens + outputTokens;
   const hasIo = !(total <= 0);
-  const promptCache = resolveTotalTokens(entry);
+  const contextTokens = resolveTotalTokens(entry);
   const parts: string[] = [];
   if (hasIo) {
     const input = formatTokenShort(inputTokens) ?? "0";
     const output = formatTokenShort(outputTokens) ?? "0";
     parts.push(`tokens ${formatTokenShort(total)} (in ${input} / out ${output})`);
-  } else if (typeof promptCache === "number" && promptCache > 0) {
-    parts.push(`tokens ${formatTokenShort(promptCache)} prompt/cache`);
+  } else if (typeof contextTokens === "number" && contextTokens > 0) {
+    parts.push(`tokens ${formatTokenShort(contextTokens)} context`);
   }
-  if (typeof promptCache === "number" && hasIo && promptCache > total) {
-    parts.push(`prompt/cache ${formatTokenShort(promptCache)}`);
+  if (typeof contextTokens === "number" && hasIo && contextTokens > total) {
+    parts.push(`context ${formatTokenShort(contextTokens)}`);
   }
   return parts.join(", ");
 }

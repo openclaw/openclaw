@@ -13,7 +13,6 @@ import { writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
-import path from "node:path";
 import {
   constants,
   PerformanceObserver,
@@ -21,9 +20,9 @@ import {
   type PerformanceNodeEntry,
 } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -43,7 +42,6 @@ const iterations = parseStrictIntegerOption({
   label: "iterations",
 });
 const ownerUrl = new URL("../../src/cli/program/config-guard.ts", import.meta.url).href;
-const replacement = values.owner ? pathToFileURL(path.resolve(values.owner)).href : undefined;
 const fixtureUrl = `data:text/javascript,${encodeURIComponent(`
   const config = {
     gateway: { mode: "local" },
@@ -63,7 +61,7 @@ const fixtureUrl = `data:text/javascript,${encodeURIComponent(`
     publications++;
   }
 `)}`;
-let replaced = false;
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl, values.owner);
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (context.parentURL === ownerUrl && specifier === "../../config/config.js") {
@@ -71,20 +69,12 @@ registerHooks({
     }
     return nextResolve(specifier, context);
   },
-  load(url, context, nextLoad) {
-    if (url !== ownerUrl || !replacement) {
-      return nextLoad(url, context);
-    }
-    replaced = true;
-    const result = nextLoad(replacement, context);
-    return { format: result.format, source: result.source, shortCircuit: true };
-  },
 });
 const { ensureConfigReady } = await import("../../src/cli/program/config-guard.js");
 const fixture: { reads: number; publications: number; reset: () => void } = await import(
   fixtureUrl
 );
-assert(!replacement || replaced, "Requested baseline source was not loaded");
+assert(!values.owner || wasOwnerReplaced(), "Requested baseline source was not loaded");
 const unexpected = (...args: unknown[]) => {
   throw new Error(`Unexpected guard diagnostic/exit: ${args.join(" ")}`);
 };

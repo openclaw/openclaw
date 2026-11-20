@@ -5,12 +5,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as worktreeRegistry from "../../agents/worktrees/registry.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
+import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import * as execRunner from "../../process/exec-runner.js";
 import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
@@ -478,8 +480,10 @@ describe("loadSessionDiff", () => {
     commitFiles("second change");
     append("second.txt", "working tree\n");
     write("loose.txt", "untracked\n");
+    repoGit("tag", baseRef);
+    repoGit("tag", "feature");
     const all = await readDiff();
-    expect(all.baseRef).toBe(baseRef);
+    expect(all).toMatchObject({ baseRef, branch: "feature" });
     expect(filePaths(all)).toEqual(["first.txt", "loose.txt", "second.txt"]);
     const uncommitted = await readDiff({ scope: "uncommitted" });
     expect(filePaths(uncommitted)).toEqual(["loose.txt", "second.txt"]);
@@ -500,6 +504,9 @@ describe("loadSessionDiff", () => {
   });
 
   it("uses the accepted managed base for working, committed, and archived reads", async () => {
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+    await drainGlobalSingletonLifecycleState("restart");
     const stateRoot = tempDir("openclaw-review-base-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
     const id = randomUUID();
@@ -515,6 +522,26 @@ describe("loadSessionDiff", () => {
       repoGit("checkout", "-qb", "task");
       const worktree = { id, repoRoot, branch: "task" };
       await seedManagedReview(worktree, { sessionKey, sessionId: "s1" }, stateRoot, acceptedBase);
+      // Native revision reads are disabled on Windows.
+      if (process.platform !== "win32") {
+        // A later raw diff must not mask whether status retained its verified stat data.
+        repoGit("config", "diff.autoRefreshIndex", "false");
+        const indexPath = path.join(repoRoot, ".git", "index");
+        const originalIndex = fs.readFileSync(indexPath);
+        fs.utimesSync(path.join(repoRoot, "base.txt"), new Date(0), new Date(0));
+        expect(
+          await runGitWorkerOperation({
+            type: "checkout.revision",
+            input: { root: repoRoot, scope: "diff" },
+          }),
+        ).toMatchObject({ worktreeStatus: { clean: true } });
+        expect(fs.readFileSync(indexPath)).toEqual(originalIndex);
+        mockSession(repoRoot, { worktree });
+        expect(await requestDiff({ sessionKey, scope: "uncommitted" })).toMatchObject([
+          { ok: true, payload: { files: [], additions: 0, deletions: 0 } },
+        ]);
+        expect(fs.readFileSync(indexPath)).not.toEqual(originalIndex);
+      }
       mockSession(repoRoot, { worktree });
       write("task.txt", "authored change\n");
       const beforePublication = await readDiff();
@@ -554,30 +581,30 @@ describe("loadSessionDiff", () => {
       const archived = await readDiff();
       expect(filePaths(archived)).toEqual(["task.txt"]);
       expect(archived).toMatchObject({ additions: 2, deletions: 0, aheadCount: 2 });
-      for (const patch of [
-        { agent_id: "other" },
-        { session_key: "agent:main:other" },
-        { session_id: "replaced" },
-      ]) {
+      const owner = { agent_id: "main", session_key: sessionKey, session_id: "s1" };
+      for (const field of ["agent_id", "session_key", "session_id"] as const) {
         await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
-          store.update(store.get()!, patch),
+          store.update(store.get()!, { [field]: "other" }),
         );
         await expect(readDiff()).rejects.toThrow(/workspace.*incarnation/i);
         await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
-          store.update(store.get()!, {
-            agent_id: "main",
-            session_key: sessionKey,
-            session_id: "s1",
-          }),
+          store.update(store.get()!, owner),
         );
       }
       mockSession(path.dirname(repoRoot), { worktree, archivedAt: 1 });
       await expect(readDiff()).rejects.toThrow("Local workspace review owner changed");
       mockSession(repoRoot, { worktree, archivedAt: 1 });
+      const removedMessage = /worktree was removed.*Use Restore in Settings > Worktrees/;
+      await worktreeRegistry.updateRegistryWorktree(process.env, id, { removedAt: 0 });
+      await expect(requestDiff({ sessionKey })).rejects.toThrow(removedMessage);
+      await worktreeRegistry.updateRegistryWorktree(process.env, id, { removedAt: undefined });
       await withLocalWorkspaceStore({ worktreeId: id }, (store) => store.delete(store.get()!));
       expect(filePaths(await readDiff())).toEqual(["task.txt", "upstream.txt"]);
+      await worktreeRegistry.deleteRegistryWorktree(process.env, id);
+      await expect(requestDiff({ sessionKey })).rejects.toThrow(removedMessage);
     } finally {
       await closeOpenClawStateDatabaseAsync();
+      await drainGlobalSingletonLifecycleState("restart");
     }
   });
 

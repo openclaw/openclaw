@@ -3,7 +3,7 @@
 import http from "node:http";
 import OpenAI from "openai";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
 import { TRUNCATED_REPLY_NOTICE_TEXT } from "../agents/embedded-agent-runner/run/incomplete-turn-resolution.js";
 import {
@@ -2367,25 +2367,24 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     });
   });
 
-  it.each([
+  it.for([
     { name: "streaming", stream: true, includeUsage: false },
     { name: "usage-enabled streaming", stream: true, includeUsage: true },
     { name: "non-streaming", stream: false, includeUsage: false },
   ])(
     "aborts and retains cleanup admission when $name client disconnects",
     { timeout: 15_000 },
-    async ({ stream, includeUsage }) => {
+    async ({ stream, includeUsage }, { signal: testSignal }) => {
       const port = enabledPort;
       const idleRootCount = getActiveGatewayRootWorkCount();
+      const entered = createDeferred<AbortSignal | undefined>();
       const agentAborted = createDeferred();
       const finishAgentCleanup = createDeferred();
       const cleanupAdmissionClosed = createDeferred<boolean>();
-      let serverAbortSignal: AbortSignal | undefined;
 
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
         const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-        serverAbortSignal = signal;
         if (includeUsage) {
           const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
           emitAgentEvent({ runId, stream: "assistant", data: { delta: "hello" } });
@@ -2396,6 +2395,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         } else {
           signal?.addEventListener("abort", () => agentAborted.resolve(), { once: true });
         }
+        entered.resolve(signal);
         await agentAborted.promise;
         cleanupAdmissionClosed.resolve(isGatewaySubordinateWorkAdmissionClosed());
         await finishAgentCleanup.promise;
@@ -2422,27 +2422,23 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         ),
       );
 
-      await vi.waitFor(() => {
-        expect(agentCommandMock).toHaveBeenCalledTimes(1);
-      });
-
       try {
+        const serverAbortSignal = await withinTest(entered.promise, testSignal);
+        expect(agentCommandMock).toHaveBeenCalledTimes(1);
         clientReq.destroy();
 
-        await vi.waitFor(() => expect(serverAbortSignal?.aborted).toBe(true), {
+        await withinTest(agentAborted.promise, testSignal);
+        expect(serverAbortSignal?.aborted).toBe(true);
+        expect(await withinTest(cleanupAdmissionClosed.promise, testSignal)).toBe(false);
+        expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
+      } finally {
+        clientReq.destroy();
+        finishAgentCleanup.resolve();
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount), {
           timeout: 5_000,
           interval: 50,
         });
-        expect(await cleanupAdmissionClosed.promise).toBe(false);
-        expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
-      } finally {
-        finishAgentCleanup.resolve();
       }
-
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount), {
-        timeout: 5_000,
-        interval: 50,
-      });
     },
   );
 

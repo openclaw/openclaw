@@ -1,5 +1,7 @@
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { captureSessionControllerSourceSettlement } from "../sessions/session-controller.mailbox.js";
 import {
   getRpcSourceIdentity,
@@ -12,8 +14,11 @@ import {
 import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-internal.js";
 import { createChatAbortOps } from "./chat-abort-ops.js";
 import { abortChatRunById } from "./chat-abort.js";
-import { retainGatewayDeviceRevocation } from "./device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { bindGatewayDeviceRevocation, retainGatewayDeviceRevocation } from "./device-revocation.js";
+import { onOpenClawIdTunnelPrincipalsChanged } from "./openclaw-id/tunnel-principal.js";
+import { onOperatorRolePolicyChanged } from "./operator-role-policy.js";
+import type { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
 import {
   captureAbortedPartial,
   deferAbortedPartialPersistence,
@@ -31,16 +36,80 @@ type OperatorRunCancellationContext = Pick<
   keyof Parameters<typeof createChatAbortOps>[0] | "logGateway" | "trackExecution"
 >;
 
+/** Own policy cancellation for a retained producer without revoking its admitted request. */
+export function retainGatewayOperatorRunAuthority(
+  captured: NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>,
+) {
+  let { authority, release: releaseSource } = captured;
+  if (authority.reauthorize) {
+    // Long-lived turns own immediate policy cancellation; an individual admitted request
+    // may finish. Each queued, recovered or child turn acquires this lifetime separately.
+    const source = authority;
+    const revoked = new AbortController();
+    const recheck = () => {
+      try {
+        source.reauthorize?.();
+      } catch (error) {
+        if (!isOperatorAuthorityUnavailable(error)) {
+          revoked.abort(error);
+        }
+      }
+    };
+    const subscriptions = [
+      onOperatorRolePolicyChanged((change) => {
+        if (change.kind === "assignment" && change.profileId === source.profileId) {
+          recheck();
+        }
+      }),
+    ];
+    if (source.openclawIdPrincipal?.kind !== "member") {
+      subscriptions.push(onOpenClawIdTunnelPrincipalsChanged(recheck));
+    }
+    let references = 1;
+    const releaseHold = (release: (() => void) | undefined) => {
+      let released = false;
+      return () => {
+        if (!released) {
+          released = true;
+          if (--references === 0) {
+            subscriptions.forEach((unsubscribe) => unsubscribe());
+          }
+          release?.();
+        }
+      };
+    };
+    const retained = createAdmittedRunOperatorAuthority({
+      ...source,
+      signal: AbortSignal.any([revoked.signal, ...(source.signal ? [source.signal] : [])]),
+      get modelPolicy() {
+        return source.modelPolicy;
+      },
+      retain: () => {
+        retained.assertCurrent();
+        const release = source.retain?.();
+        references += 1;
+        return releaseHold(release);
+      },
+    });
+    bindGatewayDeviceRevocation(retained.assertCurrent, source.assertCurrent);
+    authority = retained;
+    releaseSource = releaseHold(releaseSource);
+  }
+  try {
+    // Capture can yield; admit against current policy after installing this producer's listener.
+    authority.reauthorize?.();
+    return { authority, release: releaseSource };
+  } catch (error) {
+    releaseSource();
+    throw error;
+  }
+}
+
 /** Retain authority before its execution or queue owner can arm cancellation. */
 export async function retainGatewayOperatorRun(
-  params: Omit<
-    Parameters<typeof captureGatewayOperatorRunAuthority>[0],
-    "independentContinuation"
-  > & {
+  params: Parameters<typeof captureGatewayOperatorRunAuthority>[0] & {
     context: OperatorRunCancellationContext;
     runId: string;
-    /** Canonical child relationship from the admitted session. */
-    spawnedBy?: string;
     entry?: RpcSourceRef;
     abortSession?: Extract<ChatAbortSessionSnapshot, { ok: true }>["value"];
     /** Present only for a trusted host-originated input with no explicit human requester. */
@@ -49,26 +118,25 @@ export async function retainGatewayOperatorRun(
 ) {
   const captured = params.systemTurn
     ? await prepareSessionSystemTurnAuthority(params.systemTurn)
-    : await captureGatewayOperatorRunAuthority({
-        ...params,
-        // Every child owns its accepted work beyond the requester's recovery turn.
-        independentContinuation: params.spawnedBy ? true : undefined,
-      });
+    : // The requester's turn ending or chat edit does not revoke accepted work; policy does.
+      await captureGatewayOperatorContinuation(params);
+  const retained = captured && retainGatewayOperatorRunAuthority(captured);
   const releaseSource =
-    captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
-  const signal = captured?.authority.signal;
+    retained?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
+  const authority = retained?.authority;
+  const signal = authority?.signal;
   let partialSession: ReturnType<typeof retainChatAbortSessionSnapshot> | undefined;
   try {
     if (
       !params.systemTurn &&
-      captured &&
+      authority &&
       params.entry &&
       isRpcSourceRegistered(params.entry) &&
-      resolveAuthenticatedPersonalGatewayProfileId(params.client) === captured.authority.profileId
+      resolveAuthenticatedPersonalGatewayProfileId(params.client) === authority.profileId
     ) {
       // Retain human initiation across live queue handoffs. System-turn authority
       // can come from the current session owner and must not mint this fact.
-      params.entry.adapter.initiatingPersonalOperator = captured.authority;
+      params.entry.adapter.initiatingPersonalOperator = authority;
     }
     partialSession =
       signal && params.entry
@@ -93,7 +161,7 @@ export async function retainGatewayOperatorRun(
           })
         : undefined;
     return {
-      authority: captured?.authority,
+      authority,
       armCancellation: () => cancellation?.arm(),
       retireCancellation: () => {
         cancellation?.release();

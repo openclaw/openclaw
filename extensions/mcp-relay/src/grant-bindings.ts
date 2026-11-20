@@ -6,6 +6,37 @@ import {
 import { RelayError } from "./protocol.js";
 import type { RelayState } from "./state.js";
 
+export async function registerRelayPrincipalRecovery(
+  factory: GatewayControlUiIngressFactoryV2,
+  state: Pick<RelayState, "getGrant" | "getGrantSignal" | "assertGrantCurrent">,
+  signal: AbortSignal,
+): Promise<void> {
+  await factory.registerPrincipalRecovery?.(async (audienceId) => {
+    signal.throwIfAborted();
+    const grant = state.getGrant(audienceId);
+    if (!grant) {
+      return undefined;
+    }
+    return {
+      audienceId,
+      recoveryId: grant.issuanceId,
+      principal: grant.principal,
+      operatorScopeCeiling: grant.ceiling,
+      signal: AbortSignal.any([signal, state.getGrantSignal(audienceId)]),
+      assertCurrent: () => {
+        signal.throwIfAborted();
+        state.assertGrantCurrent(audienceId);
+        if (state.getGrant(audienceId)?.issuanceId !== grant.issuanceId) {
+          throw new GatewayControlUiIngressError(
+            "forbidden",
+            "The original relay grant was replaced.",
+          );
+        }
+      },
+    };
+  });
+}
+
 export function isRetiredBindingError(error: unknown): error is GatewayControlUiIngressError {
   return (
     error instanceof GatewayControlUiIngressError &&
@@ -18,7 +49,7 @@ export class GrantBindings {
   readonly #bindings = new Map<string, Promise<GatewayIngressPrincipalBindingV1>>();
   constructor(
     readonly factory: GatewayControlUiIngressFactoryV2,
-    readonly state: Pick<RelayState, "getGrant" | "assertGrantCurrent">,
+    readonly state: Pick<RelayState, "getGrant" | "getGrantSignal" | "assertGrantCurrent">,
     readonly signal: AbortSignal,
   ) {}
 
@@ -39,7 +70,7 @@ export class GrantBindings {
       audienceId: grantId,
       principal: grant.principal,
       operatorScopeCeiling: grant.ceiling,
-      signal: this.signal,
+      signal: AbortSignal.any([this.signal, this.state.getGrantSignal(grantId)]),
       assertCurrent: () => {
         this.signal.throwIfAborted();
         this.state.assertGrantCurrent(grantId);

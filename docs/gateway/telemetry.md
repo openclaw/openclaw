@@ -81,7 +81,9 @@ and other failed checks do not interrupt startup or normal operation.
 A successful response and its timestamp are cached in the existing shared state
 database. Startup reuses the cached result for the next 24 hours, and a running
 Gateway checks again during normal maintenance with a small random delay. Failed
-checks do not count as successful daily checks.
+checks do not count as successful daily checks. On the `stable` channel without
+automatic updates, the Gateway update notice reads this cached result hourly, so
+a newer release appears within an hour of the daily check that found it.
 
 For testing or self-hosting, set `OPENCLAW_TELEMETRY_ENDPOINT` to your complete
 replacement endpoint URL. The public server source is available at

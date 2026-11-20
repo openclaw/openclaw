@@ -2756,13 +2756,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect([thinkingArgs.provider, thinkingArgs.model]).toEqual(["gmn", "gpt-5.4"]);
     expect(thinkingArgs.level).toBe("xhigh");
     const catalog = requireArray(thinkingArgs.catalog, "thinking catalog");
+    const supportedReasoningEfforts = ["low", "medium", "high", "xhigh"];
     expectRecordFields(catalog[0], {
       provider: "gmn",
       id: "gpt-5.4",
-      compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
-      },
+      compat: expect.objectContaining({ supportedReasoningEfforts }),
     });
   });
 

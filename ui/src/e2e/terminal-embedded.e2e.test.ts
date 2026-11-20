@@ -23,9 +23,7 @@ suite.define(() => {
       expect(await page.locator("openclaw-app-shell").count()).toBe(0);
       expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
 
-      await page
-        .getByText("The terminal is not available on this gateway.", { exact: true })
-        .waitFor();
+      await page.getByText("The terminal is unavailable.", { exact: true }).waitFor();
       const back = page.getByRole("button", { name: "Back", exact: true });
       await back.waitFor();
       await back.click();
@@ -53,7 +51,7 @@ suite.define(() => {
           JSON.parse(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ?? "null")
             ?.buildId === "replacement-build",
       );
-      await page.getByText("Server updated", { exact: true }).waitFor();
+      await page.getByText("OpenClaw was updated", { exact: true }).waitFor();
 
       expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
       expect(await page.locator("openclaw-terminal-panel").count()).toBe(0);

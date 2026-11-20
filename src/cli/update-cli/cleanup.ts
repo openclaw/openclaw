@@ -1,7 +1,7 @@
 /** Local recovery retirement. This handler never invokes update or Doctor repair. */
 import { confirm } from "@clack/prompts";
 import {
-  collectUpdateCleanupInventory,
+  collectUpdateCleanupInventoryAsync,
   inspectSessionSqliteRecovery,
   type RecoveryCleanupReport,
 } from "../../commands/doctor-session-sqlite-recovery-inventory.js";
@@ -81,7 +81,11 @@ export async function updateCleanupCommand(options: {
       : readSourceConfigBestEffort;
     const cfg = await readConfig();
     if (options.includeUnmanifested?.length) {
-      const inventory = collectUpdateCleanupInventory({ cfg, env: process.env });
+      const inventory = await collectUpdateCleanupInventoryAsync({
+        cfg,
+        env: process.env,
+        current: true,
+      });
       selectUnmanifestedRecovery({
         inventory,
         cfg,
@@ -90,7 +94,7 @@ export async function updateCleanupCommand(options: {
       });
       report = inventory.report;
     } else {
-      report = inspectSessionSqliteRecovery({ cfg, env: process.env });
+      report = await inspectSessionSqliteRecovery({ cfg, env: process.env });
     }
     if (!options.dryRun) {
       if (report.artifacts.length === 0 && !options.yes) {

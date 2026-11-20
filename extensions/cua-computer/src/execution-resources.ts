@@ -31,7 +31,12 @@ export type CuaExecutionResources = {
 
 export function createLazyCuaExecutionResources(): CuaExecutionResources {
   let resourcesPromise: Promise<CuaExecutionResources> | undefined;
-  const resources = () => (resourcesPromise ??= createCuaExecutionResources());
+  const resources = () =>
+    (resourcesPromise ??= createCuaExecutionResources().catch((error: unknown) => {
+      // Let the same execution retry or close after initialization fails.
+      resourcesPromise = undefined;
+      throw error;
+    }));
   return {
     createDirectory: async (label) => await (await resources()).createDirectory(label),
     resolveFiles: async (handles) => await (await resources()).resolveFiles(handles),

@@ -97,6 +97,7 @@ export type SessionTurnPlan = {
         | "shouldAppendInTransaction"
         | "prepareMessageAfterIdempotencyCheck"
         | "beforeFreshMessageCommit"
+        | "prepareMentionInvitation"
         | "workerPreparation"
         | "preparation"
       > & {

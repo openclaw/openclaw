@@ -4,6 +4,7 @@ import {
   skipWhitespaceGraphemes,
   trimEndWhitespaceGraphemes,
 } from "@openclaw/normalization-core/grapheme";
+import { normalizeChunkLimit } from "../../packages/markdown-core/src/chunk-text.js";
 import {
   findFenceSpanAt,
   parseFenceSpans,
@@ -15,7 +16,7 @@ import { resolveChannelStreamingChunkMode } from "../channels/streaming.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { chunkTextByBreakResolver, normalizeChunkLimit } from "../shared/text-chunking.js";
+import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 
@@ -215,7 +216,7 @@ export function chunkByParagraph(
   const re = /\n[\t ]*\n+/g; // paragraph break: blank line(s), allowing whitespace
   let lastIndex = 0;
   for (const match of normalized.matchAll(re)) {
-    const idx = match.index ?? 0;
+    const idx = match.index;
 
     // Blank lines inside code are content, not disposable paragraph separators.
     if (isInsideCode(idx, codeRegions)) {

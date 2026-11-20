@@ -15,6 +15,7 @@ import {
   CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
 } from "./native-tool-policy.js";
 import { readCodexPluginConfig as readWorkerPluginConfig } from "./src/app-server/config-parsing.js";
+import { hasManagedCodexAppServerBinary } from "./src/app-server/managed-binary.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
@@ -157,7 +158,7 @@ export function createCodexAppServerAgentHarness(
     options.pluginConfig;
   const resolveIsolatedCompletionRuntime: NonNullable<
     AgentHarnessV2["resolveIsolatedCompletionRuntime"]
-  > = ({ authorizationOwner }) => (authorizationOwner === "host" ? "openclaw" : "self");
+  > = () => "self";
   const assertOwnershipCurrent = (params: { assertCurrent: () => void }) => {
     params.assertCurrent();
     if (disposed) {
@@ -392,6 +393,22 @@ export function createCodexAppServerAgentHarness(
           return unsupported("Codex Platform auth requires a prepared API key");
         }
       }
+      const appServer = readWorkerPluginConfig(
+        options.resolvePluginConfig?.() ?? options.pluginConfig,
+      ).appServer;
+      if (
+        (appServer?.transport ?? "stdio") === "stdio" &&
+        // Worker placement owns its binary; selection has no admitted placement yet.
+        appServer?.workerHostedCloud !== true &&
+        !appServer?.command?.trim() &&
+        !process.env.OPENCLAW_CODEX_APP_SERVER_BIN?.trim() &&
+        !hasManagedCodexAppServerBinary()
+      ) {
+        // Missing binaries cannot preserve an explicit native session's ownership.
+        return unsupported(
+          "no native Codex app-server binary is available; install Codex or configure appServer.command for a native build",
+        );
+      }
       return { supported: true, priority: 100 };
     },
     runAttempt: async (params) => {
@@ -519,19 +536,10 @@ export function createCodexAppServerAgentHarness(
           "Native command auth currently requires an ordinary Codex session, not isolated completion.",
         );
       }
-      if (
-        resolveIsolatedCompletionRuntime({ authorizationOwner: params.authorization.owner }) ===
-        "openclaw"
-      ) {
-        const { runHostPreparedIsolatedCompletion } = await loadSimpleCompletionRuntime();
-        return runHostPreparedIsolatedCompletion(params);
-      }
       const { runCodexIsolatedCompletion } = await loadIsolatedCompletion();
       const { readCodexPluginConfig } = await loadConfigParsing();
       return runCodexIsolatedCompletion(params, {
-        pluginConfig: readCodexPluginConfig(
-          options.resolvePluginConfig?.() ?? options.pluginConfig,
-        ),
+        pluginConfig: readCodexPluginConfig(resolveAttemptPluginConfig(params.config)),
       });
     },
     runIsolatedCompletion: async (params) => {

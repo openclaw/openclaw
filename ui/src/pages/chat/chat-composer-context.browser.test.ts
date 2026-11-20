@@ -94,17 +94,20 @@ it("paints the complete readout outside a clipped short split pane and dismisses
   const { trigger, popover } = drawComposer(false, true);
   await page.elementLocator(trigger).click();
   const readout = () => [
-    ...popover.querySelectorAll<HTMLElement>(".context-usage__title, strong, dt, dd"),
+    ...popover.querySelectorAll<HTMLElement>(
+      ".oc-menu-heading__label, strong, [role=columnheader]:not(:empty), [role=rowheader], [role=cell]",
+    ),
   ];
   expect(readout().map((element) => element.textContent?.trim())).toEqual([
     "Context window",
     "20.3k / 200k · 10%",
     "In",
-    "19.6k",
     "Out",
+    "Latest run",
+    "19.6k",
     "126",
   ]);
-  const readoutPainted = () => readout().length === 6 && readout().every(isPainted);
+  const readoutPainted = () => readout().length === 7 && readout().every(isPainted);
   await expect.poll(readoutPainted).toBe(true);
   const box = popover.getBoundingClientRect();
   expect(box.left).toBeGreaterThanOrEqual(0);
@@ -150,7 +153,7 @@ it.each([
         box.width > 0 &&
         box.top >= (panned ? 300 : 0) &&
         (panned
-          ? Math.abs(box.bottom - (composer.getBoundingClientRect().top - 6)) <= 1
+          ? Math.abs(box.bottom - (composer.getBoundingClientRect().top - 4)) <= 1
           : box.left >= 0 &&
             box.right <= width + 1 &&
             box.bottom <= composer.getBoundingClientRect().top + 1),

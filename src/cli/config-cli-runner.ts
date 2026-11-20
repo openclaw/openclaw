@@ -17,11 +17,13 @@ import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
 import type { ConfigSchemaResponse } from "../config/schema.js";
+import { findSkillWorkshopPolicyWriteRefusal } from "../config/skill-workshop-plugin-migration.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { visitConfigValueTree } from "../config/value-tree.js";
 import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
+import { openClawIdAccessWarning } from "../gateway/openclaw-id/access-plugin.js";
 import { danger, info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -118,12 +120,13 @@ export async function runConfigOperations(params: {
   databaseOnly?: true;
   /**
    * Replaces the local file write when another process owns the state root.
-   * Receives the authored config before and after the change; may return a reload hint.
+   * Receives the authored config before and after the change; may return a reload hint and
+   * the owner's billing-route warnings.
    */
   commit?: (change: {
     previous: OpenClawConfig;
     next: OpenClawConfig;
-  }) => Promise<string | undefined>;
+  }) => Promise<{ hint?: string; warnings: readonly string[] }>;
 }) {
   const { runtime, operations, options } = params;
   if (
@@ -476,6 +479,15 @@ export async function runConfigOperations(params: {
       previousEnv: preparedPreviousValues.resolutionEnv,
     };
   }
+  // Refuse before any offline write or Gateway-routed patch, including an equal value.
+  const workshopPolicyRefusal = findSkillWorkshopPolicyWriteRefusal({
+    previousConfig: authoredPreviousConfig,
+    nextConfig: authoredNextConfig,
+    writesPlugins: appliedOperations.some(({ setPath }) => setPath[0] === "plugins"),
+  });
+  if (workshopPolicyRefusal) {
+    throw new Error(workshopPolicyRefusal);
+  }
   const validation = await validateConfigMutation({
     config: nextConfig,
     modelValidation,
@@ -517,7 +529,11 @@ export async function runConfigOperations(params: {
       unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
       env: resolutionEnv,
     });
-    committedHint = await params.commit(change);
+    const committed = await params.commit(change);
+    committedHint = committed.hint;
+    for (const warning of committed.warnings) {
+      runtime.error(warning);
+    }
     if (change.clearedSessionStoreOwner) {
       // The local writer reports this itself; the Gateway's writer reports only to its own log.
       runtime.error(
@@ -525,7 +541,7 @@ export async function runConfigOperations(params: {
       );
     }
   } else {
-    await replaceConfigFile({
+    const written = await replaceConfigFile({
       sourceConfig: authoredNextConfig,
       snapshot,
       ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
@@ -548,6 +564,10 @@ export async function runConfigOperations(params: {
           : {}),
       },
     });
+    const warning = openClawIdAccessWarning(written.nextConfig);
+    if (warning) {
+      runtime.error(warning);
+    }
   }
   if (removedGatewayAuthPaths.length > 0) {
     runtime.log(

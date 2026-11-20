@@ -298,6 +298,10 @@ export const discordOutbound: ChannelOutboundAdapter = {
     }
 
     const discordData = asOptionalRecord(payload.channelData?.discord) ?? {};
+    const literalText = discordData.literalText === true;
+    const literalOptions = literalText
+      ? { suppressEmbeds: true, allowedMentions: { parse: [] } }
+      : {};
     const filename = normalizeOptionalString(discordData.filename);
     const componentSpec = await resolveDiscordComponentSpec(payload);
     const nativeComponents =
@@ -308,7 +312,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       !componentSpec && Array.isArray(discordData.embeds)
         ? (discordData.embeds as DiscordSendEmbeds)
         : undefined;
-    if (!componentSpec && !nativeComponents && !embeds?.length && !filename) {
+    if (!literalText && !componentSpec && !nativeComponents && !embeds?.length && !filename) {
       const result = await sendTextMediaPayload({
         channel: "discord",
         ctx: payloadContext,
@@ -332,6 +336,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
               embeds,
               filename,
               ...sendContext.options(),
+              ...literalOptions,
             }),
       send: async ({ text, mediaUrl, isFirst }) => {
         if (componentSpec && isFirst) {
@@ -342,6 +347,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
         }
         return await sendContext.send(sendContext.target, text, {
           ...sendContext.mediaOptions(mediaUrl),
+          ...literalOptions,
           ...(!componentSpec
             ? {
                 components: isFirst ? nativeComponents : undefined,

@@ -45,7 +45,30 @@ it("reads the accepted base immediately after a real same-session reset", async 
     const id = randomUUID();
     const sessionId = randomUUID();
     const sessionKey = "agent:main:review-reset";
-    const worktree = { id, repoRoot: repo, branch: "task" };
+    const worktree = {
+      id,
+      repoRoot: repo,
+      branch: "task",
+      githubPullRequest: {
+        url: "https://github.com/example/project/pull/7",
+        host: "github.com",
+        number: 7,
+        origin: "external-pr" as const,
+        base: {
+          repository: "example/project",
+          repositoryId: 1,
+          branch: "main",
+          commit: acceptedBase,
+        },
+        head: {
+          repository: "example/project",
+          repositoryId: 1,
+          branch: "task",
+          commit: acceptedBase,
+        },
+        preparedHeadCommit: acceptedBase,
+      },
+    };
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
       {
@@ -76,7 +99,7 @@ it("reads the accepted base immediately after a real same-session reset", async 
     });
     expect(reset).toMatchObject({ ok: true });
     const after = await loadGatewaySessionEntryReadOnlyAsync(sessionKey, { agentId: "main" }, cfg);
-    expect(after.entry).toMatchObject({ sessionId, worktree: { id } });
+    expect(after.entry).toMatchObject({ sessionId, worktree });
     expect(after.entry?.lifecycleRevision).not.toBe("before-reset");
     expect((await readLocalWorkspaceProjection(id))?.lifecycle_revision).toBe("before-reset");
     const diff = await loadSessionDiff({ sessionKey });

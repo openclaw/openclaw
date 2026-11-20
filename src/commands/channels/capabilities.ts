@@ -10,7 +10,7 @@ import {
   createMessageActionDiscoveryContext,
   resolveMessageActionDiscoveryForPluginAsync,
 } from "../../channels/plugins/message-action-discovery.js";
-import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../../channels/plugins/read-only.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelCapabilities,
@@ -21,7 +21,7 @@ import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolu
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
-import { ExpectedCliError } from "../../cli/failure-output.js";
+import { ExpectedCliError } from "../../cli/expected-cli-error.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";
@@ -159,7 +159,7 @@ export async function channelsCapabilitiesCommand(
     throw new ExpectedCliError({ message, humanOutput: danger(message), machineOutput: message });
   }
 
-  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+  const plugins = await listReadOnlyChannelPluginsForConfigAsync(cfg, {
     includeSetupFallbackPlugins: true,
   });
   let selected = plugins;

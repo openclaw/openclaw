@@ -118,9 +118,12 @@ beforeEach(async () => {
   spawned = createDeferredCore();
   mocks.spawn.mockImplementation((_command: string, args: string[], options: SpawnOptions) => {
     child = new ChildProcess();
-    Object.defineProperty(child, "pid", { value: 654 });
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
+    Object.defineProperties(child, {
+      pid: { value: 654 },
+      stdin: { value: null },
+      stdout: { value: new PassThrough() },
+      stderr: { value: new PassThrough() },
+    });
     childEnv = options.env ?? {};
     contextPath = args[args.indexOf("--context") + 1]!;
     observedContext = JSON.parse(fsSync.readFileSync(contextPath, "utf8"));
@@ -230,11 +233,7 @@ it.each(["unknown-version", "artifact"] as const)(
     expect(mocks.spawn).toHaveBeenCalledWith(
       "/selected/node",
       [path.join(root, "dist", "index.js"), "update", "admit", "--context", contextPath],
-      expect.objectContaining({
-        cwd: root,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      }),
+      expect.objectContaining({ cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }),
     );
     expect(childEnv).toEqual({
       ...preservedEnv,

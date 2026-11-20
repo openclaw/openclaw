@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   createCapturedHashProbe,
@@ -59,7 +60,7 @@ describePosix("captured baseline hash stdin", () => {
     head = fixture.incoming;
     const probe = createCapturedHashProbe(root);
     scratch = probe.scratch;
-    node = spawnSync("which", ["node"], { encoding: "utf8" }).stdout.trim();
+    node = requireNodeTool("node");
     env = { ...fixture.env, ...probe.env };
   });
 
@@ -84,9 +85,14 @@ describePosix("captured baseline hash stdin", () => {
     expect(readFileSync(join(root, authorityPath), "utf8")).toBe("changed after capture");
   });
 
-  it("fails closed and cleans its resources on write, spawn and Git failures", () => {
+  it("hashes large captured inputs without writing a temporary snapshot", () => {
+    const result = run(Buffer.alloc(32 * 1024 * 1024, 0xa5), {}, true);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Missing baseline transition operation owner.");
+  });
+
+  it("fails closed and cleans its resources on spawn and Git failures", () => {
     for (const [result, message] of [
-      [run(Buffer.alloc(4096), {}, true), "EFBIG"],
       [run(Buffer.from("spawn"), { OPENCLAW_PR_GIT: join(root, "missing-git") }), "ENOENT"],
       [run(Buffer.from("git"), { FAIL_HASH: "1" }), "fixture Git hash failure"],
     ] as const) {

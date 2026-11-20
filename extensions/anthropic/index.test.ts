@@ -484,7 +484,7 @@ describe("anthropic provider replay hooks", () => {
       apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
       source: "Claude CLI native auth",
       mode: "oauth",
-      nativeAuth: { runtime: "claude-cli", mode: "oauth" },
+      nativeAuth: { runtime: "claude-cli", mode: "oauth", display: { kind: "native" } },
     });
     expect(
       await provider.prepareSyntheticAuth?.({ provider: "claude-cli" } as never),

@@ -7,6 +7,7 @@ import {
   upsertPresence,
 } from "../../infra/system-presence.js";
 import { buildAuthenticatedPresenceUser } from "../authenticated-presence-user.js";
+import { createSessionViewerPresenceDeclarations } from "../session-viewer-presence.js";
 import { dispatchProfile, gatewayConnect } from "./client-fixtures.test-support.js";
 import { startWorkerHumanPresence } from "./client-human-presence.js";
 import {
@@ -36,7 +37,7 @@ describe("live person presence timing", () => {
     const validUser = (user: unknown) => Value.Check(PresenceEntrySchema, { ts: 1, user });
     const authenticatedUserId = "same-id";
     const fallback = buildAuthenticatedPresenceUser({ authenticatedUserId });
-    expect(fallback).toEqual({ id: authenticatedUserId, email: authenticatedUserId });
+    expect(fallback).toEqual({ id: authenticatedUserId });
     expect(buildAuthenticatedPresenceUser({})).toBeUndefined();
     const profile = buildAuthenticatedPresenceUser({
       authenticatedUserId,
@@ -49,7 +50,7 @@ describe("live person presence timing", () => {
     expect(validUser(profile)).toBe(true);
     expect(
       validUser({
-        ...fallback,
+        id: authenticatedUserId,
         identity: {
           type: "observation",
           id: authenticatedUserId,
@@ -149,7 +150,7 @@ describe("live person presence timing", () => {
   }
 
   function row(connection: Connection) {
-    return listSystemPresence().find((entry) => entry.user?.email === connection.email);
+    return listSystemPresence().find((entry) => entry.connectionId === connection.client.connId);
   }
   function expectRow(connection: Connection, expected: object) {
     expect(row(connection)).toMatchObject(expected);
@@ -278,11 +279,53 @@ describe("live person presence timing", () => {
     },
   );
 
-  it("keeps heartbeat freshness and cache eviction independent of person timing", async () => {
+  it("restores connection metadata and viewer declarations after presence cache eviction", async () => {
     const first = await connect("heartbeat@timing.test", "heartbeat-person", {
       nativeClient: "openclaw-tui",
+      deferAdmission: true,
     });
     const t = Date.now();
+    Object.assign(first.client.connect.client, {
+      displayName: "Presence laptop",
+      version: "2026.11.1",
+      platform: "linux",
+      deviceFamily: "Laptop",
+      modelIdentifier: "test-laptop",
+      timeZone: "Asia/Calcutta",
+      instanceId: first.client.presenceKey,
+    });
+    first.client.connect.device = {
+      id: "presence-device",
+      publicKey: "test-public-key",
+      signature: "test-signature",
+      signedAt: t,
+      nonce: "test-nonce",
+    };
+    first.client.connect.scopes = ["operator.read"];
+    first.client.clientIp = "203.0.113.10";
+    expect(setClient(first)).toBe(true);
+    const metadata = {
+      host: "Presence laptop",
+      clientId: "openclaw-tui",
+      version: "2026.11.1",
+      platform: "linux",
+      deviceFamily: "Laptop",
+      modelIdentifier: "test-laptop",
+      timeZone: "Asia/Calcutta",
+      instanceId: first.client.presenceKey,
+      deviceId: "presence-device",
+      ip: "203.0.113.10",
+      mode: "ui",
+      roles: ["operator"],
+      scopes: ["operator.read"],
+    };
+    // Seed the accepted metadata normally published by the connect handshake.
+    upsertPresence(first.client.presenceKey!, metadata);
+    const declarations = createSessionViewerPresenceDeclarations({
+      clients,
+      publishPresence: vi.fn(),
+    });
+    declarations.replace(first.client.connId, ["agent:main:watched"]);
     activity(first);
     vi.setSystemTime(t + 10_000);
     first.socket.emit("pong");
@@ -296,6 +339,8 @@ describe("live person presence timing", () => {
       onlineSince: t,
       lastActivityAt: t,
       connectionLastActivityAt: t,
+      ...metadata,
+      watchedSessions: ["agent:main:watched"],
     });
 
     vi.setSystemTime(t + 20_000);
@@ -308,18 +353,24 @@ describe("live person presence timing", () => {
         connectionId: first.client.connId,
         user: { id: "heartbeat-person" },
         connectionLastActivityAt: t,
+        timeZone: "Asia/Calcutta",
+        ip: "203.0.113.10",
       },
     ]);
     const overlap = await connect("eviction@timing.test", "heartbeat-person", {
       nativeClient: "openclaw-macos",
     });
-    expectRow(first, { connectionLastActivityAt: t });
+    expectRow(first, {
+      ...metadata,
+      connectionLastActivityAt: t,
+      watchedSessions: ["agent:main:watched"],
+    });
     expect(personTimes(row(overlap))).toEqual([t, t]);
 
     vi.setSystemTime(t + 400_000);
     expect(row(overlap)).toBeUndefined();
     expect(activity(overlap)).toBe(true);
-    expect(row(first)).toBeDefined();
+    expectRow(first, { ...metadata, watchedSessions: ["agent:main:watched"] });
     expectRow(overlap, {
       onlineSince: t,
       lastActivityAt: t + 400_000,
@@ -350,6 +401,30 @@ describe("live person presence timing", () => {
     expect(refreshClientPresence(clients, delayed.client)).toBe(false);
     expect(activity(delayed)).toBe(false);
     expect(row(delayed)).toBeUndefined();
+  });
+
+  it.each([
+    { role: "operator", local: true, instanceId: "reported-instance", ip: undefined },
+    { role: "node", local: false, instanceId: "paired-device", ip: "203.0.113.20" },
+  ])("preserves $role device identity and local IP policy in snapshots", async (expected) => {
+    const connection = await connect("device@timing.test", "device-person", {
+      deferAdmission: true,
+    });
+    connection.client.connect.role = expected.role;
+    connection.client.connect.client.instanceId = "reported-instance";
+    connection.client.connect.device = {
+      id: "paired-device",
+      publicKey: "test-public-key",
+      signature: "test-signature",
+      signedAt: Date.now(),
+      nonce: "test-nonce",
+    };
+    connection.client.clientIp = "203.0.113.20";
+    connection.client.internal = expected.local ? { isLocalClient: true } : undefined;
+    expect(setClient(connection)).toBe(true);
+    expect(snapshotClientPresence(clients)).toMatchObject([
+      { deviceId: "paired-device", instanceId: expected.instanceId, ip: expected.ip },
+    ]);
   });
 
   it("rejects copied, invalidated, closing, and unregistered clients without changing activity", async () => {

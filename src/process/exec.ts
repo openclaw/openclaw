@@ -12,6 +12,7 @@ import {
   CommandProcessCleanupError,
   createSanitizedCommandError,
   hasCommandProcessCleanupError,
+  readCommandProcessCleanup,
   readCommandProcessFailure,
 } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
@@ -22,6 +23,7 @@ import {
   spawnCommand,
   waitForCommandSpawn,
 } from "./exec-spawn.js";
+import type { ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { setProcessTimeout } from "./process-deadline.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 export { runCommandWithTimeout, runUtf8CommandWithTimeout } from "./exec-runner.js";
@@ -256,12 +258,16 @@ export async function runExec(
 }
 
 export type BufferedCommandOptions = {
+  executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
   cwd?: string;
   input?: string | Uint8Array;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
+  /** Operation-owned output of resolveCommandEnv. */
+  preparedEnv?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   maxOutputBytes?: number | { stdout?: number; stderr?: number };
   maxCombinedOutputBytes?: number;
@@ -337,7 +343,10 @@ export async function runCommandBuffered(
 
   try {
     const result = await runCommandWithTimeout(argv, {
+      executionIntent: options.executionIntent,
+      executionScopeKey: options.executionScopeKey,
       baseEnv: options.baseEnv,
+      preparedEnv: options.preparedEnv,
       cwd: options.cwd,
       env: options.env,
       input: options.input,
@@ -357,6 +366,15 @@ export async function runCommandBuffered(
     const termination: BufferedCommandResult["termination"] = result.outputLimitExceeded
       ? "output-limit"
       : result.termination;
+    const pendingCleanup = readCommandProcessCleanup(result);
+    const cleanupError = pendingCleanup
+      ? await pendingCleanup.then(
+          (cleanup) => (cleanup === "uncertain" ? new CommandProcessCleanupError() : undefined),
+          (cause: unknown) => new CommandProcessCleanupError({ cause }),
+        )
+      : result.cleanup === "uncertain"
+        ? new CommandProcessCleanupError()
+        : undefined;
     return {
       stdout: capturedOutput("stdout"),
       stderr: capturedOutput("stderr"),
@@ -366,7 +384,7 @@ export async function runCommandBuffered(
       termination,
       ...(outputLimitStream ? { outputLimitStream } : {}),
       ...(result.outputErrorStream ? { errorStream: result.outputErrorStream } : {}),
-      ...(result.cleanup === "uncertain" ? { error: new CommandProcessCleanupError() } : {}),
+      ...(cleanupError ? { error: cleanupError } : {}),
     };
   } catch (error) {
     const commandError = error instanceof Error ? error : new Error("Command execution failed");

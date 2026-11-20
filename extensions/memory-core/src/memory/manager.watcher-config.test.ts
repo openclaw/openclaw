@@ -14,15 +14,29 @@ import {
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
+import type { MemoryFileWatcherOptions } from "./file-watcher.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexManager } from "./manager.js";
+
+const settledChanges = vi.hoisted(() => vi.fn<() => void>());
 
 // Keep owner fault injection in this process; real worker transport has separate coverage.
 vi.mock("./local-file-watcher.js", async (original) => {
   const { MemoryFileWatcher } = await import("./file-watcher.js");
   return {
     ...(await original<typeof import("./local-file-watcher.js")>()),
-    LocalMemoryFileWatcher: MemoryFileWatcher,
+    LocalMemoryFileWatcher: class extends MemoryFileWatcher {
+      constructor(options: MemoryFileWatcherOptions) {
+        super({
+          ...options,
+          onChange: () => {
+            const result = options.onChange();
+            settledChanges();
+            return result;
+          },
+        });
+      }
+    },
   };
 });
 
@@ -30,6 +44,7 @@ const observer = await vi.hoisted(async () => {
   const { createMemoryObservationHarness } = await import("./watcher-test-support.js");
   return createMemoryObservationHarness();
 });
+const { activity } = await vi.hoisted(() => import("./agent-activity.test-support.js"));
 vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({
   ...(await original<typeof import("openclaw/plugin-sdk/file-access-runtime")>()),
   watch: observer.watch,
@@ -40,6 +55,7 @@ describe("Memory watch configuration", () => {
   let manager: MemoryIndexManager | null = null;
   beforeEach(async () => {
     observer.reset();
+    settledChanges.mockReset();
     vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
     vi.stubEnv("CHOKIDAR_INTERVAL", undefined);
     state = await createOpenClawTestState({ label: "memory-watch-config" });
@@ -55,7 +71,7 @@ describe("Memory watch configuration", () => {
     resetMemoryCoreDreamingStateForTests();
     await state.cleanup();
   });
-  async function openManager(text: string) {
+  async function openManager(text: string, sessions = false) {
     const file = path.join(state.workspaceDir, "memory", "note.md");
     await fs.writeFile(file, text);
     await configureMemoryCoreDreamingStateForTests(state.env);
@@ -66,6 +82,7 @@ describe("Memory watch configuration", () => {
         search: {
           provider: "none",
           sources: ["memory"],
+          ...(sessions ? { rememberAcrossConversations: true } : {}),
           store: { vector: { enabled: false } },
           extraPaths: [state.path("extra")],
         },
@@ -85,6 +102,66 @@ describe("Memory watch configuration", () => {
   }
   const snippets = async (active: MemoryIndexManager, text: string) =>
     (await active.search(text, { minScore: 0 })).map((result) => result.snippet);
+
+  it("does not invalidate a foreground index again when its baseline debounce arrives", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { cfg, active, idle } = await openManager("Baseline already indexed.");
+    const entry = observer.observations[0]!;
+    entry.dirty(undefined, "reconcile");
+    expect(active.status().dirty).toBe(true);
+    await active.sync({ reason: "foreground" });
+    expect(active.status().dirty).toBe(false);
+    const dirtiness: Array<ReturnType<MemoryIndexManager["status"]>["dirty"]> = [];
+    settledChanges.mockImplementation(() => dirtiness.push(active.status().dirty));
+    await vi.advanceTimersByTimeAsync(resolveMemorySearchConfig(cfg, "main")!.sync.watchDebounceMs);
+    expect(dirtiness).toEqual([false]);
+    await idle();
+    expect(await snippets(active, "Baseline")).toContain("Baseline already indexed.");
+  });
+
+  it.each(["selected", "overflow"] as const)(
+    "indexes a settled %s edit even when foreground sync consumed its first dirty notification",
+    async (notification) => {
+      const { file, cfg, active, idle } = await openManager("Initial indexed text.");
+      const entry = observer.observations[0]!;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      await fs.writeFile(file, "Intermediate write.");
+      if (notification === "overflow") {
+        entry.dirty(undefined, "overflow");
+      } else {
+        entry.dirty([{ path: path.relative(entry.root.rootDir, file), type: "content" }]);
+      }
+      await active.sync({ reason: "foreground" });
+      expect(active.status().dirty).toBe(false);
+      // Finish during debounce, before even the first settling sample.
+      await fs.writeFile(file, "Final cobalt heron text.");
+      const sampled = createDeferred<void>();
+      const open = entry.root.open.bind(entry.root);
+      vi.spyOn(entry.root, "open").mockImplementation(async (...args) => {
+        const opened = await open(...args);
+        const dispose = opened[Symbol.asyncDispose].bind(opened);
+        vi.spyOn(opened, Symbol.asyncDispose).mockImplementation(async () => {
+          await dispose();
+          sampled.resolve();
+        });
+        return opened;
+      });
+      const changed = createDeferred<void>();
+      settledChanges.mockImplementation(() => changed.resolve());
+      await vi.advanceTimersByTimeAsync(
+        resolveMemorySearchConfig(cfg, "main")!.sync.watchDebounceMs,
+      );
+      if (notification === "selected") {
+        await sampled.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      await changed.promise;
+      await idle();
+      expect(await snippets(active, "cobalt heron")).toContain("Final cobalt heron text.");
+      expect(active.status().dirty).toBe(false);
+    },
+  );
 
   it("keeps a newer selected-file dirty behind held settling before publishing the index", async () => {
     const { file, cfg, active, idle } = await openManager("Initial indexed text.");
@@ -174,47 +251,50 @@ describe("Memory watch configuration", () => {
     }
   });
 
-  it("refreshes every search after watch-limit without further notifications", async () => {
-    const { file, active, idle } = await openManager("Amber lantern baseline.");
-    vi.useFakeTimers();
-    observer.observations[0]!.health({
-      state: "unavailable",
-      failure: { operation: "watch", code: "watch-limit", error: new Error("watch limit") },
-    });
-    for (const text of ["Cobalt heron discovered.", "Violet badger replaced it."]) {
-      await fs.writeFile(file, text);
-      // Search schedules maintenance while serving its captured published generation.
-      await active.search(text, { minScore: 0 });
+  it.each([
+    { unavailable: false, sessions: false },
+    { unavailable: true, sessions: false },
+    { unavailable: false, sessions: true },
+    { unavailable: true, sessions: true },
+  ])(
+    "recovers missed files within five minutes (watch unavailable=$unavailable, sessions=$sessions)",
+    async ({ unavailable, sessions }) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const { active, idle } = await openManager("Amber lantern baseline.", sessions);
       await idle();
-      expect(await snippets(active, text)).toContain(text);
+      if (sessions) {
+        expect(activity.listener).toBeTypeOf("function");
+        activity.listener!(true);
+      }
+      if (unavailable) {
+        observer.observations[0]!.health({
+          state: "unavailable",
+          failure: { operation: "watch", code: "watch-limit", error: new Error("watch limit") },
+        });
+        await vi.advanceTimersByTimeAsync(2_000);
+        await idle();
+      }
+      const content = "Cobalt heron discovered without a watcher event.";
+      await fs.writeFile(path.join(state.workspaceDir, "memory", "missed.md"), content);
+      using acquisition = vi.spyOn(MemoryIndexManager, "get");
+      await expect(snippets(active, "Cobalt heron")).resolves.toEqual([]);
       await idle();
-    }
-    expect(await active.search("Cobalt heron", { minScore: 0 })).toEqual([]);
-  });
-
-  it("stops refreshing clean searches after all observations recover", async () => {
-    const { active, idle } = await openManager("Amber lantern.");
-    const sync = vi.spyOn(MemoryIndexManager.prototype, "sync");
-    const observationCount = observer.observations.length;
-    vi.useFakeTimers();
-    observer.observations[0]!.health({
-      state: "unavailable",
-      failure: { operation: "scan", code: "EIO", error: new Error("temporary scan failure") },
-    });
-    await active.search("Amber lantern", { minScore: 0 });
-    await idle();
-    expect(sync).toHaveBeenCalledWith({ reason: "search" });
-    await vi.advanceTimersByTimeAsync(500);
-    await vi.waitFor(() =>
-      expect(active.status().custom?.watcher).toEqual(
-        Array.from({ length: observationCount }, () => expect.objectContaining({ state: "ready" })),
-      ),
-    );
-    await active.sync({ reason: "recovered" });
-    await idle();
-    sync.mockClear();
-    expect(await snippets(active, "Amber lantern")).toContain("Amber lantern.");
-    await idle();
-    expect(sync).not.toHaveBeenCalled();
-  });
+      expect(acquisition.mock.calls.some(([params]) => params.purpose === "maintenance")).toBe(
+        false,
+      );
+      for (let turn = 0; turn < 9; turn++) {
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(await snippets(active, "Amber lantern")).toContain("Amber lantern baseline.");
+      }
+      await vi.advanceTimersByTimeAsync(5 * 60_000 - performance.now());
+      await idle();
+      expect(await snippets(active, "Cobalt heron")).toContain(content);
+      await active.close();
+      expect(activity.listener).toBeUndefined();
+      expect(observer.observations.every((entry) => entry.close.mock.calls.length === 1)).toBe(
+        true,
+      );
+      expect(active).toMatchObject({ sessionWatchTimer: null, activeManagerOperations: 0 });
+    },
+  );
 });

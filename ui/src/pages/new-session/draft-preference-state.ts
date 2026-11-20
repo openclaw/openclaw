@@ -348,7 +348,12 @@ export class DraftPreferenceState {
             }
             if (current && this.preferenceScope === scope) {
               this.identityPreferences = { ...this.identityPreferences, [agentId]: next };
-              this.callbacks.changed();
+              if (this.callbacks.preferenceScope === "palette") {
+                // The palette may have reopened while its own model save was pending.
+                this.adoptPreferences();
+              } else {
+                this.callbacks.changed();
+              }
             }
             return true;
           }
@@ -362,6 +367,7 @@ export class DraftPreferenceState {
       writer.write = pending.then((confirmed) => {
         if (confirmed === false && isCurrent()) {
           showToast({
+            severity: "error",
             message: t(
               accepted
                 ? "newSession.worktreeNameClearUnconfirmed"

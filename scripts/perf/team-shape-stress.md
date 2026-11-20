@@ -4,9 +4,18 @@ Run one fixed workload against two **already-built** revisions from this tooling
 checkout. All state, logs, profiles, and results go under a new output directory.
 The controller creates its own loopback listeners on free ports >=40000. It never
 connects to an existing Gateway, discovers credentials, or drives a real browser.
-Both builds must support the database schemas written by the tooling checkout's
-fixture generator. A schema mismatch is a setup failure; the harness never
-downstamps databases or bypasses Gateway schema admission.
+Each arm runs its built `doctor --fix --non-interactive` against its isolated
+fixture before Gateway readiness, warmup, and measurement. Service repair is
+disabled through the external-supervisor policy. Use a tooling checkout whose
+fixture schema both builds can read or migrate forward; newer fixture schemas
+cannot be downgraded. Doctor failures or subsequent schema admission failures
+are setup failures; the harness never downstamps databases or bypasses admission.
+The first synthetic `sessions.create` retries only the Gateway's retryable
+`UNAVAILABLE` / `startup-sidecars` response, honoring `retryAfterMs` within a
+120-second total request-and-wait budget. Every retry is logged. This happens
+before warmup and measurement; transport errors, other refusals, and measured RPC
+failures are not retried.
+
 The Gateway's instrumentation loader uses native Node type stripping and resolves
 source-only `.js` imports to TypeScript without applying tsconfig aliases.
 Already-built JavaScript stays byte-for-byte native: a transforming loader can
@@ -121,6 +130,51 @@ Four turns run concurrently once per minute by default. Faster turn cadence also
 increases the workload's history verification traffic, so calibrate the method
 mix as well as total RPC rate. `--list-weight 2 --round-ms 15000 --churn-ms 2000`
 selects a heavier turn/history workload with the same client and fixture counts.
+
+## Old-generation attribution workload
+
+`--oldgen-workload --agents 465 --runs 20 --worktree-tool-churn` adds an opt-in
+retention workload to the same campaign. It creates native databases with eight
+sessions for each non-main agent, closes them through the normal owner, and adds
+512 synthetic skills across three configured roots plus one workspace skill per
+agent. Main keeps the ordinary 10,800-session fixture. Public bundled skill text
+supplies synthetic bodies; no production state is read. `oldgen-fixture.json`
+records additional session/database counts and bytes separately from the ordinary
+fixture summary. The first project has 62,000 files of 18,432 bytes (1.06 GiB).
+`--transcript-mib` still controls logical transcript bytes before compression;
+measure the actual database size rather than calling this a 35 GiB database.
+
+Each foreground turn performs real `skills.search` and `catalog.search` calls in
+Code Mode and verifies their results before its existing file/exec work. Every
+fifth measured round patches the logging level through `config.get`/`config.patch`
+to exercise hot reload. Configured agents outside the main foreground cohort
+exercise startup/admission and sidebar inventory; this profile does not run a
+model turn on every configured agent.
+
+Only retention passes request full GC at the existing memory checkpoints. Timing
+passes remain free of explicit GC. The diagnostic preload reads admission counts
+through the measured build's existing exported owner operations; it does not
+replace source or import another source graph. `oldgen-admission-counts.jsonl`
+records process age and configured/readable/writable/pending counts, so equal-age
+heap comparisons can distinguish different admitted populations. The fixture is
+clean-closed; a sealed-first startup experiment additionally needs a separately
+recorded, real interrupted synthetic writer before launch. Doctor runs before each
+Gateway and may change clean-close state. No filesystem or schema state is forged.
+
+For a clean-close control, the broadcast driver accepts
+`--post-doctor-fixture-script scripts/perf/team-shape-fixture-verify.mjs` with
+`--team-stress`. After native Doctor finishes, it runs the script in a separate
+process with the fixture environment and measured build root as its first argument.
+The helper performs full integrity and foreign-key checks through that build's
+owners, then closes each agent database normally. Its log and proof record remain
+in the fixture; the driver records the script hash. Preparation must succeed before
+the Gateway process starts, keeping offline verification outside Gateway process
+age and measurement. This does not change schema or manufacture clean-close receipts.
+
+Use a path with secure temp ancestors. A writable non-sticky volume ancestor can
+be rejected by the normal runtime temp owner; keep fixture state under a private
+local directory rather than changing shared volume permissions. This macOS proof
+uses the host filesystem and does not establish btrfs behavior.
 
 ## Measurement protocol
 

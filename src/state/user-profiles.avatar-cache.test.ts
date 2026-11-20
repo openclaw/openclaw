@@ -45,7 +45,7 @@ it("retains absent avatars until committed email or avatar changes", async () =>
 it.each(["settled", "pending"] as const)(
   "evicts %s avatar bytes without losing warm reads or in-flight coalescing",
   async (phase) => {
-    const bytes = new Uint8Array(512 * 1024).fill(7);
+    const bytes = Buffer.alloc(512 * 1024, 7);
     const profiles = Array.from({ length: 33 }, (_, index) => {
       const profile = ensureProfileForEmail(`avatar-${index}@example.test`, options);
       upload(profile.id, bytes);
@@ -94,11 +94,11 @@ it.each(["settled", "pending"] as const)(
     const read = observeReads();
     const prepared = await inspect(profiles[0]!.id);
     expect(prepared.isCurrent()).toBe(true);
-    expect((await prepared.loadBytes())?.bytes).toEqual(bytes);
-    expect((await load(0))?.bytes).toEqual(bytes);
+    expect(bytes.equals((await prepared.loadBytes())?.bytes ?? Buffer.alloc(0)), "warm").toBe(true);
+    expect(bytes.equals((await load(0))?.bytes ?? Buffer.alloc(0)), "warm").toBe(true);
     expect(read).not.toHaveBeenCalled();
     // A retained reader must not keep an evicted payload outside the byte budget.
-    expect((await retained.loadBytes())?.bytes).toEqual(bytes);
+    expect(bytes.equals((await retained.loadBytes())?.bytes ?? Buffer.alloc(0)), "cold").toBe(true);
     expect(read).toHaveBeenCalledOnce();
   },
 );

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { Header } from "tar";
+import { Header } from "tar/raw";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildOpenClawReleaseClawHubPlan,
@@ -271,8 +271,10 @@ describe("collectPluginClawHubReleasePlan", () => {
           registryBaseUrl,
           sleep: async () => {},
         }),
-      ).rejects.toThrow(`Failed to query ClawHub package @openclaw/demo-plugin: 503 ${detail}`);
-      expect(packageRequests).toBe(4);
+      ).rejects.toThrow(
+        `Failed to query ClawHub package @openclaw/demo-plugin: HTTP 503 ${detail}`,
+      );
+      expect(packageRequests).toBe(5);
     },
   );
 

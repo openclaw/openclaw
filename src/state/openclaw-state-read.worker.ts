@@ -7,14 +7,18 @@ import {
   getDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
+import { withStateDatabaseColdAdmission } from "../infra/gateway-state-owner.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import { ownedWorkerBytes } from "../infra/worker-transfer-bytes.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   openOpenClawStateReadConnection,
@@ -31,6 +35,8 @@ import type {
   OpenClawStateReadResult,
 } from "./openclaw-state-read.types.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
+
+const log = createSubsystemLogger("sqlite/transaction");
 
 const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
   message,
@@ -50,9 +56,17 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       input.command.type === "agentDatabaseRegistry.read"
         ? await import("./openclaw-agent-db-registry.read.js")
         : undefined;
+    const deletionSnapshotReader =
+      input.command.type === "agentDatabaseDeletion.snapshot"
+        ? await import("./agent-deletion-journal.snapshot.worker.js")
+        : undefined;
     const manifestReader =
       input.command.type === "localWorkspace.manifest"
         ? await import("../gateway/worker-environments/local-workspace-manifest-scan.js")
+        : undefined;
+    const sessionListReader =
+      input.command.type === "subagents.sessionList"
+        ? await import("../agents/subagents/registry/subagent-registry.store.sqlite.js")
         : undefined;
     // Finish the selected owner's import before fresh admission, not during stream execution.
     const readStream =
@@ -68,7 +82,9 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       input.command.type === "plugins.metadata.read" ||
       input.command.type === "gatewayOwnerLease.read" ||
       input.command.type === "localWorkspace.manifest" ||
-      input.command.type === "agentDatabaseRegistry.read";
+      input.command.type === "agentDatabaseRegistry.read" ||
+      input.command.type === "agentDatabaseDeletion.snapshot" ||
+      input.command.type === "subagents.sessionList";
     const prepared = dedicatedRead ? undefined : stateReadRegistry.prepare(input.command.type);
     if (prepared) {
       return prepared.then(() => read(input, channel, control));
@@ -77,18 +93,33 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       dedicatedRead || stateReadRegistry.has(input.command)
         ? undefined
         : await import("./openclaw-state-read-handlers.js");
+    const metadataRead =
+      input.command.type === "acpSessions.metadata"
+        ? (
+            await import("../acp/runtime/session-meta-read.worker.js")
+          ).prepareAcpSessionMetadataRead(input.command)
+        : undefined;
+    const preparedRead = handlers
+      ? await handlers.prepareOpenClawStateRead(input, input.command, metadataRead)
+      : undefined;
     const executeRead = async (): Promise<OpenClawStateReadReply> => {
       const quarantineStorePath = resolveQuarantineStorePath(input.context.environment);
       if (input.checkFreshAdmission) {
-        openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
-          input.databasePath,
-          input.context.environment,
-          (error) => {
-            nativeCleanupFailure = {
-              error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
-            };
-          },
-          true,
+        // A schema owner can arrive after host dispatch. Wait before entering the read,
+        // never replay a domain operation or borrow an offline maintenance owner.
+        withStateDatabaseColdAdmission(
+          { databasePath: input.databasePath, busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
+          () =>
+            openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+              input.databasePath,
+              input.context.environment,
+              (error) => {
+                nativeCleanupFailure = {
+                  error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
+                };
+              },
+              true,
+            ),
         );
       }
       const { command } = input;
@@ -131,7 +162,9 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       const locationArgs = [
         input.databasePath,
         input.location,
-        undefined,
+        command.type === "updateRuns.recoveryAdmission"
+          ? openDoctorStateSchemaReadAdmission
+          : undefined,
         input.expectedIdentity,
         input.snapshotRoot,
         true,
@@ -195,6 +228,25 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
         );
         return { ok: true, sourceAdmitted: true, ...result };
       }
+      if (command.type === "agentDatabaseDeletion.snapshot") {
+        if (!deletionSnapshotReader) {
+          throw new Error("Agent database deletion snapshot reader is unavailable");
+        }
+        const snapshot = withOpenClawStateReadOnlyLocation(
+          ({ db }) => {
+            sourceAdmitted = true;
+            return deletionSnapshotReader.readAgentDatabaseDeletionWorkerSnapshot(
+              db,
+              input.databasePath,
+              command.purpose,
+            );
+          },
+          ...locationArgs,
+          undefined,
+          quarantineStorePath,
+        );
+        return { ok: true, type: command.type, sourceAdmitted: true, snapshot };
+      }
       if (command.type === "agentDatabaseRegistry.read") {
         if (!registryReader) {
           throw new Error("Agent database registry reader is unavailable");
@@ -224,14 +276,14 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
         }
         return await control.runNativeSection(readStream);
       }
-      if (!handlers) {
-        throw new Error("State read command handlers are unavailable");
-      }
       if (command.type === "subagents.sessionList") {
+        if (!sessionListReader) {
+          throw new Error("Subagent session list reader is unavailable");
+        }
         const result = readOpenClawStateReadOnlyLocation(
           ({ db }) => {
             sourceAdmitted = true;
-            return handlers.loadSubagentSessionListRunsFromSqlite(undefined, { db });
+            return sessionListReader.loadSubagentSessionListRunsFromSqlite(undefined, { db });
           },
           ...locationArgs,
           undefined,
@@ -254,14 +306,13 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
               },
             };
       }
-      const metadataRead =
-        command.type === "acpSessions.metadata"
-          ? handlers.prepareAcpSessionMetadataRead(command)
-          : undefined;
+      if (!preparedRead) {
+        throw new Error("State read command handlers are unavailable");
+      }
       const result = withOpenClawStateReadOnlyLocation(
         ({ db }): OpenClawStateReadResult => {
           sourceAdmitted = true;
-          return handlers.readOpenClawStateDatabaseCommand(db, input, command, metadataRead);
+          return preparedRead(db);
         },
         ...locationArgs,
         metadataRead?.readContentVersionRow,
@@ -271,8 +322,11 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
     };
     const selection = input.context.databaseEngineSelection ?? getDatabaseEngineSelection();
     const execute = () =>
-      withSqliteReaderOwner({ operation: input.command.type, ownerKind: "worker" }, () =>
-        runWithSqliteWorkerStateContext(input.context, executeRead),
+      withSqliteReaderOwner(
+        { operation: input.command.type, ownerKind: "worker" },
+        () => runWithSqliteWorkerStateContext(input.context, executeRead),
+        undefined,
+        log,
       );
     const run = () =>
       input.postgresSnapshot

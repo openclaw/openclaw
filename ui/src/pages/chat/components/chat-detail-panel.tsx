@@ -28,6 +28,7 @@ import { createFileCopy } from "./chat-file-copy.ts";
 import { captureFileEditorDraft, readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import { createFileSessionAttachment } from "./chat-file-session-attachment.ts";
 import { createFileHtmlPreview } from "./chat-html-preview.ts";
+import { bindMcpAppTab } from "./chat-mcp-app-tab.tsx";
 import type {
   FileSidebarNavigation,
   AttachmentSidebarRuntime,
@@ -587,6 +588,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanelElement) 
   const close = () => {
     host.dispatchEvent(new CustomEvent("chat-detail-panel-close", { bubbles: true }));
   };
+  const notifyAppTab = bindMcpAppTab(host, () => props.content, close);
 
   const showRawText = () => {
     if (htmlPreview.file) {
@@ -696,8 +698,9 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanelElement) 
   invalidateRender = () => lifecycle.invalidate();
   createEffect(
     () => lifecycle.snapshot(),
-    () => {
+    (panel) => {
       publishDraft();
+      notifyAppTab(panel.content);
       // Bridge props may already describe the next selection while this frame applies.
       // Consume only the navigation synchronized with visibleContent by renderPanel.
       const request = previousNavigation?.view;
@@ -722,6 +725,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanelElement) 
       });
     },
   );
+  onSettled(() => props.registerPanelHost?.(host));
   onSettled(() => () => {
     unregisterRetirement();
     disposed = true;

@@ -350,7 +350,7 @@ it("stays in the retained reset interval after the live session advances", async
     ]) {
       const page = await read({ cursor, limit: 1 });
       expect(page.sessionId).toBe(scope.sessionId);
-      expect(messageIds(page)).toEqual([id]);
+      expect([messageIds(page), page.hasMore]).toEqual([[id], undefined]);
       if (id === "message-2") {
         const end = await read({ cursor: page.newerCursor, limit: 1 });
         expect(messageIds(end)).toEqual(["closed-reset"]);

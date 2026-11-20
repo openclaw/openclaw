@@ -25,7 +25,8 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import { isHostGeneratedInputProvenance } from "../../sessions/input-provenance.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
+import { CRON_EXECUTION_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import type {
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRequester,
@@ -47,6 +48,32 @@ import {
 } from "./message-injection-authority.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
+
+export function assertCurrentOperatorAuthority(
+  authority: AdmittedRunOperatorAuthority | undefined,
+): void {
+  if (authority) {
+    assertAdmittedRunOperatorAuthority(authority);
+    authority.assertCurrent();
+  }
+}
+
+/** Admission-only: effects retain their previously captured authority. */
+export function reauthorizeReplyToolAuthorityInput(
+  snapshot: ReplyToolAuthorityInput,
+  caller: ReplyToolAuthorityCaller | undefined,
+): void {
+  const participant = caller && "kind" in caller ? caller.caller : caller;
+  const incoming =
+    participant && !("requesterOrigin" in participant) ? participant.operatorAuthority : undefined;
+  const incumbent = snapshot.operatorAuthority;
+  assertCurrentOperatorAuthority(incumbent);
+  incumbent?.reauthorize?.();
+  if (incoming !== incumbent) {
+    assertCurrentOperatorAuthority(incoming);
+    incoming?.reauthorize?.();
+  }
+}
 
 /** Classify ordinary guidance without changing the selected execution's authority. */
 export function captureReplyToolAuthorityContinuation({
@@ -76,12 +103,16 @@ export function captureReplyToolAuthorityContinuation({
       ? caller
       : undefined;
   const incomingProfile = continuation && readTransferredRequesterProfile(continuation.caller);
+  const provenance = snapshot.run.inputProvenance;
   // Owner guidance joins background work without borrowing its principal or
-  // replacing the scheduled/delegated execution's permissions.
+  // permissions. Completion reports into a parent keep normal direct-command admission.
   const backgroundOwner =
     continuation &&
     readReplyInputChannel(continuation.caller) &&
-    isHostGeneratedInputProvenance(snapshot.run.inputProvenance) &&
+    (isSubagentSessionKey(snapshot.run.sessionKey) ||
+      (provenance?.kind === "internal_system" &&
+        (provenance.sourceTool === "cron" ||
+          provenance.sourceTool === CRON_EXECUTION_SOURCE_TOOL))) &&
     continuation.caller.operatorAuthority?.scopes.includes("operator.admin")
       ? continuation.caller.operatorAuthority
       : undefined;
@@ -106,7 +137,7 @@ export function captureReplyToolAuthorityContinuation({
       const incoming = continuation.caller;
       const incumbentShared = isSharedGatewayOwnerRunAuthority(snapshot.operatorAuthority);
       const incomingShared = isSharedGatewayOwnerRunAuthority(incoming.operatorAuthority);
-      // This is a continuation grant between a shared browser principal and a
+      // This is a continuation grant between a shared UI principal and a
       // channel participant, never equivalence between personal administrators.
       const channel =
         incumbentShared && !incomingShared

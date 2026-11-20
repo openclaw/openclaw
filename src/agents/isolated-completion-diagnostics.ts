@@ -6,7 +6,7 @@ import {
   emitTrustedDiagnosticEvent,
   isDiagnosticsEnabled,
 } from "../infra/diagnostic-events.js";
-import { estimateAggregateUsageCost } from "../utils/usage-format.js";
+import { estimateAggregateUsageCostAsync, resolveModelCostConfig } from "../utils/usage-format.js";
 import type { IsolatedCompletionResult } from "./isolated-completion-output.js";
 import type { IsolatedCompletionPurpose } from "./isolated-completion-purpose.js";
 import { hasObservedModelUsage, normalizeUsage, toDiagnosticUsage } from "./usage.js";
@@ -27,12 +27,16 @@ type CompletionUsageOwner = {
   runtimeKind: "cli" | "harness";
   provider: string;
   model: string;
+  assertCurrent?: () => void;
 };
 
 /** Plugin completions finalize usage with host-plugin attribution; core callers have no other path. */
-function emitIsolatedCompletionUsage(
-  params: CompletionUsageOwner & { attemptId: string; result?: CompletionUsage },
-): void {
+async function emitIsolatedCompletionUsage(
+  params: CompletionUsageOwner & {
+    attemptId: string;
+    result?: CompletionUsage;
+  },
+): Promise<void> {
   const { config, result } = params;
   if (params.purpose === "plugin-completion" || !isDiagnosticsEnabled(config)) {
     return;
@@ -56,12 +60,15 @@ function emitIsolatedCompletionUsage(
     usage: available ? toDiagnosticUsage(usage) : {},
     ...(available
       ? {
-          costUsd: estimateAggregateUsageCost({
+          costUsd: await estimateAggregateUsageCostAsync({
             usage,
-            provider,
-            model,
-            config,
-            agentDir: params.agentDir,
+            prepareCost: () =>
+              resolveModelCostConfig({
+                provider,
+                model,
+                config,
+                agentDir: params.agentDir,
+              }).catch(() => undefined),
           }),
         }
       : {}),
@@ -75,21 +82,25 @@ export async function observeIsolatedCompletionUsage<T>(
   project: (result: T) => CompletionUsage,
 ): Promise<T> {
   const attemptId = randomUUID();
+  params.assertCurrent?.();
   let observed = false;
+  let observation: Promise<void> | undefined;
   const observe = (result?: T) => {
     if (observed) {
       return;
     }
     observed = true;
-    try {
-      emitIsolatedCompletionUsage({
-        ...params,
-        attemptId,
-        ...(result === undefined ? {} : { result: project(result) }),
-      });
-    } catch {
-      // Accounting must neither authorize stale output nor replace the runtime's outcome.
-    }
+    observation = (async () => {
+      try {
+        await emitIsolatedCompletionUsage({
+          ...params,
+          attemptId,
+          ...(result === undefined ? {} : { result: project(result) }),
+        });
+      } catch {
+        // Accounting must neither authorize stale output nor replace the runtime's outcome.
+      }
+    })();
   };
   try {
     const result = await run(observe);
@@ -98,6 +109,7 @@ export async function observeIsolatedCompletionUsage<T>(
   } finally {
     // Logical abort can precede settlement. Only this actual dispatch closes its observation.
     observe();
+    await observation;
   }
 }
 

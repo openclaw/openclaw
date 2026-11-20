@@ -1,15 +1,24 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { CommandOwnerReference } from "../state/user-channel-authorization-reference.js";
+import type { UserChannelIdentity } from "../state/user-profiles.types.js";
 
 const COMMAND_OWNER_AUTHORITY = Symbol("openclaw.commandOwnerAuthority");
 type CommandOwnerAuthority = Readonly<{
   isCurrent: () => boolean;
+  /** Exact native identity accepted by the host ingress, never a delivery projection. */
+  channelPrincipal?: Readonly<UserChannelIdentity>;
+  /** Prepared source invoked by the full `isCurrent` check, not a replacement for it. */
+  sourceAssertion?: SessionSourceAssertion;
   recoveryReference?: CommandOwnerReference;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** The requester's own live check for work that outlives this source occurrence. */
   successor?: CommandOwnerAuthority;
 }>;
-export type CommandOwnerAssertion = (() => void) & {
+export type CommandOwnerAssertion = SessionSourceAssertion & {
   readonly recoveryReference?: CommandOwnerReference | null;
 };
 
@@ -25,9 +34,12 @@ export function bindCommandOwnerAuthority(context: object, authority: CommandOwn
     authority.recoveryReference && Object.freeze({ ...authority.recoveryReference });
   const capability = {
     recoveryReference,
+    channelPrincipal:
+      authority.channelPrincipal && Object.freeze({ ...authority.channelPrincipal }),
     operatorAuthority,
     successor: authority.successor,
     isCurrent: checkCurrent,
+    sourceAssertion: authority.sourceAssertion,
   };
   Object.setPrototypeOf(capability, null);
   Object.freeze(capability);
@@ -65,14 +77,19 @@ export function captureCommandOwnerAssertion(context: object): CommandOwnerAsser
   if (!authority) {
     return undefined;
   }
-  return Object.assign(
-    () => {
-      if (!authority.isCurrent()) {
-        throw new CommandOwnerRevokedError(
-          "Channel operator authority changed; send a new request.",
-        );
-      }
-    },
-    { recoveryReference: authority.recoveryReference ?? null },
-  );
+  const assertCurrent = () => {
+    if (!authority.isCurrent()) {
+      throw new CommandOwnerRevokedError("Channel operator authority changed; send a new request.");
+    }
+  };
+  return Object.assign(assertCurrent, {
+    recoveryReference: authority.recoveryReference ?? null,
+    prepareSessionSourceEffect: composeSessionSourceAssertion(
+      [authority.sourceAssertion],
+      (assertSource) => {
+        assertSource();
+        assertCurrent();
+      },
+    ).prepareSessionSourceEffect,
+  });
 }

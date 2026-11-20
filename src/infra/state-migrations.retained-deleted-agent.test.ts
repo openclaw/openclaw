@@ -275,7 +275,7 @@ describe("Doctor with a deleted agent database", () => {
       path: path.join(stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite"),
     });
     storeCredentials(sourcePath, "synthetic-owner-key");
-    const detected = detectSharedAuthStoreMigration({
+    const detected = await detectSharedAuthStoreMigration({
       stateDir,
       env,
       doctorOnlyStateMigrations: true,
@@ -309,7 +309,7 @@ describe("Doctor with a deleted agent database", () => {
     storeCredentials(sourcePath, "synthetic-retained-main-key");
     deleteAgent("main", path.dirname(sourcePath), "delete-shared-auth");
     const bytes = fs.readFileSync(sourcePath);
-    const detected = detectSharedAuthStoreMigration({
+    const detected = await detectSharedAuthStoreMigration({
       stateDir,
       env,
       doctorOnlyStateMigrations: true,
@@ -460,7 +460,7 @@ describe("Doctor with a deleted agent database", () => {
           await noteSessionTranscriptLabelHealth({ cfg, env, shouldRepair: true });
           const catalogs = await migrateCatalogs();
           expect(catalogs.warnings).toEqual([]);
-          expect(detectTelegramGeneralTopicConversationRepairs({ cfg, env })).toEqual([]);
+          expect(await detectTelegramGeneralTopicConversationRepairs({ cfg, env })).toEqual([]);
           expect(
             await maybeRepairCodexSessionRoutes({ cfg, env, shouldRepair: true }),
           ).toMatchObject({ warnings: [] });

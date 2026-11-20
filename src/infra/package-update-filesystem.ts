@@ -1,7 +1,10 @@
 import fsSync, { type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
+import {
+  movePathWithCopyFallback,
+  type MovePathPublicationReceipt,
+} from "@openclaw/fs-safe/atomic";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -14,6 +17,7 @@ import type {
   createPackageIntegrityReader,
   PackageLauncherFingerprint,
 } from "./package-update-integrity.js";
+import { resolvePackageUpdateLauncherNames } from "./package-update-launcher-names.js";
 import type { StagedPackageSwapParams } from "./package-update-swap-contract.js";
 import { pathEntryExists as packagePathEntryExists } from "./path-existence.js";
 import { retryAsync } from "./retry.js";
@@ -93,7 +97,7 @@ export async function activateStagedNpmPackageRoot(
       operation: "activation",
       assertCaller,
       onPublished,
-      warnings: unjournaled?.warnings ?? [],
+      warn: (message) => unjournaled?.warnings.push(message),
       platform: unjournaled?.platform,
     });
     return;
@@ -115,6 +119,8 @@ export async function activateStagedNpmPackageRoot(
  * Moves an unjournaled package root to a sibling path. Windows uses guarded
  * rename retries instead of fs-safe's EPERM copy fallback, which would publish
  * a copy and then fail deleting the still-held source after the destination is live.
+ * Rejected source hardlinks always publish fs-safe's fresh copy, so a hardlink
+ * created after any preflight can never become the published tree.
  */
 export async function movePackageRoot(
   source: string,
@@ -122,25 +128,35 @@ export async function movePackageRoot(
   options: {
     operation: string;
     assertCaller: () => void;
-    onPublished: () => void;
-    warnings: string[];
+    /** Extra synchronous precondition checked immediately before each rename. */
+    assertBeforeRename?: () => void;
+    onPublished: (receipt: MovePathPublicationReceipt) => void;
+    warn: (message: string) => void;
+    sourceHardlinks?: "allow" | "reject";
     platform?: NodeJS.Platform;
   },
 ): Promise<void> {
   const assertCaller = retainMutationAuthority(options.assertCaller);
-  if ((options.platform ?? process.platform) === "win32") {
-    await renamePackageRootWithWindowsRetries(source, destination, assertCaller, {
-      operation: options.operation,
-      warn: (message) => options.warnings.push(message),
-    });
-    options.onPublished();
+  const assertBeforeRename = () => {
+    options.assertBeforeRename?.();
+    assertCaller();
+  };
+  const sourceHardlinks = options.sourceHardlinks ?? PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS;
+  if ((options.platform ?? process.platform) === "win32" && sourceHardlinks === "allow") {
+    const identity = await renamePackageRootWithWindowsRetries(
+      source,
+      destination,
+      assertBeforeRename,
+      { operation: options.operation, warn: options.warn },
+    );
+    options.onPublished({ path: destination, dev: identity.dev, ino: identity.ino });
     return;
   }
   await movePathWithCopyFallback({
     from: source,
-    sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
+    sourceHardlinks,
     to: destination,
-    assertBeforeRename: assertCaller,
+    assertBeforeRename,
     assertBeforeMutation: assertCaller,
     onDestinationPublished: options.onPublished,
   });
@@ -181,7 +197,7 @@ async function renamePackageRootWithWindowsRetries(
   destination: string,
   assertCurrent: () => void,
   options: { operation: string; warn?: (message: string) => void },
-): Promise<void> {
+): Promise<BigIntStats> {
   const sourceIdentity = fsSync.lstatSync(source, { bigint: true });
   // Activation crosses parents; pin both so a retry cannot follow a swapped junction.
   const parents = [...new Set([path.dirname(source), path.dirname(destination)])].map(
@@ -237,6 +253,7 @@ async function renamePackageRootWithWindowsRetries(
       { code: isErrno(error) ? error.code : undefined },
     );
   }
+  return sourceIdentity;
 }
 
 export function removePackagePath(
@@ -500,16 +517,6 @@ export type PackageLauncherBackup = {
     fingerprint?: PackageLauncherFingerprint;
   }>;
 };
-
-export function resolvePackageUpdateLauncherNames(
-  packageName: string,
-  entries?: readonly string[],
-) {
-  const names = new Set([packageName, "openclaw"]);
-  return (
-    entries?.filter((entry) => names.has(entry) || names.has(path.parse(entry).name)) ?? [...names]
-  ).toSorted();
-}
 
 /** Publish partial backup state so the swap owner can recover after any failed copy. */
 export async function capturePackageLaunchers(

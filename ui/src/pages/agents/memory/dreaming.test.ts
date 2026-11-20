@@ -394,7 +394,7 @@ describe("dreaming controller", () => {
     await expect(updateDreamingEnabled(state, config, true)).resolves.toBe(false);
     expect(config.patch).not.toHaveBeenCalled();
     expect(config.lookupSchemaPath).not.toHaveBeenCalled();
-    expect(state.dreamingStatusError).toBe("Config hash missing; refresh and retry.");
+    expect(state.dreamingStatusError).toBe("Couldn’t save settings. Refresh and try again.");
   });
 
   it.each(["## Dream Diary\n- recurring glacier thoughts", null])(
@@ -522,7 +522,7 @@ describe("dreaming controller", () => {
 
   it.each([
     { copied: true, kind: "success", text: "Archive path copied." },
-    { copied: false, kind: "error", text: "Could not copy archive path." },
+    { copied: false, kind: "error", text: "Couldn’t copy the archive path. Try again." },
   ])("reports clipboard result: $kind", async ({ copied, kind, text }) => {
     const { state } = createState();
     state.dreamDiaryActionArchivePath = "/tmp/openclaw/archive";

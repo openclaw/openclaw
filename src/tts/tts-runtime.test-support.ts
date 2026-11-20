@@ -3,15 +3,12 @@ import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
-import { MAX_TIMER_TIMEOUT_MS as MAX_TIMER_TIMEOUT_MS_CORE } from "openclaw/plugin-sdk/number-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type {
   SpeechListVoicesRequest,
   SpeechProviderPlugin,
   SpeechProviderPrepareSynthesisContext,
   SpeechSynthesisRequest,
-  SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { expect, vi } from "vitest";
 import { createRequireRecord } from "../../test/helpers/record.js";
@@ -40,11 +37,12 @@ const {
     vi.fn<(providerId: string, cfg?: OpenClawConfig) => SpeechProviderPlugin | null | undefined>(),
   // Keep the real return union so individual cases can enable transcoding.
   transcodeAudioBufferMock: vi.fn<
-    () => ReturnType<typeof import("../media/media-services.js").transcodeAudioBuffer>
+    typeof import("../media/audio-transcode.js").transcodeAudioBuffer
   >(async () => ({ ok: false, reason: "platform-unsupported" })),
 }));
 
-vi.mock("../media/media-services.js", () => ({
+vi.mock("../media/audio-transcode.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../media/audio-transcode.js")>()),
   transcodeAudioBuffer: transcodeAudioBufferMock,
 }));
 
@@ -98,38 +96,30 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
 
 installSpeechProviders([createMockSpeechProvider("mock", { label: "Mock" })]);
 
-export const {
-  testApi,
+const {
   buildTtsSystemPromptHint,
-  getTtsPersona,
-  getTtsProviderAsync,
-  isTtsProviderConfiguredAsync,
+
   listSpeechVoices,
   resolveTtsConfig,
   setTtsMachinePrefsPathResolver,
-  setSummarizationEnabled,
-  setTtsMaxLength,
+
   synthesizeSpeech,
-  textToSpeechStream,
-  textToSpeechTelephony,
 } = await import("./runtime-api.js");
+export {
+  buildTtsSystemPromptHint,
+  listSpeechVoices,
+  resolveTtsConfig,
+  setTtsMachinePrefsPathResolver,
+  synthesizeSpeech,
+};
 export const { prepareTtsRequest } = await import("./tts-request.js");
 export const { maybeApplyTtsToPayloadCore } = await import("./tts-payload.js");
 export const { textToSpeechCore } = await import("./tts-synthesis.js");
 
-export const MAX_TIMER_TIMEOUT_MS = MAX_TIMER_TIMEOUT_MS_CORE;
 export {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-
-export const nativeVoiceNoteChannels = [
-  "discord",
-  "feishu",
-  "matrix",
-  "telegram",
-  "whatsapp",
-] as const;
 
 export function createMockSpeechProvider(
   id = "mock",
@@ -186,7 +176,7 @@ export function maybeApplyTtsToPayload(params: Parameters<typeof maybeApplyTtsTo
   return maybeApplyTtsToPayloadCore(params, persistTestTtsAudio);
 }
 
-export async function withTtsPayload(
+async function withTtsPayload(
   params: Parameters<typeof maybeApplyTtsToPayload>[0],
   check: (result: Awaited<ReturnType<typeof maybeApplyTtsToPayload>>) => void | Promise<void>,
 ) {
@@ -211,23 +201,12 @@ export function createTtsConfig(prefsName: string, overrides: TtsConfig = {}): O
 
 export const requireRecord = createRequireRecord("record", "expected-label-record");
 
-export function requireFirstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: string) {
-  const call = calls[0];
+export function requireFirstSynthesisRequest(label: string): SpeechSynthesisRequest {
+  const call = synthesizeMock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} call`);
   }
   return call[0];
-}
-
-export function requireFirstSynthesisRequest(label: string): Record<string, unknown> {
-  return requireRecord(requireFirstCallParam(synthesizeMock.mock.calls, label), label);
-}
-
-export function requireAttempt(attempts: unknown[] | undefined, index: number) {
-  if (!attempts) {
-    throw new Error("expected synthesis attempts");
-  }
-  return requireRecord(attempts[index], `synthesis attempt ${index}`);
 }
 
 export async function expectTtsPayloadResult(params: {
@@ -264,11 +243,4 @@ export async function expectTtsPayloadResult(params: {
 }
 
 export { prepareSynthesisMock, synthesizeMock, transcodeAudioBufferMock };
-export type {
-  OpenClawConfig,
-  ReplyPayload,
-  SpeechListVoicesRequest,
-  SpeechSynthesisRequest,
-  SpeechTelephonySynthesisRequest,
-  TtsConfig,
-};
+export type { OpenClawConfig, SpeechListVoicesRequest, SpeechSynthesisRequest, TtsConfig };

@@ -387,4 +387,41 @@ describe("stale OAuth profile shadow doctor repair", () => {
     expect(repair).toEqual({ changes: [], warnings: [] });
     expect(loadPersistedAuthProfileStore(childAgentDir)).toBeNull();
   });
+
+  it.each([
+    { scenario: "ENOENT", code: "ENOENT" },
+    { scenario: "EACCES", code: "EACCES" },
+  ])("dir scan ${scenario}: only non-ENOENT surfaces a warning", async ({ code }) => {
+    await writeRawAuthStore(childAgentDir, shadowStore("anthropic:default", now, "child"));
+    saveAuthProfileStore(shadowStore("anthropic:default", now, "main"));
+
+    if (code === "EACCES") {
+      const originalReaddir = fs.readdir;
+      vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+        if (String(args[0]) === path.join(stateDir, "agents")) {
+          const targetPath = String(args[0]);
+          const err = Object.assign(new Error(`EACCES: permission denied, list '${targetPath}'`), {
+            code,
+          });
+          throw err;
+        }
+        return await originalReaddir(...args);
+      });
+    } else {
+      await fs.rm(path.join(stateDir, "agents"), { recursive: true, force: true });
+    }
+
+    const { warnings } = await scanStaleOAuthProfileShadows({
+      cfg: { agents: { entries: { telegram: {} } } },
+      now,
+    });
+
+    if (code === "EACCES") {
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("Cannot list agent directories");
+      expect(warnings[0]).toContain("directory discovery was skipped");
+    } else {
+      expect(warnings).toEqual([]);
+    }
+  });
 });

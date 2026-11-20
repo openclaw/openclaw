@@ -1,29 +1,23 @@
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   resetDecisionTestRuntime,
   activateDecisionRegistry,
   decisionOptions,
+  prepareDecisionRuntime,
 } from "../agents/decision-inference.test-support.js";
-import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listDecisionModels } from "../gateway/server-methods/models-list-capabilities.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  evaluateDecisionV2InRegistry,
-  inspectDecisionProviders,
-  prepareDecisionProviderReload,
-} from "./runtime.js";
+import { prepareDecisionProviderReload } from "./provider-reload.js";
+import { evaluateDecisionV2InRegistry } from "./runtime.js";
 import type { DecisionBatchV2 } from "./types-v2.js";
 
 const batch: DecisionBatchV2 = {
   state: { type: "text", text: "A damaged parcel" },
-  questions: {
-    damaged: { type: "boolean", instructions: "Is it damaged?" },
-  },
+  questions: { damaged: { type: "boolean", instructions: "Is it damaged?" } },
 };
 const catalog = {
   providers: [
@@ -124,22 +118,23 @@ it.each(["default", "per-agent"])(
             const evaluate = (agentId = "main") =>
               evaluateDecisionV2InRegistry(batch, decisionOptions({ agentId }), registry, config);
             try {
-              await using prepared = await acquireAgentRunPreparedModelRuntime(
-                {
-                  config,
-                  agentId: "main",
-                  agentDir: resolveAgentDir(config, "main"),
-                  workspaceDir: config.agents.defaults.workspace,
-                  loadRuntimePlugins: true,
-                  runtimePluginSelections: [
-                    { provider: "clawrouter", modelId: "openai/gpt-6-luna", agentId: "main" },
-                  ],
-                },
-                { catalogMode: "static" },
+              // Compile the lazy core executor and host SDK before the operation deadline starts.
+              const instance = getPluginInstance(registry.decisionProviders[0]!.host.record)!;
+              instance.loadModule("openclaw/plugin-sdk/agent-harness-runtime");
+              await import("../agents/decision-inference.js");
+              await using prepared = await prepareDecisionRuntime(
+                config,
+                "clawrouter",
+                "openai/gpt-6-luna",
+                "main",
               );
               const outcome = await evaluate();
               expect(
-                listDecisionModels({ config, snapshot: prepared.snapshot.metadataSnapshot }),
+                listDecisionModels({
+                  config,
+                  snapshot: prepared.snapshot.metadataSnapshot,
+                  catalog: prepared.snapshot.modelCatalog.entries,
+                }),
               ).toContainEqual(
                 expect.objectContaining({
                   provider: "clawrouter",
@@ -147,7 +142,12 @@ it.each(["default", "per-agent"])(
                   pluginId: "clawrouter",
                 }),
               );
-              expect(outcome).toMatchObject({
+              expect(
+                outcome,
+                outcome.status === "unavailable"
+                  ? `Decision unavailable: ${outcome.reason}`
+                  : undefined,
+              ).toMatchObject({
                 status: "ok",
                 result: {
                   model: "gpt-6-luna",
@@ -169,7 +169,9 @@ it.each(["default", "per-agent"])(
                   ],
                 },
               });
-              expect(inspectDecisionProviders(config, registry)).toContainEqual(
+              expect(
+                registry.decisionProviders.map((entry) => entry.host.inspect(config)),
+              ).toContainEqual(
                 expect.objectContaining({ providerId: "clawrouter", activeRequests: 0 }),
               );
               const beforeDisabled = requests.length;

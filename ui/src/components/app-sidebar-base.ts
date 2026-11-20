@@ -1,8 +1,12 @@
 import { createChangeListeners } from "../../../src/shared/listeners.js";
-import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
+import {
+  DEFAULT_SIDEBAR_ENTRIES,
+  type NavigationRouteId,
+  type SidebarNavigationView,
+} from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
-import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
@@ -14,17 +18,14 @@ import {
   type SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
-import {
-  areUiSessionKeysEquivalent,
-  parseAgentSessionKey,
-  resolveUiConfiguredMainKey,
-} from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import { selectSidebarContext, type ContextualSidebar } from "./sidebar-context-state.ts";
+import type { SidebarRouteView } from "./sidebar-menus-types.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 export type AppSidebarProps = {
@@ -49,8 +50,11 @@ export type AppSidebarProps = {
   sessionKey: string;
   sidebarEntries: readonly string[];
   navigationVisible: boolean;
-  navigationView: "pages" | "sessions" | "online";
+  connectionPending?: boolean;
+  navigationView: SidebarNavigationView;
   navigationCollapsed: boolean;
+  /** The saved collapse choice; a page without a sidebar reads as collapsed without it. */
+  navigationCollapsedByChoice?: boolean;
   sidebarAgentsMode: "chip" | "roster";
   sidebarLiveActivity: boolean;
   pinnedAgentIds: readonly string[];
@@ -61,12 +65,11 @@ export type AppSidebarProps = {
   onOpenPalette: (() => void) | undefined;
   onRetryConnect: (() => void) | undefined;
   onToggleSidebar: (() => void) | undefined;
+  onExitSettings: (() => void) | undefined;
   onOpenNewSession: ((agentId: string, target?: NewSessionTarget) => void) | undefined;
   onUpdateSidebarEntries: ((entries: string[]) => void) | undefined;
   onPairMobile: (() => void) | undefined;
-  onNavigate:
-    | ((routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void)
-    | undefined;
+  onNavigate: SidebarRouteView["onNavigate"];
 };
 
 export const appSidebarProperties = {
@@ -89,8 +92,10 @@ export const appSidebarProperties = {
   sessionKey: { default: "", attribute: false },
   sidebarEntries: { default: DEFAULT_SIDEBAR_ENTRIES, attribute: false },
   navigationVisible: { default: true, attribute: false },
+  connectionPending: { default: false, attribute: false },
   navigationView: { default: "sessions", attribute: false },
   navigationCollapsed: { default: false, type: Boolean },
+  navigationCollapsedByChoice: { default: undefined, attribute: false },
   sidebarAgentsMode: { default: "chip", attribute: false },
   sidebarLiveActivity: { default: true, attribute: false },
   pinnedAgentIds: { default: [], attribute: false },
@@ -101,6 +106,7 @@ export const appSidebarProperties = {
   onOpenPalette: { default: undefined, attribute: false },
   onRetryConnect: { default: undefined, attribute: false },
   onToggleSidebar: { default: undefined, attribute: false },
+  onExitSettings: { default: undefined, attribute: false },
   onOpenNewSession: { default: undefined, attribute: false },
   onUpdateSidebarEntries: { default: undefined, attribute: false },
   onPairMobile: { default: undefined, attribute: false },
@@ -134,8 +140,10 @@ export abstract class AppSidebarBase {
   declare sessionKey: AppSidebarProps["sessionKey"];
   declare sidebarEntries: AppSidebarProps["sidebarEntries"];
   declare navigationVisible: AppSidebarProps["navigationVisible"];
+  declare connectionPending: AppSidebarProps["connectionPending"];
   declare navigationView: AppSidebarProps["navigationView"];
   declare navigationCollapsed: AppSidebarProps["navigationCollapsed"];
+  declare navigationCollapsedByChoice: AppSidebarProps["navigationCollapsedByChoice"];
   declare sidebarAgentsMode: AppSidebarProps["sidebarAgentsMode"];
   declare sidebarLiveActivity: AppSidebarProps["sidebarLiveActivity"];
   declare pinnedAgentIds: AppSidebarProps["pinnedAgentIds"];
@@ -146,6 +154,7 @@ export abstract class AppSidebarBase {
   declare onOpenPalette: AppSidebarProps["onOpenPalette"];
   declare onRetryConnect: AppSidebarProps["onRetryConnect"];
   declare onToggleSidebar: AppSidebarProps["onToggleSidebar"];
+  declare onExitSettings: AppSidebarProps["onExitSettings"];
   declare onOpenNewSession: AppSidebarProps["onOpenNewSession"];
   declare onUpdateSidebarEntries: AppSidebarProps["onUpdateSidebarEntries"];
   declare onPairMobile: AppSidebarProps["onPairMobile"];
@@ -183,10 +192,7 @@ export abstract class AppSidebarBase {
   ) {
     for (const key of Object.keys(appSidebarProperties)) {
       Object.defineProperty(this, key, {
-        get: () =>
-          key === "sidebarAgentsMode"
-            ? (this.sidebarSnapshot?.mode ?? Reflect.get(hostElement, key))
-            : Reflect.get(hostElement, key),
+        get: () => Reflect.get(hostElement, key),
         set: (value: unknown) => {
           Reflect.set(hostElement, key, value);
         },
@@ -285,23 +291,6 @@ export abstract class AppSidebarBase {
   pendingSessionCreate() {
     const pending = this.context.chatSubmissions.readCreate();
     return this.activeRouteId === "chat" && !pending?.creation.admitted ? pending : undefined;
-  }
-
-  sessionCreateDisplay() {
-    const pending = this.pendingSessionCreate();
-    if (pending) {
-      return pending;
-    }
-    const accepted = this.context.chatSubmissions.readAcceptedCreate();
-    return this.activeRouteId === "chat" &&
-      this.sessionsStatusFilter === "active" &&
-      accepted &&
-      areUiSessionKeysEquivalent(accepted.creation.sessionKey, this.sessionKey) &&
-      !this.sessionData.sessionsResult?.sessions.some((row) =>
-        areUiSessionKeysEquivalent(row.key, accepted.creation.sessionKey),
-      )
-      ? accepted
-      : undefined;
   }
 
   public getRouteSessionKey(): string {

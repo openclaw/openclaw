@@ -143,7 +143,7 @@ describe("nextcloud-talk inbound room-kind lookup retry", () => {
     let clock = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => clock);
     // Advance the spool poll independently of the durable retry clock; HTTP stays real.
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
     await withSpool("retry", async ({ queue, spool, dispatches, requests }) => {
       const completed = observeChannelIngressQueueWrite(queue, "complete", "msg-proof");
       await spool.receive(createRawWebhookEvent("room-durable-direct"));

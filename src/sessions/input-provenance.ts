@@ -30,6 +30,17 @@ export function isHostGeneratedInputProvenance(provenance: InputProvenance | und
 
 export const PROGRESS_CARD_REFRESH_SOURCE_TOOL = "progress_card_refresh" as const;
 
+/** A background fork of another session's conversation; `sourceSessionKey` names that session. */
+export const SESSION_FORK_SOURCE_TOOL = "session_fork" as const;
+
+/** The session a background fork reads, or undefined for every other input. */
+export function readSessionForkSource(provenance: InputProvenance | undefined): string | undefined {
+  return provenance?.kind === "internal_system" &&
+    provenance.sourceTool === SESSION_FORK_SOURCE_TOOL
+    ? provenance.sourceSessionKey
+    : undefined;
+}
+
 /** Execution input, never a delivered cron announcement or a user-authored prompt. */
 export const CRON_EXECUTION_SOURCE_TOOL = "cron_execution" as const;
 
@@ -125,7 +136,9 @@ export function applyInputProvenanceToUserMessage<T extends AgentMessage>(
   if (!provenance) {
     return message;
   }
-  const hideExecutionInput = isCronExecutionInputProvenance(provenance);
+  const hideExecutionInput =
+    isCronExecutionInputProvenance(provenance) ||
+    (provenance.kind === "internal_system" && provenance.sourceTool === "session_state");
   if (existing && (!hideExecutionInput || Reflect.get(message, "display") === false)) {
     return message;
   }

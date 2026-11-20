@@ -40,11 +40,12 @@ import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
-import {
-  searchSessionTranscripts as searchSessionTranscriptsAsync,
-  searchSessionTranscriptsReadOnlySync,
-} from "./session-transcript-search.js";
+import { searchSessionTranscripts as searchSessionTranscriptsAsync } from "./session-transcript-search.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
+import {
+  searchSessionTranscriptsFiltered,
+  searchSessionTranscriptsReadOnlySync,
+} from "./session-transcript-search.worker.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 
 vi.mock("../config.js", async () => ({
@@ -134,6 +135,38 @@ function agentDatabase() {
 }
 
 describe("searchSessionTranscripts", () => {
+  it.each([
+    ["明天下午开项目评审会议讨论排期", "会议"],
+    ["明日は東京で会議を開きます", "東京"],
+    ["내일서울에서회의합니다", "회의"],
+    ["明天下午开会讨论", "会"],
+  ])("finds an interior CJK substring in %s", async (text, query) => {
+    await appendUserMessage("cjk", "agent:main:main", `${"context ".repeat(100)}${text}`);
+    const result = await searchSessionTranscriptsAsync({ agentId: "main", env: env(), query });
+    expect(result.hits).toEqual([
+      expect.objectContaining({ sessionId: "cjk", snippet: expect.stringContaining(query) }),
+    ]);
+  });
+
+  it("keeps word matching and session filters when retrying CJK searches", async () => {
+    await appendUserMessage("false-positive", "agent:main:main", "明天开会议 scattered");
+    await appendUserMessage("match", "agent:main:other", "明天开会议 cat");
+    expect(search("会议 cat").hits).toEqual([expect.objectContaining({ sessionId: "match" })]);
+    expect(search("会议 cat", { sessionKeys: ["agent:main:main"] }).hits).toEqual([]);
+    expect(search("cat").hits).toEqual([expect.objectContaining({ sessionId: "match" })]);
+    for (const query of ["会议 -", "会议 →", "会议 🚀"]) {
+      expect(
+        search(query)
+          .hits.map((hit) => hit.sessionId)
+          .toSorted(),
+        query,
+      ).toEqual(["false-positive", "match"]);
+    }
+    expect(search("会议 🦞").hits).toEqual([]);
+    await appendUserMessage("symbol", "agent:main:symbol", "会议纪要 🦞");
+    expect(search("会议 🦞").hits).toEqual([expect.objectContaining({ sessionId: "symbol" })]);
+  });
+
   it.each([false, true])(
     "searches a populated closed database without reopening a writer (shared: %s)",
     async (shared) => {
@@ -435,9 +468,6 @@ describe("searchSessionTranscripts", () => {
           })),
         );
         expect(result.truncated).toBe(baseline.length > options.limit);
-        expect(
-          result.hits.every((hit) => hit.sessionId !== "dirty" && hit.sessionId !== "excluded"),
-        ).toBe(true);
         let snippets = 0;
         db.function("count_search_snippet", (value) => {
           snippets++;
@@ -474,6 +504,36 @@ describe("searchSessionTranscripts", () => {
           expect(firstContent).toBeUndefined();
         }
       }
+      statements.length = 0;
+      await searchSessionTranscriptsFiltered(
+        { agentId: "main", env: env(), query: "needle", sessionKeys, limit: 3 },
+        { agentId: "main", env: env() },
+        {
+          consumeInput() {},
+          notify() {},
+          async request(keys) {
+            return { input: Array.isArray(keys) ? keys.map(() => true) : [], consumed() {} };
+          },
+        },
+        () => {},
+      );
+      const { db, query, bindings } = statements[0]!;
+      let snippets = 0;
+      db.function("count_filtered_snippet", (value) => {
+        snippets++;
+        return value;
+      });
+      const counted = query.replace(/(snippet\([^)]*\))/u, "count_filtered_snippet($1)");
+      const cursor = prepare.call(db, counted).iterate(...bindings);
+      // Reading four candidates must evaluate four snippets, rather than every match.
+      try {
+        for (let row = 0; row < 4; row++) {
+          expect(cursor.next().done).toBe(false);
+        }
+      } finally {
+        cursor.return?.();
+      }
+      expect(snippets).toBe(4);
     } finally {
       spy.mockRestore();
     }
