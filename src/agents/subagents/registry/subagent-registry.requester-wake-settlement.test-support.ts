@@ -4,6 +4,8 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/help
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
+import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
+import { resumeMarkedSessions } from "../../../gateway/session-restart-resume.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   bindGatewayContextResolver,
@@ -64,6 +66,59 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
   setReleaseAgentCallGate: (release: () => void) => void;
   useGlobalSessionScope: () => void;
 }): void {
+  it("wakes a yielded parent when startup fails its child's unreachable yield", async () => {
+    const child = visibleChild("restart-lost-yield");
+    const parentRunId = "parent-before-restart";
+    await spawnVisibleChild({ ...child, requesterTurnRunId: parentRunId });
+    await createRequesterYieldTool(requesterSessionKey, parentRunId).execute("yield", {});
+    await settleTurn(parentRunId, [child]);
+    const entry = getFixture().sessionStore[child.childSessionKey]!;
+    // The child's own awaited completion disappeared with the previous Gateway.
+    getLifecycleHandler()!({
+      stream: "lifecycle",
+      runId: child.runId,
+      seq: 1,
+      ts: Date.now(),
+      sessionKey: child.childSessionKey,
+      data: { phase: "end", yielded: true },
+    });
+    await flushOwnedWork();
+    expect(subagentRuns.get(child.runId)?.pauseReason).toBe("sessions_yield");
+    for (const data of [
+      { phase: "start" },
+      { phase: "end", yielded: true, livenessState: "paused", stopReason: "end_turn" },
+    ]) {
+      await persistGatewaySessionLifecycleEvent({
+        sessionKey: child.childSessionKey,
+        agentId: "main",
+        event: { runId: child.runId, sessionId: entry.sessionId, ts: Date.now(), data },
+      });
+    }
+    await resumeMarkedSessions({
+      context: createGatewayContext(),
+      signal: new AbortController().signal,
+      log: { warn: vi.fn() },
+    });
+    await flushOwnedWork();
+    expect(
+      loadExactSessionEntryReadOnly({
+        agentId: "main",
+        sessionKey: child.childSessionKey,
+      })?.entry.status,
+    ).toBe("failed");
+    expect(subagentRuns.get(child.runId)?.execution.outcome).toMatchObject({
+      status: "error",
+      error: expect.stringContaining(
+        "child completion this run was waiting for can no longer arrive",
+      ),
+    });
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()[0]?.params).toMatchObject({
+      inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+    });
+    await waitForDeliveredCleanup(child.runId);
+  });
+
   it.each(["never bound", "binding retired", "restored"])(
     "delivers the bound member of a frozen batch with a %s member",
     async (binding) => {
