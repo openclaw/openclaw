@@ -218,7 +218,12 @@ async function allocations(
             value = BigInt(high);
           }
         }
-        result[key] = { value: String(value ?? 1), called: value !== null && value !== undefined };
+        // SQLite allows a zero high-water mark for a never-used sequence;
+        // PostgreSQL's sequence starts at 1 and must still be uncalled.
+        result[key] =
+          value === 0n || value === 0
+            ? { value: "1", called: false }
+            : { value: String(value ?? 1), called: value !== null && value !== undefined };
       }
     }
   }
