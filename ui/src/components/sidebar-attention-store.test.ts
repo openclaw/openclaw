@@ -2,7 +2,9 @@
 
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_RESTART_UNAVAILABLE_REASON } from "../../../packages/gateway-protocol/src/restart-unavailable.ts";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { CronStatus, ModelAuthStatusResult } from "../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -416,6 +418,40 @@ describe("sidebar attention source publication", () => {
     await waitForFast(() =>
       expect(loadDismissals(key)).toEqual({ openClawIdRecoveryUse: ["existing"] }),
     );
+  });
+
+  it("keeps a dismissal refused during Gateway restart and submits it after reload", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const acknowledgement = deferred<{ acknowledgedAtMs: number }>();
+    const acknowledge = vi
+      .fn(async () => ({ acknowledgedAtMs: 0 }))
+      .mockImplementationOnce(() => acknowledgement.promise);
+    const request = respond({
+      "cron.list": () => cronPage("archive"),
+      "cron.status": () => ({ enabled: true, triggersEnabled: true, jobs: 1 }),
+      "models.authStatus": () => emptyAuth(1),
+      "users.prefs.get": () => ({ status: "ok", entries: {} }),
+      "cron.acknowledgeFailure": acknowledge,
+    });
+    const harness = gateway(request, true);
+    store = activate(harness);
+    await waitLabels("archive");
+    store.dismiss({ kind: "cronFailed", signature: "archive" });
+    acknowledgement.reject(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Gateway is restarting",
+        retryable: true,
+        details: { method: "cron.acknowledgeFailure", reason: GATEWAY_RESTART_UNAVAILABLE_REASON },
+      }),
+    );
+    await settleRefresh();
+    expectLabels();
+
+    store.dispose();
+    store = activate(harness);
+    await waitForFast(() => expect(acknowledge).toHaveBeenCalledTimes(2));
+    expectLabels();
   });
 
   it("retires old-account health before the eager facade publishes a storage refresh", async () => {

@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isGatewayRestartUnavailableError } from "../../../packages/gateway-protocol/src/restart-unavailable.ts";
 import {
   CRON_FAILURE_DISMISSALS_KEY,
   readCronFailureDismissals,
@@ -145,23 +146,27 @@ export class CronFailureDismissals {
     this.#receipts.set(id, Math.max(this.#receipts.get(id) ?? 0, at));
   }
 
+  #defer(id: string, at: number): void {
+    // Keep the exact reviewed run through a same-profile reconnect. Different jobs
+    // have independent keys, so offline tabs cannot replace each other's intent.
+    this.#deferred.set(id, at);
+    try {
+      const storage = getSafeLocalStorage();
+      if (!storage) {
+        throw new Error(t("connection.offlineChangesReloadBlocked"));
+      }
+      storage.setItem(this.#deferredKey(id), String(at));
+    } catch (error) {
+      showToast({ severity: "error", message: formatUiError(error) });
+    }
+  }
+
   async acknowledge(id: string, at?: number): Promise<void> {
     if (this.#disposed || (at !== undefined && this.#pending.get(id) === at)) {
       return;
     }
     if (at !== undefined && !this.isCurrent()) {
-      // Keep the exact reviewed run through a same-profile reconnect. Different jobs
-      // have independent keys, so offline tabs cannot replace each other's intent.
-      this.#deferred.set(id, at);
-      try {
-        const storage = getSafeLocalStorage();
-        if (!storage) {
-          throw new Error(t("connection.offlineChangesReloadBlocked"));
-        }
-        storage.setItem(this.#deferredKey(id), String(at));
-      } catch (error) {
-        showToast({ severity: "error", message: formatUiError(error) });
-      }
+      this.#defer(id, at);
       this.changed();
       return;
     }
@@ -191,7 +196,13 @@ export class CronFailureDismissals {
       }
     } catch (error) {
       if (at !== undefined && !this.#disposed) {
-        showToast({ message: formatUiError(error), severity: "error" });
+        if (isGatewayRestartUnavailableError(error)) {
+          if (this.#pending.get(id) === at) {
+            this.#defer(id, at);
+          }
+        } else {
+          showToast({ message: formatUiError(error), severity: "error" });
+        }
       }
     } finally {
       if (at !== undefined && this.#pending.get(id) === at) {
