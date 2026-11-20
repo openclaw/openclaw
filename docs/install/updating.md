@@ -1229,7 +1229,10 @@ changes nothing. The saved report keeps the details.
 - **Git (Git checkouts):** Git 2.31 or newer. Older Git misreads
   `git rev-parse --path-format=absolute` instead of failing. The updater looks
   for Git next to its Node first, then in system directories such as
-  `/usr/bin`, so the refusal names the Git it found.
+  `/usr/bin`, so the refusal names the Git it found. If `/usr/bin/git` is selected
+  and macOS has no active developer directory, the updater asks you to install
+  the Command Line Tools with `xcode-select --install` or select an installed Xcode
+  before retrying.
 - **Disk (package installs):** the install volume must hold about 4.4 times the
   target's registry `dist.unpackedSize` (the package, its dependencies and npm's
   cache). Registries that omit `dist.unpackedSize` skip this check. The state
