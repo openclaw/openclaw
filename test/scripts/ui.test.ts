@@ -459,8 +459,14 @@ process.exitCode = 0;\n`,
     writeFiles(root, Object.fromEntries(posterFonts.map((font) => [font, "initial font bytes"])));
     // This fixture owns UI cache behavior; the native presenter builder is
     // exercised with real source and distribution bytes in its delivery suite.
+    // Its Settings stub only records the Node flags it started with.
+    const settingsExecArgv = path.join(root, "settings-execargv.jsonl");
+    const preload = path.join(root, "preload.cjs");
     writeFiles(root, {
-      "scripts/build-plugin-control-ui.mts": "export {};\n",
+      "preload.cjs": "",
+      "scripts/build-plugin-control-ui.mts": `import fs from "node:fs";
+fs.appendFileSync(${JSON.stringify(settingsExecArgv)}, JSON.stringify(process.execArgv) + "\\n");
+`,
       ...Object.fromEntries(validatorNames.map((file) => [`scripts/${file}`, "export {};\n"])),
     });
     build.vite(`
@@ -481,18 +487,31 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log("fixture-bundler-ran");
 }
 `);
-    const run = (expectedExit = 0, privateQa = false) => {
-      const result = build.run({
-        BUILD_ALL_CACHE_ROOT: cacheRoot === "explicit" ? path.join(root, "cache") : undefined,
-        OPENCLAW_BUILD_CACHE: "1",
-        OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS: "1",
-        OPENCLAW_CONTROL_UI_BUILD_ID: "cache-test",
-        OPENCLAW_BUILD_PRIVATE_QA: privateQa ? "1" : "0",
-      });
+    const run = (expectedExit = 0, privateQa = false, nodeArgs: string[] = []) => {
+      const result = build.run(
+        {
+          BUILD_ALL_CACHE_ROOT: cacheRoot === "explicit" ? path.join(root, "cache") : undefined,
+          OPENCLAW_BUILD_CACHE: "1",
+          OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS: "1",
+          OPENCLAW_CONTROL_UI_BUILD_ID: "cache-test",
+          OPENCLAW_BUILD_PRIVATE_QA: privateQa ? "1" : "0",
+        },
+        [...nodeArgs, "scripts/ui.js", "build"],
+      );
       expectExit(result, expectedExit);
       return result.stdout;
     };
-    expect(run()).toContain("fixture-bundler-ran");
+    // A seat's node shim adds compiler flags; the Settings child keeps them, never preloads (#1546).
+    expect(run(0, false, ["--no-opt", "--require", preload])).toContain("fixture-bundler-ran");
+    const settingsRuns = fs
+      .readFileSync(settingsExecArgv, "utf8")
+      .trim()
+      .split("\n")
+      .map((line): string[] => JSON.parse(line));
+    expect(settingsRuns.map((execArgv) => execArgv.filter(isNodeCompilerArg))).toEqual([
+      ["--no-opt"],
+    ]);
+    expect(settingsRuns.flat()).not.toContain(preload);
     const cachedHtml = path.join(
       root,
       cacheRoot === "explicit" ? "cache" : ".artifacts/build-all-cache",
