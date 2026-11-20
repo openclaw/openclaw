@@ -100,7 +100,10 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
   const discovery = createMemo(() => ({
     ...page().discovery.read(),
   }));
-  const onOpenSkill = (request: PluginsSkillsReadParams) => void page().skillPreview.open(request);
+  const onOpenSkill = (
+    request: PluginsSkillsReadParams,
+    identity: { description?: string; publisher?: string },
+  ) => void page().skillPreview.open(request, identity);
   const actions = {
     openPluginSettings: (pluginId: string | null) => {
       page().context.navigate("plugin-settings", {
@@ -171,8 +174,14 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     if (!staticCatalog || !version || !staticCatalog.detail.skills.length) {
       return undefined;
     }
-    const onOpen = (skillName: string) =>
-      onOpenSkill({ source: "catalog", catalogId: staticCatalog.plugin.id, version, skillName });
+    const onOpen = (skill: { name: string; description?: string }) =>
+      onOpenSkill(
+        { source: "catalog", catalogId: staticCatalog.plugin.id, version, skillName: skill.name },
+        {
+          description: skill.description,
+          publisher: staticCatalog.detail.author?.handle ?? staticCatalog.plugin.catalog.author,
+        },
+      );
     return renderPluginSkillsSection(staticCatalog.detail.skills, onOpen);
   };
   const shared = createMemo(() => ({
@@ -288,12 +297,14 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           }
           skillsSection={
             skills().length
-              ? renderPluginSkillsSection(skills(), (skillName) =>
-                  onOpenSkill({
-                    source: "installed",
-                    pluginId: detailProps.pluginId,
-                    skillName,
-                  }),
+              ? renderPluginSkillsSection(skills(), (skill) =>
+                  onOpenSkill(
+                    { source: "installed", pluginId: detailProps.pluginId, skillName: skill.name },
+                    {
+                      description: skill.description,
+                      publisher: page().state.detail?.catalog?.detail.author?.handle,
+                    },
+                  ),
                 )
               : !components()
                 ? catalogSkillsSection()
@@ -478,7 +489,10 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           </Errored>
         )}
       </SettingsWorkspace>
-      <PluginSkillPreview preview={page().skillPreview} state={page().skillPreview.state} />
+      <PluginSkillPreview
+        preview={props.page.skillPreview}
+        state={props.page.skillPreview.read()}
+      />
       <WizardLogin
         controller={props.page.mcpLogin.dialog}
         signInIcon={
