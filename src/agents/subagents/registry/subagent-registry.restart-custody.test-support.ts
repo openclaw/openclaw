@@ -9,6 +9,7 @@ import { expect, vi } from "vitest";
 import { requestContinuationWake } from "../../../auto-reply/continuation/continuation-wake.js";
 import { enqueueContinuationReturnDeliveries } from "../../../auto-reply/continuation/targeting.js";
 import * as sessionEventHandoff from "../../../auto-reply/reply/session-event-handoff.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import {
@@ -161,12 +162,23 @@ export function useRestartCustodyWorld() {
     overrides: Partial<Omit<SubagentRunRecord, "runId">> = {},
   ): Promise<SubagentRunRecord> {
     const childSessionKey = `agent:main:subagent:${runId}`;
-    await writeSubagentSessionEntry({
+    const storePath = await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       agentId: "main",
       sessionKey: childSessionKey,
       defaultSessionId: `sess-${runId}`,
     });
+    // Spawn records the child's lineage (createInitialSubagentSession); upstream #201970's
+    // restart root walk follows it from the child to its requester.
+    await replaceSessionEntry(
+      { storePath, sessionKey: childSessionKey },
+      {
+        sessionId: `sess-${runId}`,
+        updatedAt: Date.now(),
+        spawnedBy: parent,
+        parentSessionKey: parent,
+      },
+    );
     const startedAt = Date.now() - 1_000;
     await addSubagentRunForTests({
       runId,
