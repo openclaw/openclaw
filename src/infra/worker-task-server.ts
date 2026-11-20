@@ -58,6 +58,11 @@ type OwnedWorkerTaskServerOptions<Output> = {
   idleGc?: false;
   /** Cheap owner-held counts and size estimates; never contents, keys, or identities. */
   retainedData?: () => readonly DiagnosticWorkerRetainedData[];
+  /**
+   * Release every native resource this module retains between tasks. A shared-host endpoint
+   * runs it before a logical stop, which otherwise would not release what isolate exit does.
+   */
+  releaseRetainedResources?: () => void | Promise<void>;
 };
 
 /**
@@ -125,10 +130,14 @@ function serve<Output, Input>(
       : run();
   };
   if (endpoint) {
-    // The host stops only an idle endpoint; isolate-wide state belongs to the host's lifetime.
-    endpoint.close = () => {
-      databaseAdmissionPort?.close();
-      endpoint.port.close();
+    // The host stops only an idle endpoint, after it releases what isolate exit would have.
+    endpoint.close = async () => {
+      try {
+        await runInEndpoint(() => options.releaseRetainedResources?.());
+      } finally {
+        databaseAdmissionPort?.close();
+        endpoint.port.close();
+      }
     };
   }
   serveRuntimeWorkerTasks<Output, WorkerTaskContext, Input>(

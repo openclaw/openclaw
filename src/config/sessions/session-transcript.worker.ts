@@ -17,6 +17,7 @@ import { isSessionHistoryReadOperation } from "./session-history-read-operation-
 import { encodeSessionTranscriptRequestError } from "./session-history-worker-errors.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import {
+  closeHistoryDatabaseScopes,
   withHistoryDatabase,
   pruneClosedHistoryDatabaseScopes,
 } from "./session-transcript-worker-scopes.js";
@@ -705,5 +706,6 @@ export const startHostedWorker = serveOwnedWorkerTasks(
       );
       pruneClosedHistoryDatabaseScopes();
     },
+    releaseRetainedResources: closeHistoryDatabaseScopes,
   },
 );

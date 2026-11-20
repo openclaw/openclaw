@@ -371,6 +371,7 @@ export const startHostedWorker = serveOwnedWorkerTasks(
   },
   {
     closeResource: closeRetainedOpenClawStateReadConnections,
+    releaseRetainedResources: () => closeRetainedOpenClawStateReadConnections(),
     transferList: (reply) =>
       reply.ok && reply.type === "localWorkspace.manifest" ? [reply.snapshot.buffer] : [],
   },

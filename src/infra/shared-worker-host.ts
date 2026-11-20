@@ -28,11 +28,8 @@ import type {
 } from "./shared-worker-host.types.js";
 import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
 import type { WorkerRetirementReason } from "./worker-cpu.js";
-import {
-  createCpuTrackedWorker,
-  receiveWorkerMemoryPort,
-  setTrackedWorkerHostedEndpoints,
-} from "./worker-cpu.js";
+import { receiveWorkerMemoryPort, setTrackedWorkerHostedEndpoints } from "./worker-cpu.js";
+import { createRetainedNativeWorker } from "./worker-native-lifecycle.js";
 
 const hostedEntrypoints = {
   "sqlite-store": runtimeProcessEntrypoints.sqliteStore,
@@ -112,7 +109,8 @@ export function isHostedWorkerEndpoint(worker: unknown): worker is HostedWorkerE
 }
 
 class SharedWorkerHost {
-  readonly worker: Worker;
+  /** Supervised, so synchronous callers can observe its exit through service(). */
+  readonly worker: RetainedNativeWorker;
   readonly control: MessagePort;
   readonly endpoints = new Map<number, HostedWorkerEndpoint>();
   failure?: Error;
@@ -122,28 +120,32 @@ class SharedWorkerHost {
     const { port1, port2 } = new MessageChannel();
     this.control = port1;
     const url = resolveRuntimeProcessEntrypointUrl("sharedWorkerHost");
-    const selection = getDatabaseEngineSelection();
-    this.worker = createCpuTrackedWorker(url, {
+    this.worker = createRetainedNativeWorker(url, {
       env: resolveNodeCompileCacheEnv(),
       execArgv: resolveRuntimeWorkerThreadExecArgv(url),
-      workerData: { sharedWorkerHost: true, control: port2, databaseEngineSelection: selection },
+      workerData: {
+        sharedWorkerHost: true,
+        control: port2,
+        databaseEngineSelection: getDatabaseEngineSelection(),
+      },
       transferList: [port2],
       // The largest standalone member (SQLite store) uses the same bounded nursery.
       resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 16 },
     });
-    // Hosted modules publish database admission facts under this one physical thread.
-    trackSqliteDatabaseAdmissionWorker(this.worker);
-    setTrackedWorkerHostedEndpoints(this.worker, () => this.endpoints.size);
+    this.worker.on("started", () => {
+      // Hosted modules publish database admission facts under this one physical thread.
+      trackSqliteDatabaseAdmissionWorker(this.worker);
+      setTrackedWorkerHostedEndpoints(this.worker, () => this.endpoints.size);
+    });
     this.worker.on("message", (message: unknown) => {
       receiveWorkerMemoryPort(this.worker, message);
     });
     this.control.on("message", (reply: SharedWorkerHostReply) => this.receive(reply));
     this.control.unref();
     this.worker.unref();
-    this.worker.on("error", (error) =>
-      this.fail(error instanceof Error ? error : new Error(String(error))),
-    );
-    this.worker.once("exit", (code) => {
+    this.worker.on("error", (error) => this.fail(error));
+    // Execution exit is observable synchronously; every endpoint settles before the join.
+    this.worker.on("execution-exit", (code) => {
       const failure =
         this.failure ?? new Error(`Shared worker host exited with code ${code ?? "unknown"}`);
       this.failure = failure;
@@ -152,6 +154,8 @@ class SharedWorkerHost {
       for (const endpoint of this.endpoints.values()) {
         endpoint.finish(code ?? 1, failure);
       }
+    });
+    this.worker.once("exit", () => {
       if (state.host === this) {
         state.host = undefined;
       }
@@ -177,7 +181,7 @@ class SharedWorkerHost {
       return;
     }
     this.failure = new Error(`Shared worker host failed: ${cause.message}`, { cause });
-    void this.worker.terminate();
+    void this.worker.stop().result.catch(() => undefined);
   }
 
   /** Release isolate-wide state physically once no endpoint remains. */
@@ -185,7 +189,7 @@ class SharedWorkerHost {
     if (this.endpoints.size === 0 && !this.failure) {
       this.failure = new Error("Shared worker host retired after its last endpoint stopped");
       // Exit clears the owner; until then claims refuse so only one host isolate exists.
-      void this.worker.terminate();
+      void this.worker.stop().result.catch(() => undefined);
     }
   }
 
@@ -204,17 +208,24 @@ class SharedWorkerHost {
     }
   }
 
-  /** Synchronous callers drain replies without returning to the event loop. */
+  /** Synchronous callers observe replies, overdue stops and physical exit without the event loop. */
   service(): void {
     if (this.servicing) {
       return;
     }
     this.servicing = true;
     try {
+      this.worker.service();
       let received;
-      while ((received = receiveMessageOnPort(this.control))) {
+      while (!this.failure && (received = receiveMessageOnPort(this.control))) {
         // SAFETY: Only the host worker writes this private control channel.
         this.receive(received.message as SharedWorkerHostReply);
+      }
+      const now = performance.now();
+      for (const endpoint of this.endpoints.values()) {
+        if (endpoint.stopDeadlineAt !== undefined && now >= endpoint.stopDeadlineAt) {
+          this.fail(new Error(`${endpoint.kind} endpoint did not stop`));
+        }
       }
     } finally {
       this.servicing = false;
@@ -238,6 +249,7 @@ export class HostedWorkerEndpoint extends EventEmitter implements RetainedNative
   private logicalStop = false;
   private physicalStop = false;
   private stopDeadline?: NodeJS.Timeout;
+  stopDeadlineAt?: number;
 
   constructor(
     private readonly host: SharedWorkerHost,
@@ -263,9 +275,8 @@ export class HostedWorkerEndpoint extends EventEmitter implements RetainedNative
     return this.host.worker.threadId;
   }
 
-  get performance(): Worker["performance"] {
-    return this.host.worker.performance;
-  }
+  /** The supervised host exposes no event-loop utilization to the main thread. */
+  readonly performance = undefined;
 
   cpuUsage(...args: Parameters<Worker["cpuUsage"]>): ReturnType<Worker["cpuUsage"]> {
     return this.host.worker.cpuUsage(...args);
@@ -319,6 +330,7 @@ export class HostedWorkerEndpoint extends EventEmitter implements RetainedNative
       this.stopRequested = true;
       if (this.logicalStop && !this.physicalStop && !this.host.failure) {
         this.host.send({ type: "stop", id: this.id });
+        this.stopDeadlineAt = performance.now() + ENDPOINT_STOP_DEADLINE_MS;
         this.stopDeadline = setTimeout(() => {
           this.host.fail(new Error(`${this.kind} endpoint did not stop`));
         }, ENDPOINT_STOP_DEADLINE_MS);
@@ -339,6 +351,7 @@ export class HostedWorkerEndpoint extends EventEmitter implements RetainedNative
       return;
     }
     clearTimeout(this.stopDeadline);
+    this.stopDeadlineAt = undefined;
     this.executionStopped = true;
     this.executionExitCode = code;
     this.terminalFailure = failure;
