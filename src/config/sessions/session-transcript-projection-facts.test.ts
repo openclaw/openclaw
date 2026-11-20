@@ -163,6 +163,36 @@ it("excludes saved system-prompt checkpoints from compaction pressure bytes", as
   });
 });
 
+it("classifies saved prompt checkpoints without active fact rows", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const checkpoint = {
+      type: "custom",
+      id: "sp",
+      parentId: "assistant",
+      customType: "openclaw.system-prompt",
+      data: { prefix: "x".repeat(150_000), routeKey: "route", historyId: "history" },
+    };
+    const f = fixture([user, assistant, checkpoint]);
+    const db = requireNativeSqliteDatabase(f.database.db);
+    db.prepare(
+      `DELETE FROM session_transcript_active_event_facts
+       WHERE session_id = ? AND seq = (
+         SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = 'sp'
+       )`,
+    ).run(f.scope.sessionId, f.scope.sessionId);
+
+    expect(
+      readProjection(f.database, f.scope, (projection) =>
+        readSessionTranscriptAccountingFromProjection(projection, {
+          includeByteSize: true,
+          includeUsage: false,
+          excludeSystemPromptCheckpoints: true,
+        }),
+      ),
+    ).toMatchObject({ kind: "value", value: { eventCount: 2 } });
+  });
+});
+
 function withObservedSnapshot(
   f: ReturnType<typeof fixture>,
   run: (observed: ReturnType<ReturnType<typeof fixture>["observe"]>) => void,

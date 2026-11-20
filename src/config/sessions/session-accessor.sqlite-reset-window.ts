@@ -685,10 +685,20 @@ export function readVisibleTranscriptStats(
       query.where(
         /* kysely-allow-raw: saved prompt checkpoints keep their full navigation entry in facts. */
         sql<number>`CASE
-          WHEN facts.seq IS NULL THEN 1
+          WHEN facts.seq IS NOT NULL THEN CASE
+            WHEN ${jsonPathValue(
+              projection.database.db,
+              sql.ref("facts.dependency_navigation_json"),
+              sql.lit("$.customType"),
+            )} = 'openclaw.system-prompt' THEN 0
+            ELSE 1
+          END
           WHEN ${jsonPathValue(
             projection.database.db,
-            sql.ref("facts.dependency_navigation_json"),
+            sql`(SELECT ${transcriptEventNavigationSql(projection.database.db, "fallback")}
+              FROM transcript_events AS fallback
+              WHERE fallback.session_id = active.session_id
+                AND fallback.seq = active.event_seq)`,
             sql.lit("$.customType"),
           )} = 'openclaw.system-prompt' THEN 0
           ELSE 1

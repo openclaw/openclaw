@@ -18,6 +18,10 @@ export function readSessionTranscriptAccountingFromReplica(
   target: { path: string; sessionKey: string; sessionId: string },
   options: SessionTranscriptAccountingOptions,
 ): SessionTranscriptAccountingSnapshot | undefined {
+  // Resident facts cannot prove checkpoint exclusion; the projection reader owns that accounting.
+  if (options.excludeSystemPromptCheckpoints) {
+    return undefined;
+  }
   if (!options.includeUsage && !options.includeTurnTaint) {
     if (!options.includeByteSize) {
       return {};
