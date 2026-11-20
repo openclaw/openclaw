@@ -160,7 +160,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   } else if (frozenBatchRunIds && frozen) {
     const runsById = new Map(requesterRuns.map((entry) => [entry.runId, entry]));
     // Retired rows no longer own completion.
-    settledBatch = subagentRuns.selectCompletionAuthorityBatch(
+    settledBatch = subagentRuns.selectCompletionBatch(
       frozenBatchRunIds.map((runId) => runsById.get(runId)).filter(hasCurrentWake),
       currentSettledEntry,
     );
@@ -177,7 +177,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   } else {
     // An unfrozen wave cannot absorb a different requester-yield generation.
     settledBatch = selectConnectedSettledSubagentWave(
-      subagentRuns.selectCompletionAuthorityBatch(
+      subagentRuns.selectCompletionBatch(
         requesterRuns.filter(
           (entry) => hasCurrentWake(entry) && isRequesterSettleMemberReady(entry),
         ),
@@ -190,7 +190,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   if (settledBatch.length === 0 || settledBatch.some(isClaimedByLiveRequesterTurn)) {
     return false;
   }
-  if (subagentRuns.isCompletionAuthorityRetired(currentSettledEntry)) {
+  if (subagentRuns.isExecutionRetired(currentSettledEntry)) {
     await completeBatch(settledBatch, currentState, {
       delivered: false,
       path: "none",
@@ -611,7 +611,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
             if (!isSourceSessionEffectsAllowed()) {
               throw new Error("Requester completion source changed before continuation admission.");
             }
-            return subagentRuns.runWithCompletionBatchAuthority(settledBatch, deliver);
+            return subagentRuns.runWithCompletionBatchContext(settledBatch, deliver);
           },
         );
       };

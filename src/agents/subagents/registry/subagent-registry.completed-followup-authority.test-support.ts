@@ -19,7 +19,6 @@ import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function operatorFixture(
   profileName: string,
@@ -58,48 +57,33 @@ export function registerCompletedFollowupAuthorityTests({
   registration,
   updateRun,
 }: RegistryRegistrationFixture) {
-  it.each(["original", "successor"] as const)(
-    "keeps completed-result and followup custody independent when the %s source is revoked",
-    (revokedOwner) =>
-      withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
-        const context = createContext();
-        const resolveGatewayContext = () => context;
-        const captureSource = async (profileName: string) => {
-          const { source, revoked, client } = await retainedOperatorFixture(
-            profileName,
-            context,
-            resolveGatewayContext,
-          );
-          return {
-            ...source,
-            revoked,
-            run: <T>(work: () => T) =>
-              withPluginRuntimeGatewayRequestScope(
-                { client, context, resolveGatewayContext, isWebchatConnect: () => false },
-                work,
-              ),
-          };
-        };
-        const original = await captureSource("completion-owner");
-        let followup: Awaited<ReturnType<typeof captureSource>> | undefined;
-        try {
-          await original.run(() =>
+  it("preserves a pending completed result separately from a fresh followup execution", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const original = operatorFixture("completion-owner");
+      const followup = operatorFixture("followup-owner");
+      try {
+        await withPluginRuntimeGatewayRequestScope(
+          { ...original, isWebchatConnect: () => false },
+          () =>
             registerSubagentRun(
-              registration("child", { requesterAgentId: "main", requesterTurnRunId: "parent" }),
+              registration("child", {
+                requesterAgentId: "main",
+                requesterTurnRunId: "parent",
+                gatewayContextResolver: original.resolveGatewayContext,
+              }),
             ),
-          );
-          original.release();
-          expect(original.authority.assertCurrent).not.toThrow();
-          const entry = expectDefined(subagentRuns.get("child"), "completed child");
-          await updateRun(entry.runId, (draft) => {
-            draft.execution = { status: "terminal", endedAt: 1, outcome: { status: "ok" } };
-            draft.delivery = { status: "pending" };
-            draft.cleanupHandled = true; // Delivery is outside this custody proof.
-          });
-          followup = await captureSource("followup-owner");
-          expect(
-            await followup.run(() =>
+        );
+        const entry = expectDefined(subagentRuns.get("child"), "completed child");
+        await updateRun(entry.runId, (draft) => {
+          draft.execution = { status: "terminal", endedAt: 1, outcome: { status: "ok" } };
+          draft.delivery = { status: "pending" };
+          draft.cleanupHandled = true; // Pending delivery is retained without running it here.
+        });
+        expect(
+          await withPluginRuntimeGatewayRequestScope(
+            { ...followup, isWebchatConnect: () => false },
+            () =>
               replaceSubagentRunAfterSteerCore({
                 previousRunId: entry.runId,
                 nextRunId: "successor",
@@ -108,51 +92,39 @@ export function registerCompletedFollowupAuthorityTests({
                 preserveCompletedRun: true,
                 task: "second turn",
               }),
-            ),
-          ).toBe(true);
-          followup.release();
-          const retained = expectDefined(subagentRuns.get(entry.runId), "pending completed result");
-          const successor = expectDefined(subagentRuns.get("successor"), "followup child");
-          const stored = loadSubagentRegistryFromSqlite();
-          expect(stored.get(entry.runId)).toMatchObject({
-            execution: { status: "terminal", suppressSessionEffects: true },
-            delivery: { status: "pending" },
-            requesterTurnRunId: "parent",
-          });
-          expect(stored.get(successor.runId)).toMatchObject({
-            taskRunId: successor.runId,
-            task: "second turn",
-            execution: { status: "running" },
-          });
-          expect(successor.requesterTurnRunId).toBeUndefined();
-          expect(successor.requesterTurnYielded).toBeUndefined();
-          const completionSource = (run: SubagentRunRecord) =>
-            subagentRuns.runWithCompletionAuthority(
-              run,
-              () =>
-                getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority
-                  ?.source,
-            );
-          // Suppressing old session effects must not retire its pending result's custody.
-          expect(completionSource(retained)).toBe(original.authority.source);
-          expect(completionSource(successor)).toBe(followup.authority.source);
-          const revokeOriginal = revokedOwner === "original";
-          (revokeOriginal ? original.revoked : followup.revoked).abort(
-            new Error("operator revoked"),
-          );
-          expect(completionSource(revokeOriginal ? retained : successor)).toBeUndefined();
-          expect(completionSource(revokeOriginal ? successor : retained)).toBe(
-            revokeOriginal ? followup.authority.source : original.authority.source,
-          );
-          await releaseSubagentRun(entry.runId);
-          await releaseSubagentRun(successor.runId);
-          expect(original.authority.assertCurrent).toThrow();
-          expect(subagentRuns.runWithCompletionAuthority(entry, () => "baseline")).toBe("baseline");
-        } finally {
-          original.release();
-          followup?.release();
-          await resetSubagentRegistryForTests({ persist: false });
-        }
-      }),
-  );
+          ),
+        ).toBe(true);
+        const retained = expectDefined(subagentRuns.get(entry.runId), "pending completed result");
+        const successor = expectDefined(subagentRuns.get("successor"), "followup child");
+        const stored = loadSubagentRegistryFromSqlite();
+        expect(stored.get(entry.runId)).toMatchObject({
+          execution: { status: "terminal", suppressSessionEffects: true },
+          delivery: { status: "pending" },
+          requesterTurnRunId: "parent",
+        });
+        expect(stored.get(successor.runId)).toMatchObject({
+          taskRunId: successor.runId,
+          task: "second turn",
+          execution: { status: "running" },
+        });
+        expect(successor.requesterTurnRunId).toBeUndefined();
+        expect(successor.requesterTurnYielded).toBeUndefined();
+        original.revoked.abort(new Error("original operator revoked"));
+        followup.revoked.abort(new Error("followup operator revoked"));
+        withPluginRuntimeGatewayRequestScope({ ...followup, isWebchatConnect: () => false }, () => {
+          const assertNoOperator = () =>
+            expect(
+              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
+            ).toBeUndefined();
+          subagentRuns.runWithCompletionContext(retained, assertNoOperator);
+          subagentRuns.runWithCompletionContext(successor, assertNoOperator);
+          subagentRuns.runWithCompletionBatchContext([retained, successor], assertNoOperator);
+        });
+        await releaseSubagentRun(entry.runId);
+        await releaseSubagentRun(successor.runId);
+      } finally {
+        await resetSubagentRegistryForTests({ persist: false });
+      }
+    });
+  });
 }

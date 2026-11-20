@@ -11,10 +11,10 @@ import { resolveGatewayAgentAbortStopReason } from "../../../gateway/agent-turn/
 import type { AgentTurnStartRequest } from "../../../gateway/agent-turn/agent-turn-start-request.types.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
-import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { GatewayOperatorAccessUnavailableError } from "../../../infra/operator-authority-error.js";
 import {
+  bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -25,7 +25,6 @@ import { markReplyOperationExecutionStarted } from "../../../sessions/session-co
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { prepareEmbeddedAttemptTimeout } from "../../embedded-agent-runner/run/attempt-timeout-prepare.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
 import {
@@ -111,11 +110,11 @@ describe("requester settle dispatch deadline", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
 
   it.each([false, true])(
-    "delivers overlapping completions under their own invocations (frozen=%s)",
+    "delivers overlapping results without borrowing an unrelated ambient operator (frozen=%s)",
     (frozen) =>
       withOpenClawTestState({ scenario: "minimal" }, async () => {
         const context = createContext();
-        const source = await retainedOperatorFixture("settle-owner", context);
+        const source = await retainedOperatorFixture("unrelated-observer", context);
         const children = ["first", "second"].map((name) => {
           const child = settledChild();
           child.runId = name;
@@ -126,65 +125,43 @@ describe("requester settle dispatch deadline", () => {
           if (frozen) {
             child.requesterSettleWake!.batchRunIds = ["first", "second"];
           }
+          bindGatewayContextResolver(child, source.resolveGatewayContext);
           subagentRuns.set(child.runId, child);
           return child;
         });
-        const invocations = [{}, {}];
         try {
-          for (const [index, child] of children.entries()) {
-            const client = {
-              ...source.client,
-              internal: {
-                operatorRunAuthority: createAdmittedRunOperatorAuthority({
-                  ...source.source.authority,
-                  invocation: invocations[index]!,
-                }),
-              },
-            };
-            const custody = await withPluginRuntimeGatewayRequestScope(
-              { ...source, client, isWebchatConnect: () => false },
-              () => captureOperatorToolGatewayContinuationContext(),
-            );
-            if (!custody) {
-              throw new Error("Missing completion custody");
-            }
-            subagentRuns.bindCompletionAuthority(child, custody);
-          }
           registryRead.listSubagentRunsForRequester.mockReturnValue(children);
           useDirectDelivery();
           const received: string[] = [];
           startTurn.mockImplementation(async (turn) => {
-            const index = received.length;
-            expect(
-              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority
-                ?.invocation,
-            ).toBe(invocations[index]);
-            expect(turn.preflight.request.message).toContain(`${children[index]!.runId} result`);
-            expect(turn.preflight.request.message).not.toContain(
-              `${children[1 - index]!.runId} result`,
-            );
-            received.push(children[index]!.runId);
+            expect(getPluginRuntimeGatewayRequestScope()?.client).toBeUndefined();
+            received.push(turn.preflight.request.message);
             acceptTurn(turn);
             finishTurn(turn.io, "Completion received.");
           });
-          for (const child of children) {
-            await expect(
-              withGateway(context, () =>
-                maybeWakeRequesterAfterAllChildrenSettled(
-                  wakeParams(child, (batch, _generation, delivery) => {
-                    expect(delivery?.delivered).toBe(true);
-                    for (const entry of batch) {
-                      entry.requesterSettleWake = undefined;
-                    }
-                  }),
-                ),
+          await expect(
+            withPluginRuntimeGatewayRequestScope({ ...source, isWebchatConnect: () => false }, () =>
+              maybeWakeRequesterAfterAllChildrenSettled(
+                wakeParams(children[0]!, (batch, _generation, delivery) => {
+                  expect(delivery?.delivered).toBe(true);
+                  for (const entry of batch) {
+                    entry.requesterSettleWake = undefined;
+                  }
+                }),
               ),
-            ).resolves.toBe(true);
-          }
-          expect(received).toEqual(["first", "second"]);
+            ),
+          ).resolves.toBe(true);
+          expect(received).toHaveLength(1);
+          expect(received[0]).toContain("first result");
+          expect(received[0]).toContain("second result");
+          await expect(
+            withPluginRuntimeGatewayRequestScope({ ...source, isWebchatConnect: () => false }, () =>
+              maybeWakeRequesterAfterAllChildrenSettled(wakeParams(children[1]!, vi.fn())),
+            ),
+          ).resolves.toBe(false);
+          expect(received).toHaveLength(1);
         } finally {
           for (const child of children) {
-            subagentRuns.releaseCompletionAuthority(child);
             subagentRuns.delete(child.runId);
           }
           source.source.release();

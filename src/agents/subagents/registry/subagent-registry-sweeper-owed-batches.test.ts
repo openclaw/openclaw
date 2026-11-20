@@ -26,6 +26,7 @@ import {
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-persistence.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { createSubagentSweeperHarness } from "./subagent-registry-sweeper.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 
@@ -178,13 +179,20 @@ it("settles ready results from overlapping yielded batches without consuming mes
           return { delivered: true, path: "direct" };
         },
       );
+      // This custom sweeper owns dispatch; the global restart resumer must not race it.
+      for (const entry of subagentRuns.values()) {
+        if (entry.requesterSettleWake || entry.delivery?.status === "pending") {
+          subagentRuns.reactivateExecution(entry);
+        }
+      }
+      expect(recovery.log.warn).not.toHaveBeenCalled();
       for (let pass = 0; pass < batches.length; pass++) {
         const drain = observeRootWork();
         await harness.sweeper.sweepOnce();
         await drain();
         expect(deliver, `sweep ${pass + 1}`).toHaveBeenCalled();
       }
-      expect(harness.resumeRequesterSettleWake).toHaveBeenCalled();
+      const stored = loadSubagentRegistryFromSqlite();
       for (let index = 0; index < 58; index++) {
         expect(subagentRuns.get(id(index))?.requesterSettleWake, id(index)).toBeUndefined();
         const current = subagentRuns.get(id(index));
@@ -196,7 +204,7 @@ it("settles ready results from overlapping yielded batches without consuming mes
             payload: { childRunId: id(index) },
           });
         }
-        expect(current?.completion?.resultText).toBe(`Saved result ${index}`);
+        expect(stored.get(id(index))?.completion?.resultText).toBe(`Saved result ${index}`);
       }
       for (const runId of pausedIds) {
         expect(subagentRuns.get(runId)).toMatchObject({

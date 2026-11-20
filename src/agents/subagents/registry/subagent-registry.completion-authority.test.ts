@@ -11,26 +11,14 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../../gateway/agent-runtime-approval-authority.js";
 import { callGateway } from "../../../gateway/call.js";
 import * as operatorCapture from "../../../gateway/operator-run-authority.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-lifecycle-runtime-context.js";
-import type { GatewayRequestHandlerOptions } from "../../../gateway/server-methods/types.js";
-import { dispatchGatewayMethodInProcessRaw } from "../../../gateway/server-plugin-in-process-dispatch.js";
-import {
-  createContext,
-  createOperatorClient,
-} from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
+import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { onAgentEvent, rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../../../infra/agent-run-registry.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
-  getGatewayContextLifetime,
   getGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -42,9 +30,8 @@ import {
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
-import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "../announce/subagent-announce-overrides.test-support.js";
 import * as announce from "../announce/subagent-announce.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -57,11 +44,7 @@ import {
   retainedOperatorFixture,
   registerCompletedFollowupAuthorityTests,
 } from "./subagent-registry.completed-followup-authority.test-support.js";
-import {
-  adoptSubagentRunForRequesterTurn,
-  registerSubagentRun,
-  replaceSubagentRunAfterSteerCore,
-} from "./subagent-registry.js";
+import { registerSubagentRun } from "./subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 import { registerSubagentRegistrationOwnershipTests } from "./subagent-registry.registration-ownership.test-support.js";
 import { registerRequesterAutomationCustodyTests } from "./subagent-registry.requester-automation-custody.test-support.js";
@@ -89,27 +72,12 @@ function inGateway<T>(
   return withPluginRuntimeGatewayRequestScope({ ...scope, isWebchatConnect: () => false }, run);
 }
 
-function completionAuthority() {
-  return getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
-}
-
 async function updateRun(runId: string, update: (draft: SubagentRunRecord) => void): Promise<void> {
   await mutateSubagentRuns([runId], (rows) => {
     const current = expectDefined(rows.get(runId), "completion authority fixture run");
     const draft = structuredClone(current);
     update(draft);
     return { value: undefined, postimages: new Map([[runId, draft]]) };
-  });
-}
-
-async function markCancelled(runId: string) {
-  await updateRun(runId, (draft) => {
-    draft.execution = {
-      status: "terminal",
-      endedAt: 1,
-      outcome: { status: "error", error: "cancelled" },
-    };
-    draft.endedReason = "subagent-killed";
   });
 }
 
@@ -158,9 +126,29 @@ afterEach(async () => {
   vi.mocked(config.getRuntimeConfig).mockReset();
 });
 
-describe("registered completion source custody", () => {
+describe("registered completion execution and delivery context", () => {
   registerSubagentRegistrationOwnershipTests({ registration, updateRun });
   registerCompletedFollowupAuthorityTests({ registration, updateRun });
+
+  it("never delivers through a replaced execution owner or reactivates its retired retry", () => {
+    const previous = createSubagentRunRecord({ runId: "replaced-completion" });
+    subagentRuns.set(previous.runId, previous);
+    subagentRuns.retireExecution(previous);
+    subagentRuns.set(previous.runId, { ...previous, generation: (previous.generation ?? 0) + 1 });
+    const delivered: string[] = [];
+    const deliver = () => delivered.push("child result");
+
+    expect(() => subagentRuns.runWithCompletionContext(previous, deliver)).toThrow(
+      "Subagent completion runtime owner is no longer active",
+    );
+    expect(() => subagentRuns.runWithCompletionBatchContext([previous], deliver)).toThrow(
+      "Subagent completion runtime owner is no longer active",
+    );
+    expect(() => subagentRuns.reactivateExecution(previous)).toThrow(
+      "Subagent completion retry no longer owns its source",
+    );
+    expect(delivered).toEqual([]);
+  });
 
   it.each([
     "current",
@@ -342,16 +330,19 @@ describe("registered completion source custody", () => {
         expect(subagentRuns.has(params.runId)).toBe(false);
         revoked.abort(new Error("operator source revoked after commit"));
         release.resolve();
-        await expect(outcome).resolves.toMatchObject({
-          error: { outcome: "committed", publication: "published" },
-        });
+        // Local registration admission still expires; committed publication does not roll back.
+        await expect(outcome).resolves.toMatchObject({ error: expect.any(Error) });
         const entry = expectDefined(subagentRuns.get(params.runId), "committed registration");
         expect(getGatewayContextResolver(entry)).toBe(resolveGatewayContext);
         expect(competingRegistration.assertCurrent).toThrow();
         expect(source.authority.assertCurrent).toThrow();
-        const ambient = vi.fn();
-        subagentRuns.runWithCompletionAuthority(entry, ambient);
-        subagentRuns.runWithCompletionBatchAuthority([entry], ambient);
+        const ambient = vi.fn(() => {
+          expect(
+            getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
+          ).toBeUndefined();
+        });
+        subagentRuns.runWithCompletionContext(entry, ambient);
+        subagentRuns.runWithCompletionBatchContext([entry], ambient);
         expect(ambient).toHaveBeenCalledTimes(2);
         expect(callGateway).not.toHaveBeenCalled();
         held.mockRestore();
@@ -360,7 +351,7 @@ describe("registered completion source custody", () => {
         });
         const current = subagentRuns.get(entry.runId)!;
         expect(current).not.toBe(entry);
-        subagentRuns.runWithCompletionAuthority(current, ambient);
+        subagentRuns.runWithCompletionContext(current, ambient);
         expect(getGatewayContextResolver(current)).toBe(resolveGatewayContext);
         expect(ambient).toHaveBeenCalledTimes(3);
       } finally {
@@ -374,7 +365,7 @@ describe("registered completion source custody", () => {
   });
 
   it.for(["current", "revoked"] as const)(
-    "rechecks %s registered completion authority at the final outbound adapter",
+    "delivers the registered result when its operator source is %s at the final outbound adapter",
     async (authority, { signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = useConfig({ session: { store: state.path("sessions.json") } });
@@ -536,110 +527,6 @@ describe("registered completion source custody", () => {
   registerRequesterAutomationCustodyTests({ registration, updateRun });
 
   it.each([
-    "completed System parent",
-    "missing System custody",
-    "revoked System custody",
-    "mixed System scopes",
-  ] as const)("preserves registered completion authority for %s", async (scenario) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = useConfig({ session: { store: state.path("sessions.json") } });
-      const requesterSessionKey = "agent:main:main";
-      const handler = ({ client, respond }: GatewayRequestHandlerOptions) => {
-        respond(true, {
-          scopes: client?.connect.scopes,
-          runtime: client?.internal?.agentRuntimeIdentity,
-        });
-      };
-      const validateRuntime = createAgentRuntimeApprovalAuthorityValidator();
-      const createSource = () => {
-        const context = createContext([["agent", "operator.write", "agent", handler]]);
-        const resolveGatewayContext = () => context;
-        context.resolveGatewayContext = resolveGatewayContext;
-        context.getRuntimeConfig = () => cfg;
-        context.validateAgentRuntimeApprovalAuthority = validateRuntime;
-        return { context, resolveGatewayContext };
-      };
-      const source = createSource();
-      const siblingSource = scenario === "revoked System custody" ? createSource() : source;
-      const operationalRunInstance = createOperationalRunInstanceRef("system-completion-parent");
-      const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-      onTestFinished(() => void releaseAgentRunDelegatedAuthority(delegatedAuthority));
-      const client = createSyntheticPluginRuntimeClient({
-        scopes: ["operator.write"],
-        operatorRoleActor: { kind: "system" },
-      });
-      client.internal = {
-        ...client.internal,
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey: requesterSessionKey,
-          operationalRunInstance,
-          delegatedAuthority: { kind: "local", ...delegatedAuthority },
-        },
-      };
-      for (const [runId, owner, scopes] of [
-        ["system-child", source, ["operator.write"]],
-        [
-          "system-sibling",
-          siblingSource,
-          scenario === "mixed System scopes"
-            ? ["operator.write", "operator.approvals"]
-            : ["operator.write"],
-        ],
-      ] as const) {
-        await inGateway(
-          {
-            client: { ...client, connect: { ...client.connect, scopes: [...scopes] } },
-            ...owner,
-          },
-          () =>
-            registerSubagentRun(
-              registration(runId, { gatewayContextResolver: owner.resolveGatewayContext }),
-            ),
-        );
-      }
-      const entry = expectDefined(subagentRuns.get("system-child"), "registered System child");
-      const sibling = expectDefined(
-        subagentRuns.get("system-sibling"),
-        "registered System sibling",
-      );
-      releaseAgentRunDelegatedAuthority(delegatedAuthority);
-      expect(validateRuntime(client.internal.agentRuntimeIdentity!)).toBe(false);
-      if (scenario === "missing System custody") {
-        subagentRuns.releaseCompletionAuthority(sibling);
-      } else if (scenario === "revoked System custody") {
-        getGatewayContextLifetime(siblingSource.resolveGatewayContext).abort();
-      }
-      const dispatch = vi.fn(() =>
-        dispatchGatewayMethodInProcessRaw(
-          "agent",
-          {
-            message: "Accepted child result",
-            sessionKey: requesterSessionKey,
-            idempotencyKey: "system-completion",
-          },
-          { syntheticScopeMode: "exact" },
-        ),
-      );
-      // No ambient spawning operator survives into a requester settle wake.
-      await inGateway({ ...source }, async () => {
-        for (const deliver of [
-          ...(scenario === "completed System parent"
-            ? [() => subagentRuns.runWithCompletionAuthority(entry, dispatch)]
-            : []),
-          () => subagentRuns.runWithCompletionBatchAuthority([entry, sibling], dispatch),
-        ]) {
-          await expect(deliver()).resolves.toMatchObject({
-            ok: true,
-            payload: { scopes: ["operator.write"], runtime: undefined },
-          });
-        }
-      });
-    });
-  });
-
-  it.each([
     "admission",
     "lifecycle",
     "replacement",
@@ -766,221 +653,4 @@ describe("registered completion source custody", () => {
       });
     },
   );
-
-  it.each([
-    "settle",
-    "non-announcing-settle",
-    "revoke",
-    "gateway-close",
-    "replace",
-    "release-rejected",
-    "registration-rejected",
-    "cancelled-by-another-operator",
-    "cancelled-with-requester-custody",
-    "cancelled-with-missing-custody",
-    "cancelled-with-distinct-custody",
-    "cancelled-with-independent-invocation",
-    "mixed-cancellation-source",
-    "mixed-cancellation-independent-invocation",
-    "mixed-cancellation-same-source",
-    "stale-batch-member",
-  ] as const)("outlives execution and closes on %s", async (ending) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      config.setRuntimeConfigSnapshot({});
-      const { context, resolveGatewayContext, client, revoked, source } =
-        await retainedOperatorFixture("completion-owner");
-      try {
-        const independentInvocation = () => ({
-          ...client,
-          internal: {
-            operatorRunAuthority: createAdmittedRunOperatorAuthority({
-              ...source.authority,
-              invocation: {},
-            }),
-          },
-        });
-        const register = (runId = "child", actor = client) =>
-          inGateway({ client: actor, context, resolveGatewayContext: () => context }, () =>
-            registerSubagentRun(
-              registration(runId, {
-                requesterAgentId: "main",
-                requesterTurnRunId: "parent",
-                expectsCompletionMessage: ending !== "non-announcing-settle",
-                ...(ending === "replace"
-                  ? { childSessionKey: "global", childAgentId: "research" }
-                  : {}),
-              }),
-            ),
-          );
-        if (ending === "registration-rejected") {
-          rejectNextRegistryWrite("write refused");
-          await expect(register()).rejects.toThrow("write refused");
-          source.release();
-          expect(source.authority.assertCurrent).toThrow();
-          expect(subagentRuns.has("child")).toBe(false);
-          return;
-        }
-        await register();
-        source.release();
-        expect(source.authority.assertCurrent).not.toThrow();
-        const entry = subagentRuns.get("child")!;
-        subagentRuns.runWithCompletionAuthority(entry, () => {
-          const retained = completionAuthority();
-          expect(retained?.source).toBe(source.authority.source);
-          expect(retained?.scopes).toEqual(["operator.write"]);
-        });
-        if (ending === "settle" || ending === "non-announcing-settle") {
-          await updateRun(entry.runId, (draft) => {
-            draft.execution = { status: "terminal", endedAt: 1, outcome: { status: "ok" } };
-            draft.cleanupCompletedAt = 1;
-            draft.requesterSettleWake = { status: "pending", attemptCount: 0 };
-          });
-          expect(source.authority.assertCurrent).not.toThrow();
-          await updateRun(entry.runId, (draft) => {
-            if (ending === "settle") {
-              draft.requesterTurnRunId = undefined;
-            }
-            draft.requesterSettleWake = undefined;
-            draft.delivery = {
-              status: ending === "settle" ? "delivered" : "not_required",
-            };
-          });
-          if (ending === "non-announcing-settle") {
-            expect(subagentRuns.get(entry.runId)?.requesterTurnRunId).toBe("parent");
-          }
-        } else if (ending === "cancelled-with-requester-custody") {
-          await markCancelled(entry.runId);
-          const observer = createOperatorClient({
-            profileName: "cancellation-owner",
-            scopes: ["operator.admin", "operator.write"],
-          });
-          const assertRequesterAuthority = () => {
-            expect(completionAuthority()?.source).toBe(source.authority.source);
-            expect(completionAuthority()?.profileId).toBe(
-              client.authenticatedUserProfile?.profileId,
-            );
-            expect(completionAuthority()?.scopes).toEqual(["operator.write"]);
-          };
-          inGateway({ client: observer, context }, () => {
-            subagentRuns.runWithCompletionAuthority(entry, assertRequesterAuthority);
-            subagentRuns.runWithCompletionBatchAuthority([entry], assertRequesterAuthority);
-          });
-          await releaseSubagentRun(entry.runId);
-        } else if (
-          ending === "cancelled-with-missing-custody" ||
-          ending === "cancelled-with-distinct-custody" ||
-          ending === "cancelled-with-independent-invocation"
-        ) {
-          const other =
-            ending === "cancelled-with-independent-invocation"
-              ? { client: independentInvocation(), revoked: new AbortController() }
-              : operatorFixture("other-requester");
-          await register("other", other.client);
-          await markCancelled(entry.runId);
-          await markCancelled("other");
-          if (ending === "cancelled-with-missing-custody") {
-            other.revoked.abort(new Error("other requester revoked"));
-          }
-          const observer = createOperatorClient({
-            profileName: "cancellation-owner",
-            scopes: ["operator.write"],
-          });
-          inGateway({ client: observer, context }, () =>
-            subagentRuns.runWithCompletionBatchAuthority([entry, subagentRuns.get("other")!], () =>
-              expect(getPluginRuntimeGatewayRequestScope()?.client).toBe(observer),
-            ),
-          );
-          await releaseSubagentRun(entry.runId);
-          await releaseSubagentRun("other");
-        } else if (ending === "cancelled-by-another-operator") {
-          revoked.abort(new Error("operator revoked"));
-          await markCancelled(entry.runId);
-          const observer = createOperatorClient({
-            profileName: "cancellation-owner",
-            scopes: ["operator.write"],
-          });
-          inGateway({ client: observer, context }, () =>
-            subagentRuns.runWithCompletionAuthority(entry, () =>
-              expect(getPluginRuntimeGatewayRequestScope()?.client).toBe(observer),
-            ),
-          );
-          await releaseSubagentRun(entry.runId);
-        } else if (ending.startsWith("mixed-cancellation") || ending === "stale-batch-member") {
-          const differentSource = ending === "mixed-cancellation-source";
-          const differentInvocation = ending === "mixed-cancellation-independent-invocation";
-          await register(
-            "other",
-            differentSource
-              ? createOperatorClient({ profileName: "other-owner", scopes: ["operator.write"] })
-              : differentInvocation
-                ? independentInvocation()
-                : client,
-          );
-          const other = subagentRuns.get("other")!;
-          if (ending === "stale-batch-member") {
-            await releaseSubagentRun(other.runId);
-            expect(
-              subagentRuns.runWithCompletionBatchAuthority([entry, other], () => "baseline"),
-            ).toBe("baseline");
-          } else {
-            await markCancelled(other.runId);
-            if (differentSource || differentInvocation) {
-              expect(
-                subagentRuns.runWithCompletionBatchAuthority([entry, other], () => "baseline"),
-              ).toBe("baseline");
-            } else {
-              subagentRuns.runWithCompletionBatchAuthority([other, entry], () =>
-                expect(completionAuthority()?.source).toBe(source.authority.source),
-              );
-            }
-          }
-          await releaseSubagentRun(entry.runId);
-          await releaseSubagentRun(other.runId);
-        } else if (ending === "gateway-close") {
-          getGatewayContextLifetime(resolveGatewayContext).abort();
-        } else if (ending === "replace") {
-          expect(
-            await replaceSubagentRunAfterSteerCore({
-              previousRunId: entry.runId,
-              nextRunId: "successor",
-              expected: entry,
-              preserveRequesterSettleWake: true,
-            }),
-          ).toBe(true);
-          expect(subagentRuns.get("successor")?.childAgentId).toBe("research");
-          expect(source.authority.assertCurrent).not.toThrow();
-          expect(subagentRuns.runWithCompletionAuthority(entry, () => "baseline")).toBe("baseline");
-          await releaseSubagentRun("successor");
-        } else if (ending === "release-rejected") {
-          rejectNextRegistryWrite("write refused");
-          await expect(releaseSubagentRun(entry.runId)).rejects.toThrow("write refused");
-          expect(source.authority.assertCurrent).not.toThrow();
-          await releaseSubagentRun(entry.runId);
-        } else {
-          await updateRun(entry.runId, (draft) => {
-            draft.requesterTurnRunId = undefined;
-          });
-          revoked.abort(new Error("operator revoked"));
-          await expect(
-            adoptSubagentRunForRequesterTurn({
-              expected: entry,
-              requesterSessionKey: entry.requesterSessionKey,
-              requesterAgentId: "main",
-              requesterTurnRunId: "next-parent",
-              assertCurrent: () => {},
-            }),
-          ).resolves.toEqual({
-            runId: entry.taskRunId ?? entry.runId,
-            childSessionKey: entry.childSessionKey,
-            expectsCompletionMessage: true,
-          });
-        }
-        expect(source.authority.assertCurrent).toThrow();
-        expect(subagentRuns.runWithCompletionAuthority(entry, () => "baseline")).toBe("baseline");
-      } finally {
-        source.release();
-        await resetSubagentRegistryForTests({ persist: false });
-      }
-    });
-  });
 });

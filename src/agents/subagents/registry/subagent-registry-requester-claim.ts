@@ -1,4 +1,3 @@
-import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import {
   mergeAcceptedSessionSpawnsForRun,
@@ -98,32 +97,20 @@ export async function reconcileRequesterTurnClaimForRun(params: {
   if (getActiveAgentRunDelegatedAuthority(params.requesterRunInstance)) {
     return true;
   }
-  return subagentRuns.runWithCompletionBatchAuthority(entries, async () => {
-    const custody = await captureOperatorToolGatewayContinuationContext();
-    const assertCurrent = custody?.assertCurrent ?? captureGatewayToolCallerAssertion();
-    try {
-      const current = ownedEntries();
-      if (!current.includes(acceptedEntry)) {
-        return false;
-      }
-      // The transfer owns row retirement; retain source custody independently of those rows.
-      return await subagentRuns.runWithCompletionBatchAuthority(current, () => {
-        const settle = () =>
-          settleRequesterAfterSessionSpawns({
-            ...params,
-            requesterTurnRunId,
-            requesterYielded: false,
-            acceptedSessionSpawns: current.map((entry) => ({
-              runId: entry.taskRunId ?? entry.runId,
-              childSessionKey: entry.childSessionKey,
-              expectsCompletionMessage: true,
-            })),
-            assertCurrent: () => assertCurrent?.(),
-          });
-        return custody ? custody.run(settle) : settle();
-      });
-    } finally {
-      custody?.release();
+  return subagentRuns.runWithCompletionBatchContext(entries, () => {
+    const current = ownedEntries();
+    if (!current.includes(acceptedEntry)) {
+      return false;
     }
+    return settleRequesterAfterSessionSpawns({
+      ...params,
+      requesterTurnRunId,
+      requesterYielded: false,
+      acceptedSessionSpawns: current.map((entry) => ({
+        runId: entry.taskRunId ?? entry.runId,
+        childSessionKey: entry.childSessionKey,
+        expectsCompletionMessage: true,
+      })),
+    });
   });
 }

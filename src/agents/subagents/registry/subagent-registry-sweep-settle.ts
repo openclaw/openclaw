@@ -54,7 +54,7 @@ export async function settleUnreachableYieldedSubagentRun(params: {
         isTerminalSessionStatus(requester.status) &&
         requester.lastRunId === requesterCompletion.runId);
   }
-  const retired = subagentRuns.isCompletionAuthorityRetired(entry);
+  const retired = subagentRuns.isExecutionRetired(entry);
   let continuation = isYieldedSubagentRun(entry)
     ? resolveYieldedRunContinuation(entry, requesterEnded)
     : undefined;
@@ -150,7 +150,7 @@ export async function settleRestartInterruptedSubagentRun(params: {
     hasSubagentRunEnded(entry) ||
     isYieldedSubagentRun(entry) ||
     // Fresh requester custody owns the notice; the retired process cannot send it.
-    (subagentRuns.isCompletionAuthorityRetired(entry) && entry.expectsCompletionMessage === true) ||
+    (subagentRuns.isExecutionRetired(entry) && entry.expectsCompletionMessage === true) ||
     // Only an earlier process could have owned this execution; this process never did.
     !(entry.createdAt < processStartedAt) ||
     isSubagentRunLive(entry) ||

@@ -139,7 +139,7 @@ export async function settleSubagentCompletionReservation(
     entry.requesterSettleWake ||
     entry.killIntent ||
     entry.killReconciliation ||
-    subagentRuns.isCompletionAuthorityRetired(entry) ||
+    subagentRuns.isExecutionRetired(entry) ||
     lifecycle.isTerminalTailActive(entry) ||
     hasLiveAgentRunContext(entry.runId) ||
     resolveAnnounceDeliveryDeadline(entry, now, ANNOUNCE_COMPLETION_HARD_EXPIRY_MS) > now

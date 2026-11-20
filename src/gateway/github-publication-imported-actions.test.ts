@@ -5,8 +5,11 @@ import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { SessionGitHubActionResultSchema } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
+  getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
@@ -14,7 +17,10 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
 import { createRequesterPublicationFixture } from "./github-publication-requester.test-support.js";
@@ -26,6 +32,7 @@ import {
   SESSION_KEY,
 } from "./github-publication.test-support.js";
 import { prepareAdmission } from "./mcp-http-request.test-support.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 
 const mocks = githubPublicationTestMocks();
@@ -249,6 +256,75 @@ describe("actions on the imported original PR", () => {
       await work.drain();
     }
   });
+
+  it.each(["delivery", "settlement"] as const)(
+    "refuses operator-write PR actions from child-result %s without caller authority",
+    async (phase) => {
+      const f = await fixture();
+      const runId = randomUUID();
+      const admission = prepareAdmission(runId, "authority-less-completion");
+      const work = new AsyncWorkScope();
+      const context = createDirectChatContext({
+        ...f.maintainerSource.context,
+        githubPublicationService: f.coordinator,
+        trackExecution: work.track.bind(work),
+      });
+      const operator = await captureGatewayOperatorRunAuthority({
+        context,
+        client: f.maintainerSource.client,
+      });
+      const child = createSubagentRunRecord({
+        runId: randomUUID(),
+        requesterSessionKey: SESSION_KEY,
+        requesterAgentId: "main",
+      });
+      subagentRuns.set(child.runId, child);
+      try {
+        expect(operator).toBeDefined();
+        const admitted = await admission.admit("gateway", runId);
+        bindGatewayContextResolver(admitted, () => context);
+        const caller = createAdmittedGatewayToolCallerIdentity({
+          admittedRunContext: admitted,
+          agentId: "main",
+          sessionKey: SESSION_KEY,
+        });
+        const close = () => {
+          expect(getGatewayToolCallerIdentity()).toBeUndefined();
+          return withGatewayToolCallerIdentity(caller, () =>
+            createGitHubPublishTool().execute("completion-close-control", {
+              action: "close",
+              pullRequestUrl: url,
+              expectedHeadCommit: headCommit,
+            }),
+          );
+        };
+        await expect(
+          withPluginRuntimeGatewayRequestScope(
+            { context, client: f.maintainerSource.client, isWebchatConnect: () => false },
+            () =>
+              withGatewayToolCallerIdentity(
+                {
+                  agentId: "main",
+                  sessionKey: SESSION_KEY,
+                  operatorAuthority: operator?.authority,
+                },
+                () =>
+                  phase === "delivery"
+                    ? subagentRuns.runWithCompletionContext(child, close)
+                    : subagentRuns.runWithCompletionBatchContext([child], close),
+              ),
+          ),
+        ).rejects.toThrow("GitHub pull request actions require full operator write permission.");
+        expect(f.writes).toEqual([]);
+        expect(f.externalWrites).toEqual([]);
+      } finally {
+        operator?.release();
+        admission.close();
+        subagentRuns.delete(child.runId);
+        await work.drain();
+      }
+    },
+  );
 
   it.each(["guest", "admin"] as const)(
     "requests re-review of an explicit verified PR without importing source (%s)",

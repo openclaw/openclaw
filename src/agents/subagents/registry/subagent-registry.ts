@@ -166,7 +166,7 @@ export function resumeSubagentRun(runId: string) {
   if (!entry || resumedRuns.has(getSubagentRunRuntimeKey(entry))) {
     return;
   }
-  if (subagentRuns.isCompletionAuthorityRetired(entry)) {
+  if (subagentRuns.isExecutionRetired(entry)) {
     // A retired owner cannot deliver, but its yielded batch still owes a visible failure.
     if (entry.requesterSettleWake) {
       resumeRequesterSettleWake(runId, entry);

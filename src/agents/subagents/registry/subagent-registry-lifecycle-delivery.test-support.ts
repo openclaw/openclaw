@@ -105,7 +105,7 @@ export function registerLifecycleDeliveryReceiptCases({
       completion: { required: true, resultText: "retained result" },
     });
     const runSubagentAnnounceFlow = vi.fn<AnnounceFlow>(async () => {
-      subagentRuns.retireCompletionAuthority(readLifecycleRun(entry));
+      subagentRuns.retireExecution(readLifecycleRun(entry));
       return "retryable";
     });
     const controller = createLifecycleController({

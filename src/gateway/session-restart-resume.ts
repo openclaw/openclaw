@@ -621,6 +621,6 @@ async function resumeRestartStore(
     summary.publish();
   }
   // Admit restart inputs before recovered completion notices can start a turn.
-  resume();
+  await resume();
   return completed;
 }

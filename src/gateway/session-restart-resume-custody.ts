@@ -4,36 +4,25 @@ import {
 } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { resumeSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import { owesRequesterCompletion } from "../agents/subagents/registry/subagent-requester-settle-identity.js";
+import { isSameSubagentRunOwner } from "../agents/subagents/registry/subagent-run-generation.js";
 import { isYieldedSubagentRun } from "../agents/subagents/registry/subagent-run-liveness.js";
+import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
 import { readSessionSubmittedInput } from "../config/sessions/session-pending-input-source.js";
 import type { PendingInputScope } from "../config/sessions/session-pending-input-store.js";
 import { isRestartResumeEntryOutOfScope } from "../config/sessions/session-restart-resume-scope.js";
-import {
-  acquireTranscriptLease,
-  type TranscriptLease,
-} from "../config/sessions/transcript-lease.js";
+import { releaseSessionSourceAuthorities } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import {
-  bindGatewayContextResolver,
-  withPluginRuntimeGatewayContextResolver,
-} from "../plugins/runtime/gateway-request-scope.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import {
   GatewayDrainingError,
   isGatewayRestartDraining,
 } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { chatRef } from "../sessions/chat-ref.js";
-import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import {
-  captureOperatorToolGatewayContinuationContext,
-  withOperatorToolGatewayAuthority,
-} from "./server-plugin-in-process-dispatch.js";
 import type {
   PreparedRestartStore,
   RestartResumeParams,
 } from "./session-restart-resume-discovery.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 /** A consumed settle input transfers interrupted-turn recovery to the Gateway. */
 export async function hasInterruptedCommittedRequesterSettleInput(
@@ -54,11 +43,11 @@ export async function hasInterruptedCommittedRequesterSettleInput(
   );
 }
 
-/** Admit retained obligations before classifying nested waits in this store. */
+/** Rebind retained completion routing without reviving wake sources before classification. */
 export async function prepareRestartCompletionCustody(
   { context, signal, log }: RestartResumeParams,
   { target, entries }: Pick<PreparedRestartStore, "target" | "entries">,
-): Promise<{ assertCurrent: () => void; resume: () => void }> {
+): Promise<{ assertCurrent: () => void; resume: () => Promise<void> }> {
   const assertCurrent = () => {
     signal.throwIfAborted();
     if (isGatewayRestartDraining()) {
@@ -66,23 +55,24 @@ export async function prepareRestartCompletionCustody(
     }
   };
   assertCurrent();
-  const recovered: string[] = [];
+  const recovered: Array<{ sessionKey: string; resume: () => Promise<void> }> = [];
   for (const { sessionKey, entry } of entries) {
     // A completion wakes parent work; work from another restart resume scope never regains it.
     if (isRestartResumeEntryOutOfScope(entry)) {
       continue;
     }
     try {
-      recovered.push(
-        ...(await recoverRequesterCompletionCustody({
-          context,
-          ...target,
-          sessionKey,
-          entry,
-          agentId: parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
-          assertCurrent,
-        })),
-      );
+      const resume = await recoverRequesterCompletionCustody({
+        context,
+        ...target,
+        sessionKey,
+        entry,
+        agentId: parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
+        assertCurrent,
+      });
+      if (resume) {
+        recovered.push({ sessionKey, resume });
+      }
     } catch (error) {
       signal.throwIfAborted();
       log.warn(`Restart completion recovery failed for ${sessionKey}: ${String(error)}`);
@@ -90,18 +80,26 @@ export async function prepareRestartCompletionCustody(
   }
   return {
     assertCurrent,
-    resume: () => {
+    resume: async () => {
       signal.throwIfAborted();
-      if (!isGatewayRestartDraining()) {
-        for (const runId of recovered) {
-          resumeSubagentRun(runId);
+      if (isGatewayRestartDraining()) {
+        return;
+      }
+      for (const recovery of recovered) {
+        try {
+          await recovery.resume();
+        } catch (error) {
+          signal.throwIfAborted();
+          log.warn(
+            `Restart completion recovery failed for ${recovery.sessionKey}: ${String(error)}`,
+          );
         }
       }
     },
   };
 }
 
-/** Recover the obligation under a fresh exact requester admission, never its stored bearer. */
+/** Recover requester routing without rebuilding operator authority for owed results. */
 async function recoverRequesterCompletionCustody(params: {
   context: GatewayRequestContext;
   agentId: string;
@@ -110,15 +108,15 @@ async function recoverRequesterCompletionCustody(params: {
   env?: NodeJS.ProcessEnv;
   entry: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "archivedAt">;
   assertCurrent: () => void;
-}): Promise<string[]> {
+}): Promise<(() => Promise<void>) | undefined> {
   const { context, entry, agentId, sessionKey, storePath, assertCurrent } = params;
   if (entry.archivedAt !== undefined) {
-    return [];
+    return undefined;
   }
   const pending = [...getSubagentRunsForRequesterSession(sessionKey)].filter(
     (child) =>
       child.requesterAgentId === agentId &&
-      subagentRuns.isCompletionAuthorityRetired(child) &&
+      subagentRuns.isExecutionRetired(child) &&
       ((isYieldedSubagentRun(child) && owesRequesterCompletion(child)) ||
         child.requesterSettleWake !== undefined ||
         child.delivery?.status === "pending" ||
@@ -126,58 +124,48 @@ async function recoverRequesterCompletionCustody(params: {
         child.delivery?.status === "failed"),
   );
   if (!pending.length) {
-    return [];
+    return undefined;
   }
-  const authority = await prepareSessionSystemTurnAuthority({
-    context,
-    agentId,
-    sessionKey,
-    storePath,
-    sessionId: entry.sessionId,
-    preserveRecordedSource: true,
+  const requesterSource = captureSessionEntrySourceAssertion({
+    scope: { agentId, sessionKey, storePath, env: params.env },
+    expected: entry,
+    fields: ["sessionId", "lifecycleRevision", "archivedAt"],
     assertCurrent,
+    assertHostCurrent: assertCurrent,
+    refuse: () => {
+      throw new Error("Restart completion requester is unavailable or has changed.");
+    },
   });
-  let target: TranscriptLease | undefined;
-  try {
-    target = await acquireTranscriptLease(
-      chatRef({ agentId, sessionKey, storePath }),
-      { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision },
-      { env: params.env },
-    );
-    const requester = target;
-    await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
-      withOperatorToolGatewayAuthority(
-        {
-          operatorRunAuthority: authority?.authority,
-          operatorRoleActor: { kind: "system" },
-          scopes: authority?.authority.scopes ?? [ADMIN_SCOPE],
-          assertCurrent,
-        },
-        async () => {
-          for (const child of pending) {
-            const custody = await captureOperatorToolGatewayContinuationContext({
-              agentId,
-              sessionKey,
-            });
-            if (!custody) {
-              throw new Error("Restart completion has no current Gateway authority");
-            }
-            try {
-              assertCurrent();
-              requester.assertCurrent();
-              bindGatewayContextResolver(child, context.resolveGatewayContext);
-              subagentRuns.bindCompletionAuthority(child, custody);
-            } catch (error) {
-              custody.release();
-              throw error;
-            }
-          }
-        },
-      ),
-    );
-  } finally {
-    target?.release();
-    authority?.release();
-  }
-  return pending.map((child) => child.runId);
+  const withRequester = async (run: (assertRequesterCurrent: () => void) => void) => {
+    const requester = await requesterSource.prepareSessionSource();
+    try {
+      assertCurrent();
+      requester.assertCurrent();
+      run(requester.assertCurrent);
+    } finally {
+      await releaseSessionSourceAuthorities([requester]);
+    }
+  };
+  await withRequester((assertRequesterCurrent) => {
+    for (const child of pending) {
+      assertRequesterCurrent();
+      if (!isSameSubagentRunOwner(subagentRuns.get(child.runId), child)) {
+        throw new Error("Restart completion execution owner has changed.");
+      }
+      bindGatewayContextResolver(child, context.resolveGatewayContext);
+    }
+  });
+  return () =>
+    withRequester((assertRequesterCurrent) => {
+      for (const child of pending) {
+        assertRequesterCurrent();
+        const current = subagentRuns.get(child.runId);
+        if (!current || !isSameSubagentRunOwner(current, child)) {
+          throw new Error("Restart completion execution owner has changed.");
+        }
+        // Root restart inputs must be admitted before these retired wake sources return.
+        subagentRuns.reactivateExecution(current);
+        resumeSubagentRun(current.runId);
+      }
+    });
 }
