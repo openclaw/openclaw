@@ -282,6 +282,7 @@ async function notifyOnExit(
       );
       recordNotifyOnExitRemoval(session, receipt.cancel);
       void receipt.settled.then(async (outcome) => {
+        session.notifyOnExitRemoval = undefined;
         if (outcome.status === "failed") {
           logWarn(
             `exec: completion delivery failed (${outcome.error}); inspect the process result.`,
