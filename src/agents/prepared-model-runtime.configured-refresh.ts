@@ -90,46 +90,50 @@ function applyRemoteModelCatalogUpdateNow(
   }
   const completion: Promise<RemoteCatalogPublicationResult> = host.publicationQueue.track(
     runOutsideRemoteModelCatalogSnapshot(async (): Promise<RemoteCatalogPublicationResult> => {
-      const config = getConfig();
-      const update = await readRemoteModelCatalogUpdate(config);
-      assertLifetime();
-      // The next catalog check retries if an overlapping config publication wins.
-      const replacement = update ? host.getPendingReplacement() : undefined;
-      if (replacement) {
-        await replacement;
+      for (;;) {
+        const update = await readRemoteModelCatalogUpdate(getConfig());
         assertLifetime();
-      }
-      if (!update) {
-        return "unchanged";
-      }
-      const catalog = update;
-      const previous = captureRemoteModelCatalogStartupSnapshot();
-      if (previous?.sourceUrl === catalog.sourceUrl) {
-        if (previous.revision === catalog.revision) {
+        if (!update) {
           return "unchanged";
         }
-        if (previous.generatedAt > catalog.generatedAt) {
-          return "superseded";
+        // Adopt over the newest owners. A replacement resolves when a newer one supersedes it.
+        for (let pending = host.getPendingReplacement(); pending;) {
+          await pending;
+          assertLifetime();
+          pending = host.getPendingReplacement();
         }
-      }
-      try {
-        if (
-          !(await withRemoteModelCatalogSnapshot(catalog, () =>
-            publishPreparedModelRuntimeCatalogReplacement(host, catalog, previous),
-          ))
-        ) {
-          return "superseded";
+        const catalog = update;
+        const previous = captureRemoteModelCatalogStartupSnapshot();
+        if (previous?.sourceUrl === catalog.sourceUrl) {
+          if (previous.revision === catalog.revision) {
+            return "unchanged";
+          }
+          if (previous.generatedAt > catalog.generatedAt) {
+            return "superseded";
+          }
         }
-        notifyPreparedModelRuntimePublication({ phase: "published" });
-        return "published";
-      } catch (error) {
-        if (
-          error instanceof PreparedModelRuntimePublicationSupersededError ||
-          host.getCancellationSignal().aborted
-        ) {
-          return "superseded";
+        // This attempt's fence; a config publication aborts it and replaces the owners.
+        const signal = host.getCancellationSignal();
+        try {
+          if (
+            !(await withRemoteModelCatalogSnapshot(catalog, () =>
+              publishPreparedModelRuntimeCatalogReplacement(host, catalog, previous, signal),
+            ))
+          ) {
+            return "superseded";
+          }
+          notifyPreparedModelRuntimePublication({ phase: "published" });
+          return "published";
+        } catch (error) {
+          if (signal.reason instanceof PreparedModelRuntimePublicationSupersededError) {
+            // Follow that publication: adopt over its owners once it settles.
+            continue;
+          }
+          if (error instanceof PreparedModelRuntimePublicationSupersededError || signal.aborted) {
+            return "superseded";
+          }
+          throw error;
         }
-        throw error;
       }
     }).finally(() => {
       host.pending = undefined;
@@ -252,6 +256,7 @@ async function publishPreparedModelRuntimeCatalogReplacement(
   host: PreparedModelRuntimeCatalogPublicationHost,
   catalog: ActiveRemoteModelCatalog,
   previous: ActiveRemoteModelCatalog | null,
+  signal: AbortSignal,
 ): Promise<boolean> {
   const claims = [...host.owners.values()]
     .filter((owner) => owner.provenance === "configured")
@@ -262,7 +267,6 @@ async function publishPreparedModelRuntimeCatalogReplacement(
   ) {
     return false;
   }
-  const signal = host.getCancellationSignal();
   const buildTimeoutMs = host.getBuildTimeoutMs();
   const publication = createCatalogReplacementCallbacks(
     host.owners,
