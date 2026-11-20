@@ -179,7 +179,8 @@ async function openWorkshop(
   });
   await page.goto(`${suite.server.baseUrl}skills/workshop`);
   await waitForControlUiRoute(page, { pathname: "/skills/workshop", routeId: "skill-workshop" });
-  await page.locator(".sw-row").filter({ hasText: skillName }).waitFor();
+  // Drafts of one skill can fill the opening view with several rows of that name.
+  await page.locator(".sw-row").filter({ hasText: skillName }).first().waitFor();
   return gateway;
 }
 
@@ -258,7 +259,14 @@ suite.define(() => {
   it("routes to the library, shows retained versus pruned change actions and metadata diffs, and writes learning mode", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await openWorkshop(page);
-      const liveRow = page.locator(".sw-row").filter({ hasText: skillName });
+      // Changes and no drafts: the start page opens on History; the library is Learned skills.
+      expect(
+        await page
+          .getByRole("button", { name: "History", exact: true })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+      await page.getByRole("button", { name: /^Learned skills/ }).click();
+      const liveRow = page.locator(".sw-grid .sw-row").filter({ hasText: skillName });
       expect(await liveRow.textContent()).toContain("7 uses");
       await liveRow.locator(".sw-row__main").click();
       await page
@@ -282,7 +290,7 @@ suite.define(() => {
       });
       await retained.getByRole("button", { name: "Compare", exact: true }).click();
       await expect
-        .poll(() => page.locator(".sw-detail__desc").textContent())
+        .poll(() => page.locator(".plugin-catalog-detail__summary").textContent())
         .toBe("Old deployment procedure");
       expect(await page.locator(".sw-diff__line--remove").textContent()).toContain(
         "description: Old deployment procedure",
@@ -290,6 +298,12 @@ suite.define(() => {
       expect(await page.locator(".sw-diff__line--add").textContent()).toContain(
         "description: Current deployment procedure",
       );
+      // Learning mode sits behind the start page's gear.
+      await page
+        .locator(".plugins-settings-breadcrumb")
+        .getByRole("link", { name: "Skill workshop", exact: true })
+        .click();
+      await page.getByRole("button", { name: "Skill Workshop learning mode", exact: true }).click();
       await page.getByRole("button", { name: "Off", exact: true }).click();
       const patch = await gateway.waitForRequest("config.patch");
       expect(patch.params).toMatchObject({
@@ -299,6 +313,8 @@ suite.define(() => {
         baseHash: "workshop-contract-config",
         note: "Disable Skill Workshop learning",
       });
+      await page.keyboard.press("Escape");
+      // Back on the start page, Learned skills is still the open view.
       await page.getByRole("button", { name: /^Archived/ }).click();
       await page.locator(".sw-row").filter({ hasText: archivedName }).waitFor();
       expect(await page.locator(".sw-row").filter({ hasText: skillName }).count()).toBe(0);
@@ -340,26 +356,25 @@ suite.define(() => {
         "skills.workshop.applyDraft": { changes: [] },
         "skills.workshop.discardDraft": { changes: [] },
       });
-      await page.getByRole("button", { name: /^Drafts/ }).click();
+      // Drafts wait, so the start page opens on them.
+      expect(await page.getByRole("button", { name: /^Drafts/ }).getAttribute("aria-pressed")).toBe(
+        "true",
+      );
       const first = page.locator(".sw-row").filter({ hasText: "Check the rollback first" });
       await first.locator(".sw-row__main").click();
       await expect
         .poll(() => page.locator(".sw-diff__line--add").allTextContents())
         .toContainEqual(expect.stringContaining("Check the rollback first."));
       expect(await page.locator(".sw-diff__key--remove").textContent()).toBe("Live skill");
-      await page.getByRole("button", { name: "Apply", exact: true }).click();
+      await first.getByRole("button", { name: "Apply", exact: true }).click();
       expect((await gateway.waitForRequest("skills.workshop.applyDraft")).params).toEqual({
         agentId: "main",
         name: skillName,
         draftId: "deploy-staging-1a2b3c4d",
       });
-      await page.getByRole("button", { name: /^Drafts/ }).click();
-      await page
-        .locator(".sw-row")
-        .filter({ hasText: "Unused idea" })
-        .locator(".sw-row__main")
-        .click();
-      await page.getByRole("button", { name: "Discard", exact: true }).click();
+      // The queue stays open on the next draft.
+      const unused = page.locator(".sw-row").filter({ hasText: "Unused idea" });
+      await unused.getByRole("button", { name: "Discard", exact: true }).click();
       expect((await gateway.waitForRequest("skills.workshop.discardDraft")).params).toEqual({
         agentId: "main",
         name: skillName,
@@ -393,12 +408,19 @@ suite.define(() => {
       expect(await workshop.getByRole("button", { name: /^(Archive|Restore|Undo)$/ }).count()).toBe(
         0,
       );
+      await page
+        .locator(".plugins-settings-breadcrumb")
+        .getByRole("link", { name: "Skill workshop", exact: true })
+        .click();
+      await page.getByRole("button", { name: "Skill Workshop learning mode", exact: true }).click();
       expect(await workshop.getByRole("button", { name: "Off", exact: true }).isDisabled()).toBe(
         true,
       );
       expect(await workshop.getByRole("button", { name: "Auto", exact: true }).isDisabled()).toBe(
         true,
       );
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: /^Learned skills/ }).click();
       await page.getByRole("button", { name: /^Active/ }).click();
       await page.locator(".sw-row__main").filter({ hasText: skillName }).click();
       await page

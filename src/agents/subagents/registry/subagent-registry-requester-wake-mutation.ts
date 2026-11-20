@@ -8,8 +8,8 @@ import type {
   RequesterWakeCommittedWrite,
   RequesterWakeMutation,
 } from "../completion/subagent-completion-mutation.types.js";
+import { settleConsumedRequesterDelivery } from "../completion/subagent-completion-settlement.js";
 import { captureSubagentControllerInputRetirement } from "./subagent-controller-inputs.js";
-import { resolveRequesterDeliveryOutcome } from "./subagent-delivery-state.js";
 import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -161,10 +161,7 @@ export function createRequesterWakeSettlement(params: {
     admittedWake,
     release,
   } = params;
-  const outcome = resolveRequesterDeliveryOutcome(
-    batch.map((member) => context.options.runs.get(member.runId) ?? member),
-    observedOutcome,
-  );
+  let outcome = observedOutcome;
   // Retry bookkeeping with the observed outcome, never by replaying delivery or inventing failure.
   const receipt: RequesterWakeMutationReceipt = {};
   const retireInputs = batch.map(captureSubagentControllerInputRetirement);
@@ -185,6 +182,12 @@ export function createRequesterWakeSettlement(params: {
         (outcome !== undefined ||
           receipt.committed !== undefined ||
           members.length === batch.length);
+      if (settlesMembers && outcome && !receipt.committed) {
+        outcome = await settleConsumedRequesterDelivery(
+          members.map((member) => context.options.runs.get(member.runId) ?? member),
+          outcome,
+        );
+      }
       if (
         settlesMembers &&
         !(await mutateRequesterSettleWakeBatch(
