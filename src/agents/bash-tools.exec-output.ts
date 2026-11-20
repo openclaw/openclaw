@@ -2,9 +2,9 @@
  * Keeps no-output placeholders and warning placement consistent across exec
  * progress, polling, and completion surfaces.
  */
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
 import { isOneShotRunSessionKey } from "../sessions/session-key-utils.js";
-import { tail } from "./bash-process-registry.js";
 import type { PrivateTempFileStream } from "./sessions/tools/private-temp-file.js";
 import { formatFullOutputFooter } from "./sessions/tools/tool-contracts.js";
 
@@ -226,7 +226,7 @@ export function selectExecCompletionContent(
       break;
     }
   }
-  return content.length <= maxChars ? content : tail(content, maxChars);
+  return content.length <= maxChars ? content : sliceUtf16Safe(content, content.length - maxChars);
 }
 
 export function joinExecFailureOutput(aggregated: string, reason: string) {
