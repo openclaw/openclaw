@@ -318,18 +318,27 @@ it(
               const call = (name: string, callId: string, args: Record<string, unknown>) =>
                 writeToolCall(response, name, callId, args);
               const owned = () => jobs.owned!.id;
+              if ((step === 0 || step === 3) && lastOutput?.call_id !== "call_plan") {
+                call("automations", "plan", {
+                  action: "plan",
+                  names: step === 0 ? ["Owned proof", "Closing proof"] : ["Foreign proof"],
+                });
+                return;
+              }
               switch (step++) {
                 // A scoped, non-admin requester creates two conversation-owned automations.
                 case 0:
-                  call("automations", "add_owned", proofJob("Owned proof", "RUN-MARKER-A", 60_000));
+                  call("automations", "add_owned", {
+                    ...proofJob("Owned proof", "RUN-MARKER-A", 60_000),
+                    position: 1,
+                  });
                   break;
                 case 1:
                   jobs.owned = JSON.parse(outputs.get("add_owned")!) as CronJob;
-                  call(
-                    "automations",
-                    "add_closing",
-                    proofJob("Closing proof", "RUN-MARKER-C", 120_000),
-                  );
+                  call("automations", "add_closing", {
+                    ...proofJob("Closing proof", "RUN-MARKER-C", 120_000),
+                    position: 2,
+                  });
                   break;
                 case 2:
                   jobs.closing = JSON.parse(outputs.get("add_closing")!) as CronJob;
