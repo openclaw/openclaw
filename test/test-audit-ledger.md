@@ -1190,6 +1190,16 @@ candidate runs each pass all 89 cases. Temporary instrumentation is restored
 byte for byte. Independent preservation reviews found no gaps. Scoped scripts-test
 typecheck, lint, formatting and both line-cap ratchets pass.
 
+### Boat release-runner fixture cleanup
+
+At `da816e2190ca2466c0a5cebe32a6aaabea64029a`, the Boat release-runner test clears
+its root tracker before removal. A removal failure loses the failed and
+unattempted roots. Reuse the shared cleanup owner while retaining all six
+declarations / nine expanded cases, fixture executable bytes, environment,
+receipt assertions, Windows skip and synchronous child-process settlement.
+Production and shared helpers remain unchanged. Actual registered-hook
+failure/retry controls and clean baseline/candidate runs are pending.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
