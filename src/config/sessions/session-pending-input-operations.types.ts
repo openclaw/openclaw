@@ -24,6 +24,8 @@ type PendingInputStageRead = PendingInputIdentity & {
 export type PendingInputSourceRead = PendingInputIdentity & {
   kind: "source";
   pendingOnly: boolean;
+  /** Only active-only retries need the durable delivery outcome. */
+  includeCompletion?: boolean;
 };
 
 export type PendingInputSourceSnapshot = {
@@ -32,6 +34,7 @@ export type PendingInputSourceSnapshot = {
   pending?: SessionPendingInputRow;
   committed?: PersistedUserTurnMessage;
   committedMessageSeq?: number;
+  completion?: AgentRunTerminalOutcome;
 };
 
 export type PendingInputSnapshot = {

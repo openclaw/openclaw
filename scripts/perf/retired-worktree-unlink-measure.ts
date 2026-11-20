@@ -9,6 +9,7 @@
  * CPU/allocation include instrumentation; fixture creation is outside timing.
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
@@ -24,6 +25,9 @@ const { values } = parseArgs({
     worker: { type: "string" },
     files: { type: "string", default: "62000" },
     "file-bytes": { type: "string", default: "18432" },
+    "reservation-counter": { type: "string" },
+    reflink: { type: "boolean", default: false },
+    "fake-reservations": { type: "boolean", default: false },
   },
 });
 assert(values.output);
@@ -37,16 +41,41 @@ fs.mkdirSync(retired);
 const sizes = new Map<string, number>([[retired, 0]]);
 const content = Buffer.alloc(fileBytes, 97);
 for (let index = 0; index < files; index++) {
-  const directory = path.join(retired, String(Math.floor(index / 100)));
+  const directory = path.join(retired, "node_modules", `package-${Math.floor(index / 100)}`, "lib");
   if (index % 100 === 0) {
-    fs.mkdirSync(directory);
+    fs.mkdirSync(directory, { recursive: true });
     sizes.set(directory, 0);
+    sizes.set(path.dirname(directory), 0);
+    sizes.set(path.dirname(path.dirname(directory)), 0);
   }
   const file = path.join(directory, String(index));
   fs.writeFileSync(file, content);
   sizes.set(file, fileBytes);
 }
+// A sibling reflink checkout keeps shared extents live during retirement.
+if (values.reflink) {
+  execFileSync("cp", ["-a", "--reflink=always", retired, path.join(output, "sibling")]);
+  execFileSync("sync", ["-f", retired]);
+}
 const entryCount = sizes.size;
+let peakReservationBytes = 0;
+let simulatedMs = 0;
+let simulatedReservation = 0;
+if (values["fake-reservations"]) {
+  assert(
+    values["reservation-counter"],
+    "Bind a writable fake counter over this filesystem's sysfs counter",
+  );
+  fs.writeFileSync(values["reservation-counter"], "0\n");
+}
+const sampleReservation = () => {
+  if (values["reservation-counter"]) {
+    peakReservationBytes = Math.max(
+      peakReservationBytes,
+      Number(fs.readFileSync(values["reservation-counter"], "utf8")),
+    );
+  }
+};
 const batches: { entries: number; bytes: number; pauseMs: number; actualPauseMs: number }[] = [];
 let entries = 0;
 let bytes = 0;
@@ -60,6 +89,15 @@ const count = (target: fs.PathLike) => {
   entries++;
   bytes += sizes.get(name)!;
   sizes.delete(name);
+  if (values["fake-reservations"]) {
+    // Deliberately synthetic: 3 MiB reserved per entry, drained every 30s.
+    // This exercises feedback; it is not a calibrated btrfs cost model.
+    simulatedReservation += 3 * 1024 ** 2;
+    fs.writeFileSync(values["reservation-counter"]!, String(simulatedReservation));
+  }
+  if (entries % 128 === 0) {
+    sampleReservation();
+  }
 };
 fs.unlinkSync = (target) => {
   unlink(target);
@@ -79,7 +117,15 @@ fs.rmSync = (target, options) => {
 };
 timers.setTimeout = async (ms, value, options) => {
   const start = performance.now();
-  const result = await sleep(ms, value, options);
+  const result = await sleep(values["fake-reservations"] ? 0 : ms, value, options);
+  if (values["fake-reservations"]) {
+    const previousCommit = Math.floor(simulatedMs / 30_000);
+    simulatedMs += ms ?? 1;
+    if (Math.floor(simulatedMs / 30_000) > previousCommit) {
+      simulatedReservation = 0;
+      fs.writeFileSync(values["reservation-counter"]!, "0\n");
+    }
+  }
   batches.push({ entries, bytes, pauseMs: ms ?? 1, actualPauseMs: performance.now() - start });
   entries = 0;
   bytes = 0;
@@ -93,6 +139,8 @@ const allocation = getHeapStatistics().total_allocated_bytes;
 assert(Number.isFinite(allocation));
 const loadBefore = os.loadavg();
 const start = performance.now();
+sampleReservation();
+const sampler = setInterval(sampleReservation, 20);
 try {
   await import(
     values.worker
@@ -100,6 +148,8 @@ try {
       : "../../src/agents/worktrees/retired-worktree-cleanup.worker.js"
   );
 } finally {
+  clearInterval(sampler);
+  sampleReservation();
   process.argv = argv;
   fs.unlinkSync = unlink;
   fs.rmdirSync = rmdir;
@@ -120,6 +170,8 @@ const report = {
   elapsedMs,
   cpuMs: (used.user + used.system) / 1000,
   allocatedBytes,
+  peakReservationBytes,
+  simulatedMs: values["fake-reservations"] ? simulatedMs : undefined,
   loadBefore,
   loadAfter: os.loadavg(),
   maxBatchEntries: Math.max(...batches.map((batch) => batch.entries)),
