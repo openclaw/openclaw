@@ -1,3 +1,12 @@
+import {
+  isReplyOperationForSession,
+  resolveActiveReplyOperationForSessionId,
+} from "../../../auto-reply/reply/reply-run-registry.registry.js";
+import {
+  getAttachedBackend,
+  isReplyOperationPreBackendPhase,
+  waitForReplyOperationBackend,
+} from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { sessionDeliveryChannel } from "../../../utils/delivery-context.read.js";
@@ -20,6 +29,29 @@ import {
 export const SOURCE_OWNER_CHANGED = Symbol("source_owner_changed");
 
 export { resolveRequesterSessionActivity };
+
+/** A follow-up must not queue behind the preparing parent that is waiting for it. */
+export function waitForPreparingRequesterBackend(
+  agentId: string,
+  sessionKey: string,
+  sessionId: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<boolean> | undefined {
+  const operation = resolveActiveReplyOperationForSessionId(sessionId);
+  if (
+    !isReplyOperationForSession({ agentId, sessionKeys: [sessionKey], sessionId }, operation) ||
+    (!isReplyOperationPreBackendPhase(operation.phase) &&
+      (operation.phase !== "running" || getAttachedBackend(operation)))
+  ) {
+    return undefined;
+  }
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return waitForReplyOperationBackend(
+    operation,
+    signal ? AbortSignal.any([signal, timeout]) : timeout,
+  );
+}
 
 // Wake an active requester run through transient compacting and delivery-mode
 // outcomes. Unsupported transcript-commit waits are terminal refusals: the loop

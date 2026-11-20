@@ -1,5 +1,11 @@
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -52,6 +58,7 @@ describe("requester receipts after completion expiry", () => {
       completionTarget?: "parent";
       reason?: "expiry" | "permanent_failure";
       resultText?: string | null;
+      notice?: true;
     } = {},
   ) {
     const input = armRequesterWake(records());
@@ -64,6 +71,18 @@ describe("requester receipts after completion expiry", () => {
     input.subagent.delivery = { status: "pending", generation: 1 };
     if (options.resultText !== undefined) {
       input.subagent.completion!.resultText = options.resultText;
+    }
+    if (options.notice) {
+      input.subagent.requesterStorePath = path.join(
+        process.env.OPENCLAW_STATE_DIR!,
+        "sessions.json",
+      );
+      const scope = {
+        agentId: input.subagent.requesterAgentId,
+        sessionKey: input.subagent.requesterSessionKey,
+        storePath: input.subagent.requesterStorePath,
+      };
+      await replaceSessionEntry(scope, { sessionId: "notice-requester", updatedAt: Date.now() });
     }
     seedSubagentCompletionDelivery({ ...input, databaseOptions: { database } });
     subagentRuns.set(input.subagent.runId, input.subagent);
@@ -92,6 +111,44 @@ describe("requester receipts after completion expiry", () => {
       databaseOptions: { database },
     });
   }
+
+  it.each([true, false])(
+    "records a visible delay before later settlement (delivered=%s)",
+    async (delivered) => {
+      const input = await suspend({ notice: true });
+      const scope = {
+        agentId: input.subagent.requesterAgentId,
+        sessionKey: input.subagent.requesterSessionKey,
+        storePath: input.subagent.requesterStorePath,
+        sessionId: "notice-requester",
+      };
+      const notices = async () =>
+        (await loadTranscriptEvents(scope)).filter(
+          (event) => isRecord(event) && event.type === "custom_message",
+        );
+      const delay = expect.objectContaining({
+        customType: "subagent-delivery-delayed",
+        display: true,
+      });
+      expect(await notices()).toEqual([delay]);
+      await settle(input, delivered);
+      database = await reopenCompletionFixtureOwners();
+      if (delivered) {
+        expect(currentCompletionRun(input).delivery?.status).toBe("delivered");
+      }
+      expect(await notices()).toEqual(
+        delivered
+          ? [delay]
+          : [
+              delay,
+              expect.objectContaining({
+                customType: "run-failed-before-reply",
+                display: true,
+              }),
+            ],
+      );
+    },
+  );
 
   it("retains an admitted cleanup lock while publishing the requester receipt", async () => {
     const input = armRequesterWake(records());

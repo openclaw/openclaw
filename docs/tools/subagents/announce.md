@@ -22,6 +22,10 @@ By default, delivery depends on requester depth:
 - Nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session.
 - If a nested requester subagent session is gone, OpenClaw falls back to that session's requester when available.
 
+If an active requester is still preparing its reply backend after recovery,
+public child completion waits for the backend before steering. If recovery
+finishes without an active run, delivery can start a fresh requester turn.
+
 Model fallback and other model-routing updates do not invalidate prepared
 completion or child follow-up authority. Changes to session identity, lifecycle,
 spawn lineage, tool policy, sandbox, or execution host still reject stale work.
@@ -61,7 +65,10 @@ keyed input belongs to a closed turn, delivery records a permanent failure with
 the error. It does not retry other models or keep scheduling the same completion.
 
 Blocked completion warnings identify the child run and retain the concrete delivery
-error across retries. A confirmed handoff remains delivered even if its receipt
+error across retries. When automatic delivery expires, the requester chat gets a
+delay notice: a later settlement may still deliver the saved result. Failed
+settlement or final discard reports a delivery failure without starting another
+agent turn. A confirmed handoff remains delivered even if its receipt
 callback fails; cleanup must not replay an already consumed result. Failures before
 a delivery result is reported follow the same retryability policy as direct sends.
 

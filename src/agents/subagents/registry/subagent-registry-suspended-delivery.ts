@@ -1,4 +1,5 @@
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { recordRequiredCompletionNotice } from "../completion/subagent-completion-admission.store.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import {
@@ -103,6 +104,7 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     recovery:
       "Inspect retained results with /subagents info <runId>; session history depends on cleanup and retention.",
   });
+  await recordRequiredCompletionNotice(entry, "failed");
   if (shouldRemoveSubagentAttachments(entry) && isHookCurrent()) {
     await safeRemoveAttachmentsDir(entry, isHookCurrent);
   }

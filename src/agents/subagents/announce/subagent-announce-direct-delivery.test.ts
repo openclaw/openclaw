@@ -1,5 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
+import * as replyState from "../../../auto-reply/reply/reply-run-registry.state.js";
+import { createTestReplyOperation } from "../../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import { createSessionWorkStartChangedError } from "../../../config/sessions/lifecycle.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../../config/sessions/restart-recovery-types.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
@@ -15,6 +17,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
+import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 
 const sentDeliveryStatus = { status: "sent", resultCount: 1 } as const;
 
@@ -155,6 +158,66 @@ describe("late exact requester recovery", () => {
       steer,
     };
   }
+
+  it.each(["backend ready", "owner completed"] as const)(
+    "does not queue a child completion behind a preparing requester (%s)",
+    async (ending) => {
+      const fixture = setup();
+      fixture.params.sourceTool = "subagent_announce";
+      fixture.params.expectsCompletionMessage = true;
+      fixture.state.active = true;
+      const operation = createTestReplyOperation({
+        sessionKey,
+        sessionId: fixture.state.entry.sessionId,
+      });
+      const waiting = createDeferredCore();
+      const waitForBackend = replyState.waitForReplyOperationBackend;
+      const wait = vi
+        .spyOn(replyState, "waitForReplyOperationBackend")
+        .mockImplementation((...args) => {
+          waiting.resolve();
+          return waitForBackend(...args);
+        });
+      fixture.steer.mockImplementation((sessionId) =>
+        replyState.getAttachedBackend(operation)
+          ? { queued: true, sessionId, target: "embedded_run", gatewayHealth: "live" }
+          : {
+              queued: false,
+              sessionId,
+              reason: "transcript_commit_wait_unsupported",
+              gatewayHealth: "live",
+            },
+      );
+      fixture.dispatchDone.resolve({
+        status: "ok",
+        result: {
+          payloads: [{ text: "Child result delivered" }],
+          deliveryStatus: sentDeliveryStatus,
+        },
+      });
+      const delivery = sendSubagentAnnounceDirectly(fixture.params);
+      try {
+        await Promise.race([waiting.promise, delivery]);
+        expect(fixture.steer).not.toHaveBeenCalled();
+        expect(fixture.dispatch).not.toHaveBeenCalled();
+        if (ending === "backend ready") {
+          operation.attachBackend({ kind: "embedded", cancel: vi.fn() });
+          operation.setPhase("running");
+          await expect(delivery).resolves.toMatchObject({ delivered: true, path: "steered" });
+          expect(fixture.dispatch).not.toHaveBeenCalled();
+        } else {
+          fixture.state.active = false;
+          operation.complete();
+          await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
+          expect(fixture.dispatch).toHaveBeenCalledOnce();
+        }
+      } finally {
+        operation.complete();
+        await Promise.allSettled([delivery]);
+        wait.mockRestore();
+      }
+    },
+  );
 
   it.each(["subagent_settle", "subagent_announce"])(
     "joins an interrupted %s continuation and consumes its final receipt without replay",

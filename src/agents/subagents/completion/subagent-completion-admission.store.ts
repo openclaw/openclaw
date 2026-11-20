@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { appendSessionTranscriptReport } from "../../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-owner.js";
 import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import type { QueuedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
@@ -25,6 +28,7 @@ import {
 import { isCanonicalSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
+  buildRequesterSettleWakeIdentity,
   sameRequesterSettleRunIdentity,
   captureRequesterSettleWakeProgress,
 } from "../registry/subagent-requester-settle-identity.js";
@@ -49,6 +53,80 @@ export class SubagentCompletionSourceChangedError extends SubagentRegistryMutati
 type AdmissionReceipt =
   SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
 type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
+
+/** A committed delivery outcome can notify the requester without admitting another turn. */
+export async function recordRequiredCompletionNotice(
+  entry: SubagentRunRecord,
+  kind: "delayed" | "failed",
+): Promise<void> {
+  if (
+    entry.expectsCompletionMessage !== true ||
+    entry.execution.status !== "terminal" ||
+    entry.pauseReason === "sessions_yield" ||
+    (subagentRuns.get(entry.runId)?.delivery?.status === "delivered" &&
+      (kind === "delayed" || !entry.requesterSettleWake?.requesterYieldBatch))
+  ) {
+    return;
+  }
+  const target = {
+    agentId: entry.requesterAgentId,
+    sessionKey: entry.requesterSessionKey,
+    storePath: entry.requesterStorePath,
+  };
+  try {
+    const current = await readSessionEntryReadOnlyInWorker(target);
+    if (!current?.sessionId || current.status === "killed" || current.archivedAt !== undefined) {
+      return;
+    }
+    const customType = kind === "delayed" ? "subagent-delivery-delayed" : "run-failed-before-reply";
+    const wake = entry.requesterSettleWake;
+    const runId = wake?.requesterYieldBatch
+      ? buildRequesterSettleWakeIdentity({
+          requesterAgentId: entry.requesterAgentId,
+          requesterSessionKey: entry.requesterSessionKey,
+          batchRunIds: wake.batchRunIds ?? [entry.runId],
+          rearmGeneration: wake.rearmGeneration,
+        }).runId
+      : ["subagent-delivery", entry.taskRunId ?? entry.runId, entry.delivery?.generation ?? 1].join(
+          ":",
+        );
+    const result = await runWithoutOwnedSessionTranscriptWrites(() =>
+      appendSessionTranscriptReport(
+        {
+          ...target,
+          sessionId: current.sessionId,
+          expectedLifecycleRevision: current.lifecycleRevision,
+        },
+        {
+          kind: "custom",
+          customTypes: [customType],
+          selectReport: (latest) =>
+            isRecord(latest?.details) && latest.details.runId === runId
+              ? undefined
+              : {
+                  customType,
+                  display: true,
+                  excludeFromContext: true,
+                  content:
+                    kind === "delayed"
+                      ? "Automatic delivery of a child result timed out. The saved result may still arrive automatically."
+                      : "A child result could not be delivered to this conversation.",
+                  details: { runId, childRunId: entry.runId },
+                },
+        },
+      ),
+    );
+    if (!result.ok) {
+      log.warn("Subagent completion notice could not be recorded", {
+        runId: entry.runId,
+        code: result.error.code,
+      });
+    }
+  } catch (error) {
+    // The delivery mutation has already committed. Reporting must not replay it.
+    log.warn("Subagent completion notice could not be recorded", { runId: entry.runId, error });
+  }
+}
 
 function parseAcknowledgedRecord(value: unknown): SubagentCompletionRecord {
   if (
@@ -446,6 +524,16 @@ export async function blockSubagentCompletionDelivery(
     },
     params,
   );
+  if (
+    result.applied &&
+    !params.storeReplaced &&
+    (params.suspendedReason || params.disposition === "permanent_failure")
+  ) {
+    await recordRequiredCompletionNotice(
+      params.subagent,
+      params.suspendedReason === "expiry" ? "delayed" : "failed",
+    );
+  }
   return result.applied === true;
 }
 
@@ -514,7 +602,7 @@ export async function mutateRequesterCompletionBatch(
     operation: RequesterWakeMutation | { kind: "settle"; outcome: SubagentAnnounceDeliveryResult };
   },
 ): Promise<CompletionMutationPublication> {
-  return mutateCompletion(
+  const publication = await mutateCompletion(
     params.entries,
     (rows) => {
       const cohort = {
@@ -537,4 +625,16 @@ export async function mutateRequesterCompletionBatch(
       },
     },
   );
+  if (
+    publication.applied &&
+    params.operation.kind === "settle" &&
+    !params.operation.outcome.delivered &&
+    !params.operation.outcome.storeReplaced &&
+    params.operation.outcome.disposition !== "intentional_non_delivery"
+  ) {
+    for (const entry of params.entries) {
+      await recordRequiredCompletionNotice(entry, "failed");
+    }
+  }
+  return publication;
 }

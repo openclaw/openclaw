@@ -42,6 +42,7 @@ import {
   SOURCE_OWNER_CHANGED,
   resolveActiveWakeWithRetries,
   resolveRequesterSessionActivity,
+  waitForPreparingRequesterBackend,
 } from "./subagent-announce-active-wake.js";
 import {
   deliverCompletionDirect,
@@ -225,7 +226,7 @@ async function sendSubagentAnnounceDirectlyBound(
     const requiresMessageToolDelivery =
       completionRouteRequiresMessageToolDelivery ||
       subagentDirectMessageCompletionRequiresMessageTool;
-    const requesterActivity = resolveRequesterSessionActivity(
+    let requesterActivity = resolveRequesterSessionActivity(
       params.targetRequesterSessionKey,
       requester,
     );
@@ -327,13 +328,40 @@ async function sendSubagentAnnounceDirectlyBound(
         directOrigin?.channel,
       sessionEntry: requesterEntry,
     });
-    if (
-      !recoveredResult &&
-      !parentOnly &&
-      params.expectsCompletionMessage &&
-      requesterActivity.sessionId &&
-      requesterActivity.isActive
-    ) {
+    const shouldWake = !recoveredResult && !parentOnly && params.expectsCompletionMessage;
+    const activeSessionId = requesterActivity.sessionId;
+    const readiness =
+      shouldWake && activeSessionId && requesterActivity.isActive && requesterAgentId
+        ? waitForPreparingRequesterBackend(
+            requesterAgentId,
+            canonicalRequesterSessionKey,
+            activeSessionId,
+            announceTimeoutMs,
+            params.signal,
+          )
+        : undefined;
+    if (readiness) {
+      const ready = await readiness;
+      if (!isCompletionAdmissionAllowed()) {
+        return sourceOwnerChangedResult();
+      }
+      requesterActivity = resolveRequesterSessionActivity(
+        params.targetRequesterSessionKey,
+        requester,
+      );
+      if (
+        requesterActivity.isActive &&
+        (!ready || requesterActivity.sessionId !== activeSessionId)
+      ) {
+        return {
+          delivered: false,
+          path: "none",
+          reason: "requester_turn_pending",
+          disposition: "retryable",
+        };
+      }
+    }
+    if (shouldWake && requesterActivity.sessionId && requesterActivity.isActive) {
       const wakeOptions: EmbeddedAgentQueueMessageOptions = {
         deliveryTimeoutMs: announceTimeoutMs,
         steeringMode: "all",
