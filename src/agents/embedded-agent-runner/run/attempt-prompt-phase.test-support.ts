@@ -4,6 +4,7 @@ import type { SubsystemLogger } from "../../../logging/subsystem.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { createFixedRequestTokenEstimator } from "../../sessions/context-token-pressure.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import type { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
 import type {
@@ -301,6 +302,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     preparedStreamRuntime: {
       cache: {},
       history: {
+        estimateFixedRequest: createFixedRequestTokenEstimator(),
         contextEnginePromptAuthority: "assembled",
       },
       promptActiveSession: vi.fn(),

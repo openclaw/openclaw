@@ -168,6 +168,7 @@ async function stageWorkerWorkspaceResult(
     gitHistory?: WorkerWorkspaceGitHistory;
     gitPackPath?: string;
     parentCommit?: string;
+    blobsOnly?: true;
   },
 ): Promise<string> {
   const root = await fs.realpath(params.root);

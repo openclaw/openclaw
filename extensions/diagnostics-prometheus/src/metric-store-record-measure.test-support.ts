@@ -5,7 +5,7 @@ import { loadavg } from "node:os";
 import { getHeapStatistics } from "node:v8";
 import type { PrometheusMetricStore } from "./prometheus-metric-store.js";
 
-function measureSynchronous<T>(run: () => T) {
+export function measureSynchronous<T>(run: () => T) {
   const allocatedBefore = getHeapStatistics().total_allocated_bytes;
   assert(Number.isFinite(allocatedBefore), "Requires Node 26.12+ allocation counters");
   const cpuBefore = process.threadCpuUsage();

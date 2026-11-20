@@ -127,7 +127,10 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
   };
   const finish = () => {
     if (!retiring) {
-      host.onIdle();
+      // Admitted cleanup may still retain resources after the task reply.
+      if (pendingResourceClosures === 0) {
+        host.onIdle();
+      }
       return;
     }
     // Queued resource receipts depend on execution. Join them after returning,
@@ -214,7 +217,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
           .finally(() => {
             receipt.close();
             pendingResourceClosures--;
-            if (!active && !retiring) {
+            if (!active && !retiring && pendingResourceClosures === 0) {
               host.onIdle();
             }
           });

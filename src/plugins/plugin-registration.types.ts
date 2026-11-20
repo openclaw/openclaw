@@ -288,6 +288,16 @@ export type OpenClawPluginNodeInvokePolicyResult =
 export type OpenClawPluginNodeInvokePolicy = {
   commands: string[];
   /**
+   * Admit an exact MCP tool to same-node execution without running handle.
+   * Only an explicit true permits local execution; otherwise the Gateway handles it.
+   */
+  allowLocalMcpTool?: (ctx: {
+    nodeId: string;
+    server: string;
+    tool: string;
+    pluginConfig?: Record<string, unknown>;
+  }) => boolean;
+  /**
    * Platforms where these node-handled commands should be allowlisted by default.
    * Omit for commands that require explicit `gateway.nodes.commands.allow`.
    */
@@ -442,6 +452,8 @@ export type OpenClawPluginServiceContext = {
     onWorkerRequestMetrics?: (
       listener: import("../infra/worker-request-diagnostics.js").WorkerRequestMetricsListener,
     ) => () => void;
+    /** Synchronous samples recorded through `api.metrics`; labels are borrowed until return. */
+    onPluginMetrics?: (listener: import("./plugin-metrics.js").PluginMetricsListener) => () => void;
     /** Identity of the hosting process, available only while this service is active. */
     getRuntimeIdentity?: () => { processInstanceId: string; buildId?: string };
     /** Current owner-projected work; undefined while the Gateway projection is unavailable. */

@@ -10,6 +10,7 @@ import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
 } from "../../../sessions/input-provenance.js";
+import { waitForReplyOperationBackend } from "../../../sessions/session-controller.state.js";
 import {
   submitSessionControllerSteer,
   type SessionControllerSteerResult,
@@ -277,6 +278,17 @@ async function sendSubagentAnnounceDirectlyBound(
     ) {
       let steer: SessionControllerSteerResult;
       try {
+        // Recovery owns the turn before its backend is ready. Queuing behind it can
+        // deadlock a parent waiting for this result; steering resolves its live owner below.
+        const requesterOperation = params.controllerInput.mailbox.owner.active;
+        if (requesterOperation) {
+          await waitForReplyOperationBackend(
+            requesterOperation,
+            params.signal
+              ? AbortSignal.any([params.signal, params.controllerInput.abortSignal])
+              : params.controllerInput.abortSignal,
+          );
+        }
         steer = await submitSessionControllerSteer({
           input: params.controllerInput,
           text: turnMessage,
@@ -321,12 +333,13 @@ async function sendSubagentAnnounceDirectlyBound(
         }
         throw error;
       }
-      // Steering consumes admission; its result remains valid while the delivery owner is current.
-      if (!isCompletionDeliveryAllowed()) {
-        return sourceOwnerChangedResult();
-      }
+      // A committed steer delivered the result; a later owner change cannot undo that.
       if (steer.status === "accepted") {
         return { delivered: true, path: "steered" };
+      }
+      // Otherwise steering consumed admission; its outcome counts while the owner is current.
+      if (!isCompletionDeliveryAllowed()) {
+        return sourceOwnerChangedResult();
       }
       if (steer.status === "indeterminate") {
         // The input was consumed without a confirmed commit; it is never replayed.

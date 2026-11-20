@@ -41,6 +41,7 @@ export type SqliteSessionWriteOperation =
   | "session.reclamation.prepare"
   | "session.reclamation.retain"
   | "session.reclamation.worker-commit"
+  | "session.cold.sweep"
   | "session.transcript.batch"
   | "session.transcript.branch"
   | "session.transcript.compact"

@@ -48,6 +48,10 @@ import {
   inspectActionsArtifactZipWithPolicy,
   sha256Digest,
 } from "./lib/actions-artifact-archive.mjs";
+import {
+  dispatchReceiptRecovery,
+  parseReceiptRecoveryArgs,
+} from "./lib/full-release-recovery-dispatch.mjs";
 import { execPlainGh, plainGhAuthenticatedEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
 import {
   RELEASE_PRIORITY_VARIABLE,
@@ -80,7 +84,7 @@ const DEFAULT_CHILD_MAX_ATTEMPTS = 2;
 const PLAN_ARTIFACT_PROPAGATION_MS = 2 * 60_000;
 const PLAN_FILENAME = "full-release-execution-plan.json";
 const USAGE =
-  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> [--no-follow] | --child <key|run-id> [--max-attempts <n>]] | pnpm frv logs --job <job-id> [--grep <text>] | pnpm frv prioritize --restore <record>";
+  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify|recover> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> [--no-follow] | --child <key|run-id> [--max-attempts <n>]] | pnpm frv logs --job <job-id> [--grep <text>] | pnpm frv prioritize --restore <record> | pnpm frv recover --run <original> --workflow-sha <P> --request-file <path> | pnpm frv recover --reconcile-request <path>";
 const PACIFIC_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/Los_Angeles",
   year: "numeric",
@@ -138,6 +142,9 @@ function remainingOperationTime(deadline, label = "FRV operation") {
 
 function parseArgs(argv) {
   const command = argv[0];
+  if (command === "recover") {
+    return parseReceiptRecoveryArgs(argv.slice(1));
+  }
   const options = {
     command,
     dryRun: false,
@@ -584,8 +591,8 @@ async function recheckArtifactProducers(
   }
 }
 
-const ARTIFACT_PRODUCER_STAGES = new Set(["npm", "docker", "candidate"]);
-const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker"]);
+const ARTIFACT_PRODUCER_STAGES = new Set(["npm", "docker", "candidate", "plugin-npm"]);
+const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker", "plugin-npm"]);
 
 async function legacyNpmRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
   if (!workflow.includes("node scripts/full-release-artifacts.mjs resolve")) {
@@ -654,10 +661,14 @@ function artifactRecoveryJobs(workflow) {
       continue;
     }
     const childKind = job.env?.CHILD_WORKFLOW_KIND;
-    if (typeof childKind !== "string" || !childKind.startsWith("artifact-")) {
+    if (
+      typeof childKind !== "string" ||
+      (!childKind.startsWith("artifact-") && childKind !== "plugin-npm-preflight")
+    ) {
       continue;
     }
-    const stage = childKind.slice("artifact-".length);
+    const stage =
+      childKind === "plugin-npm-preflight" ? "plugin-npm" : childKind.slice("artifact-".length);
     if (!ARTIFACT_PRODUCER_STAGES.has(stage) || typeof job.name !== "string" || !job.name.trim()) {
       throw new Error("Source workflow artifact producer contract is unsupported");
     }
@@ -719,11 +730,39 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       continue;
     }
     const log = stripVTControlCharacters(await client.getJobLog(job.id, options));
-    const dispatches = [
-      ...log.matchAll(
-        /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact dispatch (npm|docker) target ([a-f0-9]{40}): https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
-      ),
-    ];
+    const plugin = stage === "plugin-npm";
+    const pluginDispatches = plugin
+      ? [
+          ...log.matchAll(
+            /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Dispatched plugin-npm-release\.yml: https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
+          ),
+        ]
+      : [];
+    const distTags = plugin
+      ? [
+          ...new Set(
+            [
+              ...log.matchAll(
+                /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?\s*NPM_DIST_TAG: (default|extended-stable)\r?(?=\n|$)/gu,
+              ),
+            ].map((match) => match[1]),
+          ),
+        ]
+      : [];
+    const dispatches = plugin
+      ? pluginDispatches.map((match) => [
+          match[0],
+          stage,
+          plan.targetSha,
+          match[1],
+          match[2],
+          match[3],
+        ])
+      : [
+          ...log.matchAll(
+            /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact dispatch (npm|docker) target ([a-f0-9]{40}): https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
+          ),
+        ];
     if (
       dispatches.length === 0 &&
       plan.evidenceReuse?.requested === true &&
@@ -731,6 +770,9 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       job.conclusion === "success"
     ) {
       continue;
+    }
+    if (plugin && (distTags.length !== 1 || !log.includes(`TARGET_SHA: ${plan.targetSha}`))) {
+      throw new Error("Original plugin-npm dispatch inputs are unavailable or ambiguous");
     }
     if (
       dispatches.length !== 1 ||
@@ -760,7 +802,10 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       request: {
         stage,
         repository,
-        dispatchId: `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-${stage}`,
+        dispatchId: plugin
+          ? `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-plugin-npm-preflight`
+          : `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-${stage}`,
+        ...(plugin ? { sourceSha: plan.targetSha, npmDistTag: distTags[0] } : {}),
         toolingSha: plan.workflowSha,
         workflowRef: plan.workflowRef,
       },
@@ -1011,7 +1056,17 @@ async function readChildAttemptEvidence(child, client, options) {
           throw new Error(`child changed during attempt materialization: ${child.key}`);
         }
       }
-      return { run, evidence };
+      // Progress is observational: never add mutable step data to the accepted jobs digest.
+      const activeJobs = (attempts.at(-1)?.jobs ?? [])
+        .filter((job) => job.status === "in_progress")
+        .map((job) => {
+          const step = job.steps?.find((entry) => entry.status === "in_progress");
+          return {
+            name: job.name,
+            step: step ? { name: step.name, startedAt: step.started_at } : null,
+          };
+        });
+      return { run, evidence, activeJobs };
     } catch (error) {
       // GitHub briefly returns overlapping job identities while a new attempt
       // materializes. Never normalize those rows into accepted evidence.
@@ -1054,7 +1109,7 @@ export async function inspectContinuation(plan, client, options = {}) {
           url: String(child.url ?? ""),
         };
       }
-      const { run, evidence } = await readChildAttemptEvidence(child, client, options);
+      const { run, evidence, activeJobs } = await readChildAttemptEvidence(child, client, options);
       const effectiveRunAttempt = Number(run.run_attempt);
       if (!evidence) {
         return {
@@ -1079,6 +1134,7 @@ export async function inspectContinuation(plan, client, options = {}) {
       };
       const passed = !active && terminalPolicyPass(policyChild, plan.targetVersion, plan.targetSha);
       return {
+        activeJobs,
         compositeJobsSha256: evidence.compositeJobsSha256,
         conclusion: String(run.conclusion ?? ""),
         dispatchActor: evidence.dispatchActor,
@@ -2271,6 +2327,17 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
     // idling until unrelated siblings settle. The budget is re-derived from attempts.
     const failedAgain = status.failed.find((child) => ownedAttempts.has(child.runId));
     if (failedAgain) {
+      if (target?.name !== undefined && failedAgain.key === target.childKey) {
+        const job = failedAgain.jobs.find((entry) => entry.name === target.name);
+        if (job?.acceptedRunAttempt === ownedAttempts.get(failedAgain.runId)) {
+          log(
+            `[frv] target ${target.childKey}:${target.name}: ${job.conclusion} (accepted attempt ${job.acceptedRunAttempt})`,
+          );
+          log(
+            `[frv] composite ${failedAgain.key}: failed (attempt ${failedAgain.effectiveRunAttempt})`,
+          );
+        }
+      }
       const used = failedAgain.effectiveRunAttempt - failedAgain.plannedRunAttempt + 1;
       throw new Error(
         `child ${failedAgain.key} failed again on attempt ${failedAgain.effectiveRunAttempt}; rerun budget remaining ${Math.max(0, DEFAULT_CHILD_MAX_ATTEMPTS - used)}; rerun pnpm frv continue --failed --run ${rootRunId}${repositoryOption} to retry a confirmed flake, otherwise start a fresh all-group FRV`,
@@ -3824,6 +3891,15 @@ function print(value, json) {
     console.log(
       `${child.key}: ${child.status}${child.conclusion && child.conclusion !== "success" ? ` (${child.conclusion})` : ""} attempt=${child.effectiveRunAttempt} planned=${child.plannedRunAttempt} run=${child.runId}`,
     );
+    for (const job of child.activeJobs ?? []) {
+      const startedAt = Date.parse(job.step?.startedAt);
+      const age = Number.isFinite(startedAt)
+        ? `${Math.max(0, Math.floor((Date.now() - startedAt) / 1000))}s`
+        : "unknown";
+      console.log(
+        `  ${JSON.stringify(job.name)}: step=${JSON.stringify(job.step?.name ?? "unavailable")} age=${age}`,
+      );
+    }
   }
   for (const run of value.rerun ?? []) {
     console.log(`${run.name} ${run.id} ${run.headBranch} ${run.url}`);
@@ -3876,6 +3952,56 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.command === "help") {
     console.log(USAGE);
+    return;
+  }
+  if (options.command === "recover") {
+    const client = createReleaseEvidenceClient(options.repository);
+    const result = await dispatchReceiptRecovery(options, {
+      ...client,
+      async listRecoveryRuns() {
+        const inventory = await ghJson(
+          options.repository,
+          "actions/workflows/full-release-receipt-recovery.yml/runs?event=workflow_dispatch&branch=main&per_page=100",
+        );
+        if (!Array.isArray(inventory.workflow_runs)) {
+          throw new Error("Invalid recovery run inventory");
+        }
+        return inventory.workflow_runs;
+      },
+      async postRecovery(wire) {
+        const directory = mkdtempSync(join(dirname(options.requestFile), ".frv-recovery-"));
+        const path = join(directory, "dispatch.json");
+        try {
+          writeFileSync(path, wire, { flag: "wx", mode: 0o600 });
+          await execGh([
+            "api",
+            "--method",
+            "POST",
+            "repos/" +
+              options.repository +
+              "/actions/workflows/full-release-receipt-recovery.yml/dispatches",
+            "--input",
+            path,
+          ]);
+        } finally {
+          rmSync(directory, { recursive: true, force: true });
+        }
+      },
+    });
+    print(result, options.json);
+    if (!options.json) {
+      console.log(
+        "recovery run: " +
+          (result.runId ?? "unconfirmed") +
+          "; status: " +
+          (result.status ?? "unknown") +
+          "; conclusion: " +
+          (result.conclusion ?? "unknown"),
+      );
+      if (!result.complete) {
+        console.log("next: " + result.nextCommand);
+      }
+    }
     return;
   }
   if (options.publicationRunId) {

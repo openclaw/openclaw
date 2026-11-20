@@ -1,3 +1,5 @@
+import { posix } from "node:path";
+
 // Keep subprocess metadata independent of executable launcher declarations.
 export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
   const runtimeProcessEntrypoint = (
@@ -10,13 +12,14 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
       currentModuleUrl,
       sourceModulePath: `src/${path}${sourceExtension ?? ".ts"}`,
       sourceExtension,
-      sourceWorkerName: path.startsWith("infra/") ? path.slice("infra/".length) : `../${path}`,
+      sourceWorkerName: posix.relative("/infra", `/${path}`),
       distWorkerPath: `${distModulePath}${extension}`,
     }) as const;
   const loaderFreeEntrypoint = (modulePath: string) =>
     runtimeProcessEntrypoint(modulePath, undefined, undefined, ".mjs");
 
   return {
+    workerThreadLoader: loaderFreeEntrypoint("infra/runtime-worker-loader"),
     daemonRuntimeProbe: runtimeProcessEntrypoint("infra/daemon-runtime-probe.entry"),
     pluginToolsServe: runtimeProcessEntrypoint("mcp/plugin-tools-serve"),
     openclawToolsServe: runtimeProcessEntrypoint("mcp/openclaw-tools-serve"),
@@ -39,6 +42,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     backupDatabaseDiscovery: runtimeProcessEntrypoint("infra/backup-database-discovery.worker"),
     sqliteHeaderProbe: runtimeProcessEntrypoint("infra/sqlite-header-probe.worker"),
     databaseBackup: runtimeProcessEntrypoint("snapshot/database-backup.worker"),
+    backupGzip: runtimeProcessEntrypoint("infra/backup-gzip.worker"),
     managedHandoffEngine: runtimeProcessEntrypoint(
       "infra/update-managed-service-handoff-engine.worker",
     ),
@@ -287,6 +291,17 @@ export const pluginRuntimeProcessManifest = {
     package: {
       name: "@openclaw/document-extract-plugin",
       distWorkerPath: "document-extractor.worker.js",
+    },
+  },
+  webReadability: {
+    ...pluginRuntimeProcess(
+      "web-readability",
+      "web-content-extractor-worker.runtime",
+      "web-content-extractor.worker",
+    ),
+    package: {
+      name: "@openclaw/web-readability-plugin",
+      distWorkerPath: "web-content-extractor.worker.js",
     },
   },
   fileTransferDirFetch: {
@@ -595,7 +610,7 @@ export const runtimeProcessGatewayEntrypointNames = [
   "gatewayEntryModule",
 ] as const satisfies readonly (keyof typeof runtimeProcessExternalPackageEntrypoints)[];
 
-const runtimeProcessStandaloneModules = [
+const standaloneModulePaths = [
   "../runtime-process-scripts.generated.mjs",
   "../openclaw.mjs",
   "../node-compile-cache.mjs",
@@ -626,13 +641,12 @@ export function createStandaloneRuntimeProcessEntrypoints(
   ];
   return {
     ...createRuntimeProcessEntrypoints(currentModuleUrl),
-    ...Object.fromEntries(plugins.map(([name, entry]) => [`plugin:${name}`, entry])),
-    ...Object.fromEntries(
-      deploy.map((name) => [`deploy:${name}`, { distWorkerPath: `worker/${name}.mjs` }]),
-    ),
-    ...Object.fromEntries(
-      runtimeProcessStandaloneModules.map((name) => [`module:${name}`, { distWorkerPath: name }]),
-    ),
+    // Namespace projections share a packaged path; root descriptors retain their full types.
+    ...Object.fromEntries<{ distWorkerPath: string }>([
+      ...plugins.map(([name, entry]) => [`plugin:${name}`, entry] as const),
+      ...deploy.map((key) => [`deploy:${key}`, { distWorkerPath: `worker/${key}.mjs` }] as const),
+      ...standaloneModulePaths.map((id) => [`module:${id}`, { distWorkerPath: id }] as const),
+    ]),
   };
 }
 

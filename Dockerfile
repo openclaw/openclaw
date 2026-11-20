@@ -464,6 +464,7 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 # NOTE: /home/node/.config must be created with node ownership first so that
 # the leaf /home/node/.config/openclaw inherits the correct parent permissions.
 # Without this, install -d leaves /home/node/.config as root:root (issue #85968).
+RUN chmod 0755 /home/node
 RUN install -d -m 0755 -o node -g node /home/node/.config && \
     install -d -m 0700 -o node -g node \
       /home/node/.openclaw \
@@ -475,6 +476,8 @@ RUN install -d -m 0755 -o node -g node /home/node/.config && \
     stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'
 
 ENV NODE_ENV=production
+# Limit glibc arena fragmentation; container environment overrides remain authoritative.
+ENV MALLOC_ARENA_MAX=2
 
 # Security hardening: Run as non-root user
 # The node:24-trixie image includes a 'node' user (uid 1000)

@@ -1,6 +1,8 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { EventEmitter } from "node:events";
 import type { Readable, Writable } from "node:stream";
+import { MessageChannel, type MessagePort } from "node:worker_threads";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 
@@ -24,8 +26,16 @@ type Host = {
 // process owns those streams and never closes one on macOS: a close only retires
 // its id, and the helper exits without teardown once its input ends.
 
-let host: Host | undefined;
-let nextId = 0;
+type WatchRequest = { id: number; path: string; recursive: boolean } | { id: number };
+type WatchReply =
+  | { id: number; event: string; filename?: string }
+  | { id: number; error: Error; pathUnavailable: boolean };
+
+const state = resolveGlobalSingleton<{
+  host?: Host;
+  nextId: number;
+  remote?: (path: string, listener: Listener, recursive: boolean) => DirectoryWatch;
+}>(Symbol.for("openclaw.directoryWatchHost"), () => ({ nextId: 0 }));
 // Retired native watches stay open until their helper exits; past this many the
 // live watches move to a fresh helper, whose single stream build replaces one
 // rebuild per close.
@@ -68,8 +78,8 @@ function startHost(): Host {
     }
   });
   const lost = () => {
-    if (host === started) {
-      host = undefined;
+    if (state.host === started) {
+      state.host = undefined;
     }
     const watches = Array.from(started.watches.values());
     started.watches.clear();
@@ -100,20 +110,23 @@ export function watchDirectory(
   listener: Listener,
   recursive = false,
 ): DirectoryWatch {
-  const id = nextId++;
+  if (state.remote) {
+    return state.remote(directoryPath, listener, recursive);
+  }
+  const id = state.nextId++;
   const watch = Object.assign(new EventEmitter(), { path: directoryPath, recursive });
   watch.on("change", listener);
   try {
-    register((host ??= startHost()), id, watch);
+    register((state.host ??= startHost()), id, watch);
   } catch (error) {
-    host?.watches.delete(id);
+    state.host?.watches.delete(id);
     queueMicrotask(() => watch.emit("error", error, false));
   }
   return Object.assign(watch, {
     close() {
       watch.removeAllListeners("change");
       // Live watches always sit in the current helper; a lost one is in none.
-      const current = host;
+      const current = state.host;
       if (!current?.watches.delete(id)) {
         return;
       }
@@ -124,10 +137,10 @@ export function watchDirectory(
         current.child.stdin.write(`${JSON.stringify({ id })}\n`);
         return;
       }
-      host = undefined;
+      state.host = undefined;
       if (current.watches.size) {
         // Each moved watch invalidates once when live again, covering the handoff.
-        const next = (host = startHost());
+        const next = (state.host = startHost());
         for (const [movedId, moved] of current.watches) {
           register(next, movedId, moved);
         }
@@ -136,4 +149,81 @@ export function watchDirectory(
       current.child.stdin.end();
     },
   });
+}
+
+/** Give an owned worker access to this isolate's host without starting a helper. */
+export function createDirectoryWatchChannel(): { port: MessagePort; close(): void } {
+  const { port1, port2 } = new MessageChannel();
+  const watches = new Map<number, DirectoryWatch>();
+  const close = () => {
+    for (const watch of watches.values()) {
+      watch.close();
+    }
+    watches.clear();
+    port1.close();
+  };
+  port1.on("close", close);
+  port1.on("message", (request: WatchRequest) => {
+    const { id } = request;
+    if (!("path" in request)) {
+      watches.get(id)?.close();
+      watches.delete(id);
+      return;
+    }
+    const post = (reply: WatchReply) => port1.postMessage(reply);
+    const watch = watchDirectory(
+      request.path,
+      (event, filename) => post({ id, event, filename }),
+      request.recursive,
+    );
+    watches.set(id, watch);
+    watch.on("error", (error, pathUnavailable) => {
+      watches.delete(id);
+      post({ id, error, pathUnavailable });
+    });
+  });
+  port1.unref();
+  return { port: port2, close };
+}
+
+/** Bind before the worker admits work. The port owns all subscriptions until the worker exits. */
+export function installDirectoryWatchPort(port: MessagePort): void {
+  const watches = new Map<number, EventEmitter>();
+  let closed = false;
+  const disconnected = () => new Error("Directory watch owner disconnected");
+  port.on("message", (reply: WatchReply) => {
+    const watch = watches.get(reply.id);
+    if ("event" in reply) {
+      watch?.emit("change", reply.event, reply.filename);
+    } else {
+      watches.delete(reply.id);
+      watch?.emit("error", reply.error, reply.pathUnavailable);
+    }
+  });
+  port.on("close", () => {
+    closed = true;
+    const pending = [...watches.values()];
+    watches.clear();
+    for (const watch of pending) {
+      watch.emit("error", disconnected(), false);
+    }
+  });
+  port.unref();
+  state.remote = (path, listener, recursive) => {
+    const id = state.nextId++;
+    const watch = new EventEmitter().on("change", listener);
+    if (closed) {
+      queueMicrotask(() => watch.emit("error", disconnected(), false));
+    } else {
+      watches.set(id, watch);
+      port.postMessage({ id, path, recursive } satisfies WatchRequest);
+    }
+    return Object.assign(watch, {
+      close() {
+        if (watches.delete(id)) {
+          port.postMessage({ id } satisfies WatchRequest);
+        }
+      },
+    });
+  };
 }

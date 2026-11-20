@@ -161,7 +161,10 @@ settings. Increasing a workspace result limit does not fix cache exhaustion.
 
 Workspace capture and transfer omit exact tool-owned cache roots left by older
 sandboxes: `.npm/_cacache`, `.npm/_logs`, `.cache/pip`, `.cache/uv`, `.pnpm-store`,
-`.bun/install/cache`, `.cargo/registry`, `.cargo/git`, and `.gradle/caches`.
+`.bun/install/cache`, `.cargo/registry`, `.cargo/git`, `.gradle/caches`,
+`.local/share/NuGet/http-cache`, `.local/share/NuGet/v3-cache`, `.nuget/packages`,
+and `.cache/convex/binaries`. NuGet HTTP caches can be relocated with
+`NUGET_HTTP_CACHE_PATH`, and its global packages with `NUGET_PACKAGES`.
 Cargo and Gradle retain their workspace configuration; their cache subdirectories
 use this exclusion policy. Files elsewhere in `.npm`, `.cache`, `.cargo`, and
 `.gradle`, nested project fixtures, and staged inputs remain workspace data.

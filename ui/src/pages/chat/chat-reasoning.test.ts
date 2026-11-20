@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { extractThinkingCached } from "../../lib/chat/message-extract.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -11,6 +12,7 @@ import {
 } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { projectChatReasoning } from "./chat-reasoning.ts";
+import { openAIModel } from "./chat-thread-fixtures.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatInto } from "./chat-view.test-helpers.ts";
 import {
@@ -46,7 +48,13 @@ const toolCall = (id: string, args = {}) => ({
 function transcriptRow<T extends { id: string; seq: number }>(
   content: unknown,
   identity: T,
-  fields: { role?: string; timestamp?: number; stopReason?: string } = {},
+  fields: {
+    role?: string;
+    timestamp?: number;
+    stopReason?: string;
+    provider?: string;
+    model?: string;
+  } = {},
 ) {
   return { role: "assistant", timestamp: identity.seq, content, __openclaw: identity, ...fields };
 }
@@ -83,13 +91,18 @@ function thinking(text: string, seq = 1, owner = runId, itemId = "thinking-1") {
   thinkingEvent({ text, delta: text, itemId }, seq, owner);
 }
 
-function final(text = "The answer is 42.", seq = 3, sessionKey = state.sessionKey) {
+function final(
+  text = "The answer is 42.",
+  seq = 3,
+  sessionKey = state.sessionKey,
+  source?: typeof openAIModel,
+) {
   handleChatGatewayEvent(state, {
     state: "final",
     sessionKey,
     runId,
     seq,
-    message: { role: "assistant", content: [answer(text)] },
+    message: { role: "assistant", ...source, content: [answer(text)] },
   });
 }
 
@@ -351,14 +364,18 @@ it("keeps persisted tool-step reasoning visible until its run finishes", async (
     transcriptRow(
       [thought(text), toolCall(`read-${index}`, { path: `evidence-${index}.txt` })],
       { id: `${owner}-${index}`, seq: timestamp, runId: owner },
-      { stopReason: "toolUse" },
+      { ...openAIModel, stopReason: "toolUse" },
     );
   const history = activeHistory(runId);
   history.messages = [
     transcriptRow("Earlier question.", { id: "earlier-user", seq: 100 }, { role: "user" }),
     toolMessage(0, "earlier-run", "Earlier first thought.", 200),
     toolMessage(1, "earlier-run", "Earlier second thought.", 300),
-    transcriptRow("Earlier answer.", { id: "earlier-answer", seq: 400, runId: "earlier-run" }),
+    transcriptRow(
+      "Earlier answer.",
+      { id: "earlier-answer", seq: 400, runId: "earlier-run" },
+      openAIModel,
+    ),
     { ...user, timestamp: 1_000, __openclaw: { ...user["__openclaw"], seq: 1_000 } },
   ];
   state = createState(history);
@@ -442,7 +459,7 @@ it("keeps persisted tool-step reasoning visible until its run finishes", async (
   show();
   await waitForSolid(expectSteps);
 
-  final("The answer is 42.", ++seq);
+  final("The answer is 42.", ++seq, sessionKey, openAIModel);
   show();
   expect(worked()).toHaveLength(2);
   expect(thinkingNodes()).toHaveLength(1);

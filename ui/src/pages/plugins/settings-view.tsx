@@ -16,9 +16,8 @@ import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginReadme } from "./catalog-detail.tsx";
-import { PluginArtTile } from "./consent-dialog.tsx";
-import "./custom-elements.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
+import "./custom-elements.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
@@ -36,6 +35,7 @@ import {
 } from "./plugin-row-message.tsx";
 import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
+import { PluginArtTile } from "./presentation.tsx";
 import { PluginRecommendedPrompts } from "./recommended-prompts.tsx";
 import {
   pluginSettingsNodeOptions,
@@ -335,6 +335,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
       <PluginDetailShell
         registerRemovalHeading={props.registerRemovalHeading}
         id={"plugin-installed-detail"}
+        rail
         name={plugin().name}
         summary={plugin().description || catalog()?.plugin.catalog.summary}
         backHref={props.backHref}
@@ -342,6 +343,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
         onBack={props.onBack}
         icon={
           <PluginArtTile
+            neutralFallback
             registerIcon={props.registerIcon}
             slug={plugin().id}
             name={plugin().name}
@@ -389,13 +391,13 @@ function PluginOverview(props: DetailProps): JSX.Element {
               />
             }
           >
+            {renderPluginAskAction(props.onAskPlugin, false)}
             <PluginInstallAction
               registerInstallAction={props.registerInstallAction}
               buttonClass="btn oc-action plugin-catalog-detail__install"
               primary={true}
               progress={props.installProgress}
             />
-            {renderPluginAskAction(props.onAskPlugin, false)}
           </Show>
         }
         sidebar={
@@ -408,9 +410,9 @@ function PluginOverview(props: DetailProps): JSX.Element {
               )
             : undefined
         }
+        notices={<PluginNotices {...props} />}
         panel={
           <>
-            <PluginNotices {...props} />
             {renderPluginCapabilitySection(
               t("pluginsPage.auth.accounts"),
               (props.inspection?.mcpAuth ?? []).map((server) => ({

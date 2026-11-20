@@ -487,7 +487,7 @@ describe("committed human mentions", () => {
       ]);
       expect(await fixture.read()).toEqual([]);
       expect(recorder.isPendingInputConsumed?.()).toBe(true);
-      recorder.finishPendingInput?.("interrupted");
+      recorder.finishPendingInput?.("interrupted", "failed");
       await recorder.waitForPendingInputSettlement?.();
       fixture.releaseDispatch();
       fixture.activeRun?.complete();
@@ -844,24 +844,23 @@ describe("committed human mentions", () => {
       const target = { ...fixture.scope, storePath: physical.path };
       const captured = await captureSessionQueuedInputsForRestart(target);
       expect(captured.queuedInputIds).toHaveLength(1);
-      expect(captured.queuedInputSources?.[captured.queuedInputIds[0]!]).toBeDefined();
       await persistRunningSessionsForRestart({ cfg: getRuntimeConfig() });
-      expect(loadSessionEntry(fixture.scope)?.resumeAfterRestart?.queuedInputIds).toEqual(
-        captured.queuedInputIds,
-      );
+      expect(loadSessionEntry(fixture.scope)?.resumeAfterRestart).toEqual({});
       rotateAgentEventLifecycleGeneration();
       await fixture.finishDispatch();
       await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
       fixture.context.dedupe.clear();
 
-      const { rows } = await readSessionQueuedInputPage(target, {
-        queuedInputIds: captured.queuedInputIds,
-      });
+      const { rows } = await readSessionQueuedInputPage(target);
       const row = rows[0];
       if (!row) {
         throw new Error("Expected a captured graceful-restart input");
       }
       expect(row.request_hash).toMatch(/^request:/);
+      expect(JSON.parse(row.origin_source_json!)).toMatchObject({
+        kind: "gateway",
+        snapshot: { profileId: fixture.aliceId },
+      });
       const message = parseSessionPendingInputMessage(row.message_json);
       expect(message["__openclaw"]?.humanMentions).toEqual(fixture.params.mentions);
       const held = holdResumedDispatch();
@@ -869,7 +868,6 @@ describe("committed human mentions", () => {
         await continueSessionQueuedInputs(fixture.context, target, {
           signal,
           assertCurrent: () => signal.throwIfAborted(),
-          ...captured,
         });
         const resumed = await withinTest(held.recorder, signal);
         if (notificationFailure) {
@@ -914,7 +912,8 @@ describe("committed human mentions", () => {
       fixture.params.message += " Robo, please review too.";
       const { recorder, original } = await admitPending(fixture);
       if (change === "cancelled") {
-        recorder?.finishPendingInput?.("cancelled");
+        recorder?.finishPendingInput?.("cancelled", "failed");
+        await recorder.waitForPendingInputSettlement?.();
       }
       rotateAgentEventLifecycleGeneration();
       await fixture.finishDispatch();
@@ -927,7 +926,7 @@ describe("committed human mentions", () => {
         fixture.params.message += " Changed request.";
       }
       const response = await fixture.send();
-      expect(response.mock.calls[0]?.[0]).toBe(change === "cancelled");
+      expect(response.mock.calls[0]?.[0]).toBe(false);
       if (change === "sender") {
         expect(response).toHaveBeenCalledWith(
           false,
@@ -943,9 +942,20 @@ describe("committed human mentions", () => {
           undefined,
           expect.objectContaining({ details: { reason: "chat-request-conflict" } }),
         );
+      } else {
+        expect(response).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            details: { reason: "chat-input-cancelled", endCause: "failed" },
+          }),
+        );
       }
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect((await pending(fixture)).items).toEqual([{ ...original, state: "cancelled" }]);
+      expect((await pending(fixture)).items).toEqual([
+        { ...original, state: "cancelled", endCause: change === "cancelled" ? "failed" : "reset" },
+      ]);
       expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
     },
   );

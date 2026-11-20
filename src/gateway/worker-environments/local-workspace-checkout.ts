@@ -13,12 +13,13 @@ import {
   type PreparedSessionSourceEffect,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
-import { resolveStateDir } from "../../config/state-dir.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { idleIoPriorityArgv } from "../../process/idle-io-priority.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
+import { localWorkspaceProjectionRoot } from "./local-workspace-paths.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { captureInitialLocalWorkspaceManifest } from "./workspace-manifest-worker.js";
@@ -29,6 +30,7 @@ type CheckoutAuthority = {
   signal: AbortSignal;
   assertCurrent: SessionSourceAssertion;
   workerAuthority?: WorktreeWorkerAuthority;
+  idleIoPriority?: boolean;
 };
 
 function checkoutCurrent(source: PreparedSessionSourceEffect, params: CheckoutAuthority) {
@@ -73,6 +75,7 @@ async function configureProjectionFetch(
   cleanEnv: NodeJS.ProcessEnv,
 ) {
   const options = {
+    idleIoPriority: params.idleIoPriority,
     baseEnv: cleanEnv,
     env: cleanEnv,
     signal: params.signal,
@@ -117,12 +120,7 @@ export async function localWorkspaceProjectionPath(
   if (!/^[a-f0-9-]{36}$/u.test(owner.worktree.id)) {
     throw new Error("Invalid managed worktree identity");
   }
-  return path.join(
-    await fs.realpath(resolveStateDir(owner.env)),
-    "worktree-projections",
-    owner.worktree.id,
-    "workspace",
-  );
+  return path.join(await localWorkspaceProjectionRoot(owner.env), owner.worktree.id, "workspace");
 }
 
 /** Build or refresh private source-only metadata before any guest can write this checkout. */
@@ -154,6 +152,7 @@ export async function prepareLocalWorkspaceCheckout(
       params.source,
       true,
       {
+        idleIoPriority: params.idleIoPriority,
         signal,
         beforeRun: current,
         stateOwnerPath: params.workerAuthority?.stateOwnerPath,
@@ -167,6 +166,7 @@ export async function prepareLocalWorkspaceCheckout(
             temporaryRoot: temporary,
             signal,
             baseEnv,
+            idleIoPriority: params.idleIoPriority,
           }),
         ),
     );
@@ -177,6 +177,7 @@ export async function prepareLocalWorkspaceCheckout(
     const cleanEnv = checkoutGitEnvironment(temporary);
     const git = (args: string[], input?: Uint8Array) =>
       requireGit(repo, args, {
+        idleIoPriority: params.idleIoPriority,
         baseEnv: cleanEnv,
         env: cleanEnv,
         input,
@@ -199,16 +200,22 @@ export async function prepareLocalWorkspaceCheckout(
       const result = await withGitProcessOperation(
         "workspace.inventory",
         () =>
-          runCommandWithTimeout(["git", "-C", repo, "index-pack", "--stdin", "--fix-thin"], {
-            stdinFileDescriptor: input.fd,
-            baseEnv: gitEnvironment(cleanEnv),
-            signal,
-            timeoutMs: 300_000,
-            maxOutputBytes: 4096,
-            terminateOnOutputLimit: true,
-            killProcessTree: true,
-            requireProcessTreeExtinction: true,
-          }),
+          runCommandWithTimeout(
+            idleIoPriorityArgv(
+              ["git", "-C", repo, "index-pack", "--stdin", "--fix-thin"],
+              params.idleIoPriority,
+            ),
+            {
+              stdinFileDescriptor: input.fd,
+              baseEnv: gitEnvironment(cleanEnv),
+              signal,
+              timeoutMs: 300_000,
+              maxOutputBytes: 4096,
+              terminateOnOutputLimit: true,
+              killProcessTree: true,
+              requireProcessTreeExtinction: true,
+            },
+          ),
         "default",
       );
       if (result.code !== 0 || result.termination !== "exit") {

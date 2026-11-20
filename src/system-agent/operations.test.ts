@@ -364,6 +364,9 @@ describe("system agent operations", () => {
       cliOptions: { refProvider: "default", refSource: "env", refId: id },
     });
     expect(loggedOutput()).toContain("[openclaw] done: config.setRef");
+    expect(loggedOutput()).toContain(
+      "Completed only config.setRef. Other requested actions are not done unless separately confirmed.",
+    );
     expectAudit("config.setRef", "Set config gateway.auth.token SecretRef", {
       rescue: true,
       channel: "whatsapp",

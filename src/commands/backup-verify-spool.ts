@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { normalizeArchivePath } from "../infra/backup-archive-path-policy.js";
 import type { ReportBackupProgress } from "../infra/backup-progress.js";
 import {

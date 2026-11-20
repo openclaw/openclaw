@@ -1,7 +1,12 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
+import {
+  SUBAGENT_ENDED_REASON_ERROR,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "./subagent-lifecycle-events.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -29,7 +34,43 @@ export async function restoreSubagentRunMetadata(
       if (ownerChanged) {
         draft.requesterAgentId = requesterAgentId;
       }
-      if (updateSubagentArchiveAtMs(draft, cfg) || ownerChanged) {
+      const interruptedShutdown =
+        draft.expectsCompletionMessage === true &&
+        draft.delivery?.status === "pending" &&
+        draft.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+        draft.execution.outcome?.status === "error" &&
+        draft.execution.outcome.error === "Gateway stopped" &&
+        draft.killReconciliation?.suppressTaskDelivery === true &&
+        draft.killReconciliation.taskCancellationAccepted !== true;
+      if (interruptedShutdown) {
+        // Older shutdowns recorded interruption as a quiet kill. Restore the owed outcome;
+        // requester recovery still admits delivery under its current authority.
+        draft.endedReason = SUBAGENT_ENDED_REASON_ERROR;
+        draft.killReconciliation = undefined;
+        draft.suppressAnnounceReason = undefined;
+        draft.suppressCompletionDelivery = undefined;
+        draft.cleanupHandled = false;
+        draft.cleanupCompletedAt = undefined;
+        draft.completion = {
+          ...draft.completion,
+          required: true,
+          resultText: draft.completion?.resultText ?? null,
+          capturedAt: draft.completion?.capturedAt ?? draft.execution.endedAt,
+        };
+      }
+      const unfinishedCollector =
+        draft.collect && draft.execution.status === "terminal" && !draft.collectorCompletion;
+      if (unfinishedCollector) {
+        // Shutdown can retire execution before its collector result publishes.
+        draft.completion = draft.completion ? { ...draft.completion } : undefined;
+        updateSwarmCollectorCompletion(draft, cfg, { entry: undefined });
+      }
+      if (
+        interruptedShutdown ||
+        unfinishedCollector ||
+        updateSubagentArchiveAtMs(draft, cfg) ||
+        ownerChanged
+      ) {
         postimages.set(runId, draft);
       }
     }

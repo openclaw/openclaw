@@ -124,14 +124,22 @@ suite.define(() => {
         const reader = controlUiE2eBuiltModuleRequest(
           "ui/src/pages/skills/skill-reader-dialog.tsx",
         );
+        const tooltip = controlUiE2eBuiltModuleRequest("ui/src/components/solid/tooltip.tsx");
         let readerRequests = 0;
+        let tooltipRequests = 0;
         page.on("request", (request) => {
           if (reader.test(request.url())) {
             readerRequests += 1;
           }
+          if (tooltip.test(request.url())) {
+            tooltipRequests += 1;
+          }
         });
 
         const observation = await visit(page, route);
+        if (route === "plugins") {
+          expect(tooltipRequests, "Audit tooltip presentation loads only on reveal").toBe(0);
+        }
         const readyAssets = observation.assets.filter((asset) => asset.completedByReady);
         expect(readyAssets.length).toBeGreaterThan(0);
         expect(
