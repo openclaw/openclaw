@@ -26,7 +26,10 @@ import {
   type PublishedGitHubPullRequest,
 } from "./github-publication-pull-requests.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
-import { resolveRecordedPublicationBaseBranch } from "./github-publication-recorded-base.js";
+import {
+  gitHubBranchPresence,
+  resolveRecordedPublicationBaseBranch,
+} from "./github-publication-recorded-base.js";
 import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
 import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
@@ -214,11 +217,16 @@ export async function prepareGitHubPublicationTarget(params: {
   const repository = `${target.pullRequest.owner}/${target.pullRequest.repo}`;
   const baseBranch = target.fork
     ? target.pullRequest.defaultBranch
-    : await resolveRecordedPublicationBaseBranch(
-        worktree.path,
-        worktree.baseRef,
-        target.pullRequest.defaultBranch,
-      );
+    : await resolveRecordedPublicationBaseBranch({
+        cwd: worktree.path,
+        baseRef: worktree.baseRef,
+        defaultBranch: target.pullRequest.defaultBranch,
+        remoteBranchExists: gitHubBranchPresence({
+          repository,
+          host: githubHost,
+          env: params.identity.env,
+        }),
+      });
   assertCurrent();
   if (!target.fork && branch === baseBranch) {
     throw new GitHubPublicationWorkspaceChangedError(
