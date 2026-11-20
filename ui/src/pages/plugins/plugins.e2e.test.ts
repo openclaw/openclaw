@@ -334,7 +334,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       plugin: installed,
       restartRequired: false,
     });
-    const enable = role(page, "button", "Enable Matrix");
+    const enable = page.getByRole("switch", { name: "Matrix", checked: false, exact: true });
     await enable.waitFor();
     expect(await enable.getAttribute("aria-disabled")).toBe("true");
     await captureScreenshot(page, "direct-install-needs-settings.png");
@@ -360,7 +360,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       source: "official",
       pluginId: "local-calendar",
     });
-    await role(page, "button", "Enable Local Calendar").waitFor();
+    await page
+      .getByRole("switch", { name: "Local Calendar", checked: false, exact: true })
+      .waitFor();
     expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
     expect(await gateway.getRequests("connect")).toHaveLength(connects);
     expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
@@ -422,7 +424,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     await gateway.waitForRequest("plugins.install");
     await setInstalled(gateway, { ...matrixEnabled, catalogId: matrixDiscoveryPlugin.id });
     await reconnectMockGateway(page, gateway);
-    await role(page, "button", "Disable Matrix").waitFor();
+    await page.getByRole("switch", { name: "Matrix", checked: true, exact: true }).waitFor();
     expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
     expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
     expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
