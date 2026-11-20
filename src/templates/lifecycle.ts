@@ -9,7 +9,11 @@ import { parseRequestedClawHubSkillRef } from "../skills/lifecycle/clawhub-store
 import { resolveUserPath } from "../utils.js";
 import { templateAgentCopyNumber, selectNextTemplateAgentId } from "./add-agent-id.js";
 import { templateOwnedAgentConfig } from "./agent-config-ownership.js";
-import { templateAddCapabilityChange, templateAgentCapabilityChange } from "./application-plan.js";
+import {
+  planTemplateCronJobs,
+  templateAddCapabilityChange,
+  templateAgentCapabilityChange,
+} from "./application-plan.js";
 import { planBundledTemplateDependency } from "./bundled-dependency-plan.js";
 import { templateDependencyInventory } from "./dependency-inventory.js";
 import { digestTemplateBytes, digestTemplateValue } from "./digest.js";
@@ -643,33 +647,13 @@ export async function buildTemplateAddPlan(params: {
     agentId: finalId,
   });
 
-  // Keep the declared execution session independent from delivery. Templates can only
-  // announce to the last channel, which the scheduler rejects on multi-channel hosts,
-  // so channel delivery remains an owner choice after Add.
-  for (const { delivery: _ignoredDelivery, ...job } of params.manifest.automations) {
-    actions.push({
-      kind: "cronJob",
-      id: job.id,
-      action: "schedule",
-      target: `cron:${job.id}:agent=${finalId}`,
-      details: {
-        ...job,
-        agentId: finalId,
-        expectedState: "absent",
-      },
-      blocked: false,
-    });
-    capabilityChanges.push(
-      templateAddCapabilityChange({
-        kind: "cronJob",
-        id: job.id,
-        path: `automations.${job.id}`,
-        action: "schedule",
-        reason: "The Template declares recurring scheduled work.",
-        effect: { ...job, agentId: finalId },
-      }),
-    );
-  }
+  planTemplateCronJobs({
+    automations: params.manifest.automations,
+    agentId: finalId,
+    deviceTimeZone: context.deviceTimeZone,
+    actions,
+    capabilityChanges,
+  });
 
   capabilityChanges.sort((left, right) =>
     `${left.kind}:${left.id}:${left.path}`.localeCompare(`${right.kind}:${right.id}:${right.path}`),

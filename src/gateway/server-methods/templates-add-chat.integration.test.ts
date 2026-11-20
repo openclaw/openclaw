@@ -214,7 +214,7 @@ async function withGateway(
     root: string;
     cron: { add: ReturnType<typeof vi.fn>; jobs: unknown[] };
     events: Array<{ stage: string; agentId: string }>;
-    add: (params: Record<string, unknown>) => Promise<Parameters<RespondFn>>;
+    add: (params: Record<string, unknown>, timeZone?: string) => Promise<Parameters<RespondFn>>;
     workspace: (agentId: string) => string;
   }) => Promise<void>,
   entries: NonNullable<OpenClawConfig["agents"]>["entries"] = {},
@@ -275,7 +275,7 @@ async function withGateway(
           cron,
           events,
           workspace: (agentId) => config.agents!.entries![agentId]!.workspace!,
-          add: async (params) => {
+          add: async (params, timeZone) => {
             const respond = vi.fn<RespondFn>();
             await templatesAddHandlers["templates.add.apply"]!({
               req: { type: "req", id: `add-${++request}`, method: "templates.add.apply" },
@@ -283,7 +283,11 @@ async function withGateway(
               respond,
               client: {
                 connId: "administrator",
-                connect: { role: "operator", scopes: ["operator.admin"], client: { mode: "ui" } },
+                connect: {
+                  role: "operator",
+                  scopes: ["operator.admin"],
+                  client: { mode: "ui", timeZone },
+                },
               },
               context: {
                 getRuntimeConfig: () => config,
@@ -486,9 +490,8 @@ it("creates the Template's agent without a plan and reports dependencies after i
       sessionKey,
       "template",
       buildTemplateOpeningMessage(
-        { failures: [], mcpServers: [] },
+        { report: { failures: [], mcpServers: [] }, dependenciesPending: true },
         { agentId: "travel-copilot", sessionKey },
-        true,
       ),
       expect.any(Function),
     ]);
@@ -534,7 +537,7 @@ it.each([false, true])(
 
       if (retry) {
         greeting.mockRejectedValueOnce(new Error("Fixture first setup turn failed"));
-        const [firstOk, first] = await gateway.add(chatAdd);
+        const [firstOk, first] = await gateway.add(chatAdd, "Invalid/Timezone");
         expect(firstOk).toBe(true);
         expect(first).toMatchObject({
           status: "partial",
@@ -542,7 +545,10 @@ it.each([false, true])(
           initializationPending: true,
         });
       }
-      const [ok, result] = await gateway.add({ ...chatAdd, ...(retry ? { resume: true } : {}) });
+      const [ok, result] = await gateway.add(
+        { ...chatAdd, ...(retry ? { resume: true } : {}) },
+        retry ? "Asia/Tokyo" : undefined,
+      );
 
       expect(ok, JSON.stringify(result)).toBe(true);
       expect(result).toMatchObject({
@@ -573,6 +579,10 @@ it.each([false, true])(
         ? (greeting.mock.calls.at(-1)![4] as string)
         : JSON.stringify(dependencyReport.mock.calls.at(-1)![2]);
       expect(prompt).toContain("search");
+      if (retry) {
+        expect(prompt).toContain('"tz":"<schedule.timezone>"');
+        expect(prompt).not.toContain("Asia/Tokyo");
+      }
       const report = (
         await readSessionEntryReadOnlyInWorker({ agentId: "travel-copilot", sessionKey })
       )?.templateSetup?.report;
@@ -733,7 +743,7 @@ it("retries only the hidden setup after a failed first turn, preserving files an
   await withGateway(async (gateway) => {
     deliver(await writeTemplate(gateway.root));
     greeting.mockRejectedValueOnce(new Error("Fixture first turn failed"));
-    const [ok, first] = await gateway.add(chatAdd);
+    const [ok, first] = await gateway.add(chatAdd, "America/New_York");
     expect(ok).toBe(true);
     expect(first).toMatchObject({
       agentId: "travel-copilot",
@@ -748,7 +758,7 @@ it("retries only the hidden setup after a failed first turn, preserving files an
     const firstPrompt = greeting.mock.calls[0]![4];
     const release = Promise.withResolvers<void>();
     greeting.mockImplementationOnce(() => release.promise);
-    const retry = gateway.add({ ...chatAdd, resume: true });
+    const retry = gateway.add({ ...chatAdd, resume: true }, "Asia/Tokyo");
     await vi.waitFor(() => expect(greeting).toHaveBeenCalledTimes(2));
     const concurrent = gateway.add({ ...chatAdd, resume: true });
     release.resolve();
@@ -771,6 +781,17 @@ it("retries only the hidden setup after a failed first turn, preserving files an
     expect(resolveSource).toHaveBeenCalledTimes(sourceReads);
     expect(greeting).toHaveBeenCalledTimes(2);
     expect(firstPrompt).toContain("still installing declared");
+    for (const prompt of [firstPrompt, greeting.mock.calls[1]![4]]) {
+      expect(prompt).toContain(
+        '"schedule":{"kind":"cron","expr":"<schedule.cron>","tz":"America/New_York"}',
+      );
+      expect(prompt).not.toContain("Asia/Tokyo");
+      expect(prompt).toContain("do not add or update that one, including user-enabled jobs");
+    }
+    expect(await fs.readFile(path.join(workspace, "CLAW.md"))).toEqual(
+      await fs.readFile(path.join(gateway.root, "CLAW.md")),
+    );
+    expect(gateway.cron.add).not.toHaveBeenCalled();
     expect(greeting.mock.calls[1]![4]).not.toContain("still installing declared");
     expect(greeting.mock.calls[1]![4]).toContain('The Gateway added these servers: ["docs"]');
 

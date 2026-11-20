@@ -80,6 +80,11 @@ it.each([
       );
       await fs.writeFile(path.join(root, "SOUL.md"), "A calm fixture personality.\n");
       const manifest = path.join(root, "CLAW.md");
+      const retrySchedule =
+        outcome === "admitted-runtime-retry" || outcome === "admitted-config-retry";
+      const originZone = outcome === "admitted-runtime-retry" ? "America/New_York" : undefined;
+      let deviceTimeZone = originZone;
+      const cronAdd = vi.fn(async (_job: Record<string, unknown>) => ({ id: "fixture-weekly" }));
       await fs.writeFile(
         manifest,
         "---\n" +
@@ -87,6 +92,19 @@ it.each([
             schemaVersion: 1,
             agent: { id: "fixture-first", name: "First Fixture" },
             workspace: { bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } } },
+            ...(retrySchedule
+              ? {
+                  automations: [
+                    {
+                      id: "weekly",
+                      enabled: false,
+                      schedule: { cron: "0 9 * * 1", timezone: "Europe/Paris" },
+                      session: "main",
+                      message: "Prepare a summary.",
+                    },
+                  ],
+                }
+              : {}),
           }) +
           "\n---\n",
       );
@@ -163,7 +181,11 @@ it.each([
       setRuntimeConfigSnapshot(config);
       const reviewPlan = async () =>
         projectGatewayTemplateAddPlan(
-          await buildGatewayTemplateAddPlan(source, { config, sourceMcpServers: {} }),
+          await buildGatewayTemplateAddPlan(source, {
+            config,
+            sourceMcpServers: {},
+            deviceTimeZone,
+          }),
           source,
           { riskAcknowledgementRequired: false },
           config,
@@ -234,7 +256,8 @@ it.each([
         ...(outcome.startsWith("admitted-")
           ? { agentId: "fixture-first", planIntegrity: review!.planIntegrity }
           : {}),
-        getPlanningContext: async () => ({ config, sourceMcpServers: {} }),
+        getPlanningContext: async () => ({ config, sourceMcpServers: {}, deviceTimeZone }),
+        ...(retrySchedule ? { cronGateway: { add: cronAdd } } : {}),
         policyConfig: { configPath: state.configPath, env: state.env },
         configWriteOptions: {
           beforeCommit: async () => {
@@ -412,6 +435,14 @@ it.each([
         });
         const retained = loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey });
         expect(retained?.sessionId).toBe(admittedSessionId);
+        if (retrySchedule) {
+          if (originZone) {
+            expect(retained?.templateInitialization?.deviceTimeZone).toBe(originZone);
+          } else {
+            // This is also the persisted shape of receipts written before device-zone support.
+            expect(retained?.templateInitialization).not.toHaveProperty("deviceTimeZone");
+          }
+        }
         const profile = path.join(config.agents!.entries!["fixture-first"]!.workspace!, "SOUL.md");
         if (outcome === "admitted-config-retry") {
           expect(result.error?.code).toBe("add_failed");
@@ -420,7 +451,8 @@ it.each([
         }
         const before = outcome === "admitted-runtime-retry" ? await fs.stat(profile) : undefined;
         // A rerun from a new client has only the kept agent's ID and the catalog coordinate.
-        const rerun = { agentId: "fixture-first", config, sourceMcpServers: {} };
+        deviceTimeZone = "Asia/Tokyo";
+        const rerun = { agentId: "fixture-first", config, sourceMcpServers: {}, deviceTimeZone };
         expect(
           await planTemplateAddForGateway({ ...rerun, source: applyInput.source }),
         ).toMatchObject({ blockers: [], planIntegrity: review!.planIntegrity });
@@ -440,6 +472,11 @@ it.each([
           });
         }
         expect(result, JSON.stringify(result)).toMatchObject({ status: "complete", sessionKey });
+        if (retrySchedule) {
+          expect(cronAdd.mock.calls.map(([job]) => job.schedule)).toEqual([
+            { kind: "cron", expr: "0 9 * * 1", tz: originZone ?? "Europe/Paris" },
+          ]);
+        }
         expect(loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })?.sessionId).toBe(
           admittedSessionId,
         );

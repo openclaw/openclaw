@@ -8,7 +8,7 @@ import type { ClawHubFetchOptions } from "../infra/clawhub-client.js";
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import type { StatelessTemplateAddOptions } from "./add-stateless.js";
 import type { ClawHubCoordinate } from "./clawhub-source.js";
-import type { TemplateSetupReport } from "./conversation.js";
+import type { TemplateSetupOpening, TemplateSetupReport } from "./conversation.js";
 import type { TemplateCronGateway, PersistedTemplateCronRef } from "./cron.js";
 import type { GatewayTemplateAddPlanningContext } from "./gateway-add-plan.js";
 import type { TemplateAddSource, TemplateAddStageHook } from "./gateway-add-source.js";
@@ -44,8 +44,7 @@ export type ChatTemplateAddInput = ClawHubFetchOptions & {
   /** Creation has finished; the agent's first turn starts here with its outcome. */
   onAgentCreated?: (
     agent: { agentId: string; sessionKey: string },
-    report: TemplateSetupReport,
-    dependenciesPending?: true,
+    opening: TemplateSetupOpening,
   ) => Promise<void>;
   /** A separate hidden turn reports results after the opening, never concurrently with it. */
   onDependenciesSettled?: (

@@ -295,6 +295,7 @@ export async function createTemplateAgentFromChat(
               async () =>
                 await admitted.chat.complete?.({
                   source: input.source,
+                  ...(admitted.deviceTimeZone ? { deviceTimeZone: admitted.deviceTimeZone } : {}),
                   report,
                   dependenciesPending: true,
                 }),
