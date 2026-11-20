@@ -274,7 +274,7 @@ it.for([
               runFollowup: followup,
             }),
           ),
-        ).resolves.toBe("handled");
+        ).resolves.toBe(steered ? "handled" : "followup");
         expect(delivered).toEqual(steered ? [run.prompt] : []);
         expect(resultState.admission).toEqual({
           status: "accepted",
