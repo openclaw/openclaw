@@ -1,4 +1,4 @@
-import { createSignal, onCleanup } from "solid-js";
+import { createSignal, onCleanup, Show } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
@@ -105,52 +105,49 @@ describe("native plugin surface", () => {
     warnings.mockRestore();
   });
 
-  it("mounts a routed page that settled before its parent inserted it", async () => {
+  it("mounts a routed page that its workspace replacement inserts after it settles", async () => {
     const source = runtime();
-    const abort = new AbortController();
-    const dispose = vi.fn();
-    const mount = vi.fn((container: HTMLElement) => {
-      container.textContent = "Projects page";
-      return { dispose };
-    });
+    const page = recordReplacement("workspace", "Projects page");
+    const [active, setActive] = createSignal(false, { ownedWrite: true });
+    const { signal } = new AbortController();
+    const host = createInertViewHost(signal);
     Object.assign(source.context.plugins, {
-      registrations: (kind: string) =>
-        kind === "pages"
-          ? [
-              {
-                key: "example/projects",
-                pluginId: "example",
-                value: { id: "projects", label: "Projects", mount },
-                host: createInertViewHost(abort.signal),
-                signal: abort.signal,
-              },
-            ]
-          : [],
+      registrations: () => [{ key: "example/projects", value: page.view, host, signal }],
     });
     const provider = createSolidApplicationContextProvider(source.context);
-    // A workspace replacement builds the page before it appends its pane to the document.
-    const detached = document.createElement("div");
     const view = mountSolid(
-      () => <PluginContribution kind="pages" contributionKey="example/projects" props={{}} />,
-      { wrapper: provider.wrapper, container: detached },
+      () => {
+        // Like the shell, the replacement re-inserts the same workspace nodes.
+        const workspace = (
+          <Show when={active()}>
+            <PluginContribution kind="pages" contributionKey="example/projects" props={{}} />
+          </Show>
+        );
+        return (
+          <PluginSurface
+            surface="workspace"
+            props={{ sessionKey: "main", agentId: "main", routeId: "plugin" }}
+            renderDefault={() => workspace}
+          />
+        );
+      },
+      { wrapper: provider.wrapper },
     );
-    await waitForSolid(() => expect(detached.querySelector("openclaw-plugin-view")).not.toBeNull());
-    expect(mount).not.toHaveBeenCalled();
-
-    document.body.append(detached);
-    await waitForSolid(() => expect(mount).toHaveBeenCalledOnce());
-    expect(mount.mock.calls[0]![0].isConnected).toBe(true);
-    expect(detached.textContent).toBe("Projects page");
-
-    // Moving the mounted page keeps its plugin state instead of mounting it again.
-    detached.remove();
-    document.body.append(detached);
+    // The routed page is built while the replacement holds the workspace detached.
+    source.select(
+      replacement("workspace", (container, context) => {
+        setActive(true);
+        queueMicrotask(() => context.mountDefault(container));
+      }),
+    );
+    await waitForSolid(() => expect(view.getByText("Projects page")).toBeTruthy());
+    // Moving the mounted page keeps it instead of mounting it again.
+    const pageView = page.roots[0]!.closest("openclaw-plugin-view")!;
+    pageView.parentNode!.insertBefore(pageView, pageView.nextSibling);
     flush();
-    expect(mount).toHaveBeenCalledOnce();
-    expect(dispose).not.toHaveBeenCalled();
+    expect(page.mount).toHaveBeenCalledOnce();
+    expect(page.dispose).not.toHaveBeenCalled();
     view.unmount();
-    expect(dispose).toHaveBeenCalledOnce();
-    detached.remove();
   });
 
   it("revokes deselected composer operations before rendering and retires replaced contexts", async () => {

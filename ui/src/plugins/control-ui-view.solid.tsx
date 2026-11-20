@@ -57,9 +57,10 @@ function MountedContent(props: { mount?: (target: HTMLElement) => () => void }) 
   );
 }
 
-const views = new WeakMap<HTMLElement, { focus(options?: FocusOptions): void }>();
-// Solid-owned hosts can settle before their parent inserts them; connection finishes that mount.
-const pendingMounts = new WeakMap<HTMLElement, () => void>();
+const views = new WeakMap<
+  HTMLElement,
+  { connected(): void; focus(options?: FocusOptions): void }
+>();
 
 function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
   const context = useOptionalApplication();
@@ -74,11 +75,6 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
   let viewContext: ControlUiViewContext<unknown> | undefined;
   let disposed = false;
   let pendingMount: (() => void) | undefined;
-  pendingMounts.set(host, () => {
-    const start = pendingMount;
-    pendingMount = undefined;
-    start?.();
-  });
   const defaultContainers = new Map<HTMLElement, () => void>();
   host.style.display = "contents";
   const resolveRegistration = (): ViewRegistration | undefined => {
@@ -289,13 +285,14 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     // Plugins may mount host Solid content, which must inherit this retained root.
     const viewOwner = getOwner();
     let container!: HTMLDivElement;
-    const start = () => runWithOwner(viewOwner, () => mount(container));
     onSettled(() => {
+      // A routed page can settle inside a workspace that its replacement inserts later.
+      pendingMount = () => {
+        pendingMount = undefined;
+        runWithOwner(viewOwner, () => mount(container));
+      };
       if (host.isConnected) {
-        start();
-      } else {
-        // A routed page can settle inside a subtree its parent has not inserted yet.
-        pendingMount = start;
+        pendingMount();
       }
     });
     return (
@@ -310,6 +307,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
   }
   onSettled(() => {
     views.set(host, {
+      connected: () => pendingMount?.(),
       focus(options) {
         if (handle?.focus) {
           handle.focus();
@@ -328,7 +326,6 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       disposed = true;
       unmount();
       views.delete(host);
-      pendingMounts.delete(host);
     };
   });
   return (
@@ -375,7 +372,7 @@ export const PluginView = defineSolidBridge<
     mountReplacementCompanion: { default: undefined, attribute: false },
     presented: { default: true, type: Boolean },
   },
-  connected: (host) => pendingMounts.get(host)?.(),
+  connected: (host) => views.get(host)?.connected(),
   methods: { focus: (host, options) => views.get(host)?.focus(options) },
 });
 
