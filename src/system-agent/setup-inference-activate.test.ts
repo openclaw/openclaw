@@ -85,6 +85,34 @@ describe("setup activation credentials and configuration", () => {
     expect(restored).toEqual(setup.config);
   });
 
+  it("restores a size-dropping first config write when its activation is not applied", async () => {
+    // The write pipeline stamps metadata the in-memory candidate lacks.
+    const setup = await fixture({
+      authMethod: "api_key",
+      fresh: true,
+      addProviderDuringLogin: true,
+    });
+    delete setup.config.meta;
+    await writeConfig(setup, setup.config);
+    let complete: (() => Promise<boolean>) | undefined;
+    const result = await setup.activate("api-key", true, {
+      apiKey: "synthetic-recovery-key",
+      onActivationCompletion: (completion) => {
+        complete = completion;
+      },
+    });
+    expect(result).toMatchObject({ ok: true });
+    assert(complete);
+    const candidate = await fs.readFile(setup.configPath);
+    // Keep this regression tied to the size-drop guard as the fixture evolves.
+    expect(candidate.byteLength).toBeGreaterThanOrEqual(512);
+    await expect(complete()).rejects.toThrow("The previous connection was restored on disk");
+    const recovered = await fs.readFile(setup.configPath);
+    expect(recovered.byteLength).toBeLessThan(Math.floor(candidate.byteLength / 2));
+    const { meta: _meta, ...restored } = JSON.parse(recovered.toString("utf8"));
+    expect(restored).toEqual(setup.config);
+  });
+
   it.each([
     { target: "utility" as const, requested: undefined },
     { target: undefined, requested: "utility" as const },

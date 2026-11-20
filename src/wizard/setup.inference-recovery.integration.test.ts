@@ -271,6 +271,33 @@ it("wizard recovery restores serialized model defaults after provider canonicali
   expect((await target.read()).config.models?.providers).toEqual(before.models?.providers);
 });
 
+it("wizard recovery restores a size-dropping provider write", async () => {
+  state = await createOpenClawTestState({ label: "wizard-size-drop-recovery" });
+  const before: OpenClawConfig = { gateway: { mode: "local" } };
+  await state.writeConfig(before);
+  const candidate = {
+    ...before,
+    ...providerConfig("example", {
+      baseUrl: "https://fixture.invalid/v1",
+      api: "openai-completions",
+      models: [modelDefinition("fixture", { name: "Fixture" })],
+    }),
+  };
+  let candidateBytes = 0;
+  const target = createWizardInferenceConfigTarget(async (config, options) => {
+    const committed = await writeWizardConfigFile(config, options);
+    candidateBytes = Buffer.byteLength((await readSetupConfigFileSnapshot()).raw ?? "");
+    return committed;
+  });
+  await expect(rejectActivation(target, candidate, new Error("promotion refused"))).rejects.toThrow(
+    "promotion refused",
+  );
+  const restored = await readSetupConfigFileSnapshot();
+  expect(candidateBytes).toBeGreaterThanOrEqual(512);
+  expect(Buffer.byteLength(restored.raw ?? "")).toBeLessThan(Math.floor(candidateBytes / 2));
+  expect(restored.sourceConfig.models).toBeUndefined();
+});
+
 it.each([
   { pending: true, superseded: false },
   { pending: false, superseded: true },
