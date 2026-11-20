@@ -92,9 +92,16 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/i18n/locales/en-skill-library.ts":
+    case "ui/src/lib/skills-shared.ts":
+    case "ui/src/lib/skills-grouping.ts":
+      // Both grouping consumers already load the skill helpers and their English labels.
+      return "skills-shared";
+    case "ui/src/components/solid/registry-category-icon.tsx":
+    case "ui/src/pages/plugins/catalog-skeleton.tsx":
     case "ui/src/pages/plugins/catalog-grid.tsx":
     case "ui/src/pages/plugins/plugin-card.tsx":
-      // Catalogs already load both; a lazy skill reader must not split their first visit.
+      // Skills and Plugins already load the catalog runtime; shared icons must not pull in a route.
       return "plugin-catalog-runtime";
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
