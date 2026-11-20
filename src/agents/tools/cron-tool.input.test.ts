@@ -87,3 +87,15 @@ it("recovers a malformed wrapper for a partial update", async () => {
     expect.anything(),
   );
 });
+
+it.each([
+  ["owner", { sessionKey: "agent:main:main" }],
+  ["declarationKey", "daily-report"],
+] as const)("rejects create-only %s in an update before any Gateway call", async (field, value) => {
+  const tool = createTestCronTool();
+  const job = { enabled: false, [field]: value };
+  await expect(
+    tool.execute("update-create-only", { action: "update", jobId: "saved-job", job }),
+  ).rejects.toThrow(`${field} can only be set by action="add"`);
+  expect(callGatewayMock).not.toHaveBeenCalled();
+});

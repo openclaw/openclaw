@@ -411,7 +411,7 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
               agentId: Type.Optional(Type.String()),
               sessionKey: Type.Optional(Type.String()),
             },
-            { additionalProperties: false },
+            { additionalProperties: false, description: "Creator ownership (add only)." },
           ),
         ),
         schedule: createCronScheduleSchema({
