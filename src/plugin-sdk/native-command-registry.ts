@@ -12,7 +12,6 @@ export {
   resolveCommandArgMenuAsync,
   serializeCommandArgs,
 } from "../auto-reply/commands-registry.js";
-export { loadCommandArgMenuModelCatalog } from "../auto-reply/command-arg-menu-catalog.js";
 export type {
   ChatCommandDefinition,
   CommandArgDefinition,

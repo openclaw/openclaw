@@ -21,6 +21,10 @@ beforeEach(() => {
   surfaceReport = structuredClone(baseReport);
 });
 
+it("keeps the current public SDK within its default surface budgets", () => {
+  expect(failures()).toEqual([]);
+});
+
 it("accepts frozen named facades while rejecting missing deprecated reexports", () => {
   expect(surfaceReport.deprecatedBarrelWithoutReexports).toEqual([]);
   surfaceReport.deprecatedBarrelWithoutReexports = ["fixture-facade"];

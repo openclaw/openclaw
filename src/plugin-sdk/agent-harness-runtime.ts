@@ -168,7 +168,6 @@ export type {
 export {
   AgentHarnessModelRequestPolicyError,
   AgentHarnessPreflightError,
-  AgentHarnessRuntimeUpdateRequiredError,
   AgentHarnessSessionCleanupError,
   AgentHarnessSessionSupersededError,
 } from "../agents/harness/errors.js";
