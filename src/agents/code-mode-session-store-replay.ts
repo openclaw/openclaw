@@ -12,18 +12,43 @@ export function readCodeModeStoreKey(key: unknown): string {
   return key;
 }
 
+/** Legacy custom entries and durable terminal receipts share one store projection. */
+export function readCodeModeStoreEntry(entry: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(entry)) {
+    return undefined;
+  }
+  if (entry.type === "custom" && entry.customType === CODE_MODE_STORE_CUSTOM_TYPE) {
+    return entry;
+  }
+  const message = entry.type === "message" ? entry.message : undefined;
+  if (!isRecord(message) || message.role !== "toolResult" || !isRecord(message.details)) {
+    return undefined;
+  }
+  const details = message.details;
+  if (
+    details.status !== "completed" ||
+    typeof details.durableExecutionId !== "string" ||
+    !isRecord(details.codeModeStore)
+  ) {
+    return undefined;
+  }
+  return {
+    ...entry,
+    type: "custom",
+    customType: CODE_MODE_STORE_CUSTOM_TYPE,
+    data: details.codeModeStore,
+  };
+}
+
 /** Validate history once at its reader, retaining only each key's final write. */
 export function collectCodeModeStoreWrites(
   entries: Iterable<unknown>,
   incremental = false,
 ): CodeModeStoreWrites {
   const writes = new Map<string, { value: unknown; networkContent: boolean } | null>();
-  for (const entry of entries) {
-    if (
-      !isRecord(entry) ||
-      entry.type !== "custom" ||
-      entry.customType !== CODE_MODE_STORE_CUSTOM_TYPE
-    ) {
+  for (const raw of entries) {
+    const entry = readCodeModeStoreEntry(raw);
+    if (!entry) {
       continue;
     }
     const data = entry.data;

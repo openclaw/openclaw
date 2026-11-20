@@ -205,11 +205,12 @@ export async function loadAgentPortDescriptor(
     // Schema 41 adds active event facts; predecessors retain their unknown-row fallback.
     // Schema 42 adds usage counters; predecessors retain their counter-free catalog.
     // Schema 43 adds pending-input endings and reserved provenance columns.
+    // Schema 44 adds the active Code Mode execution journal.
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 43 ||
-      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 44 ||
+      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -226,6 +227,7 @@ export async function loadAgentPortDescriptor(
   const legacyToolUsage = sourceVersion < AGENT_TOOL_USAGE_SCHEMA_VERSION;
   const legacyPendingEndings = sourceVersion < AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION;
   const legacyTrajectory = sourceVersion < 30;
+  const legacyCodeMode = sourceVersion < 44;
   const catalog = agentPostgresRuntime.expectedCatalog.filter(
     (fact) =>
       !(
@@ -234,6 +236,7 @@ export async function loadAgentPortDescriptor(
         isColumn(fact) &&
         ["end_cause", "origin_source_json"].includes(fact.value.name)
       ) &&
+      !(legacyCodeMode && fact.table === "session_code_mode_journal") &&
       !(legacyToolUsage && fact.table === "agent_tool_usage") &&
       !(legacyColdArchive && fact.table === "session_transcript_cold_archive_chunks") &&
       !(legacyCreation && fact.table === "session_creation_operations") &&
@@ -256,6 +259,7 @@ export async function loadAgentPortDescriptor(
       ...metadata.tables
         .filter(
           ({ name }) =>
+            !(legacyCodeMode && name === "session_code_mode_journal") &&
             !(legacyToolUsage && name === "agent_tool_usage") &&
             !(legacyColdArchive && name === "session_transcript_cold_archive_chunks") &&
             !(legacyCreation && name === "session_creation_operations") &&

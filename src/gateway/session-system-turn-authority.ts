@@ -1,3 +1,4 @@
+import { recordCodeModeRecoveryAdmission } from "../agents/code-mode-durable-recovery.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import { getSessionControllerEntryForOperation } from "../sessions/session-controller.identity.js";
@@ -60,12 +61,14 @@ export async function prepareSessionSystemTurnAuthority(
       assertCurrent: () => params.assertCurrent?.(),
     });
     try {
-      return await prepareSessionPrincipalRunAuthority({
+      const prepared = await prepareSessionPrincipalRunAuthority({
         ...params,
         profileId: restored.authority.profileId,
         recoveredOperatorAuthority: restored.authority,
         preserveRecordedSource: true,
       });
+      recordCodeModeRecoveryAdmission(prepared.authority, params.operatorSource);
+      return prepared;
     } finally {
       restored.release();
     }

@@ -3,6 +3,10 @@ import {
   AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION,
   withoutAgentActiveEventFacts,
 } from "./openclaw-agent-active-event-facts-schema.js";
+import {
+  AGENT_CODE_MODE_JOURNAL_SCHEMA_VERSION,
+  withoutAgentCodeModeJournal,
+} from "./openclaw-agent-code-mode-journal-schema.js";
 import { withoutAgentColdArchiveChunks } from "./openclaw-agent-cold-archive-chunks-schema.js";
 import { withoutAgentColdNavigation } from "./openclaw-agent-cold-navigation-schema.js";
 import {
@@ -323,8 +327,11 @@ function withLegacyAgentWriteLayout(schema: string): string {
     );
 }
 
-const AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS =
-  withoutAgentPendingInputEndings(OPENCLAW_AGENT_SCHEMA_SQL);
+const AGENT_SCHEMA_BEFORE_CODE_MODE_JOURNAL =
+  withoutAgentCodeModeJournal(OPENCLAW_AGENT_SCHEMA_SQL);
+const AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS = withoutAgentPendingInputEndings(
+  AGENT_SCHEMA_BEFORE_CODE_MODE_JOURNAL,
+);
 const AGENT_SCHEMA_BEFORE_TOOL_USAGE = withoutAgentToolUsage(
   AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS,
 );
@@ -355,7 +362,9 @@ export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
             ? AGENT_SCHEMA_BEFORE_TOOL_USAGE
             : targetVersion < AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION
               ? AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS
-              : OPENCLAW_AGENT_SCHEMA_SQL;
+              : targetVersion < AGENT_CODE_MODE_JOURNAL_SCHEMA_VERSION
+                ? AGENT_SCHEMA_BEFORE_CODE_MODE_JOURNAL
+                : OPENCLAW_AGENT_SCHEMA_SQL;
   const navigationSchemaSql =
     targetVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
       ? withoutAgentColdNavigation(schemaSql)

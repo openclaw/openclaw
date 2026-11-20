@@ -46,6 +46,14 @@ export type PendingBridgeRequest = {
 
 export type SettledBridgeRequest = { id: string; ok: boolean; json: string };
 
+/** Opt-in reproducible fresh execution; host journals and replays boundary deliveries. */
+export type CodeModeDeterministicInput = {
+  startedAt: number;
+  seed: number;
+  /** A saved engine/controller fingerprint must match before guest execution. */
+  fingerprint?: string;
+};
+
 type CodeModeWorkerInput<State> =
   | {
       kind: "exec";
@@ -57,6 +65,7 @@ type CodeModeWorkerInput<State> =
       apiFiles?: CodeModeApiVirtualFile[];
       namespaces: CodeModeNamespaceDescriptor[];
       swarmEnabled?: boolean;
+      deterministic?: CodeModeDeterministicInput;
     }
   | {
       kind: "resume";
@@ -64,6 +73,8 @@ type CodeModeWorkerInput<State> =
       config: CodeModeConfig;
       settledRequests: SettledBridgeRequest[];
       pendingRequests?: PendingBridgeRequest[];
+      /** Advances a deterministic guest's clock before delivering these replies. */
+      deterministicTimeMs?: number;
     };
 
 export type CodeModeWorkerPayload<State> = CodeModeWorkerInput<State> & {
@@ -89,6 +100,8 @@ export type CodeModeSettlementMode =
 
 /** Transient worker boundary; no heap serialization and no resumable handle. */
 export type CodeModeWorkerBoundary = {
+  /** Deterministic starts first emit an empty boundary for host fingerprint persistence. */
+  deterministicFingerprint?: string;
   networkContentObserved?: true;
   status: "boundary";
   pendingRequests: PendingBridgeRequest[];
@@ -106,11 +119,15 @@ export type CodeModeWorkerContinuation =
       timeoutMs: number;
       settledRequests: SettledBridgeRequest[];
       pendingRequests: PendingBridgeRequest[];
+      deterministicTimeMs?: number;
     };
 
 export type CodeModeFailurePhase = "input" | "guest" | "bridge" | "host";
 
-type CodeModeWorkerOutcome<Output, Value, State> = { networkContentObserved?: true } & (
+type CodeModeWorkerOutcome<Output, Value, State> = {
+  networkContentObserved?: true;
+  deterministicFingerprint?: string;
+} & (
   | {
       status: "completed";
       value: Value;

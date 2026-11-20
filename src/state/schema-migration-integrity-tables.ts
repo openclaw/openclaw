@@ -111,6 +111,7 @@ const migrationTables: Readonly<
     ],
     26: ["session_nodes", "context_engine_turn_outbox", "transcript_events"],
     43: ["session_pending_inputs"],
+    44: ["session_code_mode_journal"],
   },
   state: {
     ...SCHEMA_MIGRATION_BACKUP_TABLES.state,

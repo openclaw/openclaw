@@ -13,6 +13,7 @@ import {
   isCodeModeControlTool,
   markCodeModeControlTool,
 } from "./code-mode-control-tools.js";
+import { finalizeCodeModeDurableResult, readRestoredCodeModeResult } from "./code-mode-durable.js";
 import {
   normalizeCodeModeTimeoutResult,
   CodeModeHeadlessAbortError,
@@ -275,21 +276,28 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
   // control remains executable during model overrides.
   const config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
   const resultBudget = resolveToolResultBudget(ctx.modelContextWindowTokens);
-  const formatResult = (
+  const formatResult = async (
     rawResult: Awaited<ReturnType<typeof runCodeModeExec | typeof runWait>>,
     runtime: ToolSearchRuntime | undefined,
     signal?: AbortSignal,
   ) => {
+    const restored = readRestoredCodeModeResult(rawResult);
+    if (restored) {
+      return restored;
+    }
     const result = normalizeCodeModeTimeoutResult(rawResult);
     markCodeModePermissionChangeResult(result, signal);
     const controlResult = formatToolSearchControlResult(result, runtime, {
       terminalBatchStatus: result.status,
     });
     runtime?.sourceReplyCell.attach(controlResult, result.status);
-    return copyInternalToolResultState(controlResult, {
-      ...controlResult,
-      ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
-    });
+    return finalizeCodeModeDurableResult(
+      rawResult,
+      copyInternalToolResultState(controlResult, {
+        ...controlResult,
+        ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
+      }),
+    );
   };
   const execTool = markCodeModeControlTool({
     name: CODE_MODE_EXEC_TOOL_NAME,

@@ -220,7 +220,10 @@ function maintenance(
             }
           }
           const facts = projectSessionTranscriptReportFacts(row.event);
-          if (facts.kind === "canonical" && facts.entry.type === "custom") {
+          if (
+            facts.kind === "canonical" &&
+            (facts.entry.type === "custom" || facts.entry.type === "message")
+          ) {
             eventsBySeq.set(row.rawSeq, row.event);
           }
           yield { seq: row.rawSeq, facts };

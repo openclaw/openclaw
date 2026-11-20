@@ -108,7 +108,13 @@ JavaScript between engines or replay completed tool calls.
 Node retains its live worker context while suspended. QuickJS can release its
 worker after serializing the guest and restore the snapshot for `wait`. Both
 continuations are transient: completion, failure, cancellation, expiry, or
-Gateway shutdown releases them. Neither survives a Gateway restart.
+Gateway shutdown releases them. Persisted QuickJS cells additionally keep a
+bounded replay journal. After a crash, OpenClaw can reconstruct the cell in a
+fresh deterministic VM, reuse committed replies, and retry only pending calls
+whose current tool contract is replay-safe. This is not a restored native stack
+or an exactly-once guarantee for external effects. Node and older unjournaled
+cells still require transcript-based reconciliation. See
+[durable restart recovery](/gateway/restart-recovery#durable-code-mode-cells).
 
 `timeoutMs`, output limits, pending-call limits, suspended-run capacity, and
 `snapshotTtlSeconds` apply to both executors. The historical

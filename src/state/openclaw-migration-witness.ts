@@ -13,6 +13,7 @@ import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION } from "./openclaw-agent-active-event-facts-schema.js";
 import { LEGACY_CANONICAL_VALIDATION_TRIGGER_NAMES } from "./openclaw-agent-canonical-validation-migration.js";
+import { AGENT_CODE_MODE_JOURNAL_SCHEMA_VERSION } from "./openclaw-agent-code-mode-journal-schema.js";
 import { withoutAgentColdNavigation } from "./openclaw-agent-cold-navigation-schema.js";
 import { AGENT_CREATION_OPERATIONS_SCHEMA_VERSION } from "./openclaw-agent-creation-operations-schema.js";
 import {
@@ -51,6 +52,7 @@ const ADDITIVE_AGENT_TABLES = new Map([
   ["session_creation_operations", AGENT_CREATION_OPERATIONS_SCHEMA_VERSION],
   ["session_transcript_active_event_facts", AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION],
   ["agent_tool_usage", AGENT_TOOL_USAGE_SCHEMA_VERSION],
+  ["session_code_mode_journal", AGENT_CODE_MODE_JOURNAL_SCHEMA_VERSION],
 ]);
 
 const derivedMigrationColumns = new Map<string, ReadonlySet<string>>(

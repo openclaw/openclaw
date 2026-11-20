@@ -12,6 +12,7 @@ import type {
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { Snapshot } from "quickjs-wasi";
 import { onTestFinished, vi } from "vitest";
+import { fingerprintQuickJsAssets } from "./deterministic.js";
 import { codeModeExecutor } from "./executor.js";
 import { quickJsWorkerTestEntrypoint } from "./worker-entrypoint.test-support.js";
 
@@ -70,11 +71,12 @@ export async function runQuickJsExecutor(
 
 const resolve = createRequire(import.meta.url).resolve;
 export const quickJsTestModules = Promise.all([
-  readFile(resolve("quickjs-wasi/quickjs.wasm")).then((bytes) => WebAssembly.compile(bytes)),
-  readFile(resolve("quickjs-wasi/encoding.so")).then((bytes) => WebAssembly.compile(bytes)),
-]).then(([wasmModule, encoding]) => ({
-  wasmModule,
-  wasmExtensions: [{ name: "encoding", wasm: encoding }],
+  readFile(resolve("quickjs-wasi/quickjs.wasm")),
+  readFile(resolve("quickjs-wasi/encoding.so")),
+]).then(async ([wasm, encoding]) => ({
+  wasmModule: await WebAssembly.compile(wasm),
+  wasmExtensions: [{ name: "encoding", wasm: await WebAssembly.compile(encoding) }],
+  engineFingerprint: fingerprintQuickJsAssets([wasm, encoding]),
 }));
 
 /** Exercises real persisted VM bytes without exposing them through the executor contract. */

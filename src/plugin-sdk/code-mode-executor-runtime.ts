@@ -34,6 +34,7 @@ export { prepareSource } from "../agents/code-mode-source.js";
 export { CODE_MODE_WORKER_WATCHDOG_GRACE_MS } from "../agents/code-mode-worker-types.js";
 export type {
   CodeModeConfig,
+  CodeModeDeterministicInput,
   CodeModeNamespaceDescriptor,
   CodeModeVmResult,
   CodeModeWorkerBoundary,

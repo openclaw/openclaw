@@ -1,3 +1,4 @@
+import { createCodeModeJournalStore } from "../config/sessions/code-mode-journal.js";
 import { sessionActorReplicaTargetKey } from "../config/sessions/session-actor-replica-index.js";
 import type {
   SessionTranscriptMaintenanceFacts,
@@ -9,6 +10,7 @@ import {
   getOwnedSessionTranscriptActor,
 } from "../config/sessions/transcript-write-context.js";
 import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { registerOpenClawAgentDatabaseSyncResource } from "../state/openclaw-agent-db-resources.js";
@@ -175,6 +177,43 @@ export function bindCodeModeSessionStore(
     controller: new AbortController(),
     commitTail: Promise.resolve(),
   });
+}
+
+/** Reuse the admitted session binding; no independent database or writer owner. */
+export function createCodeModeDurableJournalAccess(ctx: ToolSearchToolContext) {
+  const owner = ctx.catalogRef;
+  const bound = owner ? stores.get(owner) : undefined;
+  const target = bound?.manager.getSessionTarget();
+  if (!owner || !bound || !target || isIncognitoSessionKey(target.sessionKey)) {
+    return undefined;
+  }
+  const assertCurrent = () => {
+    ctx.abortSignal?.throwIfAborted();
+    if (
+      stores.get(owner) !== bound ||
+      bound.controller.signal.aborted ||
+      !sameSessionTranscriptTargetBinding(target, bound.manager.getSessionTarget())
+    ) {
+      throw new Error("Code Mode journal lost its admitted session owner");
+    }
+  };
+  const store = createCodeModeJournalStore({
+    ...target,
+    sessionId: bound.manager.getSessionId(),
+    assertCurrent,
+  });
+  return {
+    read: (id: string) => bound.withOwnedTranscriptWrite(() => store.read(id)),
+    list: () => bound.withOwnedTranscriptWrite(() => store.list()),
+    begin: (input: Parameters<typeof store.begin>[0]) =>
+      bound.withOwnedTranscriptWrite(() => store.begin(input)),
+    call: (...args: Parameters<typeof store.call>) =>
+      bound.withOwnedTranscriptWrite(() => store.call(...args)),
+    completeCall: (...args: Parameters<typeof store.completeCall>) =>
+      bound.withOwnedTranscriptWrite(() => store.completeCall(...args)),
+    finish: (...args: Parameters<typeof store.finish>) =>
+      bound.withOwnedTranscriptWrite(() => store.finish(...args)),
+  };
 }
 
 function encode(value: unknown, networkContent: boolean): StoredValue {
@@ -370,6 +409,31 @@ export function createCodeModeSessionStoreAccess(ctx: ToolSearchToolContext, sig
       return value
         ? { value: JSON.parse(value.json) as unknown, networkContent: value.networkContent }
         : { networkContent: false };
+    },
+    async prepareDurableCommit() {
+      if (writes.size === 0) {
+        return undefined;
+      }
+      const active = assertCell();
+      const next = applyWrites(await projection(), writes);
+      const data = {
+        set: Object.fromEntries(
+          [...writes].flatMap(([key, value]) =>
+            value ? [[key, JSON.parse(value.json) as unknown]] : [],
+          ),
+        ),
+        delete: [...writes].filter(([, value]) => value === null).map(([key]) => key),
+        networkContent: Object.fromEntries(
+          [...writes].flatMap(([key, value]) => (value ? [[key, value.networkContent]] : [])),
+        ),
+      };
+      return {
+        data,
+        publish() {
+          active.projection = Promise.resolve(next);
+          writes.clear();
+        },
+      };
     },
     async commit(): Promise<void> {
       if (writes.size === 0) {

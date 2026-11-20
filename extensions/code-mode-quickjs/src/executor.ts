@@ -25,6 +25,7 @@ import {
 } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Snapshot } from "quickjs-wasi";
+import { fingerprintQuickJsAssets } from "./deterministic.js";
 import type { QuickJsWorkerPayload } from "./worker-types.js";
 
 const getQuickJsModules = createLazyRuntimeModule(async () => {
@@ -35,7 +36,8 @@ const getQuickJsModules = createLazyRuntimeModule(async () => {
     const binary = sourceExecution
       ? resolve(sourceSpecifier)
       : new URL(`../assets/${asset}`, codeModeWorkerUrl());
-    return WebAssembly.compile(await readFile(binary));
+    const bytes = await readFile(binary);
+    return { wasm: await WebAssembly.compile(bytes), bytes };
   };
   const [wasmModule, encoding] = await Promise.all([
     compile("quickjs.wasm", "quickjs-wasi/quickjs.wasm"),
@@ -46,8 +48,9 @@ const getQuickJsModules = createLazyRuntimeModule(async () => {
     throw error;
   });
   return {
-    wasmModule,
-    wasmExtensions: [{ name: "encoding", wasm: encoding }],
+    wasmModule: wasmModule.wasm,
+    wasmExtensions: [{ name: "encoding", wasm: encoding.wasm }],
+    engineFingerprint: fingerprintQuickJsAssets([wasmModule.bytes, encoding.bytes]),
   };
 });
 

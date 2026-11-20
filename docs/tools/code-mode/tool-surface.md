@@ -65,10 +65,12 @@ Rules:
 - The retired `language` and `typecheck` fields are rejected with `invalid_input`.
   Tool arguments are validated when each call reaches its normal execution owner;
   Code Mode does not typecheck the whole program before execution.
-- A Gateway restart ends the process-local Code Mode continuation. The resumed
-  root session inspects the transcript and current state before running a new cell;
-  it does not reconstruct or replay an unfinished cell. See
-  [Restart recovery](/gateway/restart-recovery).
+- A Gateway restart ends the process-local continuation. Persisted QuickJS cells
+  can reconstruct their deterministic program from a bounded journal under the
+  original requester’s newly admitted authority. Committed replies are reused;
+  an uncertain pending mutation stops recovery instead of being repeated. Node
+  and older cells still use transcript-based reconciliation. See
+  [Restart recovery](/gateway/restart-recovery#durable-code-mode-cells).
 - `exec` rejects `import`, `require`, dynamic import, and module-loader
   patterns.
 - `exec` never exposes the normal shell `exec` implementation recursively.

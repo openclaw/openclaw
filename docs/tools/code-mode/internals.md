@@ -171,8 +171,9 @@ never keep a completed run executable.
 Every new `exec` starts a fresh JavaScript context. Variables, functions, and
 imports never carry over between cells; `wait` continues the original cell.
 
-Each code-mode run is tracked in an in-process map keyed by `runId` (not
-persisted to disk or a database). `exec`/`wait` return one of three result
+Live code-mode continuations are tracked in an in-process map keyed by `runId`.
+Persisted QuickJS cells also record a bounded journal in the existing session
+SQLite owner. `exec`/`wait` return one of three result
 statuses: `completed`, `waiting`, or `failed`.
 
 - A `waiting` result retains an executor continuation, pending bridge requests, and
@@ -187,7 +188,8 @@ statuses: `completed`, `waiting`, or `failed`.
   session.`.
 - A run's continuation is released as soon as it settles to
   `completed` or `failed`, or is dropped on Gateway shutdown. Continuations
-  do not survive a restart; committed session-store values do.
+  do not survive a restart; journaled QuickJS cells can replay in a fresh VM,
+  and committed session-store values remain available.
 - OpenClaw caps the number of concurrently suspended runs per process (64) and
   rejects new suspensions past that cap with `too many suspended code mode
   runs.`. Cells submitted with outer `awaitResults: true` retain ownership through

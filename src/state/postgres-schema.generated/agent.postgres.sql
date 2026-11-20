@@ -301,6 +301,17 @@ CREATE TABLE "session_canonical_validation_pending" (
   PRIMARY KEY ("session_key")
 );
 
+CREATE TABLE "session_code_mode_journal" (
+  "session_key" text COLLATE "C" NOT NULL,
+  "session_id" text COLLATE "C" NOT NULL,
+  "execution_id" text COLLATE "C" NOT NULL,
+  "tool_call_id" text COLLATE "C" NOT NULL,
+  "version" bigint NOT NULL,
+  "record_json" text COLLATE "C" NOT NULL,
+  PRIMARY KEY ("session_key", "session_id", "execution_id"),
+  CHECK (("version" >= 1))
+);
+
 CREATE TABLE "session_conversations" (
   "session_id" text COLLATE "C" NOT NULL,
   "conversation_id" text COLLATE "C" NOT NULL,
@@ -741,6 +752,8 @@ CREATE INDEX "idx_memory_index_sources_source" ON "memory_index_sources" (("sour
 
 CREATE INDEX "idx_agent_message_tool_run_outcomes_occurred" ON "message_tool_run_outcomes" (("occurred_at") DESC, ("id") DESC);
 
+CREATE UNIQUE INDEX "idx_agent_code_mode_journal_tool_call" ON "session_code_mode_journal" (("session_key") ASC, ("session_id") ASC, ("tool_call_id") ASC);
+
 CREATE INDEX "idx_agent_session_conversations_conversation" ON "session_conversations" (("conversation_id") ASC, ("last_seen_at") DESC, ("session_id") ASC);
 
 CREATE UNIQUE INDEX "idx_agent_session_conversations_primary" ON "session_conversations" (("session_id") ASC) WHERE ("role" = 'primary');
@@ -830,6 +843,10 @@ ALTER TABLE "heartbeat_outcomes" ADD FOREIGN KEY ("session_key") REFERENCES "ses
 ALTER TABLE "memory_index_chunk_provenance" ADD FOREIGN KEY ("chunk_id") REFERENCES "memory_index_chunks" ("id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
 ALTER TABLE "memory_index_chunk_recall_metadata" ADD FOREIGN KEY ("chunk_id") REFERENCES "memory_index_chunks" ("id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
+
+ALTER TABLE "session_code_mode_journal" ADD FOREIGN KEY ("session_id") REFERENCES "session_windows" ("session_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
+
+ALTER TABLE "session_code_mode_journal" ADD FOREIGN KEY ("session_key") REFERENCES "session_nodes" ("session_key") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
 ALTER TABLE "session_conversations" ADD FOREIGN KEY ("conversation_id") REFERENCES "conversations" ("conversation_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 

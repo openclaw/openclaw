@@ -63,6 +63,7 @@ export async function createFixture(
   const runAbort = vi.fn();
   const toolSearchCatalogExecutor = vi.fn();
   const subscription = {
+    unsubscribe: vi.fn(),
     isCompacting: vi.fn(() => false),
   };
   const queueHandle = { kind: "embedded", runId: "run-1" };

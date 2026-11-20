@@ -43,6 +43,10 @@ import {
   adoptCanonicalSessionValidationSchema,
   canonicalSessionValidationSchemaSql,
 } from "./openclaw-agent-canonical-validation-schema.js";
+import {
+  AGENT_CODE_MODE_JOURNAL_SCHEMA_VERSION,
+  AGENT_CODE_MODE_JOURNAL_SQL,
+} from "./openclaw-agent-code-mode-journal-schema.js";
 import { AGENT_COLD_ARCHIVE_CHUNKS_SQL } from "./openclaw-agent-cold-archive-chunks-schema.js";
 import { migrateAgentColdNavigationInTransaction } from "./openclaw-agent-cold-navigation-schema.js";
 import {
@@ -399,6 +403,9 @@ function ensureAgentSchema(
         }
         if (crossesVersion(AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION)) {
           migrateAgentPendingInputEndingsInTransaction(db);
+        }
+        if (crossesVersion(AGENT_CODE_MODE_JOURNAL_SCHEMA_VERSION)) {
+          db.exec(AGENT_CODE_MODE_JOURNAL_SQL);
         }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.

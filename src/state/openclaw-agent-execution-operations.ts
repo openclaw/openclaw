@@ -13,6 +13,7 @@ import {
   takeSqliteWorkerOperationAdmissionAttachment,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { readTrajectoryRuntimeRetentionLease } from "../trajectory/runtime-retention.contract.js";
+import { loadCodeModeJournalOperations } from "./openclaw-agent-execution-code-mode.worker.js";
 import type { createAgentDatabaseMaintenanceOwner } from "./openclaw-agent-execution-maintenance.js";
 import { loadAgentToolUsageOperations } from "./openclaw-agent-execution-tool-usage.worker.js";
 import {
@@ -574,6 +575,12 @@ export function createAgentWorkerOperationLoaders(
     "toolUsage.flush": loadAgentToolUsageOperations,
     "toolUsage.reset": loadAgentToolUsageOperations,
     "toolUsage.import": loadAgentToolUsageOperations,
+    "codeModeJournal.read": loadCodeModeJournalOperations,
+    "codeModeJournal.list": loadCodeModeJournalOperations,
+    "codeModeJournal.begin": loadCodeModeJournalOperations,
+    "codeModeJournal.call": loadCodeModeJournalOperations,
+    "codeModeJournal.completeCall": loadCodeModeJournalOperations,
+    "codeModeJournal.finish": loadCodeModeJournalOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
     "usageCache.writeQuarters": loadUsageCacheOperations,
     "usageCache.prune": loadUsageCacheOperations,

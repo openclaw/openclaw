@@ -20,15 +20,13 @@ import {
 } from "openclaw/plugin-sdk/code-mode-executor-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { serveWorkerTasks, type WorkerTaskChannel } from "openclaw/plugin-sdk/worker-task-server";
-import {
-  EvalFlags,
-  JSException,
-  MAX_STACK_SIZE,
-  QuickJS,
-  type JSValueHandle,
-  type Snapshot,
-} from "quickjs-wasi";
-import type { QuickJsWorkerPayload as CodeModeWorkerPayload } from "./worker-types.js";
+import { EvalFlags, JSException, MAX_STACK_SIZE, QuickJS, type JSValueHandle } from "quickjs-wasi";
+import { createDeterministicEnvironment } from "./deterministic.js";
+import { CodeModeWorkerFailure } from "./worker-failure.js";
+import type {
+  QuickJsWorkerPayload as CodeModeWorkerPayload,
+  QuickJsSnapshot as Snapshot,
+} from "./worker-types.js";
 
 type CodeModeWorkerResult = CodeModeVmResult<Snapshot>;
 type CodeModeWorkerThreadResult = SharedWorkerThreadResult<Snapshot>;
@@ -37,17 +35,6 @@ type CodeModeFailure = Extract<CodeModeWorkerResult, { status: "failed" }>;
 // This worker and its pinned WASM build share one trusted controller program.
 // Cache bytecode only: every fresh cell still initializes an independent guest heap.
 let controllerBytecode: Uint8Array | undefined;
-
-class CodeModeWorkerFailure extends Error {
-  constructor(
-    readonly code: CodeModeFailure["code"],
-    message: string,
-    readonly failurePhase: CodeModeFailure["failurePhase"],
-  ) {
-    super(message);
-    this.name = "CodeModeWorkerFailure";
-  }
-}
 
 function notifyWorkerFailure(
   channel: WorkerTaskChannel | undefined,
@@ -251,6 +238,8 @@ function createHostCancelRequestHandler(params: {
 }
 
 async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState) {
+  const replay = createDeterministicEnvironment(input);
+  const deterministic = replay.state;
   const startedAt = performance.now();
   let deadlineMs = startedAt + input.config.timeoutMs;
   let timedOut = false;
@@ -264,6 +253,7 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState) {
     memoryLimit: input.config.memoryLimitBytes,
     maxStackSize: MAX_STACK_SIZE,
     timezoneOffset: 0,
+    ...replay.options,
     onUnhandledRejection: trackPromiseRejection,
     interruptHandler: () => {
       timedOut = deadlineReached();
@@ -278,6 +268,7 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState) {
       : error;
   });
   try {
+    replay.initialize(vm);
     if (input.kind === "resume") {
       // Restore owns an independent WASM heap; all incoming aliases share this snapshot.
       input.continuation.memory = new Uint8Array();
@@ -347,6 +338,8 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState) {
     }
     return {
       vm,
+      deterministic,
+      advanceTime: replay.advanceTime,
       didTimeout: () => timedOut || deadlineReached(),
       pauseBudget: () => {
         timedOut ||= deadlineReached();
@@ -511,7 +504,10 @@ async function run(
     canceledRequestIds: [],
     replyIndex: 0,
   };
-  const { vm, didTimeout, setBudget, pauseBudget } = await createVm({ ...input, config }, bridge);
+  const { vm, deterministic, advanceTime, didTimeout, setBudget, pauseBudget } = await createVm(
+    { ...input, config },
+    bridge,
+  );
   const maxTimeoutMs = input.config.timeoutMs;
   let prepare = () => {
     if (input.kind === "exec") {
@@ -523,12 +519,55 @@ async function run(
       vm.evalCode(program.source, USER_SOURCE_FILE, EvalFlags.ASYNC).dispose();
       return;
     }
+    advanceTime(input.deterministicTimeMs);
     settleRequests(vm, bridge, input.settledRequests);
   };
   const executionResult = await (async (): Promise<CodeModeWorkerResult> => {
     let output: unknown[] = [];
     let consumed = channel?.consumeInput;
     try {
+      const acceptContinue = (
+        command: Extract<CodeModeWorkerContinuation, { kind: "continue" }>,
+      ) => {
+        if (
+          !Number.isFinite(command.timeoutMs) ||
+          command.timeoutMs <= 0 ||
+          command.timeoutMs > maxTimeoutMs
+        ) {
+          throw new Error("invalid code mode continuation budget");
+        }
+        setBudget(command.timeoutMs);
+        advanceTime(command.deterministicTimeMs);
+      };
+      if (input.kind === "exec" && deterministic && channel) {
+        // Persist compatibility before any guest request can reach the host.
+        consumed?.();
+        consumed = undefined;
+        pauseBudget();
+        const response = await channel.request({
+          status: "boundary",
+          deterministicFingerprint: deterministic.fingerprint,
+          pendingRequests: [],
+          canceledRequestIds: [],
+          settlementMode: { kind: "awaiting" },
+          output: captureCodeModeOutput([], config.maxOutputBytes),
+          memoryUsedBytes: vm.getMemoryUsage().memoryUsedSize,
+        });
+        consumed = response.consumed;
+        const command = response.input as CodeModeWorkerContinuation;
+        if (
+          command.kind !== "continue" ||
+          command.pendingRequests.length ||
+          command.settledRequests.length
+        ) {
+          throw new CodeModeWorkerFailure(
+            "invalid_input",
+            "deterministic initialization requires an empty continue command",
+            "input",
+          );
+        }
+        acceptContinue(command);
+      }
       for (;;) {
         prepare();
         consumed?.();
@@ -574,6 +613,7 @@ async function run(
               pauseBudget();
               const response = await channel.request({
                 status: "boundary",
+                ...(deterministic ? { deterministicFingerprint: deterministic.fingerprint } : {}),
                 ...(bridge.networkContentObserved ? { networkContentObserved: true as const } : {}),
                 pendingRequests: bridge.pendingRequests,
                 canceledRequestIds: bridge.canceledRequestIds,
@@ -587,14 +627,7 @@ async function run(
               // SAFETY: The task-bound host returns only the typed continuation command.
               const command = response.input as CodeModeWorkerContinuation;
               if (command.kind === "continue") {
-                if (
-                  !Number.isFinite(command.timeoutMs) ||
-                  command.timeoutMs <= 0 ||
-                  command.timeoutMs > maxTimeoutMs
-                ) {
-                  throw new Error("invalid code mode continuation budget");
-                }
-                setBudget(command.timeoutMs);
+                acceptContinue(command);
                 bridge.pendingRequests = command.pendingRequests;
                 bridge.canceledRequestIds = [];
                 prepare = () => settleRequests(vm, bridge, command.settledRequests);
@@ -608,7 +641,10 @@ async function run(
               consumed();
               consumed = undefined;
             }
-            const snapshot = vm.snapshot();
+            const snapshot: Snapshot = vm.snapshot();
+            if (deterministic) {
+              snapshot.deterministic = { ...deterministic };
+            }
             // Preserve the encoded-size cap, but serialize only metadata: the snapshot
             // already owns transferable memory, so the storage codec would copy it again.
             const metadata = QuickJS.serializeSnapshot({ ...snapshot, memory: new Uint8Array() });
@@ -656,9 +692,11 @@ async function run(
       // worker before releasing it, rather than infer consumption from VM disposal.
     }
   })();
-  return bridge.networkContentObserved
-    ? { ...executionResult, networkContentObserved: true }
-    : executionResult;
+  return {
+    ...executionResult,
+    ...(bridge.networkContentObserved ? { networkContentObserved: true as const } : {}),
+    ...(deterministic ? { deterministicFingerprint: deterministic.fingerprint } : {}),
+  };
 }
 
 function settleRequests(vm: QuickJS, bridge: BridgeState, requests: SettledBridgeRequest[]): void {

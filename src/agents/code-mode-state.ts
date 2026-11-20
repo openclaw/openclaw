@@ -21,6 +21,7 @@ import { observeAgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
+import type { CodeModeDurable } from "./code-mode-durable.js";
 import type {
   CodeModeExecutorContinuation,
   CodeModeWorkerResult,
@@ -232,6 +233,7 @@ export function createCodeModeRunOwner(
       required = true;
     },
     runId,
+    durable: undefined as CodeModeDurable | undefined,
     signal,
     inbox,
     results: createCodeModeResultsAccess(ctx, config),

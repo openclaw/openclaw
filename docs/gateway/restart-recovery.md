@@ -16,8 +16,9 @@ state and continue. Recorded yield waits stay parked when their wake source
 survives. A lost source settles a sub-agent with a visible failure; its registry
 completion wakes the requester. A root with no remaining child settlement or
 delivery receives the ordinary resume input to inspect and reconcile instead.
-The transcript remains the agent's context; the Gateway does not reconstruct or
-replay the old execution. For a captured interrupted turn, the shutdown marker
+The transcript remains the agent's context. Except for journaled QuickJS Code
+Mode cells described below, the Gateway does not reconstruct or replay the old
+execution. For a captured interrupted turn, the shutdown marker
 retains its original requester's bounded authentication source. Startup revalidates
 that source and current session access before admitting the continuation; a shared
 session's owner or another participant cannot replace it. A revoked or unavailable
@@ -100,8 +101,9 @@ Recovery rechecks current authority; if admission fails, it records a visible
 failure in the conversation instead of silently dropping the turn.
 
 Unmarked crash recovery has no requester source captured by graceful shutdown.
-It follows the existing source-less session-principal policy; it does not
-manufacture a captured running-root requester from queued-input provenance.
+A journaled QuickJS cell supplies its original admitted source instead. Without
+a journal, the existing source-less session-principal policy remains; recovery
+does not manufacture a requester from queued-input provenance.
 
 On upgrade from the retired restart-recovery subsystem (through 2026.10.9),
 startup and `openclaw doctor --fix` also repair tombstoned root sessions, with or
@@ -131,6 +133,37 @@ still produce a failed exit. On macOS and Linux, any remaining referenced handle
 one-second final drain before the process logs remaining handle types and re-raises
 `SIGTERM`. Failed or retained
 cleanup keeps its existing deadline and exit-status handling.
+
+## Durable Code Mode cells
+
+Persisted QuickJS Code Mode cells record their program, deterministic clock and
+random seed, engine fingerprint, original requester source, ordered nested-call
+intents, and delivered results in the session database. Startup re-admits the
+original requester with current access, then recovers the cell before preparing
+model history. A session owner cannot inherit another participant’s program.
+Incognito cells, Node cells, and cells started before this journal existed do
+not gain durable replay.
+
+Recovery starts a fresh VM, not a suspended operating-system stack. Already
+committed replies return their saved bytes without invoking their tools again.
+A pending call is retried only when both its recorded contract and its current
+tool contract permit replay. If an interrupted call may have changed external
+state, recovery reports uncertainty and does not repeat it or continue past it.
+Inspect the original operation before issuing new work. An incompatible engine,
+program, catalog, or journal also stops recovery before new effects.
+
+The journal does not make external side effects exactly once: a crash between
+an effect and its committed receipt leaves that effect uncertain. Tools that
+declare replay safety must provide the appropriate read-only or idempotent
+contract themselves. Journal keys and stored requester facts are not authority.
+
+The terminal result and buffered session-store writes commit together. The
+authoritative transcript append retires the journal in the same transaction,
+including when a `wait` call finishes the original cell. A crash before that
+append reuses the saved terminal result. Each session key has at most four
+unretired journals, each with 256 calls and a 4 MiB encoded-record limit; capacity
+refusal preserves existing recovery evidence. Completed journals are not kept
+as permanent duplicate transcripts.
 
 ## Unexpected exits
 

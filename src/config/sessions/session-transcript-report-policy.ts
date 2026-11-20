@@ -1,5 +1,9 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  CODE_MODE_STORE_CUSTOM_TYPE,
+  readCodeModeStoreEntry,
+} from "../../agents/code-mode-session-store-replay.js";
+import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
@@ -66,10 +70,15 @@ export class TranscriptReportNavigation extends SessionEntryNavigation<ReportNav
     const branch = this.getBranch(leafEntryId);
     return (function* () {
       for (const entry of branch) {
-        if (entry.type !== "custom") {
+        if (
+          entry.type !== "custom" &&
+          !(customType === CODE_MODE_STORE_CUSTOM_TYPE && entry.type === "message")
+        ) {
           continue;
         }
-        const event = readEvent(entry.seq);
+        const raw = readEvent(entry.seq);
+        const event =
+          customType === CODE_MODE_STORE_CUSTOM_TYPE ? readCodeModeStoreEntry(raw) : raw;
         if (event?.customType === customType) {
           yield event;
         }

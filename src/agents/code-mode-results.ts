@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   stringifyCodeModeJsonSafe,
   type CodeModeJsonSource,
@@ -135,6 +136,27 @@ export function createCodeModeResultsAccess(
     };
   };
   return {
+    /** Rebuild only a committed cell-local reference; never refetch its producer. */
+    restore(value: unknown, reference: unknown, networkContent: boolean) {
+      if (!isRecord(reference) || typeof reference.id !== "string") {
+        throw new Error("Invalid durable Code Mode result reference");
+      }
+      const store = currentStore();
+      const json = stringifyCodeModeJsonSafe(value);
+      const bytes = Buffer.byteLength(json);
+      const previous = store.entries.get(reference.id);
+      if (previous) {
+        if (previous.json !== json) {
+          throw new Error("Durable result reference changed");
+        }
+        return;
+      }
+      if (store.entries.size >= MAX_RESULTS || store.bytes + bytes > store.maxBytes) {
+        throw new Error("Durable Code Mode result store exceeds its limit");
+      }
+      store.entries.set(reference.id, { json, bytes, networkContent });
+      store.bytes += bytes;
+    },
     save(value: unknown, networkContent: boolean) {
       const retained = retainJson(stringifyCodeModeJsonSafe(value), networkContent);
       if ("reason" in retained) {

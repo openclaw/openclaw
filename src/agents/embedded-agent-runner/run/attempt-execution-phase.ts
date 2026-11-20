@@ -15,7 +15,7 @@ import { agentSessionSetContextReplacementHook } from "../../sessions/agent-sess
 import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { log } from "../logger.js";
 import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
-import type { EmbeddedAgentQueueHandle } from "../runs.js";
+import { detachActiveEmbeddedRun, type EmbeddedAgentQueueHandle } from "../runs.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
@@ -91,23 +91,6 @@ export async function runEmbeddedAttemptExecutionPhase(
   });
   input.setup.prepStages.mark("stream-setup");
   input.setup.emitPrepStageSummary("stream-ready");
-
-  let preparedHistory: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
-  try {
-    preparedHistory = await withOwnedSessionTranscriptWrites(
-      input.sessionLock.ownedTranscriptWriteContext,
-      () => prepareEmbeddedAttemptHistory(input, assertActive),
-    );
-  } catch (error) {
-    await cleanupEmbeddedAttemptResources({
-      flushPendingToolResultsAfterIdle,
-      session: activeSession,
-      sessionManager: sessionRuntime.sessionManager,
-      aborted: attempt.abortSignal?.aborted,
-      abortSignal: attempt.abortSignal,
-    });
-    throw error;
-  }
 
   const isProbeSession = attempt.sessionId?.startsWith("probe-") ?? false;
   const queueHandleRef: { current?: EmbeddedAgentQueueHandle } = {};
@@ -206,6 +189,52 @@ export async function runEmbeddedAttemptExecutionPhase(
       approvalPromptSent: preparedStream.subscription.didSendDeterministicApprovalPrompt(),
     });
   input.lifecycle.setToolSearchCatalogExecutor(preparedStream.toolSearchCatalogExecutor);
+  // Recovery uses the same subscribed tool executor as ordinary work, before
+  // history sanitization can replace the original call with a missing result.
+  let preparedHistory: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
+  try {
+    await withOwnedSessionTranscriptWrites(
+      input.sessionLock.ownedTranscriptWriteContext,
+      async () => {
+        await sessionRuntime.recoverDurableExecutions?.();
+      },
+    );
+    preparedHistory = await withOwnedSessionTranscriptWrites(
+      input.sessionLock.ownedTranscriptWriteContext,
+      () => prepareEmbeddedAttemptHistory(input, assertActive),
+    );
+  } catch (error) {
+    const cleanups = [
+      () => preparedStream.subscription.unsubscribe(),
+      () => attempt.replyOperation?.detachBackend(preparedStream.queueHandle),
+      () =>
+        !preparedStream.deferredLifecycleOwner &&
+        detachActiveEmbeddedRun(
+          attempt.sessionId,
+          preparedStream.queueHandle,
+          attempt.sessionKey,
+          attempt.sessionFile,
+          undefined,
+          preparedStream.registration,
+        ),
+    ];
+    for (const cleanup of cleanups) {
+      try {
+        cleanup();
+      } catch (cleanupError) {
+        log.error(`Recovery cleanup failed: ${String(cleanupError)}`);
+      }
+    }
+    await cleanupEmbeddedAttemptResources({
+      flushPendingToolResultsAfterIdle,
+      session: activeSession,
+      sessionManager: sessionRuntime.sessionManager,
+      aborted: attempt.abortSignal?.aborted,
+      abortSignal: attempt.abortSignal,
+    });
+    throw error;
+  }
+
   input.externalAbortController.setCompactionState({
     isPendingOrRetrying: preparedStream.subscription.isCompacting,
     isInFlight: () => activeSession.isCompacting,

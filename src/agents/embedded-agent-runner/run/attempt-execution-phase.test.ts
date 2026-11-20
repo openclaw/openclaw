@@ -743,6 +743,18 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     }
   });
 
+  it("binds the subscribed executor before recovery and prepares history only after recovery", async () => {
+    const fixture = await createFixture();
+    const recovered = vi.fn(async () => {
+      expect(fixture.setToolSearchCatalogExecutor).toHaveBeenCalledOnce();
+      expect(mocks.prepareHistory).not.toHaveBeenCalled();
+    });
+    Object.assign(fixture.input.prepared.sessionRuntime, { recoverDurableExecutions: recovered });
+    await runEmbeddedAttemptExecutionPhase(fixture.input);
+    expect(recovered).toHaveBeenCalledOnce();
+    expect(mocks.prepareHistory).toHaveBeenCalledOnce();
+  });
+
   it.each(["flushed", "rejected"] as const)(
     "disposes after a %s tool-result flush when history preparation fails",
     async (outcome) => {

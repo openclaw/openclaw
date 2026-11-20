@@ -7,12 +7,19 @@ import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js"
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
+import { bindCodeModeDurableSource } from "../../code-mode-durable-context.js";
+import {
+  captureCodeModeDurableSource,
+  recoverCodeModeDurableExecutions,
+} from "../../code-mode-durable-recovery.js";
 import { bindCodeModeSessionStore } from "../../code-mode-session-store.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { readGitHubPublicationToolSelection } from "../../github-tool-identity-config.js";
 import { getOpenClawSystemUpdateKind } from "../../internal-runtime-context.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
 import {
   sessionManagerReadToolResultProjectionEntries,
   sessionManagerReadTranscriptBranch,
@@ -153,12 +160,14 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   );
   const { isOpenAIResponsesApi, preparedUserTurnMessage, sessionManager, transcriptPolicy } =
     preparedSessionManager;
+  const durableSource = captureCodeModeDurableSource(attempt);
   if (codeModeControlsEnabledForRun && toolSearchCatalogRef) {
     bindCodeModeSessionStore(
       toolSearchCatalogRef,
       sessionManager,
       sessionLock.withOwnedTranscriptWrite,
     );
+    bindCodeModeDurableSource(toolSearchCatalogRef, durableSource);
   }
   const promptStateLease = retainEmbeddedSessionPromptState(attempt.sessionId);
   resources.promptStateLease = promptStateLease;
@@ -641,7 +650,27 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     },
   });
 
+  const recoverDurableExecutions =
+    attempt.inputProvenance?.kind === "internal_system" &&
+    attempt.inputProvenance.sourceTool === "restart"
+      ? async () => {
+          await recoverCodeModeDurableExecutions({
+            target: {
+              ...sessionLock.ownedTranscriptWriteContext.sessionTarget,
+              assertCurrent: sessionPreparation.assertCurrent,
+            },
+            source: durableSource,
+            tools: effectiveTools,
+            sessionManager,
+            signal: runAbortSignal,
+          });
+          activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
+            (await sessionManager[sessionManagerReadInitialContext]()).messages,
+          );
+        }
+      : undefined;
   return {
+    ...(recoverDurableExecutions ? { recoverDurableExecutions } : {}),
     systemPrompt,
     agentSession: preparedAgentSession,
     anthropicPayloadLogger,

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readCodeModeDurableRecoverySource } from "../agents/code-mode-durable-recovery.js";
 import { resolveSessionYieldWait } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   captureSessionEventTargetForHost,
@@ -484,6 +485,13 @@ async function resumeRestartStore(
           );
         } else {
           try {
+            const durableSource = await readCodeModeDurableRecoverySource({
+              ...target,
+              agentId,
+              sessionKey,
+              sessionId: entry.sessionId,
+              assertCurrent: () => signal.throwIfAborted(),
+            });
             authority = await prepareSessionSystemTurnAuthority({
               context,
               ...target,
@@ -491,7 +499,7 @@ async function resumeRestartStore(
               sessionKey,
               sessionId: entry.sessionId,
               preserveRecordedSource: true,
-              operatorSource: marker.operatorSource,
+              operatorSource: durableSource ?? marker.operatorSource,
               assertCurrent: () => signal.throwIfAborted(),
             });
             admissionStage = "target";

@@ -3,6 +3,23 @@
 -- indexes; session_windows and their children own transcript generations.
 -- Legacy ACP provenance is private import evidence carried with its logical session.
 
+-- Bounded replay state is retained until final transcript settlement, never cache expiry.
+CREATE TABLE IF NOT EXISTS session_code_mode_journal (
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  execution_id TEXT NOT NULL,
+  tool_call_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version >= 1),
+  record_json TEXT NOT NULL,
+  PRIMARY KEY (session_key, session_id, execution_id),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
+  FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_code_mode_journal_tool_call
+  ON session_code_mode_journal(session_key, session_id, tool_call_id);
+-- END CODE MODE JOURNAL
+
 CREATE TABLE IF NOT EXISTS schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY,
   role TEXT NOT NULL,

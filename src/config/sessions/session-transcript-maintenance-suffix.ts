@@ -1,4 +1,8 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  CODE_MODE_STORE_CUSTOM_TYPE,
+  readCodeModeStoreEntry,
+} from "../../agents/code-mode-session-store-replay.js";
 import type { SessionTranscriptMaintenanceCheckpoint } from "./session-transcript-hydration.types.js";
 import { projectSessionTranscriptReportFacts } from "./session-transcript-report-facts.js";
 
@@ -30,8 +34,11 @@ export function selectTranscriptMaintenanceSuffix(
       return undefined;
     }
     parent = facts.entry.id;
-    const event = asOptionalRecord(row.event)!;
-    if (facts.entry.type === "custom" && event.customType === customType) {
+    const event =
+      customType === CODE_MODE_STORE_CUSTOM_TYPE
+        ? readCodeModeStoreEntry(row.event)
+        : asOptionalRecord(row.event);
+    if (event?.customType === customType) {
       events.push(event);
     }
   }

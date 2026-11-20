@@ -14,6 +14,7 @@ import {
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { retireCodeModeJournalForToolResult } from "./code-mode-journal.kernel.js";
 import { advanceCliHistoryBoundaryInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { preserveSessionEntryCacheAcrossWrite } from "./session-accessor.sqlite-entry-cache.js";
@@ -390,6 +391,22 @@ export function appendTranscriptEventInTransaction(
         projectionNeedsRebuild,
         options,
       );
+      if (
+        isRecord(persistedEvent) &&
+        persistedEvent.type === "message" &&
+        isRecord(persistedEvent.message) &&
+        persistedEvent.message.role === "toolResult" &&
+        typeof persistedEvent.message.toolCallId === "string"
+      ) {
+        // The final result and journal retirement have one commit owner. A crash
+        // before this COMMIT leaves the finished outcome available for recovery.
+        retireCodeModeJournalForToolResult(
+          database.db,
+          scope,
+          persistedEvent.message.toolCallId,
+          persistedEvent.message,
+        );
+      }
       return eventJson;
     },
   );
