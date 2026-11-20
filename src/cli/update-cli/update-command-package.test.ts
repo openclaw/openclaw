@@ -212,9 +212,15 @@ it.each([
       name: "package-update",
       exitCode: 1,
       failureFacts: expect.arrayContaining([
-        expect.objectContaining({
-          message: expect.stringContaining("Candidate validation failed"),
-        }),
+        expect.objectContaining(
+          code === "EACCES"
+            ? {
+                check: "package-install",
+                code: "global-install-permission-denied",
+                message: "Package update cannot write [redacted-path]",
+              }
+            : { message: expect.stringContaining("Candidate validation failed") },
+        ),
       ]),
     },
   });

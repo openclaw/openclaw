@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
@@ -19,6 +19,7 @@ import {
   agentDiscoveryMock,
   connectWebchatClient,
   dispatchInboundMessageMock,
+  mockGetReplyFromConfigOnce,
   rpcReq,
   testState,
   writeSessionStore,
@@ -28,10 +29,41 @@ import { agentCommandMock } from "./test-helpers.runtime-state.js";
 let ws: WebSocket;
 let port: number;
 
+const connectWork: Promise<unknown>[] = [];
+let restoreConnectWork: (() => void) | undefined;
+const waitForConnectWork = async () => {
+  while (connectWork.length > 0) {
+    await Promise.allSettled(connectWork.splice(0));
+  }
+};
+
+// Connect-triggered history prewarming outlives hello-ok and must settle before teardown.
+beforeAll(async () => {
+  const admission = await import("../process/gateway-work-admission.js");
+  const runIndependent = admission.runWithGatewayIndependentRootWorkAdmission;
+  const tails = vi
+    .spyOn(admission, "runWithGatewayIndependentRootWorkAdmission")
+    .mockImplementation((run, origin, signal) => {
+      const pending = runIndependent(run, origin, signal);
+      if (origin === "ws:preauth") {
+        connectWork.push(pending);
+      }
+      return pending;
+    });
+  restoreConnectWork = () => tails.mockRestore();
+});
+afterAll(async () => {
+  try {
+    await waitForConnectWork();
+  } finally {
+    restoreConnectWork?.();
+  }
+});
+
 const gatewaySuite = installGatewayServerChatTestSuite((started) => {
   ws = started.ws;
   port = started.port;
-});
+}, waitForConnectWork);
 const { settleGatewayFixture, waitForAgentRunDrained, withMainSessionStore } = gatewaySuite;
 const assistantContent = (text: string, timestamp: number, type = "text") => ({
   role: "assistant",
@@ -93,6 +125,7 @@ describe("gateway server chat", () => {
       error: { message: expect.stringMatching(/null bytes/i) },
     });
 
+    mockGetReplyFromConfigOnce(async () => ({ text: "Sanitized input received." }));
     const sanitizedRes = await sendChat("idem-sanitized-1", { message: "Cafe\u0301\u0007\tline" });
     expect(sanitizedRes.ok).toBe(true);
     await waitForAgentRunDrained("idem-sanitized-1");
@@ -127,6 +160,7 @@ describe("gateway server chat", () => {
         },
       });
 
+      mockGetReplyFromConfigOnce(async () => ({ text: "WebChat reply." }));
       const webchatRes = await sendChat("idem-webchat-1", {}, webchatWs);
       expect(webchatRes.ok).toBe(true);
       await waitForAgentRunDrained("idem-webchat-1");
@@ -135,6 +169,7 @@ describe("gateway server chat", () => {
       webchatWs = undefined;
 
       testState.agentConfig = { timeoutSeconds: 123 };
+      mockGetReplyFromConfigOnce(async () => ({ text: "Reply within configured timeout." }));
       const timeoutRes = await sendChat("idem-timeout-1");
       expect(timeoutRes.ok).toBe(true);
       expect(timeoutRes.payload?.runId).toBe("idem-timeout-1");

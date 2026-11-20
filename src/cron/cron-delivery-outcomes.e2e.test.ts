@@ -356,6 +356,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
                 agentId: "work",
                 sessionKey,
                 contextKey: `cron:${job.id}:failure-alert`,
+                jobId: job.id,
               },
             );
             await expectState(storePath, job.id, {
