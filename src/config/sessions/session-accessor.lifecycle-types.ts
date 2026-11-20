@@ -24,6 +24,13 @@ export type SessionLifecycleArtifactCleanupParams = {
   /** Preserve explicitly foreign plugin-owned state while retaining ownerless legacy rows. */
   pluginOwnerId?: string;
   sessionKeySegmentPrefix: string;
+  /**
+   * Foreground helper teardown only: restrict the orphan transcript sweep to
+   * the cleanup's own session-key segment. When unset, the shared
+   * marker-based reclamation contract applies and orphans outside the entry
+   * prefix are still reclaimed.
+   */
+  scopeOrphanSweepToSessionKeySegmentPrefix?: boolean;
   transcriptContentMarker: string;
   orphanTranscriptMinAgeMs: number;
   nowMs?: number;

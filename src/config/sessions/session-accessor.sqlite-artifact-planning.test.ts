@@ -339,6 +339,8 @@ it("scopes the orphan marker sweep to the cleanup's own session-key prefix", () 
     agentId: "main",
     orphanTranscriptMinAgeMs: 300_000,
     nowMs,
+    // Foreground helper teardown opts in to the scoped sweep (#202134).
+    scopeOrphanSweepToSessionKeySegmentPrefix: true,
     diagnostics,
   });
   // The victim entry matches the prefix and is removed with its own orphan.
@@ -352,6 +354,22 @@ it("scopes the orphan marker sweep to the cleanup's own session-key prefix", () 
   // longer rescans unrelated orphan transcripts on every call (#202134).
   expect(diagnostics.markerWindows).toBe(1);
   expect(diagnostics.windowRows).toBe(1);
+
+  // Without the opt-in, the shared marker-based reclamation contract still
+  // finds marked history outside the entry prefix (#165254, #182245).
+  const unscopedDiagnostics: SqliteSessionArtifactPreparationDiagnostics = {};
+  const unscopedPlan = artifactPlanning.planSessionLifecycleArtifactCleanup(database, {
+    ...planInput(),
+    agentId: "main",
+    orphanTranscriptMinAgeMs: 300_000,
+    nowMs,
+    diagnostics: unscopedDiagnostics,
+  });
+  expect(unscopedDiagnostics.markerWindows).toBe(130);
+  expect(unscopedDiagnostics.windowRows).toBe(130);
+  expect(unscopedPlan.deletePlans.map((item) => item.sessionId).toSorted()).toEqual(
+    [sessionId, inScopeId, ...outOfScopeIds].toSorted(),
+  );
 });
 
 it("pages orphan marker reads while protecting fresh and retained history", () => {
@@ -366,13 +384,6 @@ it("pages orphan marker reads while protecting fresh and retained history", () =
   const nowMs = Date.now();
   runOpenClawAgentWriteTransaction((transaction) => {
     writeRow(transaction, sessionKey, { ...entry, previousSessionId: ids.at(-2) });
-    // Orphan windows belong to this cleanup's own key prefix: the sweep must
-    // not reach windows outside it (#202134). The node stays fresh so it is
-    // not an entry candidate itself.
-    writeRow(transaction, "agent:main:unrelated-history", {
-      sessionId: "unrelated-history-current",
-      updatedAt: nowMs,
-    });
     const window = transaction.db.prepare(
       "INSERT INTO session_windows (session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)",
     );
@@ -380,7 +391,7 @@ it("pages orphan marker reads while protecting fresh and retained history", () =
       "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, 0, ?, 1)",
     );
     for (const id of ids) {
-      window.run(id, "agent:main:unrelated-history");
+      window.run(id, sessionKey);
       transcript.run(
         id,
         JSON.stringify({
@@ -389,7 +400,7 @@ it("pages orphan marker reads while protecting fresh and retained history", () =
         }),
       );
     }
-    window.run(coldSessionId, "agent:main:unrelated-history");
+    window.run(coldSessionId, sessionKey);
     const payload = prepareColdTranscriptPayload(
       transaction.db,
       JSON.stringify({ type: "message", id: "cold", message: { role: "user", content: marker } }),

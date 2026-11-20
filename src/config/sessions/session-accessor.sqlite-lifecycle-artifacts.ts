@@ -153,11 +153,13 @@ const ORPHAN_WINDOW_PAGE_SIZE = 128;
 
 /**
  * Narrows orphan-window reads to the cleanup's own session-key segment, so a
- * scoped lifecycle cleanup no longer pages through unrelated orphans on every
- * call (#202134). Mirrors sessionKeySegmentStartsWith: the segment is the key
- * after its second colon, or the whole key when there is no second colon.
- * Callers still apply the exact JavaScript predicate per row; this only keeps
- * the scan itself from growing with unrelated orphan transcripts.
+ * scoped foreground helper cleanup no longer pages through unrelated orphans
+ * on every call (#202134). Mirrors sessionKeySegmentStartsWith: the segment is
+ * the key after its second colon, or the whole key when there is no second
+ * colon. Only used when the caller opts in with
+ * scopeOrphanSweepToSessionKeySegmentPrefix; the shared marker-based
+ * reclamation contract otherwise still finds marked history outside the entry
+ * prefix (#165254, #182245).
  */
 function sessionKeySegmentStartsWithSql(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -203,9 +205,10 @@ function readOrphanWindowPage(
 }
 
 // Plans orphan cleanup without file writes or row deletion; finalization
-// handles archive durability before removing rows. The sweep stays inside the
-// cleanup's own session-key segment: a scoped plugin cleanup must not rescan
-// unrelated orphan transcripts on every call (#202134).
+// handles archive durability before removing rows. The orphan sweep follows
+// the shared marker-based reclamation contract across session-key prefixes
+// unless the caller opts in to scoping it to the cleanup's own segment
+// (foreground helper teardown, #202134).
 function* planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
   agentId?: string;
   archiveRemovedEntryTranscripts: boolean;
@@ -216,6 +219,7 @@ function* planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
   pluginOwnerId?: string;
   referencedSessionIds: ReadonlySet<string>;
   sessionKeySegmentPrefix: string;
+  scopeOrphanSweepToSessionKeySegmentPrefix?: boolean;
   transcriptContentMarker: string;
   orphanTranscriptMinAgeMs: number;
   nowMs: number;
@@ -233,7 +237,8 @@ function* planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
       .filter(
         (row) =>
           sessionKeyBelongsToAgent(row.session_key, params.agentId) &&
-          sessionKeySegmentStartsWith(row.session_key, params.sessionKeySegmentPrefix) &&
+          (!params.scopeOrphanSweepToSessionKeySegmentPrefix ||
+            sessionKeySegmentStartsWith(row.session_key, params.sessionKeySegmentPrefix)) &&
           !params.referencedSessionIds.has(row.session_id) &&
           !params.excludedSessionIds?.has(row.session_id) &&
           (!params.pluginOwnerId ||
@@ -271,7 +276,7 @@ function* planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
     rows = readOrphanWindowPage(
       params.database,
       rows.at(-1)!.session_id,
-      params.sessionKeySegmentPrefix,
+      params.scopeOrphanSweepToSessionKeySegmentPrefix ? params.sessionKeySegmentPrefix : undefined,
     );
   }
   return deletePlans;
@@ -420,7 +425,11 @@ function* planSessionLifecycleArtifactCleanupPages(
     if (diagnostics) {
       diagnostics.selectedEntries = entries.length;
     }
-    const firstPage = readOrphanWindowPage(database, undefined, params.sessionKeySegmentPrefix);
+    const firstPage = readOrphanWindowPage(
+      database,
+      undefined,
+      params.scopeOrphanSweepToSessionKeySegmentPrefix ? params.sessionKeySegmentPrefix : undefined,
+    );
     if (entries.length === 0 && firstPage.length === 0) {
       if (diagnostics) {
         diagnostics.deletePlans = 0;
@@ -461,6 +470,12 @@ function* planSessionLifecycleArtifactCleanupPages(
         ...(params.pluginOwnerId ? { pluginOwnerId: params.pluginOwnerId } : {}),
         referencedSessionIds,
         sessionKeySegmentPrefix: params.sessionKeySegmentPrefix,
+        ...(params.scopeOrphanSweepToSessionKeySegmentPrefix === undefined
+          ? {}
+          : {
+              scopeOrphanSweepToSessionKeySegmentPrefix:
+                params.scopeOrphanSweepToSessionKeySegmentPrefix,
+            }),
         transcriptContentMarker: params.transcriptContentMarker,
         orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
         nowMs: params.nowMs,

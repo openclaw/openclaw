@@ -58,6 +58,18 @@ export function planMemoryLifecycleArtifacts(
     if (removed.has(sessionKey)) {
       continue;
     }
+    // Foreground helper teardown may opt in to scoping the orphan sweep to
+    // the cleanup's own session-key segment; otherwise the shared
+    // marker-based reclamation contract reclaims marked history across
+    // prefixes (#165254, #182245).
+    if (
+      input.scopeOrphanSweepToSessionKeySegmentPrefix &&
+      !(parseAgentSessionKey(sessionKey)?.rest ?? sessionKey).startsWith(
+        input.sessionKeySegmentPrefix,
+      )
+    ) {
+      continue;
+    }
     for (const [sessionId, window] of state.historicalWindows) {
       if (
         !retained.has(sessionId) &&
