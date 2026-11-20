@@ -45,6 +45,7 @@ afterEach(async () => {
 function createBudget(admit: () => boolean) {
   return {
     floor: 1,
+    isCurrent: vi.fn(() => true),
     admitGrowth: vi.fn(admit),
     releaseGrowth: vi.fn(),
     reservePointReadFloor: vi.fn(),
@@ -55,8 +56,9 @@ function createBudget(admit: () => boolean) {
 
 function createPool(budget: WorkerPoolMemoryBudget | undefined, maxWorkers = 2) {
   const workers: FixtureWorker[] = [];
+  const createMemoryBudget = vi.fn((): WorkerPoolMemoryBudget | undefined => budget);
   const host: WorkerTaskHost = {
-    createMemoryBudget: () => budget,
+    createMemoryBudget,
     createWorker() {
       const worker = new FixtureWorker(workers.length + 1);
       workers.push(worker);
@@ -83,7 +85,7 @@ function createPool(budget: WorkerPoolMemoryBudget | undefined, maxWorkers = 2) 
     host,
   );
   pools.push(pool);
-  return { pool, workers };
+  return { pool, workers, createMemoryBudget };
 }
 
 const settle = () =>
@@ -157,4 +159,26 @@ it("keeps standard sizing when the host supplies no budget", async () => {
   expect(workers).toHaveLength(2);
   workers.forEach((worker) => worker.reply());
   await Promise.all(runs);
+});
+
+it("rebinds to the host's current policy after the previous one was replaced", async () => {
+  const lean = createBudget(() => true);
+  const { pool, workers, createMemoryBudget } = createPool(lean);
+  const runs = [pool.run("first", {}), pool.run("second", {})];
+  await settle();
+  workers.forEach((worker) => worker.reply());
+  await Promise.all(runs);
+  // An in-process restart chose standard: the old lean policy no longer applies.
+  lean.isCurrent.mockReturnValue(false);
+  expect(createMemoryBudget).toHaveBeenCalledOnce();
+  createMemoryBudget.mockReturnValue(undefined);
+  const next = [pool.run("a", {}), pool.run("b", {})];
+  await settle();
+  // The pool asked for the current policy instead of charging the retired ledger.
+  expect(createMemoryBudget.mock.calls.length).toBeGreaterThan(1);
+  expect(lean.releaseGrowth).not.toHaveBeenCalled();
+  expect(lean.admitGrowth).toHaveBeenCalledOnce();
+  expect(workers.filter((worker) => worker.inputs.length === 2)).toHaveLength(2);
+  workers.forEach((worker) => worker.reply());
+  await Promise.all(next);
 });

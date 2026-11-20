@@ -34,6 +34,8 @@ export type WorkerTaskObservation = { started(): void; completed(): void };
 export type WorkerPoolMemoryBudget = {
   /** Ordinary workers always admitted, including settlement capacity. */
   readonly floor: number;
+  /** False once the host replaced this policy; the pool then binds the current one. */
+  isCurrent(): boolean;
   /** Admit one ordinary worker beyond the floor. */
   admitGrowth(): boolean;
   releaseGrowth(count: number): void;
