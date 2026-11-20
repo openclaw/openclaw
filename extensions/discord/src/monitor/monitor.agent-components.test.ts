@@ -25,6 +25,7 @@ import {
 type Controls = typeof import("./agent-components.js");
 let controls: Controls;
 let buildDiscordComponentMessage: typeof import("../components.js").buildDiscordComponentMessage;
+let readDiscordComponentSpec: typeof import("../components.js").readDiscordComponentSpec;
 let buildDiscordPresentationComponents: typeof import("../shared-interactive.js").buildDiscordPresentationComponents;
 let lastBody: unknown;
 
@@ -40,7 +41,7 @@ const context = (allowFrom = ["123456789"]) =>
 
 beforeAll(async () => {
   controls = await import("./agent-components.js");
-  ({ buildDiscordComponentMessage } = await import("../components.js"));
+  ({ buildDiscordComponentMessage, readDiscordComponentSpec } = await import("../components.js"));
   ({ buildDiscordPresentationComponents } = await import("../shared-interactive.js"));
 });
 
@@ -62,11 +63,13 @@ beforeEach(() => {
   });
 });
 
-/** Renders one core-marked presentation the way a message action sends it. */
+/** Renders one core-marked presentation the way a message action sends it, through the send parser. */
 function sendMarked(blocks: Record<string, unknown>[]) {
   const { presentation } = stampAgentControls({ presentation: { blocks } });
-  const spec = buildDiscordPresentationComponents(
-    presentation as Parameters<typeof buildDiscordPresentationComponents>[0],
+  const spec = readDiscordComponentSpec(
+    buildDiscordPresentationComponents(
+      presentation as Parameters<typeof buildDiscordPresentationComponents>[0],
+    ),
   );
   if (!spec) {
     throw new Error("expected Discord components");
