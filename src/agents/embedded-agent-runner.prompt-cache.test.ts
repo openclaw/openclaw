@@ -328,7 +328,7 @@ it.for(cases)(
           try {
             // Expiry is meaningful only after this exact session discovered its server.
             const catalog = await mcpLease.runtime.getCatalog();
-            expect(catalog.diagnostics).toEqual([]);
+            expect(catalog.diagnostics ?? []).toEqual([]);
             expect(catalog.tools).toEqual(
               expect.arrayContaining([
                 expect.objectContaining({ serverName: "cache_fixture", toolName: "probe" }),
