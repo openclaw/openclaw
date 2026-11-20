@@ -1,0 +1,145 @@
+/* The message column aligns bubbles at the start. Size this bubble from the column,
+   not the intrinsic width of the job name or a newly loaded schedule. */
+.chat-group.assistant .chat-bubble:has(.chat-created-automations) {
+  width: min(100%, 384px);
+}
+
+.chat-created-automations {
+  width: min(100%, 360px);
+  min-width: 0;
+  margin-block: 8px;
+  padding-inline: 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  color: var(--text);
+  font: 400 calc(13px * var(--control-ui-text-scale, 1)) / 1.4 var(--font-body);
+}
+
+.chat-created-automations__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 5px;
+  border-bottom: 1px solid var(--border);
+  font: inherit;
+  font-weight: 600;
+}
+
+.chat-created-automations__clock {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.chat-created-automations__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-created-automations__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  align-items: center;
+  column-gap: 4px;
+  min-height: 56px;
+}
+
+.chat-created-automations__row + .chat-created-automations__row {
+  border-block-start: 1px solid var(--border);
+}
+
+.chat-created-automations--single {
+  .chat-created-automations__row {
+    grid-template-columns: 32px minmax(0, 1fr) 44px;
+  }
+
+  .chat-created-automations__clock {
+    width: 30px;
+    height: 30px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-selected);
+  }
+}
+
+.chat-created-automations__copy {
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px 6px;
+  color: inherit;
+
+  strong,
+  small {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  strong {
+    font-weight: 550;
+  }
+
+  small {
+    color: var(--muted);
+    font-size: var(--control-ui-text-sm);
+  }
+}
+
+.chat-created-automations__link {
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
+}
+
+.chat-created-automations__action {
+  display: grid;
+  place-items: center;
+  height: 44px;
+
+  .settings-toggle {
+    width: 100%;
+    height: 100%;
+    justify-content: center;
+  }
+
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.chat-created-automations__error {
+  color: var(--danger);
+  grid-column: 1 / -1;
+  margin-block-end: 8px;
+  overflow-wrap: anywhere;
+}
+
+.chat-created-automations__retry {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+
+  &:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+}

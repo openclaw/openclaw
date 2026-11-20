@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout } from "node:timers/promises";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { requirePinnedBun } from "../../../scripts/lib/pinned-bun.mjs";
@@ -153,7 +154,8 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
     const backend = await detectWorktreeFilesystemBackend(root, options);
     assert(backend?.id === "apfs", "APFS backend required");
     await backend.createTemplate(source, options);
-    await fs.writeFile(path.join(source, "payload"), Buffer.alloc(1024 * 1024, 0x5a));
+    const payload = Buffer.alloc(1024 * 1024, 0x5a);
+    await fs.writeFile(path.join(source, "payload"), payload);
     await backend.cloneTemplate(source, destination, options);
     const [original, cloned] = await nativeWorktreeFilesystem.readMetadata(
       [path.join(source, "payload"), path.join(destination, "payload")],
@@ -162,9 +164,7 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
     assert(original && cloned && original.cloneId > 0n, "native clone provenance required");
     expect(cloned.cloneId).toBe(original.cloneId);
     expect(cloned.ino).not.toBe(original.ino);
-    expect(await fs.readFile(path.join(destination, "payload"))).toEqual(
-      await fs.readFile(path.join(source, "payload")),
-    );
+    expect(await fs.readFile(path.join(destination, "payload"))).toEqual(payload);
     expect(getFsSafeNativeConfig().mode).toBe("off");
   });
 
@@ -219,38 +219,38 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
     },
   );
 
-  it("retains prepared authority until the native copy settles", async () => {
+  it("waits for delayed input and retains prepared authority until the native copy settles", async () => {
     await fs.mkdir(source);
     await fs.writeFile(path.join(source, "payload"), "original");
-    let released = false;
-    let prepared = false;
+    vi.spyOn(runner, "runCommandBuffersWithTimeout").mockImplementation((argv, inputOptions) => {
+      assert(typeof inputOptions !== "number");
+      // ESM node:process initialization makes the child's stdin socket nonblocking.
+      return run([argv[0]!, "--import", "node:process", ...argv.slice(1)], {
+        ...inputOptions,
+        prepareInput: async (pid, args) => {
+          await setTimeout(1_000);
+          await inputOptions.prepareInput?.(pid, args);
+        },
+      });
+    });
+    let state = "unprepared";
     const commitGuard = Object.assign(
-      () => {
-        if (prepared) {
-          throw new Error("Raw callback used outside its prepared source scope");
-        }
-      },
+      () => assert(state !== "prepared", "Raw callback used outside its prepared source scope"),
       {
         prepareSessionSourceEffect: async () => {
-          prepared = true;
+          state = "prepared";
           return {
-            assertCurrent: () => {
-              if (released) {
-                throw new Error("effect authority released");
-              }
-            },
+            assertCurrent: () => assert(state !== "released", "effect authority released"),
             release: async () => {
-              await Promise.resolve();
               expect(await fs.readFile(path.join(destination, "payload"), "utf8")).toBe("original");
-              released = true;
-              prepared = false;
+              state = "released";
             },
           };
         },
       },
     );
     await copy({ commitGuard });
-    expect(released).toBe(true);
+    expect(state).toBe("released");
   });
 
   it.each([

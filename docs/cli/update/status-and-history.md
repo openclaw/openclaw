@@ -215,6 +215,12 @@ Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
 a run ID.
 
+When the CLI saves a Markdown report, it prints the path and a **Read report**
+command. Copy the command, not the path alone: `cat -- <quoted-path>` in a POSIX
+shell, or `Get-Content -LiteralPath <quoted-path>` in PowerShell on Windows.
+The report is a private text file, not an executable; reading it does not require
+changing its permissions. JSON output keeps the report path without shell instructions.
+
 On an existing profile, update history admission waits for a database writer using
 the update's step timeout (30 minutes by default, or `--timeout`). If that wait
 expires, the command exits successfully with a deferred `update-ledger-busy`
@@ -231,6 +237,10 @@ use candidate code before its own history admission completes.
 
 Triage preserves the original update report. Any update launched during repair
 gets a separate `runId`.
+
+Standalone `openclaw update repair` reports a repair and shows only its own phases.
+If the newest prior run is a failed update, the repair report retains that run's ID,
+version, failed phase, reason, and failure detail under **Repaired update**.
 
 Unexpected automatic-update campaign failures retain the error code, when present,
 and a redacted diagnostic in the run history as well as the Gateway log. Status

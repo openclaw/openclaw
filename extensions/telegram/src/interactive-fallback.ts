@@ -6,6 +6,7 @@ import {
   normalizeLegacyInteractiveReply,
   renderMessagePresentationFallbackText,
   resolveLegacyInteractiveTextFallback,
+  stampAgentControls,
   type MessagePresentation,
   type MessagePresentationInteractiveBlock,
   type MessagePresentationTableBlock,
@@ -157,13 +158,19 @@ export function canonicalizeTelegramPresentationPayload(
   payload: ReplyPayload,
   options?: { allowWebAppButtons?: boolean; richTables?: boolean },
 ): ReplyPayload {
-  const normalizedPresentation = normalizeMessagePresentation(payload.presentation);
   const telegramData = payload.channelData?.telegram as
     | (Record<string, unknown> & {
         buttons?: Parameters<typeof resolveTelegramInlineButtons>[0]["buttons"];
         typedCallbackOwner?: unknown;
       })
     | undefined;
+  // Sends queued by v2026.11.5 record agent ownership here instead of in the value. Remove
+  // this reader once queue rows written by that release have drained.
+  const owned =
+    telegramData?.typedCallbackOwner === "agent"
+      ? stampAgentControls({ presentation: payload.presentation, interactive: payload.interactive })
+      : payload;
+  const normalizedPresentation = normalizeMessagePresentation(owned.presentation);
   if (!normalizedPresentation) {
     const nativeButtons = resolveTelegramInlineButtons({ buttons: telegramData?.buttons });
     if (!buildInlineKeyboard(nativeButtons) || payload.text?.trim()) {
@@ -178,13 +185,11 @@ export function canonicalizeTelegramPresentationPayload(
     capabilities: resolveTelegramPresentationCapabilities({ richMessages: richTables }),
   });
 
-  const interactive = normalizeLegacyInteractiveReply(payload.interactive);
+  const interactive = normalizeLegacyInteractiveReply(owned.interactive);
   const buttonOptions: TelegramButtonBuildOptions = {
     allowWebAppButtons: options?.allowWebAppButtons === true,
     supportsDisabled: richTables,
     questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
-    // Set by prepareSendPayload, so it persists with queued deliveries.
-    ...(telegramData?.typedCallbackOwner === "agent" ? { typedCallbackOwner: "agent" } : {}),
   };
   const existingButtons = resolveTelegramInlineButtons(
     {

@@ -296,7 +296,7 @@ it.skipIf(process.platform === "win32")(
       }
       expect(await fs.readdir(path.join(clone, ".git/objects/pack"))).toEqual(packs);
       expect(await fs.readFile(trace, "utf8")).not.toContain("fetch origin");
-      expect((await command(["cat-file", "-t", "HEAD"])).aggregated).toBe("commit");
+      expect((await command(["cat-file", "-t", "HEAD"])).aggregated).toBe("commit\n");
       const negative = await command(["merge-base", "--is-ancestor", "HEAD", old]);
       expect(negative.exitCode).toBe(1);
       expect(negative.aggregated).not.toContain("OpenClaw:");
@@ -320,7 +320,7 @@ it.skipIf(process.platform === "win32")(
       expect(
         (await command(["fetch", "origin", missing, "--negotiation-tip=origin/main"])).exitCode,
       ).toBe(0);
-      expect((await command(["cat-file", "-t", missing])).aggregated).toBe("commit");
+      expect((await command(["cat-file", "-t", missing])).aggregated).toBe("commit\n");
       expect(await fs.readFile(path.join(clone, ".git/config"), "utf8")).toBe(config);
       // A fork can contain blobs that the projection's origin cannot hydrate.
       const fork = path.join(root, "fork");

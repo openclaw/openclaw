@@ -133,6 +133,7 @@ jobs:
       hosted_runner_profile_contract: ${{ steps.runner_profile.outputs.hosted_runner_profile_contract }}
       runner_profile: ${{ steps.runner_profile.outputs.runner_profile }} # hosted-runner-profile-contract-v1
       node_runner_backend: ${{ steps.runner_profile.outputs.node_runner_backend }} # runson-runner-profile-contract-v1
+      boat_node_job_limit: ${{ steps.runner_profile.outputs.boat_node_job_limit }}
       ci_qualification: ${{ steps.runner_profile.outputs.ci_qualification }}
       ci_shape: ${{ steps.runner_profile.outputs.ci_shape }}
       qualification_runner_backend: ${{ steps.runner_profile.outputs.qualification_runner_backend }}
@@ -201,6 +202,7 @@ jobs:
       startup_corpus_test_files_json: ${{ steps.manifest.outputs.startup_corpus_test_files_json }}
       changed_core_test_paths_json: ${{ steps.manifest.outputs.changed_core_test_paths_json }}
       narrow_check_paths_json: ${{ steps.manifest.outputs.narrow_check_paths_json }}
+      changed_root_test_paths_json: ${{ steps.manifest.outputs.changed_root_test_paths_json }}
       run_check_plan: ${{ steps.manifest.outputs.run_check_plan }}
       shared_sdk_declarations: ${{ steps.manifest.outputs.shared_sdk_declarations }}
       check_plan_input_json: ${{ steps.manifest.outputs.check_plan_input_json }}
@@ -3646,7 +3648,7 @@ jobs:
     name: ${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}
     needs: [preflight]
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' }}
-    runs-on: ${{ needs.preflight.outputs.effective_runner_backend == 'boat' && matrix.runner == 'ubuntu-24.04' && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || 'ubuntu-24.04')))) || (needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || 'ubuntu-24.04')) }}
+    runs-on: ${{ needs.preflight.outputs.effective_runner_backend == 'boat' && matrix.runner == 'ubuntu-24.04' && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && needs.preflight.outputs.node_runner_backend == 'github' && github.run_attempt == 1 && needs.preflight.outputs.boat_node_job_limit != '' && fromJSON(needs.preflight.outputs.boat_node_job_limit) > 0 && contains(fromJSON('["boat-large","boat-xlarge"]'), matrix.runner) && matrix.runner || (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || 'ubuntu-24.04')))) || (needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && needs.preflight.outputs.node_runner_backend == 'github' && github.run_attempt == 1 && needs.preflight.outputs.boat_node_job_limit != '' && fromJSON(needs.preflight.outputs.boat_node_job_limit) > 0 && contains(fromJSON('["boat-large","boat-xlarge"]'), matrix.runner) && matrix.runner || (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || 'ubuntu-24.04')) }}
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
@@ -4093,6 +4095,27 @@ jobs:
             availableParallelism() >= 8 ? 8 : 1;
           process.exitCode = await runChangedCheck(detectChangedLanes(paths), { lintOnly: true, lintSelection, lintThreads });
           CHANGED_LINT
+
+      - name: Run fallback root-test lint
+        if: ${{ !cancelled() && steps.check_setup.outcome == 'success' && steps.bun_setup.outcome == 'success' && matrix.task == 'lint' && !(needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json) && needs.preflight.outputs.changed_root_test_paths_json && needs.preflight.outputs.changed_root_test_paths_json != '[]' }}
+        env:
+          ROOT_TEST_PATHS_JSON: ${{ needs.preflight.outputs.changed_root_test_paths_json }}
+          OPENCLAW_LOCAL_CHECK: "0"
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import ./scripts/tsx.mjs --input-type=module <<'ROOT_TEST_LINT'
+          import { detectChangedLanes } from "./scripts/changed-lanes.mts";
+          import { runChangedCheck } from "./scripts/check-changed.mts";
+          const paths = JSON.parse(process.env.ROOT_TEST_PATHS_JSON);
+          process.exitCode = await runChangedCheck(detectChangedLanes(paths), {
+            lintOnly: true,
+            lintThreads: 1,
+            lintSelection: {
+              files: [], rootTestFiles: paths, coreStripes: [], extensionStripes: [], groups: [], central: false,
+            },
+          });
+          ROOT_TEST_LINT
 
       - name: Run check shard
         if: ${{ !cancelled() && (steps.check_setup.outcome == 'success' || steps.npm-lock-scope.outputs.skip == 'true') && (matrix.task != 'lint' || steps.bun_setup.outcome == 'success') && (matrix.task != 'lint' || !(needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json)) }}
@@ -6087,6 +6110,7 @@ jobs:
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
+            -only-testing:OpenClawTests/ChatSessionsCodingTests
             -only-testing:OpenClawTests/SettingsHubTests
             -only-testing:OpenClawTests/SettingsHubVisualProofTests/testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage
             -only-testing:OpenClawTests/ChatComposerTextViewIOSTests
@@ -6145,6 +6169,7 @@ jobs:
               -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.xcresult \
               -parallel-testing-enabled NO \
               -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings \
+              -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testNestedCustomToolsExposeResultsQuietDetailsAndPendingAuthority \
               -only-testing:OpenClawUITests/BootstrapSetupFailureUITests \
               "$test_action"
           fi
@@ -6839,9 +6864,18 @@ jobs:
           acceleration="$(/usr/bin/timeout --signal=TERM --kill-after=2s 15s emulator -accel-check 2>&1)"
           printf '%s\n' "$acceleration"
           grep -Eiq '\bKVM\b.*\b(available|usable)\b' <<<"$acceleration"
+          gradle_args=(
+            -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE"
+            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.NativeTransportQualificationSuite
+            -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          )
+          # Keep compilation off the emulator's boot path and reuse those exact APK inputs.
+          node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
+            :app:assemblePlayDebug :app:assemblePlayDebugAndroidTest "${gradle_args[@]}"
           printf 'no\n' | avdmanager create avd --name openclaw-access --package "$SYSTEM_IMAGE" --device pixel_6
           # Bound disposable userdata so the hosted runner can boot after SDK setup.
-          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -partition-size 4096 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
+          # The strict 16 KiB image exhausts its default 2560 MiB during instrumentation.
+          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -memory 4096 -partition-size 4096 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
           emulator_pid=$!
           trust_evidence="$RUNNER_TEMP/android-native-tls-trust"
           mkdir -p "$trust_evidence"
@@ -6896,10 +6930,7 @@ jobs:
             bash scripts/android-native-tls-trust.sh prepare "$trust_evidence"
           ' bash "$trust_evidence" "$EXPECTED_PAGE_SIZE"
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
-            :app:connectedPlayDebugAndroidTest --info \
-            -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
-            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.NativeTransportQualificationSuite \
-            -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            :app:connectedPlayDebugAndroidTest --info "${gradle_args[@]}"
           apk="$(python3 - <<'PY'
           from pathlib import Path
           import json

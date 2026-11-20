@@ -1970,7 +1970,7 @@ const reviewedOperations = new Map([
       },
       {
         tier: "W",
-        operations: ["readCursor", "readMaterialCursors", "updateMaterialCursor"],
+        operations: ["readCursor", "readMaterialCursors", "writeMaterialCursors"],
         evidence:
           "Watch/record workers and subagent-registry.store.worker.ts execute these queries",
       },

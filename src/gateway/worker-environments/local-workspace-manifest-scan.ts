@@ -47,7 +47,7 @@ import type {
   LocalWorkspacePreparedEntry,
 } from "./local-workspace-store.types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
-import { workspaceCtimeIsReusable } from "./workspace-hash-memo.js";
+import { workspaceCtimeIsReusable, workspaceStatIdentity } from "./workspace-hash-memo.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
@@ -550,13 +550,17 @@ export async function executeLocalWorkspaceManifestRead(
       gitIgnore,
       preserveDirectories,
       buildCacheInputs: new Set(retained),
-      reuseFile: (entryPath, identity, stats) => {
+      reuseFile: (entryPath, stats) => {
         const file = prepared.get(entryPath);
-        return file?.entry.type === "file" &&
-          file.identity === identity &&
+        if (
+          file?.entry.type === "file" &&
+          file.identity === workspaceStatIdentity("gateway", stats) &&
           workspaceCtimeIsReusable(stats.ctimeNs, scanStartedAtMs)
-          ? file.entry
-          : fingerprintScan.reuseFile(entryPath, identity, stats);
+        ) {
+          fingerprintScan.observe(entryPath, file.identity);
+          return file.entry;
+        }
+        return fingerprintScan.reuseFile(entryPath, stats);
       },
       unchangedProbe: action.kind === "probe",
       btrfsSnapshot: capture !== undefined,

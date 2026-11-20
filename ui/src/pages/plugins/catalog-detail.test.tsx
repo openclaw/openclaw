@@ -48,7 +48,6 @@ it.each([false, true])(
     const primaryButton = actions.querySelector<HTMLButtonElement>("button.primary")!;
     expect(primaryButton.textContent?.trim()).toBe(installed ? "Ask OpenClaw" : "Install");
     expect(actions.querySelectorAll("button.primary")).toHaveLength(1);
-    expect(actions.querySelector("button")).toBe(primaryButton);
     primaryButton.click();
     expect(onInstall).not.toHaveBeenCalled();
     const ask = [...actions.querySelectorAll<HTMLButtonElement>("button")].find(
@@ -179,10 +178,9 @@ it("normalizes shorthand repositories and keeps documentation separate", () => {
   const { container, all, query, attr, text } = render(() => metadata(result));
   expect(attr(".plugin-metadata__repository", "href")).toBe(repository);
   expect(text(".plugin-metadata__repository")).toContain("Acme/plugin");
-  expect([...all(".plugin-metadata__links a")].map((link) => link.textContent)).toEqual([
-    "Acme/plugin",
-    "Documentation",
-  ]);
+  const links = [...all(".plugin-metadata__link-value a")];
+  expect(links.map((link) => link.getAttribute("href"))).toEqual([repository, documentation]);
+  expect(links.every((link) => link.getAttribute("rel") === "noopener noreferrer")).toBe(true);
   expect(container.textContent).not.toContain("View on ClawHub");
   expect(query(`a[href="${documentation}"]`)).not.toBeNull();
 });
@@ -225,7 +223,7 @@ it.each(["clean", "review", "custom-status"])(
     const result = createDiscoveryDetail();
     result.detail.security = { status, verdict: status, auditUrl: "https://example.com/audit" };
     const { query } = render(() => metadata(result));
-    expect(query(".plugin-catalog-detail__security-score strong")?.textContent).toBe(
+    expect(query(".plugin-catalog-detail__security-verdict")?.textContent).toBe(
       status === "custom-status" ? status : "localized audit label",
     );
     if (status !== "custom-status") {

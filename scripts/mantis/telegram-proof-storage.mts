@@ -112,7 +112,12 @@ function assertMount(root: string) {
 export function proofStorageEnvironment(rootValue = process.env.MANTIS_PODMAN_ROOT ?? "") {
   const manifest = load(rootValue),
     mount = assertMount(manifest.root);
-  const config = path.join(manifest.root, "storage.conf");
+  // Podman 4.9 ignores rootless storage paths when this override is set.
+  if (process.env.CONTAINERS_STORAGE_CONF !== undefined) {
+    throw new Error("Unset CONTAINERS_STORAGE_CONF to use bounded rootless storage");
+  }
+  const configHome = path.join(manifest.root, "config");
+  const config = path.join(configHome, "containers", "storage.conf");
   const expected = `[storage]\ndriver = "overlay"\nrunroot = "${mount}/runroot"\ngraphroot = "${mount}/graphroot"\n`;
   if (
     readFileSync(config, "utf8") !== expected ||
@@ -134,8 +139,10 @@ export function proofStorageEnvironment(rootValue = process.env.MANTIS_PODMAN_RO
     throw new Error("Rootless Podman requires the existing runner user session");
   }
   return {
-    CONTAINERS_STORAGE_CONF: config,
+    XDG_CONFIG_HOME: configHome,
     CONTAINERS_CONF: containers,
+    // Podman loads this last, so inherited overrides must use the same owned config.
+    CONTAINERS_CONF_OVERRIDE: containers,
     XDG_RUNTIME_DIR: runtime,
     DBUS_SESSION_BUS_ADDRESS: `unix:path=${runtime}/bus`,
   };
@@ -155,7 +162,9 @@ export function assertPodmanProofStorage() {
   if (
     info.host?.security?.rootless !== true ||
     info.host?.logDriver !== "k8s-file" ||
-    info.host?.rootlessNetworkCmd !== "slirp4netns" ||
+    // Older Podman omits this field; the verified configuration still pins slirp4netns.
+    (info.host?.rootlessNetworkCmd !== undefined &&
+      info.host.rootlessNetworkCmd !== "slirp4netns") ||
     info.store?.graphRoot !== `${mount}/graphroot` ||
     info.store?.runRoot !== `${mount}/runroot`
   ) {
@@ -170,7 +179,8 @@ function setup() {
     throw new Error("Proof requires a non-root Linux runner");
   }
   command("slirp4netns", ["--version"]);
-  const parent = realpathSync(process.env.RUNNER_TEMP ?? "");
+  // Podman limits runroot to 50 characters; hosted RUNNER_TEMP prefixes exceed that.
+  const parent = realpathSync("/tmp");
   const root = mkdtempSync(path.join(parent, "mantis-podman-"));
   chmodSync(root, 0o700);
   writeFileSync(
@@ -202,7 +212,9 @@ function setup() {
   mkdirSync(path.join(mount, "graphroot"), { mode: 0o700 });
   mkdirSync(path.join(mount, "runroot"), { mode: 0o700 });
   const config = `[storage]\ndriver = "overlay"\nrunroot = "${mount}/runroot"\ngraphroot = "${mount}/graphroot"\n`;
-  writeFileSync(path.join(root, "storage.conf"), config, { mode: 0o600 });
+  const configDirectory = path.join(root, "config", "containers");
+  mkdirSync(configDirectory, { recursive: true, mode: 0o700 });
+  writeFileSync(path.join(configDirectory, "storage.conf"), config, { mode: 0o600 });
   writeFileSync(path.join(root, "containers.conf"), containerConfiguration, { mode: 0o600 });
   const environment = proofStorageEnvironment(root);
   const readyManifest = path.join(root, "manifest.ready.json");

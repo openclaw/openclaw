@@ -93,7 +93,9 @@ Gateway restart repeats the selection, which picks up Codex installs, upgrades,
 and removals.
 
 The binary selection does not decide which OpenAI models the picker shows. The
-ChatGPT subscription model list reports the newest published Codex version (see
+ChatGPT subscription model list reports the OpenClaw version, with a `99.0.0`
+fallback when it is unavailable or not a calendar version with a four-digit
+year of 2026 or later (see
 [Model discovery](/plugins/codex-harness-reference/model-discovery)), so it can
 list a model that the selected Codex binary is too old to run. A Codex-harness
 turn on such a model fails with a message that names the running Codex version
@@ -106,6 +108,11 @@ never installs or updates Codex.
 `appServer.command`, `OPENCLAW_CODEX_APP_SERVER_BIN`, and remote app-servers
 always win. Login-status checks, node exec-servers, and the Doctor package check
 always use the shipped binary.
+
+Verified setup and repair inference also fingerprints the selected local runtime.
+For standalone packages, this includes the installer-created `codex -> bin/codex`
+link and the regular target inside the same package. Other package symlinks remain
+unsupported, and a changed link or target invalidates the captured artifact.
 
 Ordinary managed turns with the default isolated agent home prefer this package
 selection even when a macOS desktop bundle is installed. When

@@ -236,7 +236,6 @@ export async function executeWorkerTurn(
     });
     const { browser, computer, preparedComputer } = desktop;
     const {
-      authProfileStoreSource,
       capabilityProfile,
       policy: toolPolicy,
       exec,
@@ -352,7 +351,6 @@ export async function executeWorkerTurn(
                 const prepared = await createOpenClawCodingToolsInternalAsync(
                   {
                     ...turn,
-                    authProfileStoreSource,
                     agentId: placement.agentId,
                     conversationCapabilityProfile: capabilityProfile,
                     preparedModelRuntime: preparedRuntime.snapshot,
@@ -522,6 +520,7 @@ export async function executeWorkerTurn(
           isAuthorized,
           userMessageAlreadyPersisted,
           baseLeafId,
+          modelPromptProjection: promptContext.modelPromptProjection,
         });
         return baseLeafId;
       };

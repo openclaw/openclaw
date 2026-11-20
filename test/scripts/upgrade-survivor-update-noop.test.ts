@@ -47,6 +47,14 @@ const cleanup = {
   durationMs: 12,
   exitCode: 0,
   diagnostics: [
+    "Update backup cleanup removed 1 item (400 logical bytes, 0 MiB).",
+    "Removed /fixture/state/state/openclaw.sqlite.pre-startup-migration-1.bak (400 logical bytes, 0 MiB).",
+  ],
+};
+// Releases before per-item reporting summarized cleanup in one sentence.
+const legacyCleanup = {
+  ...cleanup,
+  diagnostics: [
     "Recovery cleanup removed 2 files (400 logical bytes); protected recovery artifacts were retained.",
   ],
 };
@@ -136,6 +144,11 @@ describe("legacy-operator already-current update", () => {
     {
       name: "accepts verified recovery cleanup",
       report: { ...noop, steps: [cleanup] },
+      accepted: true,
+    },
+    {
+      name: "accepts the earlier one-sentence cleanup summary",
+      report: { ...noop, steps: [legacyCleanup] },
       accepted: true,
     },
     {

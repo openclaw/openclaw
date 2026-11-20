@@ -561,7 +561,7 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
       refuse(opts, { code: "not_owner", detail: "only an owner device of this claw sees people" });
       return;
     }
-    const link = await service.linkStatus({ includeSandboxBackend: true });
+    const link = await service.linkStatus({ includeSandboxReadiness: true });
     if (!ownerCheck()) {
       refuse(opts, { code: "not_owner", detail: "only an owner device of this claw sees people" });
       return;

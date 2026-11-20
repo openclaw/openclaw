@@ -222,7 +222,7 @@ describe("gateway chat metadata runtime", () => {
     const harness = createChatMetadataHarness();
 
     await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow(
-      "prepared chat metadata snapshot is unavailable",
+      "Chat metadata is starting; retry shortly.",
     );
     await harness.runtime.refresh();
     expect(harness.buildProjection).not.toHaveBeenCalled();
@@ -501,17 +501,24 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
-  test("reuses the prepared generation for an equivalent config replacement", async () => {
-    const harness = await preparedHarness();
+  test("retains prepared metadata through browser profile writes without notifying clients", async () => {
+    const onChanged = vi.fn();
+    const harness = createChatMetadataHarness(undefined, { onChanged });
+    await harness.refresh();
+    onChanged.mockClear();
     const first = await harness.read();
 
-    harness.setConfig({ agents: { entries: { main: {} } } });
+    harness.setConfig({
+      agents: { entries: { main: {} } },
+      browser: { profiles: { temporary: { cdpPort: 18801, color: "#123456" } } },
+    });
     await harness.refresh();
     const second = await harness.read();
 
     expect(second).toEqual(first);
     expect(harness.buildCommands).toHaveBeenCalledTimes(1);
     expect(harness.buildProjection).toHaveBeenCalledTimes(1);
+    expect(onChanged).not.toHaveBeenCalled();
   });
 
   test("rebuilds after an auth store publishes a newer revision", async () => {

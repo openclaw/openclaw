@@ -48,10 +48,10 @@ imports remain owned by Doctor; reset does not recursively delete session direct
 ## Notes
 
 - Run `openclaw backup create` first for a restorable snapshot before removing local state.
-- Both scopes that remove sessions require exclusive state ownership. If an unmanaged or externally supervised Gateway is still running, reset refuses and asks you to stop it first.
+- Both scopes that remove sessions require exclusive state ownership, except with `--dry-run`. If an unmanaged or externally supervised Gateway is still running, reset refuses before removing any selected data and asks you to stop it first.
 - Workspace setup state and attestations are rows in the shared SQLite database. `full` removes them with the state directory. There are no current attestation sidecar files to remove separately.
 - If archive-file removal fails after session rows are deleted, reset reports the exact remaining files for manual cleanup. It never deletes unrelated files merely because their names look like session archives.
-- Session cleanup failures do not skip other agent stores or the independent config and OAuth directory cleanup. Failed stores retain any history whose removal was refused.
+- Once reset acquires ownership, a failure in one session store does not skip cleanup of other stores, config, or the OAuth directory. Failed stores retain any history whose removal was refused.
 - Without `--scope`, `openclaw reset` prompts interactively for the scope to remove.
 - `--non-interactive` is only valid when both `--scope` and `--yes` are set.
 - `config+creds+sessions` and `full` print `Next: openclaw onboard --install-daemon` when done.

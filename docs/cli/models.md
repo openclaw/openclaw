@@ -185,10 +185,13 @@ use `models list --refresh` to inspect a local refresh instead.
 
 A provider that rejects catalog authentication produces a separate CLI diagnostic
 with its provider and, when available, profile ID. Open **Models** in the Control
-UI to check sign-in and catalog access, then retry with `--refresh`. Catalog
+UI to check sign-in and catalog access, then run `openclaw models list --refresh`. Catalog
 rejection alone does not cause the generic refresh warning or prove that model
 requests will fail. Timeouts and other discovery failures still produce the
 refresh warning, even when another provider needs sign-in.
+`models status` reports the same rejected or unavailable discovery from the prepared
+Gateway catalog on stderr; Doctor's `core/doctor/model-references` check reports
+rejected discovery as a warning and unavailable discovery as info.
 
 Discovery diagnostics go to stderr in every output mode. JSON output also includes
 `providerOutcomes` when the Gateway or local catalog publishes them: each entry
@@ -256,7 +259,7 @@ The command requires the local Gateway to be stopped. Stop it through its
 service owner, run the refresh, then start it again. It takes exclusive offline
 ownership through download and write settlement, and refuses while a Gateway
 owns the state directory. A successful result describes the saved download;
-the next Gateway start loads compatible metadata. The running Gateway continues
+the next Gateway start and local `models list` load compatible metadata. The running Gateway continues
 to perform its own scheduled catalog refreshes.
 If `models.catalogRefresh.enabled` is `false`, the command reports that refresh
 is disabled.

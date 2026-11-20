@@ -23,6 +23,7 @@ export const SESSION_DASHBOARD_ROW_FIELDS: ReadonlySet<string> = new Set([
   "key",
   "rowMode",
   "sessionId",
+  "hasMessages",
   "lifecycleRevision",
   "kind",
   "agentId",

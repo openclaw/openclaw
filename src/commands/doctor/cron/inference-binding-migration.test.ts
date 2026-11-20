@@ -379,7 +379,17 @@ it("recovers only an old upgrade's path-bound jobs, without rerunning or reenabl
     );
     const before = await readJobs(store);
     await doctor.withDoctorConfigMaintenance(async () => {
-      expect((await migrate(cfg)).changes).toEqual([]);
+      const withoutReceipt = await migrate(cfg);
+      expect(withoutReceipt.changes).toEqual([]);
+      expect(withoutReceipt.warnings).toEqual([
+        expect.stringMatching(/\(missed\).*no usable upgrade receipt/i),
+        expect.stringMatching(/\(unrelated\).*no usable upgrade receipt/i),
+      ]);
+      expect(withoutReceipt.warnings[0]).toContain("openclaw models auth list --agent main");
+      expect(withoutReceipt.warnings[0]).toContain(
+        "openclaw automations edit missed --model 'openai/gpt-5.5@<profileId>'",
+      );
+      expect(await readJobs(store)).toEqual(before);
       await state.writeJson(".upgraded-example.json", {
         appVersion: "example",
         ops: [
@@ -393,6 +403,9 @@ it("recovers only an old upgrade's path-bound jobs, without rerunning or reenabl
       expect((await migrate(cfg, false)).changes).toEqual([]);
       const repaired = await migrate(cfg);
       expect(repaired.changes.join("\n")).toContain("missed");
+      expect(repaired.warnings).toEqual([
+        expect.stringMatching(/\(unrelated\).*no usable upgrade receipt/i),
+      ]);
       expect((await migrate(cfg)).changes).toEqual([]);
     });
     const after = await readJobs(store);
@@ -415,7 +428,11 @@ it("recovers only an old upgrade's path-bound jobs, without rerunning or reenabl
     await upsertAuthProfileWithLockOrThrow(apiProfile(profileId, "fixture-replacement"));
     await saveJobs(store, job);
     await doctor.withDoctorConfigMaintenance(async () => {
-      expect((await migrate(cfg)).changes).toEqual([]);
+      const replaced = await migrate(cfg);
+      expect(replaced.changes).toEqual([]);
+      expect(replaced.warnings).toEqual([
+        expect.stringMatching(/\(missed\).*no usable upgrade receipt/i),
+      ]);
     });
     expect((await readJobs(store))[0]?.inferenceBinding).toEqual(broken);
     expect(globalThis.fetch).not.toHaveBeenCalled();

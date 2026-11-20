@@ -210,7 +210,8 @@ function usage() {
        node scripts/full-release-validation-at-sha.mjs --resume-request <path>
 
 Admitted candidate qualification is the default: Q defaults to C. Explicitly
-select --workflow-sha to freeze an independent main-provenance Q. Invoking it
+select --workflow-sha to freeze an independent canonical-repository Q, including
+off-main tooling. Invoking it
 attests that the exact candidate and selected qualification policy are reviewed. The existing
 prepare workflow at independently trusted P authenticates the complete request;
 then this same dispatch owner runs the candidate workflow graph at Q. P defaults
@@ -2222,11 +2223,9 @@ async function main() {
   const workflowSha = candidateOwned
     ? resolveSha(args.workflowSha || targetSha)
     : resolveTrustedWorkflowSha(args.workflowSha, args.trustedWorkflowRef);
-  if (candidateOwned && workflowSha !== targetSha) {
-    // An explicit Q is frozen here, never replaced by the fetched main tip. P
-    // independently repeats provenance and operator admission before Q can run.
-    resolveTrustedWorkflowSha(workflowSha, "main");
-  }
+  // Candidate admission freezes the operator-selected Q without requiring main
+  // ancestry. P reads its immutable source from the canonical repository; the
+  // dispatch owner verifies the exact release-ci transport before execution.
   const trustedWorkflowHarness = assertTrustedWorkflowHarness(workflowSha);
   if (candidateOwned) {
     const workflow = parseYaml(run("git", ["show", `${workflowSha}:${TRUSTED_WORKFLOW_PATH}`]));

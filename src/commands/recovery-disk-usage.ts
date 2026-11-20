@@ -66,7 +66,7 @@ export async function collectRecoveryDiskUsage(params: {
         : item.captureSource === "doctor"
           ? "doctorCaptures"
           : "updateCaptures";
-    const category = /^(?:unmanifested-|orphan-)/u.test(item.reason)
+    const category = /^(?:unmanifested-|unreceipted-|orphan-)/u.test(item.reason)
       ? "unmanifestedOrOrphan"
       : item.outcome === "candidate"
         ? "retirable"

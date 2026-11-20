@@ -1,3 +1,5 @@
+import { logConfigWarningsOnce } from "../../config/io.warnings.js";
+import { resolveConfigPath } from "../../config/paths.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
@@ -11,6 +13,7 @@ import {
   TALK_SCOPE,
   WRITE_SCOPE,
 } from "../operator-scopes.js";
+import { openClawIdAccessWarning } from "./access-plugin.js";
 import type { OpenClawIdStatus } from "./service-status.js";
 
 /** Ordinary editable definitions installed when OpenClaw ID is activated. */
@@ -97,7 +100,22 @@ export function createMemberRolePresetActivation(log: { warn: (message: string) 
       }
       return failure && status.state !== "off" ? { state: "failed", reason: failure } : status;
     },
-    async reconcile(enabled: boolean): Promise<boolean> {
+    async reconcile(
+      enabled: boolean,
+      observedConfig = getRuntimeConfigSnapshot(),
+    ): Promise<boolean> {
+      const warning =
+        enabled && observedConfig ? openClawIdAccessWarning(observedConfig) : undefined;
+      // Hand-edited/immutable config must stay untouched when Access is blocked.
+      // Doctor owns the consented allowlist repair.
+      if (warning) {
+        logConfigWarningsOnce({
+          configPath: resolveConfigPath(),
+          warnings: [{ path: "gateway.openclawId.enabled", message: warning }],
+          logger: log,
+        });
+        return false;
+      }
       if (active === enabled) {
         return false;
       }
