@@ -430,9 +430,11 @@ that would exceed the budget.
   growth inside running workers), subprocesses, and plugin workers created directly
   rather than through a worker pool. These are measured once running but not refused.
 
-If the floors alone exceed the budget, the Gateway logs a warning at startup or when
-the pool that crosses the budget first starts. Mandatory workers still run, and no
-growth is admitted.
+The floor estimate is the memory measured when the lean budget starts (the main
+thread and any workers already running) plus every floor's estimate. The Gateway logs
+a warning once if that estimate exceeds the budget, and once if measured memory
+exceeds the budget while only floor workers run. In either case, mandatory workers
+still run and no growth is admitted.
 
 `openclaw status` (also `--json` and `--all`) and the `diagnostics.lanes` Gateway RPC
 report the active profile, selection reason, effective memory limit/source and CPU
@@ -449,6 +451,6 @@ nested workers; it is not a process RSS breakdown. Offline status does not subst
 the CLI's own resource profile for the Gateway's.
 
 In `lean`, status and `diagnostics.lanes` also report `memoryBudget`: the budget and
-limit, last measured use, reserved floor bytes, reservations not yet running, growth
+limit, last measured use, the startup baseline and estimated floor bytes, reservations not yet running, growth
 admissions and refusals, and waits (count, currently waiting, total and longest
 wait), in total and per worker kind.

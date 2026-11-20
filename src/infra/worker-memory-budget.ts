@@ -78,6 +78,9 @@ export type WorkerMemoryBudgetSnapshot = {
   usageSource: "cgroup-v2-working-set" | "host-used";
   floorBytes: number;
   pendingBytes: number;
+  /** Working set when admission started: the main isolate and any workers already running. */
+  baselineBytes: number;
+  /** Floors exceed the budget by estimate (baseline plus floor reservations) or by measurement. */
   floorsExceedBudget: boolean;
   growthAdmissions: number;
   refusals: number;
@@ -136,6 +139,7 @@ function directFloors(hosted: HostedSlotPredicate): Record<string, number> {
 export function createWorkerMemoryBudget(params: {
   limitBytes: number;
   readUsageBytes: () => number | undefined;
+  baselineBytes: number;
   usageSource: WorkerMemoryBudgetSnapshot["usageSource"];
   countLive: () => { pools: Map<number, number>; direct: Map<string, number> };
   poolId: (pool: object) => number;
@@ -153,6 +157,7 @@ export function createWorkerMemoryBudget(params: {
   };
   let lastUsage: number | null = null;
   let warned = false;
+  let floorUsageExceeded = false;
   // A retired owner's pools rebind to the current Gateway's policy on their next dispatch.
   let retired = false;
   const family = (name: string) => {
@@ -176,7 +181,8 @@ export function createWorkerMemoryBudget(params: {
     const live = params.countLive();
     const hosted = params.hosted();
     const floors = directFloors(hosted);
-    let floorBytes = 0;
+    // Per-kind estimates are heap proxies; the measured baseline charges the main isolate.
+    let floorBytes = params.baselineBytes;
     let pendingBytes = 0;
     for (const entry of pools) {
       const pool = entry.pool.deref();
@@ -203,7 +209,7 @@ export function createWorkerMemoryBudget(params: {
     if (!warned && floorBytes > budgetBytes) {
       warned = true;
       log.warn(
-        `Lean worker floors alone (${Math.round(floorBytes / MiB)} MiB estimated) exceed the ${Math.round(budgetBytes / MiB)} MiB worker memory budget. Mandatory workers still start; no worker growth will be admitted. Raise the memory limit or reduce enabled features.`,
+        `Lean worker floors alone (${Math.round(floorBytes / MiB)} MiB estimated, including the ${Math.round(params.baselineBytes / MiB)} MiB measured at startup) exceed the ${Math.round(budgetBytes / MiB)} MiB worker memory budget. Mandatory workers still start; no worker growth will be admitted. Raise the memory limit or reduce enabled features.`,
       );
     }
     return { floorBytes, pendingBytes };
@@ -231,7 +237,8 @@ export function createWorkerMemoryBudget(params: {
       usageSource: params.usageSource,
       floorBytes,
       pendingBytes,
-      floorsExceedBudget: floorBytes > budgetBytes,
+      baselineBytes: params.baselineBytes,
+      floorsExceedBudget: floorUsageExceeded || floorBytes > budgetBytes,
       ...totals(),
       families: Array.from(families, ([name, entry]) =>
         Object.assign({ family: name }, entry),
@@ -277,6 +284,17 @@ export function createWorkerMemoryBudget(params: {
         admitGrowth() {
           const { floorBytes, pendingBytes } = ledger();
           lastUsage = params.readUsageBytes() ?? null;
+          if (
+            !floorUsageExceeded &&
+            lastUsage !== null &&
+            lastUsage >= budgetBytes &&
+            [...families.values()].every((held) => held.growth === 0)
+          ) {
+            floorUsageExceeded = true;
+            log.warn(
+              `Lean Gateway memory use with only floor workers (${Math.round(lastUsage / MiB)} MiB measured) exceeds the ${Math.round(budgetBytes / MiB)} MiB worker memory budget. No worker growth will be admitted, and the Gateway may still reach its memory limit. Raise the memory limit or reduce enabled features.`,
+            );
+          }
           const projectedBytes = (lastUsage ?? 0) + pendingBytes + entry.estimate;
           if (lastUsage === null || floorBytes > budgetBytes || projectedBytes >= budgetBytes) {
             entry.family.refusals++;
@@ -326,11 +344,13 @@ export function initializeWorkerMemoryBudget(profile: Readonly<GatewayResourcePr
   }
   const directory =
     profile.memoryLimitSource === "cgroup-v2" ? findCgroupV2MemoryLimitDirectory() : undefined;
+  const readUsageBytes = directory
+    ? () => readCgroupV2WorkingSetBytes(directory)
+    : () => os.totalmem() - readProcessAvailableMemoryBytes();
   state.budget = createWorkerMemoryBudget({
     limitBytes: profile.memoryLimitBytes,
-    readUsageBytes: directory
-      ? () => readCgroupV2WorkingSetBytes(directory)
-      : () => os.totalmem() - readProcessAvailableMemoryBytes(),
+    readUsageBytes,
+    baselineBytes: readUsageBytes() ?? 0,
     usageSource: directory ? "cgroup-v2-working-set" : "host-used",
     countLive: () => {
       const pools = new Map<number, number>();

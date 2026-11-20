@@ -15,7 +15,7 @@ export function buildStatusResourceRows(resources: StatusSummary["resources"]) {
       ? [
           {
             Item: "Worker memory budget",
-            Value: `${mib(resources.memoryBudget.budgetBytes)} of ${mib(resources.memoryBudget.limitBytes)} · in use ${resources.memoryBudget.usageBytes === null ? "unknown" : mib(resources.memoryBudget.usageBytes)} (${resources.memoryBudget.usageSource}) · floors ${mib(resources.memoryBudget.floorBytes)}${resources.memoryBudget.floorsExceedBudget ? " (exceed budget)" : ""} · pending ${mib(resources.memoryBudget.pendingBytes)} · growth ${resources.memoryBudget.growthAdmissions} admitted / ${resources.memoryBudget.refusals} refused · waits ${resources.memoryBudget.waits} (${resources.memoryBudget.waitingTasks} waiting, max ${Math.round(resources.memoryBudget.maxWaitMs)} ms)`,
+            Value: `${mib(resources.memoryBudget.budgetBytes)} of ${mib(resources.memoryBudget.limitBytes)} · in use ${resources.memoryBudget.usageBytes === null ? "unknown" : mib(resources.memoryBudget.usageBytes)} (${resources.memoryBudget.usageSource}) · floors ${mib(resources.memoryBudget.floorBytes)} incl. ${mib(resources.memoryBudget.baselineBytes)} at startup${resources.memoryBudget.floorsExceedBudget ? " (exceed budget)" : ""} · pending ${mib(resources.memoryBudget.pendingBytes)} · growth ${resources.memoryBudget.growthAdmissions} admitted / ${resources.memoryBudget.refusals} refused · waits ${resources.memoryBudget.waits} (${resources.memoryBudget.waitingTasks} waiting, max ${Math.round(resources.memoryBudget.maxWaitMs)} ms)`,
           },
           ...resources.memoryBudget.families
             .filter((row) => row.refusals > 0 || row.growthAdmissions > 0)
