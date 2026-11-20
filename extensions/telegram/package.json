@@ -8,8 +8,8 @@
     "@grammyjs/transformer-throttler": "1.2.1",
     "abort-controller": "3.0.0",
     "grammy": "1.46.0",
-    "quickjs-wasi": "3.6.3",
-    "typebox": "1.4.3",
+    "quickjs-wasi": "3.7.0",
+    "typebox": "1.4.5",
     "undici": "8.12.4",
     "zod": "4.6.7"
   },

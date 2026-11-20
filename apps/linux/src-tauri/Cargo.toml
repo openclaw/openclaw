@@ -22,7 +22,7 @@ ed25519-dalek = "3.0.0"
 futures-util = "0.3.34"
 getrandom = "0.4.3"
 keyring = { version = "4.2.0", default-features = false, features = ["v1"] }
-mdns-sd = { version = "0.21.6", default-features = false }
+mdns-sd = { version = "0.21.7", default-features = false }
 openclaw-gateway-client = { path = "../../../crates/openclaw-gateway-client" }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -40,9 +40,9 @@ tauri = { version = "2.12.5", features = [
 ] }
 tauri-plugin-autostart = "2.7.0"
 tauri-plugin-deep-link = "2.6.1"
-tauri-plugin-dialog = "2.8.3"
+tauri-plugin-dialog = "2.8.4"
 tauri-plugin-global-shortcut = "2.4.1"
-tauri-plugin-opener = "2.7.2"
+tauri-plugin-opener = "2.7.3"
 tauri-plugin-process = "2.4.0"
 tauri-plugin-single-instance = { version = "2.5.3", features = ["deep-link"] }
 # Vendored so Windows cleanup still runs only after the installer launches.
@@ -53,7 +53,7 @@ tauri-plugin-window-state = "2.5.0"
 tauri-utils = { version = "2.10.2", features = ["config-json5"] }
 tokio = { version = "1.54.1", features = ["macros", "sync", "time"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
-uuid = { version = "1.29.0", features = ["v4"] }
+uuid = { version = "1.29.2", features = ["v4"] }
 zeroize = "1.9.1"
 
 [target.'cfg(unix)'.dependencies]

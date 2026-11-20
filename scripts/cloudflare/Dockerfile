@@ -5,8 +5,8 @@ FROM ${OPENCLAW_IMAGE} AS litestream
 
 USER root
 
-ARG LITESTREAM_VERSION=0.5.17
-ARG LITESTREAM_SHA256=cfb371176d164437ae869f8351cfde49bd1804ae71c61923f75c9cba9c9c006d
+ARG LITESTREAM_VERSION=0.5.18
+ARG LITESTREAM_SHA256=d3687b9fd0f2e9426bbd3da828429ff3f1dfc5c9b74d54fdf028e4ee510e7dea
 
 ADD --checksum=sha256:${LITESTREAM_SHA256} \
   https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-${LITESTREAM_VERSION}-linux-x86_64.tar.gz \

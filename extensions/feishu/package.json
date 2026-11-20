@@ -10,9 +10,9 @@
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.76.0",
     "mdast-util-from-markdown": "2.1.0",
-    "mdast-util-gfm-table": "2.0.0",
+    "mdast-util-gfm-table": "2.0.1",
     "micromark-extension-gfm-table": "2.1.2",
-    "typebox": "1.4.3",
+    "typebox": "1.4.5",
     "zod": "4.6.7"
   },
   "devDependencies": {

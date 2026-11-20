@@ -136,11 +136,11 @@
   "dependencies": {
     "@anthropic-ai/sdk": "0.137.0",
     "@google/genai": "2.32.0",
-    "@opentelemetry/semantic-conventions": "1.44.0",
-    "openai": "7.47.0",
+    "@opentelemetry/semantic-conventions": "1.45.0",
+    "openai": "7.57.0",
     "partial-json": "0.1.7",
     "proxy-from-env": "2.1.0",
-    "typebox": "1.4.3",
+    "typebox": "1.4.5",
     "zod": "4.6.7",
     "zod-to-json-schema": "3.25.2"
   },
@@ -165,7 +165,7 @@
     }
   },
   "devDependencies": {
-    "@mistralai/mistralai": "3.4.0",
+    "@mistralai/mistralai": "3.5.0",
     "@openclaw/model-catalog-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*"
   },

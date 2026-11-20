@@ -68,7 +68,7 @@
     "@noble/hashes": "2.4.0",
     "@openclaw/gateway-protocol": "workspace:*",
     "ipaddr.js": "2.5.0",
-    "ws": "8.22.0"
+    "ws": "8.23.0"
   },
   "devDependencies": {
     "@openclaw/normalization-core": "workspace:*"

@@ -5,7 +5,7 @@
   "description": "Sandbox-bound Auto Review tool",
   "type": "module",
   "dependencies": {
-    "typebox": "1.4.3"
+    "typebox": "1.4.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

@@ -1759,7 +1759,7 @@ jobs:
       - name: Install security scanners
         id: security_scanners
         if: ${{ !cancelled() && steps.workflow_scope.outputs.changed == 'true' }}
-        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.7.0 zizmor==1.31.1
+        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.7.0 zizmor==1.32.0
 
       - name: Audit changed GitHub workflows with zizmor
         if: ${{ !cancelled() && steps.security_scanners.outcome == 'success' && steps.scanner_config.outcome == 'success' && steps.workflow_scope.outputs.changed == 'true' }}
@@ -4841,13 +4841,13 @@ jobs:
         if: matrix.shard != 'pg16-smoke'
         uses: ./.ci-harness/.github/actions/postgres-conformance
         with:
-          image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+          image: pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
           shard: ${{ matrix.shard }}
       - name: Run PostgreSQL 16 Gateway cron smoke
         if: ${{ !cancelled() && github.event_name == 'pull_request' && matrix.shard == 'pg16-smoke' && steps.node_setup.outcome == 'success' }}
         uses: ./.ci-harness/.github/actions/postgres-conformance
         with:
-          image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
+          image: pgvector/pgvector:pg16@sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f
           target: src/gateway/server-database-engine-cron.postgres.test.ts
 
   check-docs:

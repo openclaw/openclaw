@@ -9,10 +9,10 @@
   ],
   "dependencies": {
     "@shinyoshiaki/binary-data": "0.6.1",
-    "jose": "6.2.14",
+    "jose": "6.2.17",
     "libopus-wasm": "0.4.1",
     "werift": "0.25.2",
-    "ws": "8.22.0",
+    "ws": "8.23.0",
     "zod": "4.6.7"
   },
   "devDependencies": {

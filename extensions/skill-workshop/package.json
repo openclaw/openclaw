@@ -6,7 +6,7 @@
   "type": "module",
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",
-    "typebox": "1.4.3"
+    "typebox": "1.4.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
