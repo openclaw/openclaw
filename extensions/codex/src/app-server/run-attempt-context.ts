@@ -115,6 +115,7 @@ export async function prepareCodexAttemptContext(
       : {}),
     trigger: params.trigger,
     inputProvenance: params.inputProvenance,
+    requesterDeviceId: params.approvalReviewerDeviceId,
     ...buildAgentHookContextChannelFields({
       sessionKey: contextSessionKey,
       messageChannel: params.messageChannel,
@@ -189,6 +190,7 @@ export async function prepareCodexAttemptContext(
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
     dynamicTools: toolBridge.availableSpecs,
+    remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
   });
   // This section uses the existing native thread carrier only when there is no
   // managed parent-local inference route; it is separate from immutable policy.

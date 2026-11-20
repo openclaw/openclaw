@@ -38,6 +38,7 @@ import {
   listActiveDegradedPlugins,
   toPublicPluginVerificationDiagnostic,
 } from "../plugins/runtime-degraded-state.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getSecretEgressCertificateStatus } from "../secrets/egress-proxy/registry.js";
 import {
@@ -599,6 +600,10 @@ export async function prepareStatusSummary(
             state,
             diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
           })),
+          // A plugin that failed to load stays off for this boot; the next start retries it.
+          failedPlugins: (getActivePluginRegistry()?.plugins ?? []).flatMap((plugin) =>
+            plugin.status === "error" && plugin.activated === true ? [plugin.id] : [],
+          ),
           sessions: {
             paths: includeSensitive ? publishedStores.paths : [],
             count: publishedStores.count,

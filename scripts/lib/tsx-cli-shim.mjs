@@ -1,5 +1,5 @@
 // Bootstraps documented JavaScript entrypoints before the TypeScript loader is active.
-import { spawn } from "node:child_process";
+import childProcess from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { constants as osConstants } from "node:os";
@@ -211,7 +211,7 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
   process.on("exit", exitHandler);
 
   try {
-    child = spawn(nodeExecutable, commandArgs, {
+    child = childProcess.spawn(nodeExecutable, commandArgs, {
       cwd: process.cwd(),
       detached,
       env: process.env,

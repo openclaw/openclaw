@@ -205,7 +205,7 @@ export async function prepareTemplateDraft(params: {
       id: `cron:${job.id}`,
       kind: "automation",
       label: job.name ?? job.id,
-      detail: `${job.schedule.cron} · ${job.schedule.timezone} · ${job.enabled === false ? "Paused" : "Enabled"}`,
+      detail: `${job.schedule.cron} · ${job.schedule.timezone} · ${job.enabled === false ? "Disabled" : "Enabled"}`,
       automation: {
         message: job.message,
         schedule: job.schedule,
@@ -227,10 +227,13 @@ export async function prepareTemplateDraft(params: {
   const draftName = choices?.name ?? authored.name;
   // Only the slug-derived default is title-cased; a CLAW.md agent name is the author's text.
   const displayName =
-    choices?.displayName ?? draftManifest.agent.name ?? titleCaseTemplateName(draftName);
+    choices?.displayName?.trim() || draftManifest.agent.name || titleCaseTemplateName(draftName);
   // New drafts start with `description: ""`; that must not erase the CLAW.md description.
-  const description =
-    choices?.description ?? (authored.description || draftManifest.agent.description) ?? "";
+  const description = (
+    choices?.description ??
+    (authored.description || draftManifest.agent.description) ??
+    ""
+  ).trim();
   draftManifest.agent.id = draftName;
   draftManifest.agent.name = displayName;
   draftManifest.agent.description = description || undefined;

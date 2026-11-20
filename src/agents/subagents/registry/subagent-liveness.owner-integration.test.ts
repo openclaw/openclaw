@@ -367,6 +367,9 @@ it("retains an exact queued collector reservation without calling it executor-li
   });
   const hold = holdQueuedSwarmRun(entry.runId);
   try {
+    await testing.sweepOnceForTests();
+    expect(subagentRuns.get(entry.runId)).toMatchObject({ execution: { status: "queued" } });
+    expect(subagentRuns.get(entry.runId)?.collectorCompletion).toBeUndefined();
     expect(hold?.withdraw()).toBe(true);
     expect(captured.countActiveDescendantRuns(parent)).toBe(0);
     expect(captured.countPendingDescendantRuns(parent)).toBe(0);

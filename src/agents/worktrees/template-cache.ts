@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { hostname } from "node:os";
 import path from "node:path";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+} from "../../config/sessions/session-source-authority.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -15,7 +19,10 @@ import {
 } from "./allocation.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
-import { nativeWorktreeFilesystem } from "./filesystem-native.js";
+import {
+  nativeWorktreeFilesystem,
+  prepareWorktreeFilesystemMutation,
+} from "./filesystem-native.js";
 import {
   listGitWorktrees,
   requireGit,
@@ -42,6 +49,7 @@ import {
   worktreeTemplateMutationKey,
   type WorktreeTemplateRecord,
 } from "./template-registry.js";
+import type { WorktreeWorkerAuthority } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 export const WORKTREE_TEMPLATE_DIRECTORY = ".templates";
@@ -54,6 +62,7 @@ export async function retainWorktreeTemplate(
     | (Pick<WorktreeTemplateRecord, "cacheKey" | "contentKey" | "backend"> & { now?: number }),
   assertCurrent: () => void,
   unpublish?: true,
+  workerAuthority?: WorktreeWorkerAuthority,
 ): Promise<PreparedWorktreeTemplate | undefined> {
   const context = captureOpenClawStateWorkerContext({ env });
   const key = randomUUID();
@@ -66,7 +75,9 @@ export async function retainWorktreeTemplate(
   const release = async (outcome?: unknown) => {
     if (!hasWorktreeUnknownOutcome(outcome)) {
       try {
-        await releaseTemplateReaderAsync(env, key, () => context.admission.assertCurrent());
+        await releaseTemplateReaderAsync(env, key, () => context.admission.assertCurrent(), {
+          stateOwnerPath: workerAuthority?.stateOwnerPath,
+        });
       } catch (cleanupError) {
         if (outcome !== undefined) {
           throw new AggregateError(
@@ -84,6 +95,7 @@ export async function retainWorktreeTemplate(
       env,
       { key, owner, ...("id" in selection ? { id: selection.id, unpublish } : { selection }) },
       assertCurrent,
+      workerAuthority,
     );
     return record ? { ...record, release } : undefined;
   } catch (error) {
@@ -98,11 +110,17 @@ async function retireWorktreeTemplate(
   record: WorktreeTemplateRecord,
   options: WorktreeFilesystemOptions,
 ): Promise<boolean> {
-  const assertCurrent = () => {
+  const assertCurrent = composeSessionSourceAssertion([options.commitGuard], (assertSource) => {
     options.signal?.throwIfAborted();
-    options.commitGuard();
-  };
-  const retained = await retainWorktreeTemplate(env, record, assertCurrent, true);
+    assertSource();
+  });
+  const retained = await retainWorktreeTemplate(
+    env,
+    record,
+    assertCurrent,
+    true,
+    options.workerAuthority,
+  );
   if (!retained) {
     return false;
   }
@@ -111,7 +129,19 @@ async function retireWorktreeTemplate(
     assertCurrent();
     if (record.backend.startsWith("sandbox-")) {
       const { retireSandboxDependencyTemplate } = await import("../sandbox/dependency-template.js");
-      await retireSandboxDependencyTemplate(record.path, assertCurrent);
+      const source = await prepareSessionSourceEffect(assertCurrent);
+      await using _ = { [Symbol.asyncDispose]: async () => await source.release?.() };
+      await retireSandboxDependencyTemplate(record.path, source.assertCurrent, undefined, {
+        assertHost: source.assertCurrent,
+        prepareHost: async () => await prepareWorktreeFilesystemMutation(options, source),
+        filesystem: [
+          ...new Set([
+            ...(options.workerAuthority?.workspaceEvidence ?? []),
+            ...(source.workspaceEvidence ?? []),
+          ]),
+        ],
+        stateOwnerPath: options.workerAuthority?.stateOwnerPath,
+      });
     }
     const registered =
       (await worktreePathExists(record.repoRoot)) &&
@@ -120,6 +150,7 @@ async function retireWorktreeTemplate(
         await listGitWorktrees(record.repoRoot, {
           signal: options.signal,
           beforeRun: assertCurrent,
+          stateOwnerPath: options.workerAuthority?.stateOwnerPath,
         })
       ).some((entry) => path.resolve(entry.path) === record.path);
     assertCurrent();
@@ -130,11 +161,12 @@ async function retireWorktreeTemplate(
       await requireGit(record.repoRoot, ["worktree", "remove", "--force", record.path], {
         signal: options.signal,
         beforeRun: assertCurrent,
+        stateOwnerPath: options.workerAuthority?.stateOwnerPath,
         killProcessTree: true,
         timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
       });
     }
-    await deleteTemplateAsync(env, record.id, assertCurrent);
+    await deleteTemplateAsync(env, record.id, assertCurrent, options.workerAuthority);
     return true;
   } catch (error) {
     outcome = error;
@@ -151,11 +183,14 @@ export async function collectWorktreeTemplates(
   options: WorktreeFilesystemOptions & {
     beforeRemoval?: () => Promise<void>;
     maxRemovals?: number;
+    readyOnly?: boolean;
     scope?: Pick<WorktreeTemplateRecord, "commonDir" | "worktreeRoot">;
   },
   onError?: (error: unknown, id: string) => void,
 ): Promise<void> {
-  const records = (await listTemplatesAsync(env)).filter(
+  const records = (
+    await listTemplatesAsync(env, options.commitGuard, options.workerAuthority)
+  ).filter(
     (record) =>
       !options.scope ||
       (record.commonDir === options.scope.commonDir &&
@@ -163,12 +198,16 @@ export async function collectWorktreeTemplates(
   );
   const retained = new Set<string>();
   const groups = new Map<string, { count: number; currentKey: string }>();
+  const groupKey = (record: WorktreeTemplateRecord) =>
+    record.backend.startsWith("sandbox-")
+      ? JSON.stringify([record.commonDir, record.worktreeRoot])
+      : worktreeTemplateMutationKey(record.cacheKey);
   // Bound across runtime identities, so a changed image/store cannot add another allowance.
   for (const record of records.toReversed()) {
-    if (record.status !== "ready" || !record.backend.startsWith("sandbox-")) {
+    if (record.status !== "ready" || record.cacheKey.startsWith("warm:")) {
       continue;
     }
-    const group = JSON.stringify([record.commonDir, record.worktreeRoot]);
+    const group = groupKey(record);
     const selection = groups.get(group) ?? {
       count: 0,
       currentKey: worktreeTemplateMutationKey(record.cacheKey),
@@ -180,12 +219,15 @@ export async function collectWorktreeTemplates(
   }
   let removed = 0;
   for (const record of records) {
+    if (options.readyOnly && record.status !== "ready") {
+      continue;
+    }
     const sandbox = record.backend.startsWith("sandbox-");
-    const overCapacity = sandbox && record.status === "ready" && !retained.has(record.id);
+    const overCapacity =
+      !record.cacheKey.startsWith("warm:") && record.status === "ready" && !retained.has(record.id);
     const supersededIdentity =
       sandbox &&
-      groups.get(JSON.stringify([record.commonDir, record.worktreeRoot]))?.currentKey !==
-        worktreeTemplateMutationKey(record.cacheKey);
+      groups.get(groupKey(record))?.currentKey !== worktreeTemplateMutationKey(record.cacheKey);
     const expiresBefore = supersededIdentity
       ? Math.max(before, Date.now() - 6 * 60 * 60_000)
       : record.cacheKey.startsWith("warm:")
@@ -200,7 +242,13 @@ export async function collectWorktreeTemplates(
       await withWorktreeMutationLease(
         { env, ...options, id: `template:${worktreeTemplateMutationKey(record.cacheKey)}` },
         async (guard) => {
-          const current = await readTemplateAsync(env, record.cacheKey, guard.commitGuard);
+          const current = await readTemplateAsync(
+            env,
+            record.cacheKey,
+            guard.commitGuard,
+            undefined,
+            guard.workerAuthority,
+          );
           if (
             !current ||
             current.id !== record.id ||
@@ -259,16 +307,19 @@ export async function prepareWorktreeTemplate(params: {
   prepare: (record: WorktreeTemplateRecord, options: WorktreeAllocationGuard) => Promise<void>;
 }): Promise<PreparedWorktreeTemplate | undefined> {
   const { validate } = params;
-  const retainCommits = params.backend.startsWith("sandbox-");
+  const retainCommits = params.refresh !== undefined;
   let built = false;
   let retained: PreparedWorktreeTemplate | undefined;
   let preparationKey: string | undefined;
   let finishPreparation: (() => void) | undefined;
   try {
-    const assertCallerCurrent = () => {
-      params.options.signal?.throwIfAborted();
-      params.options.commitGuard();
-    };
+    const assertCallerCurrent = composeSessionSourceAssertion(
+      [params.options.commitGuard],
+      (assertSource) => {
+        params.options.signal?.throwIfAborted();
+        assertSource();
+      },
+    );
     while (true) {
       retained = await retainWorktreeTemplate(
         params.env,
@@ -279,6 +330,8 @@ export async function prepareWorktreeTemplate(params: {
           now: retainCommits ? (params.backgroundUsedAt ?? params.now()) : undefined,
         },
         assertCallerCurrent,
+        undefined,
+        params.options.workerAuthority,
       );
       if (retained) {
         setWorktreePreparationTemplate("warm", { reason: "ready" });
@@ -337,10 +390,16 @@ export async function prepareWorktreeTemplate(params: {
           params.cacheKey,
           assertCurrent,
           retainCommits ? params.contentKey : undefined,
+          options.workerAuthority,
         );
         assertCurrent();
         const hasReaders = existing
-          ? await hasTemplateReadersAsync(params.env, existing.id, assertCurrent)
+          ? await hasTemplateReadersAsync(
+              params.env,
+              existing.id,
+              assertCurrent,
+              options.workerAuthority,
+            )
           : false;
         let refreshable = false;
         if (
@@ -366,15 +425,29 @@ export async function prepareWorktreeTemplate(params: {
                 existing,
                 options.rollbackGuard,
                 true,
+                { stateOwnerPath: options.workerAuthority?.stateOwnerPath },
               );
             }
             throw error;
           }
           if (valid && existing.contentKey === params.contentKey) {
-            retained = await retainWorktreeTemplate(params.env, existing, assertCurrent);
+            retained = await retainWorktreeTemplate(
+              params.env,
+              existing,
+              assertCurrent,
+              undefined,
+              options.workerAuthority,
+            );
             const usedAt = params.backgroundUsedAt ?? params.now();
             if (!hasReaders && usedAt > existing.lastUsedAt) {
-              await markTemplateReadyAsync(params.env, existing.id, usedAt, assertCurrent);
+              await markTemplateReadyAsync(
+                params.env,
+                existing.id,
+                usedAt,
+                assertCurrent,
+                undefined,
+                options.workerAuthority,
+              );
             }
             setWorktreePreparationTemplate("warm", { reason: "ready" });
             return retained;
@@ -427,18 +500,36 @@ export async function prepareWorktreeTemplate(params: {
           createdAt: params.now(),
           lastUsedAt: Math.max(params.backgroundUsedAt ?? params.now(), existing?.lastUsedAt ?? 0),
         };
-        await reserveTemplateAsync(params.env, record, assertCurrent);
+        await reserveTemplateAsync(params.env, record, assertCurrent, options.workerAuthority);
         built = true;
-        retained = await retainWorktreeTemplate(params.env, record, assertCurrent);
+        retained = await retainWorktreeTemplate(
+          params.env,
+          record,
+          assertCurrent,
+          undefined,
+          options.workerAuthority,
+        );
         if (!retained) {
           throw new Error("Worktree template builder lost its reader custody");
         }
-        assertCurrent();
-        await fs.mkdir(directory, { recursive: true });
+        {
+          const source = await prepareSessionSourceEffect(assertCurrent);
+          await using _ = { [Symbol.asyncDispose]: async () => await source.release?.() };
+          await prepareWorktreeFilesystemMutation(options, source);
+          options.signal?.throwIfAborted();
+          source.assertCurrent();
+          await fs.mkdir(directory, { recursive: true });
+        }
         setWorktreePreparationTemplate("cold", { reason: "template-build" });
         let refreshed = false;
         if (refreshable && existing && params.refresh) {
-          const source = await retainWorktreeTemplate(params.env, existing, assertCurrent);
+          const source = await retainWorktreeTemplate(
+            params.env,
+            existing,
+            assertCurrent,
+            undefined,
+            options.workerAuthority,
+          );
           if (!source) {
             throw new Error("Worktree template refresh lost its source custody");
           }
@@ -470,6 +561,7 @@ export async function prepareWorktreeTemplate(params: {
                 ? retainedWorktreeTemplateKey(params.cacheKey, existing.contentKey)
                 : undefined,
           },
+          options.workerAuthority,
         );
         setWorktreePreparationTemplate(refreshed ? "warm" : "cold", { reason: "ready" });
         return { ...retained, cacheKey, status: "ready" as const };
@@ -479,6 +571,8 @@ export async function prepareWorktreeTemplate(params: {
       await collectWorktreeTemplates(params.env, 0, {
         ...params.options,
         maxRemovals: 1,
+        // Invalid managed generations remain deferred to maintenance, not request-path IO.
+        readyOnly: !params.backend.startsWith("sandbox-"),
         scope: { commonDir: params.commonDir, worktreeRoot: params.worktreeRoot },
       });
     }
@@ -497,6 +591,9 @@ export async function prepareWorktreeTemplate(params: {
     }
     throw error;
   } finally {
+    setWorktreePreparationTemplate(undefined, {
+      identity: `${params.backend}:${params.cacheKey}:${params.contentKey}`,
+    });
     if (finishPreparation && preparationKey) {
       pendingPreparations.delete(preparationKey);
       finishPreparation();

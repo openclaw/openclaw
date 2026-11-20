@@ -265,7 +265,7 @@ it.each(["revoked", "unavailable"] as const)(
           api.registerGatewayAccessPolicy({
             authorize() {
               if (failure === "unavailable") {
-                throw new Error("Plugin invocation scope is closed");
+                throw new Error("Plugin fixture was reloaded or disabled");
               }
               const signal = AbortSignal.abort(new Error("Visitor grant ended"));
               return { signal, assertCurrent: () => signal.throwIfAborted() };

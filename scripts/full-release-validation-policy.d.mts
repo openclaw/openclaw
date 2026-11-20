@@ -22,6 +22,13 @@ export function assertReleasePublicationKnownBudget(
 export function normalizeReleaseCoveragePolicy(
   input: ReleaseRecord,
 ): "npm-beta-v1" | "npm-stable-v1" | undefined;
+export function resolveReleaseQualificationScope(input: ReleaseRecord): {
+  coveragePolicy: "npm-beta-v1" | "npm-stable-v1" | undefined;
+  ciReleaseScope: string;
+  skipPackageTelegramE2e: boolean;
+  npmDistTag: string;
+  releaseCandidateBranch: string;
+};
 export function validateReleaseCoveragePolicyBinding(
   plan: ReleaseRecord | undefined,
   validationInputs?: ReleaseRecord,
@@ -140,7 +147,11 @@ export function composeReleaseChildAttemptEvidence(input: {
 }): ReleaseRecord;
 
 export function releaseChildAdvisories(child: ReleaseRecord): ReleaseRecord[];
-export function terminalPolicyPass(child: ReleaseRecord, targetVersion?: string): boolean;
+export function terminalPolicyPass(
+  child: ReleaseRecord,
+  targetVersion?: string,
+  targetSha?: string,
+): boolean;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;
 export function releasePlanGateFailures(gates: ReleaseRecord[]): ReleaseRecord[];
@@ -178,3 +189,16 @@ export function affectedActiveRunIds(
   blockers: ReleaseRecord[],
   cancelledRunIds?: Set<string>,
 ): string[];
+
+export function resolveAdmittedQualificationScope(
+  admission: import("./release-qualification-admission.mjs").QualificationAdmission,
+): ReturnType<typeof resolveReleaseQualificationScope> & {
+  releaseProfile: string;
+  runReleaseSoak: boolean;
+};
+export function qualificationChildDispatchInputs(
+  role: string,
+  admission: import("./release-qualification-admission.mjs").QualificationAdmission,
+  binding: import("./full-release-candidate-contract.mjs").RecordedFullReleaseCandidateBinding,
+  workflowSource: string,
+): Record<string, string>;

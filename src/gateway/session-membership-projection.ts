@@ -3,7 +3,7 @@ import {
   readPreparedSessionEntryPublicationSource,
   type SessionEntryPublicationSource,
 } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
-import { captureCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
+import { prepareCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
 import type {
   SessionMembershipFact,
   SessionParticipantProjection,
@@ -269,11 +269,11 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
         env,
       );
       const continuations: NonNullable<
-        ReturnType<typeof captureCanonicalSessionReaderContinuation>
+        Awaited<ReturnType<typeof prepareCanonicalSessionReaderContinuation>>
       >[] = [];
       try {
         for (const database of nativeReaders.databases) {
-          const continuation = captureCanonicalSessionReaderContinuation(database);
+          const continuation = await prepareCanonicalSessionReaderContinuation(database);
           if (continuation) {
             continuations.push(continuation);
           }
@@ -298,6 +298,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
                 env,
                 continuation: continuation?.receipt,
               });
+              await continuation?.prepareCurrent();
               continuation?.assertCurrent();
               if (
                 disposed ||

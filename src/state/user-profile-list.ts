@@ -141,6 +141,7 @@ export function captureResidentUserProfileAccess(
         profileId: profile.id,
         emails: [...(bindings.emailsByProfile.get(profile.id) ?? [])].toSorted(),
         ...projectUserProfileGitHubFacts(profile),
+        ...(profile.hasOpenClawIdIdentity ? { hasOpenClawIdIdentity: true } : {}),
         assignedRole: profile.role ?? null,
         githubLogin: profile.githubLogin ?? null,
       };

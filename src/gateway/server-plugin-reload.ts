@@ -248,7 +248,7 @@ export async function reloadGatewayPlugins(
           !params.changedPaths.some(
             (key) => key === "transcripts" || key.startsWith("transcripts."),
           );
-        for (const warning of recovery.capture(changedPluginIds)) {
+        for (const warning of await recovery.capture(changedPluginIds)) {
           log.warn(warning);
           recordWarning(warning);
         }

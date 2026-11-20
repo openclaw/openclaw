@@ -84,7 +84,7 @@ export const forumMessagingForTest: ChannelMessagingAdapter = {
   preserveHeartbeatThreadIdForGroupRoute: true,
 };
 
-export function createTestChannelPlugin(params: {
+function createTestChannelPlugin(params: {
   id: ChannelPlugin["id"];
   label?: string;
   outbound?: ChannelOutboundAdapter;

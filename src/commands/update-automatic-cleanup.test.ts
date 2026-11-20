@@ -141,6 +141,14 @@ async function fail(runId: string, at: number) {
   expect(getUpdateRun(runId, { env })?.status).toBe("failed");
   return result;
 }
+function verifyHealthy(runId: string) {
+  const ready = { serviceRunning: true, versionMatch: true, settled: true, readyz: true };
+  recordUpdateRunVerification(
+    runId,
+    { ...ready, channelsReady: true, coreReady: true, pluginErrors: [] },
+    { env },
+  );
+}
 async function recoveryFixture() {
   const fixture = await createVerifiedRecoveryStore();
   env = fixture.store.env;
@@ -752,7 +760,9 @@ it("retires a failed update's own capture only when it never activated", async (
   await complete(succeeded, now - 60_000);
   const activated = failedRun(now, ["staging", "validating", "activating"]);
   const activatedResult = await fail(activated.runId, now + 1_000);
+  // An activated failure keeps its own capture; with nothing older to release it adds no step.
   expect(activatedResult.steps.map((step) => step.name)).not.toContain("recovery-artifact-cleanup");
+  expect(fs.existsSync(activated.directory)).toBe(true);
   const unactivated = failedRun(now + 2_000, ["staging", "validating"]);
   const result = await fail(unactivated.runId, now + 3_000);
   expect(fs.existsSync(unactivated.directory)).toBe(false);
@@ -776,19 +786,7 @@ it.each([true, false])(
     // Activation's Doctor migration completes inside the run.
     const { backup } = await migrationOriginal();
     if (verified) {
-      recordUpdateRunVerification(
-        runId,
-        {
-          serviceRunning: true,
-          versionMatch: true,
-          settled: true,
-          readyz: true,
-          channelsReady: true,
-          coreReady: true,
-          pluginErrors: [],
-        },
-        { env },
-      );
+      verifyHealthy(runId);
     }
     const result = await complete(runId, now + 60_000);
     expect([directory, backup].map(fs.existsSync)).toEqual([!verified, !verified]);
@@ -803,6 +801,12 @@ it("keeps the triggering update's capture when the wall clock moves backward", a
   const result = await complete(runId, now);
   expect(fs.existsSync(current)).toBe(true);
   expect(result.steps.at(-1)?.advisory?.message).toContain("triggering update");
+  // A warning-only attempt records no stale summary beside its warning.
+  expect(
+    getUpdateRun(runId, { env })?.steps.find(
+      (step) => step.step === "diagnostic:recovery-artifact-cleanup",
+    )?.detail,
+  ).toBe("Update backup cleanup did not finish on its latest attempt; see its warning.");
 });
 
 it.each([true, false])(
@@ -911,3 +915,69 @@ it.each(["intent", "unlink-pending", "retained"] as const)(
     }
   },
 );
+
+it("retires an already-current run's own capture when that run ends", async () => {
+  const { runId, directory } = capturedRun(now);
+  using clock = vi.spyOn(Date, "now");
+  clock.mockReturnValue(now + 1_000);
+  vi.mocked(defaultRuntime.log).mockClear();
+  const emit = await prepareUpdateCommandTerminalResult(
+    { opts: { json: false, run: { runId, env } } },
+    { status: "skipped", mode: "git", reason: "already-current", steps: [], durationMs: 1 },
+    { rolledBack: false },
+  );
+  const result = await emit();
+  expect(getUpdateRun(runId, { env })?.status).toBe("skipped");
+  expect(fs.existsSync(directory)).toBe(false);
+  // The plain-text report says what the cleanup removed.
+  const summary = result.steps.at(-1)?.diagnostics?.[0];
+  expect(summary).toContain("removed 1 item");
+  expect(vi.mocked(defaultRuntime.log).mock.calls.flat()).toContain(summary);
+});
+
+it("retires a failed run's capture after a later verified update, and reruns cleanup once verification lands", async () => {
+  const { runId: failed, directory: failedCapture } = capturedRun(now - 240_000);
+  {
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(now - 200_000);
+    finishUpdateRun(failed, { status: "rolled-back" }, { env });
+  }
+  const { runId, directory } = capturedRun(now);
+  // An unreadable manifest makes the first cleanup warn; it is gone before the rerun.
+  const unreadable = path.join(resolveSessionSqliteMigrationRunsDir(env), "unreadable.json");
+  fs.mkdirSync(path.dirname(unreadable), { recursive: true });
+  fs.writeFileSync(unreadable, "{");
+  // Cleanup runs before the Gateway's health verification is recorded.
+  const first = (await complete(runId, now + 1_000)).steps.at(-1);
+  expect(first?.advisory?.message).toContain("unreadable-manifest");
+  expect([failedCapture, directory].map(fs.existsSync)).toEqual([true, true]);
+  fs.unlinkSync(unreadable);
+  {
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(now + 30_000);
+    verifyHealthy(runId);
+  }
+  const cleanup = await automaticallyCleanUpdateRecovery(runId, env);
+  expect(cleanup?.advisory).toBeUndefined();
+  expect([failedCapture, directory].map(fs.existsSync)).toEqual([false, false]);
+  // The run record now holds only the rerun's report: no earlier line or warning survives.
+  const report = getUpdateRun(runId, { env })!.steps.filter((step) =>
+    step.step.includes("recovery-artifact-cleanup"),
+  );
+  expect(report.map((step) => step.step).toSorted()).toEqual([
+    "diagnostic:recovery-artifact-cleanup",
+    "recovery-artifact-cleanup",
+    "warning:recovery-artifact-cleanup",
+  ]);
+  expect(report.find((step) => step.step.startsWith("diagnostic:"))?.detail).toBe(
+    cleanup?.diagnostics?.[0],
+  );
+  // The earlier warning no longer counts; the resolution is a diagnostic in the result.
+  expect(report.find((step) => step.step.startsWith("warning:"))).toMatchObject({
+    status: "skipped",
+  });
+  expect(report.find((step) => step.step.startsWith("warning:"))?.detail).toBeUndefined();
+  expect(cleanup?.diagnostics?.at(-1)).toBe(
+    "An earlier cleanup warning was resolved by a later cleanup.",
+  );
+});

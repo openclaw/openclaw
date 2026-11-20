@@ -114,7 +114,9 @@ describe("config form map integrity", () => {
       renderValue();
       await expandConfigObjects(container);
       if (scope === "agent") {
-        expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
+        expect(container.textContent).toContain(
+          "Edit this setting in the Raw tab of Advanced settings.",
+        );
       }
       expect(Array.from(getSelect().options, (option) => option.textContent?.trim())).toEqual([
         "Default",
@@ -320,7 +322,9 @@ describe("config form map integrity", () => {
       value: state.configForm,
       onPatch: (path, value) => updateConfigFormValue(state, path, value),
     });
-    expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
+    expect(container.textContent).toContain(
+      "Edit this setting in the Raw tab of Advanced settings.",
+    );
     expect(container.querySelector('[aria-label="Retained"]')).toBeNull();
     const name = expectElement(
       container.querySelector<HTMLInputElement>('[aria-label="Name"]'),

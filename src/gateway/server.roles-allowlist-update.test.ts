@@ -324,6 +324,40 @@ test("gateway enforces operator and node permissions", async () => {
 
 registerGatewayUpdateHistoryTests(() => port, readonlyPreparation);
 
+test("a write-scoped client cannot start an installation update", async () => {
+  const install = await import("../infra/update-install-status.js");
+  const root = updateDirs.make("denied-installation-update-");
+  const entry = path.join(root, "index.js");
+  const initial = "// installed runtime fixture\n";
+  await fs.writeFile(entry, initial);
+  const discovery = vi.spyOn(install, "resolveStartupInstallStatus").mockResolvedValue({
+    root,
+    status: { root, installKind: "git", packageManager: "pnpm" },
+    installReceipt: null,
+  });
+  try {
+    const client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token: "secret",
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      scopes: ["operator.read", "operator.write"],
+    });
+    try {
+      expect((await client.request<HealthSummary>("health", {})).ok).toBe(true);
+      await expect(client.request("update.run", {})).rejects.toThrow(/operator\.admin/);
+      expect(discovery).not.toHaveBeenCalled();
+      expect(await fs.readdir(root)).toEqual(["index.js"]);
+      expect(await fs.readFile(entry, "utf8")).toBe(initial);
+      expect((await client.request<HealthSummary>("health", {})).ok).toBe(true);
+    } finally {
+      await client.stopAndWait();
+    }
+  } finally {
+    discovery.mockRestore();
+  }
+});
+
 test("update.run persists the accepted handoff before parking and restarting its foreground owner", async () => {
   await withEnvAsync(
     Object.fromEntries(SUPERVISOR_HINT_ENV_VARS.map((key) => [key, undefined])),
@@ -393,7 +427,7 @@ test("update.run persists the accepted handoff before parking and restarting its
           });
           return true;
         });
-      const claim = vi.spyOn(handoff, "claimManagedServiceUpdateHandoff").mockReturnValue(true);
+      const claim = vi.spyOn(handoff, "claimManagedServiceUpdateHandoff").mockResolvedValue(true);
       const schedule = vi.spyOn(restart, "scheduleGatewayRestart");
       const restartSignal = vi.fn();
       process.on("SIGUSR2", restartSignal);

@@ -25,7 +25,9 @@ for (const laterClosure of [false, true]) test(`historical successor reaches act
   writeFileSync(f.library, bytes);
   renameSync(f.lockFile, f.lockFile + ".saved");
   writeFileSync(f.lockFile, "replacement", { mode: 0o600 });
-  refused(/controller adoption lock inode changed/);
+  const rebooted = prepare(f);
+  assert.equal(rebooted.status, 0, rebooted.stderr);
+  assert.match(rebooted.stdout, /PREPARED .*restart=0 activation=0 original-journal=retained/);
   renameSync(f.lockFile + ".saved", f.lockFile);
   const db = new DatabaseSync(f.databasePath);
   db.exec("DELETE FROM diagnostic_events"); db.close();

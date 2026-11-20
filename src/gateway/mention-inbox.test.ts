@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { validateMentionsListResult } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -32,8 +32,10 @@ import {
   dismissMentionInbox as dismiss,
   mentionRoles,
 } from "./mention-inbox.test-support.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { identifiedClient, soloClient } from "./server-methods/sessions-sharing.test-support.js";
+import type { GatewayClient } from "./server-methods/types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -726,6 +728,62 @@ it.each([
     );
   }, cfg);
 });
+
+it("keeps mention views and dismissal within the ID membership of a linked administrator", () =>
+  withInbox(
+    async (f) => {
+      setUserProfileRole(f.bob.id, "admin");
+      invalidateOperatorRolePolicy(f.bob.id);
+      f.bobClient.connect.scopes = ["operator.admin"];
+      const principal = {
+        kind: "member" as const,
+        peerKey: "iroh:mention-reader",
+        accountId: "mention-reader",
+        role: "restricted",
+      };
+      setOpenClawIdTunnelPrincipalLookup(() => principal);
+      onTestFinished(() => setOpenClawIdTunnelPrincipalLookup(undefined));
+      const member: GatewayClient = {
+        ...f.bobSecond,
+        connId: "bob-member",
+        connect: { ...f.bobSecond.connect, scopes: ["operator.sessions.read"] },
+        internal: { openclawIdPrincipal: principal },
+      };
+      f.clients.push(member);
+      await f.items(member);
+      await f.post();
+      const localItems = await f.items(f.bobClient);
+      expect(localItems).toEqual([expect.objectContaining({ excerpt: "@Bob review this change" })]);
+      expect(await f.items(member)).toEqual([]);
+      expectMentionError(
+        await f.call("users.mentionable", { sessionKey: SESSION_KEY }, member),
+        "INVALID_REQUEST",
+      );
+      expect(await dismiss(f.inbox, member, [localItems[0]!.id])).toMatchObject({
+        ok: true,
+        value: { items: [] },
+      });
+      expect(await f.items(f.bobClient)).toEqual(localItems);
+      // A member still receives mentions in its own conversations.
+      const ownKey = "agent:main:dashboard:member-mention";
+      const ownId = "member-mention-session";
+      await f.setSession(
+        { sessionId: ownId, createdActor: { type: "human", source: "profile", id: f.bob.id } },
+        ownKey,
+      );
+      await f.post("own", { sessionKey: ownKey, sessionId: ownId });
+      const ownItem = (await f.items(f.bobClient)).find((item) => item.sessionKey === ownKey);
+      expect(ownItem).toBeDefined();
+      expect(await f.items(member)).toEqual([ownItem]);
+      expect((await f.call("users.mentionable", { sessionKey: ownKey }, member)).ok).toBe(true);
+      expect((await dismiss(f.inbox, member, [ownItem!.id])).ok).toBe(true);
+      expect(await f.items(f.bobClient)).toEqual(localItems);
+    },
+    mentionRoles({
+      admin: { agents: "*", scopes: ["operator.admin"], sessions: { others: "write" } },
+      restricted: { agents: [], scopes: ["operator.sessions.read"], sessions: { others: "none" } },
+    }),
+  ));
 
 it("fences delayed push preparation on role revocation, session replacement, and disposal", async () => {
   const cfg = mentionRoles({ denied: { agents: [], scopes: [], sessions: { others: "none" } } });

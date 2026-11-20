@@ -4,18 +4,26 @@ import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import {
+  writePlugin,
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
 } from "../plugins/loader.test-fixtures.js";
 import { cleanupNativeFixture } from "../plugins/native-resource.test-support.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { clearActivePluginRegistry } from "../plugins/runtime.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginRegistryOwner, clearActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -25,12 +33,19 @@ import { runBtwSideQuestion } from "./btw.js";
 import { makeModel } from "./embedded-agent-runner/model.test-harness.js";
 import { createContextEngineLogicalTurnLease } from "./harness/context-engine-logical-turn.js";
 import {
+  createPreparedInboundRegistryLoader,
+  prepareWorkspacePluginRegistries,
+} from "./prepared-model-runtime.inbound-registry.js";
+import {
   acquireReadOnlyPreparedModelRuntime,
   acquireAgentRunPreparedModelRuntime,
   markPreparedModelRuntimeSnapshotsStale,
   refreshPreparedModelRuntimeSnapshots,
   type PreparedModelRuntimeLease,
 } from "./prepared-model-runtime.js";
+import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import { retainPreparedPluginRegistry } from "./prepared-model-runtime.plugin-lifetime.js";
+import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 import { observeSettlement } from "./promise-settlement.test-support.js";
@@ -491,4 +506,122 @@ it("preserves an unaffected agent's retained resources until that scope becomes 
     await expect.poll(() => donor.hasRetainedConsumers).toBe(false);
     await expect(donor.drain({ includeConsumers: true })).resolves.toMatchObject({ errors: [] });
   });
+});
+
+it("borrows global startup instances across workspaces without borrowing shadowed sources", async () => {
+  await withOpenClawTestState(
+    { label: "prepared-startup-shadow", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+    async (state) => {
+      const id = "global-startup-provider";
+      const plugin = writePlugin({
+        id,
+        dir: state.path("global-plugin"),
+        registration: 'api.registerProvider({ id: "selected", label: "Selected", auth: [] });',
+      });
+      const config: OpenClawConfig = {
+        agents: { defaults: { model: "selected/model" } },
+        plugins: {
+          allow: [id],
+          load: { paths: [plugin.file] },
+          slots: { memory: "none" },
+          entries: { [id]: { enabled: true } },
+        },
+      };
+      setRuntimeConfigSnapshot(config);
+      await using cache = createPluginCache();
+      try {
+        await withPluginCache(cache, async () => {
+          const rootMetadata = loadPluginMetadataSnapshot({
+            config,
+            workspaceDir: path.join(state.workspaceDir, "first"),
+          });
+          const root = await loadAndActivateRootPluginRegistry({
+            config,
+            metadataSnapshot: rootMetadata,
+            onlyPluginIds: [id],
+            runtimeOptions: { allowGatewaySubagentBinding: true },
+            cache: false,
+            throwOnLoadError: true,
+          });
+          const gateway = createPluginRegistryOwner(root),
+            context = getPluginRuntimeLoadContext(root),
+            loadInbound = createPreparedInboundRegistryLoader();
+          try {
+            expect(rootMetadata.workspaceDir).toBe(path.join(state.workspaceDir, "first"));
+            expect(context?.workspaceDir).toBeUndefined();
+            await using resources = new PreparedModelRuntimeBuildResources(
+              retainPreparedPluginRegistry,
+            );
+            for (const agent of ["first", "second"]) {
+              const workspaceDir = path.join(state.workspaceDir, agent),
+                shadow = agent === "second";
+              const shadowPlugin = shadow
+                ? writePlugin({
+                    id,
+                    dir: path.join(workspaceDir, ".openclaw", "extensions", id),
+                    filename: "index.cjs",
+                    registration:
+                      'api.registerProvider({ id: "selected", label: "Workspace", auth: [] });',
+                  })
+                : undefined;
+              const selectedConfig = shadow
+                ? { ...config, plugins: { ...config.plugins, load: { paths: [] } } }
+                : config;
+              const metadata = shadow
+                ? loadPluginMetadataSnapshot({ config: selectedConfig, workspaceDir })
+                : rootMetadata;
+              const input = {
+                config: selectedConfig,
+                workspaceDir,
+                agentDir: state.workspaceDir,
+                allowGatewaySubagentBinding: true,
+                runtimePluginSelections: [
+                  { provider: "selected", modelId: "model", runtime: "openclaw" },
+                ],
+              };
+              const prepared = await withPluginRuntimeRegistryScope(root, () =>
+                prepareWorkspacePluginRegistries(
+                  input,
+                  metadata,
+                  (registry) => resources.retainRegistry(registry),
+                  loadInbound,
+                  true,
+                  undefined,
+                  () => [],
+                ),
+              );
+              prepareOwnedPluginLoadContext(
+                input,
+                process.env,
+                prepared.runtimePluginRegistry,
+                metadata,
+                true,
+                prepared.inboundPluginRegistry,
+              );
+              const record = prepared.runtimePluginRegistry?.plugins.find(
+                (entry) => entry.id === id,
+              );
+              expect(record?.status).toBe("loaded");
+              expect(record === root.plugins[0]).toBe(!shadow);
+              expect(record?.source).toBe(shadowPlugin?.file ?? plugin.file);
+              expect(prepared.runtimePluginRegistry?.providers[0]?.provider.label).toBe(
+                shadow ? "Workspace" : "Selected",
+              );
+              expect(getPluginRuntimeLoadContext(root)).toBe(context);
+              expect(getPluginRuntimeLoadContext(root)?.workspaceDir).toBeUndefined();
+            }
+          } finally {
+            await gateway.close();
+          }
+        });
+      } finally {
+        clearRuntimeConfigSnapshot();
+        await resetPreparedModelRuntimeSnapshotsForTest();
+        await clearActivePluginRegistry();
+        resetPluginLoaderTestStateForTest();
+        cleanupPluginLoaderFixturesForTest();
+        clearPluginMetadataLifecycleCaches();
+      }
+    },
+  );
 });

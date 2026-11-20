@@ -66,6 +66,10 @@ order without blocking the Gateway main thread on filesystem checks. Normal
 shutdown drains queued writes; forced process exit retains a synchronous rescue
 for records that have not started writing.
 
+If initial directory preparation fails, later records retry it. Once the path is
+repaired, writing resumes without a restart. Records dropped during the failure
+are not replayed.
+
 Silent logging does not prepare a file. Requests that report or tail the log path
 wait for its directory to pass the same ownership, permission, and ancestor checks
 used by writes; they never report an unqualified fallback path.
@@ -184,6 +188,11 @@ an overflow group, reports omitted-group count, and identifies the globally
 slowest statement separately. Statement IDs hash normalized SQL; no SQL text or
 bindings are logged. `rows` counts returned rows (`get`/`all`) or consumed iterator
 rows, including early close; it is not the number of rows SQLite scanned.
+`changes` sums the native rows-affected count from successful `run` calls, including
+zero-row writes. It counts executed changes, even if the transaction later rolls
+back; it excludes trigger and foreign-key cascade effects. Reads keep `rows` and
+do not gain `changes`; writes using `RETURNING` through a read method report only
+returned rows. No additional query is issued to obtain these counts.
 
 ### SQLite snapshot cleanup
 

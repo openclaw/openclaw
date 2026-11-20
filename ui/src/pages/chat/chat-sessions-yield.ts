@@ -24,7 +24,7 @@ import {
 } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
-import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
+import { chatItemStartsUserTurn, readProjectedContinuation } from "./chat-turn-boundary.ts";
 
 function readYieldReceipt(card: ToolCard): Record<string, unknown> | null {
   const details = asRecord(card.details);
@@ -415,8 +415,41 @@ function keepsRowWithToolsHidden(item: ChatItem): boolean {
     cards.length === 0 ||
     hasContent ||
     hasHandoffToolCall(item.message) ||
+    // A resumed run's first row keeps its Resumed rule; its hidden tools render nothing.
+    readProjectedContinuation(item.message) !== undefined ||
     cards.some((card) => readNodePermissionRequest(asRecord(card.details)?.permissionMissing))
   );
+}
+
+/**
+ * Work that resumes after a hidden wake, such as a finished background command,
+ * continues the block before it like a handoff. Rows split from one resumed
+ * message share its mark, so only the first opens the handoff.
+ */
+function projectContinuations(items: ChatItem[]): ChatItem[] {
+  // The run of the previous row when it carried the mark; null when it did not.
+  let continued: string | undefined | null = null;
+  return items.flatMap<ChatItem>((item) => {
+    if (item.kind !== "message") {
+      return [item];
+    }
+    const runId = transcriptRunId(item.message);
+    const marked = readProjectedContinuation(item.message) !== undefined;
+    const opens = marked && continued !== runId;
+    continued = marked ? runId : null;
+    return opens
+      ? [
+          {
+            kind: "notice",
+            key: `resume:${item.key}`,
+            handoffBoundary: true,
+            text: "",
+            timestamp: rawMessageTimestamp(item.message) ?? 0,
+          },
+          item,
+        ]
+      : [item];
+  });
 }
 
 export function projectSessionsYieldItems(
@@ -425,7 +458,7 @@ export function projectSessionsYieldItems(
   complete?: readonly ChatItem[],
 ): ChatItem[] {
   const shown = showToolCalls ? items : items.filter(keepsRowWithToolsHidden);
-  const projected = scanSessionsYieldItems(shown, showToolCalls).items;
+  const projected = scanSessionsYieldItems(projectContinuations(shown), showToolCalls).items;
   const status = complete?.find(isTurnStatus);
   const completeKeys = complete && new Set(complete.map((item) => item.key));
   const visible = completeKeys

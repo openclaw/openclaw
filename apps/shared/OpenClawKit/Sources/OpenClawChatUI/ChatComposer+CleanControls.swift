@@ -387,8 +387,13 @@ extension OpenClawChatComposer {
         return nil
     }
 
-    @ViewBuilder
+    /// Send/Talk observes the draft independently of the expensive model menu.
     var cleanCaptureAndPrimaryControls: some View {
+        ChatComposerSection { self.cleanCaptureAndPrimaryContent }
+    }
+
+    @ViewBuilder
+    private var cleanCaptureAndPrimaryContent: some View {
         let showsTalkMicrophone = self.talkControl?.isEnabled == true &&
             self.talkControl?.toggleMicrophone != nil
         // Live Talk owns its microphone control in the activity strip, not the dictation slot.

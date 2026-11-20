@@ -10,11 +10,11 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { GatewayRequestFunction } from "../gateway/call.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { DatabasePortRecoveryIntent } from "../infra/database-port-recovery.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerSignalExitGate } from "./signal-exit-barrier.js";
@@ -72,8 +72,6 @@ export async function runWithLocalStateOwner<T>(params: {
   timeoutMs?: number;
   expectFinal?: boolean;
   requireLocalBackendSharedAuth?: boolean;
-  /** Agent runs keep custody until process exit when their runtime cleanup did not settle. */
-  retainAfterUncertainCleanup?: true;
   onGatewayResponse?: (request: GatewayRequestFunction, signal: AbortSignal) => Promise<void>;
   onGatewaySignalAbort?: (request: GatewayRequestFunction) => Promise<void>;
   /** Local inspection must stay read-only and must not load mutation-capable runtime config. */
@@ -404,8 +402,7 @@ export async function runWithLocalStateOwner<T>(params: {
         uncertainCleanup = hasCommandProcessCleanupError(error);
         throw error;
       } finally {
-        uncertainCleanup ||=
-          params.retainAfterUncertainCleanup === true && cleanup.outcome === "uncertain";
+        uncertainCleanup ||= cleanup.outcome === "uncertain";
         // Failed cleanup keeps physical custody; release cannot race accepted worker/native work.
         await resources?.close();
         // Stop lending this owner, but keep physical custody until uncertain children exit.

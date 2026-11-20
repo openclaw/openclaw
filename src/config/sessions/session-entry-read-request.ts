@@ -45,6 +45,7 @@ export function captureSessionEntryWorkerRequest(input: SessionEntryWorkerRead) 
     includeMembers: input.includeMembers,
     includeParticipantRecords: input.includeParticipantRecords,
     includeAuthorization: input.includeAuthorization,
+    pointRead: input.pointRead,
     transcript: input.transcript && structuredClone(input.transcript),
   };
 }

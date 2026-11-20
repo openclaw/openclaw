@@ -9,6 +9,7 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
+import * as directoryObservation from "../infra/owned-directory-observation.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -75,6 +76,31 @@ test.each(["all", "off"] as const)(
     const root = tempDirs.make("openclaw-session-sandbox-project-");
     const workspace = await initializeRepository(root, "workspace");
     const outside = await initializeRepository(root, "outside");
+    const liveWatchDirectories = new Set([
+      workspace,
+      path.join(workspace, ".git"),
+      path.join(workspace, ".git", "refs"),
+    ]);
+    const watchAdmissions: Promise<void>[] = [];
+    const observe = directoryObservation.observeOwnedDirectory;
+    const observation = vi
+      .spyOn(directoryObservation, "observeOwnedDirectory")
+      .mockImplementation((directory, changed, options) => {
+        if (!liveWatchDirectories.has(directory)) {
+          return observe(directory, changed, options);
+        }
+        const admitted = Promise.withResolvers<void>();
+        watchAdmissions.push(admitted.promise);
+        return observe(
+          directory,
+          (filename, event) => {
+            admitted.resolve();
+            changed(filename, event);
+          },
+          options,
+        );
+      });
+    onTestFinished(() => observation.mockRestore());
     const repository = `openclaw/sandbox-project-${mode}`;
     await publishOrigin(outside, repository);
     const visibility = { [repository]: "public" };
@@ -138,20 +164,26 @@ test.each(["all", "off"] as const)(
       let result = await request("projects.checkoutOptions", { projectId });
       if (current && projectId.startsWith("workspace:")) {
         expect(result).toEqual([true, { current, worktree: false, refreshing: true }, undefined]);
-        const refreshed = Promise.withResolvers<void>();
-        const snapshot = await runGitReadOperation(
-          {
-            type: "repository.branches",
-            input: {
-              repoRoot: projectId === "workspace:main" ? workspace : outside,
-              includeRepositoryStatus: true,
+        const joinRefresh = async () => {
+          const refreshed = Promise.withResolvers<void>();
+          const snapshot = await runGitReadOperation(
+            {
+              type: "repository.branches",
+              input: {
+                repoRoot: projectId === "workspace:main" ? workspace : outside,
+                includeRepositoryStatus: true,
+              },
             },
-          },
-          { snapshot: true, onRefresh: refreshed.resolve },
-        );
-        if (snapshot.refreshing) {
-          await refreshed.promise;
-        }
+            { snapshot: true, onRefresh: refreshed.resolve },
+          );
+          if (snapshot.refreshing) {
+            await refreshed.promise;
+          }
+        };
+        await joinRefresh();
+        // Native watch admission invalidates once to cover the asynchronous startup gap.
+        await Promise.all(watchAdmissions);
+        await joinRefresh();
         result = await request("projects.checkoutOptions", { projectId });
       }
       expect(result).toEqual([true, { current, worktree }, undefined]);

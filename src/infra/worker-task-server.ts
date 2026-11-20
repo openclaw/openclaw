@@ -74,12 +74,21 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
       }
       let active = true;
       try {
-        return await withSqliteDatabaseAdmissionExchange((admissions, location, create) => {
-          if (!active) {
-            throw new Error("SQLite admission facts outlived their worker task");
-          }
-          return exchangeSqliteDatabaseAdmissions(port, admissions, location, create);
-        }, operation);
+        return await withSqliteDatabaseAdmissionExchange(
+          (admissions, location, create, observedLocation) => {
+            if (!active) {
+              throw new Error("SQLite admission facts outlived their worker task");
+            }
+            return exchangeSqliteDatabaseAdmissions(
+              port,
+              admissions,
+              location,
+              create,
+              observedLocation,
+            );
+          },
+          operation,
+        );
       } finally {
         active = false;
       }

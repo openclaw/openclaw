@@ -380,8 +380,13 @@ export async function resolveGatewayScopedTools(
     agentId: policyAgentId,
     model: { provider: params.modelProvider, id: params.modelId },
   });
+  let messageToolAvailable = true;
   const openClawToolOptions: Parameters<typeof createOpenClawToolsAsync>[0] = {
     ...commonToolOptions(),
+    retainUnavailableMessageTool: true,
+    onMessageToolAvailability: (available) => {
+      messageToolAvailable = available;
+    },
     computerExecutionId: params.admittedRunContext?.operationalRunInstance.instanceId,
     sessionPortalTarget,
     gatewayConfigReadAllowed,
@@ -626,6 +631,9 @@ export async function resolveGatewayScopedTools(
     workspaceDir,
     toolDenylist: catalogDenylist,
   });
+  // A turn that grants no tools cannot make any configured allowlist entry available, so
+  // skip the unknown-entry analysis instead of warning (or caching a warning) for it.
+  const toolLessTurn = Array.isArray(params.toolsAllow) && params.toolsAllow.length === 0;
   function filterGatewayToolPolicies(
     config: OpenClawConfig,
     onFilter?: Parameters<typeof applyToolPolicyPipeline>[0]["onFilter"],
@@ -652,7 +660,9 @@ export async function resolveGatewayScopedTools(
           groupPolicy,
           senderPolicy,
           agentId: policyAgentId,
-        }),
+        }).map((step) =>
+          toolLessTurn ? Object.assign(step, { stripPluginOnlyAllowlist: false }) : step,
+        ),
         { policy: sandboxPolicy, label: "sandbox tools.allow" },
         { policy: subagentPolicy, label: "subagent tools.allow" },
         {
@@ -722,9 +732,12 @@ export async function resolveGatewayScopedTools(
     nativeCapture,
   );
 
+  const permissionTools = applyToolAvailabilityDescriptions(tools);
   return {
     agentId: sessionAgentId,
-    tools: applyToolAvailabilityDescriptions(tools),
+    tools: permissionTools.filter((tool) => messageToolAvailable || tool.name !== "message"),
+    // Only route omission needs a separate candidate surface for MCP grant/schema capture.
+    ...(messageToolAvailable ? {} : { permissionTools }),
     workspaceDir,
     // Only the MCP owner knows which tools survived its grant and schema gates.
     captureFinalCronCreatorTools: cronCreatorToolAllowlistCaptureRef

@@ -32,8 +32,8 @@ import type {
   RetainedSqliteSnapshotPreparation,
   SqlitePrivateSnapshotFamily,
 } from "./sqlite-readonly-location.types.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import {
-  resolveSqliteInspectionSignal,
   captureSqliteReadOnlyWorkerLaunch,
   createScopedSqliteReadOnlyWorker,
   isSqliteInspectionDeadlineOwnedByCaller,

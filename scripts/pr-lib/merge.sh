@@ -1305,6 +1305,22 @@ merge_run() {
      main:.main,method:$method,route:$route,attempt:$attempt,phase:"intent",accepted:false,landed:null}
      + (if $transport == "rest" then {transport:"rest"} else {} end)
   ') || return 1
+  local acceptance_oid acceptance_bytes
+  acceptance_oid=$(awk '$1 == ".local/pending-proof-acceptance.json" { print $2 }' <<< "$correction_authority") || return 1
+  if [ -n "$acceptance_oid" ]; then
+    # Retain the accepted risks before dispatch, not an approval or proof stamp.
+    # Load the same bytes validated by admission, including after any admin reads.
+    verify_correction_review_snapshot "$pr" "$correction_authority" || return 1
+    acceptance_bytes=$(jq -Rs . .local/pending-proof-acceptance.json) || return 1
+    [ "$(printf '%s\n' "$acceptance_bytes" | jq -jr . | pr_git hash-object --stdin)" = "$acceptance_oid" ] || {
+      merge_outcome_stop "pending proof acceptance changed before intent"; return 1;
+    }
+    intent=$(printf '%s\n%s\n' "$intent" "$acceptance_bytes" | jq -cse "$(merge_outcome_jq_definitions)"'
+      (.[1] | fromjson) as $acceptance | .[0] |
+      .pendingProofAcceptance = $acceptance |
+      select(valid_pending_proof_acceptance)
+    ') || { merge_outcome_stop "invalid pending proof acceptance for the exact landing head"; return 1; }
+  fi
   if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
     intent=$(printf '%s\n%s\n' "$intent" "$MERGE_PRIOR_CI_PROOF" | jq -cse '
       select(length == 2) | .[1] as $proof | .[0] | .priorCiAdmin=$proof') || return 1

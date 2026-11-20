@@ -25,6 +25,8 @@ const enAbout = {
     built: shared.built,
     unavailable: shared.unavailable,
     copyBuild: "Copy version and commit",
+    copyVersion: "Copy version",
+    copyAvailableCommit: "Copy commit",
     copyCommit: shared.copyCommit,
     copiedCommit: shared.copiedCommit,
     gateway: shared.gateway,

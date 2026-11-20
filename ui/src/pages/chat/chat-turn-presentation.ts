@@ -8,7 +8,6 @@ import {
   normalizeRoleForGrouping,
   resolveMessageRole,
 } from "../../lib/chat/message-normalizer.ts";
-import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
@@ -41,13 +40,13 @@ export function isActivityMessageGroup(group: MessageGroup, bubbleMode = false):
     return false;
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
+  // Keep one activity owner as the first call gains live facts or more calls.
+  // Its renderer can simplify a settled singleton without replacing the owner.
   return (
     bubbleMode ||
     group.messages.length > 1 ||
-    cards.length > 1 ||
-    (cards.length === 0 &&
-      group.messages.some(({ message }) => hasVisiblePreparedActivity(message))) ||
-    cards.some((card) => readToolApprovalReviews(card.details).length > 0)
+    cards.length > 0 ||
+    group.messages.some(({ message }) => hasVisiblePreparedActivity(message))
   );
 }
 
@@ -544,7 +543,9 @@ export function joinActivityRuns(
         : undefined;
   const before = groupsOf(first);
   const after = groupsOf(next);
-  return before && after ? activityRun([...before, ...after]) : undefined;
+  return before && after && !after[0]?.startsActivityGroup
+    ? activityRun([...before, ...after])
+    : undefined;
 }
 
 /** Presentation-only rollup for tool groups separated by projected turn boundaries. */
@@ -562,11 +563,14 @@ export function coalesceActivityRuns(
     if (!first) {
       return;
     }
-    result.push(groups.length === 1 ? first : activityRun(groups));
+    result.push(activityRun(groups));
     groups = [];
   };
   for (const item of items) {
     if (item.kind === "group" && isActivityGroup(item)) {
+      if (item.startsActivityGroup) {
+        flush();
+      }
       groups.push(item);
       continue;
     }

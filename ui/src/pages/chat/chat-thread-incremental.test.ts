@@ -582,11 +582,30 @@ describe("older-page prepend reuse", () => {
     resetChatThreadState();
   });
 
-  it.each([{}, { edges: true, collision: "canvas" }] as const)(
+  it.each([{}, { edges: true, collision: "canvas" }, { completion: true }] as const)(
     "keeps matching across successive older pages: %o",
     (shape) => {
       resetChatThreadState();
       const corpus = createPrependCorpus(400, shape);
+      if ("completion" in shape) {
+        for (const index of [10, corpus.length - 3]) {
+          const source = corpus[index] as Record<string, unknown>;
+          corpus.splice(index, 0, {
+            role: "assistant",
+            phase: "commentary",
+            timestamp: source.timestamp,
+            content: [{ type: "subagent_completion" }],
+            __openclaw: { id: `finished-${index}` },
+            subagentCompletions: [
+              {
+                runId: "same-child-run",
+                sessionKey: "agent:main:subagent:worker",
+                label: "Worker01",
+              },
+            ],
+          });
+        }
+      }
       let reused = 0;
       for (let loaded = 30; loaded <= corpus.length; loaded += 37) {
         const messages = corpus.slice(-loaded);

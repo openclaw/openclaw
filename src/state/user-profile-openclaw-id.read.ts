@@ -13,7 +13,7 @@ import { userProfilesDb } from "./user-profiles-internal.js";
 import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
 // The provider-specific discriminator excludes every GitHub verified-email proof format.
-function readDisplayEmail(value: string | null): string | null {
+export function readOpenClawIdDisplayEmail(value: string | null): string | null {
   if (value === null) {
     return null;
   }
@@ -80,7 +80,7 @@ export function readOpenClawIdUserProfilesInDatabase(
                 {
                   id: profile.id,
                   displayName: profile.display_name,
-                  email: readDisplayEmail(identity.verified_email_json),
+                  email: readOpenClawIdDisplayEmail(identity.verified_email_json),
                 },
               ],
             ]
@@ -146,7 +146,7 @@ export function readOpenClawIdLinksOfProfileInDatabase(
       .orderBy("created_at"),
   ).rows.map((identity) => ({
     accountId: identity.subject,
-    email: readDisplayEmail(identity.verified_email_json),
+    email: readOpenClawIdDisplayEmail(identity.verified_email_json),
   }));
 }
 

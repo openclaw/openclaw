@@ -33,6 +33,7 @@ import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-
 import { watchPluginReplacement } from "../plugins/plugin-replacement-watchers.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
+import * as steering from "../sessions/session-controller.steer.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -108,6 +109,18 @@ it.for(["allowed", "revoked"] as const)(
     const sendResult = createDeferred<Record<string, unknown>>();
     const failure = createDeferred<never>();
     void failure.promise.catch(() => {});
+    const steerAccepted = createDeferred<boolean>();
+    const beginSteer = steering.beginSessionControllerSteer;
+    vi.spyOn(steering, "beginSessionControllerSteer").mockImplementation(async (params) => {
+      const attempt = await beginSteer(params);
+      if (params.text.includes(STEER)) {
+        void (attempt?.acceptance ?? Promise.resolve(false)).then(
+          steerAccepted.resolve,
+          failure.reject,
+        );
+      }
+      return attempt;
+    });
     const targetEffect = createDeferred();
     const handoffWake = createDeferred<string>();
     const notice = createDeferred<string>();
@@ -262,6 +275,10 @@ it.for(["allowed", "revoked"] as const)(
                   queueMode: "steer",
                 });
                 expect(steer.status).toBe("started");
+                // The RPC ACK owns custody; native acceptance owns the next model input.
+                expect(
+                  await withinTest(Promise.race([steerAccepted.promise, failure.promise]), signal),
+                ).toBe(true);
                 probes++;
                 writeToolCall(response, TOOL, {});
                 return;

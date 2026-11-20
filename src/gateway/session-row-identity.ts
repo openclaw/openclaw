@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 /** Owned row JSON must retain property order as well as values, including on full replies. */
@@ -31,21 +32,26 @@ function sameRowField(left: unknown, right: unknown): boolean {
   );
 }
 
-/** Retain unchanged facts before freezing; later audience projections then compare identities. */
-export function reuseSessionRowFields(
+/** Previous rows are deeply frozen publications; only new facts need freezing. */
+export function freezeSessionRow(
   row: GatewaySessionRow,
   previous?: Readonly<GatewaySessionRow>,
-): GatewaySessionRow {
-  if (previous) {
-    for (const field of Object.keys(row)) {
-      const current = Reflect.get(row, field);
-      const retained = Reflect.get(previous, field);
-      if (current && typeof current === "object" && sameRowField(current, retained)) {
-        Reflect.set(row, field, retained);
-      }
+  fields = Object.keys(row),
+): Readonly<GatewaySessionRow> {
+  for (const field of fields) {
+    const current = Reflect.get(row, field);
+    if (current === undefined) {
+      Reflect.deleteProperty(row, field);
+    } else if (current && typeof current === "object") {
+      const retained = previous && Reflect.get(previous, field);
+      Reflect.set(
+        row,
+        field,
+        sameRowField(current, retained) ? retained : freezeTrustedJsonSnapshot(current),
+      );
     }
   }
-  return row;
+  return Object.freeze(row);
 }
 
 const rowIds = new WeakMap<GatewaySessionRow, number>();
@@ -77,5 +83,9 @@ export function sessionRowsRevision(rows: GatewaySessionRow[]): string {
 
 export function captureSessionRowGeneration(rows: GatewaySessionRow[]): SessionRowGeneration {
   // Float64 preserves integer identities past 2^32 without retaining their row objects.
-  return { revision: sessionRowsRevision(rows), ids: Float64Array.from(rows, sessionRowId) };
+  const ids = new Float64Array(rows.length);
+  for (let index = 0; index < rows.length; index++) {
+    ids[index] = sessionRowId(rows[index]!);
+  }
+  return { revision: sessionRowsRevision(rows), ids };
 }

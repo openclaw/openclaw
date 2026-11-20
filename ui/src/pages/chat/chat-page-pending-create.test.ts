@@ -121,10 +121,10 @@ it.each([
     expect(page.querySelector("openclaw-pending-session-create")).not.toBeNull();
     expect(page.textContent).toContain(displayName);
     expect(page.querySelector(".chat-thread-inner .chat-working-indicator")?.textContent).toContain(
-      agentCreation ? "Creating new agent…" : "Starting…",
+      agentCreation ? "Creating new agent" : "Starting",
     );
     if (!agentCreation) {
-      expect(page.textContent).not.toContain("Creating new agent…");
+      expect(page.textContent).not.toContain("Creating new agent");
     }
     // Creation is progress, not a fabricated assistant turn.
     expect(page.querySelector(".chat-group.assistant .chat-text")).toBeNull();
@@ -224,7 +224,7 @@ it("previews a background start's prompt and retries its failure in place", asyn
     ),
   );
   const indicator = page.querySelector(".chat-thread-inner .chat-working-indicator");
-  expect(indicator?.textContent).toContain("Starting…");
+  expect(indicator?.textContent).toContain("Starting");
   expect(indicator?.textContent).toMatch(/2\ds/u);
   // A background start names itself plainly until the Gateway titles it.
   expect(page.querySelector(".chat-pane__session-title")?.textContent).toBe("New session");

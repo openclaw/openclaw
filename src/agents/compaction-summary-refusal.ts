@@ -1,6 +1,10 @@
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { CompactionPreparation } from "../../packages/agent-core/src/harness/compaction/compaction.js";
+import {
+  compactWithoutSummary,
+  type CompactionPreparation,
+  type CompactionPreparationMetadata,
+} from "../../packages/agent-core/src/harness/compaction/compaction.js";
 import { isSummaryProviderError } from "../../packages/agent-core/src/harness/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -10,12 +14,17 @@ import {
 } from "./agent-hooks/compaction-safeguard-runtime.js";
 import { createSessionManagerRuntimeRegistry } from "./agent-hooks/session-manager-runtime-registry.js";
 import { describeCompactionFailure } from "./embedded-agent-runner/compact-reasons.js";
-import {
-  getPreparedCompaction,
-  resolveCompactionFallback,
-} from "./sessions/prepared-compaction.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
+
+function requireCompactionMessages(
+  preparation: CompactionPreparation | CompactionPreparationMetadata,
+): CompactionPreparation {
+  if (!("messagesToSummarize" in preparation) || !("turnPrefixMessages" in preparation)) {
+    throw new Error("A transcript-view compaction requires its prepared deterministic result");
+  }
+  return preparation;
+}
 
 /** A transcript custom entry: persisted and readable, never projected into model context. */
 const COMPACTION_ATTEMPT_CUSTOM_TYPE = "openclaw.compaction-attempt";
@@ -57,15 +66,18 @@ export function isCompactionSummaryRefusal(error: unknown): boolean {
 
 /** Keep the prepared recent tail, unless the route owner retries the refusal on another route. */
 function compactAfterSummaryRefusal(
-  preparation: CompactionPreparation,
+  preparation: CompactionPreparation | CompactionPreparationMetadata,
   sessionManager: unknown,
   refusal: unknown,
+  preparedFallback?: () => ReturnType<typeof compactWithoutSummary>,
 ) {
   const mode = refusalModes.get(sessionManager);
   if (mode === "defer" || mode === "fallback") {
     throw refusal;
   }
-  const result = resolveCompactionFallback(preparation, getPreparedCompaction(sessionManager));
+  const result = preparedFallback
+    ? preparedFallback()
+    : compactWithoutSummary(requireCompactionMessages(preparation));
   if (!result.ok) {
     throw new Error(
       "The summarizer refused, and recent context could not fit without a summary. " +
@@ -85,13 +97,16 @@ function compactAfterSummaryRefusal(
 
 /** Commits a summaryless boundary; the refusal floor keeps its refusal provenance. */
 export function compactWithoutNewSummary(
-  preparation: CompactionPreparation,
+  preparation: CompactionPreparation | CompactionPreparationMetadata,
   sessionManager: unknown,
+  preparedFallback?: () => ReturnType<typeof compactWithoutSummary>,
 ) {
   if (refusalModes.get(sessionManager) === "floor") {
-    return compactAfterSummaryRefusal(preparation, sessionManager, undefined);
+    return compactAfterSummaryRefusal(preparation, sessionManager, undefined, preparedFallback);
   }
-  const result = resolveCompactionFallback(preparation, getPreparedCompaction(sessionManager));
+  const result = preparedFallback
+    ? preparedFallback()
+    : compactWithoutSummary(requireCompactionMessages(preparation));
   if (!result.ok) {
     throw result.error;
   }
@@ -101,8 +116,9 @@ export function compactWithoutNewSummary(
 /** Refusals take the refusal path; other summary failures stay failures. */
 export function settleCompactionSummary<T>(
   result: { ok: true; value: T } | { ok: false; error: Error },
-  preparation: CompactionPreparation,
+  preparation: CompactionPreparation | CompactionPreparationMetadata,
   sessionManager: unknown,
+  preparedFallback?: () => ReturnType<typeof compactWithoutSummary>,
 ) {
   if (result.ok) {
     return result.value;
@@ -110,7 +126,7 @@ export function settleCompactionSummary<T>(
   if (!isCompactionSummaryRefusal(result.error)) {
     throw result.error;
   }
-  return compactAfterSummaryRefusal(preparation, sessionManager, result.error);
+  return compactAfterSummaryRefusal(preparation, sessionManager, result.error, preparedFallback);
 }
 
 /** A fallback-route summary records the route that wrote it. */
@@ -138,8 +154,9 @@ export async function settleCompactionSafeguardCancellation(
   sessionManager: {
     appendCustomEntryAsync(customType: string, data: CompactionAttempt): Promise<string>;
   },
-  preparation: CompactionPreparation,
+  preparation: CompactionPreparation | CompactionPreparationMetadata,
   request: { signal: AbortSignal; requestRequiresCompaction?: true },
+  preparedFallback?: () => ReturnType<typeof compactWithoutSummary>,
 ) {
   const cancellation = getCompactionSafeguardRuntime(sessionManager)?.cancellation;
   if (!cancellation || request.signal.aborted) {
@@ -148,8 +165,12 @@ export async function settleCompactionSafeguardCancellation(
   // The owner's fact, not an estimate: a required preflight cannot run its pending request.
   const required = request.requestRequiresCompaction === true;
   const refused = isCompactionSummaryRefusal(cancellation.error);
-  const prepared = getPreparedCompaction(sessionManager);
-  const floor = !refused && required ? resolveCompactionFallback(preparation, prepared) : undefined;
+  const floor =
+    !refused && required
+      ? preparedFallback
+        ? preparedFallback()
+        : compactWithoutSummary(requireCompactionMessages(preparation))
+      : undefined;
   // Best effort: a lost row hides one failure from the attempt rate.
   await sessionManager
     .appendCustomEntryAsync(COMPACTION_ATTEMPT_CUSTOM_TYPE, {
@@ -176,14 +197,22 @@ export async function settleCompactionSafeguardCancellation(
 /** Hook errors must remain cancellations: throwing would invoke the raw core summarizer. */
 export function recoverCompactionSafeguardFailure(
   error: unknown,
-  preparation: CompactionPreparation,
+  preparation: CompactionPreparation | CompactionPreparationMetadata,
   signal: AbortSignal,
   sessionManager: unknown,
+  preparedFallback?: () => ReturnType<typeof compactWithoutSummary>,
 ) {
   signal.throwIfAborted();
   if (isCompactionSummaryRefusal(error)) {
     try {
-      return { compaction: compactAfterSummaryRefusal(preparation, sessionManager, error) };
+      return {
+        compaction: compactAfterSummaryRefusal(
+          preparation,
+          sessionManager,
+          error,
+          preparedFallback,
+        ),
+      };
     } catch (recoveryError) {
       setCompactionSafeguardCancellation(
         sessionManager,

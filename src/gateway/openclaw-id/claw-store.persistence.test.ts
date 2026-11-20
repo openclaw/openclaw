@@ -5,6 +5,7 @@ import { afterEach, expect, vi } from "vitest";
 import {
   formatIrohEndpointKey,
   signStatement,
+  type MailboxMessage,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -62,12 +63,185 @@ it("rolls every section back when a later section fails inside the real writer t
   expect(await readStoredClaw()).toMatchObject(record);
 });
 
+it("restores browser notices and cancellation receipts without changing membership or profiles", async ({
+  state,
+}) => {
+  state.applyEnv();
+  const store = { read: readStoredClaw, write: writeStoredClaw };
+  const claw = await linkedClaw(store);
+  const peer = formatIrohEndpointKey(new Uint8Array(32).fill(42));
+  expect(
+    await claw.authority.submit(
+      await claw.sign({
+        op: "add",
+        account_id: "member",
+        role: "viewer",
+        peer_keys: [peer],
+        invite_id: null,
+      }),
+      "tunnel",
+    ),
+  ).toMatchObject({ ok: true });
+  const before = structuredClone(claw.authority.current()!.authority);
+  const now = Math.floor(Date.now() / 1000);
+  const message: MailboxMessage = {
+    message_id: "browser-mail",
+    claw_id: claw.clawId,
+    to: "gateway",
+    from: {
+      account_id: "member",
+      display_name: "Untrusted",
+      email: null,
+      device_fp: null,
+      reported_by: "openclaw-id",
+    },
+    received_at: now,
+    expires_at: now + 86400,
+    location_hint: "x".repeat(400),
+    payload: {
+      kind: "member_browser_request",
+      request_id: "a".repeat(32),
+      action: "request",
+      member_account_id: "member",
+      label: "Browser",
+      expires_at: now + 1800,
+    },
+  };
+  const profiles = await claw.authority.memberProfiles(["member"]);
+  expect(await claw.authority.memberBrowserRequest(message)).toMatchObject({
+    ok: true,
+    events: [],
+  });
+  await closeOpenClawStateDatabaseAsync();
+  const reopened = createOpenClawIdAuthority(store);
+  await reopened.load();
+  expect(reopened.current()?.authority).toEqual(before);
+  expect(reopened.current()?.member_browser_requests?.member?.notice).toMatchObject({
+    requestId: "a".repeat(32),
+    location: "x".repeat(256),
+  });
+  expect(await reopened.memberProfiles(["member"])).toEqual(profiles);
+  if (message.payload.kind !== "member_browser_request") {
+    throw new Error("fixture");
+  }
+  message.payload.action = "cancel";
+  expect(await reopened.memberBrowserRequest(message)).toMatchObject({ ok: true });
+  for (const char of ["b", "c", "d", "e"]) {
+    message.payload.request_id = char.repeat(32);
+    expect(await reopened.memberBrowserRequest(message)).toMatchObject({ ok: true });
+  }
+  await closeOpenClawStateDatabaseAsync();
+  const canceled = createOpenClawIdAuthority(store);
+  message.payload.action = "request";
+  message.payload.request_id = "a".repeat(32);
+  expect(await canceled.memberBrowserRequest(message)).toMatchObject({
+    ok: false,
+    code: "replayed",
+  });
+  expect(canceled.current()?.member_browser_requests?.member?.notice).toBeNull();
+  expect(canceled.current()?.member_browser_requests?.member?.terminal).toHaveLength(3);
+  expect(canceled.current()?.member_browser_requests?.member?.blockedUntil).toBe(
+    message.payload.expires_at,
+  );
+  message.payload.request_id = "b".repeat(32);
+  expect(await canceled.memberBrowserRequest(message)).toMatchObject({
+    ok: false,
+    code: "replayed",
+  });
+  message.payload.request_id = "e".repeat(32);
+  expect(await canceled.memberBrowserRequest(message)).toMatchObject({
+    ok: false,
+    code: "rate_limited",
+  });
+  expect(canceled.current()?.authority).toEqual(before);
+});
+
+it("opens pre-notice v2 rows and adds browser requests without changing schema or other values", async ({
+  state,
+}) => {
+  state.applyEnv();
+  const { member_browser_requests: requests, ...record } = fullClaw("Example");
+  record.authority!.members = Object.fromEntries(
+    Object.entries(record.authority!.members).slice(0, 2),
+  );
+  record.authority!.owner_devices = Object.fromEntries(
+    Object.entries(record.authority!.owner_devices).slice(0, 2),
+  );
+  record.authority!.invites = {};
+  record.invite_reports = {};
+  record.member_approved_at = Object.fromEntries(
+    Object.entries(record.member_approved_at!).slice(0, 2),
+  );
+  record.token_bindings = record.token_bindings!.slice(0, 2);
+  const { authority, invite_reports, member_approved_at, token_bindings, ...core } = record;
+  const { owner_devices, members, invites, ...anchor } = authority!;
+  // Persist the v2 row contract used before browser notices, independently of the new row writer.
+  const priorRows = {
+    current: { ...core, v: 2, authority: anchor },
+    "owner-devices": owner_devices,
+    members,
+    invites,
+    "invite-reports": invite_reports,
+    "member-approvals": member_approved_at,
+    "token-bindings": { v: 1, bindings: token_bindings },
+  };
+  const store = createCorePluginStateKeyedStore<unknown>({
+    ownerId: "core:openclaw-id",
+    namespace: "claw",
+    retention: "retained",
+  });
+  for (const [key, value] of Object.entries(priorRows)) {
+    await store.register(key, value);
+  }
+  const unrelated = createCorePluginStateKeyedStore<unknown>({
+    ownerId: "core:openclaw-id",
+    namespace: "upgrade-sentinel",
+    retention: "retained",
+  });
+  await unrelated.register("untouched", { value: "preserve me" });
+  const inspect = () =>
+    withEngineStoreAdmission(() => {
+      const { db } = openOpenClawStateDatabase();
+      return {
+        schema: db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all(),
+        version: db.prepare("PRAGMA user_version").get(),
+        unrelated: db
+          .prepare("SELECT * FROM plugin_state_entries WHERE namespace = 'upgrade-sentinel'")
+          .all(),
+      };
+    });
+  const before = inspect();
+  await closeOpenClawStateDatabaseAsync();
+  const loaded = await readStoredClaw();
+  expect(loaded).toEqual(record);
+  expect(inspect()).toEqual(before);
+  const [accountId, request] = Object.entries(requests!)[0]!;
+  await writeStoredClaw({ ...loaded!, member_browser_requests: { [accountId]: request } });
+  await closeOpenClawStateDatabaseAsync();
+  expect(await readStoredClaw()).toEqual({
+    ...record,
+    member_browser_requests: { [accountId]: request },
+  });
+  expect(inspect()).toEqual(before);
+  const rows = new Map((await store.entries()).map(({ key, value }) => [key, value]));
+  for (const [key, value] of Object.entries(priorRows)) {
+    expect(rows.get(key)).toEqual(value);
+  }
+  expect(rows.get("member-browser-requests:0")).toEqual({ [accountId]: request });
+});
+
 it("moves prior rows without losing bindings and refuses an incomplete partitioned record", async ({
   state,
 }) => {
   state.applyEnv();
   // A small monolithic predecessor fits the old value cap and represents an existing installation.
-  const record = { ...fullClaw(), authority: null, invite_reports: {}, token_bindings: [] };
+  const record = {
+    ...fullClaw(),
+    authority: null,
+    invite_reports: {},
+    member_browser_requests: {},
+    token_bindings: [],
+  };
   const store = createCorePluginStateKeyedStore<unknown>({
     ownerId: "core:openclaw-id",
     namespace: "claw",
@@ -211,7 +385,7 @@ for (const end of ["disable", "stop"] as const) {
     const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
     const directory = path.join(claw.stateDir, "openclaw-id");
     const endpointFile = path.join(directory, "endpoint.key");
-    const { key: endpoint } = loadOrCreateEndpointKey(endpointFile);
+    const { key: endpoint } = await loadOrCreateEndpointKey(endpointFile);
     const record = (await readStoredClaw())!;
     // Bootstrap a signed fixture whose two active key files match its binding.
     await writeStoredClaw({
@@ -235,14 +409,17 @@ for (const end of ["disable", "stop"] as const) {
       ["gateway.key", "endpoint.key"].map((file) => fs.readFileSync(path.join(directory, file)));
     const beforeKeys = activeKeys();
     const nextEndpoint = formatIrohEndpointKey(
-      Buffer.from(ed25519PublicKeyHex(loadOrCreateEndpointKey(`${endpointFile}.next`).key), "hex"),
+      Buffer.from(
+        ed25519PublicKeyHex((await loadOrCreateEndpointKey(`${endpointFile}.next`)).key),
+        "hex",
+      ),
     );
     vi.spyOn(tunnelRuntime, "stageEndpointKey").mockResolvedValue(nextEndpoint);
     const binding = await signStatement(
       "ServerBinding",
       {
         ...before!.binding!.body,
-        k_gw: stageGatewayKey(claw.stateDir),
+        k_gw: await stageGatewayKey(claw.stateDir),
         k_srv: nextEndpoint,
         binding_seq: 2,
       },

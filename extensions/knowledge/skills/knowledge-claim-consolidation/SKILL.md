@@ -80,12 +80,21 @@ and the automation. Do not ask questions. Each step names its task:
    empty, report zero claims examined and go on.
 2. **Retire** duplicates and replaced claims in it
    ([retiring](references/retiring.md)), then check the residue again.
-3. **Retire written Timelines:** up to 10, largest first
+3. **Retire written Timelines,** largest first
    ([retire a written Timeline](references/retire-dated.md#retire-a-written-timeline)).
    Find them with `knowledge_grep` for `Timeline` and confirm the heading.
-4. **Review pages:** up to 5, one at a time
+4. **Review pages,** one at a time
    ([scribe page choice](references/page-review.md#scribe-page-choice)), whatever
    the residue's size.
 5. Report. The status line counts claims examined, linked, superseded,
    withdrawn and left; Timelines retired and left; pages reviewed, changed and
    left unchanged.
+
+These targets address a November 13, 2026 scheduled run that retired one
+Timeline and reviewed one page with hundreds waiting
+([#199744](https://github.com/openclaw/openclaw/pull/199744)). The run message
+sets how many Timelines and pages a run takes on; without one,
+retire 10 and review 5. These are targets, not limits: finish one before the
+next, and stop short only when none are left. Compaction keeps what you
+published, so a long run is no reason to stop. An item that still fails after
+a fix attempt is recorded and skipped. Report any shortfall and why.
