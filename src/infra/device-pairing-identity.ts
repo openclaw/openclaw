@@ -12,8 +12,8 @@ export type { NodePairingGeneration, NodePairingState } from "./device-pairing-c
 
 /**
  * The stored operator grant an OpenClaw ID member device needs so it holds exactly its role's
- * scopes, or null when it already does or has no active operator grant to change. Other roles'
- * approved scopes are kept.
+ * scopes, or null when it already does or has no approved operator grant on this key. Other
+ * roles' approved scopes are kept.
  */
 export function resolveMemberOperatorGrantChange(
   device: PairedDevice | null | undefined,
@@ -25,7 +25,6 @@ export function resolveMemberOperatorGrantChange(
     !device ||
     device.publicKey !== publicKey ||
     !token ||
-    token.revokedAtMs !== undefined ||
     !listApprovedPairedDeviceRoles(device).includes("operator")
   ) {
     return null;

@@ -148,7 +148,10 @@ export function removeOpenClawIdNodePairingsInWorker(input: {
   return removed;
 }
 
-/** Sets an OpenClaw ID member device's operator grant to exactly its role's scopes, with a new token. */
+/**
+ * Sets an OpenClaw ID member device's operator grant to exactly its role's scopes. An active
+ * token is replaced; a revoked one keeps its revocation, so the member lane still reissues it.
+ */
 export function setOpenClawIdMemberOperatorGrantInWorker(input: {
   deviceId: string;
   publicKey: string;
@@ -157,8 +160,9 @@ export function setOpenClawIdMemberOperatorGrantInWorker(input: {
 }): boolean {
   const state = loadDevicePairingStateForMutation(input.nowMs);
   const device = state.pairedByDeviceId[input.deviceId];
+  const token = device?.tokens?.operator;
   const change = resolveMemberOperatorGrantChange(device, input.publicKey, input.scopes);
-  if (!device || !change) {
+  if (!device || !token || !change) {
     return false;
   }
   state.pairedByDeviceId[input.deviceId] = {
@@ -167,14 +171,17 @@ export function setOpenClawIdMemberOperatorGrantInWorker(input: {
     approvedScopes: change.approvedScopes,
     tokens: {
       ...device.tokens,
-      operator: createDeviceAuthToken({
-        role: "operator",
-        scopes: change.tokenScopes,
-        existing: device.tokens?.operator,
-        preserveExistingIssuer: true,
-        now: input.nowMs,
-        rotatedAtMs: input.nowMs,
-      }),
+      operator:
+        token.revokedAtMs === undefined
+          ? createDeviceAuthToken({
+              role: "operator",
+              scopes: change.tokenScopes,
+              existing: token,
+              preserveExistingIssuer: true,
+              now: input.nowMs,
+              rotatedAtMs: input.nowMs,
+            })
+          : { ...token, scopes: change.tokenScopes },
     },
   };
   persistDevicePairingStoreState(state, undefined, "paired");

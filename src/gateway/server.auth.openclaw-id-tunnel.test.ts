@@ -481,14 +481,17 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     { from: "viewer", to: "operator", revoked: false },
     { from: "operator", to: "viewer", revoked: true },
     { from: "operator", to: "viewer", revoked: false },
+    // An earlier build stored a grant the new role does not contain.
+    { from: "viewer", to: "operator", revoked: false, extra: ["operator.pairing"] },
+    { from: "viewer", to: "operator", revoked: true, extra: ["operator.pairing"] },
   ] as const)(
-    "a $from browser changed to $to reconnects at the new role (token revoked: $revoked)",
-    async ({ from, to, revoked }) => {
+    "a $from browser changed to $to reconnects at the new role (token revoked: $revoked, extra: $extra)",
+    async ({ from, to, revoked, ...seed }) => {
       const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
         accountId: "acct_view",
       });
       await profileWrites.setCanonicalUserProfileRole(profile.id, from);
-      // The grant an earlier build approved: exactly the scopes of the earlier role.
+      // The grant an earlier build approved: the scopes of the earlier role, plus any extra.
       const identityPath = makeIdentityPath(`openclaw-tunnel-role-${randomUUID()}.sqlite`);
       const identity = loadOrCreateDeviceIdentity({ path: identityPath });
       const deviceId = identity.deviceId;
@@ -497,12 +500,20 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
         deviceId,
         publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
         role: "operator",
-        scopes: savedScopes,
+        scopes: [...savedScopes, ...("extra" in seed ? seed.extra : [])],
         clientId: CONTROL_UI_CLIENT.id,
         clientMode: CONTROL_UI_CLIENT.mode,
         platform: CONTROL_UI_CLIENT.platform,
       });
-      await approveDevicePairing(request.request.requestId, { callerScopes: savedScopes });
+      await approveDevicePairing(request.request.requestId, { callerScopes: ["operator.admin"] });
+      // Another device's pairing is untouched by the member's grant update.
+      const other = await requestDevicePairing({
+        deviceId: "other-device",
+        publicKey: "other-key",
+        role: "operator",
+        scopes: ["operator.read"],
+      });
+      await approveDevicePairing(other.request.requestId, { callerScopes: ["operator.read"] });
       const deviceToken = expectDefined(
         (await getPairedDevice(deviceId))?.tokens?.operator?.token,
         "saved token",
@@ -529,6 +540,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
       const roleGrant = to === "viewer" ? ["operator.sessions.read"] : PRESETS.operator.scopes;
       expect(stored?.approvedScopes?.toSorted()).toEqual(roleGrant.toSorted());
       expect(stored?.tokens?.operator?.scopes?.toSorted()).toEqual(roleGrant.toSorted());
+      expect((await getPairedDevice("other-device"))?.approvedScopes).toEqual(["operator.read"]);
     },
   );
 

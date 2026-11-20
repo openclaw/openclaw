@@ -29,9 +29,9 @@ export const devicePairingOperations = {
   "devicePairing.removeOpenClawIdNodes": devicePairingMutation(
     removeOpenClawIdNodePairingsInWorker,
   ),
+  // Persistence rewrites the paired table, so the receipt reads every device, not one.
   "devicePairing.setOpenClawIdMemberGrant": devicePairingMutation(
     setOpenClawIdMemberOperatorGrantInWorker,
-    { pairedDeviceId: (input) => input.deviceId },
   ),
   "devicePairing.registerJoinCode": devicePairingMutation(
     (input: Parameters<typeof registerDevicePairingJoinCodeInWorker>[1], { database }) =>

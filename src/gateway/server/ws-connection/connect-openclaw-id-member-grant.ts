@@ -1,4 +1,4 @@
-// An OpenClaw ID member's browser is paired with exactly its current profile role.
+// An OpenClaw ID member's browser asks for, and is paired with, exactly its current profile role.
 import { resolveMemberOperatorGrantChange } from "../../../infra/device-pairing-identity.js";
 import {
   DevicePairingAuthorityRefusedError,
@@ -11,6 +11,7 @@ import { openclawIdSubjectRolePolicy } from "../../openclaw-id/tunnel-principal.
 import { GatewayOperatorAccessDeniedError } from "../../operator-access-policy.js";
 import { operatorRoleSubject } from "../../operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../operator-role-policy.js";
+import { formatForLog } from "../../ws-log.js";
 import { applyConnectionScopeCap, rejectUnavailableProfileConnect } from "./connect-admission.js";
 import { rejectGatewayConnectOperatorAccess } from "./connect-operator-access.js";
 import type {
@@ -19,17 +20,21 @@ import type {
 } from "./message-handler-types.js";
 
 /**
- * The scopes an OpenClaw ID member's Control UI connect asks for: exactly its current profile
- * role, so a browser that saved an earlier role's scopes cannot pin itself there. connect-session
- * applies the same role as the ceiling. Returns `null` for other connects and `undefined` after
- * refusing a member whose role grants nothing (before any pairing write) or whose profile is
- * unavailable.
+ * Prepares an OpenClaw ID member's Control UI connect before pairing. The browser may still send
+ * the scopes it saved under an earlier role, so the connect asks for exactly the member's current
+ * profile role (the ceiling connect-session also applies), and an already-approved device on this
+ * key has its stored operator grant set to that role first. Promotion then needs no device
+ * approval, demotion narrows the grant, and the grant never exceeds the role.
+ * Returns `null` for other connects. Returns `undefined` after refusing the connect: a role that
+ * grants nothing (before any pairing write), an unavailable profile, or a role that changed while
+ * the grant was being stored (the client reconnects under the current role).
  */
-export async function resolveOpenClawIdMemberConnectScopes(
+export async function prepareOpenClawIdMemberConnect(
   context: GatewayConnectPhaseContext,
   state: AuthenticatedGatewayConnect,
+  isConnectAuthorizationCurrent: () => boolean,
 ): Promise<string[] | null | undefined> {
-  const { role, authMethod, authResult } = state;
+  const { role, authMethod, authResult, device, devicePublicKey } = state;
   const principal = authResult.openclawId;
   if (
     role !== "operator" ||
@@ -39,13 +44,12 @@ export async function resolveOpenClawIdMemberConnectScopes(
   ) {
     return null;
   }
-  let roleScopes: readonly string[];
   try {
     const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
       accountId: principal.accountId,
     });
     const authority = await prepareUserProfileRoleAuthority(profile.id);
-    roleScopes =
+    const roleScopes =
       openclawIdSubjectRolePolicy(principal, () =>
         resolveOperatorRolePolicyForAssignment(
           profile.id,
@@ -55,50 +59,50 @@ export async function resolveOpenClawIdMemberConnectScopes(
           operatorRoleSubject(authority ?? undefined),
         ),
       )?.scopes ?? [];
+    if (roleScopes.length === 0) {
+      await rejectGatewayConnectOperatorAccess(
+        context,
+        new GatewayOperatorAccessDeniedError("access-record-inactive"),
+      );
+      return undefined;
+    }
+    // A connection scope header caps this connect only; it never narrows the stored grant.
+    const scopes = applyConnectionScopeCap({
+      role,
+      scopes: [...roleScopes],
+      upgradeReq: context.handler.upgradeReq,
+    });
+    const paired = device && devicePublicKey ? await getPairedDevice(device.id) : null;
+    const change =
+      device && devicePublicKey
+        ? resolveMemberOperatorGrantChange(paired, devicePublicKey, roleScopes)
+        : null;
+    if (change && device && devicePublicKey) {
+      await executeDevicePairingMutation(
+        {
+          type: "devicePairing.setOpenClawIdMemberGrant",
+          input: {
+            deviceId: device.id,
+            publicKey: devicePublicKey,
+            scopes: [...roleScopes],
+            nowMs: Date.now(),
+          },
+        },
+        {
+          assertCurrent: () => {
+            if (!isConnectAuthorizationCurrent() || authority?.isCurrent() === false) {
+              throw new DevicePairingAuthorityRefusedError("OpenClaw ID member role changed");
+            }
+          },
+        },
+      );
+      context.handler.logGateway.warn(
+        `security audit: OpenClaw ID member device grant set to its role device=${formatForLog(device.id.slice(0, 12))} scopesFrom=${formatForLog((paired?.approvedScopes ?? paired?.scopes ?? []).join(",") || "<none>")} scopesTo=${formatForLog(change.tokenScopes.join(","))}`,
+      );
+    }
+    return scopes;
   } catch (error) {
     await rejectUnavailableProfileConnect(context, error);
     return undefined;
   }
-  const scopes = applyConnectionScopeCap({
-    role,
-    scopes: [...roleScopes],
-    upgradeReq: context.handler.upgradeReq,
-  });
-  if (scopes.length === 0) {
-    await rejectGatewayConnectOperatorAccess(
-      context,
-      new GatewayOperatorAccessDeniedError("access-record-inactive"),
-    );
-    return undefined;
-  }
-  return scopes;
-}
-
-/**
- * Stores exactly the role's scopes as the member device's operator grant once its pairing is
- * authorized: approval merges grants, and a demotion needs no pairing at all.
- */
-export async function storeOpenClawIdMemberGrant(params: {
-  deviceId: string;
-  publicKey: string;
-  scopes: string[];
-  isCurrent: () => boolean;
-}): Promise<void> {
-  const { deviceId, publicKey, scopes } = params;
-  if (!resolveMemberOperatorGrantChange(await getPairedDevice(deviceId), publicKey, scopes)) {
-    return;
-  }
-  await executeDevicePairingMutation(
-    {
-      type: "devicePairing.setOpenClawIdMemberGrant",
-      input: { deviceId, publicKey, scopes, nowMs: Date.now() },
-    },
-    {
-      assertCurrent: () => {
-        if (!params.isCurrent()) {
-          throw new DevicePairingAuthorityRefusedError("OpenClaw ID member authority changed");
-        }
-      },
-    },
-  );
 }

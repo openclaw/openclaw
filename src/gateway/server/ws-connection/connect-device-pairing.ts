@@ -52,10 +52,7 @@ import {
 import { createGatewayConnectDeviceTokenPreparation } from "./connect-device-tokens.js";
 import { authorizeExistingGatewayDevice } from "./connect-existing-device.js";
 import { startGatewayNodePairingSshApproval } from "./connect-node-pairing-ssh.js";
-import {
-  resolveOpenClawIdMemberConnectScopes,
-  storeOpenClawIdMemberGrant,
-} from "./connect-openclaw-id-member-grant.js";
+import { prepareOpenClawIdMemberConnect } from "./connect-openclaw-id-member-grant.js";
 import {
   resolveLocalPairingApproval,
   resolvePairingApprovalPlan,
@@ -143,7 +140,13 @@ export async function authorizeGatewayConnectDevice(
     skipLocalBackendSelfPairing,
     controlUiPairingKind,
   } = state;
-  const memberRoleScopes = await resolveOpenClawIdMemberConnectScopes(context, state);
+  const isConnectAuthorizationCurrent = () =>
+    resolveGatewayConnectPolicyFailure(context, state) === undefined;
+  const memberRoleScopes = await prepareOpenClawIdMemberConnect(
+    context,
+    state,
+    isConnectAuthorizationCurrent,
+  );
   if (memberRoleScopes === undefined) {
     return undefined;
   }
@@ -151,8 +154,6 @@ export async function authorizeGatewayConnectDevice(
     scopes = memberRoleScopes;
     connectParams.scopes = scopes;
   }
-  const isConnectAuthorizationCurrent = () =>
-    resolveGatewayConnectPolicyFailure(context, state) === undefined;
   const failPairingHandshake = (params: {
     message: string;
     details?:
@@ -682,15 +683,6 @@ export async function authorizeGatewayConnectDevice(
       }
       handoffBootstrapProfile = existingDevice.handoffBootstrapProfile;
     }
-  }
-
-  if (memberRoleScopes && device && devicePublicKey) {
-    await storeOpenClawIdMemberGrant({
-      deviceId: device.id,
-      publicKey: devicePublicKey,
-      scopes: memberRoleScopes,
-      isCurrent: isConnectAuthorizationCurrent,
-    });
   }
 
   const browserCopilotIdentityMismatch =
