@@ -278,7 +278,8 @@ defineDiscordVoiceTests(
 
       await vi.waitFor(() =>
         expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
-          getToolAuthorityOverlay: expect.any(Function),
+          assertCurrent: expect.any(Function),
+          getToolAuthorityOverlayAsync: expect.any(Function),
           sessionKey: "discord:g1:c1",
           text: "cancel that",
         }),
@@ -484,7 +485,8 @@ defineDiscordVoiceTests(
       );
 
       expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
-        getToolAuthorityOverlay: expect.any(Function),
+        assertCurrent: expect.any(Function),
+        getToolAuthorityOverlayAsync: expect.any(Function),
         sessionKey: "discord:g1:c1",
         text: "how is it going",
       });
@@ -510,7 +512,8 @@ defineDiscordVoiceTests(
       await emitFinalRealtimeUserTranscript(bridgeParams, "Hey, Molty, how is it going");
 
       expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
-        getToolAuthorityOverlay: expect.any(Function),
+        assertCurrent: expect.any(Function),
+        getToolAuthorityOverlayAsync: expect.any(Function),
         sessionKey: "discord:g1:c1",
         text: "how is it going",
       });
@@ -758,7 +761,8 @@ defineDiscordVoiceTests(
       await emitFinalRealtimeUserTranscript(bridgeParams, "OpenClaw, how is it going");
 
       expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
-        getToolAuthorityOverlay: expect.any(Function),
+        assertCurrent: expect.any(Function),
+        getToolAuthorityOverlayAsync: expect.any(Function),
         sessionKey: "discord:g1:c1",
         text: "how is it going",
       });
@@ -908,7 +912,8 @@ defineDiscordVoiceTests(
       await emitFinalRealtimeUserTranscript(bridgeParams, "how is it going");
 
       expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
-        getToolAuthorityOverlay: expect.any(Function),
+        assertCurrent: expect.any(Function),
+        getToolAuthorityOverlayAsync: expect.any(Function),
         sessionKey: "discord:g1:c1",
         text: "how is it going",
       });
