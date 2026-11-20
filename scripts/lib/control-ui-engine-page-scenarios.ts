@@ -884,11 +884,11 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
         await page.locator(".skill-discovery .skill-installed-shelf").click();
         await page.waitForFunction(() => {
           const discovery = document.querySelector(".skill-discovery");
-          const total = Number(
-            discovery?.querySelector("[aria-setsize]")?.getAttribute("aria-setsize") ?? 0,
-          );
           return (
-            total >= 1000 || (discovery?.querySelectorAll("[data-skill-id]").length ?? 0) >= 1000
+            discovery !== null &&
+            discovery.querySelector('[data-skill-id="local:data-skill-0000"]') !== null &&
+            discovery.querySelector('[data-skill-id="local:data-skill-0999"]') !== null &&
+            discovery.querySelector("[aria-setsize]")?.getAttribute("aria-setsize") === "1000"
           );
         });
       },
@@ -901,7 +901,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
           );
         });
         await frames(page);
-        return { matchingSkills: 1 };
+        return { fixtureSkills: 1000, openedInstalledSkills: 1000, matchingSkills: 1 };
       },
     },
   },

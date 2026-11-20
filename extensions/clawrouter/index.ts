@@ -18,8 +18,6 @@ import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-str
 import {
   createAnthropicThinkingPrefillPayloadWrapper,
   createOpenAIHostedWebSearchWrapper,
-  mapAssistantMessageStream,
-  transformProviderStreamMessages,
   wrapProviderPayloadHook,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
@@ -47,6 +45,12 @@ import { clawrouterEmbeddingProvider } from "./embedding-provider.js";
 import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { listClawRouterImageModelCatalog } from "./image-model-catalog.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import {
+  bridgeOpenCodeProxySession,
+  resolveOpenCodeProxyTurnState,
+  wrapOpenCodeProxyStream,
+  restoreClawRouterResponseModel,
+} from "./opencode-session.js";
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
   buildClawRouterProviderConfig,
@@ -187,6 +191,7 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
           : model.api === "openai-responses" && model.id.startsWith("xai/")
             ? (xaiReasoning.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn)
             : streamFn;
+    const decorated = wrapOpenCodeProxyStream(ctx, model, underlying);
     const apiKey = options?.apiKey?.trim();
     const dispatchKey = apiKey && apiKey !== ENV_API_KEY_MARKER ? apiKey : undefined;
     const preparedModel = prepareClawRouterRequestModel(model);
@@ -220,7 +225,7 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
       ? (openAiServiceTier.wrapStreamFn?.({
           ...ctx,
           streamFn: (requestModel, requestContext, requestOptions) =>
-            underlying(requestModel, requestContext, {
+            decorated(requestModel, requestContext, {
               ...requestOptions,
               onPayload: wrapProviderPayloadHook(
                 requestOptions?.onPayload,
@@ -248,19 +253,19 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
               return fast === true && !tiers.includes("priority") ? undefined : fast;
             },
           },
-        }) ?? underlying)
-      : underlying;
-    const response = stream({ ...preparedModel, headers }, context, options);
+        }) ?? decorated)
+      : decorated;
+    const requestOptions = bridgeOpenCodeProxySession({
+      model,
+      sourceApi: ctx.sourceApi,
+      headers,
+      options,
+    });
+    const response = stream({ ...preparedModel, headers }, context, requestOptions);
     if (preparedModel.id === model.id) {
       return response;
     }
-    // Upstream IDs belong on the wire; session state needs the resolvable catalog ID.
-    // Keep responseModel intact so genuine upstream reroutes remain observable.
-    return mapAssistantMessageStream(response, (output) =>
-      transformProviderStreamMessages(output, (message) => {
-        message.model = model.id;
-      }),
-    );
+    return restoreClawRouterResponseModel(response, model);
   };
   // Evaluate catalog facts before dispatch removes private route metadata.
   return createOpenAIHostedWebSearchWrapper(
@@ -683,6 +688,7 @@ export default defineSingleProviderPluginEntry({
         // Isolated completions share routing/auth but must remain tool-free.
         wrapClawRouterProviderStream({ ...ctx, nativeWebSearchAllowedByToolPolicy: false }),
       wrapStreamFn: wrapClawRouterProviderStream,
+      resolveTransportTurnState: resolveOpenCodeProxyTurnState,
       buildReplayPolicy: (ctx) => {
         if (ctx.modelApi === "openai-completions" && ctx.modelId?.startsWith("mistral/")) {
           return mistralReplay.buildReplayPolicy?.(ctx);

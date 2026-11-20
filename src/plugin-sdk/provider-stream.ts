@@ -15,6 +15,7 @@ import {
   resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,
 } from "../llm/providers/stream-wrappers/openai.js";
+import { createOpenCodeResponsesStreamWrapper } from "../llm/providers/stream-wrappers/opencode-responses.js";
 import {
   createKilocodeWrapper,
   createOpenRouterWrapper,
@@ -24,6 +25,7 @@ import { streamSimple } from "../llm/stream.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 import {
+  createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createGoogleThinkingPayloadWrapper,
   createPayloadPatchStreamWrapper,
   createMoonshotThinkingWrapper,
@@ -49,6 +51,12 @@ export type ProviderStreamFamily =
   | "xai-responses-reasoning"
   /** Applies the native Cohere Compatibility API instruction and tool-choice policy. */
   | "cohere-compatibility"
+  /** Applies Console Responses tool schemas and restores tool-call results. */
+  | "opencode-responses"
+  /** Applies DeepSeek V4 pro thinking, effort and replay on a caller-qualified route. */
+  | "deepseek-v4-pro-thinking"
+  /** Applies DeepSeek V4 Flash thinking, effort and replay on a caller-qualified route. */
+  | "deepseek-v4-flash-thinking"
   /** Applies Google thinking-level payload normalization. */
   | "google-thinking"
   /** Applies Kilocode proxy reasoning payload normalization. */
@@ -127,6 +135,28 @@ export function buildProviderStreamFamilyHooks(
   family: ProviderStreamFamily,
 ): ProviderStreamFamilyHooks {
   switch (family) {
+    case "opencode-responses":
+      return { wrapStreamFn: createOpenCodeResponsesStreamWrapper };
+    case "deepseek-v4-pro-thinking":
+      return {
+        wrapStreamFn: (ctx) =>
+          createDeepSeekV4OpenAICompatibleThinkingWrapper({
+            baseStreamFn: ctx.streamFn,
+            thinkingLevel: ctx.thinkingLevel,
+            shouldPatchModel: () => true,
+          }),
+      };
+    case "deepseek-v4-flash-thinking":
+      return {
+        wrapStreamFn: (ctx) =>
+          createDeepSeekV4OpenAICompatibleThinkingWrapper({
+            baseStreamFn: ctx.streamFn,
+            thinkingLevel: ctx.thinkingLevel,
+            shouldPatchModel: () => true,
+            resolveReasoningEffort: (level) =>
+              level === "low" ? "low" : level === "max" ? "max" : "high",
+          }),
+      };
     case "xai-responses-reasoning":
       return {
         wrapStreamFn: (ctx) =>

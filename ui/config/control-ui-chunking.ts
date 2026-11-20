@@ -95,6 +95,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/plugins/catalog-grid.tsx":
     case "ui/src/pages/plugins/plugin-card.tsx":
     case "ui/src/pages/plugins/catalog-skeleton.tsx":
+    case "ui/src/components/solid/middle-truncated.tsx":
       // Catalogs load their grid, cards, and loading state together.
       return "plugin-catalog-runtime";
     case "ui/src/components/sandbox-host.ts":
@@ -280,6 +281,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/config-form.array-items.ts":
       // Lightweight shape readers must not acquire analysis, validation, or Settings copy.
       return "config-form-utils-runtime";
+    case "ui/src/components/solid/catalog-discovery.tsx":
     case "ui/src/components/solid/settings-ui.tsx":
     case "ui/src/components/solid/switch.tsx":
     case "ui/src/pages/config/settings-section-header.tsx":

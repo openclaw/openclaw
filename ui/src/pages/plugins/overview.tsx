@@ -5,10 +5,11 @@ import {
   type PluginUiCapability,
 } from "../../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { MiddleTruncated, splitTail } from "../../components/solid/middle-truncated.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
-import { askBrandLabel } from "../../components/theme-brand-label.ts";
 import "../../components/tooltip.ts";
+import { askBrandLabel } from "../../components/theme-brand-label.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatDateMs } from "../../lib/format.ts";
 import type {
@@ -19,7 +20,6 @@ import type {
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { formatCompactCount } from "./catalog-results.tsx";
 import { ExtensionIcon } from "./extension-icons.tsx";
-import { MiddleTruncated, splitTail } from "./middle-truncated.tsx";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.tsx";
 import { renderPluginRowMessage } from "./plugin-row-message.tsx";
 

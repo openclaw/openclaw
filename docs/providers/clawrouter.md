@@ -669,3 +669,59 @@ exception above applies only to that specific upstream message.
     OpenClaw usage and status surfaces.
   </Card>
 </CardGroup>
+
+## OpenCode proxy session identity
+
+For OpenCode Console and Go, the current key's catalog must grant an exact
+HTTP POST offer for the selected model and paired Chat, Responses, or Messages
+format. Provider-wide compatibility flags or a route declaration alone do not
+make a model executable. The selected native or unified URL stays bound to its
+model and proxy origin; unsupported or ambiguous offers remain unavailable.
+
+OpenClaw carries conversation identity in `x-clawrouter-session-id`. An explicit
+`x-opencode-session` overrides the automatic conversation ID. Header names are
+case-insensitive; conflicting caller, model, router, or legacy session values
+fail before dispatch. Explicit identities must contain 1–256 characters from
+`A-Z`, `a-z`, digits, `. _ ~ : / + @ = -`. Automatic conversation IDs outside
+that format use a stable, bounded hash, preserving distinct identities.
+
+Native session overrides are removed from both SDK header carriers. Static
+router and legacy session headers cannot create a shared standalone identity.
+Console calls without an identity leave it absent; the Worker creates a distinct
+standalone nonce. Go retains the native hook's host-provided turn ID fallback
+when that hook runs. Conversations never receive a random per-turn replacement.
+
+This header is attribution, not authorization. The Worker derives the upstream
+session handle from the authenticated caller, selected provider, original grant
+and credential lineage. Reusing the conversation identity with another caller
+or grant cannot authorize that grant or reuse its upstream session. The client
+continues to send only its selected proxy credential, without borrowing an
+OpenCode or Anthropic key or impersonating the OpenCode client.
+
+The bridge uses the existing transport-turn and streaming hooks, including
+simple completions. Qualified Console Responses routes use the native tool-schema
+and `web_search` alias policy, restoring tool names and dynamic-record arguments
+in stream events, final results, and replay. Qualified Go Chat routes for
+`kimi-k2.5`, `kimi-k2.6`, and `kimi-k2.7-code` remove unsupported reasoning
+from outbound replay using the native Go policy. K3 retains its reasoning replay.
+Stored messages are unchanged. Qualified Go Chat routes for
+`deepseek-v4-pro` use the native thinking and replay policy: per-call reasoning
+overrides the configured level, off/none disables thinking, and xhigh/max uses
+max effort while other enabled levels use high effort. The two Flash IDs,
+`deepseek-v4-flash` and `deepseek-v4.1-flash`, share their native policy: low maps
+to low, max to max, and other enabled levels to high. Off/none disables thinking.
+Other Go models and APIs keep their existing behavior; the bridge does not copy
+native Messages headers or first-event timers.
+
+Assistant history from the exact selected catalog model is projected to its wire
+model for that request only. Stored messages, opaque reasoning signatures, and
+foreign provider/API/model history are unchanged. Native transcript checks still
+own replay admission. After a valid offer is selected, an exact bundled model's
+reasoning boolean supplies missing reasoning support, including Qwen's Messages
+route. Explicit catalog effort metadata wins; a native false remains false.
+Unknown IDs and different APIs inherit no such fact.
+
+It adds no model families, prices, limits, or provider
+activation. Google/Gemini and WebSocket OpenCode session transports remain
+unqualified. Actual client-plus-Worker qualification is required before enabling
+new native offers; SDK fixtures alone do not establish grant binding.

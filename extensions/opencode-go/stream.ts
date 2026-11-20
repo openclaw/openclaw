@@ -4,56 +4,19 @@ import type {
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
-  createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createOpenAICompatibleCompletionsThinkingOffWrapper,
   createPayloadPatchStreamWrapper,
+  stripReasoningReplayPayload,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isOpencodeGoFixedAnthropicReasoningModelId,
   isOpencodeGoKimiNoReasoningModelId,
 } from "./provider-policy-api.js";
 
-const REASONING_REPLAY_FIELDS = [
-  "reasoning_details",
-  "reasoning_content",
-  "reasoning",
-  "reasoning_text",
-] as const;
-
-const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
-
-function stripReasoningReplayFields(value: unknown): void {
-  const record = asOptionalObjectRecord(value);
-  if (!record) {
-    return;
-  }
-  for (const field of REASONING_REPLAY_FIELDS) {
-    delete record[field];
-  }
-
-  const content = record.content;
-  if (Array.isArray(content)) {
-    const nextContent = stripReasoningReplayItems(content);
-    record.content =
-      nextContent.length > 0
-        ? nextContent
-        : [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }];
-  }
-}
-
-function stripReasoningReplayItems(items: unknown[]): unknown[] {
-  const retained = [];
-  for (const item of items) {
-    const type = asOptionalObjectRecord(item)?.type;
-    if (type !== "thinking" && type !== "redacted_thinking" && type !== "reasoning") {
-      stripReasoningReplayFields(item);
-      retained.push(item);
-    }
-  }
-  return retained;
-}
+const proThinking = buildProviderStreamFamilyHooks("deepseek-v4-pro-thinking");
+const flashThinking = buildProviderStreamFamilyHooks("deepseek-v4-flash-thinking");
 
 export function createOpencodeGoWireWrapper(
   ctx: ProviderWrapStreamFnContext,
@@ -66,14 +29,7 @@ export function createOpencodeGoWireWrapper(
     baseStreamFn,
     ({ payload, model }) => {
       if (isOpencodeGoKimiNoReasoningModelId(model.id)) {
-        stripReasoningReplayFields(payload);
-        delete payload.reasoning_effort;
-        delete payload.reasoningEffort;
-        for (const key of ["messages", "input"] as const) {
-          if (Array.isArray(payload[key])) {
-            payload[key] = stripReasoningReplayItems(payload[key]);
-          }
-        }
+        stripReasoningReplayPayload(payload);
       } else if (isOpencodeGoFixedAnthropicReasoningModelId(model.id)) {
         delete payload.thinking;
         delete payload.output_config;
@@ -90,21 +46,17 @@ export function createOpencodeGoWireWrapper(
     model.provider === "opencode-go" && model.id === "kimi-k3"
       ? thinkingOff(model, context, options)
       : payloadStreamFn(model, context, options);
-  const flashStreamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
-    baseStreamFn: selected,
-    thinkingLevel,
-    shouldPatchModel: (model) =>
-      model.provider === "opencode-go" &&
-      (model.id === "deepseek-v4-flash" || model.id === "deepseek-v4.1-flash"),
-    resolveReasoningEffort: (level) => (level === "low" ? "low" : level === "max" ? "max" : "high"),
-  });
-  const deepSeek =
-    createDeepSeekV4OpenAICompatibleThinkingWrapper({
-      baseStreamFn: flashStreamFn,
-      thinkingLevel,
-      shouldPatchModel: (model) =>
-        model.provider === "opencode-go" && model.id === "deepseek-v4-pro",
-    }) ?? selected;
+  const flashStream = flashThinking.wrapStreamFn!({ ...ctx, streamFn: selected }) ?? selected;
+  const flashStreamFn: NonNullable<typeof baseStreamFn> = (model, context, options) =>
+    model.provider === "opencode-go" &&
+    (model.id === "deepseek-v4-flash" || model.id === "deepseek-v4.1-flash")
+      ? flashStream(model, context, options)
+      : selected(model, context, options);
+  const proStream = proThinking.wrapStreamFn!({ ...ctx, streamFn: flashStreamFn }) ?? selected;
+  const deepSeek: NonNullable<typeof baseStreamFn> = (model, context, options) =>
+    model.provider === "opencode-go" && model.id === "deepseek-v4-pro"
+      ? proStream(model, context, options)
+      : (flashStreamFn ?? selected)(model, context, options);
   const sourceApi = ctx.sourceApi;
   return (model, context, options) => {
     const api = sourceApi ?? model.api;

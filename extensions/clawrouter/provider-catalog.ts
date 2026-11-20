@@ -24,6 +24,7 @@ import {
 } from "./capability-offers.js";
 import { converseBaseUrl, selectConverseOffer } from "./converse-offer.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { selectOpenCodeProxyOffer } from "./opencode-session.js";
 import { CLAWROUTER_ROUTE_METADATA_KEY as ROUTE_METADATA_KEY } from "./provider-policy-api.js";
 
 export const decisionCapabilities = ModelInferenceCapabilitiesSchema.parse(
@@ -80,6 +81,7 @@ type RouteMetadata = {
   upstreamModel?: string;
   serviceTiers?: string[];
   hostedWebSearch?: true;
+  openCode?: ReturnType<typeof selectOpenCodeProxyOffer>;
 };
 
 export function normalizeClawRouterReasoningEfforts(
@@ -267,6 +269,13 @@ function buildRoutedModel(
   let baseUrl: string;
   let upstreamModel: string | undefined;
   let endpoint: string | undefined;
+  const isOpenCode = provider.id === "opencode" || provider.id === "opencode-go";
+  const openCode = isOpenCode
+    ? selectOpenCodeProxyOffer(provider.id, id, upstream, capabilities, provider.httpOffers)
+    : undefined;
+  if (isOpenCode && !openCode) {
+    return undefined;
+  }
 
   if (
     provider.id === "xai" &&
@@ -295,7 +304,12 @@ function buildRoutedModel(
             offer.url.endsWith("/chat/completions"),
         )
       : undefined;
-  if (provider.id === "aws-bedrock") {
+  if (openCode) {
+    api = openCode.api;
+    endpoint = openCode.endpoint;
+    baseUrl = openCode.baseUrl;
+    upstreamModel = openCode.routeKind === "native" ? upstream : undefined;
+  } else if (provider.id === "aws-bedrock") {
     const converse = selectConverseOffer(provider.httpOffers, id, upstream);
     if (!converse) {
       return undefined;
@@ -435,9 +449,10 @@ function buildRoutedModel(
     },
     reasoning:
       supportedReasoningEfforts !== undefined ||
-      /(?:claude-|gemini-|gpt-5|gpt-oss|deepseek-v|reasoner|glm-5|grok-4|minimax-m)/u.test(
-        qualifiedId,
-      ),
+      ((openCode ? identityFacts?.reasoning : undefined) ??
+        /(?:claude-|gemini-|gpt-5|gpt-oss|deepseek-v|reasoner|glm-5|grok-4|minimax-m)/u.test(
+          qualifiedId,
+        )),
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(Object.keys(compat).length > 0 ? { compat } : {}),
     ...(nativeFacts?.mediaInput ? { mediaInput: nativeFacts.mediaInput } : {}),
@@ -483,6 +498,7 @@ function buildRoutedModel(
       [ROUTE_METADATA_KEY]: {
         api,
         baseUrl,
+        ...(openCode ? { openCode } : {}),
         ...(upstreamModel ? { upstreamModel } : {}),
         // Support is not a grant: require this key's exact matching route admission.
         ...(provider.id === "openai" &&

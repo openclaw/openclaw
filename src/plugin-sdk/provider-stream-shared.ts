@@ -32,6 +32,7 @@ import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js"
 import { mapAssistantMessageStream } from "../llm/utils/stream-wrapper.js";
 import { createCodeRegionResolver } from "../shared/text/code-regions.js";
 import { assertProviderStreamEvent } from "./provider-stream-event-normalization.js";
+export { stripReasoningReplayPayload } from "./provider-reasoning-replay.js";
 export { recordSuppressedReasoning } from "@openclaw/llm-core/diagnostics";
 export { applyOpenAICompletionsToolReasoning } from "@openclaw/ai/internal/openai";
 export {
@@ -610,6 +611,7 @@ function promoteThinkingOnlyFinalOutputToText(message: AssistantMessage): void {
 export function transformProviderStreamMessages(
   stream: Awaited<ReturnType<StreamFn>>,
   transformMessage: (message: AssistantMessage) => void,
+  options?: { includeError?: boolean },
 ): Awaited<ReturnType<StreamFn>> {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
@@ -628,7 +630,11 @@ export function transformProviderStreamMessages(
           const event = result.value;
           if (event.type === "done") {
             transformMessage(event.message);
-          } else if (event.type !== "error" && event.partial) {
+          } else if (event.type === "error") {
+            if (options?.includeError) {
+              transformMessage(event.error);
+            }
+          } else if (event.partial) {
             transformMessage(event.partial);
           }
         }
