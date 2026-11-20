@@ -187,7 +187,7 @@ describe("catalog source change on a running Gateway", () => {
   async function changeSourceDuringReload() {
     await startGateway();
     // Like the metadata loader, a snapshot belongs to the plugin inventory that read it.
-    const metadata = mocks.pluginMetadataSnapshot;
+    const metadata = await pluginMetadata.resolvePluginMetadataSnapshotAsync({ config });
     vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync").mockImplementation(async () => {
       const snapshot = { ...metadata };
       bindPluginMetadataSnapshotCache(snapshot, getPluginCache());
