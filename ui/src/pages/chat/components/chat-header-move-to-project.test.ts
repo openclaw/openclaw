@@ -80,7 +80,7 @@ it("moves into the existing project selected in the dropdown with its detected c
   });
   const menu = renderMenu(request);
   await selectNativeMenu(menu, "quick:move-to-project");
-  await vi.dynamicImportSettled();
+
   const picker = await waitForSolid(() =>
     expectDefined(
       document.body.querySelector<HTMLButtonElement>(

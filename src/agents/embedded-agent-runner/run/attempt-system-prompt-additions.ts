@@ -99,18 +99,16 @@ export async function prepareAttemptSystemPromptAdditions(params: {
     storePath: params.storePath,
   });
   // Credit has its own retained prompt placement; do not fold it into dynamic additions.
-  const entry = params.entry?.sessionId === params.sessionId ? params.entry : undefined;
   return {
     extraSystemPrompt,
     gitCoauthorPrompt,
-    ...(entry
+    ...(params.entry
       ? {
-          toolUsageRankingSeed: entry.toolUsageRankingSeed,
           prepareSessionProjectGuidance: sessionProjectGuidanceSource({
             config: params.config,
             agentId: params.agentId,
             sessionKey: params.sessionKey,
-            entry,
+            entry: params.entry,
             senderIsOwner: params.senderIsOwner,
             operatorAuthority: readAdmittedRunOperatorAuthority(params.admittedRunContext),
           }),

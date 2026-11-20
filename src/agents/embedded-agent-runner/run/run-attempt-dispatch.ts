@@ -295,8 +295,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     params.execOverrides ??= {};
     params.execOverrides.mode = resolveSessionPermissionExecMode({ mode: params.permissionMode });
   }
+  const admittedEntry = runInput.sessionAdmission?.entry;
+  const entry = admittedEntry?.sessionId === sessionId ? admittedEntry : undefined;
   const promptAdditions = await prepareAttemptSystemPromptAdditions({
-    entry: runInput.sessionAdmission?.entry,
+    entry,
     senderIsOwner: params.senderIsOwner,
     admittedRunContext: params.admittedRunContext,
     agentId: workspaceResolution.agentId,
@@ -402,6 +404,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     operation: "attempt",
     sessionId,
     sessionKey: resolvedSessionKey,
+    toolUsageRankingSeed: entry?.toolUsageRankingSeed,
     memoryAudience,
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,

@@ -30,6 +30,7 @@ import type {
   HeaderSessionOperation,
 } from "./chat-pane-session-menu-contract.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import { showMoveToProjectDialog } from "./components/move-to-project-dialog.tsx";
 
 export async function openHeaderSessionGroup(
   owner: Pick<ReturnType<ChatHeaderSessionActionSource["readOwner"]>, "context" | "state">,
@@ -64,14 +65,12 @@ async function moveHeaderSessionToProject(
     return;
   }
   const outcomeOwner = owner.headerOutcomeOwner;
-  const signal = owner.headerSessionDraftAbortController.signal;
   try {
-    const { showMoveToProjectDialog } = await import("./components/move-to-project-dialog.tsx");
     await showMoveToProjectDialog({
       client,
       key: row.key,
       ...(row.agentId ? { agentId: row.agentId } : {}),
-      signal,
+      signal: owner.headerSessionDraftAbortController.signal,
     });
   } catch (error) {
     owner.publishHeaderError(error, outcomeOwner);

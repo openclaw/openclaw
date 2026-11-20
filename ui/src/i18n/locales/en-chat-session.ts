@@ -123,9 +123,6 @@ const enChatSession = {
       subagentsRunning: "Subagents · {count} running",
       layout: "Layout",
       panels: "Panels",
-      moveToProject: {
-        action: "Move to project…",
-      },
       continueInTerminal: {
         action: "Continue in terminal…",
         disconnected: "Reconnect to continue in a terminal.",

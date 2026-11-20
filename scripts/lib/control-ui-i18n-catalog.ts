@@ -602,10 +602,8 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         },
         sessionHeader: {
           ...registerChatSessionEnglish.catalog.chat.sessionHeader,
-          moveToProject: {
-            ...registerChatSessionEnglish.catalog.chat.sessionHeader.moveToProject,
-            ...registerChatSessionOptionalEnglish.catalog.chat.sessionHeader.moveToProject,
-          },
+          moveToProject:
+            registerChatSessionOptionalEnglish.catalog.chat.sessionHeader.moveToProject,
           continueInTerminal,
         },
         sessionSuggestions: {

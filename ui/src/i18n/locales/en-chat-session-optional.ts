@@ -378,6 +378,7 @@ const catalog = {
     },
     sessionHeader: {
       moveToProject: {
+        action: "Move to project…",
         title: "Move to a project",
         move: "Move",
         moving: "Moving… this can take a minute",
