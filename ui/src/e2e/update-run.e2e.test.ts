@@ -15,6 +15,85 @@ function text(root: Page | Locator, value: string, exact = true) {
 }
 
 suite.define(() => {
+  it("keeps an unread update failure in the Inbox after the Gateway build changes", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
+      async ({ page }) => {
+        const run = {
+          ...createUpdateRunFixture(),
+          phase: "finished",
+          status: "failed",
+          reason: "post-update-failed",
+          verification: {
+            serviceRunning: true,
+            runningVersion: "2026.11.5",
+            runningBuildId: "before-build",
+          },
+          finishedAtMs: Date.now(),
+        } as const;
+        const gateway = await installMockGateway(page, {
+          communityInvite: false,
+          serverVersion: "2026.11.5",
+          serverBuildId: "before-build",
+          gatewayBootId: "gateway-boot",
+          presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
+          controlUiBuildSource: "configured",
+          updateAvailable: null,
+          methodResponses: {
+            "update.status": { lastRun: run },
+            "update.runs.get": { run },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("update.status");
+        const inbox = page.locator(".sidebar-issues-button:visible");
+        const card = page.locator('[data-attention-kind="updateAvailable"]');
+        await inbox.click();
+        await card
+          .getByText(/OpenClaw update failed/)
+          .first()
+          .waitFor();
+
+        const connections = (await gateway.getRequests("connect")).length;
+        await gateway.setServerBuildId("after-build");
+        await gateway.closeLatest();
+        await gateway.waitForRequest("connect", { after: connections });
+        const historical = page.getByRole("link", {
+          name: /Last update run failed.*serving build after-build/,
+        });
+        await historical.waitFor();
+
+        await gateway.emitGatewayEvent("update.available", {
+          updateAvailable: {
+            channel: "stable",
+            currentVersion: "2026.11.5",
+            latestVersion: "2026.11.6",
+          },
+        });
+        const release = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await release.getByText("Update available", { exact: true }).waitFor();
+        await release.locator("summary").hover();
+        await release
+          .getByRole("button", { name: "Dismiss Update available", exact: true })
+          .click();
+        await release.waitFor({ state: "detached" });
+        await historical.click();
+        await page.waitForURL("**/settings/updates");
+        await page
+          .locator("openclaw-update-run-view")
+          .getByText(/Last update run failed/)
+          .first()
+          .waitFor();
+        expect(await page.getByRole("button", { name: "Retry update", exact: true }).count()).toBe(
+          0,
+        );
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+      },
+    );
+  });
+
   it.each([
     ["installed ahead", "2026.10.1", "2026.9.4", "2026.9.4", false],
     ["serving moved", "2026.9.4", "2026.10.1", "2026.9.4", true],
