@@ -91,6 +91,7 @@ it(
               status: "timeout",
               summary: "aborted",
               stopReason: "rpc",
+              replaySafe: true,
             });
             expect(await client.request("agent.wait", { runId, timeoutMs: 1_000 })).toMatchObject({
               status: "error",
