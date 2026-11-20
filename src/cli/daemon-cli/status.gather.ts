@@ -194,8 +194,11 @@ async function gatherDaemonStatusImpl(
       )
     : undefined;
   if (opts.deep && !trimToUndefined(opts.rpc.url)) {
-    const { preflightOpenClawDatabaseSchemas, OpenClawDatabaseSchemaPreflightError } =
-      await import("../../state/openclaw-database-preflight.js");
+    const {
+      preflightOpenClawDatabaseSchemas,
+      OpenClawDatabaseSchemaPreflightError,
+      getOpenClawDatabaseReadinessFailure,
+    } = await import("../../state/openclaw-database-preflight.js");
     // Diagnose a refused database before config and lifecycle readers try to open it.
     const schemas = await preflightOpenClawDatabaseSchemas({
       env: mergeGatewayServiceEnv(process.env, targetServiceCommand),
@@ -212,6 +215,7 @@ async function gatherDaemonStatusImpl(
       const { problem, recovery } = describeUnreadableStateDatabase(
         unreadableStateDatabase.path,
         unreadableStateDatabase.reason,
+        { cause: getOpenClawDatabaseReadinessFailure(unreadableStateDatabase) },
       );
       throw new Error(`${problem}. ${recovery}`);
     }
