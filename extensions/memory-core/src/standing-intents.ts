@@ -28,7 +28,7 @@ type DatabaseOptions = ReturnType<typeof captureMemoryAgentDatabaseOptions>;
 let scheduleMaintenance: ((path: string, nextDueAt: number | null) => void) | undefined;
 const lifecycleFacts = new Map<string, { empty: boolean }>();
 const knownDueAt = new Map<string, number>();
-const sweeps = { active: 0, waiting: [] as Array<() => void> };
+const sweeps: { active: number; waiting: Array<() => void> } = { active: 0, waiting: [] };
 
 function recordDueAt(path: string, nextDueAt: number | null): void {
   if (nextDueAt === null) {
