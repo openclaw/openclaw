@@ -3,23 +3,31 @@ import { resolveChannelConfigActivationFacts } from "./channel-config-activation
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 type Reader = "metadata" | "sessions";
-type Dependency = Reader | "both" | "other" | "unknown";
+type Dependency = Reader | "both" | "unknown";
+
+// Keep the shared conversation projection independent of server-only readers.
+const otherReaders = [
+  "$schema",
+  "wizard",
+  "diagnostics",
+  "logging",
+  "update",
+  "telemetry",
+  "browser",
+  "ui",
+  "commands",
+  // refreshConfigReloadSkills publishes command eligibility after every commit,
+  // including arbitrary requires.config paths; metadata consumes its skills version.
+  "skills",
+] as const satisfies readonly (keyof OpenClawConfig)[];
 
 // Model metadata reads catalog/auth/runtime resolution and agent policy.
 // Session rows also read workspace, sandbox, execution and response presentation.
 // Exhaustiveness makes a new schema root require an explicit reader decision;
 // unknown dependencies (including plugin-owned settings) retain invalidation.
 const dependencies: Record<string, Dependency> = {
-  $schema: "other",
   meta: "metadata",
   env: "both",
-  wizard: "other",
-  diagnostics: "other",
-  logging: "other",
-  update: "other",
-  telemetry: "other",
-  browser: "other",
-  ui: "other",
   secrets: "both",
   auth: "both",
   accessGroups: "unknown",
@@ -38,7 +46,6 @@ const dependencies: Record<string, Dependency> = {
   attachments: "unknown",
   messages: "both",
   tts: "both",
-  commands: "other",
   approvals: "unknown",
   session: "both",
   cron: "unknown",
@@ -54,18 +61,15 @@ const dependencies: Record<string, Dependency> = {
   desktop: "unknown",
   memory: "unknown",
   mcp: "unknown",
-  // refreshConfigReloadSkills publishes command eligibility after every commit,
-  // including arbitrary requires.config paths; metadata consumes its skills version.
-  skills: "other",
   // Plugin-derived rows follow completed catalog publications.
   plugins: "metadata",
   surfaces: "unknown",
   proxy: "unknown",
   audit: "unknown",
-} satisfies Record<keyof OpenClawConfig, Dependency>;
+} satisfies Record<Exclude<keyof OpenClawConfig, (typeof otherReaders)[number]>, Dependency>;
 
 export function configPathAffectsReader(path: string, reader: Reader): boolean {
-  if (path === "meta.lastTouchedVersion") {
+  if (!configPathAffectsConversation(path)) {
     return false;
   }
   const root = path.split(".")[0]!;
@@ -74,8 +78,12 @@ export function configPathAffectsReader(path: string, reader: Reader): boolean {
 }
 
 /** The same dependency decision scopes both publication keys and client refreshes. */
-export function configPathAffectsConversation(path: string): boolean {
-  return configPathAffectsReader(path, "metadata") || configPathAffectsReader(path, "sessions");
+export function configPathAffectsConversation(path: unknown): boolean {
+  const roots: readonly string[] = otherReaders;
+  return (
+    typeof path !== "string" ||
+    (path !== "meta.lastTouchedVersion" && !roots.includes(path.split(".")[0]!))
+  );
 }
 
 export function projectConfigReadDependencies(config: OpenClawConfig, reader: Reader) {

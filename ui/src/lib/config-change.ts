@@ -10,8 +10,5 @@ export function isConversationConfigChange(
     return false;
   }
   const paths = asNullableRecord(event.payload)?.changedPaths;
-  return (
-    !Array.isArray(paths) ||
-    paths.some((path: unknown) => typeof path !== "string" || configPathAffectsConversation(path))
-  );
+  return !Array.isArray(paths) || paths.some(configPathAffectsConversation);
 }
