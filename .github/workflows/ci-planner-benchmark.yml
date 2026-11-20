@@ -52,6 +52,15 @@ jobs:
           df -h "$RUNNER_TEMP"
       - name: Prepare bounded rootless candidate storage
         run: node scripts/mantis/telegram-proof-storage.mts setup
+      - name: Report Podman capability fields
+        run: >-
+          node --input-type=module -e
+          'import { execFileSync } from "node:child_process";
+          const info = JSON.parse(execFileSync("podman", ["info", "--format", "json"], { encoding: "utf8" }));
+          console.log(JSON.stringify({ version: info.version, rootless: info.host?.security?.rootless,
+          logDriver: info.host?.logDriver, rootlessNetworkCmd: info.host?.rootlessNetworkCmd ?? null,
+          networkBackend: info.host?.networkBackend, slirp4netns: info.host?.slirp4netns,
+          graphRoot: info.store?.graphRoot, runRoot: info.store?.runRoot }, null, 2));'
       - name: Verify storage across Actions steps
         run: >-
           node --input-type=module -e
