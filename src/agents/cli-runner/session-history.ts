@@ -31,6 +31,7 @@ import {
 } from "../admitted-run-context.js";
 import { projectPersistedSenderContext } from "../embedded-agent-runner/run/attempt-history.js";
 import { estimateToolResultTextChars } from "../embedded-agent-runner/tool-result-text-budget.js";
+import { HANDOFF_MAX_BYTES, selectHandoff } from "../harness/context-handoff.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
 import { isOpenClawRuntimeContextCustomMessage } from "../internal-runtime-context.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
@@ -44,11 +45,6 @@ import type { CliReusableSession } from "./types.js";
 
 const MAX_CLI_SESSION_HISTORY_BYTES = 5 * 1024 * 1024;
 const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
-// Reseeding uses a context-derived budget bounded by these floor and ceiling values.
-const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
-const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
-const CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE = 0.08;
-const CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_CLI_SESSION_HISTORY_EVENTS = 10_000;
 const MAX_CLI_DURABLE_CONTEXT_CHARS = 2_000;
 const CLI_DURABLE_CONTEXT_OMISSION = "[Session notes truncated; earlier notes may be omitted.]";
@@ -64,8 +60,9 @@ const CLI_SESSION_RESEED_CURRENCY_GUIDANCE =
   "[Recovered history may be stale; verify current and time-sensitive facts before acting.]";
 
 type CliSessionReseedMessage =
-  | { role: "compactionSummary"; summary: string; timestamp?: string }
+  | { id?: string; role: "compactionSummary"; summary: string; timestamp?: string }
   | {
+      id?: string;
       role: "user" | "assistant" | "toolResult";
       content: unknown;
       timestamp?: string;
@@ -77,16 +74,6 @@ type RawTranscriptReseedReason =
   | "auth-unknown"
   | "session-expired"
   | "stateless";
-
-export function resolveAutoCliSessionReseedHistoryChars(contextWindowTokens: number): number {
-  const contextShareChars = Math.floor(
-    contextWindowTokens * CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE * CHARS_PER_TOKEN_ESTIMATE,
-  );
-  return Math.max(
-    MAX_CLI_SESSION_RESEED_HISTORY_CHARS,
-    Math.min(MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS, contextShareChars),
-  );
-}
 
 function coerceHistoryText(content: unknown): string {
   if (typeof content === "string") {
@@ -107,7 +94,7 @@ function coerceHistoryText(content: unknown): string {
     .trim();
 }
 
-function renderHistoryMessage(entry: CliSessionReseedMessage): string | undefined {
+function renderHistoryMessage(entry: CliSessionReseedMessage): string {
   const role =
     entry.role === "assistant"
       ? "Assistant"
@@ -118,94 +105,44 @@ function renderHistoryMessage(entry: CliSessionReseedMessage): string | undefine
           : "Compaction summary";
   const text =
     entry.role === "compactionSummary" ? entry.summary.trim() : coerceHistoryText(entry.content);
-  if (!text) {
-    return undefined;
-  }
-  const timestamp = entry.timestamp;
-  return `${timestamp ? `[${timestamp}] ` : ""}${role}: ${text}`;
+  return text ? `${entry.timestamp ? `[${entry.timestamp}] ` : ""}${role}: ${text}` : "";
 }
 
+/** Fresh CLI sessions receive the shared intact-turn handoff. Pass sessionKey only with sessions_history. */
 export function buildCliSessionHistoryPrompt(params: {
   messages: CliSessionReseedMessage[];
   prompt: string;
   maxHistoryChars?: number;
+  sessionKey?: string;
 }): string | undefined {
-  const maxHistoryChars = params.maxHistoryChars ?? MAX_CLI_SESSION_RESEED_HISTORY_CHARS;
-  const historyBudget = maxHistoryChars - CLI_SESSION_RESEED_CURRENCY_GUIDANCE.length - "\n".length;
-  if (historyBudget <= 0) {
+  const items = params.messages.flatMap((message) => {
+    const value = renderHistoryMessage(message);
+    const bytes = Buffer.byteLength(value) + 2;
+    return value
+      ? [{ value, role: message.role, bytes, tokens: Math.ceil(bytes / 4), id: message.id }]
+      : [];
+  });
+  const summary = items[0]?.role === "compactionSummary" ? items[0] : undefined;
+  const maxBytes =
+    (params.maxHistoryChars ?? HANDOFF_MAX_BYTES) - CLI_SESSION_RESEED_CURRENCY_GUIDANCE.length - 1;
+  const selection = selectHandoff({
+    items: summary ? items.slice(1) : items,
+    summary,
+    maxBytes,
+    maxTokens: Math.floor(maxBytes / 4),
+    sessionKey: params.sessionKey,
+  });
+  if (!selection.values.length) {
     return undefined;
   }
-
-  // Pin the leading compaction summary; tail-slicing the whole transcript would
-  // discard it whenever the recent turns exceed the budget.
-  const firstEntry = params.messages[0];
-  const firstIsCompaction = firstEntry?.role === "compactionSummary";
-  const summaryRendered = firstIsCompaction ? renderHistoryMessage(firstEntry) : undefined;
-  const tailMessages = firstIsCompaction ? params.messages.slice(1) : params.messages;
-
-  const tailRaw = tailMessages.map(renderHistoryMessage).filter(Boolean).join("\n\n").trim();
-
-  const truncationMarker = "[OpenClaw reseed history truncated; older turns dropped]";
-  const renderTruncatedTail = (raw: string, budget: number): string => {
-    if (budget <= truncationMarker.length + "\n".length) {
-      return sliceUtf16Safe(raw, -budget).trimStart();
-    }
-    const tailBudget = budget - truncationMarker.length - "\n".length;
-    return `${truncationMarker}\n${sliceUtf16Safe(raw, -tailBudget).trimStart()}`;
-  };
-  const renderTruncatedSummaryWithTail = (renderedSummary: string): string => {
-    if (historyBudget <= truncationMarker.length + "\n".length) {
-      return tailRaw.length > 0
-        ? sliceUtf16Safe(tailRaw, -historyBudget).trimStart()
-        : truncateUtf16Safe(renderedSummary, historyBudget).trimEnd();
-    }
-    const tailBudget =
-      tailRaw.length > 0 ? Math.min(tailRaw.length, Math.floor(historyBudget / 2)) : 0;
-    const separatorBudget = tailBudget > 0 ? 2 : 1;
-    const summaryBudget = Math.max(
-      0,
-      historyBudget - truncationMarker.length - separatorBudget - tailBudget,
-    );
-    const summaryTruncated = truncateUtf16Safe(renderedSummary, summaryBudget).trimEnd();
-    const tailTruncated = tailBudget > 0 ? sliceUtf16Safe(tailRaw, -tailBudget).trimStart() : "";
-    return [truncationMarker, summaryTruncated, tailTruncated].filter(Boolean).join("\n");
-  };
-
-  let renderedHistory: string;
-  if (summaryRendered) {
-    if (summaryRendered.length >= historyBudget) {
-      // Oversize summaries must still leave room for recent exact turns.
-      renderedHistory = renderTruncatedSummaryWithTail(summaryRendered);
-    } else if (tailRaw.length === 0) {
-      renderedHistory = summaryRendered;
-    } else {
-      const summaryBlock = `${summaryRendered}\n\n`;
-      const remainingBudget = historyBudget - summaryBlock.length;
-      if (tailRaw.length <= remainingBudget) {
-        renderedHistory = `${summaryBlock}${tailRaw}`;
-      } else if (remainingBudget <= truncationMarker.length + "\n".length) {
-        // Share the budget with the tail when the truncation marker would not fit.
-        renderedHistory = renderTruncatedSummaryWithTail(summaryRendered);
-      } else {
-        renderedHistory = `${summaryBlock}${renderTruncatedTail(tailRaw, remainingBudget)}`;
-      }
-    }
-  } else {
-    renderedHistory =
-      tailRaw.length > historyBudget ? renderTruncatedTail(tailRaw, historyBudget) : tailRaw;
-  }
-
-  if (!renderedHistory) {
-    return undefined;
-  }
-
   return [
     "Continue this conversation using the OpenClaw transcript below as prior session history.",
     "Treat it as authoritative context for this fresh CLI session.",
     "",
     "<conversation_history>",
     CLI_SESSION_RESEED_CURRENCY_GUIDANCE,
-    renderedHistory,
+    ...(selection.notice ? [selection.notice] : []),
+    selection.values.join("\n\n"),
     "</conversation_history>",
     "",
     "<next_user_message>",
@@ -711,9 +648,11 @@ export async function loadCliSessionPromptContext(
     };
   }
   // This freshly loaded branch is reseed-owned; use persistence rather than provider timestamps.
+  const entryIds = new Map<object, string>();
   for (const entry of entries) {
     if (entry.type === "message") {
       entry.message.timestamp = Date.parse(entry.timestamp);
+      entryIds.set(entry.message, entry.id);
     }
   }
   const historyMessages = buildSessionContext(entries).messages;
@@ -734,7 +673,15 @@ export async function loadCliSessionPromptContext(
       transcriptCursor,
     };
   }
-  const history = projectPersistedSenderContext(historyMessages).filter(
+  // Sender projection maps 1:1, so ids stay index-aligned for sessions_history recovery.
+  const projected = projectPersistedSenderContext(historyMessages);
+  projected.forEach((message, index) => {
+    const id = entryIds.get(historyMessages[index]!);
+    if (id) {
+      entryIds.set(message, id);
+    }
+  });
+  const history = projected.filter(
     (message) =>
       message.role === "user" || message.role === "assistant" || message.role === "toolResult",
   );
@@ -744,9 +691,11 @@ export async function loadCliSessionPromptContext(
   // Bound the tail before projecting renderer fields; full replay records are unnecessary.
   const reseedMessages = selected.map((message): CliSessionReseedMessage => {
     const timestamp = timestampMsToIsoString(message.timestamp);
+    const id = entryIds.get(message);
     return message.role === "compactionSummary"
-      ? { role: message.role, summary: message.summary.trim(), timestamp }
+      ? { id, role: message.role, summary: message.summary.trim(), timestamp }
       : {
+          id,
           role: message.role,
           content: message.content,
           timestamp,

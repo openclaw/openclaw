@@ -4309,11 +4309,11 @@ describe("prepareCliRunContext", () => {
       expectsTruncation: false,
     },
     {
-      name: "keeps the default reseed history cap for non-Claude CLI backends",
+      name: "omits an oversized summary whole instead of slicing it",
       provider: "test-cli",
       model: "test-model",
-      marker: "RESEED_SUMMARY_MARKER_DEFAULT",
-      padding: 20_000,
+      marker: "RESEED_SUMMARY_MARKER_OVERSIZED",
+      padding: 80_000,
       expectsTruncation: true,
     },
   ])("$name", async (testCase) => {
@@ -4339,10 +4339,10 @@ describe("prepareCliRunContext", () => {
       expect(context.openClawHistoryPrompt).toBeDefined();
       expect(context.openClawHistoryPrompt).toContain("RESEED_RETAINED_PREFIX");
       if (testCase.expectsTruncation) {
-        expect(context.openClawHistoryPrompt).toContain("OpenClaw reseed history truncated");
+        expect(context.openClawHistoryPrompt).not.toContain(testCase.marker);
       } else {
         expect(context.openClawHistoryPrompt).toContain(testCase.marker);
-        expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
+        expect(context.openClawHistoryPrompt).not.toContain("[OpenClaw context handoff]");
       }
     });
   });

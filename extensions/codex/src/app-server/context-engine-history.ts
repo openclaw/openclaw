@@ -21,6 +21,7 @@ import {
 } from "./context-engine-projection.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
+import { selectCodexStaleBindingDelta } from "./run-attempt-prompt-continuity.js";
 import {
   hashCodexAppServerBindingFingerprint,
   type CodexAppServerBindingIdentity,
@@ -157,10 +158,16 @@ export async function prepareCodexContextEngineHistory(params: {
           return buildSeed(seed);
         }
       : await buildSeed(messages);
+  const legacyDeltaMessages =
+    configured && prepareSeed && startupBinding?.threadId
+      ? selectCodexStaleBindingDelta(messages, startupBinding)
+      : [];
   const historyDeltaItems =
     configured && selection?.prefixLength !== undefined && !projectionDecision.project
       ? await buildSeed(messages.slice(selection.prefixLength))
-      : undefined;
+      : legacyDeltaMessages.length > 0
+        ? await buildSeed(legacyDeltaMessages)
+        : undefined;
   assertCurrent();
   return {
     projection,
@@ -221,14 +228,20 @@ export async function injectCodexHistoryDelta(
           },
         }
       : undefined;
-    const marked = await params.bindingStore.mutate(
-      bindingIdentity,
-      { kind: "patch", threadId: thread.threadId, patch: { contextEngine: pendingContextEngine } },
-      assert,
-      authority,
-    );
-    if (!marked) {
-      throw new CodexThreadBindingConflictError(thread.threadId, "marking history delivery");
+    if (pendingContextEngine) {
+      const marked = await params.bindingStore.mutate(
+        bindingIdentity,
+        {
+          kind: "patch",
+          threadId: thread.threadId,
+          patch: { contextEngine: pendingContextEngine },
+        },
+        assert,
+        authority,
+      );
+      if (!marked) {
+        throw new CodexThreadBindingConflictError(thread.threadId, "marking history delivery");
+      }
     }
     await lifecycleTiming.measure("thread-reuse-seed-history", () =>
       params.client.request(
@@ -250,16 +263,21 @@ export async function injectCodexHistoryDelta(
       params.contextEngineProjection,
       true,
     );
+    const patch = acknowledged
+      ? { contextEngine: acknowledged }
+      : { historyCoveredThrough: new Date().toISOString() };
     const committed = await params.bindingStore.mutate(
       bindingIdentity,
-      { kind: "patch", threadId: thread.threadId, patch: { contextEngine: acknowledged } },
+      { kind: "patch", threadId: thread.threadId, patch },
       assert,
       authority,
     );
     if (!committed) {
       throw new CodexThreadBindingConflictError(thread.threadId, "acknowledging history delivery");
     }
-    thread.contextEngine = acknowledged;
+    if (acknowledged) {
+      thread.contextEngine = acknowledged;
+    }
   } catch (error) {
     // Preserve the native transcript but retire uncertain delivery from future reuse.
     await params.bindingStore.mutate(

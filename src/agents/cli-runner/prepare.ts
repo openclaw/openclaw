@@ -157,7 +157,6 @@ import {
   hasCliSessionTranscript,
   loadCliSessionHistoryMessages,
   loadCliSessionPromptContext,
-  resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
 import { captureCliRunToolAuthority } from "./tool-authority.js";
 import {
@@ -554,7 +553,6 @@ async function prepareCliRunContextWithinReadFence(
     params = { ...params, toolAuthorityFingerprint: questionFingerprint };
   }
   const modelDisplay = `${params.provider}/${modelId}`;
-  const isClaudeCli = isClaudeCliBackendId(params.provider);
   // A CLI-native alias (Claude Code's `fable`) sizes context from the model the
   // CLI's own menu resolves it to; OpenClaw keeps no alias table of its own.
   const requestedContextModelId = params.nativeModelId ?? modelId;
@@ -606,9 +604,6 @@ async function prepareCliRunContextWithinReadFence(
   const promptBuildRestrictsTools =
     promptBuildToolsAllow !== undefined &&
     !promptBuildToolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*");
-  const autoReseedHistoryChars = isClaudeCli
-    ? resolveAutoCliSessionReseedHistoryChars(contextWindowInfo.tokens)
-    : undefined;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
   const canonicalWorkspace = resolveUserPath(
@@ -1504,7 +1499,9 @@ async function prepareCliRunContextWithinReadFence(
       ? buildCliSessionHistoryPrompt({
           messages: sessionPromptContext?.reseedMessages ?? [],
           prompt: historyPromptCurrentTurn,
-          maxHistoryChars: autoReseedHistoryChars,
+          sessionKey: promptTools.some((tool) => tool.name === "sessions_history")
+            ? params.sessionKey
+            : undefined,
         })
       : undefined;
     systemPrompt = skipsTurnPrefix
