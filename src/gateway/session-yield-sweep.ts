@@ -1,5 +1,4 @@
-import { listFinishedSessions } from "../agents/bash-process-registry.js";
-import { listYieldAwaitableExecs } from "../agents/bash-tools.exec-notify.js";
+import { hasExecYieldWake } from "../agents/bash-tools.exec-notify.js";
 import { resolveSessionYieldWait } from "../agents/subagents/registry/subagent-registry-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { hasAgentRunContextExecutionOwner } from "../infra/agent-run-registry.js";
@@ -39,14 +38,7 @@ export async function sweepUnreachableSessionYields(
         agentId,
       ) ||
       hasRetainedSessionContinuation(sessionKey, agentId, resolveGatewayContext) ||
-      listYieldAwaitableExecs({ sessionKey, agentId }).length > 0 ||
-      listFinishedSessions().some(
-        (process) =>
-          process.sessionKey === sessionKey &&
-          process.agentId === agentId &&
-          process.resumesYieldedRun &&
-          (process.finalizing || process.notifyOnExitRemoval !== undefined),
-      ) ||
+      hasExecYieldWake({ sessionKey, agentId }) ||
       resolveSessionYieldWait(sessionKey, entry, agentId) !== "unreachable"
     ) {
       continue;
@@ -62,7 +54,6 @@ function isParkedSessionYield(entry: InternalSessionEntry): boolean {
     Number.isFinite(entry.endedAt) &&
     !entry.pendingFinalDelivery &&
     entry.archivedAt === undefined &&
-    !entry.incognito &&
-    (!entry.activeWriterRunId || entry.activeWriterRunId === entry.lifecycleRunId),
+    !entry.incognito,
   );
 }
