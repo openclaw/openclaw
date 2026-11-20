@@ -242,6 +242,8 @@ export function ToolCardRow(props: ToolCardProps) {
     (subagent()?.session?.listed && props.options.subagents?.onOpenSubagent) ||
     props.options.subagents?.onOpenSession;
   const canOpenSubagent = () => Boolean(launch()?.childKey && onOpenSubagent());
+  const hasSubagentAvatar = () =>
+    launch()?.kind === "subagent" && Boolean(launch()?.label && launch()?.childKey);
   const handleOpenSubagent = () => {
     const childKey = launch()?.childKey;
     if (childKey) {
@@ -257,16 +259,19 @@ export function ToolCardRow(props: ToolCardProps) {
         class="chat-tool-msg-summary__icon"
         role="img"
         aria-label={display().name}
-        title={display().name}
+        aria-hidden={hasSubagentAvatar() ? "true" : undefined}
+        title={hasSubagentAvatar() ? undefined : display().name}
       >
-        <ToolIcon
-          name={
-            readSubagentCancellation(card())
-              ? "bot"
-              : (TOOL_ROW_ICONS[view().kind] ?? display().icon)
-          }
-          tool={{ toolName: display().name, pluginToolIcons: props.options.pluginToolIcons }}
-        />
+        <Show when={!hasSubagentAvatar()}>
+          <ToolIcon
+            name={
+              readSubagentCancellation(card())
+                ? "bot"
+                : (TOOL_ROW_ICONS[view().kind] ?? display().icon)
+            }
+            tool={{ toolName: display().name, pluginToolIcons: props.options.pluginToolIcons }}
+          />
+        </Show>
       </span>
       <span ref={(element) => (disclosureContent = element)} class="chat-tool-disclosure__content">
         <Show

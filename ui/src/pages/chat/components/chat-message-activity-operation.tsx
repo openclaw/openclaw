@@ -222,7 +222,16 @@ export function LifecycleOperations(props: {
           onClick={() => first().options.onToggleToolExpanded?.(disclosureId(), expanded())}
         />
         <span class="chat-tool-msg-summary__icon" aria-hidden="true">
-          <Icon name="bot" />
+          <Show
+            when={
+              unnamedLabel() ||
+              !entries()
+                .slice(0, 2)
+                .some((entry) => entry.key)
+            }
+          >
+            <Icon name="bot" />
+          </Show>
         </span>
         <span class="chat-tool-disclosure__content">
           <Show
