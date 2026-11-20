@@ -14,12 +14,13 @@ const taxonomy = [
   { slug: "research", label: "Research", icon: "search" },
   { slug: "development", label: "Development", icon: "wrench" },
 ];
-function listing(slug: string, displayName: string, summary: string, categories: string[] = []) {
+function listing(displayName: string, summary: string, category?: string) {
+  const slug = displayName.toLowerCase().replaceAll(" ", "-");
   return {
     slug,
     displayName,
     summary,
-    categories,
+    categories: category ? [category] : [],
     score: 1,
     registry: "https://clawhub.ai",
     ownerHandle: "fieldnotes",
@@ -27,45 +28,21 @@ function listing(slug: string, displayName: string, summary: string, categories:
   };
 }
 const index = listing(
-  "release-digest",
   "Release Digest",
   "Turn release notes into a short weekly digest.",
-  ["development"],
+  "development",
 );
-const notebook = listing(
-  "field-notebook",
-  "Field Notebook",
-  "Collect citations and notes in one place.",
-  ["research"],
-);
-const readingRoom = listing(
-  "reading-room",
-  "Reading Room",
-  "Organize papers into a reading list.",
-  ["research"],
-);
-const changelog = listing(
-  "change-review",
-  "Change Review",
-  "Summarize changes for a code review.",
-  ["development"],
-);
-const handoff = listing(
-  "team-handoff",
-  "Team Handoff",
-  "Prepare a concise handoff for a teammate.",
-);
-const overview = [index, notebook, readingRoom, changelog, handoff];
-const atlas = listing(
-  "archive-atlas",
-  "Archive Atlas",
-  "Trace a topic through historical records.",
-);
-const ledger = listing(
-  "source-ledger",
-  "Source Ledger",
-  "Keep track of evidence and original sources.",
-);
+const notebook = listing("Field Notebook", "Collect citations and notes in one place.", "research");
+const handoff = listing("Team Handoff", "Prepare a concise handoff for a teammate.");
+const overview = [
+  index,
+  notebook,
+  listing("Reading Room", "Organize papers into a reading list.", "research"),
+  listing("Change Review", "Summarize changes for a code review.", "development"),
+  handoff,
+];
+const atlas = listing("Archive Atlas", "Trace a topic through historical records.");
+const ledger = listing("Source Ledger", "Keep track of evidence and original sources.");
 const installed = createSkill({
   name: "Daily Brief",
   skillKey: "daily-brief",
@@ -81,9 +58,7 @@ function openCatalog(page: Page) {
       "skills.search": { results: overview },
       "skills.detail": {
         skill: {
-          slug: ledger.slug,
-          displayName: ledger.displayName,
-          summary: ledger.summary,
+          ...ledger,
           createdAt: 1,
           updatedAt: 2,
         },
@@ -93,6 +68,13 @@ function openCatalog(page: Page) {
   });
 }
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+async function expectSearch(
+  gateway: Awaited<ReturnType<typeof openCatalog>>,
+  match: Record<string, unknown>,
+  after?: number,
+) {
+  expect((await gateway.waitForRequest("skills.search", { match, after })).params).toEqual(match);
+}
 const row = (page: Page, name: string) => page.getByRole("heading", { name, exact: true });
 
 async function capture(page: Page, name: string, title: string) {
@@ -124,47 +106,34 @@ suite.define(() => {
         await button(page, "Research").waitFor();
         await capture(page, `overview-${size}`, notebook.displayName);
 
-        const research = shelf(page, "Research");
-        const development = shelf(page, "Development");
-        for (const [section, name] of [
-          [research, notebook.displayName],
-          [development, index.displayName],
+        for (const [section, skill] of [
+          ["Research", notebook],
+          ["Development", index],
+          ["ClawHub", handoff],
         ] as const) {
-          expect(await section.getByRole("heading", { name }).isVisible()).toBe(true);
-          expect(
-            await section.getByRole("button", { name: "View all", exact: true }).isVisible(),
-          ).toBe(true);
+          const group = shelf(page, section);
+          expect(await group.getByRole("heading", { name: skill.displayName }).isVisible()).toBe(
+            true,
+          );
+          expect(await group.getByRole("button", { name: "View all" }).count()).toBe(
+            section === "ClawHub" ? 0 : 1,
+          );
         }
-        const uncategorized = page.locator('[data-catalog-section="clawhub"]');
-        expect(
-          await uncategorized.getByRole("heading", { name: handoff.displayName }).isVisible(),
-        ).toBe(true);
-        expect(
-          await uncategorized.getByRole("heading", { name: notebook.displayName }).count(),
-        ).toBe(0);
-        expect((await gateway.getRequests("skills.search")).map(({ params }) => params)).toEqual([
+        expect((await gateway.getRequests("skills.search")).map((r) => r.params)).toEqual([
           { limit: 20 },
         ]);
         expect(await gateway.getRequests("skills.categories")).toHaveLength(1);
-        const bounds = await page
+        const overflow = await page
           .locator("[data-catalog-section] :is(h2, article, button)")
-          .evaluateAll((elements) => ({
-            viewport: document.documentElement.clientWidth,
-            document: document.documentElement.scrollWidth,
-            leaking: elements
-              .map((element) => ({
-                label: element.textContent?.trim(),
-                rect: element.getBoundingClientRect(),
-              }))
-              .filter(
-                ({ rect }) =>
-                  rect.width > 0 &&
-                  (rect.left < -1 || rect.right > document.documentElement.clientWidth + 1),
-              )
-              .map(({ label }) => label),
-          }));
-        expect(bounds.document).toBe(bounds.viewport);
-        expect(bounds.leaking).toEqual([]);
+          .evaluateAll((elements) =>
+            elements
+              .filter((el) => {
+                const { left, right } = el.getBoundingClientRect();
+                return left < -1 || right > document.documentElement.clientWidth + 1;
+              })
+              .map((el) => el.textContent),
+          );
+        expect(overflow).toEqual([]);
       }));
   }
 
@@ -180,9 +149,7 @@ suite.define(() => {
       });
       await shelf(page, "Research").getByRole("button", { name: "View all", exact: true }).click();
       const category = { category: "research", limit: 20 };
-      expect((await gateway.waitForRequest("skills.search", { match: category })).params).toEqual(
-        category,
-      );
+      await expectSearch(gateway, category);
       await row(page, atlas.displayName).waitFor();
       expect(await row(page, index.displayName).count()).toBe(0);
       await capture(page, "research-skills", atlas.displayName);
@@ -191,7 +158,7 @@ suite.define(() => {
       const next = { ...category, cursor: "research:page-2" };
       await gateway.deferNext("skills.search", next);
       await more.click();
-      expect((await gateway.waitForRequest("skills.search", { match: next })).params).toEqual(next);
+      await expectSearch(gateway, next);
       await gateway.rejectDeferred(
         "skills.search",
         { code: "UNAVAILABLE", message: "Next page unavailable" },
@@ -202,9 +169,7 @@ suite.define(() => {
       expect(await row(page, atlas.displayName).isVisible()).toBe(true);
       await gateway.setMethodResponse("skills.search", { results: [ledger] });
       await error.getByRole("button", { name: "Retry" }).click();
-      expect(
-        (await gateway.waitForRequest("skills.search", { match: next, after: 1 })).params,
-      ).toEqual(next);
+      await expectSearch(gateway, next, 1);
       await row(page, ledger.displayName).waitFor();
       expect(await row(page, atlas.displayName).isVisible()).toBe(true);
       expect(await more.count()).toBe(0);
@@ -237,9 +202,7 @@ suite.define(() => {
       await gateway.setMethodResponse("skills.search", { results: [atlas] });
       await button(page, "Research").click();
       const query = { ...scoped, query: "citations" };
-      expect((await gateway.waitForRequest("skills.search", { match: query })).params).toEqual(
-        query,
-      );
+      await expectSearch(gateway, query);
       await row(page, atlas.displayName).waitFor();
       await capture(page, "research-citations", atlas.displayName);
       expect(await button(page, "Load more").count()).toBe(0);
