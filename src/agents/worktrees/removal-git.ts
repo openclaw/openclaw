@@ -174,7 +174,9 @@ export async function removeManagedCheckout(
             const deleted = await withChildProcessOperation("worktree.cleanup", () =>
               runCommandWithTimeout(
                 process.platform === "win32" ? argv : ["nice", "-n", "10", ...argv],
-                { timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS, killProcessTree: true },
+                // Pacing and pressure waits need a separate background budget;
+                // this retired tree owns no live checkout or removal lease.
+                { timeoutMs: 30 * 60_000, killProcessTree: true },
               ),
             );
             if (deleted.termination !== "exit" || deleted.code !== 0) {
