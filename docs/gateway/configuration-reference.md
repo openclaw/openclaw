@@ -246,3 +246,10 @@ connections only when set to `true`. It defaults to off and does not supply devi
 or source-publication permissions. Disabling it retires existing reader admissions
 and pending disclosures, even across a subsequent re-enable. Reconnect after
 re-enabling. See [Session Share](/plugins/session-share#outbound-gateway-pull).
+
+### Active steering opt-in
+
+`gateway.sessionControl.steeringEnabled` permits authenticated people to steer an
+existing run only when set to `true`. It defaults to off, independently of
+publication reader access. Disabling it retires pending steering admissions,
+including across an off/on transition. It does not start idle sessions.
