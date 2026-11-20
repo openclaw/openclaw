@@ -226,6 +226,7 @@ type QueuedApiRequest<T> = {
   run: () => Promise<T>;
   resolve: (value: T) => void;
   reject: (err: unknown) => void;
+  detach: () => void;
 };
 
 class GroupRequestScheduler {
@@ -307,6 +308,7 @@ class GroupRequestScheduler {
     this.pendingActions.clear();
     for (const queue of this.lanes.values()) {
       for (const request of queue) {
+        request.detach();
         request.reject(reason);
       }
     }
@@ -333,7 +335,11 @@ class GroupRequestScheduler {
     laneKey: string,
     run: () => Promise<T>,
     replaceable: { skip: () => T } | undefined,
+    signal: TelegramApiSignal,
   ): Promise<T> {
+    if (signal?.aborted) {
+      return Promise.reject(new DOMException("Request canceled", "AbortError"));
+    }
     if (this.retiredReason) {
       return Promise.reject(this.retiredReason);
     }
@@ -348,6 +354,20 @@ class GroupRequestScheduler {
           : run,
         resolve: resolve as (value: unknown) => void,
         reject,
+        detach: () => signal?.removeEventListener("abort", abort),
+      };
+      const abort = () => {
+        const queue = this.lanes.get(laneKey);
+        const index = queue?.indexOf(request) ?? -1;
+        if (!queue || index < 0) {
+          return;
+        }
+        queue.splice(index, 1);
+        if (queue.length === 0) {
+          this.lanes.delete(laneKey);
+        }
+        request.detach();
+        reject(new DOMException("Request canceled", "AbortError"));
       };
       const existing = this.lanes.get(laneKey);
       if (existing) {
@@ -355,6 +375,7 @@ class GroupRequestScheduler {
       } else {
         this.lanes.set(laneKey, [request]);
       }
+      signal?.addEventListener("abort", abort, { once: true });
       this.start();
     });
   }
@@ -395,6 +416,7 @@ class GroupRequestScheduler {
       const [laneKey, queue] = next.value;
       const request = queue.shift();
       if (request) {
+        request.detach();
         return request;
       }
       this.lanes.delete(laneKey);
@@ -548,6 +570,7 @@ function createTelegramAccountThrottler(
         replaceable
           ? { skip: () => skippedFloodResponse(1_000, "yielded to a pending reply", true) }
           : undefined,
+        signal,
       );
     };
 
