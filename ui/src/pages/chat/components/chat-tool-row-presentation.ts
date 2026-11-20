@@ -61,6 +61,11 @@ export function commandPreview(command: string): string {
   return truncateUtf16Safe(command.replace(/\s+/gu, " ").trim(), 200);
 }
 
+export const SESSION_LAUNCH_LIMIT_STYLE = {
+  "white-space": "normal",
+  "overflow-wrap": "anywhere",
+} as const;
+
 export function formatSessionLaunchLimit(
   launch: ReturnType<typeof resolveSessionLaunchPresentation>,
 ): string | undefined {

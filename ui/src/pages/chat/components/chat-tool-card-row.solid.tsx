@@ -37,6 +37,7 @@ import {
   formatSessionLaunchLimit,
   resolveToolOperationLabel,
   resolveToolRowVerb,
+  SESSION_LAUNCH_LIMIT_STYLE,
 } from "./chat-tool-row-presentation.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
@@ -200,7 +201,7 @@ function SessionLaunchRowContent(props: {
           </span>
         }
       >
-        {(message) => <span class="chat-tool-row__launch-limit">{message()}</span>}
+        {(message) => <span style={SESSION_LAUNCH_LIMIT_STYLE}>{message()}</span>}
       </Show>
       <Show when={props.launch.label && !props.launch.capacity}>
         <Show

@@ -21,6 +21,7 @@ import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import {
   formatSessionLaunchLimit,
   resolveToolOperationLabel,
+  SESSION_LAUNCH_LIMIT_STYLE,
 } from "./chat-tool-row-presentation.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
@@ -244,7 +245,10 @@ export function LifecycleOperations(props: {
           <Show
             when={!plainLabel()}
             fallback={
-              <span class={limitMessage() ? "chat-tool-row__launch-limit" : "chat-tool-row__title"}>
+              <span
+                class={firstLaunch()?.capacity ? undefined : "chat-tool-row__title"}
+                style={firstLaunch()?.capacity ? SESSION_LAUNCH_LIMIT_STYLE : undefined}
+              >
                 {plainLabel()}
               </span>
             }
