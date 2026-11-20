@@ -87,6 +87,25 @@ it("renders a CLI handoff the reseed parser accepts, without a tool hint when th
   expect(rendered).not.toContain("sessions_history");
 });
 
+it("keeps a notice-only CLI envelope when no intact history item fits", () => {
+  const rendered = buildCliSessionHistoryPrompt({
+    messages: [
+      { id: "s-1", role: "compactionSummary", summary: "s".repeat(80_000) },
+      { id: "e-1", role: "assistant", content: "a".repeat(80_000) },
+    ],
+    prompt: "Current question",
+    sessionKey: "agent:main:huge",
+  });
+  expect(rendered).toContain("<conversation_history>");
+  expect(rendered).toContain("[OpenClaw context handoff]");
+  expect(rendered).toContain('sessions_history({ sessionKey: "agent:main:huge"');
+  expect(rendered).not.toContain("a".repeat(1_000));
+  expect(parseCliReseedPrompt(rendered!)).toEqual({
+    kind: "legacy",
+    userMessage: "Current question",
+  });
+});
+
 it("bounds a tool-heavy transcript without a model call and tolerates a failing observer", async () => {
   await withOpenClawTestState({ label: "handoff-bound" }, async (state) => {
     setRuntimeConfigSnapshot({});

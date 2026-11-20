@@ -132,7 +132,8 @@ export function buildCliSessionHistoryPrompt(params: {
     maxTokens: Math.floor(maxBytes / 4),
     sessionKey: params.sessionKey,
   });
-  if (!selection.values.length) {
+  // A notice-only envelope still tells the fresh session that history exists and how to read it.
+  if (!selection.values.length && !selection.notice) {
     return undefined;
   }
   return [
@@ -142,7 +143,7 @@ export function buildCliSessionHistoryPrompt(params: {
     "<conversation_history>",
     CLI_SESSION_RESEED_CURRENCY_GUIDANCE,
     ...(selection.notice ? [selection.notice] : []),
-    selection.values.join("\n\n"),
+    ...(selection.values.length ? [selection.values.join("\n\n")] : []),
     "</conversation_history>",
     "",
     "<next_user_message>",
