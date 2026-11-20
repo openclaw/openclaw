@@ -19,15 +19,9 @@ export type SkillsRouteData = {
   /** An admitted prefetch adopted by the mounted Skills request owner. */
   reportRead?: Promise<SkillStatusReport | undefined>;
   error: string | null;
-  clawhubRef?: string;
 };
 
-export type SkillsList = (props: SkillsProps) => JSX.Element;
-export type SkillsPageProps = {
-  routeData?: SkillsRouteData;
-  surface?: "discovery" | "settings";
-  List: SkillsList;
-};
+export type SkillsPageProps = { routeData?: SkillsRouteData; surface?: "discovery" | "settings" };
 
 export type ClawHubDetailReceipt = {
   client: GatewayBrowserClient | null;
@@ -39,13 +33,12 @@ export type ClawHubDetailReceipt = {
 };
 
 export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
-export type SkillDetailTab = "overview" | "card";
 
 export type SkillsPresentation = {
   skillsFilter: string;
   skillsStatusFilter: SkillsStatusFilter;
+  /** The installed skill whose page is open, from the address. */
   skillsDetailKey: string | null;
-  skillsDetailTab: SkillDetailTab;
   clawhubSearchQuery: string;
 };
 
@@ -87,11 +80,15 @@ export type SkillsProps = {
     retry: () => void;
   };
   onInstall: (skillKey: string, name: string, installId: string) => void;
+  /** Where a skill page's first crumb leads: the list it was opened from. */
+  listHref: string;
+  /** Opens an installed skill's page. */
   onDetailOpen: (skillKey: string) => void;
+  /** Leaves a skill page for the list it was opened from. */
   onDetailClose: () => void;
-  onDetailTabChange: (tab: SkillDetailTab) => void;
+  onSkillCardRetry: (skillKey: string) => void;
   onClawHubQueryChange: (query: string) => void;
+  /** Opens a ClawHub skill's page. */
   onClawHubDetailOpen: (ref: string) => void;
-  onClawHubDetailClose: () => void;
   onClawHubInstall: (ref: string, version?: string) => void;
 };

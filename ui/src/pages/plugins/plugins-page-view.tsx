@@ -15,7 +15,6 @@ import {
   pathForPluginSettings,
   pathForRoute,
 } from "../../app-route-paths.ts";
-import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsLoadingSkeleton,
@@ -23,7 +22,7 @@ import {
   SettingsPageHeader,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { configSecretFields } from "../../lib/config/config-secret-fields.ts";
+import { WizardLogin } from "../../components/wizard-login-controller.tsx";
 import { currentConfigRead } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -40,12 +39,8 @@ import { PluginsHubHeader } from "./plugins-hub-header.tsx";
 import { pluginsHubPanel, type PluginsHubTab } from "./plugins-hub.ts";
 import { installRequestForDiscoveryDetail } from "./plugins-page-model.ts";
 import type { PluginsPageModel } from "./plugins-page.ts";
+import { PluginArtTile } from "./presentation.tsx";
 import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-inventory.tsx";
-import {
-  pluginAdvancedSchema,
-  pluginConfigSchema,
-  pluginHostControlsSchema,
-} from "./settings-model.ts";
 import { PluginRetryError } from "./settings-retry-error.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { PluginSkillPreview, renderPluginSkillsSection } from "./skill-preview.tsx";
@@ -160,8 +155,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     return staticAsk ? () => void staticAsk() : undefined;
   });
   const configState = () => page().context.runtimeConfig.state;
-  const rawConfigSchema = createMemo(() => configState().configSchema);
-  const configAnalysis = createMemo(() => analyzeConfigSchema(rawConfigSchema()), { lazy: true });
   const detailPluginId = () => page().state.detail?.pluginId;
   const catalogId = () => page().state.catalogDetail?.id ?? "";
   const catalogInstallable = createMemo(() => {
@@ -205,6 +198,8 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     configValue: configState().configForm,
     configHints: configState().configUiHints,
     configSchemaLoading: configState().configSchemaLoading,
+    rawConfigSchema: configState().configSchema,
+    settingsContext: page().context,
     onIconError: (pluginId: string) => page().icons.installed.handleError(pluginId),
     onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) =>
       void page().consent.mutateInstalledPlugin(pluginId, enabled ? "enable" : "disable", rowKey),
@@ -212,7 +207,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     onConfigPatch: (path: Array<string | number>, value: unknown) =>
       page().settings.patch(path, value),
     onConfigRemove: (path: Array<string | number>) => page().settings.patch(path, undefined),
-    configSecretFields: configSecretFields(page().context),
     onConfigReload: page().reloadConfig,
     onConfigReadRetry: actions.retryConfigRead,
     onConfigWriteRetry: () => void page().context.runtimeConfig.retry(),
@@ -240,12 +234,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         loading={inventoryProps.loading}
         tab={page().settingsTab()}
         query={query()}
-        advancedSchema={
-          page().settingsTab() === "advanced" ? pluginAdvancedSchema(configAnalysis().schema) : null
-        }
-        configUnsupportedPaths={
-          page().settingsTab() === "advanced" ? configAnalysis().unsupportedPaths : []
-        }
         onTabChange={actions.selectSettingsTab}
         onQueryChange={setQuery}
         pluginHref={(pluginId) => pathForPluginSettings(pluginId, page().context.basePath)}
@@ -270,11 +258,9 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         <PluginSettingsDetail
           {...shared()}
           promptBusy={page().recommendedPrompts.pending}
-          configUnsupportedPaths={configAnalysis().unsupportedPaths}
           pluginId={detailProps.pluginId}
           installProgress={page().consent.getActiveInstall(pluginRowKey(detailProps.pluginId))}
           inspection={page().state.detail?.inspection ?? null}
-          mcpLogin={props.page.mcpLogin.dialog}
           mcpLoginBusy={page().mcpLogin.busy}
           canMcpLogin={canCallGatewayMethod(
             page().gateway.snapshot,
@@ -314,11 +300,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                 : undefined
           }
           settingsHref={`${settingsLocation().pathname ?? ""}${settingsLocation().search}`}
-          configSchema={pluginConfigSchema(configAnalysis().schema, detailProps.pluginId)}
-          hostControlsSchema={pluginHostControlsSchema(
-            configAnalysis().schema,
-            detailProps.pluginId,
-          )}
           backHref={
             settings()
               ? `${overviewLocation().pathname ?? ""}${overviewLocation().search}`
@@ -497,6 +478,23 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         )}
       </SettingsWorkspace>
       <PluginSkillPreview preview={page().skillPreview} state={page().skillPreview.state} />
+      <WizardLogin
+        controller={props.page.mcpLogin.dialog}
+        signInIcon={
+          <Show when={detailPluginId()}>
+            {(pluginId) => (
+              <PluginArtTile
+                registerIcon={page().icons.register}
+                slug={pluginId()}
+                name={page().mcpLogin.dialog.state().authLabel ?? pluginId()}
+                iconUrl={page().state.iconUrls[pluginId()]}
+                loading={page().icons.installed.isLoading(pluginId())}
+                onIconError={() => page().icons.installed.handleError(pluginId())}
+              />
+            )}
+          </Show>
+        }
+      />
       <Show when={page().consent.read().consent}>
         {(consent) => {
           const icon = createMemo(() => {

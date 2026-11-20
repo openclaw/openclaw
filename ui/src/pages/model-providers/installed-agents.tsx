@@ -25,8 +25,7 @@ import {
   SettingsStatus,
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
-import { createWizardLogin } from "../../components/wizard-login-controller.tsx";
-import { WizardLogin } from "../../components/wizard-login-view.tsx";
+import { createWizardLogin, WizardLogin } from "../../components/wizard-login-controller.tsx";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";

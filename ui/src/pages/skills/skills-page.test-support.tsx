@@ -1,6 +1,6 @@
 import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
 import { createRouter, definePage } from "@openclaw/uirouter";
-import { createSignal, flush } from "solid-js";
+import { Show, createSignal, flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
@@ -15,7 +15,6 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { SkillsPage } from "./skills-page.tsx";
 import type { SkillsRouteData } from "./view-types.ts";
-import { skillsListFor } from "./view.solid.test-support.tsx";
 
 export const personalLibrary = {
   entries: [],
@@ -118,7 +117,20 @@ export function mountSkills(
       undefined,
       { requireConfiguredAgent: true },
     ),
-    navigate: vi.fn(),
+    // Skill pages are addresses: navigation moves the fixture router like the app's.
+    navigate: vi.fn(
+      (routeId: "skills" | "skill-settings", options?: { pathname?: string; search?: string }) =>
+        void router.navigate(
+          routeId,
+          context,
+          {},
+          {
+            pathname: options?.pathname ?? (routeId === "skills" ? "/skills" : "/settings/skills"),
+            search: options?.search ?? "",
+            hash: "",
+          },
+        ),
+    ),
   } as unknown as ApplicationContext;
   const selection =
     surface === "settings" ? context.settingsAgentSelection : context.agentSelection;
@@ -138,11 +150,9 @@ export function mountSkills(
   const [currentSurface, setCurrentSurface] = createSignal(surface);
   const mounted = mountSolid(() => (
     <ApplicationProvider value={context}>
-      <SkillsPage
-        routeData={routeData()}
-        surface={currentSurface()}
-        List={skillsListFor(currentSurface())}
-      />
+      <Show when={Boolean(routeData())}>
+        <SkillsPage routeData={routeData()} surface={currentSurface()} />
+      </Show>
     </ApplicationProvider>
   ));
   flush();

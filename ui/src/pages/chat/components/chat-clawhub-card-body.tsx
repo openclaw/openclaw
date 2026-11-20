@@ -4,7 +4,7 @@ import { createMemo, createSignal, isPending, Loading, onSettled, Show } from "s
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../../app/operator-access.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { WizardLogin } from "../../../components/wizard-login-view.tsx";
+import { WizardLogin } from "../../../components/wizard-login-controller.tsx";
 import { registerPluginManagementEnglish } from "../../../i18n/locales/en-plugin-management.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";

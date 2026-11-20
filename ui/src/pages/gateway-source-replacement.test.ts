@@ -27,7 +27,6 @@ import {
   unmountPage as unmountModelProvidersPage,
 } from "./model-providers/model-providers-page.test-support.tsx";
 import { pages as skillsPages } from "./skills/route.ts";
-import { SkillsSettings } from "./skills/settings-view.tsx";
 import { SkillsPage } from "./skills/skills-page.tsx";
 import type { SkillsRouteData } from "./skills/view-types.ts";
 import { createReport, createSkill } from "./skills/view.test-support.ts";
@@ -158,7 +157,10 @@ function contextWithClient(
   });
   const context = {
     router: createRouter<RouteId, ApplicationContext>({
-      routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
+      routes: [
+        { id: "chat", path: "/chat", component: () => ({}) },
+        { id: "skill-settings", path: "/settings/skills", component: () => ({}) },
+      ],
     }),
     gateway: source.gateway,
     agents: {
@@ -243,7 +245,7 @@ function mountSkillsPage(
     ...loadedRouteData,
   };
   const mounted = mountSolid(
-    () => createComponent(SkillsPage, { routeData, surface: "settings", List: SkillsSettings }),
+    () => createComponent(SkillsPage, { routeData, surface: "settings" }),
     { wrapper: provider.wrapper },
   );
   let currentContext = context;
@@ -460,6 +462,21 @@ it("loads skills from cloned route scope and retires verdicts across disconnect 
     agentsList: mainAgents,
     selectedAgentId: "main",
   });
+  vi.mocked(harness.navigate).mockImplementation((routeId, options) => {
+    if (routeId !== "skill-settings") {
+      throw new Error(`Unexpected route: ${routeId}`);
+    }
+    void harness.router.navigate(
+      routeId,
+      harness,
+      {},
+      {
+        pathname: options?.pathname ?? "/settings/skills",
+        search: options?.search ?? "",
+        hash: "",
+      },
+    );
+  });
   const mounted = mountSkillsPage(harness, {
     ...harness.gateway.snapshot,
   });
@@ -468,7 +485,7 @@ it("loads skills from cloned route scope and retires verdicts across disconnect 
   );
   mounted.find('[aria-label="Open Repo Skill details"]')!.click();
   await waitForSolid(() =>
-    expect(mounted.find("openclaw-modal-dialog .sidebar-markdown")?.textContent).toContain(
+    expect(mounted.find(".skill-page .sidebar-markdown")?.textContent).toContain(
       "Previous provider card",
     ),
   );
@@ -491,7 +508,7 @@ it("loads skills from cloned route scope and retires verdicts across disconnect 
   expect(mounted.text()).not.toContain("Repo Skill");
   expect(mounted.text()).not.toContain("Clean");
   expect(mounted.text()).not.toContain("Previous provider card");
-  expect(mounted.find("openclaw-modal-dialog")).toBeNull();
+  expect(mounted.find(".skill-page")).toBeNull();
 });
 
 it.each([
