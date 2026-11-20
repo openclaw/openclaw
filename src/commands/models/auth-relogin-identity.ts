@@ -6,13 +6,16 @@ import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../agents/a
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import type { ProviderAuthMethod, ProviderAuthResult } from "../../plugins/types.js";
 
-type AccountMatcher = ProviderAuthMethod["matchesPersonalAccount"];
+type ReloginMethod = Pick<
+  ProviderAuthMethod,
+  "matchesPersonalAccount" | "matchesSharedAccount" | "canReplaceGeneratedProfile"
+>;
 
 export async function snapshotReloginAuthProfiles(params: {
   agentDir: string;
-  matchesPersonalAccount?: AccountMatcher;
+  method: ReloginMethod;
 }): Promise<Readonly<Record<string, AuthProfileCredential>> | undefined> {
-  if (!params.matchesPersonalAccount) {
+  if (!(params.method.matchesSharedAccount ?? params.method.matchesPersonalAccount)) {
     return undefined;
   }
   // Main-agent OAuth writes are redirected to the shared owner. Read that owner
@@ -35,7 +38,7 @@ export function resolveReloginProfileIdentity(params: {
   profiles: ProviderAuthResult["profiles"];
   requestedProfileId?: string;
   existingProfiles?: Readonly<Record<string, AuthProfileCredential>>;
-  method?: Pick<ProviderAuthMethod, "matchesPersonalAccount" | "canReplaceGeneratedProfile">;
+  method?: ReloginMethod;
   allowMissingReusedProfile?: boolean;
 }) {
   const requestedProfileId = params.requestedProfileId?.trim();
@@ -80,7 +83,7 @@ export function resolveReloginProfileIdentity(params: {
       },
     }),
   };
-  const matcher = params.method?.matchesPersonalAccount;
+  const matcher = params.method?.matchesSharedAccount ?? params.method?.matchesPersonalAccount;
   if (!matcher || !params.existingProfiles || params.profiles.length !== 1) {
     return generated;
   }

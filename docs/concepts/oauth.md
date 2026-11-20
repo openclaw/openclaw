@@ -199,6 +199,8 @@ for each workspace and choose that workspace on OpenAI's sign-in page. When the
 new sign-in and the saved profile identify different workspaces, OpenClaw saves
 the second workspace in a separate auth profile instead of replacing the first.
 Signing in again reuses a verified matching profile without changing its ID.
+For Codex imports, OpenClaw can also use saved workspace and user identity when
+the old access token is missing those claims.
 If the generated ID is already in use and OpenClaw cannot confirm it is safe to
 replace, sign in from the CLI with a different `--profile-id`.
 

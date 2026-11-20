@@ -212,6 +212,50 @@ describe("OpenAI provider Codex transport hooks", () => {
     },
   );
 
+  it.each(["oauth", "device-code"] as const)(
+    "matches stable Codex imports only for the same shared account (%s)",
+    (methodId) => {
+      const token = (claims: Record<string, string>) =>
+        [
+          "fixture",
+          Buffer.from(JSON.stringify({ "https://api.openai.com/auth": claims })).toString(
+            "base64url",
+          ),
+          "fixture",
+        ].join(".");
+      const incoming = {
+        ...tokens,
+        type: "oauth" as const,
+        provider: "openai",
+        access: token({ chatgpt_account_id: "workspace-a", chatgpt_user_id: "same-user" }),
+      };
+      const saved = {
+        ...incoming,
+        access: token({}),
+        accountId: "workspace-a",
+        idToken: token({ chatgpt_user_id: "same-user" }),
+      };
+      const method = buildOpenAIProvider().auth.find((candidate) => candidate.id === methodId)!;
+      const matchesShared = method.matchesSharedAccount!;
+      expect(matchesShared(incoming, saved)).toBe(true);
+      expect(method.matchesPersonalAccount!(incoming, saved)).toBe(false);
+      expect(method.canReplaceGeneratedProfile!(incoming, saved)).toBe(true);
+      for (const unverified of [
+        { ...saved, idToken: undefined },
+        { ...saved, idToken: token({ chatgpt_user_id: "other-user" }) },
+        { ...saved, accountId: "workspace-b" },
+        { ...saved, access: token({ chatgpt_user_id: "other-user" }) },
+        {
+          ...saved,
+          idToken: token({ chatgpt_user_id: "same-user", chatgpt_account_id: "workspace-b" }),
+        },
+      ]) {
+        expect(matchesShared(incoming, unverified)).toBe(false);
+        expect(method.canReplaceGeneratedProfile!(incoming, unverified)).toBe(false);
+      }
+    },
+  );
+
   it.each(["structured", "note"])(
     "presents a bounded device-code link through %s UI",
     async (surface) => {

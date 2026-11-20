@@ -192,6 +192,8 @@ export type ProviderAuthMethod = {
     credential: AuthProfileCredential,
     existing: AuthProfileCredential,
   ) => boolean;
+  /** Match a shared-store reconnect; defaults to matchesPersonalAccount when absent. */
+  matchesSharedAccount?: ProviderAuthMethod["matchesPersonalAccount"];
   /** Whether shared login may replace an occupied generated profile ID when no reconnect matched. */
   canReplaceGeneratedProfile?: (
     credential: AuthProfileCredential,

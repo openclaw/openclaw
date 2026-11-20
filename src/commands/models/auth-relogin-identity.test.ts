@@ -67,11 +67,15 @@ describe("re-login identity boundaries", () => {
     },
   );
 
-  it("uses a verified custom ID instead of an occupied generated ID", () => {
+  it("uses a verified shared match before checking an occupied generated ID", () => {
     const result = resolveReloginProfileIdentity({
       profiles,
       existingProfiles: { "fixture:new": credential("b"), "fixture:work": credential("a") },
-      method: { matchesPersonalAccount, canReplaceGeneratedProfile: () => false },
+      method: {
+        matchesPersonalAccount: () => false,
+        matchesSharedAccount: matchesPersonalAccount,
+        canReplaceGeneratedProfile: () => false,
+      },
     });
     expect(result.profiles[0]?.profileId).toBe("fixture:work");
     expect(() => result.validateCurrentCredential?.("fixture:work", credential("a"))).not.toThrow();
