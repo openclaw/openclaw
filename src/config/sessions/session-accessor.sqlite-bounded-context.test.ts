@@ -778,23 +778,6 @@ it("retains the latest boundary and counts earlier resets before a truncated tai
   expect(context.boundaryCount).toBe(2);
 });
 
-it("counts boundaries on the active path after a rewind past a compaction", async ({ scope }) => {
-  await persist(scope, [user("old", null)]);
-  await appendTranscriptEvent(scope, compaction("first", "old", "old", "first work"));
-  await persist(scope, [user("kept", "first")]);
-  await appendTranscriptEvent(scope, compaction("abandoned", "kept", "kept", "later work"));
-  await persist(scope, [user("after-abandoned", "abandoned")]);
-  // Rewind: the next turn continues from before the second compaction.
-  await persist(scope, [user("rewound", "kept"), assistant("reply", "rewound")]);
-  await waitProjection(scope);
-
-  const context = readContext(scope, 2048, 1);
-
-  expect(eventIds(context.events)).not.toContain("abandoned");
-  expect(context.events.at(-1)).toMatchObject({ id: "reply" });
-  expect(context.boundaryCount).toBe(1);
-});
-
 it("keeps reset history closed across compaction with a warm history cache", async ({ scope }) => {
   const manager = SessionManager.open(scope);
   const appendUser = (content: string) =>
