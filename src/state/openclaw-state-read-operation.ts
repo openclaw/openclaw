@@ -326,7 +326,7 @@ export function startOpenClawStateReadOperation(
       authority.assertCurrent();
       return undefined;
     }
-    if (!snapshot && preserveArtifacts && !independentWarmSource) {
+    if (!snapshot && !independentWarmSource) {
       const currentMetadata =
         (command.type === "plugins.metadata.read" ||
           command.type === "config.health.read" ||
@@ -342,7 +342,7 @@ export function startOpenClawStateReadOperation(
               context.admission.identity.key,
             ))) &&
         (hasVerifiedLiveSqliteOwner(pathname) || readSqliteDatabaseCleanClose(pathname));
-      if (!native || currentMetadata) {
+      if (preserveArtifacts && (!native || currentMetadata)) {
         await selectedTransport.startValidateFresh(context, authority);
       }
       if (currentMetadata) {

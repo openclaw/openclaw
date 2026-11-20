@@ -1,5 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { subagentRegistryLog } from "../agents/subagents/registry/subagent-registry-lifecycle-log.js";
 import {
   listLiveSubagentRootSessions,
   listYieldWaitingSessions,
@@ -48,7 +49,18 @@ export async function selectLiveRestartResumeSessions(
   const select = async (input: (typeof inputs)[number]) => {
     const root = input.parked
       ? input
-      : await resolveRootSubagentRequester(input.sessionKey, input.agentId);
+      : await resolveRootSubagentRequester(input.sessionKey, input.agentId).catch(
+          (error: unknown) => {
+            subagentRegistryLog.warn("failed to resolve live subagent restart ancestry", {
+              sessionKey: input.sessionKey,
+              error,
+            });
+            return undefined;
+          },
+        );
+    if (!root) {
+      return;
+    }
     const agentId =
       root.agentId ?? parseAgentSessionKey(root.sessionKey)?.agentId ?? resolveDefaultAgentId(cfg);
     const storePath =

@@ -62,8 +62,8 @@ const DONE = "BOB-TARGET-COMPLETED-7d2e";
 const WAKE =
   "Continue the original task in this conversation. Do not repeat a completed operation.";
 const UNDELIVERED = "could not continue this conversation automatically";
-// Observed refusal: Bob's revoked authority ends the retained Gateway continuation.
-const CONTINUATION_REVOKED = "Gateway continuation authority is no longer active";
+// Observed refusal: the replay's start re-admits Bob's origin, which revocation ended.
+const CONTINUATION_REVOKED = "Operator access was revoked; start a new user turn.";
 const ORIGIN = "https://control.revocation.example.test";
 const ADMIN = "admin@revocation.example.test";
 const ALICE = "alice@revocation.example.test";
@@ -348,6 +348,9 @@ it.for(["allowed", "revoked"] as const)(
             if (raw.includes(MESSAGE) && agentTurn) {
               effects++;
               targetEffect.resolve();
+              if (revoked) {
+                failure.reject(new Error("Revoked retained send reached the target effect"));
+              }
               reply(DONE);
               return;
             }
@@ -584,13 +587,21 @@ it.for(["allowed", "revoked"] as const)(
       ).toEqual([result.runId, result.runId]);
       expect(gatewayCalls).toHaveBeenCalled();
       if (targetEntry?.sessionId) {
+        // History keeps terminal refusals; a refused replay is cancelled, never left queued.
         expect(
           await listSessionPendingInputs({
             agentId: "main",
             sessionKey: targetKey,
             sessionId: targetEntry.sessionId,
           }),
-        ).toEqual({ items: [], total: 0 });
+        ).toMatchObject(
+          revoked
+            ? {
+                items: [{ runId: result.runId, state: "cancelled", endCause: "revoked" }],
+                total: 1,
+              }
+            : { items: [], total: 0 },
+        );
       }
       if (revoked) {
         expect(revocation).toEqual({ method: revokeMethod, bobRefused: true });

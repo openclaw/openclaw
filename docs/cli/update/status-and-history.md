@@ -232,6 +232,10 @@ use candidate code before its own history admission completes.
 Triage preserves the original update report. Any update launched during repair
 gets a separate `runId`.
 
+Standalone `openclaw update repair` reports a repair and shows only its own phases.
+If the newest prior run is a failed update, the repair report retains that run's ID,
+version, failed phase, reason, and failure detail under **Repaired update**.
+
 Unexpected automatic-update campaign failures retain the error code, when present,
 and a redacted diagnostic in the run history as well as the Gateway log. Status
 and the bounded run report show the cause after the campaign clears. This requires

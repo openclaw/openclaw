@@ -354,6 +354,8 @@ function workerDeployBuildConfig(
       WORKER_DEPLOY_VERSION: JSON.stringify(workerDeployVersion),
     },
     alias: {
+      // Template portrait review runs on the Gateway, not in the portable worker.
+      "@resvg/resvg-js": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
       bufferutil: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
       "chromium-bidi/lib/cjs/bidiMapper/BidiMapper": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
       "chromium-bidi/lib/cjs/cdp/CdpConnection": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
@@ -590,6 +592,9 @@ function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, stri
     "agents/mcp-auth-profile.runtime": "src/agents/mcp-auth-profile.runtime.ts",
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
+    // The catalog publish gate runs each release's own refresh from this file
+    // (RELEASED_READER_ENTRIES in scripts/lib/catalog-compare-released-gate.mts).
+    "model-catalog/remote-refresh": "src/model-catalog/remote-refresh.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
     "infra/device-identity": "src/infra/device-identity.ts",

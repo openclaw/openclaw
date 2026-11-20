@@ -89,6 +89,8 @@ struct RootTabs: View {
     // Swipe-up hides the current problem until it changes or resolves.
     @State private var isGatewayToastSwipeDismissed: Bool = false
     @State private var showOnboarding: Bool = false
+    @State private var hasSavedGateway: Bool?
+    @State private var gatewayRegistryRefreshID = UUID()
     @State private var didEvaluateOnboarding: Bool = false
     @State private var didAutoOpenSettings: Bool = false
     @State private var didApplyInitialChatSession: Bool = false
@@ -329,7 +331,13 @@ struct RootTabs: View {
             // Agent identity pill owns the chat header (prototype parity).
             ChatProTab(
                 headerSidebarAction: self.sidebarHeaderAction,
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.selectSidebarDestination(.gateway) },
+                startFirstGatewaySetup: self.hasNeverHadGateway
+                    ? { self.evaluateOnboardingPresentation(force: true) }
+                    : nil)
+                // Sidebar open/close rebuilds this branch with fresh closures; the gate keeps
+                // that from re-running the chat tab and its transcript (see `ChatProTab ==`).
+                    .equatable()
         case .overview:
             CommandCenterTab(
                 headerSidebarAction: self.sidebarHeaderAction,
@@ -428,10 +436,13 @@ struct RootTabs: View {
         return NodeAppModel.execApprovalInboxKey(self.appModel.pendingExecApprovalPrompt)
     }
 
-    private var sidebarHeaderAction: OpenClawSidebarHeaderAction? {
-        // A presented drawer covers the destination, so its control only ever reveals.
-        // Only the split layout reads visibility here; toggling it re-lays out the detail anyway.
-        let hidesSidebar = !self.isSidebarDrawerLayout && self.sidebarPresentation.isSettledPresented
+    /// Every destination header keeps this item; only split mode turns it into Hide.
+    /// In drawer mode it stays a constant Show item while the drawer covers the card.
+    /// The button observes presentation itself so opening never restructures the toolbar.
+    private var sidebarHeaderAction: OpenClawSidebarHeaderAction {
+        let hidesSidebar = Self.sidebarHeaderControlHidesSidebar(
+            isSidebarVisible: !self.isSidebarDrawerLayout && self.sidebarPresentation.isSettledPresented,
+            layoutMode: self.isSidebarDrawerLayout ? .drawer : .split)
         return OpenClawSidebarHeaderAction(
             systemName: "line.3.horizontal",
             accessibilityLabel: hidesSidebar ? .localized("Hide Sidebar") : .localized("Show Sidebar"),
@@ -439,7 +450,7 @@ struct RootTabs: View {
                 ? Self.sidebarHideButtonAccessibilityIdentifier
                 : Self.sidebarShowButtonAccessibilityIdentifier,
             drawerPresentation: self.isSidebarDrawerLayout ? self.sidebarPresentation : nil,
-            action: { self.sidebarPresentation.isPresented ? self.hideSidebar() : self.showSidebar() })
+            action: hidesSidebar ? { self.hideSidebar() } : { self.showSidebar() })
     }
 
     private var sidebarAnimation: Animation? {
@@ -633,7 +644,24 @@ struct RootTabs: View {
     }
 
     private func rootGatewayLifecycle(_ content: some View) -> some View {
-        self.rootGatewayProblemLifecycle(content)
+        let refreshID: UUID? = self.hasConnectedOnce || self.appModel.isLocalGatewayFixtureEnabled
+            ? nil : self.gatewayRegistryRefreshID
+        let registryChanges = NotificationCenter.default.publisher(for: GatewaySettingsStore.gatewayRegistryDidChange)
+            .receive(on: DispatchQueue.main)
+        return self.rootGatewayProblemLifecycle(content)
+            .task(id: refreshID) {
+                guard let refreshID else { return }
+                // Keychain lookup and registry decoding must not run during view evaluation.
+                let hasSavedGateway = await Task.detached(priority: .userInitiated) {
+                    !GatewaySettingsStore.loadGatewayRegistry().entries.isEmpty
+                }.value
+                guard !Task.isCancelled, refreshID == self.gatewayRegistryRefreshID else { return }
+                self.hasSavedGateway = hasSavedGateway
+            }
+            .onReceive(registryChanges) { _ in
+                self.hasSavedGateway = nil
+                self.gatewayRegistryRefreshID = UUID()
+            }
             .onChange(of: self.gatewayController.gateways.count) { _, _ in self.maybeShowQuickSetup() }
             .onChange(of: self.appModel.gatewayServerName) { _, newValue in
                 if newValue != nil {
@@ -683,7 +711,8 @@ struct RootTabs: View {
     }
 
     private func rootPresentation(_ content: some View) -> some View {
-        content
+        let offersNewUserGuide = self.hasNeverHadGateway
+        return content
             .sheet(isPresented: self.$showGatewayProblemDetails) {
                 if let gatewayProblem = self.appModel.lastGatewayProblem {
                     GatewayProblemDetailsSheet(
@@ -718,6 +747,7 @@ struct RootTabs: View {
             .fullScreenCover(isPresented: self.$showOnboarding) {
                 OnboardingWizardView(
                     allowSkip: true,
+                    offersNewUserGuide: offersNewUserGuide,
                     onRequestLocalNetworkAccess: { reason in
                         self.requestLocalNetworkAccess(reason: reason)
                     },
@@ -929,10 +959,19 @@ extension RootTabs {
         }
     }
 
-    private func hasExistingGatewayConfig() -> Bool {
-        if self.appModel.activeGatewayConnectConfig != nil { return true }
-        if GatewaySettingsStore.activeGatewayEntry() != nil { return true }
+    private var hasNeverHadGateway: Bool {
+        !self.appModel.isLocalGatewayFixtureEnabled && Self.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: self.hasConnectedOnce,
+            hasSavedGateway: self.hasSavedGateway,
+            hasRuntimeOrLegacyGatewayConfig: self.hasRuntimeOrLegacyGatewayConfig)
+    }
 
+    private func hasExistingGatewayConfig() -> Bool {
+        self.hasRuntimeOrLegacyGatewayConfig || GatewaySettingsStore.activeGatewayEntry() != nil
+    }
+
+    private var hasRuntimeOrLegacyGatewayConfig: Bool {
+        if self.appModel.activeGatewayConnectConfig != nil { return true }
         let preferredStableID = self.preferredGatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
         if !preferredStableID.isEmpty { return true }
 

@@ -12,6 +12,7 @@ import {
   resolveRecordedRequester,
   resolveSubagentChildAgentId,
 } from "./subagent-child-owner-match.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import {
   getRecordedSubagentChildAuthority,
   getSubagentActivationRuns,
@@ -135,16 +136,29 @@ export async function resolveRootSubagentRequester(
 }
 
 export async function listLiveSubagentRootSessions(): Promise<SubagentRootRequester[]> {
-  const requests: Promise<SubagentRootRequester>[] = [];
+  const requests: Promise<SubagentRootRequester | undefined>[] = [];
   for (const runId of listLiveAgentRunIds()) {
     const entry = subagentRuns.get(runId);
     if (!entry || !isSubagentRunLive(entry)) {
       continue;
     }
-    requests.push(resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId));
+    requests.push(
+      resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId).catch(
+        (error: unknown) => {
+          subagentRegistryLog.warn("failed to resolve live subagent restart ancestry", {
+            sessionKey: entry.childSessionKey,
+            error,
+          });
+          return undefined;
+        },
+      ),
+    );
   }
   const roots = new Map<string, SubagentRootRequester>();
   for (const root of await Promise.all(requests)) {
+    if (!root) {
+      continue;
+    }
     roots.set(JSON.stringify([root.agentId, root.storePath, root.sessionKey]), root);
   }
   return [...roots.values()];
@@ -289,10 +303,26 @@ export function resolveSessionYieldWait(
   ) {
     return undefined;
   }
-  return (
-    resolveYieldWaitingChild(sessionKey, agentId, session.lifecycleRunId, new Set()) ??
-    "unreachable"
-  );
+  const source = resolveYieldWaitingChild(sessionKey, agentId, session.lifecycleRunId, new Set());
+  if (source) {
+    return source;
+  }
+  // A child whose continuation was lost still owes its requester a registry
+  // settlement. That completion, not a second root recovery input, owns the wake.
+  for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
+    if (
+      resolveRecordedRequester(child) === agentId &&
+      (child.requesterSettleWake ||
+        (owesRequesterCompletion(child) &&
+          (child.execution.status !== "terminal" ||
+            isYieldedSubagentRun(child) ||
+            child.delivery?.status === "pending" ||
+            child.delivery?.status === "in_progress")))
+    ) {
+      return "waiting";
+    }
+  }
+  return "unreachable";
 }
 
 /** Resolve live owners through the existing aliases without scanning retained history. */

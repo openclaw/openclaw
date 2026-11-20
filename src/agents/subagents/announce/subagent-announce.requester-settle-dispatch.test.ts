@@ -341,10 +341,11 @@ describe("requester settle dispatch deadline", () => {
       throw error;
     });
     const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
-    // The committed input is delivered once; the interrupted turn shows its own error.
+    // Consumption prevents replay; retained settlement owns the visible fallback.
     await expect(run()).resolves.toBe(true);
     expect(completeBatch).toHaveBeenCalledOnce();
-    expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
+    expect(completeBatch.mock.calls[0]?.[2]).toEqual(await deliver.mock.results[0]?.value);
+    expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: false });
     expect(child.requesterSettleWake).toBeUndefined();
     await expect(run()).resolves.toBe(false);
     expect(startTurn).toHaveBeenCalledOnce();
@@ -997,7 +998,8 @@ describe("requester settle dispatch deadline", () => {
         } else {
           expect(acceptedSignal?.aborted).toBe(true);
           expect(completeBatch).toHaveBeenCalledOnce();
-          expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
+          expect(completeBatch.mock.calls[0]?.[2]).toEqual(await deliver.mock.results[0]?.value);
+          expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: false });
         }
         const later = vi.fn();
         let laterClaim: ReturnType<typeof getCurrentSessionControllerClaim>;
