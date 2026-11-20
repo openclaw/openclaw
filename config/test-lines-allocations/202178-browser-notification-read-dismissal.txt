@@ -1,4 +1,4 @@
-# Issue #202178: 24 lines above the 400-line regression budget.
-# Covers distinct producer/recipient, service-worker display ordering, lazy owner
-# admission, browser enumeration, and actually presented final-message boundaries.
-24
+# Issue #202178: 140 lines above the 400-line regression budget.
+# Distinct producer/recipient, service-worker ordering, lazy admission and real
+# Chromium notification delivery/view/foreground/late-push boundaries.
+140
