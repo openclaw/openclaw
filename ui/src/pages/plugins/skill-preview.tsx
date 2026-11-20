@@ -1,28 +1,28 @@
-import { Show, onSettled } from "solid-js";
+import { Loading, Show, lazy, onSettled } from "solid-js";
 import type {
   PluginsSkillsReadParams,
   PluginsSkillsReadResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
-import { stripFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
-import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import "../../components/modal-dialog.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
-import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import "./custom-elements.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import "../../styles/sidebar-markdown.css";
 import { renderPluginCapabilitySection as PluginCapabilitySection } from "./overview.tsx";
 import "./skill-preview.css";
 import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.tsx";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
+
+const PluginSkillDocument = lazy(() => import("./skill-preview-document.tsx"), {
+  export: "PluginSkillDocument",
+});
 
 type SkillRequest =
   | Omit<Extract<PluginsSkillsReadParams, { source: "installed" }>, "path">
@@ -257,16 +257,17 @@ export function PluginSkillPreview(props: {
                 </Show>
                 <Show when={document()}>
                   {(ready) => (
-                    <SanitizedHtml
-                      tag="article"
-                      class="sidebar-markdown"
-                      html={toSanitizedMarkdownHtml(stripFrontmatterBlock(ready().content), {
-                        mode: "document",
-                        remoteImages: false,
-                        codeBlockChrome: "none",
-                        relativeLinks: false,
-                      })}
-                    />
+                    <Loading
+                      fallback={
+                        <PanelLoadingSkeleton
+                          variant="document"
+                          label={t("common.loading")}
+                          compact
+                        />
+                      }
+                    >
+                      <PluginSkillDocument content={ready().content} />
+                    </Loading>
                   )}
                 </Show>
               </div>
