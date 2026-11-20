@@ -146,15 +146,17 @@ why. Online status leaves workspace and bootstrap checks unknown, including
 loading channel plugins and records `channelSummary` in `collection.notCollected`.
 An empty list there means the field was not collected, not that no channels are
 configured. Use `openclaw channels status` for the configured inventory, or
-`openclaw channels status --probe` for live account checks. Online status skips
-local config validation, channel and memory credential inspection, and the local
-plugin inspections normally requested by `--all` or `--deep`. Requested security
-audit and plugin compatibility sections report `collected: false`; memory remains
-`null`. Use
-`openclaw security audit`, `openclaw plugins inspect --all`, or
-`openclaw memory status --deep` for those local inspections. `--deep` still requests
-Gateway health, and `--usage --agent <id>` retains its credential scope.
-When the Gateway is unavailable, JSON status retains local diagnostics.
+`openclaw channels status --probe` for live account checks. Online JSON skips
+local config validation and channel and memory credential inspection. With `--all`,
+plugin compatibility reports `collected: false`; without `--all`, including with
+`--deep` alone, the section is omitted. Run `openclaw status --all` without
+`--json` for compatibility notices that depend on plugin registration.
+
+Online JSON also reports `collected: false` for a requested security audit, and
+memory remains `null`. Use `openclaw security audit` or
+`openclaw memory status --deep` for those checks. `--deep` still requests Gateway health, and
+`--usage --agent <id>` retains its credential scope. When the Gateway is
+unavailable, JSON status retains local diagnostics.
 
 For Git installs, plain status compares cached remote-tracking refs without a
 network fetch. If the latest recorded update fetch failed and no later update
