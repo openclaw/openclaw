@@ -92,6 +92,9 @@ selecting PostgreSQL alone is not a warning.
 | `database.postgres.connection`   | None         | Required when any effective family uses PostgreSQL. A shared DSN string or env/file/exec SecretRef; store-backed refs are rejected.                                |
 | `database.postgres.schemaPrefix` | `"openclaw"` | Prefix for new store schemas: 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors keep their recorded schema.   |
 
+OpenClaw rejects the prefix `pg` and any prefix starting with `pg_` because
+both produce names reserved for PostgreSQL system schemas.
+
 Shared state, agent databases, Workboard, Logbook, and Team Reports support PostgreSQL.
 Before its first shared-state read, the Gateway resolves the effective family
 map and, if needed, the shared PostgreSQL connection once on the host. Reader,
