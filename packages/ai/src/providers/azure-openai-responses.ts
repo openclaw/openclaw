@@ -169,6 +169,9 @@ function resolveAzureConfig(
   const baseUrl =
     options?.azureBaseUrl?.trim() || process.env.AZURE_OPENAI_BASE_URL?.trim() || undefined;
   const resourceName = options?.azureResourceName || process.env.AZURE_OPENAI_RESOURCE_NAME;
+  if (!baseUrl && resourceName && !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(resourceName)) {
+    throw new Error("Invalid Azure OpenAI resource name: expected a single DNS label");
+  }
 
   const resolvedBaseUrl =
     baseUrl ||
