@@ -4,6 +4,8 @@ import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { defaultPayload } from "../infra/gateway-state-owner-record.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "../infra/sqlite-private-directory.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
@@ -13,6 +15,9 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
+  withOpenClawStateDatabaseReadSnapshot,
 } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -30,6 +35,65 @@ const directories = useAutoCleanupTempDirTracker((cleanup) => {
     vi.unstubAllEnvs();
     cleanup();
   });
+});
+
+it("uses a live Gateway's WAL without copying while explicit discovery stays frozen", async () => {
+  const root = directories.make("state-read-live-owner-");
+  vi.stubEnv("XDG_CACHE_HOME", path.join(root, "cache"));
+  const options = {
+    path: path.join(root, "state", "openclaw.sqlite"),
+    env: { OPENCLAW_STATE_DIR: root, OPENCLAW_TEST_FAST: "1" },
+  };
+  openOpenClawStateDatabase(options);
+  await closeOpenClawStateDatabaseAsync();
+  using writer = openNodeSqliteDatabase(options.path);
+  writer.exec("PRAGMA journal_mode=WAL");
+  const owner = acquireGatewayStateOwner({
+    databasePath: options.path,
+    payload: { ...defaultPayload(options.path), role: "gateway" },
+  });
+  try {
+    const key = "readonly.live-owner.fixture";
+    const update = (value: number) =>
+      writer
+        .prepare(
+          "INSERT OR REPLACE INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+        )
+        .run(key, String(value), value);
+    update(1);
+    const copies = [
+      vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync"),
+      vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation"),
+      vi.spyOn(snapshots, "startSqliteReadOnlyLocationAsync"),
+    ];
+    const probe: Parameters<
+      typeof withExistingOpenClawStateDatabaseArtifactPreservingReadOnly
+    >[0] = ({ db }) => {
+      expect(() => db.exec("DELETE FROM config_machine_state")).toThrow(/readonly/);
+      return db.prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?").get(key)
+        ?.value_json;
+    };
+    const readAll = async () => {
+      const sync = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(probe, options);
+      const asyncCallback = await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+        probe,
+        options,
+      );
+      const reply = await withArtifactPreservingStateReads(() =>
+        executeExistingOpenClawStateRead(options, { type: "tui.lastSession.read", stateKey: key }),
+      );
+      return [sync, asyncCallback, reply?.ok ? reply.row?.value_json : undefined];
+    };
+    expect(await readAll()).toEqual(["1", "1", "1"]);
+    expect(copies.map((copy) => copy.mock.calls.length)).toEqual([0, 0, 0]);
+    await withOpenClawStateDatabaseReadSnapshot(async () => {
+      update(2);
+      expect(await readAll()).toEqual(["1", "1", "1"]);
+    }, options);
+    expect(await readAll()).toEqual(["2", "2", "2"]);
+  } finally {
+    owner.release();
+  }
 });
 
 it("rejects successor bytes substituted after fresh validation and before snapshot preparation", async () => {

@@ -10,6 +10,7 @@ import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner
 import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
+import { hasVerifiedLiveSqliteOwner } from "../infra/sqlite-live-owner.js";
 import {
   retainSnapshotTempDirectory,
   retainSnapshotWork,
@@ -246,7 +247,8 @@ function requiresArtifactPreservingSnapshot(pathname: string): boolean {
   const required =
     isArtifactPreservingStateRead("shared", pathname) &&
     !isUpdateRehearsalPrivateDatabase(pathname, process.env) &&
-    !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname);
+    !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname) &&
+    !hasVerifiedLiveSqliteOwner(pathname);
   if (required) {
     assertStateFileSnapshotAllowed();
   }
@@ -364,13 +366,12 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
       return maintained.value;
     }
   }
-  // Even read-only SQLite opens can create a missing WAL. The existing worker
-  // snapshots committed WAL pages without touching source sidecars or caller-held locks.
-  // One consistent snapshot per synchronous scope avoids mixed reads and duplicate copies.
-  // Concurrent commits become visible in the next scope; this reader closes at scope end.
+  // Offline readers must not create sidecars. Once a scope has selected private
+  // bytes, keep that source even if a live owner appears during the scope.
   const readers = synchronousReadSnapshots.current;
-  if (readers && requiresArtifactPreservingSnapshot(pathname)) {
-    let opened = readers.get(pathname);
+  let opened = readers?.get(pathname);
+  const preserve = opened !== undefined || requiresArtifactPreservingSnapshot(pathname);
+  if (readers && preserve) {
     if (!opened) {
       opened = openOpenClawStateReadOnlyLocation(
         pathname,
@@ -385,9 +386,7 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
     }
     return result;
   }
-  const prepared = requiresArtifactPreservingSnapshot(pathname)
-    ? prepareSqliteReadOnlyLocationSync(pathname)
-    : undefined;
+  const prepared = preserve ? prepareSqliteReadOnlyLocationSync(pathname) : undefined;
   // Maintenance must release readers before replacing store files.
   return withOpenClawStateReadOnlyLocation(
     operation,
