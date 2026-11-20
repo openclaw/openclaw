@@ -17,15 +17,22 @@ import { resolveRepoRoot } from "../lib/repo-root.mjs";
 
 const root = resolveRepoRoot(import.meta.url);
 const revision = process.argv[2] ?? "-";
-const owner = "scripts/lib/extension-boundary-inputs.mts";
-const ownerUrl = pathToFileURL(path.join(root, owner)).href;
-const source =
-  revision === "-"
-    ? undefined
-    : execFileSync("git", ["show", `${revision}:${owner}`], { cwd: root, encoding: "utf8" });
+const sources = new Map<string, string>();
+if (revision !== "-") {
+  for (const owner of [
+    "scripts/lib/extension-boundary-inputs.mts",
+    "scripts/lib/compiler-input-snapshot.mts",
+  ]) {
+    sources.set(
+      pathToFileURL(path.join(root, owner)).href,
+      execFileSync("git", ["show", `${revision}:${owner}`], { cwd: root, encoding: "utf8" }),
+    );
+  }
+}
 const hook = registerHooks({
   load(url, context, nextLoad) {
-    return url === ownerUrl && source !== undefined
+    const source = sources.get(url);
+    return source !== undefined
       ? { format: "module-typescript", shortCircuit: true, source }
       : nextLoad(url, context);
   },
