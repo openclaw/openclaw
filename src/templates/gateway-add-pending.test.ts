@@ -251,7 +251,18 @@ it.each([
           ),
         ).toBe("A calm fixture personality.\n");
       });
+      await using cleanup = new AsyncDisposableStack();
+      const scheduler = retrySchedule
+        ? cleanup.adopt(createDeletionCron(state), (fixture) => fixture.stop())
+        : undefined;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("Fixture authority expired");
+        }
+      };
       const applyInput = {
+        cronGateway:
+          scheduler && createTemplateCronGateway(scheduler.cron, () => config, assertCurrent),
         source: { packageName: "@fixture/template-first", version: "1.0.0" },
         ...(outcome.startsWith("admitted-")
           ? { agentId: "fixture-first", planIntegrity: review!.planIntegrity }
@@ -269,11 +280,7 @@ it.each([
             }
           },
         },
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Fixture authority expired");
-          }
-        },
+        assertCurrent,
         prepareAgentChat,
         waitForAgentRuntime: async () => {
           if (outcome === "admitted-recreated" && recreating) {
@@ -462,23 +469,13 @@ it.each([
         expect(newerVersion.blockers).toContainEqual(
           expect.objectContaining({ code: "agent_id_collision" }),
         );
-        const scheduler = retrySchedule ? createDeletionCron(state) : undefined;
-        try {
-          result = await applyTemplateAddForGateway({
-            ...applyInput,
-            cronGateway:
-              scheduler &&
-              createTemplateCronGateway(scheduler.cron, () => config, applyInput.assertCurrent),
-          });
-          expect(result, JSON.stringify(result)).toMatchObject({ status: "complete", sessionKey });
-          if (scheduler) {
-            const jobs = await scheduler.cron.list({ includeDisabled: true });
-            expect(jobs.map((job) => job.schedule)).toEqual([
-              { kind: "cron", expr: "0 9 * * 1", tz: originZone ?? "Europe/Paris" },
-            ]);
-          }
-        } finally {
-          await scheduler?.stop();
+        result = await applyTemplateAddForGateway(applyInput);
+        expect(result, JSON.stringify(result)).toMatchObject({ status: "complete", sessionKey });
+        if (scheduler) {
+          const jobs = await scheduler.cron.list({ includeDisabled: true });
+          expect(jobs.map((job) => job.schedule)).toEqual([
+            { kind: "cron", expr: "0 9 * * 1", tz: originZone ?? "Europe/Paris" },
+          ]);
         }
         if (before) {
           const after = await fs.stat(profile);
