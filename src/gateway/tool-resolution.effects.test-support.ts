@@ -190,6 +190,7 @@ export function registerGatewayToolFinalEffectTests() {
         original,
         image,
         manager,
+        session,
         requested,
         authority,
         call,
@@ -260,6 +261,7 @@ export function registerGatewayToolFinalEffectTests() {
         const applyStarted = createDeferred();
         const releaseApply = createDeferred();
         let pending: ReturnType<typeof f.call> | undefined;
+        let pendingApproval: SystemAgentChatSession["pendingApproval"];
         try {
           pending = f.call(controller.signal);
           // Observe settlement too: on the broken factory the forbidden write completes instead of requesting approval.
@@ -272,6 +274,9 @@ export function registerGatewayToolFinalEffectTests() {
           expect(await fs.readFile(f.configPath, "utf8")).toBe(f.original);
           const [record] = await f.manager.listPendingRecords();
           assert(record);
+          pendingApproval = f.session.pendingApproval;
+          assert(pendingApproval);
+          expect(pendingApproval.id).toBe(record.id);
           // Pause external inference preparation, not the approval owner or persistent sink.
           if (outcome === "precommit-revoked") {
             const execution = f.execution;
@@ -300,6 +305,8 @@ export function registerGatewayToolFinalEffectTests() {
             (value) => ({ value }),
             (error: unknown) => ({ error }),
           );
+          // Tool cancellation is prompt; its approval owner still finishes durable bookkeeping.
+          await pendingApproval.completion;
           if (outcome === "approve") {
             expect(result).toHaveProperty("value");
             expect(JSON.parse(await fs.readFile(f.configPath, "utf8"))).toMatchObject({
@@ -314,9 +321,11 @@ export function registerGatewayToolFinalEffectTests() {
             expect(await fs.readFile(f.configPath, "utf8")).toBe(f.original);
           }
         } finally {
+          pendingApproval ??= f.session.pendingApproval;
           releaseApply.resolve();
           controller.abort();
           await pending?.catch(() => undefined);
+          await pendingApproval?.completion;
           await f.close();
         }
       },
