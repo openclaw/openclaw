@@ -907,6 +907,21 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(result).toStrictEqual(notInstalled("failed", { error }));
   });
 
+  it("returns the registry failure without asking a headless caller to use a local path", () =>
+    withTestDir({ prefix: "openclaw-onboarding-local-fallback-" }, async (temp) => {
+      const { workspaceDir } = await localWorkspace(temp);
+      const error = "Package not found on ClawHub.";
+      installers.clawhub.mockResolvedValueOnce({ ok: false, code: "package_not_found", error });
+      const confirm = vi.fn(async () => false);
+      const result = await runInstall(
+        installEntry({ clawhubSpec: "clawhub:demo-plugin", localPath: "plugins/demo" }),
+        clawHubPrompter(confirm),
+        { workspaceDir, promptInstall: false, promptLocalFallback: false, failureOutput: "caller" },
+      );
+      expect(confirm).not.toHaveBeenCalled();
+      expect(result).toEqual(notInstalled("failed", { error }));
+    }));
+
   it("returns bounded multiline ClawHub failure detail to non-interactive callers", async () => {
     const runtimeError = vi.fn();
     const summaryPrefix = "x".repeat(178);
