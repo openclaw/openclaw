@@ -272,7 +272,7 @@ export function resolveSessionMutationTargets(params: {
   context: GatewayRequestContext;
 }): SessionMutationTarget[] | undefined {
   if (
-    params.method === "session.typing" &&
+    (params.method === "session.typing" || params.method === "session.suggestions.add") &&
     (params.participationRequired ||
       (params.sessionScope === "operator.sessions.write" &&
         resolveOperatorRolePolicy(params.client ?? null, params.context.getRuntimeConfig())

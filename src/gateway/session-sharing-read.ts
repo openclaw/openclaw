@@ -213,6 +213,12 @@ export type PreparedMutationSharing = {
   assertCurrent: () => void;
 };
 
+export type PreparedSessionSharingTargetFacts = {
+  target: SessionSharingTarget | null;
+  members: readonly string[];
+  memberAccess?: Readonly<Record<string, SessionMemberPermissionLevel>>;
+};
+
 /** Consume live authority or borrow prepared source facts in one synchronous frame. */
 export function createSessionSharingConsumption(params: {
   client: GatewayClient | null;
@@ -223,17 +229,29 @@ export function createSessionSharingConsumption(params: {
     sharing: PreparedMutationSharing | undefined;
     profiles: PreparedSessionSharingProfiles | undefined;
     members: readonly string[] | undefined;
-  } = { sharing: params.sharing, profiles: params.getProfiles(), members: undefined };
+    memberAccess: PreparedSessionSharingTargetFacts["memberAccess"];
+  } = {
+    sharing: params.sharing,
+    profiles: params.getProfiles(),
+    members: undefined,
+    memberAccess: undefined,
+  };
   const isMember = (_target: SessionSharingTarget, id: string) =>
     current.sharing
       ? (current.sharing.isMember?.(id) ??
         current.sharing.members.some((member) => member.identityId === id))
       : (current.members?.includes(id) ?? false);
   const memberAccess = (_target: SessionSharingTarget, id: string) =>
-    current.sharing?.memberAccess?.(id) ??
-    current.sharing?.members.find((member) => member.identityId === id)?.access;
+    current.sharing
+      ? (current.sharing.memberAccess?.(id) ??
+        current.sharing.members.find((member) => member.identityId === id)?.access)
+      : current.memberAccess?.[id];
   return Object.assign(current, {
-    policy: (cfg: OpenClawConfig, members?: readonly string[]) => {
+    policy: (
+      cfg: OpenClawConfig,
+      members?: readonly string[],
+      access?: PreparedSessionSharingTargetFacts["memberAccess"],
+    ) => {
       const policy =
         current.sharing || current.profiles
           ? prepareProjectedSessionSharing({
@@ -246,6 +264,7 @@ export function createSessionSharingConsumption(params: {
             })
           : undefined;
       current.members = members;
+      current.memberAccess = access;
       return policy;
     },
     consume: <T>(
@@ -258,6 +277,7 @@ export function createSessionSharingConsumption(params: {
           sharing: current.sharing,
           profiles: current.profiles,
           members: current.members,
+          memberAccess: current.memberAccess,
         };
         Object.assign(current, {
           sharing: typeof prepared === "function" ? undefined : prepared,

@@ -379,7 +379,7 @@ export function requiresSessionParticipation(
   if (!operatorScopeSatisfied("operator.sessions.read", scopes)) {
     return false;
   }
-  if (["chat.send", "chat.abort", "session.typing"].includes(method)) {
+  if (["chat.send", "chat.abort", "session.typing", "session.suggestions.add"].includes(method)) {
     return true;
   }
   const patch = asOptionalRecord(params);

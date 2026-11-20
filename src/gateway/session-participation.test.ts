@@ -7,6 +7,7 @@ import {
   removeSessionMember,
   setSessionMemberAccess,
 } from "../config/sessions/session-sharing-store.native.js";
+import { prepareSessionSourceAuthority } from "../config/sessions/session-source-authority.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -221,5 +222,63 @@ it("admits only bounded methods for a send invitation with read scope", async ()
     });
     expect(ordinary.error).not.toBeNull();
     ordinary.authorization?.release?.();
+  });
+});
+
+it("preserves invitation levels in prepared writer assertions without granting suggestion turns", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    const role = cfg.gateway!.roles!.definitions.invited!;
+    role.scopes = ["operator.sessions.read"];
+    setRuntimeConfigSnapshot(cfg);
+    const client = roleClient("invited", "prepared-participant");
+    client.connect.scopes = role.scopes;
+    client.internal = { authenticatedOperator: true };
+    const scope = { agentId: "main", sessionKey: "agent:main:prepared-participation" };
+    await upsertSessionEntryCore(scope, {
+      sessionId: "prepared-participation-id",
+      updatedAt: 1,
+      visibility: "shared",
+      createdActor: { type: "human", source: "profile", id: "creator" },
+    });
+    const profileId = client.authenticatedUserProfile!.profileId;
+    addSessionMember(scope, { identityId: profileId, addedBy: "creator", access: "send" });
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    const registry = createGatewayMethodRegistry([]);
+    for (const ceiling of [undefined, "read", "suggest", "send"] as const) {
+      role.sessions.maxInvitedAccess = ceiling;
+      setRuntimeConfigSnapshot(cfg);
+      for (const method of ["session.suggestions.add", "chat.send"] as const) {
+        const dispatch = authorizeGatewayMethod(method, client, scope, registry, context);
+        expect(dispatch).toEqual({ error: null, participationRequired: true });
+        const result = await resolveSessionMutationAuthorizationAsync({
+          client,
+          context,
+          method,
+          requestParams: scope,
+          participationRequired: dispatch.participationRequired,
+        });
+        const permitted =
+          ceiling === "send" || (ceiling === "suggest" && method === "session.suggestions.add");
+        expect(result.error === null, `${ceiling}/${method}`).toBe(permitted);
+        try {
+          if (!permitted) {
+            continue;
+          }
+          expect(result.authorization).toBeDefined();
+          expect(result.authorization?.participationCeiling?.kind).toBe(
+            method === "chat.send" ? "send" : undefined,
+          );
+          const prepared = await prepareSessionSourceAuthority(result.authorization!.assertCurrent);
+          try {
+            expect(prepared.assertCurrent).not.toThrow();
+          } finally {
+            await prepared.release?.();
+          }
+        } finally {
+          result.authorization?.release?.();
+        }
+      }
+    }
   });
 });

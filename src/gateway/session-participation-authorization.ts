@@ -22,6 +22,8 @@ import type { createSessionSharingConsumption } from "./session-sharing-read.js"
 export function createSessionParticipationAuthorization(
   params: SessionMutationAuthorizationParams,
 ) {
+  // Later run assertions can execute inside a tool-caller context; keep the admitted person.
+  const personalProfileId = resolveAuthenticatedPersonalGatewayProfileId(params.client);
   let ceiling: ParticipationCeiling | undefined;
   let lifetime: ReturnType<typeof retainSessionParticipation> | undefined;
   return {
@@ -56,6 +58,10 @@ export function createSessionParticipationAuthorization(
       error: ErrorShape | null;
     }): { error: ErrorShape | null } | undefined => {
       const access = target && policy?.accessForTarget(target);
+      const permitsMethod =
+        params.method === "session.suggestions.add"
+          ? access?.canSuggest
+          : access?.access === "send";
       const boundedMethod = requiresSessionParticipation(
         params.method,
         params.client?.connect.scopes ?? [],
@@ -63,7 +69,7 @@ export function createSessionParticipationAuthorization(
       );
       if (
         !params.participationRequired &&
-        !(access?.access === "send" && access.invitedAccessCeiling && boundedMethod)
+        !(permitsMethod && access?.invitedAccessCeiling && boundedMethod)
       ) {
         return undefined;
       }
@@ -71,7 +77,7 @@ export function createSessionParticipationAuthorization(
         return { error };
       }
       const profileId =
-        resolveAuthenticatedPersonalGatewayProfileId(params.client) ??
+        personalProfileId ??
         (params.method === "chat.send"
           ? readQueuedParticipationProfile(params.requestParams)
           : undefined) ??
@@ -80,7 +86,7 @@ export function createSessionParticipationAuthorization(
         !target?.entry.sessionId ||
         !profileId ||
         !access?.invitedAccessCeiling ||
-        access.access !== "send"
+        !permitsMethod
       ) {
         return { error: hiddenSessionNotFound(targetRef.sessionKey) };
       }
@@ -88,6 +94,9 @@ export function createSessionParticipationAuthorization(
         return {
           error: errorShape(ErrorCodes.FORBIDDEN, "Participation does not authorize this method."),
         };
+      }
+      if (params.method === "session.suggestions.add") {
+        return { error: null };
       }
       ceiling = {
         kind: "send",
