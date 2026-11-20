@@ -80,7 +80,7 @@ export const gracefulStopStatus = (runId: string) =>
 export const restartInterruptedStatus = (runId: string) =>
   `interrupted: the Gateway restarted before run ${runId} ended, and no graceful shutdown reached it. Not a task failure; the run was not resumed. ${NOTHING_RETAINED}`;
 
-export type RequesterMessage =
+type RequesterMessage =
   | { sessionKey: string; source: string; text: string }
   | {
       sessionKey: string;
