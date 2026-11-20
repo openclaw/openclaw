@@ -89,7 +89,7 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     /** Authenticated operator transport ingress; never accepted from wire params. */
     authenticatedOperator?: true;
     /** Closed publication transport device admission; never accepted from wire params. */
-    publicationTransport?: import("../publication-transport.js").PublicationTransportAdmission;
+    publicationTransport?: import("../publication-reader.js").PublicationTransportAdmission;
     /** Exact accepted/issued operator token; null attests a tokenless ingress. */
     operatorDeviceTokenIdentity?: Readonly<PairedDeviceTokenIdentity> | null;
     /** Handshake-attested direct-local transport; never accepted from wire params. */

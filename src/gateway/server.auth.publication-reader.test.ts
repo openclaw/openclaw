@@ -19,8 +19,8 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { PUBLICATION_READ_SCOPE, PUBLICATION_STEER_SCOPE } from "./operator-scopes.js";
-import * as publicationReader from "./publication-transport.js";
-import { prepareGatewayPublicationTransportV1 } from "./publication-transport.js";
+import * as publicationReader from "./publication-reader.js";
+import { prepareGatewayPublicationTransportV1 } from "./publication-reader.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,

@@ -205,7 +205,7 @@ export type AuthenticatedGatewayConnect = {
 };
 
 export type DeviceAuthorizedGatewayConnect = AuthenticatedGatewayConnect & {
-  publicationTransport?: import("../../publication-transport.js").PublicationTransportAdmission;
+  publicationTransport?: import("../../publication-reader.js").PublicationTransportAdmission;
   isDeviceTokenSubjectCurrent?: () => boolean;
   prepareDeviceTokens?: (
     subject: import("../../operator-role-enforcement.js").OperatorRoleSubject,

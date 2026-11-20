@@ -27,7 +27,7 @@ import {
   checkDeviceTokenPeer,
   openclawIdPeerKeyOf,
 } from "../../openclaw-id/device-token-binding.js";
-import { isPublicationTransportScope } from "../../publication-transport.js";
+import { isPublicationTransportScope } from "../../publication-reader.js";
 import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
 import {
   GATEWAY_DELEGATION_DENIED,
