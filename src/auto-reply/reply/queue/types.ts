@@ -3,7 +3,6 @@ import type {
   FollowupRun,
   ReplyOperationRunState,
 } from "../../../sessions/session-controller.contracts.js";
-import type { GroupParticipationContext } from "../group-participation.js";
 
 export type { FollowupRun } from "../../../sessions/session-controller.contracts.js";
 export type {
@@ -43,6 +42,7 @@ export function bindReplyOperationQueueDisposition(
 
 /** Admission-owned image facts stay out of the public FollowupRun contract. */
 export type InternalFollowupRun = FollowupRun & {
+  groupParticipation?: { agentName?: string; replyToText?: string };
   /** Bounded background data expires with this turn; retries attach it only once. */
   ambientOverflowContext?: {
     entries: Array<{ sequence: number; line: string }>;
