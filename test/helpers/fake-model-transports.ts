@@ -91,6 +91,15 @@ export function readWireRequest(api: FakeTransport, body: Record<string, unknown
   };
 }
 
+/**
+ * The session a request belongs to, from its runtime line: in the system prompt, or in the first
+ * message where Chat Completions carries it. Later messages can name other sessions.
+ */
+export function requestSession(request: WireRequest): string | undefined {
+  const pattern = /session=([^\s"\\|]+)/;
+  return (pattern.exec(request.system) ?? pattern.exec(request.messages[0] ?? ""))?.[1];
+}
+
 /** Messages after the newest model reply: the current input, carriers and tool results. */
 export function latestInput(request: WireRequest): string {
   const reply = request.messages.findLastIndex((message) => {

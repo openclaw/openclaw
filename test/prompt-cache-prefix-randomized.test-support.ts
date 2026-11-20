@@ -11,6 +11,7 @@ import { waitForGatewayActiveWork } from "../src/infra/gateway-active-work.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
 import {
   buildFakeProvider,
+  requestSession,
   fakeTransportRuntime,
   hasToolResult,
   latestInput as lastMessage,
@@ -344,8 +345,8 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
     const script = (request: WireRequest, thinkingEnabled: boolean): Reply => {
       const latest = lastMessage(request);
       const toolResult = hasToolResult(latest);
-      // The request's own session is in its system prompt; only a compaction summary has none.
-      const session = /session=([^\s"\\|]+)/.exec(request.system)?.[1];
+      // Only a compaction summary request has no session of its own.
+      const session = requestSession(request);
       if (!session) {
         return { text: "Summary: the session ran a randomized journey." };
       }

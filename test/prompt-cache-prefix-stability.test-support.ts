@@ -12,6 +12,7 @@ import { waitForGatewayActiveWork } from "../src/infra/gateway-active-work.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
 import {
   buildFakeProvider,
+  requestSession,
   fakeTransportRuntime,
   hasToolResult as containsToolResult,
   latestInput as lastMessage,
@@ -225,9 +226,8 @@ export function usePrefixStabilityJourney() {
     const script = (request: WireRequest): Reply => {
       const latest = lastMessage(request);
       const hasToolResult = containsToolResult(latest);
-      // The request's own session is in its system prompt; message text can name other sessions.
-      // Only a compaction summary request has none.
-      const session = /session=([^\s"\\|]+)/.exec(request.system)?.[1];
+      // Only a compaction summary request has no session of its own.
+      const session = requestSession(request);
       if (!session) {
         return { text: "Summary: the session ran the probe journey." };
       }
