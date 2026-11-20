@@ -95,9 +95,7 @@ it.each(["crash", "shutdown"] as const)(
         // A late waiter must read the durable result without a new completion event.
         expect((await tool.execute("late-wait", args, signal)).details).toMatchObject(expected);
         for (const entry of entries) {
-          expect(subagentRuns.isCompletionAuthorityRetired(subagentRuns.get(entry.runId)!)).toBe(
-            true,
-          );
+          expect(subagentRuns.isExecutionRetired(subagentRuns.get(entry.runId)!)).toBe(true);
         }
       } finally {
         await resetSubagentRegistryForTests({ persist: false });
@@ -167,7 +165,7 @@ it("restores legacy shutdown outcomes without reviving explicit Stop or delivere
       }
       // Restoring metadata grants no authority to deliver historical work.
       for (const entry of subagentRuns.values()) {
-        expect(subagentRuns.isCompletionAuthorityRetired(entry)).toBe(true);
+        expect(subagentRuns.isExecutionRetired(entry)).toBe(true);
       }
     } finally {
       await resetSubagentRegistryForTests({ persist: false });

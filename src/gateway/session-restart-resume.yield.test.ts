@@ -119,7 +119,7 @@ it.for([
     });
     subagentRuns.set(childRunId, child);
     if (source === "retired-completed" || source === "retired-message") {
-      subagentRuns.retireCompletionAuthority(child);
+      subagentRuns.retireExecution(child);
     }
     const grandchildRunId = "parked-grandchild-run";
     if (source === "nested-message" || source === "nested-retired-message") {
@@ -147,7 +147,7 @@ it.for([
         }),
       );
       if (source === "nested-retired-message") {
-        subagentRuns.retireCompletionAuthority(subagentRuns.get(grandchildRunId)!);
+        subagentRuns.retireExecution(subagentRuns.get(grandchildRunId)!);
       }
     }
     const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({

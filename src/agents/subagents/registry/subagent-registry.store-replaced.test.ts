@@ -134,7 +134,7 @@ it.each([false, true])(
     markSubagentRunPausedAfterYield({ entry: subagent });
     subagentRuns.set(subagent.runId, subagent);
     if (retired) {
-      subagentRuns.retireCompletionAuthority(subagent);
+      subagentRuns.retireExecution(subagent);
     }
     const complete = vi.fn<Parameters<typeof settleUnreachableYieldedSubagentRun>[0]["complete"]>(
       async () => {},
@@ -186,7 +186,7 @@ it("retains a restored running child until fresh requester admission can deliver
   await closeOpenClawStateDatabaseAsync();
   await restoreSubagentRunsFromDisk({ runs: subagentRuns });
   const restored = expectDefined(subagentRuns.get(subagent.runId), "restored running child");
-  expect(subagentRuns.isCompletionAuthorityRetired(restored)).toBe(true);
+  expect(subagentRuns.isExecutionRetired(restored)).toBe(true);
 
   await testing.sweepOnceForTests();
 

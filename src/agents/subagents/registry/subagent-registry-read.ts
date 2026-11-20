@@ -186,7 +186,7 @@ function resolveYieldWaitingChild(
     ) {
       continue;
     }
-    const childSource = subagentRuns.isCompletionAuthorityRetired(child)
+    const childSource = subagentRuns.isExecutionRetired(child)
       ? "resume"
       : isYieldedSubagentRun(child)
         ? owesRequesterCompletion(child)
@@ -270,7 +270,7 @@ export function resolveSessionYieldWait(
   if (interruptedRunId?.startsWith("announce:requester-settle:")) {
     for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
       if (
-        !subagentRuns.isCompletionAuthorityRetired(child) &&
+        !subagentRuns.isExecutionRetired(child) &&
         resolveRecordedRequester(child) === agentId &&
         child.requesterSettleWake !== undefined
       ) {

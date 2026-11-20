@@ -126,7 +126,7 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
           } else if (binding === "restored") {
             subagentRuns.delete(runId);
             await restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true });
-            expect(subagentRuns.isCompletionAuthorityRetired(subagentRuns.get(runId)!)).toBe(true);
+            expect(subagentRuns.isExecutionRetired(subagentRuns.get(runId)!)).toBe(true);
           }
         }
       }

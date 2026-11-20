@@ -438,7 +438,7 @@ export const startSubagentAnnounceCleanupFlow = (
           entry,
           cleanupGeneration,
           committedDeliveryOwner,
-        ) && subagentRuns.runWithCompletionAuthority(entry, () => true)
+        ) && subagentRuns.runWithCompletionContext(entry, () => true)
       );
     },
     isCompletionOwnedByRequesterYield: requesterOwnsCompletion,
@@ -600,7 +600,7 @@ export const startSubagentAnnounceCleanupFlow = (
         )?.protocolRunId;
         await commit((draft) => recordRequesterHandoff(draft, blockingRunId));
       }
-      announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
+      announceOutcome = await subagentRuns.runWithCompletionContext(entry, () =>
         params.runSubagentAnnounceFlow({
           ...announceParams,
           controllerInput,

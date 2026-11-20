@@ -83,13 +83,13 @@ it("fails a running child restored from an earlier Gateway so its requester wake
 it.each([
   [
     "a row awaiting fresh completion admission",
-    (entry: SubagentRunRecord) => subagentRuns.retireCompletionAuthority(entry),
+    (entry: SubagentRunRecord) => subagentRuns.retireExecution(entry),
   ],
   [
     "a row this process created",
     (entry: SubagentRunRecord) => {
       entry.createdAt = PROCESS_STARTED_AT + 1;
-      subagentRuns.retireCompletionAuthority(entry);
+      subagentRuns.retireExecution(entry);
     },
   ],
   [
@@ -101,14 +101,14 @@ it.each([
         endedAt: NOW - 1,
         outcome: { status: "ok" },
       };
-      subagentRuns.retireCompletionAuthority(entry);
+      subagentRuns.retireExecution(entry);
     },
   ],
   [
     "a yielded row",
     (entry: SubagentRunRecord) => {
       markSubagentRunPausedAfterYield({ entry });
-      subagentRuns.retireCompletionAuthority(entry);
+      subagentRuns.retireExecution(entry);
     },
   ],
 ] as const)("leaves %s to its existing owner", async (_name, prepare) => {

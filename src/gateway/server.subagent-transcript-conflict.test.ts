@@ -36,6 +36,7 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { loadTranscriptReadSnapshotSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -51,7 +52,6 @@ import {
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-import { captureOperatorToolGatewayContinuationContext } from "./server-plugin-in-process-authority.js";
 import { subagentToolCallEvents } from "./server.subagent-stop-settlement.product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { createGatewayBackgroundTestEnv } from "./test-helpers.env.js";
@@ -66,6 +66,7 @@ for (const scenario of [
   "revoked",
   "effect",
   "send",
+  "edit",
 ] as const) {
   it(
     `settles a completed child safely after ${scenario} during requester synthesis`,
@@ -89,7 +90,6 @@ for (const scenario of [
       let resolveGatewayContext: GatewayContextResolver | undefined;
       let execution: Awaited<ReturnType<typeof observeGatewayRunExecution>> | undefined;
       let wake: Promise<boolean> | undefined;
-      let originalSource: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
       let expectSynthesis = false,
         requestCount = 0,
         synthesisCount = 0,
@@ -188,7 +188,7 @@ for (const scenario of [
           capture.mockRestore();
         }
         await gateway.server.startupSettled;
-        if (scenario === "send") {
+        if (scenario === "send" || scenario === "edit") {
           const plugin: ChannelPlugin = {
             ...createChannelTestPluginBase({
               id: "conflict-chat",
@@ -220,38 +220,17 @@ for (const scenario of [
         }
         execution = await observeGatewayRunExecution();
         const client = gateway.client;
-        const tools = await import("../agents/embedded-agent-runner/run/attempt-gateway-tools.js");
-        const prepare = tools.withPreparedEmbeddedGatewayTools;
-        const captureSource = vi
-          .spyOn(tools, "withPreparedEmbeddedGatewayTools")
-          .mockImplementation((attempt, run) =>
-            prepare(attempt, async () => {
-              if (attempt.sessionKey === sessionKey && !originalSource) {
-                originalSource = await captureOperatorToolGatewayContinuationContext({
-                  sessionKey,
-                  agentId: "main",
-                });
-              }
-              return run();
-            }),
-          );
-        try {
-          await client.request("chat.send", {
-            sessionKey,
-            sessionId,
-            message: "Summarize the child finding.",
-            deliver: false,
-            idempotencyKey: warmupRunId,
-          });
-          await expect(
-            client.request("agent.wait", { runId: warmupRunId, timeoutMs: 30_000 }),
-          ).resolves.toMatchObject({ status: "ok" });
-          // Completion custody intentionally outlives the original request's effects.
-          await execution.waitForDispatch(warmupRunId);
-        } finally {
-          captureSource.mockRestore();
-        }
-        expect(originalSource?.operatorAuthority).toBeDefined();
+        await client.request("chat.send", {
+          sessionKey,
+          sessionId,
+          message: "Summarize the child finding.",
+          deliver: false,
+          idempotencyKey: warmupRunId,
+        });
+        await expect(
+          client.request("agent.wait", { runId: warmupRunId, timeoutMs: 30_000 }),
+        ).resolves.toMatchObject({ status: "ok" });
+        await execution.waitForDispatch(warmupRunId);
         const registry = Reflect.get(
           globalThis,
           Symbol.for("openclaw.subagentRegistryTestApi"),
@@ -292,6 +271,39 @@ for (const scenario of [
             rearmGeneration: 1,
           },
         });
+        if (scenario === "edit") {
+          // The child is still running when the Control UI rewinds a user
+          // message for editing. Completion must follow the requester chat.
+          await mutateSubagentRuns([childId], () => ({
+            value: undefined,
+            postimages: new Map([
+              [
+                childId,
+                {
+                  ...child,
+                  execution: { status: "running" as const, startedAt: Date.now() },
+                  completion: { required: true },
+                  requesterSettleWake: undefined,
+                  cleanupHandled: false,
+                  cleanupCompletedAt: undefined,
+                },
+              ],
+            ]),
+          }));
+          const history = await client.request<{
+            messages: { role: string; __openclaw?: { id?: string } }[];
+          }>("chat.history", { sessionKey });
+          const entryId = history.messages.find((message) => message.role === "user")?.[
+            "__openclaw"
+          ]?.id;
+          expect(entryId).toBeDefined();
+          const beforeEdit = loadTranscriptReadSnapshotSync(scope);
+          expect(JSON.stringify(beforeEdit.events)).toContain("Human reply.");
+          await client.request("sessions.rewind", { sessionKey, entryId });
+          expect(loadTranscriptReadSnapshotSync(scope).version).not.toEqual(beforeEdit.version);
+          const editedHistory = await client.request("chat.history", { sessionKey });
+          expect(JSON.stringify(editedHistory)).not.toContain("Human reply.");
+        }
         const childScope = {
           agentId: "main",
           sessionKey: child.childSessionKey,
@@ -328,10 +340,6 @@ for (const scenario of [
           throw new Error("Missing durable child");
         }
         bindGatewayContextResolver(saved, resolveGatewayContext);
-        if (!originalSource) {
-          throw new Error("Original requester authority was not captured");
-        }
-        subagentRuns.bindCompletionAuthority(saved, originalSource);
         const currentBatch = (batch: readonly SubagentRunRecord[]) =>
           batch.map((member) => {
             const current = subagentRuns.get(member.runId);
@@ -451,6 +459,15 @@ for (const scenario of [
           );
         };
         await startSynthesis(saved);
+        if (scenario === "edit") {
+          release.resolve();
+          expect(await wake).toBe(true);
+          expect(transcriptText().split("Requester synthesis 1.")).toHaveLength(2);
+          expect(sentTexts).toEqual([]);
+          expectDelivery("delivered");
+          await expectNoRetry(1);
+          return;
+        }
         if (scenario === "replaced") {
           // Commit a replacement incarnation through the session owner while the
           // old turn is held. Its original completion custody must not transfer.
@@ -558,7 +575,6 @@ for (const scenario of [
           await Promise.allSettled([wake]);
         }
         clearFollowupQueue(sessionKey);
-        originalSource?.release();
         if (gateway) {
           await disconnectGatewayClient(gateway.client).catch(() => undefined);
           await gateway.server.close().catch(() => undefined);

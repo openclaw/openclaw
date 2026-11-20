@@ -106,7 +106,7 @@ export function isCleanupCurrent(
     current.execution.status === expected.execution.status &&
     current.execution.endedAt === expected.execution.endedAt &&
     typeof current.execution.endedAt === "number" &&
-    (subagentRuns.isCompletionAuthorityRetired(current) ||
+    (subagentRuns.isExecutionRetired(current) ||
       (!current.killIntent && !current.killReconciliation && !current.requesterSettleWake)) &&
     !isSuspendedPendingFinalDelivery(current) &&
     !isSessionCleanupDeferred(current)

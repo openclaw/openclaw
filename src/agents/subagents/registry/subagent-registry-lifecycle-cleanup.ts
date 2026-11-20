@@ -90,7 +90,7 @@ export function isSubagentCompletionDeliveryAllowed(
     entry.requesterSettleWake?.batchRunIds?.toSorted().join("\0") ===
       committedDeliveryOwner.requesterSettleWake?.batchRunIds?.toSorted().join("\0");
   return (
-    !subagentRuns.isCompletionAuthorityRetired(entry) &&
+    !subagentRuns.isExecutionRetired(entry) &&
     entry.suppressCompletionDelivery !== true &&
     !isDeliverySuspended(entry) &&
     (entry.delivery?.status !== "delivered" ||

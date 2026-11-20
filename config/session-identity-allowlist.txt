@@ -468,7 +468,7 @@ src/agents/subagents/registry/subagent-registry-lifecycle-finalize-cleanup.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-persistence.ts	3
 src/agents/subagents/registry/subagent-registry-lifecycle-wake.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle.ts	5
-src/agents/subagents/registry/subagent-registry-memory.ts	13
+src/agents/subagents/registry/subagent-registry-memory.ts	11
 src/agents/subagents/registry/subagent-registry-persistence.ts	2
 src/agents/subagents/registry/subagent-registry-public-api.ts	3
 src/agents/subagents/registry/subagent-registry-queries.ts	4
@@ -479,7 +479,7 @@ src/agents/subagents/registry/subagent-registry-requester-yield.ts	18
 src/agents/subagents/registry/subagent-registry-run-launch.ts	14
 src/agents/subagents/registry/subagent-registry-run-manager.ts	8
 src/agents/subagents/registry/subagent-registry-run-pause.ts	1
-src/agents/subagents/registry/subagent-registry-run-recovery.ts	30
+src/agents/subagents/registry/subagent-registry-run-recovery.ts	25
 src/agents/subagents/registry/subagent-registry-sweep-cleanup.ts	2
 src/agents/subagents/registry/subagent-registry-sweep-kill.ts	6
 src/agents/subagents/registry/subagent-registry-sweep-settle.ts	2

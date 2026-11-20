@@ -347,7 +347,7 @@ export function scheduleRequesterSettleWake(
         : [];
     },
   );
-  const admittedBatch = subagentRuns.selectCompletionAuthorityBatch(offeredBatch, entry);
+  const admittedBatch = subagentRuns.selectCompletionBatch(offeredBatch, entry);
   let settleObserved = pendingSettlement?.scope === scope ? pendingSettlement.settle : undefined;
   let publishDispatch = pendingTransition?.scope === scope ? pendingTransition.commit : undefined;
   const completeBatch = async (
