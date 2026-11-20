@@ -1,8 +1,7 @@
-/**
- * Field shapes carried by liveness warnings and queue samples. Kept apart from the
- * event union so the continuation queue metrics and phase snapshots can be shared
- * by samplers without importing the diagnostic event bus.
- */
+// Field shapes carried by liveness warnings and queue samples. Kept apart from the
+// event union so the continuation queue metrics and phase snapshots can be shared
+// by samplers without importing the diagnostic event bus.
+
 export type DiagnosticLivenessWarningReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
 
 export type DiagnosticPhaseDetails = Record<string, string | number | boolean>;
