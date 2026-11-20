@@ -731,7 +731,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
       "The measured action edits the access value; provider activation and verification are excluded.",
   },
   plugins: {
-    ready: "openclaw-plugins-page .plugin-catalog-card",
+    ready: "openclaw-plugins-page .plugin-catalog-card[data-plugin-id]",
     source: requiredScenario(dataCatalogScenarios, "data-catalog-category-first-render"),
     action: {
       label: "Open the Tools catalog category",
@@ -2202,7 +2202,11 @@ export function createEnginePageScenarios(
         },
         prepare: boot,
         run: async (page, gateway) => {
-          const timing = await measureVisit(page, id, definition);
+          // This fixture has only installed plugins on its first page; search finds the available one.
+          const timing = await measureVisit(page, id, {
+            ...definition,
+            ready: "openclaw-plugins-page .plugin-catalog-results__body openclaw-panel-empty-state",
+          });
           const evidence = await browseSource.run(page, gateway);
           assert(evidence && typeof evidence.inventoryReadyAtMs === "number");
           assert(typeof evidence.inputReadyAtMs === "number");

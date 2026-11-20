@@ -40,7 +40,8 @@ function suffix(index: number) {
 function createDataCatalogInventory(revision = 1, uninstalledIndex?: number) {
   const plugins: PluginCatalogItem[] = Array.from({ length: inventorySize }, (_, index) => ({
     id: `data-plugin-${suffix(index)}`,
-    catalogId: `data-catalog-${suffix(index)}`,
+    // Browsing measures available plugins alongside a full, separate installed inventory.
+    catalogId: `${uninstalledIndex === undefined ? "data-installed" : "data-catalog"}-${suffix(index)}`,
     name: `Data plugin ${suffix(index)}${index === 0 && revision > 1 ? " updated" : ""}`,
     packageName: `@synthetic/data-plugin-${suffix(index)}`,
     description: `Synthetic catalog integration ${index} for data-heavy page profiling.`,
@@ -51,26 +52,29 @@ function createDataCatalogInventory(revision = 1, uninstalledIndex?: number) {
     state: "enabled",
     removable: true,
   }));
-  const entries: PluginDiscoveryEntry[] = plugins.map((plugin, index) => ({
-    id: `data-catalog-${suffix(index)}`,
-    catalog: {
-      name: plugin.name,
-      summary: plugin.description,
-      author: "synthetic-publisher",
-      official: index % 3 === 0,
-      categories: ["tools"],
-      downloads: inventorySize - index,
-      latestVersion: "1.0.0",
-    },
-    local: {
-      pluginId: index === uninstalledIndex ? undefined : plugin.id,
-      present: index !== uninstalledIndex,
-      installed: index !== uninstalledIndex,
-      enabled: index !== uninstalledIndex,
-      state: index === uninstalledIndex ? "not-installed" : "enabled",
-      action: index === uninstalledIndex ? "install" : "manage",
-    },
-  }));
+  const entries: PluginDiscoveryEntry[] = plugins.map((plugin, index) => {
+    const installed = uninstalledIndex !== undefined && index !== uninstalledIndex;
+    return {
+      id: `data-catalog-${suffix(index)}`,
+      catalog: {
+        name: plugin.name,
+        summary: plugin.description,
+        author: "synthetic-publisher",
+        official: index % 3 === 0,
+        categories: ["tools"],
+        downloads: inventorySize - index,
+        latestVersion: "1.0.0",
+      },
+      local: {
+        pluginId: installed ? plugin.id : undefined,
+        present: installed,
+        installed,
+        enabled: installed,
+        state: installed ? "enabled" : "not-installed",
+        action: installed ? "manage" : "install",
+      },
+    };
+  });
   return {
     plugins:
       uninstalledIndex === undefined
@@ -980,7 +984,9 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
     route: pathForRoute("plugins"),
     expected: "Catalog search works before installed inventory permits installation.",
     fixtureOverrides: () => createDataCatalogFixture(1, 900),
-    prepare: async (page) => countRows(page, ".plugin-catalog-card", 8),
+    prepare: async (page) => {
+      await page.getByText("Everything here is already installed.", { exact: true }).waitFor();
+    },
     run: async (page) => {
       const search = page.getByRole("searchbox", { name: "Search plugins" });
       if (!(await search.isEditable())) {
