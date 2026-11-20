@@ -1,4 +1,3 @@
-import type { AutomationSavedDefinition } from "../../../../src/shared/automation-saved-definition.js";
 import type { CronJob } from "../../api/types.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { formatUiError } from "../format-error.ts";
@@ -25,7 +24,6 @@ export function watchCronJobDefinition(
   gateway: ApplicationGateway,
   id: string,
   publish: (state: CronJobObservation) => void,
-  initial?: AutomationSavedDefinition,
 ) {
   let state: CronJobObservation = { loading: true, writable: false };
   let generation = 0;
@@ -119,11 +117,6 @@ export function watchCronJobDefinition(
       void read(true);
     }
   });
-  // Only a mounted pending -> confirmed transition supplies a seed. On history load,
-  // reconnect or a viewer without manage authority, read the exact job before display.
-  if (client && initial?.id === id && writable(initial)) {
-    state = { job: initial, loading: true, writable: true };
-  }
   void read();
   return {
     retry: read,

@@ -222,6 +222,9 @@ export function listNodeTestConfigFiles(config: string): string[] | undefined {
 
 /** Measurement-only ownership; adding it must not change runtime partitioning. */
 export function listNodeTestVolumeConfigFiles(config: string): string[] | undefined {
+  if (config === "test/vitest/vitest.unit-fast-isolated.config.ts") {
+    return getUnitFastIsolatedTestFiles().filter((file) => !isSharedVitestExcludedPath(file));
+  }
   if (config === "test/vitest/vitest.runtime-config.config.ts") {
     return listScopedOwnerTestFiles(runtimeConfigTestOwner).filter(
       (file) => !isSharedVitestExcludedPath(file, "src"),

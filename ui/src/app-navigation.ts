@@ -259,7 +259,8 @@ export type SettingsSearchBlock = {
 // Management surfaces (sessions, worktrees, activity, memory import) are
 // workspace destinations, not settings; model setup is a subpage of Models.
 const SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
+  { labelKey: null, routes: ["custodian"] },
+  { labelKey: "nav.settingsGroupPreferences", routes: ["profile", "appearance", "notifications"] },
   { labelKey: "nav.settingsGroupDevice", routes: ["device", "device-permissions"] },
   {
     labelKey: "nav.settingsGroupConnections",

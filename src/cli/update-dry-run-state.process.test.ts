@@ -364,7 +364,10 @@ channel("sqlite.db.query").subscribe(({ database }) => {
       expect(plan).toMatchObject({
         mutationAllowed: false,
         outcome: "refused",
-        refusal: { code: "candidate-artifact-digest-required" },
+        refusal: {
+          code: "candidate-artifact-digest-required",
+          message: expect.stringContaining("`openclaw update` verifies the staged candidate"),
+        },
         candidate: {
           root: path.resolve("."),
           version: expect.any(String),

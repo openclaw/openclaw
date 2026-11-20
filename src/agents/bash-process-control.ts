@@ -12,7 +12,6 @@ import {
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { forgetReleasedProcesses } from "../process/supervisor/released-processes.js";
 import type { ReleasedProcess } from "../process/supervisor/types.js";
-import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import {
   removeNotifyOnExit,
   getSession,
@@ -109,7 +108,7 @@ export function cancelBackgroundExecSession(sessionId: string): boolean {
     return true;
   }
   if (session.durable) {
-    session.durable.cancel(captureAgentToolSourceExecutionGuard());
+    session.durable.cancel();
   } else {
     getProcessSupervisor().cancel(sessionId, "manual-cancel");
   }

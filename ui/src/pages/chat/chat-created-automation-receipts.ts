@@ -61,12 +61,19 @@ export function automationCreationToolEvents(
   const events: AutomationCreationEvent[] = [];
   const calls = new Map<string, ToolCall>();
   const declarations = new Map<string, AutomationCreationPlan>();
+  const unbound: { call: ToolCall; details: unknown }[] = [];
   const emit = (call: ToolCall, details: unknown, isError: boolean | undefined) => {
     let args = call.args;
     if (args.action === "add" && args.planId === undefined && args.slotId === undefined) {
       const plan = call.runId ? declarations.get(call.runId) : undefined;
-      const slot = plan && automationSlotAtPosition(plan, args.position);
-      if (!slot || !plan) {
+      if (!plan) {
+        if (call.runId && isError === false) {
+          unbound.push({ call, details });
+        }
+        return;
+      }
+      const slot = automationSlotAtPosition(plan, args.position);
+      if (!slot) {
         return;
       }
       args = { ...args, planId: plan.planId, slotId: slot.slotId };
@@ -176,6 +183,12 @@ export function automationCreationToolEvents(
       ) {
         emit(paired, block.details, readToolErrorFlag(block));
       }
+    }
+  }
+  // A durable add can be scanned before a declaration still held in the live tool stream.
+  for (const { call, details } of unbound) {
+    if (call.runId && declarations.has(call.runId)) {
+      emit(call, details, false);
     }
   }
   return events;

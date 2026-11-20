@@ -412,6 +412,16 @@ describe("Control UI E2E resource ownership", () => {
       )
       .toSorted();
     expectInventory(result, inventory);
+    // These HTTP/plugin fixtures share the invocation's native worker build.
+    const workerBorrowers = new Set([
+      "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
+      "ui/src/e2e/plugin-panel-icons.e2e.test.ts",
+      "ui/src/e2e/route-asset-requests.e2e.test.ts",
+      "ui/src/e2e/team-scale-cold-load.e2e.test.ts",
+    ]);
+    expect(
+      result.shards.filter((shard) => shard.some((file) => workerBorrowers.has(file))),
+    ).toHaveLength(1);
     const reused = probeOwnership({ reuseProductionArtifact: true });
     expect(reused.files).toEqual(result.files);
     expect(reused.shards).toEqual(result.shards);

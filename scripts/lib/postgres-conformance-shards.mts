@@ -11,6 +11,7 @@ const additionalPostgresConformanceTargets = [
   "extensions/team-reports/src/postgres-store.test.ts",
   "src/infra/postgres-sync",
   DATABASE_ENGINE_TARGET,
+  "src/state/openclaw-state-lease-heartbeat.test.ts",
   "src/infra/exec-approvals-native.test.ts",
   "src/infra/client-credential-update.test.ts",
   "src/infra/update-managed-service-handoff-engine.test.ts",
