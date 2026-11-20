@@ -506,7 +506,7 @@ function* createOpenClawToolsSteps(
               }),
           createCronTool({
             ...options,
-            requireCreationPlan: true,
+            requireCreationPlan: options?.requireCronCreationPlan,
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,

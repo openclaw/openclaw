@@ -27,7 +27,6 @@ import {
   bindCronRequesterGrant,
 } from "../cron-creator-authority-context.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
-import { withToolEffectBoundary } from "../tool-effect-receipt.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
 import {
@@ -49,7 +48,11 @@ import {
   REMINDER_CONTEXT_MARKER,
   stripExistingContext,
 } from "./cron-tool-context.js";
-import { createCronCreationPlans, cronMutationResult } from "./cron-tool-creation-plan.js";
+import {
+  createCronCreationPlans,
+  cronMutationResult,
+  executePlannedCronMutation,
+} from "./cron-tool-creation-plan.js";
 import {
   applyCronToolDefaults,
   assertInheritedCronToolCaptureReady,
@@ -197,9 +200,6 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       if (action === "plan") {
         return jsonResult(creationPlans.declare(params.slots, params.names));
       }
-      const creationReceipt = action === "add" ? creationPlans.bindAdd(params) : undefined;
-      const mutationResult = (result: unknown) =>
-        cronMutationResult(result, creationReceipt, streamExecutionApproval);
       const parsedGatewayOpts = readGatewayCallOptions(params);
       const gatewayOpts: GatewayCallOptions = {
         ...parsedGatewayOpts,
@@ -266,6 +266,9 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
         );
       };
 
+      const slot = action === "add" ? creationPlans.bindAdd(params) : undefined;
+      const mutationResult = (result: unknown) =>
+        cronMutationResult(result, slot?.result, streamExecutionApproval);
       const executeAction = async (onEffectsStart?: () => void) => {
         const prepareStreamExecAuthority = async (
           creatorTools: readonly CronCreatorToolAllowlistEntry[] | undefined,
@@ -709,14 +712,15 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               ? readCronStreamApprovalEnded(error.details)
               : undefined;
           if (ended && ended.action === action) {
-            return cronMutationResult(ended, creationReceipt);
+            return cronMutationResult(ended, slot?.result);
           }
           throw error;
         });
       };
-      return await (action === "add" || action === "update"
-        ? withToolEffectBoundary(executeAction)
-        : executeAction());
+      if (action !== "add" && action !== "update") {
+        return await executeAction();
+      }
+      return await executePlannedCronMutation(executeAction, slot?.release);
     },
   };
   return setToolTerminalPresentation(tool, formatCronTerminalPresentation);

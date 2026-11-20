@@ -10,6 +10,7 @@ import {
   type AutomationCreationResult,
 } from "../../shared/automation-creation.js";
 import { isRecord } from "../../utils.js";
+import { withToolEffectBoundary } from "../tool-effect-receipt.js";
 import { CRON_CREATION_PLAN_MAX_SLOTS, CronCreationSlotsSchema } from "./cron-tool-schema.js";
 import { jsonResult } from "./tool-results.js";
 
@@ -132,18 +133,39 @@ export function createCronCreationPlans(onePlanPerTurn = false) {
           "Use an unused position from your original declaration, or its matching planId and slotId for an explicit binding. Do not ask the user for IDs.",
         );
       }
-      if (!slots.size) {
-        pending.delete(planId);
-      }
-      return (result: unknown): AutomationCreationResult => {
-        const jobId = automationJobResultId(result);
-        return {
-          type: "automation_creation_result",
-          planId,
-          slotId,
-          ...(jobId ? { status: "created", jobId } : { status: "failed" }),
-        };
+      return {
+        // An evicted plan is never restored; release only the original reservation.
+        release: () => slots.add(slotId),
+        result: (result: unknown): AutomationCreationResult => {
+          const jobId = automationJobResultId(result);
+          return {
+            type: "automation_creation_result",
+            planId,
+            slotId,
+            ...(jobId ? { status: "created", jobId } : { status: "failed" }),
+          };
+        },
       };
     },
   };
+}
+
+/** Keep the reservation through uncertain dispatch, but allow correction before a possible effect. */
+export async function executePlannedCronMutation<T>(
+  execute: (start: () => void) => Promise<T>,
+  releaseReservation?: () => void,
+): Promise<T> {
+  return await withToolEffectBoundary(async (start) => {
+    let release = releaseReservation;
+    try {
+      return await execute(() => {
+        // Approval or scheduler dispatch may have escaped. Never reopen on a lost response.
+        release = undefined;
+        start();
+      });
+    } catch (error) {
+      release?.();
+      throw error;
+    }
+  });
 }

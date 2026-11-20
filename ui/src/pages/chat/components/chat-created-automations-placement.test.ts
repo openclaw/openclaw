@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { projectChatDisplayMessages } from "../../../../../src/gateway/chat-display-projection.js";
 import type {
   AutomationCreationPlan,
@@ -9,6 +9,7 @@ import { AutomationCreationCardBlock } from "../../../lib/chat/automation-creati
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
+import * as schedulerProjection from "../chat-automation-projection-loader.ts";
 import { createState } from "../chat-gateway.test-support.ts";
 import { handleChatGatewayEvent } from "../chat-gateway.ts";
 import { buildItems, makeMessage } from "../chat-thread.test-support.ts";
@@ -16,6 +17,7 @@ import { render } from "../test-helpers/chat-transcript-native.tsx";
 import { threadFixture } from "./chat-transcript-fixture.test-support.tsx";
 import { projectTranscriptChain } from "./chat-transcript-message-index.ts";
 import {
+  requireElement,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
   threadProps,
@@ -30,19 +32,9 @@ const plan: AutomationCreationPlan = {
     { slotId: "b", name: "Weekly digest" },
   ],
 };
-const created: AutomationCreationResult = {
-  type: "automation_creation_result",
-  planId: plan.planId,
-  slotId: "b",
-  status: "created",
-  jobId: "saved-weekly",
-};
-const failed: AutomationCreationResult = {
-  type: "automation_creation_result",
-  planId: plan.planId,
-  slotId: "a",
-  status: "failed",
-};
+const receipt = { type: "automation_creation_result", planId: plan.planId } as const;
+const created = { ...receipt, slotId: "b", status: "created", jobId: "saved-weekly" } as const;
+const failed = { ...receipt, slotId: "a", status: "failed" } as const;
 function cards(messages: unknown[], toolMessages: unknown[] = [], showToolCalls = false) {
   const opts = {
     sessionKey,
@@ -167,40 +159,50 @@ it("keeps a standalone plan in each originating turn even when provider call IDs
   expect(result[0]?.key).not.toBe(result[1]?.key);
 });
 
-it("keeps the actual assistant card mounted while a planned job fails", async () => {
+function mountHistory(
+  messages: unknown[],
+  overrides: Parameters<typeof threadProps>[3],
+  pending?: Promise<schedulerProjection.AutomationProjection>,
+) {
   installTranscriptDomMocks();
-  const scheduled = liveTool("plan-call", "plan", { slots: plan.slots }, plan);
-  const props = threadProps(
-    "plan-progress",
-    sessionKey,
-    [makeMessage("prompt", 1, { role: "user", runId: "setup" })],
-    {
-      runId: "setup",
-      runWorking: true,
-      runActive: true,
-      toolMessages: [scheduled],
-      showToolCalls: false,
-    },
-  );
+  const load = vi.spyOn(schedulerProjection, "loadAutomationProjection");
+  if (pending) {
+    load.mockReturnValue(pending);
+  }
+  const props = threadProps("plan-progress", sessionKey, messages, overrides);
   const { container, transcript, rerender } = threadFixture(props);
   onTestFinished(() => {
     render(null, container);
     transcript.dispose();
     resetTranscriptTestDom();
+    load.mockRestore();
   });
   rerender();
-  const selector = ".chat-bubble .chat-created-automations";
-  const card = await waitForSolid(() => {
-    const node = container.querySelector(selector);
-    expect(node).not.toBeNull();
-    return node!;
+  return { props, container, load, rerender };
+}
+
+const prompt = makeMessage("prompt", 1, { role: "user", runId: "setup" });
+const declared = (id: string) => liveTool(id, "plan", { slots: plan.slots }, plan);
+const refused = () =>
+  liveTool("add-a", "add", { planId: plan.planId, slotId: "a" }, undefined, true);
+
+it("keeps the actual assistant card mounted while a planned job fails", async () => {
+  const scheduled = declared("plan-call");
+  const { props, container, load, rerender } = mountHistory([prompt], {
+    runId: "setup",
+    runWorking: true,
+    runActive: true,
   });
+  await waitForSolid(() => expect(container.textContent).toContain("prompt"));
+  expect(load).not.toHaveBeenCalled();
+  props.toolMessages = [scheduled];
+  rerender();
+  const selector = ".chat-bubble .chat-created-automations";
+  const card = await waitForSolid(() => requireElement(container, selector));
+  expect(load).toHaveBeenCalledOnce();
   const row = card.querySelector('[data-slot-id="a"]');
   expect(card.querySelectorAll(".chat-created-automations__switch-placeholder")).toHaveLength(2);
-  props.toolMessages = [
-    scheduled,
-    liveTool("add-a", "add", { planId: plan.planId, slotId: "a" }, undefined, true),
-  ];
+  props.toolMessages = [scheduled, refused()];
   rerender();
   await waitForSolid(() => expect(card.textContent).toContain("Not created"));
   expect(container.querySelector(selector)).toBe(card);
@@ -208,18 +210,43 @@ it("keeps the actual assistant card mounted while a planned job fails", async ()
   expect(card.querySelectorAll(".chat-created-automations__switch-placeholder")).toHaveLength(1);
 });
 
+it.each(["resolve", "reject"])(
+  "keeps cold history visible when optional projection must %s",
+  async (outcome) => {
+    const real = schedulerProjection.loadAutomationProjection;
+    const pending = Promise.withResolvers<schedulerProjection.AutomationProjection>();
+    const { container, load } = mountHistory(
+      [prompt, ...injected(plan, failed)],
+      { restoring: true },
+      pending.promise,
+    );
+    await waitForSolid(() => expect(container.textContent).toContain("prompt"));
+    expect(load).toHaveBeenCalledOnce();
+    expect(container.querySelector("[data-slot-id]")).toBeNull();
+    if (outcome === "resolve") {
+      pending.resolve(await real());
+      await waitForSolid(() => expect(container.textContent).toContain("Not created"));
+      expect(container.querySelectorAll("[data-slot-id]")).toHaveLength(2);
+    } else {
+      pending.reject(new Error("optional chunk unavailable"));
+      await Promise.allSettled([pending.promise]);
+    }
+    await waitForSolid(() => expect(container.textContent).toContain("prompt"));
+  },
+);
+
 it.each([true, false])(
   "uses the same stable assistant slot for live tools and rehydrated history when showToolCalls=%s",
   (tools) => {
-    const history = [makeMessage("prompt", 1, { role: "user", runId: "setup" })];
-    const scheduled = liveTool("plan-call", "plan", { slots: plan.slots }, plan);
+    const history = [prompt];
+    const scheduled = declared("plan-call");
     const second = liveTool(
       "add-b",
       "add",
       { planId: plan.planId, slotId: "b" },
       { automationCreation: created },
     );
-    const first = liveTool("add-a", "add", { planId: plan.planId, slotId: "a" }, undefined, true);
+    const first = refused();
     const initial = cards(history, [scheduled], tools);
     expect(initial).toHaveLength(1);
     expect(initial[0]?.rows.map((r) => r.status)).toEqual(["pending", "pending"]);

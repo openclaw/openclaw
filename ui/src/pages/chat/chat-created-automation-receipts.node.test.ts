@@ -55,24 +55,26 @@ function direct(row: { id: string; args: object; details?: unknown; isError: boo
   ];
 }
 
+function nestedRow({ id, args, details, isError }: Parameters<typeof direct>[0], i = 0) {
+  return createNestedToolActivity({
+    runId: "run",
+    scopeId: "scope",
+    afterEntryId: null,
+    startOrder: i,
+    toolCallId: id,
+    parentToolCallId: "exec",
+    toolName: "automations",
+    input: args,
+    result: { details, content: [] },
+    isError,
+    startedAt: i,
+    timestamp: i,
+  });
+}
+
 it("replays direct, Code Mode, and live tool ownership identically before and after gateway projection", () => {
   const native = rows.flatMap(direct);
-  const nested = rows.map(({ id, args, details, isError }, i) =>
-    createNestedToolActivity({
-      runId: "run",
-      scopeId: "scope",
-      afterEntryId: null,
-      startOrder: i,
-      toolCallId: id,
-      parentToolCallId: "exec",
-      toolName: "automations",
-      input: args,
-      result: { details, content: [] },
-      isError,
-      startedAt: i,
-      timestamp: i,
-    }),
-  );
+  const nested = rows.map(nestedRow);
   vi.stubGlobal("window", globalThis);
   const host = createHost();
   onTestFinished(() => {
@@ -160,19 +162,10 @@ it("retains bounded receipts when persistence omits oversized job definitions an
     },
     8192,
   );
-  const nested = createNestedToolActivity({
-    runId: "run",
-    scopeId: "scope",
-    afterEntryId: null,
-    startOrder: 0,
-    toolCallId: "add-1",
-    parentToolCallId: "exec",
-    toolName: "automations",
-    input: { ...add, job: { payload: { message: huge } } },
-    result: { details, content: [] },
-    isError: false,
-    startedAt: 1,
-    timestamp: 2,
+  const nested = nestedRow({
+    ...rows[1]!,
+    args: { ...add, job: { payload: { message: huge } } },
+    details,
   });
   for (const history of [[call, { ...result, runId: "run" }], [nested]]) {
     const display = projectChatDisplayMessages(history);
@@ -205,20 +198,7 @@ it("does not trust model-authored results, raw job shapes, non-add actions, conf
     [call, { ...result, details: { automationCreation: { ...created, slotId: "other" } } }],
     [call, { role: "assistant", content: [{ ...result, type: "toolResult" }] }],
     [call, { role: "user", content: [{ ...result, type: "toolResult" }] }],
-    [
-      {
-        ...call,
-        content: [
-          {
-            type: "toolCall",
-            id: "add-1",
-            name: "automations",
-            arguments: { ...add, action: "get" },
-          },
-        ],
-      },
-      result,
-    ],
+    direct({ ...rows[1]!, args: { ...add, action: "get" } }),
     [
       {
         ...call,
