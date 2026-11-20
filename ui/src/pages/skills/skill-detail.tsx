@@ -32,11 +32,10 @@ import {
   SkillMonoFact,
   SkillPageSection,
   SkillSecurityFact,
-  SkillTile,
   type SkillSecurityTone,
 } from "./skill-page-parts.tsx";
 import { SkillPageShell } from "./skill-page-shell.tsx";
-import { verdictForSkill, verdictStatus } from "./skill-status.tsx";
+import { SkillTile, verdictForSkill, verdictStatus } from "./skill-status.tsx";
 import type { SkillsProps } from "./view-types.ts";
 
 type BinRow = { kind: "bin"; names: string[]; missing: boolean; install: boolean };

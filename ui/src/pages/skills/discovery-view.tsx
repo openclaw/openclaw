@@ -16,8 +16,12 @@ import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import { PluginCatalogGrid } from "../plugins/catalog-grid.tsx";
 import { renderCatalogGridSkeleton } from "../plugins/catalog-skeleton.tsx";
 import { PluginCardSummary, renderPluginOfficialBadge } from "../plugins/plugin-card.tsx";
-import { SkillTile } from "./skill-page-parts.tsx";
-import { installedReference, SkillStateStatus, verdictForSkill } from "./skill-status.tsx";
+import {
+  SkillTile,
+  installedReference,
+  SkillStateStatus,
+  verdictForSkill,
+} from "./skill-status.tsx";
 import "../../styles/skills-discovery.css";
 import type { SkillsProps } from "./view-types.ts";
 

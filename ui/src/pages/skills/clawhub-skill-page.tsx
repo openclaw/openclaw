@@ -12,11 +12,10 @@ import {
   SkillEnabledSwitch,
   SkillPageSection,
   SkillSecurityFact,
-  SkillTile,
   type SkillSecurityTone,
 } from "./skill-page-parts.tsx";
 import { SkillPageAbsent, SkillPageShell } from "./skill-page-shell.tsx";
-import { installedReference } from "./skill-status.tsx";
+import { SkillTile, installedReference } from "./skill-status.tsx";
 import type { SkillsProps } from "./view-types.ts";
 
 export function ClawHubSkillPage(props: { view: SkillsProps; installLocked: boolean }) {
