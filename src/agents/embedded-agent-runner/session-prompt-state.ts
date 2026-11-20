@@ -25,6 +25,7 @@ import {
 import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
 import { resolvePromptHistoryId } from "./session-prompt-history-id.js";
+import { SYSTEM_PROMPT_UPDATE_HEADER } from "./session-prompt-update.js";
 import {
   readToolSurfaceCheckpoint,
   type ToolDefinition,
@@ -514,7 +515,7 @@ export function prepareSessionSystemPrompt(params: {
       ? buildSystemUpdateMessage(
           restart
             ? sections.join("\n\n")
-            : `System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n${sections.join("\n\n")}`,
+            : `${SYSTEM_PROMPT_UPDATE_HEADER}\n\n${sections.join("\n\n")}`,
           "prompt-update",
           false,
         )
