@@ -232,17 +232,17 @@ export async function prepareLocalWorkspaceCheckout(
       mode: 0o600,
     });
     if (params.retainedCommit) {
-      // The owner validated this private clone; advance its index without checkout's refresh.
-      await git([
-        "read-tree",
-        "--reset",
-        "--no-recurse-submodules",
-        "-u",
-        params.retainedCommit,
-        params.baseCommit,
-      ]);
+      // Rename the retained branch so no old ref keeps superseded source objects reachable.
       await git(["branch", "-m", params.branch]);
-      await git(["update-ref", "HEAD", params.baseCommit, params.retainedCommit]);
+    }
+    await git([
+      "checkout",
+      "--quiet",
+      params.retainedCommit ? "-B" : "-b",
+      params.branch,
+      params.baseCommit,
+    ]);
+    if (params.retainedCommit) {
       // A session may receive only this commit's source, including through Git objects.
       // Template metadata is host-owned; every imported object lives in a pack.
       phases.mark(`${RECONCILE_PHASE}.checkout.repack`);
@@ -252,8 +252,6 @@ export async function prepareLocalWorkspaceCheckout(
       await prepare();
       current();
       await fs.writeFile(path.join(repo, ".git", "shallow"), params.baseCommit + "\n");
-    } else {
-      await git(["checkout", "--quiet", "-b", params.branch, params.baseCommit]);
     }
     phases.mark(`${RECONCILE_PHASE}.checkout.configure`);
     await configureProjectionFetch({ ...params, assertCurrent: current }, cleanEnv);
