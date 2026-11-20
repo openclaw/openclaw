@@ -344,12 +344,10 @@ describe("ordinary steering into automatic model fallback", () => {
           }
           expect(await delivered.promise).toBe(run);
           expect(consumeFollowup).toHaveBeenCalledExactlyOnceWith(run);
-          expect(resultState.followupSourceSettlement).toBeDefined();
-          await resultState.followupSourceSettlement;
         }
         expect(injected).not.toHaveBeenCalled();
         expect(getFollowupQueueDepth(key)).toBe(0);
-        expect(typing.cleanup).toHaveBeenCalledTimes(revoked ? 1 : 0);
+        expect(typing.cleanup).toHaveBeenCalledOnce();
         expect(run.run.clientCaps).toEqual(["ui-commands", "ui-tool-images"]);
         expect(run.run.gatewayUiCommandTarget).toEqual({
           connId: "new-tab",

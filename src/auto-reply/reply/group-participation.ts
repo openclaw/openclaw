@@ -19,7 +19,7 @@ type Params = {
   sessionEntry?: SessionEntry;
 };
 
-export function resolveGroupParticipationCandidate(params: Params) {
+function resolveGroupParticipationCandidate(params: Params) {
   const { run, sessionKey, storePath, sessionEntry } = params;
   if (
     !run.groupParticipation ||
@@ -48,7 +48,7 @@ export function resolveGroupParticipationCandidate(params: Params) {
   return { recorder: run.userTurnTranscriptRecorder, sessionKey, storePath };
 }
 
-/** Decide once before typing or maintenance; declined input uses the normal transcript owner. */
+/** Decide once before generation; declined input uses the normal transcript owner. */
 export async function prepareGroupParticipation(params: Params & { operation: ReplyOperation }) {
   const candidate = resolveGroupParticipationCandidate(params);
   if (!candidate) {

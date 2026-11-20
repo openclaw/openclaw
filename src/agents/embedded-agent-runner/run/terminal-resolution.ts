@@ -35,6 +35,7 @@ import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
 import {
   hasAttemptTerminalState,
+  resolveCurrentAttemptAssistant,
   shouldContinueInteractiveAcceptedSessionSpawns,
 } from "./attempt-terminal-evidence.js";
 import {
@@ -80,8 +81,6 @@ import {
 } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-export { resolveSettledTurnFinalizationRequest } from "./settled-turn-finalization-request.js";
-
 const MAX_MISSING_ASSISTANT_RETRIES = 1;
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
@@ -102,19 +101,6 @@ export async function resolveEmbeddedRunTerminal(input: {
   modelApi: string | undefined;
   executionContract: string | undefined;
   terminalState: EmbeddedRunTerminalState;
-  payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
-  /** A host policy intentionally keeps this settled draft private. */
-  terminalReplyDisposition?: "withhold";
-  replyDeliveryState?: ReplyDeliveryState;
-  recoveredFinalAssistantPayloadsAfterPromptTimeout?: EmbeddedAgentRunResult["payloads"];
-  finalAssistantVisibleText?: string;
-  finalAssistantRawText?: string;
-  agentMeta: EmbeddedAgentMeta;
-  attemptToolSummary: EmbeddedAgentRunResult["meta"]["toolSummary"];
-  failureSignal?: EmbeddedRunFailureSignal;
-  terminalToolFailure?: EmbeddedAgentRunResult["meta"]["terminalToolFailure"];
-  maxReasoningOnlyRetryAttempts: number;
-  maxEmptyResponseRetryAttempts: number;
   attemptCompactionCount: number;
   replayState: EmbeddedRunReplayState;
   sessionPromptState: Pick<
@@ -159,26 +145,12 @@ export async function resolveEmbeddedRunTerminal(input: {
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(input.terminalState.outcome);
   const { signalOwnedInterruption } = input.terminalState;
-  if (
-    input.terminalReplyDisposition === "withhold" &&
-    classifyAgentRunTerminalOutcome(input.terminalState.outcome) !== "failure" &&
-    !terminalInterrupted
-  ) {
-    if (resolveReplyExpectation(runParams) !== "optional") {
-      throw new Error("A host policy cannot withhold a required reply");
-    }
-    return completeEmbeddedRun({
-      ...input,
-      payloadCount: 0,
-      payloadsForTerminalPath: [],
-      finalAssistantVisibleText: undefined,
-      finalAssistantRawText: undefined,
-      emptyAssistantReplyIsSilent: true,
-    });
-  }
-  const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
-    isCronTrigger: runParams.trigger === "cron",
-    payloadCount: input.payloadsWithToolMedia?.length ?? 0,
+  const payloadsForTerminalPath =
+    input.prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout ??
+    input.prepared.payloadsWithToolMedia;
+  const terminalFacts = {
+    payloadCount: input.prepared.payloadsForVisibleCompletion?.length ?? 0,
+    rawPayloadCount: payloadsForTerminalPath?.length ?? 0,
     aborted: terminalAborted,
     timedOut: terminalTimedOut,
     attempt,

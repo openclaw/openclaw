@@ -13,7 +13,6 @@ import {
 import { model as createModelFixture } from "../../agents/model-catalog-fixtures.test-support.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/send.js";
-import { createTypingCallbacks } from "../../channels/typing.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DecisionOutcome } from "../../decisions/host-outcomes.js";
@@ -37,7 +36,6 @@ type ModelResponse = {
   delta: unknown;
   stop?: string;
   beforeOutput?: () => Promise<void>;
-  status?: number;
 };
 
 const decisionMock = vi.hoisted(() =>
@@ -85,11 +83,6 @@ export async function createGroupReplyFixture() {
         return;
       }
       await next.beforeOutput?.();
-      if (next.status) {
-        response.writeHead(next.status, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: { message: "Synthetic model failure" } }));
-        return;
-      }
       response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
       const chunk = (delta: unknown, finish_reason: string | null) => ({
         id: "synthetic-completion",
@@ -141,10 +134,7 @@ export async function createGroupReplyFixture() {
   withFullRuntimeReplyConfig(config);
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
-  const partials: string[] = [];
   const sent: string[] = [];
-  let typing = 0;
-  let stopped = 0;
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -173,17 +163,6 @@ export async function createGroupReplyFixture() {
       },
     ]),
   );
-  const replyOptions: InternalGetReplyOptions = {
-    onPartialReply: (payload) => {
-      if (payload.text) {
-        partials.push(payload.text);
-      }
-    },
-    onReplyStart: () => {
-      typing++;
-    },
-    typingKeepalive: false,
-  };
   const context = (
     body: string,
     messageId: string,
@@ -210,10 +189,7 @@ export async function createGroupReplyFixture() {
     context,
     storePath,
     requests,
-    partials,
     sent,
-    typing: () => typing,
-    stopped: () => stopped,
     respond: (...next: ModelResponse[]) => {
       responses.push(...next);
     },
@@ -226,14 +202,7 @@ export async function createGroupReplyFixture() {
     ) => {
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
-      return getReplyFromConfig(
-        context(body, messageId, groupId, overrides),
-        {
-          ...replyOptions,
-          ...options,
-        },
-        config,
-      );
+      return getReplyFromConfig(context(body, messageId, groupId, overrides), options, config);
     },
     dispatch: async (
       body: string,
@@ -244,17 +213,8 @@ export async function createGroupReplyFixture() {
       return dispatchInboundMessageWithBufferedDispatcher({
         cfg: config,
         ctx: context(body, messageId, groupId),
-        replyOptions: { ...replyOptions, ...options },
+        replyOptions: options,
         dispatcherOptions: {
-          typingCallbacks: createTypingCallbacks({
-            start: async () => {
-              typing++;
-            },
-            stop: async () => {
-              stopped++;
-            },
-            onStartError: () => {},
-          }),
           deliver: (payload, info) =>
             sendDurableMessageBatchCore({
               cfg: config,

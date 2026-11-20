@@ -39,15 +39,14 @@ which defaults off. The primary model still writes replies and uses tools.
 ## Group participation
 
 With Decision assistance enabled and a configured `decisionModel`, unmentioned
-messages in always-on groups and channels are assessed before typing or reply
+messages in always-on groups and channels are assessed before reply
 generation. The Decision Model uses the existing group etiquette and bounded
 recent conversation to decide whether a reply is invited or adds clear value.
 
-A rejected message is recorded without typing or a primary-model run. Approval
-starts typing immediately, unless `typingMode` is `never`, and commits the primary
-model to a conversational reply in its usual voice. Existing permissions and
-delivery rules still apply, including `NO_REPLY` after message-tool delivery to
-prevent duplicate output. Typing stops when the turn completes or fails.
+A rejected message is recorded without a primary-model run. Approval commits the
+primary model to a conversational reply in its usual voice. Existing permissions
+and delivery rules still apply, including `NO_REPLY` after message-tool delivery
+to prevent duplicate output.
 
 Mentions, commands, media turns, and generic CLI backends keep ordinary behavior.
 Embedded harnesses, including Codex, support participation assessment. With
@@ -55,9 +54,9 @@ Decision assistance off or the Decision Model unavailable, the primary model
 keeps deciding whether to reply. Existing opt-ins also enable this feature after
 upgrade; no additional setting is needed.
 
-Hosted Decision providers receive the current message, reply reference, and
-recent conversation, and charge under their normal usage terms. Each evaluation
-has a maximum 30-second timeout, bounded further by the turn timeout. Cancellation
+Hosted Decision providers receive the current message, reply reference, bounded
+workspace identity and recent conversation, and charge under their normal usage
+terms. Each evaluation has a maximum 30-second timeout, bounded further by the turn timeout. Cancellation
 ends the turn; changing the opt-in applies to subsequent turns.
 
 ## Choose a provider and model

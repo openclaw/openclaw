@@ -2,7 +2,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { logVerbose } from "../globals.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -285,9 +284,6 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
   const replyOperationRunState: ReplyOperationRunState =
     resolveReplyOperationRunState(params.replyOptions) ?? {};
   let queueAdmissionNoticeDispatched = false;
-  let typingSourceSettled = false;
-  const hasPendingTypingSource = () =>
-    !typingSourceSettled && replyOperationRunState.followupSourceSettlement !== undefined;
   let settledDeliveries = Promise.resolve();
   const settleDeliveries = () =>
     (settledDeliveries = settledDeliveries.then(async () => {
@@ -328,14 +324,6 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
       beforeDeliver,
       onSettled: settleDeliveries,
       onFreshSettledDelivery: undefined,
-      onIdle: () => {
-        if (params.dispatcherOptions.onIdle) {
-          return params.dispatcherOptions.onIdle();
-        }
-        if (!hasPendingTypingSource()) {
-          return params.dispatcherOptions.typingCallbacks?.onIdle?.();
-        }
-      },
     });
   const onTypingController = params.replyOptions?.onTypingController
     ? (typing: Parameters<NonNullable<typeof params.replyOptions.onTypingController>>[0]) => {
@@ -367,19 +355,8 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
       await settledDeliveries;
     } finally {
       foregroundReplyLease?.release();
-      const finishTyping = () => {
-        typingSourceSettled = true;
-        markRunComplete();
-        markDispatchIdle();
-      };
-      const sourceSettlement = replyOperationRunState.followupSourceSettlement;
-      if (sourceSettlement) {
-        void sourceSettlement.then(finishTyping, finishTyping).catch((error: unknown) => {
-          logVerbose(`dispatch: queued typing cleanup failed: ${String(error)}`);
-        });
-      } else {
-        finishTyping();
-      }
+      markRunComplete();
+      markDispatchIdle();
     }
   }
 }

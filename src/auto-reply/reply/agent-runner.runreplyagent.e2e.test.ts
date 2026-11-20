@@ -1344,7 +1344,7 @@ describe("runReplyAgent active steering", () => {
     });
     const active = createMainSessionOperation();
     active.setPhase("running");
-    const queued = createRecordedSessionRun("steering rejected before admission", {
+    const { followupRun, run } = createRecordedSessionRun("steering rejected before admission", {
       opts: { turnAdoptionLifecycle: { onAdopted } },
       isActive: true,
       shouldSteer: true,
@@ -1358,14 +1358,14 @@ describe("runReplyAgent active steering", () => {
     });
 
     try {
-      await expect(queued.run()).resolves.toBeUndefined();
+      await expect(run()).resolves.toBeUndefined();
 
       expect(state.backendQueueMessageMock).toHaveBeenCalledOnce();
       expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
-      expect(queued.typing.cleanup).not.toHaveBeenCalled();
+      expect(parkedSteer.fallback).toHaveBeenCalledOnce();
       expect(parkedSteer.consume).not.toHaveBeenCalled();
       active.complete();
-      await requireScheduledFollowupRunner()(queued.followupRun);
+      await requireScheduledFollowupRunner()(followupRun);
       expect(onAdopted).toHaveBeenCalledOnce();
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     } finally {
@@ -1536,7 +1536,7 @@ describe("runReplyAgent admission and cleanup", () => {
     expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(typing.cleanup).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it.each([

@@ -41,10 +41,7 @@ import {
   type FollowupRun,
 } from "./queue.js";
 import { refuseCollaborativeSteering } from "./queue/lifecycle.js";
-import {
-  recordReplyFollowupAdmission,
-  type ReplyOperationRunState,
-} from "./reply-operation-run-state.js";
+import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
@@ -102,7 +99,7 @@ function resolveAcceptedSteerRunId(params: ActiveReplySteerParams): string {
 
 export async function runActiveReplySteer(
   params: ActiveReplySteerParams,
-): Promise<"handled" | "followup" | ReplyPayload> {
+): Promise<"handled" | ReplyPayload> {
   const {
     followupRun,
     queueKey,
@@ -163,7 +160,7 @@ export async function runActiveReplySteer(
     activeRunId?: string,
     error?: string,
     runtimeReason?: MessageInjectionRuntimeReason,
-  ): Promise<"followup"> => {
+  ): Promise<"handled"> => {
     assertReadCurrent();
     parked.fallback();
     custodyFinished = true;
@@ -171,13 +168,17 @@ export async function runActiveReplySteer(
       replyOperationRunState?.admission?.status === "skipped" &&
       replyOperationRunState.admission.reason === "queue-cap";
     if (replyOperationRunState && !queueCapRejected) {
-      recordReplyFollowupAdmission(replyOperationRunState, {
-        explicitFollowup: false,
-        requesterMismatch: reason === "requester-mismatch",
-        collaborationBlocked: reason === "collaborative_steering_disabled",
-        unavailableSteer: isInboundUserMessage,
-        followupRun,
-      });
+      replyOperationRunState.admission = {
+        status: "accepted",
+        mode: "followup",
+        ...(reason === "collaborative_steering_disabled"
+          ? { reason: "collaborative-steering-disabled" as const }
+          : reason === "requester-mismatch"
+            ? { reason }
+            : isInboundUserMessage
+              ? { reason: "steering-unavailable" as const }
+              : {}),
+      };
     }
     diagnosticLogger.warn("steering rejected; applying follow-up policy", {
       reason,
@@ -193,7 +194,7 @@ export async function runActiveReplySteer(
       activeRunId,
     });
     await touchActiveSessionEntry();
-    return "followup";
+    return "handled";
   };
   // The native receipt owns settlement after handoff, even if a finalizer fails.
   let nativeOutcome: Promise<ReplyMessageInjectionOutcome> | undefined;
