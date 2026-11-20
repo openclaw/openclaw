@@ -55,7 +55,8 @@ export function registerMcpOAuthCommands(mcp: Command, { loadServer, fail }: Mcp
           });
           if (result.status === "redirect") {
             defaultRuntime.log(terminalText`Open this URL to authorize "${name}":`);
-            defaultRuntime.log(result.authorizationUrl);
+            // Straight to stdout, as in the offline flow below: redaction masks a JWT client_id.
+            defaultRuntime.writeStdout(result.authorizationUrl);
             defaultRuntime.log(
               "After the page says you're connected, the next MCP call can use this account.",
             );

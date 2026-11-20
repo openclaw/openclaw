@@ -259,18 +259,22 @@ it("routes login and logout through a live Gateway owner and prints its sign-in 
     };
     vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue(owner);
     vi.spyOn(gatewayLock, "readLockPayloadSync").mockReturnValue(owner);
+    // JWT-shaped client_id: console redaction would mask it, so it must reach stdout unlogged.
+    const url =
+      "https://accounts.example.com/authorize?client_id=eyJhbGciOiJIUzI1.eyJ0eXAiOiJj.c2lnbmF0dXJl&state=fixture-state";
     const request = vi
       .spyOn(gatewayCall, "callGateway")
       .mockResolvedValueOnce({
         status: "redirect",
         serverName: "fixture",
-        authorizationUrl: "https://accounts.example.com/authorize?state=fixture-state",
+        authorizationUrl: url,
         redirectUrl: "http://127.0.0.1:18789/oauth/mcp/callback",
         usesPublicOrigin: false,
       })
       .mockResolvedValueOnce({ status: "authorized", serverName: "fixture" })
       .mockResolvedValueOnce({ serverName: "fixture" });
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const writeStdout = vi.spyOn(defaultRuntime, "writeStdout").mockImplementation(() => {});
     const { run } = createCli();
     await run("login", "fixture");
     expect(request).toHaveBeenLastCalledWith(
@@ -280,7 +284,7 @@ it("routes login and logout through a live Gateway owner and prints its sign-in 
         localPortOverride: owner.port,
       }),
     );
-    expect(log).toHaveBeenCalledWith("https://accounts.example.com/authorize?state=fixture-state");
+    expect(writeStdout).toHaveBeenCalledWith(url);
     expect(log).toHaveBeenCalledWith(expect.stringContaining("--callback-url <url>"));
     const callbackUrl =
       "http://127.0.0.1:18789/oauth/mcp/callback?code=fixture&state=fixture-state";
