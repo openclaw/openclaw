@@ -175,15 +175,13 @@ export class ManagedWorktreeService {
               return;
             }
             await retainRepository({ ...guard, repository });
-            const bytes = await estimateWorktreeGitBytes(
-              repository.repoRoot,
-              request.template.sourceCommit,
-              {
-                signal: guard.signal,
-                assertCurrent: guard.commitGuard,
-                preparationKey: request.template.sourceCommit,
-              },
-            );
+            const commit = request.targetCommit ?? request.template.sourceCommit;
+            const bytes = await estimateWorktreeGitBytes(repository.repoRoot, commit, {
+              signal: guard.signal,
+              assertCurrent: guard.commitGuard,
+              preparationKey: commit,
+              idleIoPriority: guard.idleIoPriority,
+            });
             await prepareWarmWorktree(this.env, request, guard, (cloneBytes) =>
               requireAllocationSpace(
                 guard,
