@@ -50,6 +50,9 @@ export function createReadWorkerFixture(
           authority.assertCurrent();
           return await read(source, authority);
         },
+        inspectLiveOwner: async () => {
+          throw new Error("Unexpected live owner inspection on fixture transport");
+        },
         startValidateFresh: async (
           _context: OpenClawStateReadLocation["context"],
           authority: OpenClawStateReadAuthority,

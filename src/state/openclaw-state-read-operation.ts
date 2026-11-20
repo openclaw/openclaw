@@ -8,7 +8,10 @@ import {
 } from "../infra/gateway-state-owner.js";
 import { statIfExists } from "../infra/path-existence.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
-import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseCleanClose,
+  readSqliteDatabaseCleanCloseAsync,
+} from "../infra/sqlite-database-admission.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { hasVerifiedLiveSqliteOwner } from "../infra/sqlite-live-owner.js";
 import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
@@ -341,7 +344,15 @@ export function startOpenClawStateReadOperation(
               pathname,
               context.admission.identity.key,
             ))) &&
-        (hasVerifiedLiveSqliteOwner(pathname) || readSqliteDatabaseCleanClose(pathname));
+        (stateAccess && (stateAccess.role === "gateway" || stateAccess.role === "agent-embedded")
+          ? // Registration routes verification; it never substitutes for the physical owner record.
+            (await selectedTransport.inspectLiveOwner(context, authority)) ||
+            (await readSqliteDatabaseCleanCloseAsync({
+              location: pathname,
+              expectedIdentity: context.admission.identity,
+              assertCurrent: authority.assertCurrent,
+            }))
+          : hasVerifiedLiveSqliteOwner(pathname) || readSqliteDatabaseCleanClose(pathname));
       if (preserveArtifacts && (!native || currentMetadata)) {
         await selectedTransport.startValidateFresh(context, authority);
       }

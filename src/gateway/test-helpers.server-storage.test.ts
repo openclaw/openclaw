@@ -58,6 +58,7 @@ test("joins a direct history projection's accepted read before retiring the Gate
         }
         return {
           startValidateFresh: (...args) => transport.startValidateFresh(...args),
+          inspectLiveOwner: (...args) => transport.inspectLiveOwner(...args),
           startClose: () => transport.startClose(),
           async startRead(...args) {
             const reply = await transport.startRead(...args);

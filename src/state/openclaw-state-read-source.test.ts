@@ -4,6 +4,7 @@ import { emptyReply, mock, queueTask, source } from "./openclaw-state-read-worke
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
 import * as processRole from "../infra/database-engine/admission-scope.js";
+import { GatewayLockNamespaceError } from "../infra/gateway-lock-payload.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
@@ -15,6 +16,7 @@ import {
   retireIdleOpenClawStateReadWorkers,
 } from "./openclaw-state-read-worker.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 
 const backupRead = { type: "backup.runs" } as const;
 function readyTask() {
@@ -81,6 +83,26 @@ it.each(["gateway", "cli-oneshot", undefined] as const)(
     }
   },
 );
+
+it("refuses unknown ownership without retiring the shared reader", async () => {
+  const { location, authority } = readFixture();
+  const transport = captureOpenClawStateReadSource().createTransport(backupRead);
+  const task = queueTask();
+  const observation = transport.inspectLiveOwner(location.context, authority);
+  expect(await task.captured).toMatchObject({
+    command: { type: "admit", inspectLiveOwner: true },
+    expectedIdentity: location.context.admission.identity.key,
+  });
+  const refused = new GatewayLockNamespaceError({ pid: 42 });
+  task.result.resolve({
+    ok: true,
+    type: "admit",
+    liveOwner: { message: refused.message, error: encodeOpenClawStateWorkerError(refused) },
+  });
+  await expect(observation).rejects.toThrow(refused);
+  await transport.startClose();
+  expect(task.close).toHaveBeenCalledExactlyOnceWith(undefined);
+});
 
 it("shares read setup methods while each read retains independent task custody", async () => {
   const { location, authority } = readFixture();

@@ -173,6 +173,18 @@ it("reads live-owned state directly while explicit snapshots retain private imag
       expect(await preserveArtifacts(readAwaited)).toEqual([]);
     });
     expect(await readDeferredPluginMigrationsAsync(options)).toEqual([]);
+    const metadataKey = "plugins.bundledDiscovery";
+    writer
+      .prepare(
+        "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+      )
+      .run(metadataKey, JSON.stringify("allowlist"), 2);
+    const metadata = await preserveArtifacts(() =>
+      readExisting(options, { type: "plugins.metadata.read", input: { stateKeys: [metadataKey] } }),
+    );
+    expect(metadata?.rows).toEqual([
+      { state_key: metadataKey, value_json: JSON.stringify("allowlist") },
+    ]);
     expect(copies.map((copy) => copy.mock.calls.length)).toEqual([0, 0, 0, 0]);
     await preserveArtifacts(() =>
       frozenScope(() => readDeferredPluginMigrationsAsync(options), options),

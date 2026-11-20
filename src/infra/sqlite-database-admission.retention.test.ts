@@ -44,6 +44,7 @@ import {
   retainSqliteDatabaseWriteScopesForPath as retainScopes,
   retireSqliteDatabaseWriteScopes as retireScopes,
   prepareSqliteDatabaseCleanClose as prepareCleanClose,
+  readSqliteDatabaseCleanCloseAsync,
   prepareSqliteDatabaseAdmissionAsync as prepareAdmission,
   invalidateSqliteDatabaseCleanClose as invalidateCleanClose,
   readSqliteDatabaseIntegrityVerification as readIntegrity,
@@ -345,15 +346,15 @@ it("retires the final closed handle's facts while preserving open siblings and d
     readSqliteCleanCloseSeal(location, fstatSync(original.descriptor, { bigint: true }))
       ?.verifiedAt,
   ).toBe(verifiedAt);
-  await prepareAdmission({
-    location,
-    expectedIdentity: original.physicalIdentity,
-    assertCurrent() {},
-  });
+  const sealRequest = { location, expectedIdentity: original.physicalIdentity, assertCurrent() {} };
+  await expect(readSqliteDatabaseCleanCloseAsync(sealRequest)).resolves.toBe(true);
+  await prepareAdmission(sealRequest);
   const prepared = recordsFor(location)[0]!;
   expect(prepared.generationId).not.toBe(readmitted.generationId);
   expect(prepared.descriptor).toBe(original.descriptor);
   expect(readIntegrity(location)).toEqual({ verifiedAt: reverifiedAt });
+  invalidateCleanClose(location);
+  await expect(readSqliteDatabaseCleanCloseAsync(sealRequest)).resolves.toBe(false);
   retireAdmission(location);
   expect(() => fstatSync(original.descriptor)).toThrow();
 });

@@ -36,6 +36,7 @@ it("joins an accepted pairing reader through the real Gateway close prelude", as
           let cleanup: Promise<void> | undefined;
           return {
             startValidateFresh: (...args) => transport.startValidateFresh(...args),
+            inspectLiveOwner: (...args) => transport.inspectLiveOwner(...args),
             startRead(location, authority) {
               const operation = transport.startRead(location, authority);
               void operation.then(

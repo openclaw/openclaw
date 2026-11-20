@@ -47,12 +47,18 @@ function decodeOpenClawStateReadReply(reply: OpenClawStateReadReply): OpenClawSt
   if (reply.ok) {
     return { value: reply };
   }
-  const error = new Error(reply.message);
-  retainOpenClawStateWorkerErrorPayload(error, reply.error);
   return {
-    error: hydrateOpenClawStateWorkerError(error, { includeOrdinary: true }),
+    error: decodeReadError(reply),
     sourceAdmitted: reply.sourceAdmitted === true,
   };
+}
+
+function decodeReadError(
+  reply: Pick<Extract<OpenClawStateReadReply, { ok: false }>, "message" | "error">,
+) {
+  const error = new Error(reply.message);
+  retainOpenClawStateWorkerErrorPayload(error, reply.error);
+  return hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
 }
 
 type ReadOperation = { close(): Promise<void> };
@@ -234,7 +240,10 @@ class StateReadSource {
     onChunk?: OpenClawStateReadOptions["onChunk"],
     onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
     awaitedOnly = false,
-  ): Pick<StateReadTransport, "startValidateFresh" | "startRead" | "startClose"> {
+  ): Pick<
+    StateReadTransport,
+    "startValidateFresh" | "inspectLiveOwner" | "startRead" | "startClose"
+  > {
     return new StateReadTransport(command, this, onChunk, onChunkAsync, awaitedOnly);
   }
 
@@ -431,16 +440,18 @@ class StateReadTransport {
     }
   }
 
-  async startValidateFresh(
+  private async checkAdmission(
     context: OpenClawStateWorkerContext,
     authority: OpenClawStateReadAuthority,
-  ): Promise<void> {
+    inspectLiveOwner: boolean,
+  ) {
     const run = this.startRun(
       context,
       context.admission.databasePath,
-      true,
-      { type: "admit" },
+      !inspectLiveOwner,
+      inspectLiveOwner ? { type: "admit", inspectLiveOwner: true } : { type: "admit" },
       authority,
+      inspectLiveOwner ? context.admission.identity.key : undefined,
     );
     const read = await run.result;
     if ("error" in read) {
@@ -448,6 +459,26 @@ class StateReadTransport {
     }
     authority.assertCurrent();
     await this.closeTask(run.task);
+    return read.value;
+  }
+  async startValidateFresh(
+    context: OpenClawStateWorkerContext,
+    authority: OpenClawStateReadAuthority,
+  ) {
+    await this.checkAdmission(context, authority, false);
+  }
+  async inspectLiveOwner(
+    context: OpenClawStateWorkerContext,
+    authority: OpenClawStateReadAuthority,
+  ) {
+    const reply = await this.checkAdmission(context, authority, true);
+    if (reply.type !== "admit" || reply.liveOwner === undefined) {
+      throw new Error("Shared-state reader returned no live-owner observation");
+    }
+    if (typeof reply.liveOwner !== "boolean") {
+      throw decodeReadError(reply.liveOwner);
+    }
+    return reply.liveOwner;
   }
   async startRead(
     source: OpenClawStateReadLocation,

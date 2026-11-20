@@ -85,7 +85,7 @@ export type OpenClawStateReadCommand =
   | TranscriptExportCommand
   | RegisteredStateReadCommand
   | { type: "localWorkspace.manifest"; input: LocalWorkspaceManifestInput }
-  | { type: "admit" }
+  | { type: "admit"; inspectLiveOwner?: true }
   | { type: "backup.runs" }
   | TuiLastSessionReadCommand
   | ChannelIngressReadCommand
@@ -273,7 +273,11 @@ export type OpenClawStateReadResult =
 
 export type OpenClawStateReadReply = (
   | ({ ok: true; sourceAdmitted: true } & OpenClawStateReadResult)
-  | { ok: true; type: "admit" }
+  | {
+      ok: true;
+      type: "admit";
+      liveOwner?: boolean | { message: string; error: OpenClawStateWorkerErrorPayload | undefined };
+    }
   | {
       ok: true;
       type: "agentDatabaseRegistry.read";
