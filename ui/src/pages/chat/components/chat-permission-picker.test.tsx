@@ -27,9 +27,12 @@ it("keeps locked modes unavailable and selects enabled numeric shortcuts with re
   const menu = container.querySelector<HTMLElement>('[role="menu"]')!;
   await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
   expect(document.activeElement).toBe(trigger);
-  expect(
-    container.querySelector('[data-chat-permission-option="full"]')?.matches(":disabled"),
-  ).toBe(true);
+  await waitForSolid(() =>
+    expect(
+      container.querySelector('[data-chat-permission-option="full"]')?.matches(":disabled"),
+    ).toBe(true),
+  );
+  expect(document.activeElement).toBe(trigger);
   menu.dispatchEvent(new KeyboardEvent("keydown", { key: "5", bubbles: true, cancelable: true }));
   expect(onSelect).not.toHaveBeenCalled();
   expect(menu.matches(":popover-open")).toBe(true);
