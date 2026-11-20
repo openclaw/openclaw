@@ -45,11 +45,26 @@ async function prepareCompactionParams() {
     sessionKey: "agent:main:compaction-auth",
     storePath: join(workspaceDir, "sessions.sqlite"),
   };
-  await upsertSessionEntryCore(sessionTarget, {
+  const entry = await upsertSessionEntryCore(sessionTarget, {
     sessionId: sessionTarget.sessionId,
     updatedAt: 1,
   });
-  return { ...sessionTarget, sessionTarget, sessionFile: sessionTarget.sessionKey, workspaceDir };
+  if (!entry) {
+    throw new Error("Compaction fixture entry was not created");
+  }
+  const { SessionManager } = await import("../sessions/index.js");
+  const preparedSession = {
+    sessionTarget,
+    entry,
+    sessionManager: await SessionManager.openAsync(sessionTarget),
+  };
+  return {
+    ...sessionTarget,
+    sessionTarget,
+    sessionFile: sessionTarget.sessionKey,
+    workspaceDir,
+    preparedSession,
+  };
 }
 
 async function runOwnedCompaction(run: () => ReturnType<typeof compactEmbeddedAgentSessionDirect>) {
@@ -255,26 +270,29 @@ it("compacts through the configured fallback when the primary profile is cooling
   });
   vi.mocked(ensureAuthProfileStoreWithoutExternalProfiles).mockReturnValue(authStore);
   resolveContextEngineMock.mockResolvedValue({
-    info: { ownsCompaction: false },
+    info: { id: "legacy", ownsCompaction: false },
     compact: vi.fn(delegateCompactionToRuntime),
   });
 
   const result = await runOwnedCompaction(() =>
-    compactEmbeddedAgentSession({
-      ...baseParams,
-      agentDir,
-      provider: "primary",
-      model: "model",
-      trigger: "budget",
-      forcePreflight: true,
-      preflightRequired: true,
-      preflightCompactionTrigger: "transcript_bytes",
-      config: {
-        agents: {
-          defaults: { model: { primary: "primary/model", fallbacks: ["backup/model"] } },
+    compactEmbeddedAgentSession(
+      {
+        ...baseParams,
+        agentDir,
+        provider: "primary",
+        model: "model",
+        trigger: "budget",
+        forcePreflight: true,
+        preflightRequired: true,
+        preflightCompactionTrigger: "transcript_bytes",
+        config: {
+          agents: {
+            defaults: { model: { primary: "primary/model", fallbacks: ["backup/model"] } },
+          },
         },
       },
-    }),
+      { preparedSession: baseParams.preparedSession },
+    ),
   );
 
   expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });

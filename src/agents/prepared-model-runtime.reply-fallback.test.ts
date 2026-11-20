@@ -231,11 +231,11 @@ describe("prepared reply fallback ownership", () => {
       allowGatewaySubagentBinding: true,
     });
     const dispatch = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
-    const registries = new Set<PreparedModelRuntimeSnapshot["modelRegistry"]>();
+    const catalogs = new Set<PreparedModelRuntimeSnapshot["modelCatalog"]>();
     reply.execute.mockImplementation(async (context: { workspaceDir: string }) => {
       const pluginGeneration = getPreparedModelRuntimePluginGeneration()!;
       const prepared = getPreparedModelRuntimeBorrowedSnapshot(pluginGeneration)!;
-      registries.add(prepared.modelRegistry);
+      catalogs.add(prepared.modelCatalog);
       // Embedded runs receive an equivalent config projection, not the published object.
       const runConfig = structuredClone(config);
       const workspaces = resolvePreparedRuntimeWorkspaces({
@@ -260,7 +260,7 @@ describe("prepared reply fallback ownership", () => {
       );
       // Scoped policy gets a projection; the prepared inventory and generation stay shared.
       expect(nested.pluginGeneration).toBe(pluginGeneration);
-      expect(nested.snapshot.modelRegistry).toBe(prepared.modelRegistry);
+      expect(nested.snapshot.modelCatalog).toBe(prepared.modelCatalog);
       expect(nested.snapshot.catalogOwner).toBe(prepared.catalogOwner);
       expect(getPreparedModelRuntimePolicyConfigReader(nested.snapshot)!()).toBe(runConfig);
       return { text: context.workspaceDir };
@@ -282,7 +282,7 @@ describe("prepared reply fallback ownership", () => {
       buildsAfterFirst ??= mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
       expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(buildsAfterFirst);
     }
-    expect(registries.size).toBe(1);
+    expect(catalogs.size).toBe(1);
   });
 
   it.each([

@@ -51,6 +51,10 @@ beforeEach(async () => {
 });
 
 it("summarizes with the model window instead of a smaller session token budget", async () => {
+  const { captureOwnedTranscriptWriteAssertion } =
+    await import("../../config/sessions/transcript-write-context.js");
+  const { attachCompactionAccountingRecorder } =
+    await import("./run/compaction-accounting-bridge.js");
   const { guardSessionManager } = await import("../session-tool-result-guard-wrapper.js");
   const { createAgentSession } = await import("../sessions/sdk.js");
   const { resolveEmbeddedAgentStream } = await import("./stream-resolution.js");
@@ -84,7 +88,18 @@ it("summarizes with the model window instead of a smaller session token budget",
     strategy: "session-custom",
   });
 
+  const sessionTarget = { agentId: "main", sessionId: prepared.sessionId, sessionKey, storePath };
+  const contextEngineRuntimeContext = {};
+  let assertWrite: (() => void) | undefined;
+  attachCompactionAccountingRecorder(contextEngineRuntimeContext, {
+    memoryTranscript: {
+      sessionTarget,
+      sessionManager: manager,
+      assertActive: () => (assertWrite ??= captureOwnedTranscriptWriteAssertion(sessionTarget))(),
+    },
+  });
   const result = await compact({
+    contextEngineRuntimeContext,
     agentId: "main",
     sessionId: prepared.sessionId,
     sessionKey,

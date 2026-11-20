@@ -548,7 +548,10 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
           sessionKey: `agent:main:delegate-${mode}`,
           storePath: state.path("transcripts", "openclaw-agent.sqlite"),
         };
-        await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+        const sessionEntry = expectDefined(
+          await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 }),
+          "delegate session entry",
+        );
         const manager = SessionManager.open(target, state.workspaceDir);
         await manager.appendModelChange(model.provider, model.id);
         await manager.appendThinkingLevelChange("off");
@@ -602,7 +605,16 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
         };
         const recordUsage = vi.fn();
         const recordCompaction = vi.fn();
-        attachCompactionAccountingRecorder(runtimeContext, { recordUsage, recordCompaction });
+        const preparedSession = {
+          sessionTarget: target,
+          entry: sessionEntry,
+          sessionManager: manager,
+        };
+        attachCompactionAccountingRecorder(runtimeContext, {
+          recordUsage,
+          recordCompaction,
+          preparedSession,
+        });
         const parent = new AsyncWorkScope();
         let operation: ReturnType<typeof delegateCompactionToRuntime> | undefined;
         let drained: Promise<void> | undefined;
@@ -670,6 +682,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                       },
                       {
                         sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined },
+                        preparedSession,
                       },
                     )
                   : delegateCompactionToRuntime({
