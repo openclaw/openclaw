@@ -497,7 +497,10 @@ export async function prepareSessionWorkspaceForRun(params: {
                 : "creating_worktree",
           ),
         acceptedSource: pending.source,
-        // Carried work lands after checkout finishes, so its prompt waits for the whole checkout.
+        prepareCheckout: carried
+          ? (worktreePath, guard) => applyUnsavedWork(carried.work, worktreePath, guard)
+          : undefined,
+        // A carried checkout's prompt includes the restored files.
         onPromptReady:
           params.onPromptReady && !carried
             ? async (promptWorkspace) => {
@@ -525,12 +528,6 @@ export async function prepareSessionWorkspaceForRun(params: {
       });
       if (!result.ok) {
         throw new Error(result.error.message);
-      }
-      if (carried) {
-        if (!result.value.sessionRoot) {
-          throw new Error("No checkout was prepared for the moved conversation's work.");
-        }
-        await applyUnsavedWork(carried.work, result.value.sessionRoot);
       }
       const bound = await commitPreparedSessionWorkspace({
         prepared: result.value,

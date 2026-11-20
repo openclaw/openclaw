@@ -133,6 +133,7 @@ export async function prepareSessionWorktree(params: {
   acceptedSource?: AcceptedWorktreeSource;
   withRollback?: SpawnParentWorktreeSource["withRollback"];
   onProgress?: CreateManagedWorktreeParams["onProgress"];
+  prepareCheckout?: CreateManagedWorktreeParams["prepareCheckout"];
   onPromptReady?: (prepared: PreparedGatewaySessionLifecycle) => Promise<void>;
 }): ReturnType<PrepareGatewaySessionLifecycle> {
   const { target, commitGuard } = params;
@@ -343,6 +344,7 @@ export async function prepareSessionWorktree(params: {
           repoRoot: workspace,
           baseRef: params.baseRef,
           checkoutCommit: params.checkoutCommit,
+          prepareCheckout: params.prepareCheckout,
           runSetupScript: sandboxRequired ? false : params.runSetupScript,
           provisionIgnoredFiles: !sandboxRequired,
         })

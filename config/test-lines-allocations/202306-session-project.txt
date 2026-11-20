@@ -1,2 +1,2 @@
 # Prompt eligibility and menu selection cover empty, registered and already-bound conversations.
-59
+76

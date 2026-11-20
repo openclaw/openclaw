@@ -9,6 +9,8 @@ const CommitShaSchema = Type.String({ pattern: "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"
 export const MoveSessionCheckoutSchema = closedObject({
   /** Relative to the conversation's workspace. */
   path: Type.String({ minLength: 1, maxLength: 1024 }),
+  commit: CommitShaSchema,
+  unsavedFiles: Type.Integer({ minimum: 0 }),
 });
 
 export const MoveSessionProjectSchema = closedObject({

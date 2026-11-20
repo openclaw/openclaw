@@ -4,6 +4,7 @@ import path from "node:path";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
 import { requireGit, runGit } from "../agents/worktrees/git.js";
+import type { WorktreeMutationGuard } from "../agents/worktrees/types.js";
 import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 
 /** Where the conversation's own files live: inside its sandbox, or on the Gateway host. */
@@ -274,30 +275,50 @@ export async function deleteCarryRef(projectRoot: string, refName: string): Prom
 }
 
 /** Lay carried unsaved changes over a new worktree, leaving them unsaved. */
-export async function applyUnsavedWork(work: string, worktreePath: string) {
+export async function applyUnsavedWork(
+  work: string,
+  worktreePath: string,
+  guard: WorktreeMutationGuard,
+) {
   // Git writes the files: it replaces links instead of following them. Carried
   // attributes may name filters, so only trusted layout config is in effect.
-  await withWorktreeGitConfig(worktreePath, true, {}, (git) =>
-    git.require(worktreePath, ["restore", `--source=${work}`, "--worktree", "--", "."]),
+  await withWorktreeGitConfig(
+    worktreePath,
+    true,
+    { signal: guard.signal, beforeRun: guard.commitGuard },
+    (git) => git.require(worktreePath, ["restore", `--source=${work}`, "--worktree", "--", "."]),
   );
 }
 
-// Lists Git checkouts one or two folders deep as NUL-separated path and origin URL pairs.
+const PREVIEW_STATUS_ARGS = [
+  "--no-optional-locks",
+  "status",
+  "--porcelain=v1",
+  "-z",
+  "--untracked-files=all",
+  "--no-renames",
+];
+
+// Lists Git checkouts one or two folders deep as NUL-separated preview records.
 const SANDBOX_LIST = String.raw`set -u
 export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 GIT_TERMINAL_PROMPT=0
 git() { command git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
 cd "$1" || exit 0
+status=$(mktemp) || exit 1
+trap 'rm -f "$status"' EXIT
 for marker in */.git */*/.git; do
   dir=$(dirname "$marker")
   test "$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$dir" && pwd -P)" || continue
-  git -C "$dir" rev-parse --verify -q 'HEAD^{commit}' >/dev/null || continue
+  commit=$(git -C "$dir" rev-parse --verify -q 'HEAD^{commit}') || continue
+  git -C "$dir" ${PREVIEW_STATUS_ARGS.join(" ")} > "$status" || continue
   origin=$(git -C "$dir" config --get remote.origin.url || true)
-  printf '%s\0%s\0' "$dir" "$origin"
+  count=$(tr -cd '\000' < "$status" | wc -c)
+  printf '%s\0%s\0%s\0%s\0' "$dir" "$origin" "$commit" "$count"
 done
 `;
 
 /** A folder with a commit to carry, and the origin that matches it to a project. */
-type CarryCheckout = { path: string; originUrl: string };
+type CarryCheckout = { path: string; originUrl: string; commit: string; unsavedFiles: number };
 
 const MAX_LISTED_CHECKOUTS = 32;
 
@@ -339,10 +360,18 @@ async function listOnHost(workspaceDir: string, signal?: AbortSignal): Promise<C
     const head = await runGit(directory, ["rev-parse", "--verify", "-q", "HEAD^{commit}"], {
       signal,
     });
-    if (head.code === 0) {
+    if (head.code === 0 && COMMIT_PATTERN.test(head.stdout.trim())) {
+      const status = await withWorktreeGitConfig(directory, true, { signal }, (git) =>
+        git.run(directory, PREVIEW_STATUS_ARGS),
+      );
+      if (status.code !== 0) {
+        continue;
+      }
       checkouts.push({
         path: relative.split(path.sep).join("/"),
         originUrl: origin.code === 0 ? origin.stdout.trim() : "",
+        commit: head.stdout.trim(),
+        unsavedFiles: status.stdout.split("\0").filter(Boolean).length,
       });
     }
   }
@@ -365,8 +394,14 @@ export async function listCarryCheckouts(
   });
   const fields = listed.code === 0 ? listed.stdout.toString().split("\0") : [];
   const checkouts: CarryCheckout[] = [];
-  for (let index = 0; index + 1 < fields.length; index += 2) {
-    checkouts.push({ path: fields[index]!, originUrl: fields[index + 1]! });
+  for (let index = 0; index + 3 < fields.length; index += 4) {
+    const path = fields[index]!;
+    const originUrl = fields[index + 1]!;
+    const commit = fields[index + 2]!;
+    const unsavedFiles = Number(fields[index + 3]);
+    if (COMMIT_PATTERN.test(commit) && Number.isSafeInteger(unsavedFiles) && unsavedFiles >= 0) {
+      checkouts.push({ path, originUrl, commit, unsavedFiles });
+    }
   }
   return checkouts.slice(0, MAX_LISTED_CHECKOUTS);
 }

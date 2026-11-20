@@ -119,7 +119,7 @@ export const projectsSessionMoveHandlers: GatewayRequestHandlers = {
             checkouts: checkouts
               .filter(({ originUrl }) => origin && parseProjectGitUrl(originUrl)?.url === origin)
               .slice(0, 32)
-              .map(({ path }) => ({ path })),
+              .map(({ path, commit, unsavedFiles }) => ({ path, commit, unsavedFiles })),
           });
         }),
       };

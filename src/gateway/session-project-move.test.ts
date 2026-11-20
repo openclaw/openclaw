@@ -20,7 +20,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { prepareSessionWorkspaceForRun } from "./server-methods/session-create-project.js";
 import { moveSessionIntoProject } from "./session-project-move.js";
-import type { CarrySource } from "./session-workspace-carry.js";
+import { listCarryCheckouts, type CarrySource } from "./session-workspace-carry.js";
 
 const commit = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit"];
 
@@ -35,6 +35,12 @@ it.each(["sandbox", "host"] as const)(
       await requireGit(repoRoot, ["init", "-b", "main"]);
       await fs.writeFile(path.join(repoRoot, "kept.txt"), "kept\n");
       await fs.writeFile(path.join(repoRoot, "removed.txt"), "removed\n");
+      await fs.mkdir(path.join(repoRoot, ".openclaw"));
+      await fs.writeFile(
+        path.join(repoRoot, ".openclaw", "worktree-setup.sh"),
+        '#!/bin/sh\nset -e\ntest "$(cat kept.txt)" = "edited, not saved"\ntest -f draft.txt\n',
+        { mode: 0o755 },
+      );
       await requireGit(repoRoot, ["add", "."]);
       await requireGit(repoRoot, [...commit, "-m", "Project base"]);
       const origin = "https://github.com/example/carry.git";
@@ -52,6 +58,7 @@ it.each(["sandbox", "host"] as const)(
       // The conversation cloned the project into its own workspace and kept working there.
       const clone = path.join(state.workspaceDir, "work");
       await requireGit(state.workspaceDir, ["clone", "--quiet", repoRoot, clone]);
+      await requireGit(clone, ["remote", "set-url", "origin", origin]);
       await fs.writeFile(path.join(clone, "feature.txt"), "committed work\n");
       await requireGit(clone, ["add", "feature.txt"]);
       // A committed link to a host file, replaced by a plain file before the move.
@@ -144,6 +151,9 @@ it.each(["sandbox", "host"] as const)(
         });
 
       await withEnvAsync({ GIT_CONFIG_GLOBAL: gitConfig, GIT_ALLOW_PROTOCOL: "file" }, async () => {
+        expect(await listCarryCheckouts(source)).toEqual([
+          { path: "work", originUrl: origin, commit: carriedCommit, unsavedFiles: 5 },
+        ]);
         expect(await move()).toEqual({
           status: "pending",
           projectId: project.id,
@@ -172,7 +182,7 @@ it.each(["sandbox", "host"] as const)(
           context,
           signal: new AbortController().signal,
           assertCurrent() {},
-          runSetupScript: false,
+          runSetupScript: where === "host",
         });
         const worktree = await managedWorktrees.findLiveByOwner("session", target.sessionKey);
         assert(worktree, "The next turn must open a managed project checkout");

@@ -52,7 +52,11 @@ function renderMenu(request: GatewayRequestHandler) {
 
 const projects = [
   { id: "project-1", name: "Website", checkouts: [] },
-  { id: "project-2", name: "Billing", checkouts: [{ path: "billing" }] },
+  {
+    id: "project-2",
+    name: "Billing",
+    checkouts: [{ path: "billing", commit: "eac9b90e94b1".padEnd(40, "0"), unsavedFiles: 2 }],
+  },
 ];
 
 it("omits Move when the catalog contains only the agent workspace", async () => {
@@ -99,6 +103,9 @@ it("moves into the existing project selected in the dropdown with its detected c
   });
   options[1]!.click();
   flush();
+  expect(document.body.textContent).toContain(
+    "Carry work from billing at commit eac9b90e94b1. Files with unsaved changes: 2.",
+  );
   expectDefined(
     document.body.querySelector<HTMLFormElement>("openclaw-modal-dialog form"),
     "dialog form",

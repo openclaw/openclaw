@@ -53,6 +53,8 @@ function renderMoveToProjectDialog(
     const projects = options().projects;
     return projects.find((entry) => entry.id === projectChoice()) ?? projects[0];
   });
+  // When several clones match, preview and carry the same first checkout.
+  const checkout = () => project()?.checkouts[0];
   const close = () => {
     if (!moving()) {
       finish(false);
@@ -64,9 +66,7 @@ function renderMoveToProjectDialog(
     if (moving() || !target) {
       return;
     }
-    // The conversation's own clone of the project, when it has one, comes along.
-    // Accepted edge case: with several clones of one project, the first listed one comes.
-    const folder = target.checkouts[0]?.path;
+    const folder = checkout()?.path;
     setMoving(true);
     setError(undefined);
     try {
@@ -154,6 +154,17 @@ function renderMoveToProjectDialog(
                     onChange: setProjectChoice,
                   }}
                 />
+                <Show when={checkout()}>
+                  {(detected) => (
+                    <p>
+                      {t("chat.sessionHeader.moveToProject.checkoutPreview", {
+                        folder: detected().path,
+                        commit: detected().commit.slice(0, 12),
+                        unsavedFiles: String(detected().unsavedFiles),
+                      })}
+                    </p>
+                  )}
+                </Show>
                 <Show when={moving()}>
                   <p role="status">{t("chat.sessionHeader.moveToProject.moving")}</p>
                 </Show>
