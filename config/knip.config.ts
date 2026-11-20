@@ -572,6 +572,8 @@ const repositoryScriptEntries = [
   "scripts/test-ios-shell-gateway.mjs!",
   "scripts/test-ios-sidebar-attention-gateway.mjs!",
   "scripts/update-clawtributors.ts!",
+  // scripts/update-gateway.sh runs this source-update build by path.
+  "scripts/update-gateway-build.mts!",
   // The candidate binder invokes this trusted producer-identity verifier by path.
   "scripts/verify-full-release-producer-job.mjs!",
   // Staging and signed-app packaging execute this verifier with each bundled Bun.

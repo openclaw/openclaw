@@ -199,7 +199,6 @@ export async function updateGitRelease(params: {
       refreshedRemotes: fetched.refreshedRemotes,
       devSource: fetched.devSource,
       beforeSha,
-      sourceRuntimePrepared: opts.sourceRuntimePrepared,
       needsCheckoutMain: false,
       runCommand,
       timeoutMs,
@@ -410,7 +409,6 @@ export async function updateGitRelease(params: {
       // Same source is current only when the running release's artifacts verify (#158931).
       // A conversion from a linked worktree can serve a different commit than the checkout.
       beforeRuntimeVerified: recovery.serviceRestartSafe && beforeSha === runningSha,
-      beforeGitStaging: opts.beforeGitStaging,
       validateCandidate: opts.validateCandidate,
       needsCheckoutMain: channel === "dev" && !opts.devTarget && branch !== DEV_BRANCH,
       beforeCandidate: async (revision) => {

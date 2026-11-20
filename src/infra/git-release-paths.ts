@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import {
-  PACKAGE_RELEASES_DIR,
   packageReleaseGlobalRoot,
   readPackageReleaseSlotSync,
 } from "./package-release-slot-path.js";
@@ -13,34 +12,23 @@ export const GIT_RELEASE_LAUNCHER = "openclaw-launcher.mjs";
 export const GIT_RELEASE_TRIAL = ".trial";
 
 /**
- * Whether a Git update runs from releases. POSIX only: #198835's link is POSIX-only, so
- * Windows checkouts and package-to-Git switches keep the in-place runner. Only an installed
- * Gateway service that owns this install starts through the release link; a checkout run
- * by hand keeps the in-place runner, or its next start would run the old commit. The layout never
- * fails an update (#197949 decision 8): when it cannot be used, `onUnavailable` hears why
- * and the update takes the in-place runner. The next update tries the layout again.
+ * Every Git install updates through releases (on Windows the link is a junction). The layout
+ * never refuses an update (#197949 decision 8): something other than a release link at the
+ * package path is moved aside, and the returned warning names where. A state directory that
+ * cannot hold `releases/` fails the update at its first write, naming the path.
  */
-export function usesGitReleases(
-  switchToGit: boolean,
-  serviceOwnsInstall: boolean,
-  onUnavailable?: (reason: string) => void,
-): boolean {
-  if (switchToGit || process.platform === "win32" || !serviceOwnsInstall) {
-    return false;
+export function prepareGitReleaseLayout(): string | undefined {
+  const slot = gitReleaseSlot(resolveGitReleasePrefix());
+  if (!fs.lstatSync(slot, { throwIfNoEntry: false }) || readPackageReleaseSlotSync(slot)) {
+    return undefined;
   }
-  const prefix = resolveGitReleasePrefix();
-  const slot = gitReleaseSlot(prefix);
+  const aside = `${slot}.displaced-${Date.now()}`;
   try {
-    fs.mkdirSync(path.join(prefix, PACKAGE_RELEASES_DIR), { recursive: true });
-    if (fs.lstatSync(slot, { throwIfNoEntry: false }) && !readPackageReleaseSlotSync(slot)) {
-      onUnavailable?.(`${slot} is not a release link`);
-      return false;
-    }
-    return true;
+    fs.renameSync(slot, aside);
   } catch (error) {
-    onUnavailable?.(`${prefix} is unavailable: ${String(error)}`);
-    return false;
+    return `${slot} is not a release link and could not be moved aside (${String(error)}); remove it, then update again.`;
   }
+  return `${slot} was not a release link; it was moved to ${aside}.`;
 }
 
 /**

@@ -196,7 +196,6 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
         inspectGitTarget: async () => {},
         validateCandidate: async () => [],
         beforeGitMutation: async () => {},
-        runGitDoctor: async () => null,
       },
     });
 
@@ -361,7 +360,6 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
                 throw new Error("the caller refused the mutation");
               }
             },
-            runGitDoctor: async () => null,
             deferReleaseActivation,
           },
         });

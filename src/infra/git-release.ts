@@ -103,7 +103,8 @@ export async function publishGitRelease(params: {
   } else {
     await sweepPackageReleaseTemporaryLinks(globalRoot);
     const temporary = path.join(globalRoot, `.openclaw.release-link-${process.pid}-${Date.now()}`);
-    await fs.symlink(target, temporary);
+    // POSIX ignores the type; on Windows a junction needs no administrator rights.
+    await fs.symlink(target, temporary, "junction");
     params.assertCurrent?.();
     await fs.rename(temporary, slot);
     await syncDirectoryIfSupported(globalRoot);
@@ -141,7 +142,9 @@ export async function settleGitReleaseTrial(runningRoot: string | null): Promise
     return;
   }
   const trial = await readGitReleaseTrial(slot.prefix);
-  if (trial?.target === slot.target) {
+  // A Windows junction stores absolute text; compare the releases the texts name.
+  const linked = (target: string) => path.resolve(path.dirname(slot.slot), target);
+  if (trial && linked(trial.target) === linked(slot.target)) {
     await fs.rm(gitReleaseTrialFile(slot.prefix), { force: true });
   }
 }

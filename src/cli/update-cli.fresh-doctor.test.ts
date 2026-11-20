@@ -10,22 +10,14 @@ import {
   lastWriteJsonCall,
   packageInstallCommandCall,
   requireValue,
-  spawnCall,
   getLogOutput,
 } from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
-import { registerForegroundFailureRecoveryTests } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import { packageTargetStatus } from "./update-cli/update-cli-package.test-support.js";
 import { runtimeFixture } from "./update-cli/update-command-fixtures.test-support.js";
 import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
-
-// These cases cover the in-place Git runner that Windows checkouts and package-to-Git switches use.
-vi.mock("../infra/git-release-paths.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/git-release-paths.js")>()),
-  usesGitReleases: () => false,
-}));
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -43,46 +35,7 @@ describe("update-cli", () => {
       switchToPackage: true,
     });
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-    expectNoSideEffects(update.updateGitCheckout, update.replaceConfigFile, mocks.spawn);
-  });
-
-  it("pins the compatibility host version to the downgraded target during current-process post-core plugin convergence (#87914)", async () => {
-    const downgradedRoot = f.createCaseDir("openclaw-downgraded-compat-root");
-    vi.mocked(update.resolveUpdateInstallKind).mockImplementation(async (root) =>
-      root === downgradedRoot ? "package" : "git",
-    );
-    f.setupUpdatedRootRefresh({
-      targetVersion: "2026.4.10",
-      gatewayUpdateImpl: async () =>
-        update.makeOkUpdateResult({
-          mode: "npm",
-          root: downgradedRoot,
-          before: { version: "2026.4.14" },
-          after: { version: "2026.4.10" },
-        }),
-    });
-    mocks.readPackageVersion.mockImplementation(async (pkgRoot: string) =>
-      pkgRoot === downgradedRoot ? "2026.4.10" : "2026.4.14",
-    );
-    f.primeNpmChannelTag("latest", "2026.4.10");
-
-    delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-    f.mockCurrentProcessFreshDoctor({ postCoreResumeAttempt: false });
-    let hostVersionDuringPluginUpdate: string | undefined = "unset";
-    mocks.updateNpmInstalledPlugins.mockImplementation(async () => {
-      hostVersionDuringPluginUpdate = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-      return { changed: false, config: f.baseConfig, outcomes: [] };
-    });
-
-    try {
-      await update.updateCommand({ yes: true, tag: "2026.4.10", restart: false });
-
-      expect(mocks.spawn).not.toHaveBeenCalled();
-      expect(hostVersionDuringPluginUpdate).toBe("2026.4.10");
-      expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
-    } finally {
-      delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-    }
+    expectNoSideEffects(update.updateGitRelease, update.replaceConfigFile, mocks.spawn);
   });
 
   it("runs updated plugin migrations for a plugin-only current-process update", async () => {
@@ -91,7 +44,7 @@ describe("update-cli", () => {
       doctorRetirementOnly: true,
     });
     mocks.readPackageVersion.mockResolvedValue(VERSION);
-    vi.mocked(update.updateGitCheckout).mockResolvedValue(
+    vi.mocked(update.updateGitRelease).mockResolvedValue(
       runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION).outcome,
     );
     vi.mocked(update.resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
@@ -143,21 +96,6 @@ describe("update-cli", () => {
     const message = result.pluginUpdate.warnings?.at(-1)?.message;
     expect(message).toMatch(/^[^\n]*update repair`[^]*process failed[^]*diagnostic output/u);
     expect(message).not.toContain("long-argv-prefix");
-  });
-});
-
-describe("update-cli", () => {
-  const f = createUpdateCliFixture({ databaseEngines: ["sqlite", "postgres"] });
-
-  registerForegroundFailureRecoveryTests({
-    setupUpdatedRootRefresh: f.setupUpdatedRootRefresh,
-    spawn: mocks.spawn,
-    updateCommand: update.updateCommand,
-    defaultRuntime: update.defaultRuntime,
-    ExitError: update.ExitError,
-    spawnCall,
-    lastWriteJsonCall,
-    updateNpmInstalledPlugins: mocks.updateNpmInstalledPlugins,
   });
 });
 

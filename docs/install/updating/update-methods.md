@@ -39,7 +39,7 @@ credentials, and workspace in `~/.openclaw`; it only changes which OpenClaw
 code install the CLI and gateway use.
 
 ```bash
-# npm package install -> editable git checkout
+# npm package install -> Git source checkout and built release
 openclaw update --channel dev
 
 # git checkout -> npm package install
@@ -53,11 +53,13 @@ openclaw update --channel dev --dry-run
 openclaw update --channel stable --dry-run
 ```
 
-`dev` creates or reuses a git checkout, builds it, and installs the global CLI from that
-checkout. The `stable`, `extended-stable`, and `beta` channels use package
-installs. Extended-stable is rejected on a git checkout without mutating or
-converting it. If the gateway is already installed, `openclaw update` refreshes
-the service metadata and restarts it unless you pass `--no-restart`.
+`dev` creates or reuses a Git source checkout and builds its first release.
+The checkout stays the source. The CLI runs the release link; the service starts
+through the release launcher. The `stable`, `extended-stable`, and `beta` channels use package
+installs. Extended-stable is rejected on a Git checkout without converting it.
+If the Gateway is installed, `openclaw update` refreshes the service metadata
+and restarts it unless you pass `--no-restart`. Git `--no-restart` builds the
+release and leaves it pending for the next service start.
 
 Automatic package-to-Git conversion currently requires an npm-owned package
 symlink. A pnpm- or Bun-owned install rejects `--channel dev` before stopping
@@ -65,15 +67,15 @@ the Gateway; use the [Git installer](/install/installer) when changing that
 installation's owner. Normal package-to-package updates keep using pnpm or Bun.
 
 Git updates build the complete runtime, including plugins and the Control UI,
-in a temporary candidate worktree. Dev updates preserve local commits by
-rebasing the candidate before its build. The updater publishes that prepared
-runtime during activation instead of repeating the build while stopped. It
-preserves the build timestamps, so ordinary CLI commands keep using that
-validated runtime without regenerating it after the move.
+in a detached release worktree. Dev updates preserve local commits by
+rebasing the candidate before its build. The updater uses `git worktree move`
+to put the validated release in place, then publishes a release link.
+It does not move the source checkout's `HEAD` or replace its built runtime.
+The running Gateway keeps its release; the next start loads the selected one.
 Candidate installs and nested build commands use a private pnpm virtual store,
 so preparing an update cannot prune dependencies used by the serving Gateway.
 The candidate's temporary workspace settings are restored before checking for
-source changes; the live checkout's workspace settings are preserved.
+source changes; the source checkout's workspace settings are preserved.
 Candidate commands keep the qualified Node first among Node providers on `PATH`,
 while preserving launcher-only prefixes such as scoped pnpm shims ahead of it.
 This also applies when the selected Node directory was already on `PATH`; its
@@ -143,9 +145,9 @@ native controls before rebuilding.
 By default, source-runner `gateway stop` and `gateway restart` use the existing
 built CLI so recovery does not rebuild first. To apply source changes, use the
 stop, build, and start sequence above.
-`openclaw update` can apply an available update, but `skipped` / `already-current`
-does not rebuild stale `dist`; use the stop, rebuild, and start sequence
-for that case.
+`openclaw update` builds a separate release. It does not rebuild this checkout's
+`dist`. Use the stop, rebuild, and start sequence to run local source changes
+directly from this checkout.
 
 A separate candidate checkout with independent output can build while the installed Gateway
 continues serving. This check observes current services; it does not prevent a

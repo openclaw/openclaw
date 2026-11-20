@@ -1181,9 +1181,9 @@ Managed update handoffs preserve the selected artifact, including already-curren
 repeats, so target checks use that artifact's database schema and runtime requirements.
 
 For source checkouts, `--dry-run` previews the update flow without fetching Git
-refs or checking working-tree changes. The real update checks for uncommitted
-changes before modifying the checkout. Use `openclaw update status` to inspect
-the current branch, version, and update availability.
+refs or building a release. A real update builds and validates a separate release
+worktree. It leaves the source checkout's files and `HEAD` unchanged.
+Use `openclaw update status` to inspect the current branch, version, and update availability.
 
 <Note>
 In Nix mode (`OPENCLAW_NIX_MODE=1`), mutating `openclaw update` runs are disabled. Update the Nix source or flake input for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start). `openclaw update status` remains read-only. `openclaw update --dry-run` previews the flow without changing the installation. It records a skipped run only when the profile already has a runtime database.
@@ -1239,7 +1239,7 @@ freshness or dependencies. Those checks run when you apply the update; use
 - <a id="git-checkout-flow"></a>[Git checkout flow](/cli/update/how-updates-run#git-checkout-flow)
 - <a id="channel-selection"></a>[Channel selection](/cli/update/how-updates-run#channel-selection)
 - <a id="update-steps"></a>[Update steps](/cli/update/how-updates-run#update-steps)
-  - <a id="verify-clean-worktree"></a>[Verify clean worktree](/cli/update/how-updates-run#verify-clean-worktree)
+  - <a id="verify-clean-worktree"></a>[Inspect the source and serving release](/cli/update/how-updates-run#verify-clean-worktree)
   - <a id="resolve-the-target"></a>[Resolve the target](/cli/update/how-updates-run#resolve-the-target)
   - <a id="build-a-candidate"></a>[Build a candidate](/cli/update/how-updates-run#build-a-candidate)
   - <a id="validate-the-candidate"></a>[Validate the candidate](/cli/update/how-updates-run#validate-the-candidate)

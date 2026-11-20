@@ -1,14 +1,8 @@
-import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import path from "node:path";
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { readConfigFileSnapshot as ReadConfigFileSnapshot } from "../../config/config.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { runUpdateFailureTriage as RunUpdateFailureTriage } from "../../infra/update-triage.js";
-import type {
-  defaultRuntime as DefaultRuntime,
-  ExitError as ExitErrorType,
-} from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { TempHomeEnv } from "../../test-utils/temp-home.js";
 import type { updateFinalizeCommand as UpdateFinalizeCommand } from "./update-command-finalize.js";
@@ -22,17 +16,6 @@ export async function mockUnbuiltRecoveryFixture(): Promise<void> {
   ).mockResolvedValue(null);
 }
 
-export const recoveryVerificationStep = (
-  failureFacts?: UpdateRunResult["steps"][number]["failureFacts"],
-  cwd = process.cwd(),
-) => ({
-  name: "gateway recovery verification",
-  command: "gateway verification",
-  cwd,
-  durationMs: expect.any(Number),
-  exitCode: failureFacts ? 1 : 0,
-  ...(failureFacts ? { failureFacts } : {}),
-});
 export const recoveryObservationStep = (cwd = process.cwd()) => ({
   name: "gateway recovery observation",
   command: "gateway verification",
@@ -59,72 +42,10 @@ export const recoveryCleanupStep = () => ({
   ]),
 });
 
-export function registerForegroundFailureRecoveryTests(deps: {
-  setupUpdatedRootRefresh: (params: { admitMutation: false }) => { root: string };
-  spawn: Mock;
-  updateCommand: typeof UpdateCommand;
-  defaultRuntime: typeof DefaultRuntime;
-  ExitError: typeof ExitErrorType;
-  spawnCall: () => [string, string[], { env?: NodeJS.ProcessEnv; stdio?: unknown }] | undefined;
-  lastWriteJsonCall: () => unknown;
-  updateNpmInstalledPlugins: Mock;
-}) {
-  it.each([
-    { exitCode: 2, handoff: undefined, expectedExit: 1 },
-    { exitCode: 2, handoff: "1", expectedExit: 79 },
-    { exitCode: 78, handoff: "1", expectedExit: 79 },
-    { exitCode: 79, handoff: "1", expectedExit: 79 },
-    { exitCode: 80, handoff: "1", expectedExit: 79 },
-  ])(
-    "preserves foreground failure $exitCode without granting handoff $handoff authority",
-    async ({ exitCode, handoff, expectedExit }) => {
-      deps.setupUpdatedRootRefresh({ admitMutation: false });
-      deps.spawn.mockImplementationOnce(() => {
-        const child = new EventEmitter();
-        queueMicrotask(() => {
-          child.emit("exit", exitCode, null);
-          child.emit("close", exitCode, null);
-        });
-        return child;
-      });
-
-      await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: handoff }, async () => {
-        await expect(deps.updateCommand({ yes: true, json: true })).rejects.toEqual(
-          new deps.ExitError(expectedExit),
-        );
-      });
-
-      expect(deps.defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(deps.spawnCall()?.[2]?.env?.OPENCLAW_UPDATE_RUN_HANDOFF).toBe(handoff);
-      const result = deps.lastWriteJsonCall() as UpdateRunResult | undefined;
-      expect(result?.verification).toEqual({});
-      expect(result).toMatchObject({
-        status: "error",
-        reason: "post-core-update-failed",
-        recovery: { serviceRestartSafe: false },
-        steps: [
-          expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
-          expect.objectContaining({
-            name: "post-update verification",
-            exitCode,
-            failureFacts: [
-              { check: "runtime", code: "post-core-update-failed" },
-              { check: "update", code: "update-failed" },
-            ],
-          }),
-          expect.objectContaining({ name: "gateway recovery observation", exitCode: 0 }),
-          ...(handoff === undefined ? [recoveryCleanupStep()] : []),
-        ],
-      });
-      expect(deps.updateNpmInstalledPlugins).not.toHaveBeenCalled();
-    },
-  );
-}
-
 export function registerFailureSelectorTests(deps: {
   updateCommand: typeof UpdateCommand;
   updateFinalizeCommand: typeof UpdateFinalizeCommand;
-  updateGitCheckout: typeof import("../../infra/update-runner-git.js").updateGitCheckout;
+  updateGitRelease: typeof import("../../infra/update-runner-git-release.js").updateGitRelease;
   readConfigFileSnapshot: typeof ReadConfigFileSnapshot;
   profileStateDir: () => string;
   runUpdateFailureTriage: typeof RunUpdateFailureTriage;
@@ -139,7 +60,7 @@ export function registerFailureSelectorTests(deps: {
       const failure = new Error(name === "update" ? "Git update failed" : "Config snapshot failed");
       if (name === "update") {
         // Target selection reads config before an admitted update installs failure triage.
-        vi.mocked(deps.updateGitCheckout).mockRejectedValueOnce(failure);
+        vi.mocked(deps.updateGitRelease).mockRejectedValueOnce(failure);
       } else {
         vi.mocked(deps.readConfigFileSnapshot).mockRejectedValueOnce(failure);
       }

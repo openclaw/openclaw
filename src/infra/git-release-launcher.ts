@@ -33,7 +33,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const prefix = path.dirname(fileURLToPath(import.meta.url));
 const slot = path.join(prefix, "openclaw");
 const trialFile = path.join(prefix, "releases", "${GIT_RELEASE_TRIAL}");
-const counts = process.argv.slice(2).includes("gateway");
+// The Windows task supervisor only starts the Gateway child, through this launcher (it reads the
+// global below), so only the child's starts count.
+const counts =
+  process.argv.slice(2).includes("gateway") && !process.argv.includes("--task-supervisor");
+globalThis[Symbol.for("openclaw.gitReleaseLauncher")] = fileURLToPath(import.meta.url);
 
 // Upgraded state keeps each replaced file as "<file>.pre-<generation>". Restore them
 // together: a trial's WAL, journal, SHM or seal must never pair with a restored
@@ -119,10 +123,18 @@ function retirePlans(stateDir, generation) {
   }
 }
 
+// On Windows the link is a junction: absolute text, and no rename onto an existing one.
 function switchLink(target) {
   const temporary = path.join(path.dirname(slot), ".openclaw.release-link-" + process.pid + "-" + Date.now());
-  fs.symlinkSync(target, temporary);
+  fs.symlinkSync(target, temporary, "junction");
+  if (process.platform === "win32") {
+    fs.rmSync(slot, { force: true });
+  }
   fs.renameSync(temporary, slot);
+}
+
+function linked(target) {
+  return path.resolve(path.dirname(slot), target);
 }
 
 let trial;
@@ -133,14 +145,14 @@ try {
 // is the operator's, with no updater to settle a trial (an older target cannot settle it
 // itself), so a deferred release is selected without the two-start fallback.
 if (trial?.pending && counts) {
-  if (fs.readlinkSync(slot) === trial.previous) {
+  if (linked(fs.readlinkSync(slot)) === linked(trial.previous)) {
     switchLink(trial.target);
   }
   fs.rmSync(trialFile, { force: true });
   trial = undefined;
 }
 if (trial && counts) {
-  if (fs.readlinkSync(slot) !== trial.target) {
+  if (linked(fs.readlinkSync(slot)) !== linked(trial.target)) {
     fs.rmSync(trialFile, { force: true });
   } else if (trial.attempts >= 2) {
     // State first, link last: until the link moves, an interrupted rollback reruns here.

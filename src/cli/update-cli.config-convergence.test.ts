@@ -488,7 +488,7 @@ it("does not activate or finalize a failed Git update", async () => {
   vi.mocked(cli.readConfigFileSnapshot).mockResolvedValue(
     f.configSnapshot({ update: { channel: "stable" } }),
   );
-  vi.mocked(cli.updateGitCheckout).mockResolvedValue(
+  vi.mocked(cli.updateGitRelease).mockResolvedValue(
     cli.makeOkUpdateResult({
       status: "error",
       mode: "git",

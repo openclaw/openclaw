@@ -6,16 +6,18 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { writeGitReleaseLauncher } from "./git-release-launcher.js";
 import {
   GIT_RELEASE_TRIAL,
   gitReleaseSlot,
   resolveGitReleaseEntrypointForLauncher,
   resolveGitReleaseLauncherForEntrypoint,
-  usesGitReleases,
+  prepareGitReleaseLayout,
 } from "./git-release-paths.js";
 import { createGitReleaseDirs, publishGitRelease, settleGitReleaseTrial } from "./git-release.js";
 import { listPackageReleases } from "./package-release-retention.js";
+import { readPackageReleaseSlotSync } from "./package-release-slot-path.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -426,59 +428,35 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: false });
     });
 
-    it("converts a checkout only when its service can be redirected to the launcher", async () => {
-      const servicePlan = await import("../cli/update-cli/update-command-service-plan.js");
-      const { gatewayServiceOwnsGitInstall } =
-        await import("../cli/update-cli/update-command-git.js");
+    it("runs a Windows checkout from releases behind an absolute junction link", async () => {
       const { stateDir, prefix } = await setup();
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const checkout = await release(prefix, "1.0.0", "");
-      const service = (entry: string | null, sealed = false) =>
-        vi.spyOn(servicePlan, "readGatewayServiceStateForUpdate").mockResolvedValue({
-          installed: entry !== null,
-          loadState: { status: entry ? "loaded" : "not-loaded" },
-          running: entry !== null,
-          env: {},
-          command: entry ? { programArguments: [process.execPath, entry, "gateway"] } : null,
-          runtime: { status: entry ? "running" : "stopped", systemd: { managerUid: 1001 } },
-          ...(sealed
-            ? { definitionMutationCapability: { kind: "sealed", reason: "symlink" } }
-            : {}),
-        } as Awaited<ReturnType<typeof servicePlan.readGatewayServiceStateForUpdate>>);
       try {
-        const entry = path.join(checkout, "dist", "index.js");
-        // Run by hand: nothing would start through the release link.
-        service(null);
-        expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
-        service(entry);
-        expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
-        // A sealed definition keeps starting the checkout, so the switch would never serve.
-        service(entry, true);
-        expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
-        // --no-restart never rewrites the definition, so the next start would run the checkout.
-        service(entry);
-        expect(await gatewayServiceOwnsGitInstall(checkout, false)).toBe(false);
-        // Once the unit names the launcher, switches need no definition write.
-        await publishGitRelease({ prefix, releaseRoot: checkout, trial: false });
-        service(await writeGitReleaseLauncher(prefix), true);
-        expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
-        expect(await gatewayServiceOwnsGitInstall(checkout, false)).toBe(true);
+        await withMockedWindowsPlatform(async () => {
+          const good = await release(prefix, "1.0.0", 'console.log("old");\n');
+          await publishGitRelease({ prefix, releaseRoot: good, trial: false });
+          const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n');
+          await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+          // A junction stores, and readlink reports, the absolute release path.
+          expect(readPackageReleaseSlotSync(gitReleaseSlot(prefix))?.target).toBe(bad);
+        });
+        startGateway(prefix);
+        startGateway(prefix);
+
+        expect(startGateway(prefix).stdout).toContain("old");
       } finally {
-        vi.restoreAllMocks();
         vi.unstubAllEnvs();
       }
     });
 
-    it("takes the in-place runner with a reason when the release link cannot be used", async () => {
+    it("moves something other than a release link aside instead of refusing the update", async () => {
       const { stateDir, prefix } = await setup();
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       try {
-        expect(usesGitReleases(false, true)).toBe(true);
-        // Something other than a release link sits at the package path.
+        expect(prepareGitReleaseLayout()).toBeUndefined();
         await fs.mkdir(gitReleaseSlot(prefix), { recursive: true });
-        const reasons: string[] = [];
-        expect(usesGitReleases(false, true, (reason) => reasons.push(reason))).toBe(false);
-        expect(reasons).toEqual([`${gitReleaseSlot(prefix)} is not a release link`]);
+        expect(prepareGitReleaseLayout()).toMatch(/was not a release link; it was moved to /u);
+        await expect(fs.lstat(gitReleaseSlot(prefix))).rejects.toThrow();
       } finally {
         vi.unstubAllEnvs();
       }
