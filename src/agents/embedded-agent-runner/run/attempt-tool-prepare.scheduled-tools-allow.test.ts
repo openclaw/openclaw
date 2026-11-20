@@ -188,15 +188,14 @@ async function prepareTools(
 const isGated = (value: unknown) =>
   (value as { details?: { gated?: unknown } } | undefined)?.details?.gated === true;
 
-/** Runs a call far enough to see a refusal; an allowed tool fails validation or times out. */
-async function settle(run: () => Promise<unknown>, ms = 300): Promise<unknown> {
-  return Promise.race([
-    run().catch(() => undefined),
-    new Promise((resolve) => {
-      setTimeout(resolve, ms);
-    }),
-  ]);
+/**
+ * Awaits a call to completion, so no call outlives its test and holds a plugin instance open
+ * (the forced-retirement failure seen under load came from abandoned calls).
+ */
+async function settle(run: () => Promise<unknown>): Promise<unknown> {
+  return run().catch(() => undefined);
 }
+const aborted = AbortSignal.abort();
 
 /** Arguments that satisfy a tool's required schema fields with placeholder values. */
 function placeholderArgs(schema: unknown): unknown {
@@ -238,21 +237,20 @@ function placeholderArgs(schema: unknown): unknown {
  * A tool executes when a call with schema-valid arguments passes every gate, starts the
  * implementation (the agent loop's preparer path) and does not come back refused. Refusals,
  * validation errors, and exceptions or timeouts before the implementation starts count as
- * not executed. Placeholder paths and commands point nowhere, so started work fails inertly.
+ * not executed. Placeholder paths and commands point nowhere, so started work fails inertly; the
+ * probe awaits it, so no call outlives its test.
  */
 async function executes(tool: AnyAgentTool): Promise<boolean> {
   const preparer = getInternalToolExecutionPreparer(tool);
   if (!preparer) {
     return false;
   }
-  const abort = new AbortController();
   let started = false;
   let refused = false;
   await settle(async () => {
     const step = await preparer({
       toolCallId: "executes",
       args: placeholderArgs(tool.parameters),
-      signal: abort.signal,
     });
     try {
       if (step.kind === "ready") {
@@ -265,16 +263,15 @@ async function executes(tool: AnyAgentTool): Promise<boolean> {
       step.dispose();
     }
   });
-  abort.abort();
   return started && !refused;
 }
 
 async function refusedVia(tool: AnyAgentTool) {
-  const direct = isGated(await settle(() => tool.execute("direct", {})));
+  const direct = isGated(await settle(() => tool.execute("direct", {}, aborted)));
   const preparer = getInternalToolExecutionPreparer(tool);
   const prepared = preparer
     ? await settle(async () => {
-        const step = await preparer({ toolCallId: "prepared", args: {} });
+        const step = await preparer({ toolCallId: "prepared", args: {}, signal: aborted });
         try {
           return step.kind === "ready" ? await step.execute() : step;
         } finally {
@@ -286,7 +283,7 @@ async function refusedVia(tool: AnyAgentTool) {
     ? isGated(prepared) || isGated((prepared as { result?: unknown } | undefined)?.result)
     : direct;
   const dispatch = isGated(
-    await settle(() => rewrapToolWithBeforeToolCallHook(tool).execute("dispatch", {})),
+    await settle(() => rewrapToolWithBeforeToolCallHook(tool).execute("dispatch", {}, aborted)),
   );
   return { direct, preparer: viaPreparer, dispatch };
 }
