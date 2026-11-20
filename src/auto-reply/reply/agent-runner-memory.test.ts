@@ -639,6 +639,13 @@ describe("runMemoryFlushIfNeeded", () => {
     const error = new Error(message);
     const cleanup = failure.setup(error);
     const overrides: Partial<MemoryFlushTestParams> = {
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          entries: { main: { workspace: rootDir } },
+          defaults: { compaction: { memoryFlush: {} } },
+        },
+      },
       followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
       sessionStore,
       storePath,

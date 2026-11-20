@@ -751,7 +751,7 @@ export async function runMemoryFlushIfNeeded(
         lane: CommandLane.Main,
       },
       harness: {
-        workspaceDir: params.followupRun.run.workspaceDir,
+        workspaceDir: maintenanceRun.workspaceDir,
         sessionKey: sourcePolicySessionKey,
         preparation: { kind: "direct" },
         resolveRuntimeOverride: (provider) =>

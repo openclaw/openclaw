@@ -146,8 +146,8 @@ async function ensureSandboxWorkspaceLayout(
       phases.mark("attempt.setup.sandbox.layout.skill_eligibility");
       const nodeSkills = await resolveNodeExecEligibilityAsync({
         cfg: config,
-        sessionKey: rawSessionKey,
-        agentId,
+        sessionKey: runtime.classificationSessionKey,
+        agentId: runtime.classificationAgentId,
         execOverrides,
       });
       const eligibility: SkillEligibilityContext = {
