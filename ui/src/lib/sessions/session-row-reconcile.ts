@@ -345,6 +345,7 @@ const NULLABLE_SESSION_ROW_FIELDS = new Set<string>([
   "updatedAt",
   "activeLeafEntryId",
   "modelOverrideSource",
+  "workspaceReadDisabledReason",
 ]);
 
 export type SessionRowObservation = {

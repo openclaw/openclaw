@@ -347,3 +347,17 @@ it.each([false, true])("reconciles thinking metadata (clear override: %s)", (cle
     { ...result.sessions[0], updatedAt: 2, thinkingLevel: clear ? undefined : "ultra" },
   ]);
 });
+
+it.each([null, "workspace access denied"])(
+  "preserves the workspace-read decision %j from a send snapshot",
+  (workspaceReadDisabledReason) => {
+    const current = buildResult(sessionRow({ workspaceReadDisabledReason: "prior decision" }));
+    const { result } = reconcileSessionChanged(current, {
+      reason: "send",
+      sessionKey: key,
+      ancestorSessions: [],
+      session: sessionRow({ updatedAt: 2, workspaceReadDisabledReason }),
+    });
+    expect(result?.sessions[0]?.workspaceReadDisabledReason).toBe(workspaceReadDisabledReason);
+  },
+);
