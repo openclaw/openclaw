@@ -18,6 +18,7 @@ import type {
   ChatSendParamsSchema,
   QueueMode,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { ParticipationCeiling } from "../../agents/participation-ceiling.js";
 import { isAbortRequestText } from "../../auto-reply/reply/abort-primitives.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
 import {
@@ -69,6 +70,7 @@ type ChatSendRequestParams = Omit<
 
 export type NormalizedChatSendRequest = {
   activeSteer?: { runId: string; profileId: string };
+  participationCeiling?: ParticipationCeiling;
   normalizeThinkingLevelOverride?: boolean;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
@@ -111,6 +113,41 @@ function shouldNormalizeTalkThinking(
 type NormalizeChatSendRequestResult =
   | { ok: true; value: NormalizedChatSendRequest }
   | { ok: false; error: string; reason?: string };
+
+/** Attach host-admitted participation after wire normalization, before session preparation. */
+export function attachChatSendParticipationCeiling(
+  request: NormalizedChatSendRequest,
+  ceiling: ParticipationCeiling,
+): NormalizeChatSendRequestResult {
+  const { p } = request;
+  if (
+    request.goalOperation ||
+    p.intent ||
+    request.providerReviewAcknowledgment ||
+    p.deliver === true ||
+    request.explicitOrigin ||
+    p.originatingChannel !== undefined ||
+    p.originatingTo !== undefined ||
+    p.originatingAccountId !== undefined ||
+    p.originatingThreadId !== undefined ||
+    request.toolBindings ||
+    p.toolBindings ||
+    p.thinking !== undefined ||
+    p.fastMode !== undefined ||
+    p.fastAutoOnSeconds !== undefined
+  ) {
+    return {
+      ok: false,
+      error:
+        "Participating inputs cannot change goals, delivery routes, tool bindings, or runtime settings.",
+    };
+  }
+  request.participationCeiling = ceiling;
+  request.suppressCommandInterpretation = true;
+  request.stopCommand = false;
+  request.turnKind = "main";
+  return { ok: true, value: request };
+}
 
 /** Validate and normalize the wire request before session or lifecycle work begins. */
 export function normalizeChatSendRequest(params: {
@@ -177,7 +214,8 @@ export function normalizeChatSendRequest(params: {
   if (
     (p.systemInputProvenance ||
       p.systemProvenanceReceipt ||
-      suppressCommandInterpretation ||
+      (suppressCommandInterpretation &&
+        recoveredInput?.target.message["__openclaw"]?.suppressCommandInterpretation !== true) ||
       explicitOriginResult.value) &&
     !params.trustedSystemInput &&
     !hasGatewayAdminScope(params.client)
@@ -358,7 +396,14 @@ export function normalizeChatSendRequest(params: {
     ...(mentions.value ? { mentions: mentions.value } : {}),
     reconnectResumeRequested: controlUiReconnectResume.resumeRequested,
   };
-  if (stopCommand) {
+  const participationCeiling = recoveredInput?.participationCeiling;
+  if (participationCeiling) {
+    const attached = attachChatSendParticipationCeiling(value, participationCeiling);
+    if (!attached.ok) {
+      return attached;
+    }
+  }
+  if (value.stopCommand) {
     return { ok: true, value };
   }
   if (recoveredInput) {

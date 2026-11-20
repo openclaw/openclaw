@@ -485,6 +485,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     ...embeddedContext,
     providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
     permissionMode: params.run.permissionMode,
+    participationCeiling: params.run.participationCeiling,
     sessionRoot: params.run.sessionRoot,
     blindPrompt: params.run.blindPrompt,
     agentDir: params.run.agentDir,

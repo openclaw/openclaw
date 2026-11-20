@@ -587,3 +587,18 @@ it("carries the admitted session permission and placement into the CLI grant", a
   await state.runCliAgentMock.mock.results[0]?.value;
   expect(result.kind).toBe("success");
 });
+
+it("refuses a participating CLI fallback before launching its backend", async () => {
+  const { turn, followupRun } = await sessionFixture("agent:main:participant-cli", {});
+  followupRun.run.participationCeiling = {
+    kind: "send",
+    profileId: "guest",
+    sessionKey: "agent:main:participant-cli",
+  };
+  useCliFallback();
+  expect(await executeAgentTurn(turn)).toMatchObject({
+    kind: "final",
+    payload: { text: expect.stringContaining("Participating inputs require the OpenClaw runtime") },
+  });
+  expect(state.runCliAgentMock).not.toHaveBeenCalled();
+});

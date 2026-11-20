@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { ParticipationCeiling } from "../agents/participation-ceiling.js";
 import type { PreparedRequesterProfile } from "../auto-reply/requester-profile.js";
 import type { PersistedUserTurnMessage } from "../sessions/user-turn-input.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -18,6 +19,7 @@ type QueuedChatInputAdmission = {
   target: QueuedChatInputTarget;
   requestFingerprint: string;
   requesterProfile?: PreparedRequesterProfile;
+  participationCeiling?: ParticipationCeiling;
 };
 
 /** Original accepted bytes retain queue custody; authority is freshly admitted by the caller. */
