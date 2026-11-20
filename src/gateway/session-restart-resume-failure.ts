@@ -11,7 +11,7 @@ import { recordGatewaySessionRunFailure } from "../sessions/session-run-error.js
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
 /** A recorded wait with no surviving source ends through its exact lifecycle owner. */
-export async function recordRestartYieldFailure(params: {
+export async function recordUnreachableYieldFailure(params: {
   sessionKey: string;
   agentId: string;
   entry: InternalSessionEntry;
@@ -23,7 +23,7 @@ export async function recordRestartYieldFailure(params: {
     return;
   }
   const error =
-    "The Gateway restarted, but the child completion this run was waiting for can no longer arrive. Inspect the saved child work, then send a new message to continue.";
+    "This turn yielded, but no registered continuation can resume it. The run has ended. Inspect its saved work, then send a message to continue.";
   await persistGatewaySessionLifecycleEvent({
     sessionKey: params.sessionKey,
     agentId: params.agentId,
@@ -53,7 +53,7 @@ export async function recordRestartYieldFailure(params: {
       suppressSessionEffects: true,
       triggerCleanup: true,
     },
-    "restart-yield-source-unavailable",
+    "yield-source-unavailable",
   );
 }
 

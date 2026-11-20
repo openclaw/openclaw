@@ -28,10 +28,8 @@ import {
   SessionWorkStartChangedError,
 } from "../../../config/sessions/work-start-error.js";
 import { readOwnNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnTranscriptRecorder,
-} from "../../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { MODEL_FALLBACK_NOTICE_KIND } from "../../../shared/model-fallback-notice.js";
 import {
   isOpenClawDeliveryMirrorAssistantMessage,

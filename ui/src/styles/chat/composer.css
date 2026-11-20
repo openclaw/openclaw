@@ -2000,6 +2000,9 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .agent-chat__media-input {
   display: none;
   position: fixed;
+  position-area: center;
+  width: 100%;
+  height: 100%;
   margin: 0;
   padding: 0;
   border: 0;

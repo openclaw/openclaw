@@ -31,6 +31,8 @@ import { prepareChannelOperatorAuthority } from "./channel-operator-authority.js
 import {
   bindGatewayDeviceRevocation,
   captureGatewayDeviceRevocation,
+  readGatewayDeviceRevocationGuard,
+  retainGatewayDeviceRevocationIndex,
 } from "./device-revocation.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
@@ -610,6 +612,24 @@ export async function captureGatewayOperatorContinuation(
     // One origin keeps one comparable source identity, as completion batches require.
     source: inherited.source,
     scopes: intersectOperatorScopes(restored.authority.scopes, input.client?.connect.scopes ?? []),
+    // Every hold keeps the origin's device revocation indexed, not its ended request lifetime.
+    retain: () => {
+      const releaseRestored = restored.authority.retain?.();
+      const releaseOrigin = retainGatewayDeviceRevocationIndex(inherited.assertCurrent);
+      return () => {
+        releaseRestored?.();
+        releaseOrigin?.();
+      };
+    },
+    // A tokenless snapshot carries no device; a start checks the origin's revocation, not its liveness.
+    reauthorize: () => {
+      if (readGatewayDeviceRevocationGuard(inherited.assertCurrent)?.() === false) {
+        throw new GatewayOperatorRecoveryAuthorizationError(
+          "Operator access was revoked; start a new user turn.",
+        );
+      }
+      restored.authority.reauthorize?.();
+    },
   });
   bindGatewayDeviceRevocation(authority.assertCurrent, inherited.assertCurrent);
   return {
