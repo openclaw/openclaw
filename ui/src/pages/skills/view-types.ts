@@ -22,7 +22,12 @@ export type SkillsRouteData = {
   clawhubRef?: string;
 };
 
-export type SkillsPageProps = { routeData?: SkillsRouteData; surface?: "discovery" | "settings" };
+export type SkillsList = (props: SkillsProps) => JSX.Element;
+export type SkillsPageProps = {
+  routeData?: SkillsRouteData;
+  surface?: "discovery" | "settings";
+  List: SkillsList;
+};
 
 export type ClawHubDetailReceipt = {
   client: GatewayBrowserClient | null;

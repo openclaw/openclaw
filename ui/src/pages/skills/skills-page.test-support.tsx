@@ -15,6 +15,7 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { SkillsPage } from "./skills-page.tsx";
 import type { SkillsRouteData } from "./view-types.ts";
+import { skillsListFor } from "./view.solid.test-support.tsx";
 
 export const personalLibrary = {
   entries: [],
@@ -138,7 +139,11 @@ export function mountSkills(
   const mounted = mountSolid(() => (
     <ApplicationProvider value={context}>
       <Show when={Boolean(routeData())}>
-        <SkillsPage routeData={routeData()} surface={currentSurface()} />
+        <SkillsPage
+          routeData={routeData()}
+          surface={currentSurface()}
+          List={skillsListFor(currentSurface())}
+        />
       </Show>
     </ApplicationProvider>
   ));

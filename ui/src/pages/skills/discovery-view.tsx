@@ -13,15 +13,26 @@ import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-brows
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
-import { PluginCatalogGrid } from "../plugins/catalog-grid.tsx";
-import { renderCatalogGridSkeleton } from "../plugins/catalog-skeleton.tsx";
+import { PluginCatalogGrid, renderCatalogGridSkeleton } from "../plugins/catalog-grid.tsx";
 import { PluginCardSummary, renderPluginOfficialBadge } from "../plugins/plugin-card.tsx";
-import { SkillTile } from "./skill-page-parts.tsx";
 import { SkillStateStatus, verdictForSkill } from "./skill-status.tsx";
+import { SkillTile } from "./skill-tile.tsx";
 import "../../styles/skills-discovery.css";
+import { createSkillsRenderer } from "./skills-page.tsx";
 import type { SkillsProps } from "./view-types.ts";
 
 registerSkillsBrowserEnglish();
+
+export function SkillsDiscoveryList(props: SkillsProps) {
+  return (
+    <>
+      <SkillDiscovery {...props} />
+      {props.library}
+    </>
+  );
+}
+
+export const renderSolid = createSkillsRenderer("discovery", SkillsDiscoveryList);
 
 type SkillDiscoveryEntry = {
   id: string;
@@ -162,7 +173,7 @@ function InstalledShelf(props: { entries: SkillDiscoveryEntry[]; onOpen: () => v
   );
 }
 
-export function SkillDiscovery(props: SkillsProps) {
+function SkillDiscovery(props: SkillsProps) {
   const query = createMemo(() => props.state.clawhubSearchQuery);
   const connected = createMemo(() => props.state.connected);
   const epoch = createMemo(() => props.clawhubSearchEpoch);

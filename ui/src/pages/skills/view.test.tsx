@@ -14,6 +14,7 @@ import {
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { SkillsSettings } from "./settings-view.tsx";
 import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
 import {
   createDialogMethodInstaller,
@@ -125,7 +126,7 @@ function mountVerdictView(container: HTMLElement, initial: Promise<Verdicts>) {
         readClawHubVerdicts: read,
         detailKey: "agentreceipt",
       });
-      return <Skills {...props} />;
+      return <Skills {...props} List={SkillsSettings} />;
     },
     { container },
   );

@@ -54,16 +54,17 @@ import { createSkillsData } from "./skills-page-state.ts";
 import type {
   ClawHubDetailReceipt,
   SkillDetailTab,
+  SkillsList,
   SkillsPageProps,
   SkillsPresentation,
   SkillsRouteData,
 } from "./view-types.ts";
 import { Skills } from "./view.tsx";
 
-export function createSkillsRenderer(surface: "discovery" | "settings") {
+export function createSkillsRenderer(surface: "discovery" | "settings", List: SkillsList) {
   return (props: SolidRouteProps<SkillsRouteData>) => (
     <Show when={Boolean(props.data)}>
-      <SkillsPage routeData={props.data} surface={surface} />
+      <SkillsPage routeData={props.data} surface={surface} List={List} />
     </Show>
   );
 }
@@ -606,6 +607,7 @@ export function SkillsPage(props: SkillsPageProps) {
           {...(surface() === "discovery" ? pluginsHubPanel("skills") : {})}
         >
           <Skills
+            List={props.List}
             state={viewState()}
             mutationSkills={mutations.rows()}
             saving={mutations.saving()}

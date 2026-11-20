@@ -27,6 +27,7 @@ import {
   unmountPage as unmountModelProvidersPage,
 } from "./model-providers/model-providers-page.test-support.tsx";
 import { pages as skillsPages } from "./skills/route.ts";
+import { SkillsSettings } from "./skills/settings-view.tsx";
 import { SkillsPage } from "./skills/skills-page.tsx";
 import type { SkillsRouteData } from "./skills/view-types.ts";
 import { createReport, createSkill } from "./skills/view.test-support.ts";
@@ -242,7 +243,7 @@ function mountSkillsPage(
     ...loadedRouteData,
   };
   const mounted = mountSolid(
-    () => createComponent(SkillsPage, { routeData, surface: "settings" }),
+    () => createComponent(SkillsPage, { routeData, surface: "settings", List: SkillsSettings }),
     { wrapper: provider.wrapper },
   );
   let currentContext = context;

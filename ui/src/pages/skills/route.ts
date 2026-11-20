@@ -65,9 +65,7 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
       };
     },
     component: () =>
-      import("./skills-page.tsx").then((module) => ({
-        renderSolid: module.createSkillsRenderer(surface),
-      })),
+      surface === "discovery" ? import("./discovery-view.tsx") : import("./settings-view.tsx"),
   });
 }
 

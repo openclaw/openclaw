@@ -21,8 +21,8 @@ import type {
 } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { categoryIcon } from "./catalog-category-icon.tsx";
-import { PluginCatalogGrid } from "./catalog-grid.tsx";
-import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skeleton.tsx";
+import { PluginCatalogGrid, renderCatalogGridSkeleton } from "./catalog-grid.tsx";
+import { PluginCatalogSkeleton } from "./catalog-skeleton.tsx";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
