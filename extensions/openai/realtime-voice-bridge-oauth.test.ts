@@ -70,6 +70,7 @@ const mockOAuthOnly = () =>
 // Discord passes its realtime provider block (silence and reasoning settings) as providerConfig.
 const DISCORD_PROVIDER_CONFIG = { model: GA_MODEL, silenceDurationMs: 650, reasoningEffort: "low" };
 
+type FakeSocket = NonNullable<(typeof FakeWebSocket.instances)[number]>;
 const logger = { debug: vi.fn(), warn: vi.fn() };
 
 function createBridge(providerConfig: Record<string, unknown> = DISCORD_PROVIDER_CONFIG) {
@@ -200,9 +201,32 @@ describe("OpenAI GA realtime direct socket over ChatGPT OAuth", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
-  it.each([401, 403])(
-    "retries once with the Platform key when OpenAI refuses the ChatGPT sign-in (%i)",
-    async (status) => {
+  it.each([
+    [
+      "HTTP 401",
+      (socket: FakeSocket) => socket.emit("error", new Error("Unexpected server response: 401")),
+    ],
+    [
+      "HTTP 403",
+      (socket: FakeSocket) => socket.emit("error", new Error("Unexpected server response: 403")),
+    ],
+    [
+      "invalid_jwt error event",
+      (socket: FakeSocket) => {
+        openSocket(socket);
+        emitServerEvent(socket, {
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            code: "invalid_jwt",
+            message: "Could not parse your authentication token. Please try signing in again.",
+          },
+        });
+      },
+    ],
+  ] as const)(
+    "retries once with the Platform key when OpenAI refuses the ChatGPT sign-in (%s)",
+    async (_name, reject) => {
       mockProfiles({
         configured: ["api_key", "oauth"],
         resolved: { api_key: "test-api-key-profile", oauth: OAUTH_TOKEN },
@@ -210,7 +234,11 @@ describe("OpenAI GA realtime direct socket over ChatGPT OAuth", () => {
       const bridge = createBridge();
       const connecting = bridge.connect();
       await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
-      FakeWebSocket.instances[0]?.emit("error", new Error(`Unexpected server response: ${status}`));
+      const first = FakeWebSocket.instances[0];
+      if (!first) {
+        throw new Error("expected a ChatGPT socket");
+      }
+      reject(first);
       await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
       const retry = FakeWebSocket.instances[1];
       if (!retry) {

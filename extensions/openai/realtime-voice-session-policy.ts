@@ -496,13 +496,25 @@ export const OPENAI_REALTIME_CHATGPT_SIGN_IN_REJECTED =
  * voice provider itself. The ChatGPT subscription wins, matching the Codex GPT-Live
  * route; the Platform API-key profile and OPENAI_API_KEY are the fallback.
  */
-/** A ChatGPT sign-in that OpenAI refused at socket startup (expired, revoked, or no realtime access). */
+// OpenAI accepts the socket, then refuses a bad ChatGPT token with a pre-ready error
+// event (for example `invalid_jwt`, observed 2026-11-20) or an HTTP 401/403 handshake.
+const OPENAI_REALTIME_SUBSCRIPTION_REJECTION_CODES = new Set([
+  "invalid_jwt",
+  "invalid_api_key",
+  "token_expired",
+  "token_invalidated",
+  "token_revoked",
+]);
+
+/** A ChatGPT sign-in that OpenAI refused at socket startup (expired, revoked, or unreadable). */
 export function isOpenAIRealtimeSubscriptionRejection(error: unknown): boolean {
   const record = asOptionalObjectRecord(error);
   const status = record?.status ?? record?.statusCode;
+  const code = typeof record?.code === "string" ? record.code.toLowerCase() : "";
   return (
     isOpenAIRealtimeStartupAuthFailure(error) ||
     status === 403 ||
+    OPENAI_REALTIME_SUBSCRIPTION_REJECTION_CODES.has(code) ||
     readRealtimeErrorDetail(error).toLowerCase().includes("unexpected server response: 403")
   );
 }
