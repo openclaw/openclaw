@@ -426,8 +426,31 @@ The opt-in Participate policy adds `sessions.maxInvitedAccess` (`"read"`,
 `"suggest"`, or `"send"`) only to roles with `sessions.others: "invited"`.
 Its per-session resolver uses the lower of the stored invitation level and this
 ceiling, treating an unspecified invitation level as `"read"`. Omitting the field
-preserves existing membership behavior. This foundation defines the policy and
-storage contract; request admission must consume it before deploying ceiling roles.
+preserves existing membership behavior. A `"send"` invitation permits bounded
+participation with a session-read scope, not general operator write authority.
+
+Set `sessions.invitedTools` alongside `maxInvitedAccess` to replace the participant
+tool ceiling with an explicit list of core tool names. Omission keeps these defaults:
+`read`, `write`, `edit`, `apply_patch`, `ls`, `exec`, `process`, `web_search`,
+`web_fetch`, `tool_search`, `tool_describe`, and `dispatch_action`. An empty list
+permits no tools. You can narrow the list or add other core tools such as
+`sessions_list`; the result still intersects the agent's tool policy and every
+tool's own authorization checks. Listing a tool does not make an unavailable or
+agent-denied tool available.
+
+Use exact names, not groups or wildcards. Unknown names, plugin-owned tools
+(including `browser` and `memory_search`), and MCP tools are rejected. A plugin
+or MCP implementation with an allowed core name never gains access, including
+through Tool Search or exact-ID dispatch. Include the discovery tools when the
+participant needs deferred core tools. Review broader tools carefully: they can
+expose more of the agent's delegated authority.
+
+The Gateway captures this ceiling on each accepted input and preserves it in
+queued input and restart recovery. Re-admission may narrow the captured list but
+never widens it; a wider role policy applies to newly submitted inputs. Participant
+turns require Gateway-local **OpenClaw** execution, not a native/CLI harness or
+remote worker. Allowing `exec` never disables its approval ceiling, host approval
+requirements, sandbox policy, or workspace containment.
 
 To enable invitation-only discovery, set the guest role's `sessions.others` to
 `"invited"` after upgrading. Existing role definitions keep their current behavior.

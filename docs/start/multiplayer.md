@@ -50,22 +50,46 @@ If you need to serve mutually untrusted people or organizations, run one gateway
 
 ### Participate collaborator policy
 
-The Participate foundation defines an opt-in invitation ceiling. A collaborator
-role can use this definition under `gateway.roles.definitions`:
+Participate lets an explicitly invited collaborator send bounded agent inputs
+without general operator write authority. For a documentation collaborator,
+use this definition under `gateway.roles.definitions`:
 
 ```json5
 {
   collaborator: {
-    sessions: { others: "invited", maxInvitedAccess: "send" },
+    sessions: {
+      others: "invited",
+      maxInvitedAccess: "send",
+      invitedTools: [
+        "read",
+        "ls",
+        "web_search",
+        "web_fetch",
+        "tool_search",
+        "tool_describe",
+        "dispatch_action",
+      ],
+    },
     scopes: ["operator.sessions.read"],
     agents: ["main"],
   },
 }
 ```
 
-The ceiling limits explicit per-session grants; it does not itself grant send
-scopes. Request-admission integration is required before deploying this role.
-See [operator scopes](/gateway/operator-scopes#named-operator-roles).
+Assign the role, then grant **Participate** on the intended session. The role
+ceiling alone does not grant membership. The session must use Gateway-local
+OpenClaw execution; native/CLI runtimes and remote workers cannot enforce this
+participant ceiling.
+
+`invitedTools` replaces the default list. Omit it for the standard file, shell,
+web, and tool-discovery tools, use `[]` for no tools, or explicitly add core names
+such as `sessions_list` to widen it. Agent tool policy can still deny any listed
+tool. Plugin/MCP names, plugin-owned tools, groups, and wildcards are rejected;
+name collisions never authorize a plugin. Adding `exec` keeps approvals and
+workspace containment in force. Accepted inputs retain their ceiling across
+queueing and restart; widening the role does not widen an old input. See
+[operator scopes](/gateway/operator-scopes#named-operator-roles) for the full
+default list and restrictions.
 
 ## Before you begin
 

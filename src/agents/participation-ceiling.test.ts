@@ -4,6 +4,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecMode } from "../infra/exec-approvals-core.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { projectAgentToolsExecPolicy } from "./agent-tools.execution-policy.js";
+import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
 import { buildEmbeddedAttemptToolRunContext } from "./embedded-agent-runner/run/attempt-tool-run-context.js";
 import {
   createEmbeddedRunPermissionChanges,
@@ -13,7 +15,11 @@ import { resolveExecDefaults } from "./exec-defaults.js";
 import { preparePluginHarnessParams } from "./harness/plugin-attempt-params.js";
 import type { AgentHarness, AgentHarnessAttemptParamsV2 } from "./harness/types.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
-import { PARTICIPATION_RUNTIME_ERROR, type ParticipationCeiling } from "./participation-ceiling.js";
+import {
+  PARTICIPATION_RUNTIME_ERROR,
+  PARTICIPATION_TOOL_ALLOWLIST,
+  type ParticipationCeiling,
+} from "./participation-ceiling.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -194,6 +200,37 @@ it.each([false, true])(
   },
 );
 
+it.each([
+  { tools: undefined, expected: [...PARTICIPATION_TOOL_ALLOWLIST] },
+  { tools: [], expected: [] },
+  { tools: ["read", "write"], expected: ["read", "write"] },
+  { tools: ["read", "message", "sessions_list"], expected: ["read", "message"] },
+])(
+  "intersects the exact participant tool ceiling $tools with agent policy",
+  ({ tools, expected }) => {
+    const capabilityProfile = resolveConversationCapabilityProfile({
+      config: { agents: { entries: { main: { tools: { deny: ["sessions_list"] } } } } },
+      sessionKey: ceiling.sessionKey,
+      participationCeiling: { ...ceiling, tools },
+    });
+    expect(
+      projectConversationToolNames({
+        capabilityProfile,
+        toolNames: [...PARTICIPATION_TOOL_ALLOWLIST, "message", "sessions_list", "skills_read"],
+        warn: () => undefined,
+      }),
+    ).toEqual(expected);
+    expect(
+      projectConversationToolNames({
+        capabilityProfile,
+        toolNames: ["read", "message"],
+        toolMeta: () => ({ pluginId: "collision" }),
+        warn: () => undefined,
+      }),
+    ).toEqual([]);
+  },
+);
+
 it("filters discovery and exact-id deferred dispatch without invoking forbidden tools", async () => {
   const read = createStubTool("read");
   const denied = [
@@ -233,4 +270,45 @@ it("filters discovery and exact-id deferred dispatch without invoking forbidden 
   for (const tool of [plugin, ...denied]) {
     expect(tool.execute).not.toHaveBeenCalled();
   }
+});
+
+it("widens deferred core tools without granting plugin or MCP collisions", async () => {
+  const core = createStubTool("sessions_list");
+  const plugin = createStubTool("message");
+  const mcp = createStubTool("web_fetch");
+  setPluginToolMeta(plugin, { pluginId: "collision", optional: false });
+  setPluginToolMeta(mcp, {
+    pluginId: "bundle-mcp",
+    optional: false,
+    mcp: {
+      serverName: "fixture",
+      safeServerName: "fixture",
+      toolName: "web_fetch",
+      operation: "tool",
+    },
+  });
+  for (const tool of [core, plugin, mcp]) {
+    tool.execute = vi.fn(async () => ({ content: [], details: {} }));
+  }
+  const catalogRef = createToolSearchCatalogRef();
+  registerHeadlessToolSearchCatalog({ catalogRef, tools: [core, plugin, mcp] });
+  const coreId = catalogRef.current!.entries.find((entry) => entry.tool === core)!.id;
+  const deniedIds = catalogRef
+    .current!.entries.filter((entry) => entry.tool !== core)
+    .map((entry) => entry.id);
+  const runtime = new ToolSearchRuntime(
+    {
+      catalogRef,
+      participationCeiling: { ...ceiling, tools: ["sessions_list", "message", "web_fetch"] },
+    },
+    resolveToolSearchConfig(),
+  );
+  expect(runtime.all().map((entry) => entry.name)).toEqual(["sessions_list"]);
+  await runtime.callExactId(coreId, {});
+  for (const id of deniedIds) {
+    await expect(runtime.callExactId(id, {})).rejects.toThrow();
+  }
+  expect(core.execute).toHaveBeenCalledOnce();
+  expect(plugin.execute).not.toHaveBeenCalled();
+  expect(mcp.execute).not.toHaveBeenCalled();
 });

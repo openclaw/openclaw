@@ -62,6 +62,21 @@ const participationCeiling = {
   profileId: "guest",
   sessionKey: "agent:main:main",
 };
+it.each([
+  { accepted: ["read"], current: ["read", "message"], expected: ["read"] },
+  { accepted: ["read", "message"], current: ["read"], expected: ["read"] },
+  { accepted: ["read"], current: [], expected: [] },
+  { accepted: [], current: ["read"], expected: [] },
+  { accepted: undefined, current: ["read", "message"], expected: ["read"] },
+])(
+  "never widens recovered participant tools: $accepted -> $current",
+  async ({ accepted, current, expected }) => {
+    const request = await normalizeValue();
+    attachChatSendParticipationCeiling(request, { ...participationCeiling, tools: accepted });
+    attachChatSendParticipationCeiling(request, { ...participationCeiling, tools: current });
+    expect(request.participationCeiling?.tools).toEqual(expected);
+  },
+);
 it.each(["/stop", "/btw hello", "/model other/model", "/queue steer"])(
   "attaches host participation to literal %s without accepting a public ceiling",
   async (message) => {
