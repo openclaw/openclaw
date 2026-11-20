@@ -171,7 +171,9 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
                     {item().name}
                   </>
                 }
-                description={automationSummary(item())}
+                description={
+                  <span class="template-automation-subtitle">{automationSummary(item())}</span>
+                }
                 onClose={() => setAutomation(null)}
               />
               <div class="oc-dialog__body template-automation-message">{item().message}</div>

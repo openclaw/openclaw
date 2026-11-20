@@ -715,6 +715,13 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await dialog.getByText("List anything still waiting on a decision.").waitFor();
     await dialog.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
     await capture(page, "paused-automation-dialog", dialog);
+    const titleText = await dialog.getByRole("heading", { name: "Weekly brief" }).evaluate((el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el.lastChild!);
+      return range.getBoundingClientRect().left;
+    });
+    const schedule = await dialog.getByText("Monday at 9:00 AM · UTC · Disabled").boundingBox();
+    expect(schedule?.x).toBe(titleText);
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await dialog.waitFor({ state: "hidden" });
     await automations.getByRole("button", { name: /Midweek nudge/ }).click();

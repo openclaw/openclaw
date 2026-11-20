@@ -318,6 +318,10 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
     }
   }
 }
+/* Align wrapped schedule text past the 36px capability icon and the dialog title gap. */
+.template-automation-subtitle {
+  margin-inline-start: calc(36px + var(--space-2));
+}
 .template-automation-message {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
