@@ -63,12 +63,22 @@ With the default hybrid reload mode, the source Gateway applies plugin configura
 
 A receiver can initiate an outbound WSS connection to a source Gateway instead
 of accepting an inbound source node. No listener or tunnel is added on the
-receiver. On the source, opt in with `share.gateway: true`, select `share.groups`,
+receiver. On the source, explicitly set
+`gateway.sessionControl.publicationReadEnabled: true` and the plugin option
+`share.gateway: true`, select `share.groups`,
 and set `share.involvingProfileId`. Add the exact approved reader device IDs to
 `share.gatewayDeviceIds`. Missing or empty device grants publish nothing over
 Gateway RPC. The device reads sessions matching both the groups and canonical
 person; it does not become that person. Requests cannot change these filters.
 Merged profile IDs remain supported; unknown or removed people publish nothing.
+
+The host switch is off unless it is exactly `true`. Plugin installation,
+authentication and stored grants do not turn it on. Disabling it retires current
+reader connections and pending disclosures, including when it is turned back on
+before their next check. Start a new connection after re-enabling. Unrelated
+configuration changes do not retire the host reader admission. Ordinary clients
+and node-based sharing are unchanged. An explicitly enabled reader connection
+may remain inert when no source plugin methods are available.
 
 On the receiver, configure a source under `gateways`:
 

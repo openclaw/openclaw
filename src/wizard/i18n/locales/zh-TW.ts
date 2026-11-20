@@ -1098,6 +1098,8 @@ export const zh_TW = {
     channelsPrimer: {
       approveWith: "核准配對：{command}",
       docs: "文件：{link}",
+      credentialStorage:
+        "直接輸入受支援的憑證會將其儲存到共用密鑰庫。Gateway 執行時，從 CLI 執行此操作需要本機 Gateway 管理員權限。如果沒有該權限，請在頻道支援的情況下使用現有的密鑰參照，或先停止 Gateway 再輸入憑證。",
       inboundSafety: "入站 DM 安全預設使用配對：未知傳送者會先取得配對碼。",
       multiUserDm:
         '多使用者 DM 請隔離工作階段：{command}（多帳號頻道也可用 "per-account-channel-peer"）。',

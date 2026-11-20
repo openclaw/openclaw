@@ -44,6 +44,8 @@ export type StoredClaw = {
   token_bindings?: DeviceTokenBinding[];
   /** Gateway approval times, bounded by current membership rather than invite lifetime. */
   member_approved_at?: Record<string, number | null>;
+  /** Members whose profile role was initialized; clearing a role must not rerun migration. */
+  member_profile_roles?: Record<string, boolean>;
   /** Display-only browser notices and bounded replay/rate receipts for current members. */
   member_browser_requests?: Record<string, MemberBrowserRequestState>;
   /** Accepted kit-use evidence; retained after kit, browser, and member removal. */

@@ -305,6 +305,28 @@ export const SessionsCreateResultSchema = Type.Object(
   { additionalProperties: true },
 );
 
+/** Literal human input for one exact running backend; never starts a turn. */
+export const SessionsSteerActiveParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sessionId: NonEmptyString,
+  runId: NonEmptyString,
+  message: Type.String({ minLength: 1 }),
+  idempotencyKey: NonEmptyString,
+});
+
+export const SessionsSteerActiveResultSchema = closedObject({
+  runId: NonEmptyString,
+  inputId: NonEmptyString,
+  status: stringLiteralUnion(["accepted", "rejected", "indeterminate", "in_flight"]),
+  reason: Type.Optional(Type.String()),
+  messageSeq: Type.Optional(Type.Integer({ minimum: 1 })),
+  receiptPersisted: Type.Boolean(),
+});
+
+export type SessionsSteerActiveParams = Static<typeof SessionsSteerActiveParamsSchema>;
+export type SessionsSteerActiveResult = Static<typeof SessionsSteerActiveResultSchema>;
+
 export const SessionsSendParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),

@@ -12,6 +12,7 @@ import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE } from "../../gateway/operator-
 import { createOperatorWsClient } from "../../gateway/server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { prepareGatewayConnectOperatorAccess } from "../../gateway/server/ws-connection/connect-operator-access.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../runtime-process-url.js";
@@ -28,6 +29,7 @@ export async function preparePublicationAuthority(
 ) {
   const profile = await ensureCanonicalUserProfileForEmail("publication-authorized@example.test");
   const foreign = await ensureCanonicalUserProfileForEmail("publication-foreign@example.test");
+  onTestFinished((await prepareUserProfileCatalog()).release);
   const scopes = [SESSION_READ_SCOPE, SESSION_WRITE_SCOPE];
   const config = getRuntimeConfig();
   const authorizedConfig: OpenClawConfig = {
