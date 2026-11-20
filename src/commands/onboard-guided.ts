@@ -401,6 +401,11 @@ async function runGuidedOnboardingFlow(
     activate,
   });
   const skippedInference = resultLines === null;
+  const nextStepCommands = {
+    onboardCommand: formatCliCommand("openclaw onboard"),
+    channelsCommand: formatCliCommand("openclaw channels add"),
+    dashboardCommand: formatCliCommand("openclaw dashboard"),
+  };
   if (localOnboarding && (resumingSetup || (!existingConfig.gateway && !detection.setupComplete))) {
     const { withConfigMutationExclusive } = await import("../config/config.js");
     // A verified existing route may need no config write. Claim before provisioning
@@ -429,7 +434,7 @@ async function runGuidedOnboardingFlow(
   if (!custodianMode) {
     if (skippedInference) {
       await prompter.note(
-        t("wizard.guided.nextStepsWithoutAi", { workspace }),
+        t("wizard.guided.nextStepsWithoutAi", { workspace, ...nextStepCommands }),
         t("wizard.guided.nextStepsTitle"),
       );
       return null;
@@ -612,7 +617,7 @@ async function runGuidedOnboardingFlow(
     : appliedWorkspace;
   if (skippedInference) {
     await prompter.note(
-      t("wizard.guided.nextStepsWithoutAi", { workspace: agentWorkspace }),
+      t("wizard.guided.nextStepsWithoutAi", { workspace: agentWorkspace, ...nextStepCommands }),
       t("wizard.guided.nextStepsTitle"),
     );
     await prompter.outro(t("wizard.guided.setupDone"));

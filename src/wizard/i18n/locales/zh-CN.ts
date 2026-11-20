@@ -396,7 +396,7 @@ export const zh_CN = {
       nextSteps:
         "工作区：{workspace}\n添加频道：`openclaw channels add`\n更喜欢聊天？运行 `openclaw setup`，然后说 `connect telegram`（或 `connect slack`）。\n打开 dashboard：`openclaw dashboard`\n稍后聊天：`openclaw`",
       nextStepsWithoutAi:
-        "工作区：{workspace}\n稍后添加 AI：重新运行 `openclaw onboard`\n连接 AI 后添加频道：`openclaw channels add`\n打开 dashboard：`openclaw dashboard`",
+        "工作区：{workspace}\n稍后添加 AI：重新运行 `{onboardCommand}`\n连接 AI 后添加频道：`{channelsCommand}`\n打开 dashboard：`{dashboardCommand}`",
       nextStepsTitle: "下一步",
       noInferenceOptions:
         "尚无可用的推理选项。请先登录 Claude Code 或 Codex，或配置 API 密钥提供商，然后重新运行引导。",

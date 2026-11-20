@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import {
   resolveOnboardingAgentTarget,
@@ -559,7 +560,7 @@ export async function applySystemAgentSetup(
           lines.push(`Gateway: ${formatExternalSupervisorActionRequired("start the gateway")}`);
         } else if (params.installDaemon === false) {
           lines.push(
-            "Gateway: service installation skipped. Run `openclaw gateway run` to start it in the foreground.",
+            `Gateway: service installation skipped. Run \`${formatCliCommand("openclaw gateway run")}\` to start it in the foreground.`,
           );
         } else {
           lines.push(
