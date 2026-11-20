@@ -6,8 +6,8 @@ import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createChatCompletionReadRef } from "./chat-completion-read.ts";
 import { ChatTranscriptRenderer } from "./chat-transcript-layout-solid.tsx";
-import type { TranscriptLayoutProps } from "./chat-transcript-layout.ts";
 import { footprintLayout, mountedVirtualizer } from "./chat-transcript-layout.test-support.ts";
+import type { TranscriptLayoutProps } from "./chat-transcript-layout.ts";
 import { createTranscriptMessageElements } from "./chat-transcript-message-elements.ts";
 import {
   installTranscriptDomMocks,
@@ -114,10 +114,7 @@ it("admits reads only from settled active rows, not hidden or resource-preparing
     const stillPresented = viewed.mock.calls[0][1];
     viewed.mockClear();
 
-    for (const preparation of [
-      { preparingRowKey: "row" },
-      { forecastRowKeys: new Set(["row"]) },
-    ]) {
+    for (const preparation of [{ preparingRowKey: "row" }, { forecastRowKeys: new Set(["row"]) }]) {
       snapshot = { ...initialSnapshot, ...preparation, activeRowKeys: new Set() };
       renderer.render(snapshot);
       expect(stillPresented()).toBe(false); // Owner fences before Solid flush.
