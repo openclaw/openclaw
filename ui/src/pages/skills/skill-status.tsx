@@ -28,6 +28,15 @@ export function SkillStatusChips(props: { skill: SkillStatusEntry; showBundledBa
   );
 }
 
+/** The registry reference an installed ClawHub skill was added from, as search results name it. */
+export function installedReference(skill: SkillStatusEntry): string | null {
+  const link = skill.clawhub;
+  if (!link?.valid) {
+    return null;
+  }
+  return link.requestedReference ?? (link.ownerHandle ? `@${link.ownerHandle}/${link.slug}` : null);
+}
+
 export function verdictForSkill(
   skill: SkillStatusEntry,
   verdicts: Record<string, ClawHubSkillSecurityVerdict>,

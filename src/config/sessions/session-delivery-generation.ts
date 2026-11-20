@@ -589,6 +589,27 @@ async function prepareSessionGenerationLease(
       [workerSource ?? assertCurrent],
       checkGenerationCurrent,
     );
+    assertGenerationCurrent.prepareSessionSourceStorageEffect = async () => {
+      const storageSource = source;
+      const assertStorageCurrent = () => {
+        if (!active || (admission && !admission.isCurrent())) {
+          throw diag.unavailable("effect-source");
+        }
+      };
+      try {
+        if (!storageSource) {
+          throw diag.unavailable("effect-source");
+        }
+        assertStorageCurrent();
+        await prepareSessionStoreCandidatesInWorker({
+          validate: { candidates, sources: [storageSource] },
+        });
+        assertStorageCurrent();
+        return { assertCurrent: assertStorageCurrent };
+      } catch (error) {
+        return refuseCurrent(error);
+      }
+    };
     assertGenerationCurrent.prepareSessionSourceEffect = async () => {
       let releaseEffect: PreparedSessionSourceEffect["release"];
       try {

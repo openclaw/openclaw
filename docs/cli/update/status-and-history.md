@@ -215,6 +215,12 @@ Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
 a run ID.
 
+When the CLI saves a Markdown report, it prints the path and a **Read report**
+command. Copy the command, not the path alone: `cat -- <quoted-path>` in a POSIX
+shell, or `Get-Content -LiteralPath <quoted-path>` in PowerShell on Windows.
+The report is a private text file, not an executable; reading it does not require
+changing its permissions. JSON output keeps the report path without shell instructions.
+
 On an existing profile, update history admission waits for a database writer using
 the update's step timeout (30 minutes by default, or `--timeout`). If that wait
 expires, the command exits successfully with a deferred `update-ledger-busy`

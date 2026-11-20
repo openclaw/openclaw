@@ -123,7 +123,11 @@ describeControlUiE2e("plugin install button progress", () => {
         card.locator(`.plugin-install-progress__activity${state && `--${state}`}`).count();
       const pluginButton = (action: string) =>
         page.getByRole("button", { name: `${action} Calendar Plus`, exact: true });
-      const disable = pluginButton("Disable");
+      const enabled = page.getByRole("switch", {
+        name: "Calendar Plus",
+        checked: true,
+        exact: true,
+      });
       const applying = card.getByText("Applying plugin…", { exact: true });
       const expectFocused = async (control: Locator) =>
         expect(await control.evaluate((el) => el === document.activeElement)).toBe(true);
@@ -164,7 +168,7 @@ describeControlUiE2e("plugin install button progress", () => {
           plugin: installed,
           restartRequired: false,
         });
-        await disable.waitFor();
+        await enabled.waitFor();
         expect(await card.count()).toBe(0);
       };
       await button.waitFor();
@@ -248,7 +252,7 @@ describeControlUiE2e("plugin install button progress", () => {
           await expectText(button, "Installing");
           expect(await card.isVisible()).toBe(true);
           expect(await applying.count()).toBe(1);
-          expect(await disable.count()).toBe(0);
+          expect(await enabled.count()).toBe(0);
           expect(await pluginButton("Uninstall").count()).toBe(0);
         }
         await capture("runtime", [1440, 390]);

@@ -1,5 +1,5 @@
-/* Skill Workshop: a start page that lists drafts and skills, and one page per skill or draft in
- * the shared detail model (breadcrumb, header, content column, facts column). */
+/* Skill Workshop: a start page with three views (Drafts, History, Learned skills), and one page
+ * per skill or draft in the shared detail model (breadcrumb, header, content column, facts column). */
 
 .sw-library,
 .sw-detail {
@@ -26,10 +26,6 @@
   font-size: 12.5px;
   font-weight: 500;
   white-space: nowrap;
-}
-
-.sw-learning__mode {
-  color: var(--text-strong);
 }
 
 .sw-learning__dot {
@@ -134,28 +130,52 @@
   color: var(--muted-strong);
 }
 
-/* ── Start page: list tabs on a track, rows in the Plugins row style ── */
+/* ── Start page: views on a track, rows in the Plugins row style ── */
 .sw-library {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
-.sw-library__bar,
-.sw-library__tools {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
+.sw-skills,
+.sw-history-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+}
+
+.sw-skills .plugin-catalog-search {
+  margin: 0;
+}
+
+.sw-history-list {
+  gap: 18px;
+}
+
+.sw-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.sw-group__title {
+  margin: 0;
+  padding-inline: 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .sw-library__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-}
-
-/* Archived has no Sort and one active agent has no picker: no empty row or gap. */
-.sw-library__tools:empty {
-  display: none;
+  gap: var(--space-2);
 }
 
 .sw-sort .settings-select {
@@ -263,7 +283,8 @@
 }
 
 .sw-row__desc,
-.sw-row__change {
+.sw-row__change,
+.sw-row__meta {
   overflow: hidden;
   color: var(--muted);
   font-size: 12.5px;
@@ -278,7 +299,7 @@
 }
 
 .sw-row__change-why::before,
-.sw-row__change-when::before {
+.sw-row__meta-uses + .sw-row__meta-when::before {
   content: " · ";
 }
 
@@ -296,17 +317,13 @@
   width: 104px;
 }
 
-.sw-row__aside--draft {
-  width: 160px;
-}
-
-/* Uses read in the right slot on wide screens and in the last line on a phone. */
-.sw-row__change-uses,
-.sw-row__change--uses-only {
+.sw-row__aside:empty {
   display: none;
 }
 
-.sw-row__uses {
+.sw-row__uses,
+.sw-row__when,
+.sw-row__meta {
   flex: none;
   color: var(--muted);
   font-size: 12px;
@@ -393,8 +410,75 @@
   color: var(--text-strong);
 }
 
-.sw-row--draft .sw-row__main {
-  gap: 12px;
+/* Draft and History rows: the text sits in one column, the age (and uses) at the right edge. */
+.sw-row--draft .sw-row__main,
+.sw-row--history .sw-row__main {
+  display: grid;
+  grid-template-columns: 14px 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1px 12px;
+}
+
+.sw-row--history .sw-row__main {
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  gap: 1px 14px;
+}
+
+.sw-row--draft .sw-row__text,
+.sw-row--history .sw-row__text {
+  display: contents;
+}
+
+.sw-row--draft .sw-row__chevron {
+  grid-area: 1 / 1 / span 2 / 2;
+}
+
+.sw-row--draft .sw-tile {
+  grid-area: 1 / 2 / span 2 / 3;
+}
+
+.sw-row--draft .sw-row__title,
+.sw-row--history .sw-row__name {
+  grid-area: 1 / -3 / 2 / -2;
+}
+
+.sw-row--draft .sw-row__desc,
+.sw-row--history .sw-row__change {
+  grid-area: 2 / -3 / 3 / -2;
+}
+
+.sw-row--draft .sw-row__meta,
+.sw-row--history .sw-row__when {
+  grid-area: 1 / -2 / span 2 / -1;
+  justify-self: end;
+  padding-inline-start: 12px;
+}
+
+.sw-row--history .sw-tile {
+  grid-area: 1 / 1 / span 2 / 2;
+}
+
+.sw-row__counts {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.sw-row__count--add {
+  color: color-mix(in srgb, var(--ok) 80%, var(--text-strong));
+}
+
+.sw-row__count--remove {
+  color: color-mix(in srgb, var(--danger) 80%, var(--text-strong));
+}
+
+.sw-row__note {
+  margin-inline-end: auto;
+  color: var(--muted);
+  font-size: 12.5px;
 }
 
 .sw-row__body {
@@ -415,6 +499,7 @@
 
 .sw-row__foot {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 12px;
@@ -1002,8 +1087,22 @@
     gap: 10px;
   }
 
+  .sw-views,
   .sw-library__filters {
     flex: 1 1 100%;
+  }
+
+  .sw-views .settings-segmented__btn {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+
+  .sw-skills .sw-library__bar {
+    flex-wrap: nowrap;
+  }
+
+  .sw-skills .sw-library__filters {
+    flex: 1 1 auto;
   }
 
   .sw-grid {
@@ -1029,26 +1128,48 @@
     -webkit-line-clamp: 2;
   }
 
+  /* One slot width on a phone too, so every row's text ends at the same line. */
   .sw-grid .sw-row__aside {
-    width: auto;
+    width: 92px;
     padding-inline-end: 8px;
   }
 
-  .sw-grid .sw-row__aside:empty,
-  .sw-row__uses--aside {
-    display: none;
+  .sw-grid .sw-row__aside,
+  .sw-row__aside--history {
+    align-self: center;
   }
 
-  .sw-row__change-uses {
-    display: inline;
+  .sw-row--history .sw-row__main {
+    grid-template-columns: 40px minmax(0, 1fr);
+    align-items: start;
+    gap: 2px 12px;
+    padding: 12px 10px;
   }
 
-  .sw-row__change--uses-only {
-    display: block;
+  .sw-row--history .sw-tile {
+    grid-area: 1 / 1 / span 3 / 2;
   }
 
-  .sw-row__change-uses + .sw-row__change-who::before {
-    content: " · ";
+  .sw-row--history .sw-row__name,
+  .sw-row--history .sw-row__change {
+    grid-column: 2 / 3;
+  }
+
+  .sw-row--history .sw-row__change {
+    display: -webkit-box;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .sw-row--history .sw-row__when {
+    grid-area: 3 / 2 / 4 / 3;
+    justify-self: start;
+    padding-inline-start: 0;
+  }
+
+  .sw-row__aside--history {
+    padding-inline-end: 10px;
   }
 
   .sw-row__aside .btn,
@@ -1063,17 +1184,34 @@
   }
 
   .sw-row--draft .sw-row__main {
-    align-items: flex-start;
-    padding: 10px;
+    grid-template-columns: 40px minmax(0, 1fr) 14px;
+    align-items: start;
+    gap: 2px 12px;
+    padding: 12px 10px;
+  }
+
+  .sw-row--draft .sw-tile {
+    grid-area: 1 / 1 / span 3 / 2;
+  }
+
+  .sw-row--draft .sw-row__title,
+  .sw-row--draft .sw-row__desc {
+    grid-column: 2 / 3;
+  }
+
+  .sw-row--draft .sw-row__meta {
+    grid-area: 3 / 2 / 4 / 3;
+    justify-self: start;
+    padding-inline-start: 0;
   }
 
   .sw-row--draft .sw-row__chevron {
+    grid-area: 1 / 3 / span 3 / 4;
     align-self: center;
-    order: 2;
   }
 
-  .sw-row--draft .sw-row__main > .sw-row__uses {
-    display: none;
+  .sw-row__note {
+    flex: 1 1 100%;
   }
 
   .sw-row__body {
