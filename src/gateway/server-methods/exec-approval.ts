@@ -41,6 +41,7 @@ import {
 } from "../operator-approval-standing-grants.js";
 import { listCronStandingGrants, revokeCronStandingGrant } from "../operator-approval-store.js";
 import { resolveGrantExpiryDaysConfig } from "../standing-grant-expiry-config.js";
+import { approvalReaderSessionPolicy } from "./approval-record-lookup.js";
 import {
   captureApprovalWorkerOwner,
   registerPendingApprovalRecord,
@@ -85,7 +86,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: params.id,
         client,
-        getCfg: context.getRuntimeConfig,
+        ...approvalReaderSessionPolicy(client, context.getRuntimeConfig),
         exposeAmbiguousPrefixError: true,
       });
       authority.assertCurrent();
@@ -119,7 +120,7 @@ export function createExecApprovalHandlers(
         manager,
         client,
         approvalKind: "exec",
-        getCfg: context.getRuntimeConfig,
+        ...approvalReaderSessionPolicy(client, context.getRuntimeConfig),
       });
       authority.assertCurrent();
       respond(true, approvals, undefined);
@@ -164,6 +165,17 @@ export function createExecApprovalHandlers(
         const effectiveCommandText = approvalContext.commandText;
         const requestRunId =
           trustedAgentRuntime?.operationalRunInstance.runId ?? normalizeOptionalString(p.runId);
+        // Admission: a request for a run that was already stopped never starts.
+        if (requestRunId && context.chatRunState.hasAbortMarker(requestRunId)) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "approval run already aborted", {
+              details: { reason: "EXEC_APPROVAL_RUN_ABORTED" },
+            }),
+          );
+          return;
+        }
         if (host === "node" && !nodeId) {
           rejectRequest("nodeId is required for host=node");
           return;
@@ -334,18 +346,7 @@ export function createExecApprovalHandlers(
               })
             : null,
         };
-        // This check is adjacent to manager creation with no await between them.
-        // The abort owner records the tombstone before sweeping pending approvals.
-        if (requestRunId && context.chatRunState.hasAbortMarker(requestRunId)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "approval run already aborted", {
-              details: { reason: "EXEC_APPROVAL_RUN_ABORTED" },
-            }),
-          );
-          return;
-        }
+        // An abort that lands during preparation may leave this record pending until expiry.
         let record: ReturnType<typeof manager.create>;
         try {
           record = manager.create(request, timeoutMs, explicitId);
@@ -416,7 +417,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: params.id,
         client,
-        getCfg: context.getRuntimeConfig,
+        ...approvalReaderSessionPolicy(client, context.getRuntimeConfig),
         respond,
         resolveTerminalReason: (snapshot) => {
           const runId = normalizeOptionalString(snapshot.request.runId);

@@ -13,7 +13,9 @@ then aborts executing work promptly. This includes accepted turns still preparin
 their runtime when shutdown begins. At the next startup, an interrupted root
 execution gets one ordinary system input asking the agent to inspect current
 state and continue. Recorded yield waits stay parked when their wake source
-survives; a lost source produces a visible failure instead.
+survives. A lost source settles a sub-agent with a visible failure; its registry
+completion wakes the requester. A root with no remaining child settlement or
+delivery receives the ordinary resume input to inspect and reconcile instead.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution. For a captured interrupted turn, the shutdown marker
 retains its original requester's bounded authentication source. Startup revalidates
@@ -21,6 +23,11 @@ that source and current session access before admitting the continuation; a shar
 session's owner or another participant cannot replace it. A revoked or unavailable
 source fails recovery rather than falling back to another person. Older markers
 without a captured source keep the session-principal recovery policy.
+
+Scheduled automation retains its cron owner, even when it runs in an ordinary
+conversation. Shutdown does not turn an interrupted occurrence into an operator
+resume request or an operator-authority failure notice. The cron scheduler owns
+its retry and next-tick behavior. Accepted user work still keeps its resume path.
 
 If the interrupted turn left a managed workspace pending, its recovery input waits
 for the workspace owner to finish preparation before starting the turn. Setup
@@ -195,18 +202,18 @@ heartbeat observer works independently of the optional V8 flight recorder.
 | Running sub-agent                                                 | Stops quietly; its root requester receives the resume input                                            |
 | Session parked in `sessions_yield` with a surviving wake source   | Keeps its recorded wait, including dashboard roots; no startup model request                           |
 | Yielded requester whose descendants were stopped                  | Receives the root resume input to reconcile their work                                                 |
-| Yielded session whose external continuation source is gone        | Closes with a recorded, visible failure                                                                |
-| Background process                                                | Ends with the old process; its root session receives the resume input                                  |
+| Yielded sub-agent whose external continuation source is gone      | Closes with a recorded, visible failure; its requester receives the child settlement                   |
+| Background process                                                | Interrupted root resumes; finished root gets a lost-process exit notice if notifications are enabled   |
 | Already-produced outbound messages and media                      | Keep the existing delivery queue and delivery reconciliation                                           |
 | Scheduled jobs                                                    | Keep cron's own scheduling, catch-up, and interruption policy                                          |
 | ACP or external-harness session                                   | Keeps its harness owner's restart policy                                                               |
 | Update outcome                                                    | Remains a passive report in the originating conversation                                               |
 | Gateway terminal PTY                                              | Ends with the old process                                                                              |
 
-A session counts as running when its own agent loop is active, a descendant
-sub-agent is running, or it owns a running background process. The Gateway reads
-these facts from their live in-memory owners during shutdown. A child contributes
-to its top-level requester; the child does not receive an independent resume input.
+A session counts as running when its own agent loop or a descendant sub-agent is
+running. The Gateway reads these facts from their live in-memory owners during
+shutdown. A child contributes to its top-level requester; the child does not receive
+an independent resume input.
 Idle and finished sessions are not marked. Cron occurrence sessions and
 ACP/external-harness sessions are excluded.
 
@@ -272,8 +279,8 @@ a recovering session waits until its resume input and retained FIFO inputs own
 their ordinary queue slots. Other sessions in the same agent can proceed.
 Incoming session events wait before reserving their FIFO position, so they cannot
 block the recovery input that must precede them. A shutdown marker still resumes
-the interrupted work when shutdown left the session marked as killed or when a
-completed reply had background commands, even when no queued input remains.
+the interrupted work when shutdown left the session marked as killed, even when
+no queued input remains.
 Stores prepared later install these waits before publishing database admission.
 This also applies when several logical agents share the same physical store. Database
 reads and writes retain their normal admission rules; recovery does not borrow
@@ -635,7 +642,11 @@ one new input through the normal session-event path:
 > The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.
 
 Background commands that were waiting to wake the conversation are reported
-separately, with a notice for each command, after any restart, including a crash. See
+separately, with a notice for each command, after any restart, including a crash.
+A finished root receives this lost-process exit notice instead of a resume input.
+Accepted edge case: an interrupted root with a notifying background command receives
+both inputs and may reply twice. This rare, visible, recoverable case is intentionally
+retained to keep restart recovery independent of process reporting. See
 [lost background commands](/gateway/background-process#lost-background-commands).
 
 This is a new input, not a replay of the original user prompt or unfinished tool

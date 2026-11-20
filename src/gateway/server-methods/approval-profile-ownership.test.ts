@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createAdmittedRunOperatorAuthority,
@@ -7,6 +8,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { ExecApprovalRecord } from "../exec-approval-manager.js";
 import { createOperatorApprovalSessionEventRuntime } from "../operator-approval-session-events.js";
@@ -47,16 +49,34 @@ function client(profileId: string, scopes = ["operator.approvals"]) {
     authenticatedUserProfile: { profileId, displayName: null, hasAvatar: false, updatedAt: 0 },
   } as GatewayClient;
 }
+function roleConfig(cap: "invited" | "view" | "suggest" | "write" = "invited"): OpenClawConfig {
+  return {
+    agents: { entries: { main: {} } },
+    gateway: {
+      roles: {
+        default: "member",
+        definitions: {
+          member: {
+            agents: "*",
+            scopes: ["operator.read", "operator.approvals"],
+            sessions: { others: cap },
+          },
+        },
+      },
+    },
+  };
+}
 afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("approval profile ownership", () => {
   it.each(["invited", "view", "suggest", "write"] as const)(
-    "does not let sessions.others=%s read another profile's turn",
+    "applies requester filtering only to sessions.others=%s invitation access",
     (cap) => {
       const reviewer = client("member");
+      const cfg = roleConfig(cap);
       const prepared = {
         sharing: prepareSessionSharing(
-          { cfg: {}, client: reviewer },
+          { cfg, client: reviewer },
           {
             aliases: new Set(["member"]),
             sessionCap: cap,
@@ -68,26 +88,26 @@ describe("approval profile ownership", () => {
       const access = (requestedByProfileId?: string) =>
         canAccessApprovalSession({
           client: reviewer,
-          cfg: {},
+          cfg,
           sessionKey,
           requestedByProfileId,
           prepared,
         });
-      expect(access("other")).toBe(false);
-      expect(access()).toBe(false);
+      expect(access("other")).toBe(cap !== "invited");
+      expect(access()).toBe(cap !== "invited");
       expect(access("member")).toBe(true);
       expect(
         canAccessApprovalSession({
           client: reviewer,
-          cfg: {},
+          cfg,
           sessionKey,
           requestedByProfileId: "member",
         }),
-      ).toBe(false);
+      ).toBe(cap !== "invited");
     },
   );
 
-  it("uses the profiled gateway owner's identity independently of owner-equivalent sharing", () => {
+  it("preserves the profiled gateway owner's main approval visibility", () => {
     const owner = client("gateway-owner");
     const prepared = {
       sharing: prepareSessionSharing({ cfg: {}, client: owner }),
@@ -102,8 +122,8 @@ describe("approval profile ownership", () => {
         prepared: { ...prepared, target: () => current },
       });
     expect(access("gateway-owner")).toBe(true);
-    expect(access("other")).toBe(false);
-    expect(access()).toBe(false);
+    expect(access("other")).toBe(true);
+    expect(access()).toBe(true);
     expect(
       access(undefined, {
         ...target,
@@ -116,17 +136,16 @@ describe("approval profile ownership", () => {
   });
 
   it("allows creators and admins, but not human device matches, for unattributed approvals", () => {
+    const cfg = roleConfig();
     const prepared = {
       sharing: prepareSessionSharing(
-        { cfg: {}, client: client("creator") },
-        { aliases: new Set(["creator"]), sessionCap: "write", isMember: () => true },
+        { cfg, client: client("creator") },
+        { aliases: new Set(["creator"]), sessionCap: "invited", isMember: () => true },
       ),
       target: () => target,
     };
     for (const reviewer of [client("creator"), client("admin", ["operator.admin"])]) {
-      expect(canAccessApprovalSession({ client: reviewer, cfg: {}, sessionKey, prepared })).toBe(
-        true,
-      );
+      expect(canAccessApprovalSession({ client: reviewer, cfg, sessionKey, prepared })).toBe(true);
     }
     const record: ExecApprovalRecord = {
       id: "missing-raiser",
@@ -140,12 +159,12 @@ describe("approval profile ownership", () => {
       isApprovalRecordVisibleToClient({
         client: client("member"),
         record,
-        cfg: {},
+        cfg,
         prepared: {
           ...prepared,
           sharing: prepareSessionSharing(
-            { cfg: {}, client: client("member") },
-            { aliases: new Set(["member"]), sessionCap: "write", isMember: () => true },
+            { cfg, client: client("member") },
+            { aliases: new Set(["member"]), sessionCap: "invited", isMember: () => true },
           ),
         },
       }),
@@ -208,12 +227,21 @@ describe("approval profile ownership", () => {
   });
 
   it("filters requested and resolved session events by source creator or raiser", () => {
-    const cfg = { agents: { entries: { main: {} } } };
+    const cfg = roleConfig();
     setRuntimeConfigSnapshot(cfg);
     const projection = createSessionRowProjectionFixture({
       cfg,
       store: { [sessionKey]: target.entry },
     });
+    Object.assign(
+      expectDefined(
+        projection.describe({ agentId: "main", key: sessionKey }),
+        "materialized session",
+      ),
+      {
+        membership: new Set(["raiser", "unrelated"]),
+      },
+    );
     const clients = [
       client("creator"),
       client("raiser"),

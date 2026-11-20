@@ -205,6 +205,11 @@ export class CompilerInputSnapshot {
   }
 
   private read(file: string) {
+    // Captured bytes belong to this phase; only new reads need filesystem admission.
+    const captured = this.files.get(path.resolve(this.rootDir, file));
+    if (captured) {
+      return captured;
+    }
     // Admit the same spelling used for reads and prior-snapshot keys, including Windows aliases.
     const absolute = this.inputPath(file);
     let entry = this.files.get(absolute);

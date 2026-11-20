@@ -7,7 +7,7 @@ import { connectGatewayClient } from "./test-helpers.e2e.js";
 
 type Client = Awaited<ReturnType<typeof connectGatewayClient>>;
 
-it("enforces creator permission ceilings and per-turn approval audiences over real Gateway RPC", async ({
+it("enforces invitation-only permission ceilings and per-turn approval audiences over real Gateway RPC", async ({
   signal,
 }) => {
   await withInvitedGuestGateway(
@@ -41,7 +41,7 @@ it("enforces creator permission ceilings and per-turn approval audiences over re
           permissionMode: "workspace",
         });
         await admin.request("session.members.add", { sessionKey: key, identityId: carol.id });
-        for (const member of [invited, teammate]) {
+        for (const member of [invited]) {
           await expect(
             member.request("sessions.patch", { key, permissionMode: "guarded" }),
           ).resolves.toBeDefined();
@@ -79,7 +79,7 @@ it("enforces creator permission ceilings and per-turn approval audiences over re
           ).rejects.toThrow(/Only the session creator or an admin can loosen/);
           await creator.request("sessions.patch", { key, permissionMode: "workspace" });
         }
-        for (const member of [invited, teammate]) {
+        for (const member of [invited]) {
           await creator.request("sessions.patch", { key, permissionMode: null });
           for (const permissionMode of ["guarded", "workspace"]) {
             await expect(member.request("sessions.patch", { key, permissionMode })).rejects.toThrow(
@@ -101,7 +101,7 @@ it("enforces creator permission ceilings and per-turn approval audiences over re
         });
         await admin.request("session.members.add", { sessionKey: main.key, identityId: carol.id });
         const resetMain = { agentId: "main", parentSessionKey: main.key, emitCommandHooks: true };
-        for (const member of [invited, teammate]) {
+        for (const member of [invited]) {
           await expect(member.request("sessions.create", resetMain)).rejects.toThrow(
             /Only the session creator or an admin can loosen/,
           );
@@ -123,7 +123,6 @@ it("enforces creator permission ceilings and per-turn approval audiences over re
           [invited, invited],
           [teammate, teammate],
           [creator, creator],
-          [invited, creator],
           [teammate, admin],
         ] as const) {
           const previous = new Set(requested());
@@ -157,7 +156,9 @@ it("enforces creator permission ceilings and per-turn approval audiences over re
               await expect(resolve(member, id, true)).rejects.toThrow(/not found/);
             }
           }
-          expect((await listed(creator)).some((record) => record.id === id)).toBe(true);
+          expect((await listed(creator)).some((record) => record.id === id)).toBe(
+            raiser === creator,
+          );
           expect((await listed(admin)).some((record) => record.id === id)).toBe(true);
           await expect(resolve(resolver, id, resolver === creator)).resolves.toBeDefined();
           await admin.request("agent.wait", { runId, timeoutMs: 30_000 });

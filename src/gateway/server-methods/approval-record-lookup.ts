@@ -10,7 +10,7 @@ import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
-import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
+import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { prepareSessionCreatorProfile } from "../session-creator.js";
 import { resolveSessionEventAgentScope } from "../session-request-agent.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
@@ -41,7 +41,7 @@ export type ApprovalRecordLookupResult<TPayload> =
   | { ok: true; approvalId: string; snapshot: ExecApprovalRecord<TPayload> }
   | { ok: false; response: PendingApprovalLookupError };
 
-export function canAccessApprovalSession(params: {
+type ApprovalSessionAccessParams = {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
   sessionKey?: string | null;
@@ -52,21 +52,29 @@ export function canAccessApprovalSession(params: {
     target: (sessionKey: string, agentId?: string) => SessionSharingTarget | null;
   };
   readFacts?: (sessionKey: string, agentId?: string) => PreparedSessionMutationFacts | undefined;
-}): boolean {
-  // A null client is an internal native/channel call, not a human socket identity.
-  if (!params.client || params.client.connect.scopes?.includes(ADMIN_SCOPE)) {
+};
+
+/** Display-profile readers retain their policy; delegated invitees carry the same deny filter. */
+export function approvalReaderSessionPolicy(
+  client: GatewayClient | null,
+  getCfg: () => OpenClawConfig,
+): { getCfg?: () => OpenClawConfig } {
+  return client?.authenticatedUserProfile || operatorSessionCap(client, getCfg()) === "invited"
+    ? { getCfg }
+    : {};
+}
+
+/** Existing session visibility remains independent of approval requester ownership. */
+export function canReadApprovalSession(params: ApprovalSessionAccessParams): boolean {
+  const cap = operatorSessionCap(params.client, params.cfg);
+  if (cap !== "none" && cap !== "invited") {
     return true;
   }
-  // The server-authenticated channel bridge retains its separate reviewer custody.
-  if (params.client?.internal?.approvalRuntime === true) {
+  const visibilityFilter = params.prepared
+    ? params.prepared.sharing.entryFilter
+    : createSessionListEntryFilter({ client: params.client, cfg: params.cfg });
+  if (!visibilityFilter) {
     return true;
-  }
-  const actor = resolveGatewayOperatorRoleActor(params.client);
-  const profileId =
-    params.client?.authenticatedUserProfile?.profileId ??
-    (actor?.kind === "operator" ? actor.profileId : undefined);
-  if (!profileId) {
-    return false;
   }
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey) {
@@ -75,7 +83,39 @@ export function canAccessApprovalSession(params: {
   const agentId = normalizeOptionalString(params.agentId);
   const facts = params.readFacts?.(sessionKey, agentId);
   const target = params.prepared ? params.prepared.target(sessionKey, agentId) : facts?.target;
-  if (!target) {
+  return Boolean(
+    target &&
+    (params.prepared
+      ? params.prepared.sharing.canReadTarget(target)
+      : createSessionListEntryFilter({
+          client: params.client,
+          cfg: params.cfg,
+          membership: facts?.membership,
+        })?.(target.storeKey, target.entry) !== false),
+  );
+}
+
+/** Invitation access adds a requester restriction; it never replaces reviewer binding. */
+export function canAccessApprovalSession(params: ApprovalSessionAccessParams): boolean {
+  if (!canReadApprovalSession(params)) {
+    return false;
+  }
+  if (
+    operatorSessionCap(params.client, params.cfg) !== "invited" ||
+    params.client?.connect.scopes?.includes(ADMIN_SCOPE)
+  ) {
+    return true;
+  }
+  const actor = resolveGatewayOperatorRoleActor(params.client);
+  const profileId =
+    params.client?.authenticatedUserProfile?.profileId ??
+    (actor?.kind === "operator" ? actor.profileId : undefined);
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  const agentId = normalizeOptionalString(params.agentId);
+  const facts = sessionKey ? params.readFacts?.(sessionKey, agentId) : undefined;
+  const target =
+    sessionKey && (params.prepared ? params.prepared.target(sessionKey, agentId) : facts?.target);
+  if (!target || !profileId) {
     return false;
   }
   const isProfile = prepareSessionCreatorProfile(
@@ -85,23 +125,23 @@ export function canAccessApprovalSession(params: {
   if (isProfile(target.entry.createdActor)) {
     return true;
   }
-  // Session readability, including sessions.others: write, never grants another person's turn.
-  if (
-    !params.requestedByProfileId ||
-    !isProfile({ type: "human", source: "profile", id: params.requestedByProfileId })
-  ) {
-    return false;
-  }
-  return params.prepared
-    ? params.prepared.sharing.canReadTarget(target)
-    : createSessionListEntryFilter(
-        {
-          client: params.client,
-          cfg: params.cfg,
-          membership: facts?.membership,
-        },
-        isProfile,
-      )?.(target.storeKey, target.entry) !== false;
+  const isMember = params.prepared
+    ? params.prepared.sharing.roleForTarget(target) === "member"
+    : facts?.membership.has(profileId) === true;
+  return (
+    !isMember ||
+    Boolean(
+      params.requestedByProfileId &&
+      isProfile({ type: "human", source: "profile", id: params.requestedByProfileId }),
+    )
+  );
+}
+
+/** New event filtering applies only to invitation access; other audiences retain their owners. */
+export function canAccessInvitedApprovalSession(params: ApprovalSessionAccessParams): boolean {
+  return (
+    operatorSessionCap(params.client, params.cfg) !== "invited" || canAccessApprovalSession(params)
+  );
 }
 
 /** Synchronous event audiences consume the resident sharing owner, never fresh SQL. */
@@ -151,11 +191,7 @@ export async function prepareApprovalSessionAccess(params: {
   };
   try {
     const cfg = params.getCfg?.() ?? params.cfg;
-    if (
-      cfg &&
-      !params.client?.connect.scopes?.includes(ADMIN_SCOPE) &&
-      !params.client?.internal?.approvalRuntime
-    ) {
+    if (cfg && ["none", "invited"].includes(operatorSessionCap(params.client, cfg) ?? "")) {
       for (const source of params.sources) {
         const sessionKey = normalizeOptionalString(source.sessionKey);
         const requestedAgentId = normalizeOptionalString(source.agentId);
@@ -173,20 +209,30 @@ export async function prepareApprovalSessionAccess(params: {
         );
       }
     }
+    const check = (
+      source: ApprovalSessionSource,
+      mode: "access" | "read" | "invite" = "access",
+    ) => {
+      const currentCfg = params.getCfg?.() ?? params.cfg;
+      return (
+        !currentCfg ||
+        (mode === "read"
+          ? canReadApprovalSession
+          : mode === "invite"
+            ? canAccessInvitedApprovalSession
+            : canAccessApprovalSession)({
+          cfg: currentCfg,
+          client: params.client,
+          ...source,
+          readFacts: (sessionKey, agentId) =>
+            reads.get(sourceKey(sessionKey, agentId))?.readCurrent(currentCfg),
+        })
+      );
+    };
     return {
-      canAccess: (source: ApprovalSessionSource) => {
-        const currentCfg = params.getCfg?.() ?? params.cfg;
-        return (
-          !currentCfg ||
-          canAccessApprovalSession({
-            cfg: currentCfg,
-            client: params.client,
-            ...source,
-            readFacts: (sessionKey, agentId) =>
-              reads.get(sourceKey(sessionKey, agentId))?.readCurrent(currentCfg),
-          })
-        );
-      },
+      canAccess: (source: ApprovalSessionSource) => check(source),
+      canRead: (source: ApprovalSessionSource) => check(source, "read"),
+      canAccessInvited: (source: ApprovalSessionSource) => check(source, "invite"),
       [Symbol.dispose]: release,
     };
   } catch (error) {
@@ -224,13 +270,6 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
     return true;
   }
   if (
-    params.client?.internal?.agentRuntimeIdentity &&
-    params.record.requestedByConnId &&
-    params.record.requestedByConnId === params.client.connId
-  ) {
-    return true;
-  }
-  if (
     params.cfg &&
     !(
       params.sessionAccess?.canAccess(readApprovalRequestSource(params.record)) ??
@@ -243,9 +282,6 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
     )
   ) {
     return false;
-  }
-  if (params.cfg && scopes.includes(APPROVALS_SCOPE) && params.client?.authenticatedUserProfile) {
-    return true;
   }
   const requestedByDeviceId = normalizeNullableString(params.record.requestedByDeviceId);
   const requestedByClientId = normalizeNullableString(params.record.requestedByClientId);

@@ -165,7 +165,7 @@ async function createFixture(
       handlers,
       method: "approval.get",
       body: { id: record.id },
-      client: createClient({ deviceId: reviewerId, scopes: ["operator.admin"] }),
+      client: createClient({ deviceId: reviewerId }),
     }).invoke();
   return {
     state,
@@ -180,7 +180,7 @@ async function createFixture(
     read: (nowMs?: number) => getOperatorApproval({ id: record.id, databaseOptions, nowMs }),
     get,
     resolveInvocation: (operation: "resolve" | "deny", signal?: AbortSignal) => {
-      const client = createClient({ deviceId: reviewerId, scopes: ["operator.admin"] });
+      const client = createClient({ deviceId: reviewerId });
       client.connectionSignal = signal;
       return createApprovalInvocation({
         handlers,

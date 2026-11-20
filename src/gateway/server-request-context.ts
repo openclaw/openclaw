@@ -16,7 +16,8 @@ import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import {
-  isApprovalRecordVisibleToClient,
+  canAccessInvitedApprovalSession,
+  readApprovalRequestSource,
   prepareProjectedApprovalSessionAccess,
 } from "./server-methods/approval-record-lookup.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -387,8 +388,8 @@ export function createGatewayRequestContext(
           (!opts.excludeConnId || gatewayClient.connId !== opts.excludeConnId) &&
           canDeliverApprovals(gatewayClient, opts.approvalKind ?? "exec") &&
           (!opts.record ||
-            isApprovalRecordVisibleToClient({
-              record: opts.record,
+            canAccessInvitedApprovalSession({
+              ...readApprovalRequestSource(opts.record),
               client: gatewayClient,
               cfg: getRuntimeConfig(),
               prepared: prepareProjectedApprovalSessionAccess({

@@ -27,7 +27,7 @@ import {
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import {
-  canAccessApprovalSession,
+  canAccessInvitedApprovalSession,
   prepareProjectedApprovalSessionAccess,
   readOperatorApprovalRequestSource,
 } from "./server-methods/approval-record-lookup.js";
@@ -98,7 +98,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         !client.invalidated &&
         connId &&
         subscribed.has(connId) &&
-        canAccessApprovalSession({
+        canAccessInvitedApprovalSession({
           cfg: getRuntimeConfig(),
           client,
           ...readOperatorApprovalRequestSource(record),
@@ -108,7 +108,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
             projection: params.getSessionRowProjection?.(),
           }),
         }) &&
-        canAccessOperatorApproval({ client, binding: record, hasSessionAccess: true })
+        canAccessOperatorApproval({ client, binding: record })
       ) {
         recipients.add(connId);
       }
@@ -268,10 +268,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       }
       const scopes = [...(client?.connect.scopes ?? [])];
       const deviceId = client?.connect.device?.id;
-      const reviewerDeviceId =
-        scopes.includes(ADMIN_SCOPE) || client?.authenticatedUserProfile
-          ? undefined
-          : deviceId?.trim();
+      const reviewerDeviceId = scopes.includes(ADMIN_SCOPE) ? undefined : deviceId?.trim();
       const assertCurrent = () => {
         if (
           params.isCurrent?.() === false ||
@@ -348,7 +345,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         }
         assertCurrent();
         const visible = (record: OperatorApprovalRecord) =>
-          canAccessApprovalSession({
+          canAccessInvitedApprovalSession({
             cfg: getRuntimeConfig(),
             client,
             ...readOperatorApprovalRequestSource(record),
@@ -357,7 +354,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
               client,
               projection: params.getSessionRowProjection?.(),
             }),
-          }) && canAccessOperatorApproval({ client, binding: record, hasSessionAccess: true });
+          }) && canAccessOperatorApproval({ client, binding: record });
         const visibleRecords = prepared.records.filter(visible);
         const visibleIds = new Set(visibleRecords.map((record) => record.id));
         return {

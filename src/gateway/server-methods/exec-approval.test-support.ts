@@ -116,8 +116,8 @@ export async function getExecApproval(params: ApprovalById) {
   return callApproval("exec.approval.get", params, { id: params.id });
 }
 
-export async function listExecApprovals(params: ApprovalCall) {
-  return callApproval("exec.approval.list", params, {});
+export async function listExecApprovals(params: ApprovalCall & { context?: object }) {
+  return callApproval("exec.approval.list", params, {}, params.context);
 }
 
 export async function requestExecApproval(

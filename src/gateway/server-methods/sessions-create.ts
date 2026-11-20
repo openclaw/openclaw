@@ -20,6 +20,7 @@ import {
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { getNodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { projectRequesterForClient } from "../project-access.js";
 import { repositoryDispatchCredentialReader } from "../repository-dispatch.js";
@@ -43,7 +44,6 @@ import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-
 import { prepareSessionWorktreeCreation } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
-import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
 import { isAttendedSessionCreator } from "./gateway-personal-caller.js";
 import { respondError } from "./response.js";
@@ -175,19 +175,17 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const { personalModelSelection, personalAccountDefaults } = personalAccounts;
     const cfg = getCurrentConfig();
     const sessionCreation = attributeAgentToolSessionCreation(preparedCreation, toolRequester);
-    const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
     const handleAuthorityError = (error: unknown): undefined => {
       if (error instanceof ModelAccountConnectAuthorityError) {
         respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
         return undefined;
       }
-      return authority.handleClosedError(error);
+      throw error;
     };
     const assertSessionCreateCurrent = Object.assign(
       bindGatewayDeviceRevocation(() => {
         requestAuthority.assertCurrent();
         assertRequiredWorkerSessionCreateCurrent(getCurrentConfig(), requiredProfile, p);
-        authority.commitGuard?.();
         sessionMutationAuthorization?.assertCurrent();
         assertPreparedSkillLibrarySelection(sessionCreation.skillLibrarySelections);
       }, hasCurrentClientAuthority),
@@ -340,9 +338,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const worktreeBaseRef = normalizeOptionalString(p.worktreeBaseRef);
     const explicitSessionLabel = normalizeOptionalString(p.label);
     const preparedDisplayName = normalizeOptionalString(p.displayName);
-    if (!authority.ensureActive()) {
-      return;
-    }
     const existingTargetEntry = explicitlyRequestedKey
       ? (
           await loadGatewaySessionEntryReadOnlyInWorker({
@@ -553,7 +548,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         fork: p.fork,
         forkFrom: p.forkFrom,
         emitCommandHooks: p.emitCommandHooks,
-        assertRuntimeCurrent: authority.commitGuard,
       }),
       succeedsParent: p.succeedsParent,
       emitCommandHooks: p.emitCommandHooks,
@@ -572,6 +566,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       bindSharingCreation: (operation) =>
         sessionMutationAuthorization?.bindCreation?.(p, operation),
       followSharingRegistration: sessionMutationAuthorization?.followRegistration,
+      readSessionSharing: sessionMutationAuthorization?.readTargetSharing,
+      getCurrentSessionAccessCap: () => operatorSessionCap(client, getCurrentConfig()),
       afterSessionCommitted: (entry, source) =>
         registerCommittedSessionCategory(
           entry.category === normalizeOptionalString(p.category) ? entry.category : undefined,
@@ -593,9 +589,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         }
       },
       afterCreate: async (session) => {
-        if (!authority.hasActive()) {
-          return;
-        }
         await prepareRequiredWorkerCreatedSession({
           requiredProfile,
           pendingWorktree: Boolean(preparedWorktree?.pendingWorktree),

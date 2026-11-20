@@ -6,7 +6,7 @@ import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
 import { expect, it } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { getSubagentRunByRunId } from "../agents/subagents/registry/subagent-registry.js";
@@ -84,7 +84,7 @@ function transcriptContent(messages: unknown[] | undefined) {
 
 // Fixed provider decisions; real identified operators, tools, authority and persisted effects.
 it(
-  "preserves restricted Goal returns and cancels revoked returns before further effects",
+  "completes authorized Goal returns and cancels retained work on role loss or Stop",
   { timeout: 120_000 },
   async ({ signal }) => {
     const state = await createOpenClawTestState({
@@ -101,13 +101,13 @@ it(
     cleanup.defer(() => state.cleanup());
     const adminProfile = ensureProfileForEmail("admin@goal-authority.example.test");
     setUserProfileRole(adminProfile.id, "administrator");
-    const scenarios = [false, true].map((revoke) => {
-      const name = revoke ? "revoke" : "current";
+    const scenarios = ["current", "revoke", "stop"].map((name) => {
       const profile = ensureProfileForEmail(`${name}@goal-authority.example.test`);
       const nonce = randomUUID();
       return {
         name,
-        revoke,
+        revoke: name === "revoke",
+        stop: name === "stop",
         profile,
         prompt: `GOAL_AUTHORITY_${nonce}`,
         childTask: `CHILD_AUTHORITY_${nonce}`,
@@ -122,6 +122,7 @@ it(
         settlementEntered: createDeferredCore(),
         releaseSettlement: createDeferredCore(),
         providerCancelled: createDeferredCore(),
+        settledText: `ITEM_COMPLETE_${nonce}`,
         finalText: `GOAL_COMPLETE_${nonce}`,
         finalReceived: createDeferredCore(),
       };
@@ -182,15 +183,15 @@ it(
         } else if (scenario.parentCalls === 4) {
           expect(text).toContain(scenario.childResult);
           expect(text).toContain("Active goal:");
-          // Hold actual provider I/O only after the committed child return admitted
-          // requester completion. Revocation must cancel this retained operator.
+          // Hold actual provider I/O after the committed child return. The retained
+          // turn still ends when its profile authority is revoked or Stop is requested.
           response.once("close", () => {
             if (!response.writableFinished) {
               scenario.providerCancelled.resolve();
             }
           });
           scenario.settlementEntered.resolve();
-          if (scenario.revoke) {
+          if (scenario.revoke || scenario.stop) {
             await wait(scenario.releaseSettlement.promise);
           }
           if (!response.destroyed) {
@@ -200,11 +201,11 @@ it(
             });
           }
         } else if (scenario.parentCalls === 5) {
-          expect(scenario.revoke).toBe(false);
+          expect(scenario.stop || scenario.revoke).toBe(false);
           expect(typeof output === "string" ? JSON.parse(output) : output).toMatchObject({
             status: "forbidden",
           });
-          reply("The delegated item is done. The remaining Goal item is unfinished.");
+          reply(scenario.settledText + " The remaining Goal item is unfinished.");
         } else if (scenario.parentCalls === 6) {
           expect(scenario.revoke).toBe(false);
           expect(text).toContain("Advance the active goal");
@@ -233,7 +234,7 @@ it(
       trustedProxy: {
         userHeader: "x-forwarded-user",
         requiredHeaders: ["x-forwarded-proto"],
-        allowUsers: ["admin", "current", "revoke"].map(
+        allowUsers: ["admin", ...scenarios.map(({ name }) => name)].map(
           (name) => `${name}@goal-authority.example.test`,
         ),
         allowLoopback: true,
@@ -372,12 +373,6 @@ it(
           child: scenario.childCalls,
           events: events.length,
         };
-        const beforeHistory = scenario.revoke
-          ? await admin.request<{ messages: unknown[] }>("chat.history", {
-              sessionKey: scenario.sessionKey,
-              limit: 100,
-            })
-          : undefined;
         let revokedEventBoundary = events.length;
         if (scenario.revoke) {
           expect(
@@ -389,9 +384,27 @@ it(
           ).toBe(true);
           await admin.request("users.setRole", { profileId: scenario.profile.id, role: "revoked" });
           revokedEventBoundary = events.length;
-          // Observe the actual provider socket cancellation, not a fixture decision
-          // to drop a response. The stale effect is released only after this fact.
-          await wait(scenario.providerCancelled.promise);
+          await wait(
+            awaitGateBeforeSettlement(
+              scenario.providerCancelled.promise,
+              waitForGatewayActiveWork(30_000),
+              "Role revocation settled without cancelling the retained Goal provider request",
+            ),
+          );
+          scenario.releaseSettlement.resolve();
+        } else if (scenario.stop) {
+          expect(await admin.request("sessions.abort", { key: scenario.sessionKey })).toMatchObject(
+            { ok: true, status: "aborted" },
+          );
+          // The real provider socket must close before Stop settles and before
+          // the fixture releases its response; do not wait on a new timer.
+          await wait(
+            awaitGateBeforeSettlement(
+              scenario.providerCancelled.promise,
+              waitForGatewayActiveWork(30_000),
+              "Stop settled without cancelling the admitted Goal provider request",
+            ),
+          );
           scenario.releaseSettlement.resolve();
         }
         const drained = await wait(waitForGatewayActiveWork(30_000));
@@ -404,11 +417,11 @@ it(
         expect(
           loadSessionEntry({ agentId: "main", sessionKey: scenario.sessionKey })?.goal,
         ).toMatchObject(
-          scenario.revoke
+          scenario.stop || scenario.revoke
             ? { status: "paused", continuationTurns: 0 }
             : { status: "complete", continuationTurns: 1 },
         );
-        if (!scenario.revoke) {
+        if (!scenario.revoke && !scenario.stop) {
           await wait(scenario.finalReceived.promise);
         }
         const history = await (scenario.revoke ? admin : member).request<{ messages: unknown[] }>(
@@ -421,23 +434,24 @@ it(
             asOptionalRecord(event.payload)?.sessionKey === scenario.sessionKey &&
             assistantText(asOptionalRecord(event.payload)?.message) === scenario.finalText,
         );
-        expect(finals).toHaveLength(scenario.revoke ? 0 : 1);
+        expect(finals).toHaveLength(scenario.revoke || scenario.stop ? 0 : 1);
         expect(
           history.messages.filter((message) => assistantText(message) === scenario.finalText),
-        ).toHaveLength(scenario.revoke ? 0 : 1);
+        ).toHaveLength(scenario.revoke || scenario.stop ? 0 : 1);
         if (scenario.revoke) {
           // The administrator may still inspect the canonical history; only the
           // revoked requester's publication stream is required to be silent.
-          // Cancellation cannot unconsume the child result already admitted to this turn.
+          // Revocation cannot unconsume the child result already admitted to this turn.
           const child = scenario.childRunId && getSubagentRunByRunId(scenario.childRunId);
           expect(child && child.delivery).toMatchObject({
             status: "delivered",
             requesterDelivery: { state: "consumed" },
           });
-          // Role changes refresh projected avatar URLs, not prior durable message content.
-          expect(transcriptContent(history.messages)).toEqual(
-            transcriptContent(beforeHistory?.messages),
-          );
+          expect(
+            history.messages.some((message) =>
+              assistantText(message)?.includes(scenario.settledText),
+            ),
+          ).toBe(false);
           expect(
             events.slice(beforeRevocation.events).filter((event) => {
               const payload = asOptionalRecord(event.payload);
@@ -494,6 +508,17 @@ it(
           ).toEqual([]);
           expect(scenario.parentCalls).toBe(beforeRevocation.parent);
           expect(scenario.childCalls).toBe(beforeRevocation.child);
+        } else if (scenario.stop) {
+          expect(scenario.parentCalls).toBe(beforeRevocation.parent);
+          expect(
+            loadSessionEntry({ agentId: "main", sessionKey: scenario.sessionKey }),
+          ).toMatchObject({
+            abortedLastRun: true,
+            goal: {
+              status: "paused",
+              lastStatusNote: "Paused after an interruption. Resume to continue.",
+            },
+          });
         } else {
           expect(scenario.parentCalls).toBe(7);
         }

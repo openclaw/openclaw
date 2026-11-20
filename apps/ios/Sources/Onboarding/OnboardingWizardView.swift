@@ -806,8 +806,7 @@ extension OnboardingWizardView {
             "",
             text: text,
             prompt: Text(placeholder)
-                .font(OpenClawType.subhead)
-                .foregroundStyle(.tertiary))
+                .font(OpenClawType.subhead))
             .font(OpenClawType.subhead)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()

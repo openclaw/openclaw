@@ -38,7 +38,10 @@ import type {
   GatewaySessionTitleModelSelection,
 } from "./session-create-service.types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
-import { authorizeSessionPermissionModeChange } from "./session-permission-authorization.js";
+import {
+  prepareSessionPermissionModeAuthorization,
+  readSessionPermissionAuthority,
+} from "./session-permission-authorization.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 
 /** Creation and adoption retain the settings mutation owner's native permission guard. */
@@ -46,6 +49,10 @@ export async function prepareSessionCreateRuntimeSelection(params: {
   request: Pick<
     CreateGatewaySessionParams,
     | "cfg"
+    | "getCurrentConfig"
+    | "commitGuard"
+    | "readSessionSharing"
+    | "getCurrentSessionAccessCap"
     | "model"
     | "agentRuntime"
     | "requestingOperatorScopes"
@@ -85,24 +92,6 @@ export async function prepareSessionCreateRuntimeSelection(params: {
     validateModelSelection: params.validateModelSelection,
     ...(context ? { placement: { context, sessionKey } } : {}),
   });
-  const validatePermissionAuthority = () =>
-    authorizeSessionPermissionModeChange({
-      existingEntry,
-      permissionMode: entry.permissionMode,
-      scopes: params.operatorAuthority?.scopes ?? request.requestingOperatorScopes,
-      profileId:
-        params.operatorAuthority?.profileId ??
-        (request.operatorRoleActor?.kind === "operator"
-          ? request.operatorRoleActor.profileId
-          : request.requestingOperatorProfileId),
-    });
-  const authorityError = validatePermissionAuthority();
-  if (authorityError) {
-    if (selection.ok) {
-      selection.release?.();
-    }
-    return { ok: false, error: authorityError };
-  }
   if (
     !selection.ok ||
     (entry.permissionMode === existingEntry?.permissionMode &&
@@ -110,7 +99,35 @@ export async function prepareSessionCreateRuntimeSelection(params: {
   ) {
     return selection;
   }
+  let permissionAuthority:
+    | Awaited<ReturnType<typeof prepareSessionPermissionModeAuthorization>>
+    | undefined;
+  const release = () => {
+    permissionAuthority?.release();
+    selection.release?.();
+  };
   try {
+    const getCurrentConfig = request.getCurrentConfig ?? (() => request.cfg);
+    permissionAuthority = await prepareSessionPermissionModeAuthorization({
+      ...params,
+      permissionMode: entry.permissionMode,
+      getCurrentConfig,
+      readSharing: request.readSessionSharing,
+      assertCurrent: request.commitGuard,
+      readAuthority: () =>
+        readSessionPermissionAuthority(getCurrentConfig(), {
+          ...request,
+          operatorAuthority: params.operatorAuthority,
+        }),
+    });
+    request.commitGuard?.();
+    const validatePermissionAuthority = () =>
+      permissionAuthority!.validate(existingEntry, entry.permissionMode);
+    const authorityError = validatePermissionAuthority();
+    if (authorityError) {
+      release();
+      return { ok: false, error: authorityError };
+    }
     // Keep execution runtime imports lazy for creation without permission changes.
     const { prepareSessionPatchSandboxChange } =
       await import("./server-methods/sessions-patch-sandbox.runtime.js");
@@ -129,12 +146,12 @@ export async function prepareSessionCreateRuntimeSelection(params: {
       validatePermissionAuthority() || validatePermissions() || selection.validate?.();
     const error = validate();
     if (error) {
-      selection.release?.();
+      release();
       return { ok: false, error };
     }
-    return { ...selection, validate };
+    return { ...selection, validate, release };
   } catch (error) {
-    selection.release?.();
+    release();
     throw error;
   }
 }
@@ -298,7 +315,7 @@ export function resolveSessionCreationCommitGuard(
         throw new Error(error.message);
       }
       for (const selection of selections) {
-        selection?.assertCurrent();
+        selection?.assertCurrent?.();
       }
     }
     // Creation restrictions end at commit; a later policy change cannot block this chat's turn.

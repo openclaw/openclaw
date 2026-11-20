@@ -19,6 +19,7 @@ export function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderC
     profileOrderLocks: {},
     credentialProviderIds: ["openai"],
     logoutTargets: [],
+    configKeys: [],
     configApiKeys: [],
     modelCount: 1,
     availableModelCount: 1,

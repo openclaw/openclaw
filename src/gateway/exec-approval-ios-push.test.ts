@@ -14,7 +14,10 @@ import {
 } from "./exec-approval-ios-push.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
-import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
+import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+} from "./openclaw-id/tunnel-principal.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import type { PreparedSessionMutationFacts } from "./session-sharing-target.types.js";
 
@@ -105,7 +108,7 @@ function mockPairedIosOperators(...paired: ReturnType<typeof pairedIosOperator>[
   mocks.pairing.mockResolvedValue({ pending: [], paired });
 }
 
-function mockPairedIosOperator(scopes: OperatorScope[] = ["operator.admin"]) {
+function mockPairedIosOperator(scopes = approvalScopes) {
   mockPairedIosOperators(pairedIosOperator(scopes));
 }
 
@@ -123,12 +126,14 @@ function mockIdMemberIosDevice() {
     accountId: "member-account",
     role: "member",
   }));
+  setOpenClawIdMemberAccountLookup((accountId) => accountId === "member-account");
   mocks.linkedProfiles.mockResolvedValue({
     "member-account": { id: "member-profile", displayName: null, email: null },
   });
   const profile: UserProfileIdentity = {
     profileId: "member-profile",
-    role: "admin",
+    role: "member",
+    openclawIdAccountIds: ["member-account"],
     aliases: new Set(["member-profile", "member-profile-alias"]),
   };
   mocks.profiles.mockResolvedValue({
@@ -232,8 +237,8 @@ describe("createExecApprovalIosPushDelivery", () => {
     await expectRejectedRequest("approval-no-read");
   });
 
-  it("does not target unprofiled non-admin devices even with approval scope", async () => {
-    mockPairedIosOperator(approvalScopes);
+  it("does not target iOS devices outside the request's reviewer binding", async () => {
+    mockPairedIosOperator();
     const delivery = createExecApprovalIosPushDelivery({ log: {} });
     expect(
       await delivery.handleRequested({
@@ -305,12 +310,14 @@ describe("createExecApprovalIosPushDelivery", () => {
   afterEach(() => {
     setDeviceTokenBindingOwner(undefined);
     setOpenClawIdTunnelPrincipalLookup(undefined);
+    setOpenClawIdMemberAccountLookup(undefined);
     clearRuntimeConfigSnapshot();
   });
 
   it("caps an ID device's fresh approval pushes without reducing independent local grants", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
+        openclawId: { enabled: true },
         roles: {
           definitions: {
             member: { scopes: ["operator.admin"], sessions: { others: "write" }, agents: "*" },
@@ -350,9 +357,10 @@ describe("createExecApprovalIosPushDelivery", () => {
   it("rechecks ID policy after APNs preparation while preserving local delivery and cleanup", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
+        openclawId: { enabled: true },
         roles: {
           definitions: {
-            member: { scopes: ["operator.admin"], sessions: { others: "write" }, agents: "*" },
+            member: { scopes: approvalScopes, sessions: { others: "write" }, agents: "*" },
           },
         },
       },
@@ -360,8 +368,8 @@ describe("createExecApprovalIosPushDelivery", () => {
     setRuntimeConfigSnapshot(cfg);
     mockIdMemberIosDevice();
     mockPairedIosOperators(
-      pairedIosOperator(["operator.admin"], "id-ios"),
-      pairedIosOperator(["operator.admin"], "local-ios"),
+      pairedIosOperator(approvalScopes, "id-ios"),
+      pairedIosOperator(approvalScopes, "local-ios"),
     );
     const authStarted = createDeferred();
     const authReady = createDeferred();
@@ -399,7 +407,10 @@ describe("createExecApprovalIosPushDelivery", () => {
       expect(sent).toEqual(["local-ios"]);
 
       await delivery.handleResolved({ id: request.id });
-      expect(mocks.execWake.mock.calls.map(([push]) => push.nodeId)).toEqual(["local-ios"]);
+      expect(mocks.execWake.mock.calls.map(([push]) => push.nodeId)).toEqual([
+        "id-ios",
+        "local-ios",
+      ]);
     } finally {
       authReady.resolve();
       await requested;
@@ -407,49 +418,52 @@ describe("createExecApprovalIosPushDelivery", () => {
   });
 
   it.each([
-    {
-      audience: "creator alias",
-      creatorId: "member-profile-alias",
-      withSession: true,
-      visible: true,
-    },
-    { audience: "another profile", creatorId: "other-profile", withSession: true, visible: false },
-    { audience: "missing source", creatorId: "other-profile", withSession: false, visible: false },
-    {
-      audience: "own turn with write",
-      creatorId: "other-profile",
-      withSession: true,
-      raiserId: "member-profile",
-      others: "write",
-      visible: true,
-    },
-    {
-      audience: "another turn with write",
-      creatorId: "other-profile",
-      withSession: true,
-      raiserId: "unrelated",
-      others: "write",
-      visible: false,
-    },
-    {
-      audience: "unattributed turn with write",
-      creatorId: "other-profile",
-      withSession: true,
-      others: "write",
-      visible: false,
-    },
+    ...[
+      {
+        audience: "creator alias",
+        creatorId: "member-profile-alias",
+        withSession: true,
+        visible: true,
+      },
+      {
+        audience: "another profile",
+        creatorId: "other-profile",
+        withSession: true,
+        visible: false,
+      },
+      {
+        audience: "missing source",
+        creatorId: "other-profile",
+        withSession: false,
+        visible: false,
+      },
+    ].map((row) =>
+      Object.assign(row, {
+        others: "none" as const,
+        member: false,
+        raiserId: undefined as string | undefined,
+      }),
+    ),
+    ...(["invited", "write"] as const).flatMap((others) =>
+      ["member-profile", "unrelated", undefined].map((raiserId) => ({
+        audience: `${others} member / requester ${raiserId ?? "unattributed"}`,
+        creatorId: "other-profile",
+        withSession: true,
+        others,
+        member: true,
+        raiserId,
+        visible: others === "write" || raiserId === "member-profile",
+      })),
+    ),
   ])(
     "uses the ID session ceiling for a $audience approval despite a linked admin role",
-    async ({ creatorId, withSession, visible, raiserId, others }) => {
+    async ({ creatorId, withSession, visible, others, member, raiserId }) => {
       setRuntimeConfigSnapshot({
         gateway: {
+          openclawId: { enabled: true },
           roles: {
             definitions: {
-              member: {
-                scopes: approvalScopes,
-                sessions: { others: others === "write" ? "write" : "none" },
-                agents: "*",
-              },
+              member: { scopes: approvalScopes, sessions: { others }, agents: "*" },
             },
           },
         },
@@ -471,7 +485,7 @@ describe("createExecApprovalIosPushDelivery", () => {
             createdActor: { type: "human", source: "profile", id: creatorId },
           },
         },
-        membership: new Set(),
+        membership: new Set(member ? ["member-profile"] : []),
       };
       mocks.sessionFacts.mockResolvedValue({
         storageTarget: {
@@ -504,7 +518,7 @@ describe("createExecApprovalIosPushDelivery", () => {
   describe("createPluginApprovalIosPushDelivery", () => {
     it("targets only paired iOS operators with approval and read scopes", async () => {
       mockPairedIosOperators(
-        pairedIosOperator(["operator.admin"], "ios-approved"),
+        pairedIosOperator(approvalScopes, "ios-approved"),
         pairedIosOperator(["operator.read"], "ios-read-only"),
       );
 

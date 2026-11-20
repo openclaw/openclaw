@@ -113,6 +113,90 @@ const stableCauses = [
   "macos-swift finished with failure (selected=true)",
 ];
 const failedJob = { status: "completed", conclusion: "failure" };
+it.each([
+  "checks-ui-e2e-real-gateway (1/2)",
+  "checks-node-compact-large-36 (node)",
+  "checks-node-compact-large-41 (node)",
+])("keeps the November 19 shard waiver candidate-scoped: %s", (name) => {
+  const observedChild = { key: "normalCi", jobs: [{ ...failedJob, id: 1, name }] };
+  const policy = (candidateSha: string) =>
+    evaluateReleaseChildPolicy({
+      child: observedChild,
+      targetVersion: "2026.11.6",
+      targetSha: candidateSha,
+    });
+  expect(policy("06afb10d3272cc9deaf38ca6a3b7b839d5935638").waivers).toHaveLength(1);
+  expect(policy("0000000000000000000000000000000000000000").waivers).toHaveLength(0);
+});
+
+describe("2026.11.6 observed OpenCode Go availability failure", () => {
+  const candidateSha = "06afb10d3272cc9deaf38ca6a3b7b839d5935638";
+  const leaf = {
+    ...failedJob,
+    id: 135459584818,
+    name: "Run repo/live E2E validation / Native live suites (Native live gateway profiles OpenCode Go smoke)",
+  };
+  const aggregate = {
+    ...failedJob,
+    id: 2,
+    name: "Verify release checks",
+    steps: [{ name: "Verify release check results", conclusion: "failure" }],
+  };
+  const observed = {
+    ...failedJob,
+    key: "releaseChecksIndependent",
+    runId: "44494417449",
+    runAttempt: 1,
+    jobs: [leaf, aggregate],
+  };
+
+  it("accepts only the exact candidate across runs and attempts without rewriting failure", () => {
+    for (const execution of [
+      observed,
+      { ...observed, runAttempt: 2 },
+      { ...observed, runId: "44494417450" },
+    ]) {
+      expect(terminalPolicyPass(execution, "2026.11.6", candidateSha)).toBe(true);
+    }
+    expect(observed.conclusion).toBe("failure");
+    expect(observed.jobs.every((job) => job.conclusion === "failure")).toBe(true);
+    for (const rejected of [
+      { ...observed, key: "releaseChecksCandidate" },
+      { ...observed, jobs: [] },
+      { ...observed, jobs: [aggregate] },
+      { ...observed, jobs: [...observed.jobs, { ...leaf, name: "Unrelated live failure" }] },
+      ...["cancelled", "timed_out", null].map((conclusion) =>
+        Object.assign({}, observed, { jobs: [{ ...leaf, conclusion }, aggregate] }),
+      ),
+      { ...observed, jobs: [{ ...leaf, status: "in_progress" }, aggregate] },
+    ]) {
+      expect(terminalPolicyPass(rejected, "2026.11.6", candidateSha)).toBe(false);
+    }
+    expect(terminalPolicyPass(observed, "2026.11.7", candidateSha)).toBe(false);
+    expect(terminalPolicyPass(observed, "2026.11.6", "a".repeat(40))).toBe(false);
+  });
+
+  it("retains exact aggregate cause and complete evidence requirements", async () => {
+    const policy = evaluateReleaseChildPolicy({
+      child: observed,
+      targetVersion: "2026.11.6",
+      targetSha: candidateSha,
+    });
+    const cause = "##[error]live_repo_e2e_release_checks ended with failure";
+    await expect(
+      validateReleaseWaiverAggregates({ policy, jobs: observed.jobs, getJobLog: () => cause }),
+    ).resolves.toBeUndefined();
+    for (const log of ["", cause + "\n##[error]artifact integrity failed"]) {
+      await expect(
+        validateReleaseWaiverAggregates({ policy, jobs: observed.jobs, getJobLog: () => log }),
+      ).rejects.toThrow("unwaived failure");
+    }
+    await expect(
+      validateReleaseWaiverAggregates({ policy, jobs: [leaf], getJobLog: () => cause }),
+    ).rejects.toThrow("missing or incomplete");
+  });
+});
+
 const stableJobs = stableNames.map((name, id) => ({ ...failedJob, id, name }));
 const gate = {
   id: 10,
@@ -678,7 +762,7 @@ describe("beta.1 exact FRV11 test failures", () => {
       steps: [{ name: "Run Node test shard", conclusion: "failure" }],
     };
     const policy = evaluateReleaseChildPolicy({
-      child: { ...child, jobs: [leaf, gate] },
+      child: { ...child, runId: "44290065577", runAttempt: 1, jobs: [leaf, gate] },
       targetVersion: "2026.11.10-beta.1",
     });
     const log = frv11Log(row);
@@ -729,4 +813,291 @@ describe("beta.1 exact FRV11 test failures", () => {
       }).waivers,
     ).toEqual([]);
   });
+});
+
+// Accepted FRV16/17 jobs follow the frozen release/candidate, not a run or attempt.
+describe("beta.1 release-scoped FRV16/17 grants", () => {
+  const targetVersion = "2026.11.10-beta.1";
+  const candidateSha = "995f9059b6e6fe3ba0865a3354924fd2bcbfceea";
+  const ciNames = [
+    "checks-ui-e2e (2/13)",
+    "checks-node-compact-small-38 (node)",
+    ...[15, 23, 3, 32, 11, 41, 18, 30, 17, 21, 43, 20, 19].map(
+      (n) => "checks-node-compact-large-" + n + " (node)",
+    ),
+    "checks-node-compact-small-12 (node)",
+    "checks-node-compact-large-39 (bun)",
+    "checks-ui-e2e (4/13)",
+  ];
+  const ci = {
+    ...child,
+    runId: "44465881623",
+    runAttempt: 1,
+    jobs: [
+      ...ciNames.map((name, id) => ({
+        status: "completed",
+        conclusion: "failure",
+        id: 100 + id,
+        name,
+      })),
+      gate,
+    ],
+  };
+  const qaGate = {
+    ...gate,
+    id: 20,
+    name: "Verify QA Lab runtime-pair lanes",
+    steps: [{ name: "Verify runtime-pair lane statuses", conclusion: "failure" }],
+  };
+  const releaseGate = {
+    ...gate,
+    id: 21,
+    name: "Verify release checks",
+    steps: [{ name: "Verify release check results", conclusion: "failure" }],
+  };
+  const qa = {
+    ...child,
+    key: "releaseChecksIndependent",
+    runId: "44465878180",
+    runAttempt: 1,
+    jobs: [
+      { ...failedJob, id: 19, name: "Run QA Lab runtime-pair lane (core)" },
+      qaGate,
+      releaseGate,
+    ],
+  };
+
+  it.each([ci, qa])(
+    "accepts named $key failures across runs and attempts and retains raw conclusions",
+    (selected) => {
+      expect(terminalPolicyPass(selected, targetVersion, candidateSha)).toBe(true);
+      expect(() =>
+        validateReleaseManifestAdvisoryJobs({
+          targetSha: candidateSha,
+          validationInputs: { targetVersion },
+          childEvidence: { [selected.key]: selected },
+        }),
+      ).not.toThrow();
+      expect(selected.jobs.every((job) => job.conclusion === "failure")).toBe(true);
+      expect(releaseQualificationExemptions(targetVersion, "beta")).toEqual([]);
+      for (const changed of [
+        { targetVersion: "2026.11.10-beta.2", targetSha: candidateSha, child: selected },
+        { targetVersion, targetSha: "a".repeat(40), child: selected },
+      ]) {
+        expect(evaluateReleaseChildPolicy(changed).waivers).toEqual([]);
+        expect(terminalPolicyPass(changed.child, changed.targetVersion, changed.targetSha)).toBe(
+          false,
+        );
+      }
+      for (const execution of [
+        { ...selected, runId: "44465881624", runAttempt: 1 },
+        { ...selected, runAttempt: 2 },
+        { ...selected, runId: undefined, runAttempt: undefined },
+      ]) {
+        expect(terminalPolicyPass(execution, targetVersion, candidateSha)).toBe(true);
+        expect(() =>
+          validateReleaseManifestAdvisoryJobs({
+            targetSha: candidateSha,
+            validationInputs: { targetVersion },
+            childEvidence: { [execution.key]: execution },
+          }),
+        ).not.toThrow();
+      }
+      for (const conclusion of ["cancelled", "timed_out", null]) {
+        expect(
+          terminalPolicyPass(
+            { ...selected, jobs: [{ ...selected.jobs[0], conclusion }] },
+            targetVersion,
+            candidateSha,
+          ),
+        ).toBe(false);
+      }
+      expect(
+        terminalPolicyPass({ ...selected, status: "in_progress" }, targetVersion, candidateSha),
+      ).toBe(false);
+      expect(terminalPolicyPass({ ...selected, jobs: [] }, targetVersion, candidateSha)).toBe(
+        false,
+      );
+      expect(
+        terminalPolicyPass(
+          {
+            ...selected,
+            jobs: [
+              ...selected.jobs,
+              { ...failedJob, id: 99, name: "Seal artifact producer receipt" },
+            ],
+          },
+          targetVersion,
+          candidateSha,
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("requires exact CI cause union and rejects missing or non-policy aggregate steps", async () => {
+    const policy = evaluateReleaseChildPolicy({
+      child: ci,
+      targetVersion,
+      targetSha: candidateSha,
+    });
+    const log = [
+      "##[error]checks-ui-e2e finished with failure (selected=true)",
+      "##[error]checks-node-core-test-nondist-shard finished with failure (selected=true)",
+    ].join("\n");
+    await expect(
+      validateReleaseWaiverAggregates({ policy, jobs: ci.jobs, getJobLog: () => log }),
+    ).resolves.toBeUndefined();
+    for (const invalid of ["", log.split("\n")[0], log + "\n##[error]artifact digest mismatch"]) {
+      await expect(
+        validateReleaseWaiverAggregates({ policy, jobs: ci.jobs, getJobLog: () => invalid }),
+      ).rejects.toThrow("unwaived failure");
+    }
+    for (const aggregateJobs of [
+      ci.jobs.filter((job) => job !== gate),
+      [...ci.jobs.slice(0, -1), { ...gate, status: "in_progress" }],
+      [...ci.jobs.slice(0, -1), { ...gate, conclusion: "cancelled" }],
+      [...ci.jobs.slice(0, -1), { ...gate, steps: [{ name: "Checkout", conclusion: "failure" }] }],
+    ]) {
+      await expect(
+        validateReleaseWaiverAggregates({ policy, jobs: aggregateJobs, getJobLog: () => log }),
+      ).rejects.toThrow();
+    }
+  });
+
+  it("never treats a silent QA status-check failure as an unrestricted aggregate", async () => {
+    const policy = evaluateReleaseChildPolicy({
+      child: qa,
+      targetVersion,
+      targetSha: candidateSha,
+    });
+    const releaseLog = "##[error]qa_lab_runtime_parity_release_checks ended with failure";
+    for (const log of [
+      "",
+      "##[error]Process completed with exit code 1.",
+      "##[error]artifact digest mismatch",
+    ]) {
+      await expect(
+        validateReleaseWaiverAggregates({
+          policy,
+          jobs: qa.jobs,
+          getJobLog: (id) => (id === 20 ? log : releaseLog),
+        }),
+      ).rejects.toThrow("differs from reviewed evidence");
+    }
+    // Exercise digest validation with synthetic bytes; live original-log proof is separate.
+    const { createHash } = await import("node:crypto");
+    const reviewedLog = "synthetic exact original aggregate log";
+    const exactPolicy = {
+      ...policy,
+      aggregates: policy.aggregates.map((row) =>
+        row.jobName === qaGate.name
+          ? Object.assign({}, row, {
+              logSha256: createHash("sha256").update(reviewedLog).digest("hex"),
+            })
+          : row,
+      ),
+    };
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy: exactPolicy,
+        jobs: qa.jobs,
+        getJobLog: (id) => (id === 20 ? reviewedLog : releaseLog),
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy: exactPolicy,
+        jobs: qa.jobs,
+        getJobLog: (id) => (id === 20 ? reviewedLog : releaseLog + "\n##[error]unknown cause"),
+      }),
+    ).rejects.toThrow("unwaived failure");
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy: exactPolicy,
+        jobs: qa.jobs.map((job) =>
+          job.id === 20
+            ? Object.assign({}, job, {
+                steps: [...qaGate.steps, { name: "Download artifacts", conclusion: "failure" }],
+              })
+            : job,
+        ),
+        getJobLog: () => reviewedLog,
+      }),
+    ).rejects.toThrow("non-policy failure");
+  });
+});
+
+it("binds the repaired 2026.11.6 trajectory exception to its exact candidate and completed leaf", () => {
+  const repairedSha = "06afb10d3272cc9deaf38ca6a3b7b839d5935638";
+  const leaf = {
+    id: 11624,
+    name: "checks-node-compact-large-24 (node)",
+    status: "completed",
+    conclusion: "failure",
+  };
+  const input = {
+    targetVersion: "2026.11.6",
+    targetSha: repairedSha,
+    child: { ...child, jobs: [leaf] },
+  };
+  const policy = evaluateReleaseChildPolicy(input);
+  expect(policy.waivers).toHaveLength(1);
+  expect(policy.waivers[0]?.testFailures?.signatures).toMatchObject([
+    {
+      kind: "vitest",
+      file: "src/trajectory/runtime-store-writer.test.ts",
+    },
+  ]);
+  expect(policy.waivers[0]?.testFailures?.signatures[0]?.test).toContain(
+    "Session reader validation does not match its current physical owner",
+  );
+  expect(
+    evaluateReleaseChildPolicy({ ...input, targetSha: "6f6cfa150a7c77a1d94168f7952c136ef7fac6bb" })
+      .waivers,
+  ).toEqual([]);
+  expect(
+    evaluateReleaseChildPolicy({
+      ...input,
+      child: { ...child, jobs: [{ ...leaf, conclusion: "cancelled" }] },
+    }).waivers,
+  ).toEqual([]);
+});
+
+it("accepts only the authorized Node23 cleanup failure on its exact candidate", async () => {
+  const leaf = {
+    id: 23,
+    name: "checks-node-compact-large-23 (node)",
+    status: "completed",
+    conclusion: "failure",
+    steps: [{ name: "Run Node test shard", conclusion: "failure" }],
+  };
+  const input = {
+    targetVersion: "2026.11.6",
+    targetSha: "06afb10d3272cc9deaf38ca6a3b7b839d5935638",
+    child: { ...child, jobs: [leaf] },
+  };
+  const policy = evaluateReleaseChildPolicy(input);
+  const log = frv11Log({
+    jobName: leaf.name,
+    file: "src/gateway/worker-environments/live-events-settlement.test.ts",
+    title: "worker live event settlement joins writes before RPC acknowledgment (revoked)",
+    assertion:
+      "Error: ENOTEMPTY: directory not empty, rmdir '/tmp/oc-vt-qFaVWf/oc-vt-0XBHte/openclaw-worker-service-2laeTn'",
+  });
+  const verify = (text: string) =>
+    validateReleaseWaiverAggregates({
+      policy,
+      jobs: [
+        leaf,
+        { id: 24, name: "openclaw/ci-gate", status: "completed", conclusion: "success" },
+      ],
+      getJobLog: () => text,
+    });
+  await expect(verify(log)).resolves.toBeUndefined();
+  await expect(verify(log.replace("ENOTEMPTY", "EACCES"))).rejects.toThrow("unwaived");
+  await expect(
+    verify(log + " FAIL other.test.ts > unexpected\nError: unexpected\n"),
+  ).rejects.toThrow("unwaived");
+  await expect(verify(log.slice(0, log.indexOf("[shard:completion]")))).rejects.toThrow("unwaived");
+  expect(evaluateReleaseChildPolicy({ ...input, targetSha: "0".repeat(40) }).waivers).toEqual([]);
 });

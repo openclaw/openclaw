@@ -51,8 +51,6 @@ export function canAccessOperatorApproval(params: {
     reviewerDeviceIds?: readonly string[] | null;
   };
   allowApprovalRuntime?: boolean;
-  /** Established by the common creator/raiser session boundary. */
-  hasSessionAccess?: boolean;
 }): boolean {
   const broadlyAuthorized = params.allowApprovalRuntime
     ? canResolveOperatorApproval(params.client)
@@ -68,8 +66,5 @@ export function canAccessOperatorApproval(params: {
     return true;
   }
 
-  if (params.hasSessionAccess && params.client?.authenticatedUserProfile) {
-    return true;
-  }
   return matchesOperatorApprovalReviewerBinding(params.binding, params.client?.connect?.device?.id);
 }

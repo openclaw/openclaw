@@ -20,12 +20,13 @@ or when a deployment points `appServer.command` at a different Codex binary.
 Availability can also be account-scoped. Use `/codex models` on a running
 gateway to see the live catalog for that harness and account.
 
-The OpenAI provider's ChatGPT subscription list is separate. ChatGPT hides a
-model from clients older than the model's minimum Codex version, so OpenClaw
-lists as the newest stable `@openai/codex` published on npm, refreshed every six
-hours and never older than the bundled version. A newly launched model therefore
-appears in the picker without an OpenClaw release. If the registry cannot be
-reached, OpenClaw lists as the bundled version.
+The OpenAI provider's ChatGPT subscription list is separate. It sends the latest
+published stable `@openai/codex` version from npm as `client_version`, never lower
+than the bundled Codex version. Successful lookups are cached for six hours.
+If the registry is unavailable, times out after one second, or returns an
+invalid version, listing uses the bundled version and retries the lookup on the
+next discovery attempt. This does not change Responses attribution headers or
+select, install, or update the Codex binary.
 
 New OpenAI models can require a newer Codex version than the binary your
 Codex harness runs. For example, GPT-6.2 requires Codex `0.166.0`. A Codex-harness
@@ -44,10 +45,14 @@ and support the required input modalities. Listing does not prove account
 entitlement.
 
 Native discovery is demand-driven. Gateway startup publishes configured model
-hints without starting an app-server for each agent. Opening an agent's model
-picker or catalog, creating a Codex session, running a turn, or requesting native
-auth/status information starts that agent's client when needed. Before discovery,
-native account readiness is unknown; configured hints are not proof of sign-in.
+hints without starting an app-server for each agent. The default agent keeps its
+background catalog warmup when it has a configured primary model, an explicit
+runtime policy, or a prepared credential for its default provider. An empty
+installation's built-in fallback model does not trigger that warmup. Opening an
+agent's model picker or catalog, creating a Codex session, running a turn, or
+requesting native auth/status information starts that agent's client when needed.
+Before discovery, native account readiness is unknown; configured hints are not
+proof of sign-in.
 First use of an idle agent can take a few seconds for the cold start.
 
 Discovery reads `model/list` and `account/read` from the same scoped

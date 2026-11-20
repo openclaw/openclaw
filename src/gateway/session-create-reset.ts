@@ -78,6 +78,8 @@ async function resetGatewaySessionForCreation(
     key: canonicalParentSessionKey,
     operatorAuthority: (await params.operatorAuthority)?.authority,
     requestingOperatorScopes: params.requestingOperatorScopes,
+    readSessionSharing: params.readSessionSharing,
+    getCurrentSessionAccessCap: params.getCurrentSessionAccessCap,
     ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
     ...(params.requestingOperatorProfileId
       ? { requestingOperatorProfileId: params.requestingOperatorProfileId }

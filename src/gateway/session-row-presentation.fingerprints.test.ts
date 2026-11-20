@@ -21,7 +21,7 @@ import {
   prepareSessionRowDeltaFields,
 } from "./session-row-delta-fields.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
-import { reuseSessionRowFields } from "./session-row-identity.js";
+import { freezeSessionRow } from "./session-row-identity.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import {
   createTestProjection,
@@ -254,9 +254,15 @@ it("retains nested publication facts across real transcript writes without hidin
       { a: ["a"], b: ["b"] },
       { b: ["b"], a: ["a"] },
     ]) {
-      record.materialized = replaceSessionRowFacts(record.materialized, {
-        toolOverrides: { mcpToolsDeny },
-      });
+      {
+        using keys = vi.spyOn(Object, "keys");
+        record.materialized = replaceSessionRowFacts(record.materialized, {
+          toolOverrides: { mcpToolsDeny },
+        });
+        expect(keys.mock.calls.some(([value]) => Reflect.get(value, "key") === query.key)).toBe(
+          false,
+        );
+      }
       expect(JSON.stringify((await read())[0]!.row.toolOverrides)).toBe(
         JSON.stringify({ mcpToolsDeny }),
       );
@@ -274,8 +280,13 @@ it.each([
     updatedAt: 0,
     pluginExtensions: [{ pluginId: "fixture", namespace: "values", value }],
   });
-  const previous = row(before);
+  const previous = freezeSessionRow(row(before));
   const next = row(after);
   const expected = JSON.stringify(next);
-  expect(JSON.stringify(reuseSessionRowFields(next, previous))).toBe(expected);
+  expect(JSON.stringify(freezeSessionRow(next, previous))).toBe(expected);
+  expect(Object.isFrozen(next)).toBe(true);
+  expect(Object.isFrozen(next.pluginExtensions)).toBe(true);
+  expect(Object.isFrozen(next.pluginExtensions?.[0])).toBe(true);
+  expect(Object.isFrozen(after)).toBe(true);
+  expect(Reflect.set(after, "length", 3)).toBe(false);
 });
