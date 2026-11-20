@@ -10,6 +10,7 @@ import {
   hashRuntimeConfigValue,
   selectLiveRuntimeConfig,
 } from "../../config/runtime-snapshot.js";
+import { bindSystemAgentOperationInput } from "../../gateway/system-agent-operation-input.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { appendConfigPathSegment } from "../../shared/dot-path.js";
@@ -30,13 +31,21 @@ import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedToolConstruction } from "../tool-construction-preparation.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../tool-fs-policy.js";
-import { jsonResult, readToolStringParam, type AnyAgentTool } from "./common.js";
+import { jsonResult, readToolStringParam, ToolInputError, type AnyAgentTool } from "./common.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
-import { callInProcessGatewayTool } from "./in-process-gateway.js";
+import { callInProcessGatewayTool, hasInProcessGatewayToolContext } from "./in-process-gateway.js";
+import { operationForAction, SystemAgentToolSchema } from "./system-agent-tool.js";
 
 const OpenClawDelegateSchema = Type.Object({
-  message: Type.String({ description: "What system must do." }),
-  sessionId: Type.Optional(Type.String({ description: "Continue prior OpenClaw talk." })),
+  ...Type.Omit(SystemAgentToolSchema, ["approved"]).properties,
+  action: Type.Optional(SystemAgentToolSchema.properties.action),
+  // Retain existing callers; the execution boundary requires exactly one input form.
+  message: Type.Optional(
+    Type.String({ description: "Legacy conversational request; prefer a typed action." }),
+  ),
+  sessionId: Type.Optional(
+    Type.String({ description: "Continue a legacy OpenClaw conversation." }),
+  ),
   connectMcpServer: Type.Optional(
     Type.String({ description: "Start shared MCP sign-in for this server after setup finishes." }),
   ),
@@ -225,8 +234,10 @@ export function createOpenClawDelegateToolsForRun(
     // Keep human approval in one model tool call; a yielded cell can outlive its turn.
     catalogMode: "direct-only",
     description:
-      "Run system setup or repair. Natural-language requests use a separate model turn; exact config commands do not need helper inference. " +
-      "Use message 'config set <path> <value>', 'config unset <path>', 'config get <path>', 'config schema <path>', or 'config validate' for deterministic config recovery with the same approval and write checks. " +
+      "Run one typed setup or repair action; you plan the work in this conversation, not a separate assistant. " +
+      "Use action with its named parameters. config_get/config_schema inspect settings; config_set/config_unset/config_set_ref/validate_config use deterministic recovery without helper inference. " +
+      "Other actions preserve their existing live model-owner checks. Mutations use host approval, never an approved argument. " +
+      "Legacy message/sessionId callers remain supported but use the separate conversational helper; do not use that route for new work. " +
       "Prefer your available tools for routine status and session/workspace checks. " +
       "Gateway restart, config, channels, plugins, published ClawHub Template review/install, agents, models/providers, API keys. " +
       "Supports multiple named custom/local model endpoints; provider IDs can be user-defined, while api selects the protocol. " +
@@ -238,8 +249,22 @@ export function createOpenClawDelegateToolsForRun(
     outputSchema: OpenClawDelegateOutputSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = (args ?? {}) as Record<string, unknown>;
-      const message = readToolStringParam(params, "message", { required: true });
-      const sessionId = readToolStringParam(params, "sessionId") ?? defaultSessionId;
+      const action = readToolStringParam(params, "action");
+      if (action && (params.message !== undefined || params.sessionId !== undefined)) {
+        throw new ToolInputError("Use a typed action or a legacy message/sessionId, not both.");
+      }
+      if (action && !hasInProcessGatewayToolContext()) {
+        throw new Error(
+          "Typed OpenClaw actions require the running Gateway’s admitted tool context.",
+        );
+      }
+      const operation = action ? operationForAction(params) : undefined;
+      const message = operation
+        ? undefined
+        : readToolStringParam(params, "message", { required: true });
+      const sessionId = operation
+        ? `operation-${randomUUID()}`
+        : (readToolStringParam(params, "sessionId") ?? defaultSessionId);
       const connectMcpServer = readToolStringParam(params, "connectMcpServer");
       let fullPermission = false;
       try {
@@ -259,28 +284,26 @@ export function createOpenClawDelegateToolsForRun(
             approvalSignals: signal ? [signal] : [],
           }
         : undefined;
-      // The helper admits its own runtime; caller authority remains in its separate scope.
+      const request = {
+        sessionId,
+        ...(message !== undefined ? { message } : {}),
+        delegation: {
+          agentId: options.sessionAgentId,
+          ...(sessionKey ? { sessionKey } : {}),
+          ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
+          ...(turnSourceTo ? { turnSourceTo } : {}),
+          ...(options.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
+          ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+        },
+      };
+      if (operation) {
+        bindSystemAgentOperationInput(request, operation);
+      }
+      // Both inputs pass the same router, source authority and exact approval owner.
       const result = await withGatewayToolCallerIdentity(caller, () =>
         runOutsidePreparedModelRuntimePluginGenerationScope(() =>
           runOutsidePluginRuntimeGenerationScope(() =>
-            callInProcessGatewayTool<OpenClawDelegateResult>(
-              "openclaw.chat",
-              {
-                sessionId,
-                message,
-                delegation: {
-                  agentId: options.sessionAgentId,
-                  ...(sessionKey ? { sessionKey } : {}),
-                  ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
-                  ...(turnSourceTo ? { turnSourceTo } : {}),
-                  ...(options.agentAccountId
-                    ? { turnSourceAccountId: options.agentAccountId }
-                    : {}),
-                  ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
-                },
-              },
-              { signal },
-            ),
+            callInProcessGatewayTool<OpenClawDelegateResult>("openclaw.chat", request, { signal }),
           ),
         ),
       );

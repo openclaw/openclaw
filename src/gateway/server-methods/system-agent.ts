@@ -41,6 +41,7 @@ import {
 } from "../../system-agent/transcript-store.js";
 import { resolveUserPath } from "../../utils.js";
 import { WizardSession } from "../../wizard/session.js";
+import { takeSystemAgentOperationInput } from "../system-agent-operation-input.js";
 import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
@@ -71,10 +72,14 @@ import {
   runSystemAgentGatewayTask,
   verifyGatewaySetupInference,
 } from "./system-agent-execution.js";
-import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
+import { runSystemAgentOperationInput } from "./system-agent-operation.js";
+import {
+  evictOldestSystemAgentSession,
+  resolveSystemAgentSessionOwnerKey,
+} from "./system-agent-session-owner.js";
 import { startSetupActivationWizard } from "./system-agent-setup-wizard.js";
 import { withSystemAgentTemplateRequests } from "./system-agent-templates.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 export type { SystemAgentChatSession };
@@ -89,7 +94,6 @@ export type { SystemAgentChatSession };
  * sanitized conversation is a durable machine-wide logbook; `reset: true`
  * replaces the in-memory session without deleting that transcript.
  */
-const MAX_SYSTEM_AGENT_SESSIONS = 8;
 const SYSTEM_AGENT_SEED_HISTORY_LIMIT = 30;
 const DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT = 100;
 // Covers a provider's 15-minute device-code window plus the post-login probe. Activation of a
@@ -106,34 +110,6 @@ async function acknowledgeDeliveredSystemAgentWelcome(
   }
   await acknowledgeSystemAgentGreetingDelivery({ auditSequence, cacheStore });
   delete session.welcomeAuditSequence;
-}
-
-async function evictOldestSession(
-  sessions: Map<string, SystemAgentChatSession>,
-  context: GatewayRequestContext,
-): Promise<void> {
-  if (sessions.size < MAX_SYSTEM_AGENT_SESSIONS) {
-    return;
-  }
-  let oldestKey: string | undefined;
-  let oldestAt = Number.POSITIVE_INFINITY;
-  for (const [key, session] of sessions) {
-    if (session.lastUsedAt < oldestAt) {
-      oldestAt = session.lastUsedAt;
-      oldestKey = key;
-    }
-  }
-  if (oldestKey !== undefined) {
-    const oldest = sessions.get(oldestKey);
-    if (oldest?.pendingApproval) {
-      await context.systemAgentApprovalManager?.expire(
-        oldest.pendingApproval.id,
-        "session-evicted",
-      );
-    }
-    await oldest?.engine.dispose();
-    sessions.delete(oldestKey);
-  }
 }
 
 export const systemAgentHandlers: GatewayRequestHandlers = {
@@ -397,6 +373,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       return;
     }
     authority.assertCurrent();
+    const operation = takeSystemAgentOperationInput(rawParams);
+    if (operation) {
+      await runSystemAgentOperationInput(options, params, operation);
+      return;
+    }
     const env = { ...process.env };
     let ownedSession: SystemAgentChatSession | undefined;
     // Accepted logbook work belongs to the serialized task, not socket cancellation.
@@ -571,7 +552,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           if (persistWelcome) {
             await persistSystemAgentEngineHistory(engine, welcomeHistoryStart, transcript);
           }
-          await evictOldestSession(sessions, context);
+          await evictOldestSystemAgentSession(sessions, context);
           assertCurrent();
         } catch (error) {
           await engine.dispose().catch(() => undefined);

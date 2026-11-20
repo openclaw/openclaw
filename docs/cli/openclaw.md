@@ -335,11 +335,22 @@ System-agent turns use `agents.defaults.timeoutSeconds`, including `0` to disabl
 the deadline, just like ordinary agent turns. The default is 48 hours; there is
 no separate two-minute cap for setup and repair.
 
-When a regular agent calls its `openclaw` tool, it delegates to this system agent
-through the running Gateway rather than launching the CLI. That adds a separate
-model turn, so routine session and workspace checks should use the agent's
-available tools directly. The embedded system helper does not load workspace
-skill catalogs because it can act only through its built-in system tool.
+A regular agent can submit typed `openclaw` actions through its admitted Gateway
+tool context. The regular agent plans the work; the existing host approval and
+operation owners execute the exact action and return its outcome without a
+second assistant conversation. Config actions retain inference-independent
+recovery. Other actions retain their existing live inference-owner checks, and
+model selection still live-tests the requested route. Typed calls do not copy
+ordinary agent conversation into the machine-wide setup logbook. Applied writes
+still use the existing change audit.
+
+The legacy `message`/`sessionId` tool form and public `openclaw.chat` conversation
+remain supported, as do `setup --message` and `--yes`. Those conversational
+requests can still use a separate model turn. This is a partial backend cutover,
+not removal of the legacy CLI or RPC. Routine session and workspace checks
+should use the agent's available tools directly. The legacy embedded system
+helper does not load workspace skill catalogs because it can act only through
+its built-in system tool.
 
 The host does not parse natural-language requests into operations. Free-form
 messages — including command-looking text and questions such as "why did my

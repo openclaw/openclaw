@@ -436,11 +436,13 @@ export async function prepareDelegatedSystemAgentApproval(params: {
                     params.session.engine.noteAssistantMessage(failedReply.text);
                     return { reply: failedReply, correction: undefined };
                   } finally {
-                    await persistSystemAgentEngineHistory(
-                      params.session.engine,
-                      historyStart,
-                      transcript,
-                    );
+                    if (!params.session.operationInput) {
+                      await persistSystemAgentEngineHistory(
+                        params.session.engine,
+                        historyStart,
+                        transcript,
+                      );
+                    }
                   }
                 }),
               "system-agent:task",

@@ -1,5 +1,33 @@
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, GatewaySystemAgentSession } from "./types.js";
+
+export async function evictOldestSystemAgentSession(
+  sessions: Map<string, GatewaySystemAgentSession>,
+  context: GatewayRequestContext,
+): Promise<void> {
+  if (sessions.size < 8) {
+    return;
+  }
+  let oldestKey: string | undefined;
+  let oldestAt = Number.POSITIVE_INFINITY;
+  for (const [key, session] of sessions) {
+    if (session.lastUsedAt < oldestAt) {
+      oldestAt = session.lastUsedAt;
+      oldestKey = key;
+    }
+  }
+  if (oldestKey !== undefined) {
+    const oldest = sessions.get(oldestKey);
+    if (oldest?.pendingApproval) {
+      await context.systemAgentApprovalManager?.expire(
+        oldest.pendingApproval.id,
+        "session-evicted",
+      );
+    }
+    await oldest?.engine.dispose();
+    sessions.delete(oldestKey);
+  }
+}
 
 export function resolveSystemAgentSessionOwnerKey(params: {
   delegation?: { agentId?: string; sessionKey?: string };

@@ -90,6 +90,34 @@ export type SystemAgentOperatorProposal = {
   description?: string;
 };
 
+/** Requester provenance belongs to the host-selected creation operation. */
+export function recordSystemAgentOperationRequester(
+  operation: SystemAgentOperation,
+  requester?: string,
+): SystemAgentOperation {
+  const requesterAgentId = requester?.trim();
+  return operation.kind === "create-agent" &&
+    requesterAgentId &&
+    operation.requesterAgentId !== requesterAgentId
+    ? { ...operation, requesterAgentId }
+    : operation;
+}
+
+/** These operations already have a deterministic, inference-independent command path. */
+export function isSystemAgentConfigOperation(operation: SystemAgentOperation): boolean {
+  switch (operation.kind) {
+    case "config-get":
+    case "config-schema":
+    case "config-validate":
+    case "config-set":
+    case "config-unset":
+    case "config-set-ref":
+      return true;
+    default:
+      return false;
+  }
+}
+
 /** Interactive actions owned by the host chat, never by delegated model turns. */
 export type SystemAgentNavigationOperation =
   | { kind: "model-setup"; workspace?: string }

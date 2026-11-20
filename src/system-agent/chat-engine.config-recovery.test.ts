@@ -11,6 +11,7 @@ import {
 } from "./chat-engine.test-support.js";
 import * as inferenceGuard from "./inference-guard.js";
 import * as operations from "./operations.js";
+import { createSystemAgentOverviewFixture } from "./overview.fixture.test-support.js";
 
 it("stages and applies an exact config command without preparing helper inference", async () => {
   useTempStateDir();
@@ -141,6 +142,78 @@ it("prepares real inference once for conversational work after an exact read", a
   expect(runAgentTurn).toHaveBeenCalledTimes(2);
   await engine.dispose();
 });
+
+it("executes a typed non-config read without another assistant turn", async () => {
+  const runAgentTurn = vi.fn(async () => ({ text: "must not run" }));
+  const engine = createChatEngine({ operatorApprovalOnly: true, runAgentTurn }, true);
+  try {
+    const reply = await engine.handleOperation({ kind: "models" });
+    expect(reply.text).toContain("Default model:");
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(engine.getPendingOperatorProposal()).toBeNull();
+  } finally {
+    await engine.dispose();
+  }
+});
+
+it.each(["typed", "typed-utility", "legacy"] as const)(
+  "keeps %s creation on its intended conversation surface",
+  async (source) => {
+    useTempStateDir();
+    operationMocks.createAgent.mockResolvedValue({
+      status: "created",
+      agentId: "researcher",
+      name: "researcher",
+      workspace: "/tmp/researcher",
+      agentDir: "/tmp/agent-researcher",
+      bootstrapPending: true,
+      config: {},
+      configPath: "/tmp/openclaw.json",
+    });
+    const runAgentTurn = vi.fn(async () => ({ text: "must not run" }));
+    const engine = createChatEngine(
+      {
+        operatorApprovalOnly: true,
+        runAgentTurn,
+        surface: "gateway",
+        ...(source === "typed-utility"
+          ? {
+              deps: {
+                loadOverview: async () =>
+                  createSystemAgentOverviewFixture({
+                    agents: [
+                      { id: "researcher", isDefault: false, utilityModel: "fixture/utility" },
+                    ],
+                  }),
+              },
+            }
+          : {}),
+      },
+      true,
+    );
+    try {
+      const operation = { kind: "create-agent" as const, agentId: "researcher" };
+      if (source !== "legacy") {
+        await engine.handleOperation(operation);
+      } else {
+        engine.propose(operation);
+      }
+      const proposal = expectDefined(engine.getPendingOperatorProposal(), "creation proposal");
+      const reply = await engine.resolveOperatorApproval("allow-once", proposal.hash);
+      expect(reply).toMatchObject({
+        applied: true,
+        action: source === "legacy" ? "open-tui" : "none",
+      });
+      expect(reply?.text).toContain("Created agent researcher");
+      if (source === "typed-utility") {
+        expect(reply?.text).toContain("needs a primary model");
+      }
+      expect(runAgentTurn).not.toHaveBeenCalled();
+    } finally {
+      await engine.dispose();
+    }
+  },
+);
 
 it.each([
   ["config set gateway.port 19001", "config-set"],
