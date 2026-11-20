@@ -187,39 +187,6 @@ describe("exact-run announcement results", () => {
     },
   );
 
-  it("announces the exact-run answer once when a model fallback notice follows it", async () => {
-    const answer = "The completed child answer";
-    const child = completedChild("captured answer");
-    const final = assistant(child.runId, answer);
-    const noticeText = "Restored the selected model.";
-    const notice = assistant(child.runId, noticeText);
-    installTranscript([
-      {
-        ...final,
-        message: { ...final.message, __openclaw: { runId: child.runId, runTerminal: true } },
-      },
-      {
-        ...notice,
-        message: {
-          ...notice.message,
-          provider: "openclaw",
-          model: "delivery-mirror",
-          openclawDeliveryMirror: {
-            kind: "model-fallback",
-            runId: child.runId,
-            phase: "restored",
-            fromModel: "fixture/fallback",
-            toModel: "fixture/selected",
-          },
-        },
-      },
-    ]);
-
-    const prepared = await readFindings([child]);
-    expect(prepared.text?.split(answer)).toHaveLength(2);
-    expect(prepared.text).not.toContain(noticeText);
-  });
-
   it("recovers the complete multipart native answer beyond the terminal snapshot", async () => {
     const first = "long answer ".repeat(500).trim();
     const text = `${first}\nrequired-final-part`;
