@@ -20,7 +20,7 @@ type ToolUsageOptions = GatewayRpcOpts & {
   limit?: number;
 };
 
-export function boundedInteger(value: string, maximum: number): number {
+function boundedInteger(value: string, maximum: number): number {
   const parsed = parseStrictPositiveInteger(value);
   if (parsed === undefined || parsed > maximum) {
     throw new InvalidArgumentError(`Expected an integer between 1 and ${maximum}.`);
@@ -58,7 +58,7 @@ export function registerToolsCli(program: Command): void {
       command
         .option(
           "--since <days>",
-          "Days of retained history (1?90)",
+          "Days of retained history (1-90)",
           (value) => boundedInteger(value, 90),
           90,
         )
@@ -68,7 +68,7 @@ export function registerToolsCli(program: Command): void {
         .option("--session <key>", "Also inspect this session's frozen ranking snapshot")
         .option(
           "--limit <count>",
-          "Number of top tools (1?100)",
+          "Number of top tools (1-100)",
           (value) => boundedInteger(value, 100),
           20,
         );
