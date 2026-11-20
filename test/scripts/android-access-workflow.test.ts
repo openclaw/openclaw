@@ -42,6 +42,7 @@ it.skipIf(process.platform === "win32").each([4096, 16384])(
   echo 'KVM is available'
 else
   test -f "$RUNNER_TEMP/build-args" || exit 49
+  case " $* " in *" -memory 4096 "*) ;; *) exit 50 ;; esac
 fi`,
     };
     for (const [name, body] of Object.entries(commands)) {

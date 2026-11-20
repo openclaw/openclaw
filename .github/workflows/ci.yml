@@ -6874,7 +6874,8 @@ jobs:
             :app:assemblePlayDebug :app:assemblePlayDebugAndroidTest "${gradle_args[@]}"
           printf 'no\n' | avdmanager create avd --name openclaw-access --package "$SYSTEM_IMAGE" --device pixel_6
           # Bound disposable userdata so the hosted runner can boot after SDK setup.
-          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -partition-size 4096 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
+          # The strict 16 KiB image exhausts its default 2560 MiB during instrumentation.
+          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -memory 4096 -partition-size 4096 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
           emulator_pid=$!
           trust_evidence="$RUNNER_TEMP/android-native-tls-trust"
           mkdir -p "$trust_evidence"
