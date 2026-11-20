@@ -517,15 +517,6 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
         text: "physicalglobal",
         now: Date.UTC(2026, 0, 1),
       });
-      const physical = await transcriptSearch.searchSessionTranscripts({
-        agentId,
-        env: suiteEnv,
-        query: "physicalglobal",
-      });
-      expect(
-        physical.hits.map((hit) => hit.messageId),
-        `physical store ${agentId}`,
-      ).toEqual([`${agentId}-global-hit`]);
     }
     const transport = recallTransport(config);
     const trace = traceRecallSearch();
@@ -534,6 +525,15 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
         query: "physicalglobal",
         recall: { requesterAgentId: agentId, requesterSessionKey: `agent:${agentId}:requester` },
       });
+      const physical = await transcriptSearch.searchSessionTranscripts({
+        agentId,
+        env: suiteEnv,
+        query: "physicalglobal",
+      });
+      expect(
+        physical.hits.map((hit) => hit.messageId),
+        `physical store ${agentId}: ${JSON.stringify(trace)}`,
+      ).toEqual([`${agentId}-global-hit`]);
       expect(
         result.results.map(({ sessionKey, sessionId, messageId }) => ({
           sessionKey,
