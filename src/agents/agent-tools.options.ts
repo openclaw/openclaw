@@ -19,7 +19,10 @@ import type { ResolvedConversationCapabilityProfile } from "./conversation-capab
 import type { DelegationCapability } from "./delegation-capability.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
-import type { OpenClawSharedToolsOptions } from "./openclaw-tools.types.js";
+import type {
+  ContinuationRunToolOptions,
+  OpenClawSharedToolsOptions,
+} from "./openclaw-tools.types.js";
 import type { SandboxContext } from "./sandbox/types.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
@@ -32,7 +35,6 @@ import type {
   ToolSearchToolContext,
 } from "./tool-search.js";
 import type { CronCreatorToolAllowlistEntry, CronToolsAllowCaptureRef } from "./tools/cron-tool.js";
-import type { RequestCompactionToolOpts } from "./tools/request-compaction-tool.js";
 
 /** Public options for building one plugin-owned agent tool surface. */
 export type OpenClawCodingToolsOptions = {
@@ -87,16 +89,6 @@ export type OpenClawCodingToolsOptions = {
   hookChannelId?: string;
   /** Trusted provider role ids for the requester in this group turn. */
   memberRoleIds?: string[];
-  /** Whether this run consumes the continue_delegate staging queue. */
-  drainsContinuationDelegateQueue?: boolean;
-  /** Internal maintenance/model-only runs that cannot schedule post-turn continuation work. */
-  disableContinuationTools?: boolean;
-  /** Callback for continue_work to request a post-turn continuation. */
-  continueWorkOpts?: {
-    requestContinuation: (
-      request: import("./tools/continue-work-tool.js").ContinueWorkRequest,
-    ) => void;
-  };
   /** True when runtimeToolAllowlist is real parent authority that child sessions inherit. */
   inheritRuntimeToolAllowlist?: boolean;
   /** Plugin-owned optional tools granted to this run (e.g. subagent toolsAlsoAllow). */
@@ -125,13 +117,6 @@ export type OpenClawCodingToolsOptions = {
   toolConstructionPlan?: OpenClawCodingToolConstructionPlan;
   /** Ring-zero OpenClaw tool; set only by the OpenClaw agent runner. */
   systemAgentTool?: import("./tools/system-agent-tool.js").SystemAgentToolOptions;
-  /** Continuation: request_compaction tool opts (injected from execution context). */
-  requestCompactionOpts?: {
-    sessionId?: string;
-    getContextUsage: RequestCompactionToolOpts["getContextUsage"];
-    contextUsageOrigin?: RequestCompactionToolOpts["contextUsageOrigin"];
-    triggerCompaction: RequestCompactionToolOpts["triggerCompaction"];
-  };
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
@@ -146,6 +131,7 @@ export type OpenClawCodingToolsOptions = {
   /** Consumed in-process completion capability; never derived from model-facing input. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
 } & OpenClawSharedToolsOptions &
+  ContinuationRunToolOptions &
   Omit<ModelAwareToolContext, "requesterAgentIdOverride"> &
   AgentRunClientContext &
   AgentRunMessageContext &

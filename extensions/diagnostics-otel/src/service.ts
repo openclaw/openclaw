@@ -12,7 +12,10 @@ import {
   TraceIdRatioBasedSampler,
 } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
-import { setContinuationTracer, type Tracer } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  setContinuationTracer,
+  type Tracer,
+} from "openclaw/plugin-sdk/continuation-tracer-runtime";
 import { asFiniteNumberInRange } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";

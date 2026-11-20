@@ -270,6 +270,7 @@ export const AgentDefaultsBaseSchema = z.strictObject({
       requireAgentId: z.boolean().optional(),
     })
     .optional(),
+  /** Agent self-elected turn continuation (CONTINUE_WORK signal). */
   continuation: z
     .strictObject({
       enabled: z.boolean().optional(),
@@ -280,24 +281,72 @@ export const AgentDefaultsBaseSchema = z.strictObject({
       maxDelayMs: z.number().int().nonnegative().optional(),
       maxChainLength: z.number().int().positive().optional(),
       costCapTokens: z.number().int().nonnegative().optional(),
+      /** Maximum number of continue_delegate tool calls per agent turn (default: 5). */
       maxDelegatesPerTurn: z.number().int().positive().optional(),
+      /**
+       * Maximum concurrent undelivered continue_work flows per session
+       * (default: 32). Enforced at enqueue; bounds the multi-continue_work flood
+       * independently of maxChainLength (lineage depth).
+       */
       maxPendingWork: z.number().int().positive().optional(),
+      /**
+       * Busy-skip exponential backoff bounds for the continue_work re-arm (rate-cap,
+       * not a safety invariant). `baseMs` (default 1000) is the first re-arm delay,
+       * multiplied by `factor` (default 2) per consecutive busy-skip up to
+       * `ceilingMs` (default: maxDelayMs). The ceiling is the give-up rate-cap —
+       * the flow keeps deferring at this rate forever, never dropped.
+       */
       busySkipBackoff: z
         .strictObject({
+          /** First re-arm delay in ms (default 1000). */
           baseMs: z.number().int().positive().optional(),
+          /** Maximum re-arm delay / give-up rate-cap in ms (default: maxDelayMs). */
           ceilingMs: z.number().int().positive().optional(),
+          /** Exponential growth factor per consecutive busy-skip (default 2, must be > 1). */
           factor: z.number().gt(1).optional(),
         })
         .optional(),
+      /**
+       * Orphan-reap confidence-gate floor in ms. An unended subagent run is
+       * treated as confident-terminal (reap-eligible) only after it ages past this
+       * cutoff; unset uses the subagent-registry default (2h). The per-run timeout
+       * is always respected. Safety invariants (uncertain→quiesce,
+       * never-wrongful-reap) are fixed — only this confidence window is tunable.
+       */
       orphanReapStaleCutoffMs: z.number().int().positive().optional(),
+      /**
+       * Cross-session delegate targeting policy.
+       * - `"disabled"` (default): delegates can return to the dispatching session or
+       *   use `fanoutMode: "tree"` for lineage-only routing. Non-self `targetSessionKey`,
+       *   `targetSessionKeys` containing any non-self session, and `fanoutMode: "all"`
+       *   are rejected with a tool error.
+       * - `"enabled"`: all targeting modes are available, including cross-session
+       *   `targetSessionKey`, `targetSessionKeys`, and `fanoutMode: "all"`.
+       *
+       * `fanoutMode: "tree"` (lineage-only return) is always allowed regardless of this setting.
+       * Self-targeting (`targetSessionKey` matching the dispatching session) is always allowed.
+       */
       crossSessionTargeting: z
         .union([z.literal("disabled"), z.literal("enabled")])
         .default("disabled"),
+      /**
+       * Context-pressure awareness threshold (exclusive (0.0, 1.0]). When the session's token
+       * usage exceeds this fraction of the context window, a [system:context-pressure]
+       * event is injected pre-run so the agent can elect evacuation. Disabled when
+       * unset. Recommended: 0.8 (80%). On the built-in runtime this only enables the
+       * events: they fire at token points below its resolved compaction trigger, because
+       * compaction there runs at 75% of the window or earlier.
+       */
       contextPressureThreshold: z
         .number()
         .gt(0, "contextPressureThreshold must be > 0 (0 would fire on empty sessions)")
         .max(1)
         .optional(),
+      /**
+       * Early-warning band as a fraction of contextPressureThreshold (default: 0.3125,
+       * which fires at 25% when the threshold is 0.8). Set to 0 to opt out. Applies to
+       * runtimes that keep their own compaction; the built-in runtime ignores it.
+       */
       earlyWarningBand: z.number().min(0).max(1).default(0.3125),
     })
     .refine(

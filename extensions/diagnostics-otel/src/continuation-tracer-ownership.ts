@@ -2,7 +2,7 @@ import {
   getContinuationTracer,
   resetContinuationTracer,
   type Tracer,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
+} from "openclaw/plugin-sdk/continuation-tracer-runtime";
 
 export function resetContinuationTracerIfOwned(expectedTracer: Tracer): boolean {
   if (getContinuationTracer() !== expectedTracer) {

@@ -90,9 +90,8 @@ const RequestCompactionToolSchema = Type.Object({
 // Options
 // ---------------------------------------------------------------------------
 
-export type RequestCompactionToolOpts = {
-  /** Current session key (e.g. "telegram:12345"). */
-  agentSessionKey?: string;
+/** The closures a live runner (or an inventory stub) supplies to request_compaction. */
+export type RequestCompactionRunOpts = {
   /** Session id (the Pi session UUID). */
   sessionId?: string;
   /**
@@ -101,8 +100,6 @@ export type RequestCompactionToolOpts = {
    * Inventory stubs omit this so unowned shared-session events cannot leak.
    */
   ownerAgentId?: string;
-  /** Stable run identifier for this agent invocation. */
-  runId?: string;
   /**
    * Returns the current context usage as a fraction (0-1). A live runner that
    * cannot measure it returns the cause instead; the inventory-only stub used
@@ -128,6 +125,13 @@ export type RequestCompactionToolOpts = {
     /** The committed summary failed its quality audit and was kept as degraded. */
     qualityDegraded?: boolean;
   }>;
+};
+
+export type RequestCompactionToolOpts = RequestCompactionRunOpts & {
+  /** Current session key (e.g. "telegram:12345"). */
+  agentSessionKey?: string;
+  /** Stable run identifier for this agent invocation. */
+  runId?: string;
   enqueueSystemEvent?: typeof enqueueSystemEvent;
 };
 

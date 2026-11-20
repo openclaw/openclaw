@@ -20,43 +20,48 @@ const ContinuationRecipientAuthorityRecipientSchema = z
   })
   .strict();
 
-export const ContinuationRecipientAuthorityBindingSchema = z
-  .discriminatedUnion("selection", [
-    z
-      .object({
-        version: z.literal(1),
-        selection: z.literal("pending"),
-        fanoutMode: z.enum(["tree", "all"]),
-      })
-      .strict(),
-    z
-      .object({
-        version: z.literal(1),
-        selection: z.literal("selected"),
-        recipients: z.array(ContinuationRecipientAuthorityRecipientSchema).max(10_000),
-      })
-      .strict(),
-  ])
-  .superRefine((binding, ctx) => {
-    if (binding.selection !== "selected") {
-      return;
-    }
-    const seen = new Set<string>();
-    for (const [index, recipient] of binding.recipients.entries()) {
-      if (seen.has(recipient.sessionKey)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["recipients", index, "sessionKey"],
-          message: "duplicate continuation recipient authority session key",
-        });
-      }
-      seen.add(recipient.sessionKey);
-    }
-  });
+export type ContinuationRecipientAuthorityBinding =
+  | { version: 1; selection: "pending"; fanoutMode: "tree" | "all" }
+  | {
+      version: 1;
+      selection: "selected";
+      recipients: { sessionKey: string; authority: SessionRecipientAuthority }[];
+    };
 
-export type ContinuationRecipientAuthorityBinding = z.infer<
-  typeof ContinuationRecipientAuthorityBindingSchema
->;
+export const ContinuationRecipientAuthorityBindingSchema: z.ZodType<ContinuationRecipientAuthorityBinding> =
+  z
+    .discriminatedUnion("selection", [
+      z
+        .object({
+          version: z.literal(1),
+          selection: z.literal("pending"),
+          fanoutMode: z.enum(["tree", "all"]),
+        })
+        .strict(),
+      z
+        .object({
+          version: z.literal(1),
+          selection: z.literal("selected"),
+          recipients: z.array(ContinuationRecipientAuthorityRecipientSchema).max(10_000),
+        })
+        .strict(),
+    ])
+    .superRefine((binding, ctx) => {
+      if (binding.selection !== "selected") {
+        return;
+      }
+      const seen = new Set<string>();
+      for (const [index, recipient] of binding.recipients.entries()) {
+        if (seen.has(recipient.sessionKey)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["recipients", index, "sessionKey"],
+            message: "duplicate continuation recipient authority session key",
+          });
+        }
+        seen.add(recipient.sessionKey);
+      }
+    });
 
 export type SessionRecipientAuthorityEpochState =
   | { state: "present"; epoch: string }

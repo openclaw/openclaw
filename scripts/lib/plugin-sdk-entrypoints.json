@@ -70,6 +70,7 @@
   "channel-join-intro-runtime",
   "concurrency-runtime",
   "continuation-test-runtime",
+  "continuation-tracer-runtime",
   "dedupe-runtime",
   "delivery-queue-runtime",
   "file-access-runtime",

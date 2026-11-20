@@ -145,7 +145,7 @@ function wrapOtelSpan(otelSpan: OtelSpan): ContinuationSpan {
 /**
  * Build the OTEL adapter. The returned tracer conforms to the
  * `ContinuationTracer` shape exported from
- * `openclaw/plugin-sdk/diagnostic-runtime` and is suitable for
+ * `openclaw/plugin-sdk/continuation-tracer-runtime` and is suitable for
  * registering via `setContinuationTracer(...)`.
  */
 export function createContinuationOtelTracerAdapter(

@@ -336,7 +336,10 @@ describe("agent request reserved continuation run ids", () => {
   };
   const backendClient = {
     connect: { client: { id: "gateway-client", mode: "backend" }, scopes: ["operator.write"] },
+    internal: { localBackendClient: true },
   };
+  // The declared mode alone is caller-chosen; it carries no server-derived backend fact.
+  const declaredBackendClient = { connect: backendClient.connect };
 
   async function runReservedKeyPreflight(idempotencyKey: string, client: unknown) {
     const respond = vi.fn();
@@ -352,6 +355,7 @@ describe("agent request reserved continuation run ids", () => {
   it.each([
     { caller: "cli", client: cliClient },
     { caller: "anonymous", client: null },
+    { caller: "declared backend", client: declaredBackendClient },
   ])("rejects a continuation idempotency key from a $caller caller", async ({ client }) => {
     const { respond, result } = await runReservedKeyPreflight("continuation:record-1:1", client);
 
