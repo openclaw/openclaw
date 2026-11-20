@@ -134,6 +134,7 @@ it("restores participation and literal commands from durable restart custody", a
     kind: "send" as const,
     profileId: created.profile.id,
     sessionKey: fixture.scope.sessionKey,
+    tools: ["read", "sessions_list"],
   };
   const normalize = chatRequest.normalizeChatSendRequest;
   const stamp = vi
@@ -148,7 +149,11 @@ it("restores participation and literal commands from durable restart custody", a
   expectStarted(await fixture.send(undefined, {}));
   stamp.mockRestore();
   const retained = await retireOriginalInputs(fixture);
-  expect((await readSessionQueuedInputPage(retained.target)).rows).toHaveLength(1);
+  const rows = (await readSessionQueuedInputPage(retained.target)).rows;
+  expect(rows).toHaveLength(1);
+  expect(JSON.parse(rows[0]!.message_json)).toMatchObject({
+    __openclaw: { participationCeiling: ceiling },
+  });
   dispatchInboundMessageMock.mockImplementation(async (input) => {
     expect(input.replyOptions).toMatchObject({
       participationCeiling: ceiling,

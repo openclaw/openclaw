@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { PARTICIPATION_TOOL_ALLOWLIST } from "../agents/participation-ceiling.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
@@ -102,6 +103,7 @@ it("admits only bounded methods for a send invitation with read scope", async ()
                 kind: "send",
                 profileId,
                 sessionKey: scope.sessionKey,
+                tools: PARTICIPATION_TOOL_ALLOWLIST,
               });
             }
             result.authorization?.release?.();
@@ -192,6 +194,23 @@ it("admits only bounded methods for a send invitation with read scope", async ()
     expect(() => lifetime?.assertCurrent()).toThrow();
     lifetime?.release();
     successor.authorization?.release?.();
+    for (const invitedTools of [[], ["read"], ["read", "message", "exec"]]) {
+      guestRole.sessions.invitedTools = invitedTools;
+      const result = await resolveSessionMutationAuthorizationAsync({
+        client,
+        context,
+        method: "chat.send",
+        requestParams: scope,
+        participationRequired: true,
+      });
+      expect(result.error).toBeNull();
+      expect(result.authorization?.participationCeiling?.tools).toEqual(invitedTools);
+      // Configuration mutation after admission cannot change the captured input ceiling.
+      invitedTools.push("sessions_list");
+      expect(result.authorization?.participationCeiling?.tools).not.toContain("sessions_list");
+      result.authorization?.release?.();
+    }
+    delete guestRole.sessions.invitedTools;
     delete guestRole.sessions.maxInvitedAccess;
     const ordinary = await resolveSessionMutationAuthorizationAsync({
       client,

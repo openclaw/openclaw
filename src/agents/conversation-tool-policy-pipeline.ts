@@ -1,6 +1,6 @@
 import { isFrozenTemplateToolAllowPolicy } from "../templates/tool-policy-runtime.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
-import { PARTICIPATION_TOOL_ALLOWLIST } from "./participation-ceiling.js";
+import { participationToolAllowlist } from "./participation-ceiling.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -108,7 +108,7 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       ? [
           {
             ...step(
-              { allow: [...PARTICIPATION_TOOL_ALLOWLIST] },
+              { allow: [...participationToolAllowlist(profile.participationCeiling)] },
               "participation ceiling",
               "runtime",
             ),

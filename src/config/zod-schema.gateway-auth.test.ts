@@ -345,3 +345,37 @@ test.each(["read", "suggest", "send"] as const)(
     }
   },
 );
+
+test("validates invited tools as exact core names only with an invitation ceiling", () => {
+  const sessions = { others: "invited", maxInvitedAccess: "send" };
+  const config = (value: object) =>
+    rolesConfig({ definitions: { guest: { ...validRole, sessions: value } } });
+  for (const invitedTools of [
+    [],
+    ["read"],
+    ["read", "message", "exec"],
+    ["tool_search", "tool_describe", "dispatch_action"],
+    [" read ", "read"],
+  ]) {
+    expect(
+      validated(config({ ...sessions, invitedTools })).gateway?.roles?.definitions.guest?.sessions,
+    ).toEqual({ ...sessions, invitedTools: [...new Set(invitedTools.map((name) => name.trim()))] });
+  }
+  for (const invitedTools of [
+    null,
+    "read",
+    [123],
+    [""],
+    ["*"],
+    ["group:fs"],
+    ["browser"],
+    ["memory_search"],
+    ["plugin_tool"],
+    ["mcp:server:read"],
+  ]) {
+    expect(OpenClawSchema.safeParse(config({ ...sessions, invitedTools })).success).toBe(false);
+  }
+  expect(
+    OpenClawSchema.safeParse(config({ others: "invited", invitedTools: ["read"] })).success,
+  ).toBe(false);
+});

@@ -3,7 +3,10 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
-import type { ParticipationCeiling } from "../agents/participation-ceiling.js";
+import {
+  PARTICIPATION_TOOL_ALLOWLIST,
+  type ParticipationCeiling,
+} from "../agents/participation-ceiling.js";
 import { requiresSessionParticipation } from "./method-scopes.js";
 import { readQueuedParticipationProfile } from "./queued-chat-input-admission.js";
 import { resolveAuthenticatedPersonalGatewayProfileId } from "./server-methods/gateway-personal-caller.js";
@@ -86,7 +89,12 @@ export function createSessionParticipationAuthorization(
           error: errorShape(ErrorCodes.FORBIDDEN, "Participation does not authorize this method."),
         };
       }
-      ceiling = { kind: "send", profileId, sessionKey: target.canonicalKey };
+      ceiling = {
+        kind: "send",
+        profileId,
+        sessionKey: target.canonicalKey,
+        tools: [...(policy?.invitedTools ?? PARTICIPATION_TOOL_ALLOWLIST)],
+      };
       return { error: null };
     },
   };

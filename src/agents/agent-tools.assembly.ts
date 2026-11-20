@@ -71,7 +71,7 @@ import {
   filterToolsByClientCaps,
   resolveSessionToolListingClientCaps,
 } from "./openclaw-tools.client-caps.js";
-import { PARTICIPATION_TOOL_ALLOWLIST } from "./participation-ceiling.js";
+import { participationToolAllowlist } from "./participation-ceiling.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
@@ -628,7 +628,8 @@ export function* assembleOpenClawCodingTools(
       (tool) =>
         (tool.name !== "message" || options?.disableMessageTool !== true) &&
         (!options?.participationCeiling ||
-          (PARTICIPATION_TOOL_ALLOWLIST.includes(tool.name) && !getPluginToolMeta(tool))),
+          (participationToolAllowlist(options.participationCeiling).includes(tool.name) &&
+            !getPluginToolMeta(tool))),
     ),
     sessionTools: options?.participationCeiling
       ? completeTurnTools(

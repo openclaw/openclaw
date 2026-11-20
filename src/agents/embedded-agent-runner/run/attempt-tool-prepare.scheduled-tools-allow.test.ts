@@ -604,3 +604,29 @@ it("keeps participation tools gated through direct calls, preparers, and deferre
   );
   expect(run.listed).toEqual(ordinary.listed);
 });
+
+it.each([[], ["read"], ["read", "sessions_list", "sessions_history"]].map((tools) => ({ tools })))(
+  "enforces configured participation tools $tools through real tool assembly",
+  async ({ tools }) => {
+    const run = await prepareTools(
+      {
+        runId: "configured-participant",
+        trigger: "user",
+        senderIsOwner: true,
+        participationCeiling: { kind: "send", profileId: "guest", sessionKey, tools },
+      },
+      { ...baseConfig, agents: { entries: { main: { tools: { deny: ["sessions_history"] } } } } },
+    );
+    expect(run.callable).toEqual(tools.filter((name) => name !== "sessions_history").toSorted());
+    for (const [name, refused] of run.refusals) {
+      if (!tools.includes(name) || name === "sessions_history") {
+        expect({ name, ...refused }).toEqual({
+          name,
+          direct: true,
+          preparer: true,
+          dispatch: true,
+        });
+      }
+    }
+  },
+);

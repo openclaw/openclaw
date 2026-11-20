@@ -18,7 +18,10 @@ import type {
   ChatSendParamsSchema,
   QueueMode,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { ParticipationCeiling } from "../../agents/participation-ceiling.js";
+import {
+  participationToolAllowlist,
+  type ParticipationCeiling,
+} from "../../agents/participation-ceiling.js";
 import { isAbortRequestText } from "../../auto-reply/reply/abort-primitives.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
 import {
@@ -140,7 +143,16 @@ export function attachChatSendParticipationCeiling(
         "Participating inputs cannot change goals, delivery routes, tool bindings, or runtime settings.",
     };
   }
-  request.participationCeiling = ceiling;
+  // Recovery re-admits current role authority, but cannot widen the accepted input's tools.
+  const retained = request.participationCeiling;
+  request.participationCeiling = retained
+    ? {
+        ...ceiling,
+        tools: participationToolAllowlist(retained).filter((name) =>
+          participationToolAllowlist(ceiling).includes(name),
+        ),
+      }
+    : ceiling;
   request.suppressCommandInterpretation = true;
   request.stopCommand = false;
   request.turnKind = "main";
