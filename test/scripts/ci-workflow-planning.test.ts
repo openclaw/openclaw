@@ -151,7 +151,7 @@ describe("PostgreSQL conformance selection", () => {
     expect(conformance.uses).toBe("./.ci-harness/.github/actions/postgres-conformance");
     expect(conformance.with).toEqual({
       image:
-        "pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d",
+        "pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd",
       shard: "${{ matrix.shard }}",
     });
     expect(workflow.jobs["ci-gate"].needs).toContain("postgres-conformance");
@@ -159,7 +159,7 @@ describe("PostgreSQL conformance selection", () => {
     expect(smoke.uses).toBe(conformance.uses);
     expect(smoke.with).toEqual({
       image:
-        "pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a",
+        "pgvector/pgvector:pg16@sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f",
       target: "src/gateway/server-database-engine-cron.postgres.test.ts",
     });
   });
@@ -253,12 +253,12 @@ describe("PostgreSQL conformance selection", () => {
     for (const [version, image] of [
       [
         "pg16",
-        "pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a",
+        "pgvector/pgvector:pg16@sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f",
       ],
       ["pg17", prConformance.with.image],
       [
         "pg18",
-        "pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11",
+        "pgvector/pgvector:pg18@sha256:38681dc6eaf55308e2a4c6de392d131652dcfac70e1263e35cd9b5ea3fe39782",
       ],
     ]) {
       expect(

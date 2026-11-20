@@ -6,8 +6,8 @@
   "type": "module",
   "dependencies": {
     "@google/genai": "2.32.0",
-    "dotenv": "18.0.9",
-    "google-auth-library": "11.3.2"
+    "dotenv": "18.0.10",
+    "google-auth-library": "11.3.4"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
