@@ -450,9 +450,7 @@ export async function fixture(
       | "onActivationCompletion"
       | "modelTarget"
       | "modelRef"
-      | "agentRuntime"
       | "automaticSetup"
-      | "completeFirstAgent"
       | "assertCurrent"
     > = {},
   ) =>

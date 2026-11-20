@@ -243,17 +243,23 @@ export function AutomaticSetupCard(props: { owner: AutomaticModelSetup; revision
             </div>
           </Show>
           <SignInWizard setup={setup} actions={actions} />
-          <Show when={result()?.firstAgent}>
-            {(agent) => (
-              <button
-                class="btn primary"
-                type="button"
-                disabled={busy()}
-                onClick={() => openFirstAgentConversation(context, agent())}
-              >
-                {t("modelSetup.startTalking")}
-              </button>
-            )}
+          <Show when={setup().ready}>
+            <button
+              class="btn primary"
+              type="button"
+              disabled={busy()}
+              onClick={() => {
+                // The agent handoff is best effort; a ready connection always opens chat.
+                const agent = result()?.firstAgent;
+                if (agent) {
+                  openFirstAgentConversation(context, agent);
+                } else {
+                  context.navigate("chat");
+                }
+              }}
+            >
+              {t("modelSetup.startTalking")}
+            </button>
           </Show>
           <Show when={setup().error}>
             {(error) => (

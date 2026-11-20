@@ -74,18 +74,14 @@ export function createModelSetupDetectRequest(options: {
 
 export function createModelSetupVerifyRequest() {
   return createSetupRequest<
-    readonly [GatewayBrowserClient | null, string | null, "utility" | undefined, boolean?],
+    readonly [GatewayBrowserClient | null, string | null, "utility" | undefined],
     ModelSetupTaskResult<SystemAgentSetupVerifyResult>
-  >(async ([client, agentId, modelTarget, completeFirstAgent], signal) =>
+  >(async ([client, agentId, modelTarget], signal) =>
     client
       ? captureModelSetupResult(client, () =>
           client.request<SystemAgentSetupVerifyResult>(
             "openclaw.setup.verify",
-            {
-              ...(agentId ? { agentId } : {}),
-              ...(modelTarget ? { modelTarget } : {}),
-              ...(completeFirstAgent ? { completeFirstAgent: true } : {}),
-            },
+            { ...(agentId ? { agentId } : {}), ...(modelTarget ? { modelTarget } : {}) },
             { timeoutMs: MODEL_SETUP_VERIFY_TIMEOUT_MS, signal },
           ),
         )

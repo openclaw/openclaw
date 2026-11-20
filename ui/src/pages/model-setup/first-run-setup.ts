@@ -485,7 +485,7 @@ export class FirstRunSetup {
       outcome.value.modelRef === modelRef &&
       outcome.value.modelTarget === pending.modelTarget
     ) {
-      this.completeNavigation(outcome.value.firstAgent, outcome.value.modelTarget);
+      this.completeNavigation(pending.firstAgent, outcome.value.modelTarget);
     } else if (outcome.value.ok) {
       this.showUnresolved();
     }
@@ -552,7 +552,7 @@ export class FirstRunSetup {
     } else if (!this.pending) {
       const verified = this.host.verifyState();
       if (verified.phase === "ok") {
-        this.completeNavigation(verified.firstAgent, verified.modelTarget);
+        this.completeNavigation(undefined, verified.modelTarget);
       } else if (!this.host.routeData()?.firstRun) {
         this.host.context().navigate("chat");
       }
@@ -560,10 +560,6 @@ export class FirstRunSetup {
   }
 
   private completeNavigation(firstAgent?: SetupFirstAgent, modelTarget?: "utility"): void {
-    if (modelTarget !== "utility" && !firstAgent) {
-      this.showUnresolved();
-      return;
-    }
     this.pending = null;
     clearFirstRunActivationReceipt();
     this.host.setRefreshWarning(null);
@@ -572,7 +568,12 @@ export class FirstRunSetup {
       this.host.notify();
       return;
     }
-    openFirstAgentConversation(this.host.context(), firstAgent!);
+    if (firstAgent) {
+      openFirstAgentConversation(this.host.context(), firstAgent);
+    } else {
+      // Setup succeeded; the agent handoff is best effort, never a failure.
+      this.host.context().navigate("chat");
+    }
   }
 
   private showUnresolved(): void {
@@ -617,7 +618,7 @@ export class FirstRunSetup {
     if (!this.pending) {
       this.host.context().navigate("chat");
     } else if (this.pending.modelRef === modelRef && this.pending.modelTarget === modelTarget) {
-      this.completeNavigation(outcome.value.firstAgent, outcome.value.modelTarget);
+      this.completeNavigation(this.pending.firstAgent, modelTarget);
     } else {
       this.showUnresolved();
     }

@@ -136,11 +136,6 @@ test.each([false, true])(
       expect(result.ok, JSON.stringify(result.error)).toBe(true);
       const firstFrame = joining.frames.find((frame) => frame.event !== "connect.challenge");
       expect(firstFrame?.payload?.type ?? firstFrame?.event).toBe("hello-ok");
-      expect(firstFrame).toMatchObject({
-        payload: {
-          features: { capabilities: expect.arrayContaining(["openclaw-setup-first-agent"]) },
-        },
-      });
       expect(firstFrame?.payload?.snapshot?.presence?.map((entry) => entry.instanceId)).toContain(
         "joining-browser",
       );

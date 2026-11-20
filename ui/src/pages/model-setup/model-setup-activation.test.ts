@@ -50,7 +50,6 @@ async function startAndCancelSignIn(
         sessionId: expect.any(String),
         agentId: "main",
         authChoice: "provider-login",
-        completeFirstAgent: true,
       },
       { timeoutMs: null },
     ),
@@ -151,7 +150,8 @@ describe("ModelSetupPage first-run activation ownership", () => {
       expect(callsFor(request, "openclaw.setup.verify")).toHaveLength(0);
       expect(context.navigate).not.toHaveBeenCalled();
       pageButton(page, ".model-setup__recovery .btn.primary")!.click();
-      await waitForOnboarding(context);
+      // A lost activation reply has no handoff target; recovery opens the ordinary chat.
+      await waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("chat"));
       releaseActivation?.(activated("provider/late-other"));
       await page.updateComplete;
       expect(callsFor(request, activatedMethod)).toHaveLength(entry === "provider sign-in" ? 2 : 1);
@@ -713,7 +713,7 @@ describe("ModelSetupPage utility roles", () => {
 
       expect(request).toHaveBeenCalledWith(
         "openclaw.setup.verify",
-        { agentId: "main", modelTarget: "utility", completeFirstAgent: true },
+        { agentId: "main", modelTarget: "utility" },
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
       if (replyTarget) {

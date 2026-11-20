@@ -62,13 +62,6 @@ it("requires a session id and does not accept client capability acknowledgments"
   const activation = { kind: "codex-cli", modelRef: "openai/gpt-5.6-luna" };
   const start = { ...activation, sessionId: "activation" };
   acceptsParams(protocol.validateSystemAgentSetupActivateParams, activation);
-  acceptsParams(protocol.validateSystemAgentSetupActivateStartParams, {
-    sessionId: "native-selection",
-    kind: "native-model",
-    modelRef: "fixture/model",
-    agentRuntime: "fixture-native",
-    completeFirstAgent: true,
-  });
   check(
     protocol.validateSystemAgentSetupActivateStartParams,
     [start],

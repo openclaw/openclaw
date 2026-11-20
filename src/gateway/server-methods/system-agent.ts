@@ -182,42 +182,14 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     "openclaw.setup.verify",
     validateSystemAgentSetupVerifyParams,
     async ({ params, respond, context }) => {
-      const verify = async () => {
-        const result = await runSystemAgentGatewayTask(() =>
-          verifyGatewaySetupInference({
-            runtime: defaultRuntime,
-            context,
-            ...params,
-          }),
-        );
-        if (result.ok && result.modelTarget !== "utility" && params.completeFirstAgent) {
-          // Creation's config application drains the setup lane; settle verification first.
-          const { completeSetupFirstAgent } =
-            await import("../../system-agent/setup-first-agent.js");
-          return {
-            ...result,
-            firstAgent: await completeSetupFirstAgent({
-              agentId: params.agentId,
-              modelRef: result.modelRef,
-            }),
-          };
-        }
-        return result;
-      };
-      try {
-        respond(
-          true,
-          params.completeFirstAgent
-            ? await runExclusiveSystemAgentSetupActivation(verify)
-            : await verify(),
-          undefined,
-        );
-      } catch (error) {
-        if (!(error instanceof SetupAdmissionBusyError)) {
-          throw error;
-        }
-        respondSetupAdmissionBusy(respond);
-      }
+      await runSystemAgentGatewayTask(async () => {
+        const result = await verifyGatewaySetupInference({
+          runtime: defaultRuntime,
+          context,
+          ...params,
+        });
+        respond(true, result, undefined);
+      });
     },
   ),
   "openclaw.setup.runtime.start": defineValidatedGatewayHandler(

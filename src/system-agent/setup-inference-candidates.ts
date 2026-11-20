@@ -1,5 +1,4 @@
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -53,35 +52,6 @@ export async function stageSetupInferenceCandidate(
     return await stageProviderAutoCandidate(ctx, choiceId);
   }
   switch (params.kind) {
-    case "native-model": {
-      const modelRef = params.modelRef?.trim();
-      const runtimeId = params.agentRuntime?.trim();
-      if (
-        !modelRef ||
-        !runtimeId ||
-        runtimeId === "openclaw" ||
-        splitTrailingAuthProfile(modelRef).profile
-      ) {
-        return { error: "Choose an available native model in Model Setup." };
-      }
-      const { preparePublishedModelRuntimeChoice } =
-        await import("../agents/model-runtime-choice.js");
-      const choice = await preparePublishedModelRuntimeChoice({
-        cfg,
-        agentId: ctx.routeAgentId,
-        ...parseInferenceRef(modelRef),
-        runtimeId,
-      });
-      if (choice.kind === "unavailable") {
-        return { error: choice.message };
-      }
-      return {
-        modelRef,
-        agentRuntimeId: choice.runtimeId,
-        validateSelection: choice.validate,
-        config: cfg,
-      };
-    }
     case "existing-model": {
       const route = await resolveSystemAgentConfiguredRouteFromConfig(
         cfg,

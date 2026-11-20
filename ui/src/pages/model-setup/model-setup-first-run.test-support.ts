@@ -125,21 +125,7 @@ export function mockRequests(
     if (!Object.hasOwn(handlers, method) || !handler) {
       throw new Error(`Unexpected method ${method}`);
     }
-    const result = await handler(params);
-    if (
-      method === "openclaw.setup.verify" &&
-      result &&
-      typeof result === "object" &&
-      "ok" in result &&
-      result.ok &&
-      !("modelTarget" in result)
-    ) {
-      return {
-        ...result,
-        firstAgent: { agentId: "main", sessionKey: "agent:main:main", bootstrapPending: true },
-      };
-    }
-    return result;
+    return handler(params);
   });
 }
 

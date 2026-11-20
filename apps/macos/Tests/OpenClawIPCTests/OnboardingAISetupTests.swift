@@ -2827,74 +2827,6 @@ struct OnboardingAISetupTests {
         #expect(local["modelRef"]?.value as? String == "lmstudio/qwen-local")
     }
 
-    @Test(arguments: [
-        "candidate", "manual", "activation-wizard", "auth",
-    ], [false, true])
-    func `onboarding requests first agent completion only from supporting Gateways`(
-        flow: String, supportsCompletion: Bool
-    ) async throws {
-        let method = if flow == "auth" {
-            "openclaw.setup.auth.start"
-        } else if flow == "activation-wizard" {
-            "openclaw.setup.activate.start"
-        } else {
-            "openclaw.setup.activate"
-        }
-        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingFirstAgentRequestTests"))
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let capabilities = ["openclaw-setup-model-ref"] +
-            (supportsCompletion ? ["openclaw-setup-first-agent"] : [])
-        let harness = AISetupHarness(
-            url: url,
-            handler: { _, request, _ in
-                if request.method == "openclaw.setup.detect" {
-                    return detectedSetupResponse(id: request.id, kind: "claude-cli", modelRef: "fixture/model")
-                }
-                guard request.method == method else { return nil }
-                #expect(request.params["completeFirstAgent"] as? Bool == (supportsCompletion ? true : nil))
-                if method == "openclaw.setup.activate" {
-                    return successfulActivationResponse(id: request.id, modelRef: "fixture/model", latencyMs: 1)
-                }
-                let sessionID = try #require(request.params["sessionId"] as? String)
-                return try JSONSerialization.data(withJSONObject: [
-                    "type": "res", "id": request.id, "ok": true,
-                    "payload": [
-                        "sessionId": sessionID, "done": true, "status": "done",
-                        "modelActivation": ["modelRef": "fixture/model"],
-                    ],
-                ])
-            },
-            receiveHook: { task, receiveIndex in
-                if receiveIndex == 0 {
-                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                }
-                return .data(GatewayWebSocketTestSupport.connectOkData(
-                    id: task.snapshotConnectRequestID() ?? "connect",
-                    methods: ["openclaw.setup.detect", method],
-                    capabilities: capabilities
-                ))
-            }
-        )
-        let model = harness.model(defaults: defaults)
-        await model.detectConnections()
-        if method == "openclaw.setup.auth.start" {
-            let task = try #require(model.startProviderWizard(
-                .init(id: "test-provider", brandId: nil, label: "Test provider", hint: nil,
-                      groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false, modelTarget: nil),
-                kind: .auth))
-            await task.value
-        } else if flow == "manual" {
-            model.manualKey = "synthetic-manual-key"
-            let task = try #require(model.submitManualKey())
-            await task.value
-        } else {
-            await model.activate(kind: "claude-cli")
-        }
-        #expect(await harness.recorder.snapshot().methods.filter { $0 == method }.count == 1)
-        model.resetForGatewayChange()
-        await harness.gateway.shutdown()
-    }
-
     @Test func `unavailable detected integrations decode for informational display`() throws {
         let candidates = try JSONDecoder().decode(
             [OnboardingAISetupModel.UnavailableCandidate].self,
@@ -2923,7 +2855,6 @@ struct OnboardingAISetupTests {
         let hello = try JSONDecoder().decode(HelloOk.self, from: data)
 
         #expect(hello.supportsServerCapability(.systemAgentSetupModelRef))
-        #expect(!hello.supportsServerCapability(.systemAgentSetupFirstAgent))
     }
 
     @Test func `only definitive failures can clear an activation marker`() {

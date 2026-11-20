@@ -36,10 +36,7 @@ describe("ModelSetupWizardRunner", () => {
       const onStart = vi.fn();
       const runner = createRunner({ getClient: () => client, getAgentId: () => "main", onStart });
       try {
-        await runner.start("meta/muse-code", method, {
-          completeFirstAgent: true,
-          selectModel: true,
-        });
+        await runner.start("meta/muse-code", method, { selectModel: true });
         expect(onStart).toHaveBeenCalledWith(
           method,
           expect.objectContaining({

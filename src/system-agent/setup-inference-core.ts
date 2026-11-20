@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
+  SetupFirstAgent,
   SetupInferenceActivationRejection,
   SetupInferenceFailureStatus,
 } from "../../packages/gateway-protocol/src/schema/setup-inference.js";
@@ -149,6 +150,8 @@ export type ActivateSetupInferenceResult =
       lines: string[];
       modelName?: string;
       gatewayRestartRequired?: true;
+      /** Gateway setup only: the regular agent whose Home continues setup. */
+      firstAgent?: SetupFirstAgent;
     })
   | (Extract<VerifySetupInferenceResult, { ok: false }> & {
       disposition?: SetupInferenceActivationRejection["disposition"];
@@ -178,7 +181,6 @@ export class SetupInferenceOwnerDriftError extends Error {
 export type VerifySetupInferenceResult =
   | {
       ok: true;
-      firstAgent?: import("../../packages/gateway-protocol/src/schema/setup-inference.js").SetupFirstAgent;
       modelTarget?: "utility";
       modelRef: string;
       latencyMs: number;
@@ -204,10 +206,7 @@ export type BoundVerifySetupInferenceResult =
   | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type ActivateSetupInferenceParams = {
-  completeFirstAgent?: true;
-  kind: SetupInferenceKind | "api-key" | "provider-auth" | "native-model";
-  /** Published native runtime choice for native-model activation. */
-  agentRuntime?: string;
+  kind: SetupInferenceKind | "api-key" | "provider-auth";
   /** Gateway first-run policy; never inherited by the manual picker. */
   automaticSetup?: true;
   /** Enable and verify access without changing the agent's selected model. */
@@ -520,7 +519,6 @@ export type StagedCandidate = {
   modelRef: string;
   modelTarget?: "utility";
   agentRuntimeId?: string;
-  validateSelection?: () => string | undefined;
   authProfileId?: string;
   pluginId?: string;
   config: OpenClawConfig;

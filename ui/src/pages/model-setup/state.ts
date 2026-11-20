@@ -18,7 +18,7 @@ export const MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS = null;
 
 export type ModelSetupActivationPreferences = Pick<
   SystemAgentSetupActivateParams,
-  "nativeSessionCatalogsEnabled" | "completeFirstAgent"
+  "nativeSessionCatalogsEnabled"
 > & { selectModel?: true };
 
 export type ModelSetupAuthOption = Pick<ProviderLoginOption, "id" | "label"> & {
@@ -68,13 +68,7 @@ type ModelSetupVerifyFailure = Extract<SystemAgentSetupVerifyResult, { ok: false
 export type ModelSetupVerifyState =
   | { phase: "idle" }
   | { phase: "checking" }
-  | {
-      phase: "ok";
-      modelRef: string;
-      modelTarget?: "utility";
-      latencyMs?: number;
-      firstAgent?: Extract<SystemAgentSetupVerifyResult, { ok: true }>["firstAgent"];
-    }
+  | { phase: "ok"; modelRef: string; modelTarget?: "utility"; latencyMs?: number }
   | { phase: "failed"; status: ModelSetupVerifyFailure["status"]; error: string };
 
 export type ModelSetupWizardResult =
@@ -127,18 +121,14 @@ export type ModelSetupState = {
   cancellationNotice: string | null;
 };
 
-/** One request preference projection for every first-run activation entrypoint. */
+/** One request preference projection for every activation entrypoint. */
 export function modelSetupActivationPreferences(
-  firstRun: boolean | undefined,
   state: ModelSetupState,
 ): ModelSetupActivationPreferences {
-  return {
-    ...(firstRun ? { completeFirstAgent: true } : {}),
-    ...(state.pageState.phase === "ready" &&
+  return state.pageState.phase === "ready" &&
     state.pageState.result.nativeSessionCatalogPreferenceRequired === true
-      ? { nativeSessionCatalogsEnabled: state.nativeSessionCatalogsEnabled }
-      : {}),
-  };
+    ? { nativeSessionCatalogsEnabled: state.nativeSessionCatalogsEnabled }
+    : {};
 }
 
 export function createModelSetupState(): ModelSetupState {
@@ -222,7 +212,6 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
     return {
       phase: "ok",
       modelRef: result.modelRef,
-      ...(result.firstAgent ? { firstAgent: result.firstAgent } : {}),
       ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
       ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
     };

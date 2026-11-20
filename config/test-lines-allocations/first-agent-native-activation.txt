@@ -1,9 +1,9 @@
-# Fresh native setup must prove consent rejection, verification/cancellation, real config
-# application/rollback, canonical workspace bootstrap, and existing-agent preservation.
-# Keep these production-owner regressions rather than replace them with mock-only checks.
-# Native sign-in regression and real hello negotiation cover the reviewed missing request path.
-# Browser focus assertion protects the unsent starter handoff; native Swift wire tests are separate.
-# Header Connect AI needs the actual models.authLogin/config/workspace boundary, browser
-# picker-to-main handoff, and retained wizard admission proof; these are distinct entrypoints.
-# Measured net test growth over the prepared PR base: 645; allocation covers the 245-line excess.
-245
+# Gateway-decided first-agent setup must prove consent rejection, verification/cancellation,
+# real config application/rollback, canonical workspace bootstrap and existing-agent
+# preservation for host-only Codex activation, plus the provider sign-in and header
+# models.authLogin entrypoints. Existing installs, CLI activation and configured primaries
+# must stay unprovisioned, and the read-only handoff target must fail open (unknown agent,
+# unreadable config, utility-only) at the real Gateway boundary. Browser coverage keeps the
+# unsent, focused starter handoff and the ordinary-chat fallback.
+# Measured net test growth over main: 473; allocation covers the 73-line excess.
+73

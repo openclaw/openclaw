@@ -243,11 +243,15 @@ async function verifyAndActivateCandidate(
           workspaceDir: ctx.workspace,
         });
   const providerPatch = createMergePatch(cfg, stripPendingPluginInstallRecords(prepared));
+  // Gateway setup that chooses the first primary model on an install without
+  // an authored roster also creates the canonical first agent. Existing
+  // installs, CLI activation and access-only sign-in keep their prior shape.
   // The UI may select implicit main before it has an authored roster. Runtime
   // metadata must remain in defaults until canonical first-agent provisioning.
   const pendingFirstAgent =
-    params.completeFirstAgent &&
+    params.surface === "gateway" &&
     !hasResolvedRosterBeforeMigrations(snapshot) &&
+    !resolveAgentEffectiveModelPrimary(source, routeAgentId) &&
     (!params.agentId || routeAgentId === resolveAmbientOwnerAgentId(cfg));
   const createFirstAgent =
     pendingFirstAgent && params.selectModel !== false && staged.modelTarget !== "utility";
@@ -410,10 +414,6 @@ async function verifyAndActivateCandidate(
   }
   params.onActivationStarted?.();
   const revalidateOwner = async (candidateRoute: SystemAgentConfiguredRoute) => {
-    const selectionError = staged.validateSelection?.();
-    if (selectionError) {
-      throw new SetupInferenceOwnerDriftError(selectionError);
-    }
     if ("binding" in verification) {
       let current: SetupHarnessVerification | undefined;
       try {

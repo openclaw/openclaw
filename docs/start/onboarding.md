@@ -134,13 +134,14 @@ See [AI connection options](/start/onboarding#ai-connection-options) below for l
 local models, and custom endpoints.
 </Step>
 <Step title="Continue in the dashboard">
-A newly verified primary model finishes creating your first regular agent and
-opens its persistent Home conversation. The "Wake up, my friend!" starter is
-an editable draft, not an automatically sent message. Send it to get acquainted,
-or replace it with real work: your request takes priority over naming and avatars.
-Keep talking to that same agent for tools, integrations, setup, and everyday work.
-Existing agents are reused. A utility-only connection stays in Model Setup until
-you connect a primary model.
+On a fresh install, connecting your first primary model also creates your first
+regular agent and opens its persistent Home conversation. The "Wake up, my friend!"
+starter is an editable draft, not an automatically sent message. Send it to get
+acquainted, or replace it with real work: your request takes priority over naming
+and avatars. Keep talking to that same agent for tools, integrations, setup, and
+everyday work. Existing installs and agents are left as they are, and if the agent
+handoff isn't available the dashboard opens your normal chat. A utility-only
+connection stays in Model Setup until you connect a primary model.
 
 - **Import memory (optional):** choose files in
   **Settings → Import Memory**. Local Gateways can import Claude Code, Codex,

@@ -182,7 +182,6 @@ suite.define(() => {
       expect((await gateway.waitForRequest("openclaw.setup.activate")).params).toEqual({
         kind: "ollama",
         modelRef: "ollama/local-model",
-        completeFirstAgent: true,
       });
       await card.getByText("The local model stopped.", { exact: true }).waitFor();
       await selected.waitFor();
@@ -392,7 +391,6 @@ suite.define(() => {
         authChoice: "meta/muse-code",
         agentId: "main",
         selectModel: true,
-        completeFirstAgent: true,
       });
       await gateway.resolveDeferred("models.authLogin", {
         done: true,
@@ -407,53 +405,6 @@ suite.define(() => {
         .poll(() => composer.evaluate((element) => element === document.activeElement))
         .toBe(true);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-    });
-  });
-
-  it("verifies a native model choice before first-agent handoff", async () => {
-    await suite.withPage(options, async ({ page }) => {
-      const gateway = await install(page, {
-        historyMessages: [],
-        deferredMethods: ["openclaw.setup.activate.start"],
-        featureMethods: ["openclaw.setup.activate.start"],
-        methodResponses: {
-          "models.list": {
-            models: [
-              {
-                provider: "fixture",
-                id: "native",
-                name: "Native fixture",
-                available: true,
-                agentRuntime: { id: "fixture-native", source: "implicit" },
-              },
-            ],
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
-      const native = page.locator("[data-native-model-setup]");
-      await native.locator(".picker-select__trigger").click();
-      await native.locator('[role="option"][data-value="fixture/native"]').click();
-      await native.locator("button.primary").click();
-      expect((await gateway.waitForRequest("openclaw.setup.activate.start")).params).toMatchObject({
-        agentId: "main",
-        kind: "native-model",
-        modelRef: "fixture/native",
-        agentRuntime: "fixture-native",
-        completeFirstAgent: true,
-      });
-      expect(await gateway.getRequests("agents.update")).toHaveLength(0);
-      expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
-      await gateway.resolveDeferred("openclaw.setup.activate.start", {
-        done: true,
-        status: "done",
-        modelActivation: { modelRef: "fixture/native", firstAgent: configured.firstAgent },
-      });
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.waitFor();
-      expect(new URL(page.url()).pathname).toBe("/chat/main");
-      expect(await composer.inputValue()).toBe("Wake up, my friend!");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });

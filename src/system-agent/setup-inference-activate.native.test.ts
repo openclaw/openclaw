@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import * as runtimeChoices from "../agents/model-runtime-choice.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { clearConfigCache, readConfigFileSnapshot as readSnapshot } from "../config/config.js";
 import {
@@ -13,7 +12,7 @@ import {
 import { getRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import * as proactive from "../cron/default-proactive-job.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
-import { completeSetupFirstAgent } from "./setup-first-agent.js";
+import { describeSetupFirstAgent } from "./setup-first-agent.js";
 import { fixture, modelRef } from "./setup-inference-activate.test-support.js";
 import { resetSetupInferenceState } from "./setup-inference-state.test-support.js";
 
@@ -30,13 +29,14 @@ it.each([
   "cancelled",
   "application-failure",
 ])(
-  "couples canonical first-agent creation with host-only native activation (%s)",
+  "couples canonical first-agent creation with host-only Codex activation (%s)",
   async (outcome) => {
     const setup = await fixture({
       codex: true,
       homeScope: "user",
       fresh: outcome !== "existing",
       skipBootstrap: false,
+      surface: "gateway",
     });
     const provision = vi.spyOn(proactive, "provisionDefaultProactiveJob");
     if (outcome === "existing") {
@@ -74,11 +74,6 @@ it.each([
         ),
       );
     }
-    vi.spyOn(runtimeChoices, "preparePublishedModelRuntimeChoice").mockResolvedValue({
-      kind: "ready",
-      runtimeId: "codex",
-      validate: () => undefined,
-    });
     const harness = setup.pluginRegistry.agentHarnesses[0]!.harness;
     harness.executionEnvironment = "host-only";
     harness.verifySetup = async () => {
@@ -95,10 +90,8 @@ it.each([
       vi.mocked(setup.prompter.select).mockResolvedValue("continue");
     }
     let complete: (() => Promise<boolean>) | undefined;
-    const activation = setup.activate("native-model", undefined, {
+    const activation = setup.activate("codex-cli", undefined, {
       agentId: "main",
-      agentRuntime: "codex",
-      completeFirstAgent: true,
       signal: controller.signal,
       ...(withApplication
         ? {
@@ -137,7 +130,7 @@ it.each([
       await expect(complete()).resolves.toBe(false);
       expect(applicationCount).toBe(1);
     }
-    await completeSetupFirstAgent({ agentId: "main", modelRef });
+    const described = await describeSetupFirstAgent({ agentId: "main" });
     const snapshot = await readSnapshot();
     if (outcome === "existing") {
       expect(snapshot.sourceConfig.agents?.entries?.main).toMatchObject({
@@ -149,6 +142,11 @@ it.each([
       expect(Object.keys(snapshot.sourceConfig.agents?.entries ?? {})).toEqual(["main"]);
       await expect(fs.stat(path.join(setup.workspace, "BOOTSTRAP.md"))).rejects.toMatchObject({
         code: "ENOENT",
+      });
+      expect(described).toEqual({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        bootstrapPending: false,
       });
       expect(provision).not.toHaveBeenCalled();
       return;
@@ -164,68 +162,10 @@ it.each([
       "The user's request always comes first.",
     );
     expect(provision).toHaveBeenCalledOnce();
-    const before = await fs.readFile(setup.configPath, "utf8");
-    await completeSetupFirstAgent({ agentId: "main", modelRef });
-    expect(await fs.readFile(setup.configPath, "utf8")).toBe(before);
-    expect(provision).toHaveBeenCalledOnce();
-  },
-);
-
-it.each(["success", "probe-failure", "catalog-changed"])(
-  "stages a published native selection before committing (%s)",
-  async (outcome) => {
-    const setup = await fixture({ codex: true, homeScope: "user", fresh: true });
-    const validate = vi.fn(() =>
-      outcome === "catalog-changed" ? "Native model inventory changed. Choose again." : undefined,
-    );
-    const prepare = vi
-      .spyOn(runtimeChoices, "preparePublishedModelRuntimeChoice")
-      .mockResolvedValue({
-        kind: "ready",
-        runtimeId: "codex",
-        validate,
-      });
-    const verifySetup = vi.fn(async () => {
-      expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
-      if (outcome === "probe-failure") {
-        throw new Error("Native verification failed");
-      }
-    });
-    setup.pluginRegistry.agentHarnesses[0]!.harness.verifySetup = verifySetup;
-    const result = await setup.activate("native-model", undefined, {
+    expect(described).toEqual({
       agentId: "main",
-      agentRuntime: "codex",
-      completeFirstAgent: true,
-    });
-    expect(prepare).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        provider: "openai",
-        model: "gpt-5.4-mini",
-        runtimeId: "codex",
-      }),
-    );
-    expect(verifySetup).toHaveBeenCalled();
-    expect(setup.login).not.toHaveBeenCalled();
-    expect(setup.run).not.toHaveBeenCalled();
-    if (outcome !== "success") {
-      expect(result).toMatchObject({
-        ok: false,
-        error: expect.stringContaining(
-          outcome === "probe-failure"
-            ? "Native verification failed"
-            : "Native model inventory changed",
-        ),
-      });
-      expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
-      return;
-    }
-    expect(result).toMatchObject({ ok: true, modelRef });
-    expect(validate).toHaveBeenCalled();
-    const saved = await readSnapshot();
-    expect(hasResolvedRosterBeforeMigrations(saved)).toBe(true);
-    expect(saved.sourceConfig.agents?.defaults?.models?.[modelRef]?.agentRuntime).toEqual({
-      id: "codex",
+      sessionKey: "agent:main:main",
+      bootstrapPending: true,
     });
   },
 );

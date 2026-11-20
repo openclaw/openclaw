@@ -152,7 +152,7 @@ export class AutomaticModelSetup {
     await this.run(async (client) => {
       const result = await client.request<SystemAgentSetupActivateResult>(
         "openclaw.setup.activate",
-        { kind: candidate.kind, modelRef: candidate.modelRef, completeFirstAgent: true },
+        { kind: candidate.kind, modelRef: candidate.modelRef },
         { timeoutMs: null },
       );
       if (!result.ok) {
@@ -180,9 +180,7 @@ export class AutomaticModelSetup {
     this.wizardStepId = null;
     this.wizard.prepareSignIn("oauth", signIn.label);
     const epoch = this.epoch;
-    const completion = await this.wizard.start(signIn.authOptionId, "openclaw.setup.auth.start", {
-      completeFirstAgent: true,
-    });
+    const completion = await this.wizard.start(signIn.authOptionId, "openclaw.setup.auth.start");
     if (epoch === this.epoch && completion) {
       await this.finishSignIn(completion);
     }

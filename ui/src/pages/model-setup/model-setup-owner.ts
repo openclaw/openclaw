@@ -123,7 +123,6 @@ export function createModelSetup(
       return activationBlocked();
     },
     onSelected: () => (props.embedded ? props.onClose?.() : context.navigate("chat")),
-    activateFirstRun: (params, targetId) => void activate(params, targetId),
     onChange: notify,
   });
   const iconLoader = createModelSetupIconLoader(
@@ -377,12 +376,7 @@ export function createModelSetup(
       return undefined;
     }
     state.verifyState = { phase: "checking" };
-    return runVerification([
-      client,
-      agentSelection().state.selectedId,
-      modelTarget,
-      routeData()?.firstRun,
-    ]);
+    return runVerification([client, agentSelection().state.selectedId, modelTarget]);
   }
 
   function activationBlocked(): boolean {
@@ -401,7 +395,7 @@ export function createModelSetup(
     await runWizardMutation(() => wizard.activate({ ...params, ...preferences() }, targetId));
   }
 
-  const preferences = () => modelSetupActivationPreferences(routeData()?.firstRun, state);
+  const preferences = () => modelSetupActivationPreferences(state);
 
   function startAuth(
     option: ModelSetupAuthOption,

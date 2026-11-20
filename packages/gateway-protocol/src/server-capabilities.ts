@@ -53,8 +53,6 @@ export const GATEWAY_SERVER_CAPS = {
   SENDER_RESTRICTED_HIDDEN_HELPERS: "sender-restricted-hidden-helpers-v1",
   SYSTEM_AGENT_WIZARD_CANCEL,
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
-  /** Canonical first-agent completion during setup activation and sign-in. */
-  SYSTEM_AGENT_SETUP_FIRST_AGENT: "openclaw-setup-first-agent",
   TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
   TALK_SESSION_CLOSE_DISPOSITION: "talk-session-close-disposition",
 } as const;

@@ -122,37 +122,45 @@ it.each([true, false])(
   },
 );
 
-it("offers the ordinary Home draft without sending a chat turn", async () => {
-  const { context, request, snapshot } = createFirstRunContext();
-  snapshot.hello.features.methods = [...snapshot.hello.features.methods, "openclaw.setup.auto"];
-  Object.assign(context.agents, { refreshList: vi.fn(async () => null) });
-  request.mockImplementation(async (method) => {
-    if (method === "openclaw.setup.auto") {
-      return ready;
+it.each([true, false])(
+  "offers the ordinary Home without sending a chat turn (handoff target=%s)",
+  async (described) => {
+    const { context, request, snapshot } = createFirstRunContext();
+    snapshot.hello.features.methods = [...snapshot.hello.features.methods, "openclaw.setup.auto"];
+    Object.assign(context.agents, { refreshList: vi.fn(async () => null) });
+    request.mockImplementation(async (method) => {
+      if (method === "openclaw.setup.auto") {
+        return described ? ready : { ...ready, firstAgent: undefined };
+      }
+      if (method === "openclaw.setup.detect") {
+        return detection;
+      }
+      throw new Error("Unexpected request: " + method);
+    });
+    const page = createPage(context);
+    page.routeData = { firstRun: true, automatic: true };
+    document.body.append(page);
+    mountModelSetupPage(page);
+    await waitForSolid(() => expect(page.textContent).toContain("Start talking to your agent"));
+    button(page, "Start talking to your agent").click();
+    if (described) {
+      expect(context.navigate).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({
+          pathname: "/openclaw/chat/main",
+          search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
+        }),
+      );
+    } else {
+      // A ready connection without a described agent still opens chat, never an error.
+      expect(context.navigate).toHaveBeenCalledWith("chat");
     }
-    if (method === "openclaw.setup.detect") {
-      return detection;
-    }
-    throw new Error("Unexpected request: " + method);
-  });
-  const page = createPage(context);
-  page.routeData = { firstRun: true, automatic: true };
-  document.body.append(page);
-  mountModelSetupPage(page);
-  await waitForSolid(() => expect(page.textContent).toContain("Start talking to your agent"));
-  button(page, "Start talking to your agent").click();
-  expect(context.navigate).toHaveBeenCalledWith(
-    "chat",
-    expect.objectContaining({
-      pathname: "/openclaw/chat/main",
-      search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
-    }),
-  );
-  expect(request.mock.calls.map(([method]) => method)).toEqual([
-    "openclaw.setup.auto",
-    "openclaw.setup.detect",
-  ]);
-});
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.setup.auto",
+      "openclaw.setup.detect",
+    ]);
+  },
+);
 
 it.each([false, true])(
   "refreshes sign-in and keeps cancellation available (shared=%s)",
@@ -203,8 +211,8 @@ it.each([false, true])(
     cancellation.resolve({ status: "running" });
     await waitForSolid(() => expect(button(page, "Cancel").disabled).toBe(false));
     answer.resolve({ done: true, status: "done" });
-    await waitForSolid(() => expect(page.textContent).toContain("Start talking to your agent"));
-    expect(calls).toBe(2);
+    await waitForSolid(() => expect(calls).toBe(2));
+    expect(page.textContent).toContain("Start talking to your agent");
   },
 );
 

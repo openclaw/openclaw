@@ -37,47 +37,8 @@ import { unmountModelSetupPage } from "./test-helpers/solid-page.test-support.ts
 
 describe("ModelSetupPage first-run inference", () => {
   useFirstRunFixtures("durable-device-private-key-for-testing", true);
-  it("verifies a first-run native selection before provisioning and handing off", async () => {
-    const { context, client, request } = createFirstRunContext();
-    const release = createDeferred<ReturnType<typeof activated>>();
-    mockRequests(request, {
-      "models.list": () => ({ models: [nativeModel()] }),
-      "openclaw.setup.activate.start": () => release.promise,
-    });
-    const { page } = await mountDetection(context, client);
-    pageButton(page, "[data-native-model-setup] .picker-select__trigger")!.click();
-    const option = '[role="option"][data-value="acp-opencode/fixture-model"]';
-    await waitForElement(page, option);
-    page.querySelector<HTMLElement>(option)!.click();
-    await page.updateComplete;
-    pageButton(page, "[data-native-model-setup] button.primary")!.click();
-    try {
-      await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith(
-          "openclaw.setup.activate.start",
-          {
-            sessionId: expect.any(String),
-            agentId: "main",
-            kind: "native-model",
-            modelRef: "acp-opencode/fixture-model",
-            agentRuntime: "acp-opencode",
-            completeFirstAgent: true,
-          },
-          expect.any(Object),
-        ),
-      );
-      expect(request.mock.calls.some(([method]) => method === "agents.update")).toBe(false);
-      expect(context.navigate).not.toHaveBeenCalled();
-      release.resolve(activated("acp-opencode/fixture-model"));
-      await waitForOnboarding(context);
-      expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
-    } finally {
-      release.resolve(activated("acp-opencode/fixture-model"));
-    }
-  });
-
   it.each(["current", "reconnect", "rejected"])(
-    "finishes Settings native Use only while its page is current (%s)",
+    "finishes native Use only while its page is current (%s)",
     async (owner) => {
       const entered = createDeferred();
       const release = createDeferred();
@@ -107,7 +68,7 @@ describe("ModelSetupPage first-run inference", () => {
           agents: [{ id: "main", model: "acp-opencode/fixture-model" }],
         }),
       });
-      const { page } = await mountDetection(context, client, detection, false);
+      const { page } = await mountDetection(context, client, detection);
       try {
         pageButton(page, "[data-native-model-setup] .picker-select__trigger")!.click();
         const option = '[role="option"][data-value="acp-opencode/fixture-model"]';
@@ -217,13 +178,12 @@ describe("ModelSetupPage first-run inference", () => {
 
     await waitForFast(() => {
       expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
-        ["openclaw.setup.verify", { agentId: "main", completeFirstAgent: true }],
+        ["openclaw.setup.verify", { agentId: "main" }],
         [
           "openclaw.setup.activate.start",
           {
             sessionId: expect.any(String),
             agentId: "main",
-            completeFirstAgent: true,
             kind: "anthropic-api-key",
             modelRef: "anthropic/replacement",
           },
@@ -263,22 +223,15 @@ describe("ModelSetupPage first-run inference", () => {
       expect(context.navigate).not.toHaveBeenCalled();
       const retry = pageButton(page, ".model-setup__current button")!;
       expect(retry.disabled).toBe(false);
-      request.mockResolvedValueOnce({
-        ok: true,
-        modelRef: "openai/existing",
-        latencyMs: 31,
-        firstAgent: { agentId: "main", sessionKey: "agent:main:main", bootstrapPending: true },
-      });
+      request.mockResolvedValueOnce({ ok: true, modelRef: "openai/existing", latencyMs: 31 });
       retry.click();
       await waitForElement(page, ".model-setup__verified");
       const continueSetup = [...page.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
         button.textContent?.includes("Start talking to your agent"),
       )!;
       continueSetup.click();
-      expect(context.navigate).toHaveBeenCalledWith("chat", {
-        pathname: "/openclaw/chat/main",
-        search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
-      });
+      // Verification alone never provisions; the handoff opens the ordinary chat.
+      expect(context.navigate).toHaveBeenCalledWith("chat");
       expect(request.mock.calls.map(([method]) => method)).toEqual([
         "openclaw.setup.verify",
         "openclaw.setup.verify",
@@ -347,12 +300,9 @@ describe("ModelSetupPage first-run inference", () => {
             "openclaw.setup.detect",
             "openclaw.setup.verify",
           ]);
-          expect(context.navigate).toHaveBeenCalledWith("chat", {
-            pathname: "/openclaw/chat/main",
-            search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
-          });
+          // Recovery without the activation reply has no handoff target: open chat.
+          expect(context.navigate).toHaveBeenCalledWith("chat");
         });
-        expect(context.navigate).not.toHaveBeenCalledWith("chat");
         activation.resolve(activated(expected, { gatewayRestartRequired: true }));
       } else {
         await waitForFast(() => {
@@ -437,7 +387,6 @@ describe("ModelSetupPage first-run inference", () => {
           {
             sessionId: expect.any(String),
             agentId: "main",
-            completeFirstAgent: true,
             kind: "anthropic-api-key",
             modelRef: "anthropic/fresh",
           },
@@ -569,7 +518,7 @@ describe("ModelSetupPage first-run application recovery", () => {
     expect(relaunched.request).toHaveBeenCalledOnce();
     expect(relaunched.request).toHaveBeenCalledWith(
       "openclaw.setup.verify",
-      { agentId: "main", completeFirstAgent: true },
+      { agentId: "main" },
       { timeoutMs: MODEL_SETUP_VERIFY_TIMEOUT_MS, signal: expect.any(AbortSignal) },
     );
   });

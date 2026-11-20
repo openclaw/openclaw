@@ -111,7 +111,6 @@ describe("Model setup refresh continuity", () => {
         getConnection: () => null,
         canUseSetup: (candidate) => candidate === client,
         blocked: () => false,
-        activateFirstRun: () => {},
         onSelected: () => {},
         onChange: () => {},
       }),

@@ -15,14 +15,12 @@ type SetupActivation = Pick<
   | "kind"
   | "agentId"
   | "modelRef"
-  | "agentRuntime"
   | "modelTarget"
   | "authChoice"
   | "apiKey"
   | "workspace"
   | "nativeSessionCatalogsEnabled"
   | "selectModel"
-  | "completeFirstAgent"
 >;
 type AuthWizardRequest = {
   ownerKey: string;
@@ -62,7 +60,6 @@ async function admitSetupActivationSession(
       previous.activation.workspace !== activation.workspace ||
       previous.activation.modelTarget !== activation.modelTarget ||
       previous.activation.selectModel !== activation.selectModel ||
-      previous.activation.completeFirstAgent !== activation.completeFirstAgent ||
       previous.activation.nativeSessionCatalogsEnabled !== activation.nativeSessionCatalogsEnabled)
   ) {
     return undefined;

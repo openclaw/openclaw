@@ -44,7 +44,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
-import { completeSetupFirstAgent } from "./setup-first-agent.js";
+import { describeSetupFirstAgent } from "./setup-first-agent.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
 import {
   fixture,
@@ -369,7 +369,6 @@ it.each(["native", "header"])(
         authChoice: "meta/muse-code",
         agentId: "main",
         selectModel: true,
-        completeFirstAgent: true,
         nativeSessionCatalogsEnabled: false,
       });
       const initial = await readConfigFileSnapshot();
@@ -426,9 +425,8 @@ it.each(["native", "header"])(
         activateSetupInference({
           kind: "provider-auth",
           authChoice: "muse-code",
-          completeFirstAgent: true,
           nativeSessionCatalogsEnabled: false,
-          surface: "cli",
+          surface: "gateway",
           runtime: createNonExitingRuntime(),
           prompter: setup.prompter,
         }),
@@ -443,7 +441,7 @@ it.each(["native", "header"])(
     expect(await fs.readFile(path.join(setup.workspace, "BOOTSTRAP.md"), "utf8")).toContain(
       "The user's request always comes first.",
     );
-    await expect(completeSetupFirstAgent({ modelRef: selectedModel })).resolves.toEqual({
+    await expect(describeSetupFirstAgent({})).resolves.toEqual({
       agentId: "main",
       sessionKey: "agent:main:main",
       bootstrapPending: true,
