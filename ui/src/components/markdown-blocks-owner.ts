@@ -113,7 +113,9 @@ export class MarkdownBlocks {
   }
 
   refreshFileLinks(scope: string | undefined): void {
-    if (this.#fileLinkScope === scope) return;
+    if (this.#fileLinkScope === scope) {
+      return;
+    }
     this.#fileLinkScope = scope;
     this.#collectBlocks(this.#root);
   }

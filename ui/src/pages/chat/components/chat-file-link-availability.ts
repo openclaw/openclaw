@@ -37,14 +37,20 @@ export async function checkFileLinkAvailability(
   const requests = new Map<string, { files: Reference[]; keys: string[] }>();
   for (const element of links) {
     const previous = unavailableFileLinks.get(element);
-    if (previous?.scope === scope) continue;
+    if (previous?.scope === scope) {
+      continue;
+    }
     const anchor = previous?.anchor ?? element;
-    if (!(anchor instanceof HTMLAnchorElement)) continue;
+    if (!(anchor instanceof HTMLAnchorElement)) {
+      continue;
+    }
     if (previous) {
       const focused = element.ownerDocument.activeElement === element;
       anchor.append(...element.childNodes);
       element.replaceWith(anchor);
-      if (focused) anchor.focus({ preventScroll: true });
+      if (focused) {
+        anchor.focus({ preventScroll: true });
+      }
       unavailableFileLinks.delete(element);
     }
     const target = markdownFileLinkFromAnchor(anchor);
@@ -114,13 +120,19 @@ const unavailableFileLinks = new WeakMap<
 
 /** Demoted references retain their anchor for a subsequent owner-driven recheck. */
 function unlink(anchor: HTMLAnchorElement, scope: string) {
-  if (!anchor.isConnected) return;
+  if (!anchor.isConnected) {
+    return;
+  }
   const text = document.createElement("span");
   text.dataset.filePath = anchor.dataset.filePath;
   text.append(...anchor.childNodes);
   const focused = anchor.ownerDocument.activeElement === anchor;
-  if (focused) text.tabIndex = -1;
+  if (focused) {
+    text.tabIndex = -1;
+  }
   unavailableFileLinks.set(text, { anchor, scope });
   anchor.replaceWith(text);
-  if (focused) text.focus({ preventScroll: true });
+  if (focused) {
+    text.focus({ preventScroll: true });
+  }
 }
