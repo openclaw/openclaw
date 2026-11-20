@@ -5,10 +5,10 @@ import type {
   TranscriptUtterance as ProjectedTranscriptUtterance,
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import type { TranscriptSourceLocator } from "./provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "./source-locator.js";
 import { normalizeExportText } from "./store-artifacts.js";
 import type { TranscriptReadEntry, TranscriptReadNotes } from "./store-types.js";
+import type { TranscriptSourceLocator } from "./types.js";
 
 /** Only public locator fields cross the Gateway; provider-private keys stay in the archive. */
 export function projectTranscriptSource(

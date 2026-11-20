@@ -1,6 +1,7 @@
 import { reasoningTagTextPolicy } from "../provider-options.js";
 import {
   PROVIDER_CONTEXT_HANDOFF,
+  PROVIDER_DEFERRED_TOOL_NAMES,
   PROVIDER_MODEL_INPUT,
   type ProviderStreamOptions,
 } from "../provider-types.js";
@@ -25,6 +26,7 @@ export function buildBaseOptions(
   const baseOptions = {
     [PROVIDER_CONTEXT_HANDOFF]: options?.[PROVIDER_CONTEXT_HANDOFF],
     [PROVIDER_MODEL_INPUT]: options?.[PROVIDER_MODEL_INPUT],
+    [PROVIDER_DEFERRED_TOOL_NAMES]: options?.[PROVIDER_DEFERRED_TOOL_NAMES],
     temperature: options?.temperature,
     ...(options?.serviceTier ? { serviceTier: options.serviceTier } : {}),
     maxTokens: options?.maxTokens,

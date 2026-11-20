@@ -74,9 +74,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>publish</name>\n    <location>/skills/publish/SKILL.md</location>\n  </skill>\n</available_skills>",
     });
-    expect(prompt).toContain("read exact <location>");
+    expect(prompt).toContain("read exact `<location>`");
     expect(prompt).toContain(
-      "## Execution Bias\n- Actionable request: act now. Explicit skill workflow gates override this bias; user instructions, prior authorization, safety, and tool policy remain authoritative.",
+      "## Execution Bias\n- Act now on actionable requests using available tools; tool policy and approvals gate risk, so do not pre-refuse or ask unrequired permission. Explicit skill gates, user instructions, prior authorization, safety, and tool policy remain authoritative.",
     );
   });
 
@@ -211,7 +211,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain("Subagent-only command guidance.");
     expect(prompt).toContain("## Promised Work");
-    expect(prompt).toContain("Progress such as `running` is not completion.");
+    expect(prompt).toContain("`running` is not completion.");
     expect(prompt.match(/## Promised Work/g)).toHaveLength(1);
   });
 

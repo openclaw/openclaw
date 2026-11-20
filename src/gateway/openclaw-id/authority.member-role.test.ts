@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   formatIrohEndpointKey,
   generateEd25519Signer,
@@ -10,10 +10,88 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOpenClawIdAuthority } from "./authority.js";
 import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
-import { linkedClaw, memoryStore, serviceFor } from "./openclaw-id.test-support.js";
+import { linkedClaw, memoryStore, ownerInvite, serviceFor } from "./openclaw-id.test-support.js";
 import { resolveOpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
 
+const { spawnCommand } = vi.hoisted(() => ({ spawnCommand: vi.fn() }));
+// mock-isolation: container engine I/O is synthetic; config, authority and storage stay real.
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
+  spawnCommand,
+}));
+let sandboxImage: "present" | "missing" = "present";
+beforeEach(() => {
+  sandboxImage = "present";
+  spawnCommand.mockReset().mockImplementation(async (argv: string[]) => {
+    const missing = sandboxImage === "missing" && argv.includes("inspect");
+    return {
+      failed: missing,
+      isCanceled: false,
+      exitCode: missing ? 1 : 0,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.from(missing ? "Error: No such image: openclaw-sandbox:trixie-slim" : ""),
+    };
+  });
+});
 afterEach(clearRuntimeConfigSnapshot);
+
+it.each(["tunnel", "local_operator"] as const)(
+  "refuses inviting or moving anyone to a sandbox role whose image is missing on %s",
+  async (channel) => {
+    setRuntimeConfigSnapshot({ gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } } });
+    sandboxImage = "missing";
+    const claw = await linkedClaw();
+    const { service } = serviceFor(claw.authority);
+    const peer = formatIrohEndpointKey(new Uint8Array(32).fill(22));
+    const refusal = {
+      ok: false,
+      code: "sandbox_unavailable",
+      detail:
+        "The guest role requires a sandbox, but its sandbox image openclaw-sandbox:trixie-slim is missing on this claw. Set up sandboxing, then try again.",
+    };
+    try {
+      const invite = await ownerInvite(claw, { email: "guest@example.test", role: "guest" });
+      expect(
+        await service.registerInvite(channel, { cap: invite.cap, proofKey: invite.proofKey }),
+      ).toEqual(refusal);
+      expect((await claw.authority.load())?.authority?.invites).toEqual({});
+      await service.submitStatement(
+        channel,
+        await claw.sign({
+          op: "add",
+          account_id: "member",
+          role: "viewer",
+          peer_keys: [peer],
+          invite_id: null,
+        }),
+      );
+      // A forged grant is refused on its signature before any engine probe runs.
+      spawnCommand.mockClear();
+      expect(
+        await service.submitStatement(
+          channel,
+          await claw.sign(
+            { op: "set_role", account_id: "member", role: "guest" },
+            await generateEd25519Signer(),
+          ),
+        ),
+      ).toMatchObject({ ok: false, code: expect.not.stringMatching("sandbox_unavailable") });
+      expect(spawnCommand).not.toHaveBeenCalled();
+      const moveToGuest = await claw.sign({ op: "set_role", account_id: "member", role: "guest" });
+      expect(await service.submitStatement(channel, moveToGuest)).toEqual(refusal);
+      expect(await claw.authority.resolvePeer(peer)).toMatchObject({ role: "viewer" });
+
+      sandboxImage = "present";
+      expect(
+        await service.registerInvite(channel, { cap: invite.cap, proofKey: invite.proofKey }),
+      ).toMatchObject({ ok: true });
+      expect(await service.submitStatement(channel, moveToGuest)).toMatchObject({ ok: true });
+      expect(await claw.authority.resolvePeer(peer)).toMatchObject({ role: "guest" });
+    } finally {
+      await service.stop();
+    }
+  },
+);
 
 it.each(["tunnel", "local_operator"] as const)(
   "validates set_role at the authority on %s and disconnects the member",

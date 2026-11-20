@@ -614,6 +614,10 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sandboxSessionKey,
     ...(sandbox !== undefined ? { sandbox } : {}),
     codeModeControlsEnabled: codeModeControlsEnabledForRun,
+    getDeferredToolEntries: () =>
+      input.toolCatalog.deferredDirectoryToolsCallable
+        ? toolSearchCatalogRef?.current?.entries
+        : undefined,
     providerPromptState: {
       state: getProviderPromptState(attempt.runId),
       effectiveContextTokenBudget: Math.max(

@@ -59,6 +59,7 @@ export { patchSession } from "./session-organizer-patch.runtime.ts";
 
 export { setSessionInvolvement } from "./session-organizer-batch-mutations.ts";
 export {
+  archiveSessionGroupWithUndo,
   archiveSessionWithUndo,
   confirmRunningSessionsArchive,
   promoteSession,

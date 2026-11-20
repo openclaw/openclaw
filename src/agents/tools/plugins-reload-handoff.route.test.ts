@@ -15,8 +15,15 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { resolveEmbeddedRunTerminal } from "../embedded-agent-runner/run/terminal-resolution.js";
+import {
+  expectComplete,
+  makeTerminalInput,
+  textAssistant,
+} from "../embedded-agent-runner/run/terminal-resolution.test-support.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createPluginsTool } from "./plugins-tool.js";
+import { handoffSessionTool } from "./session-tool-handoff.js";
 
 const request = { action: "reloadAndResume", pluginId: "reload-fixture" };
 
@@ -36,6 +43,13 @@ afterEach(() => {
 });
 
 it.each([
+  {
+    id: "retained after-turn handoff with an empty final answer",
+    caller: { turnSourceChannel: "webchat" },
+    stored: "webchat",
+    expectedRoute: false,
+    afterTurn: true,
+  },
   {
     id: "webchat turn without recipient",
     caller: { turnSourceChannel: "webchat" },
@@ -90,7 +104,9 @@ it.each([
     stored: "telegram",
     expectedRoute: false,
   },
-] as const)("selects the reload resume route: $id", async ({ caller, stored, expectedRoute }) => {
+] as const)("selects the reload resume route: $id", async (scenario) => {
+  const { caller, stored, expectedRoute } = scenario;
+  const afterTurn = "afterTurn" in scenario;
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sessionKey = "agent:main:reload-route";
     const sessionId = "reload-route-session";
@@ -116,7 +132,9 @@ it.each([
     operation.attachBackend({ kind: "embedded", runId, cancel: () => {} });
     const cleanup = createDeferredCore();
     const observed = createDeferredCore<Parameters<typeof events.enqueueSessionEventForHost>[1]>();
-    vi.spyOn(events, "enqueueSessionEventForHost").mockImplementation((_text, options) => {
+    let resumedText = "";
+    vi.spyOn(events, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+      resumedText = text;
       observed.resolve(options);
       return {
         id: "resume-route",
@@ -132,6 +150,7 @@ it.each([
     const endpoint = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
       respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["reload-fixture"] } });
     });
+    const deferredWork = vi.fn(async () => ({ ok: true, answer: "Retained result" }));
     const context = createContext(
       [["plugins.reload", "operator.admin", "plugins", endpoint]],
       () => config,
@@ -139,11 +158,21 @@ it.each([
     context.resolveGatewayContext = () => context;
     const invoke = () =>
       withSessionControllerOwner(operation, async () => {
-        const result = await createPluginsTool({
+        const options = {
           sessionId,
           runId,
           onYield: () => operation.completeWithAfterClearBarrier(cleanup.promise),
-        }).execute("reload-route", request);
+        };
+        const result = afterTurn
+          ? await handoffSessionTool({
+              ...options,
+              operation,
+              name: "Reload",
+              yield: "after_turn",
+              run: deferredWork,
+              formatResult: JSON.stringify,
+            })
+          : await createPluginsTool(options).execute("reload-route", request);
         expect(result.details).toMatchObject({ status: "started" });
       });
     try {
@@ -158,8 +187,39 @@ it.each([
               ),
           ),
       );
+      if (afterTurn) {
+        expect(deferredWork).not.toHaveBeenCalled();
+        const terminal = await resolveEmbeddedRunTerminal(
+          makeTerminalInput({
+            assistant: textAssistant("", { stopReason: "stop" }),
+            runParams: {
+              sessionId,
+              sessionKey,
+              runId,
+              messageChannel: "webchat",
+              replyOperation: operation,
+            },
+            attemptOverrides: {
+              toolMetas: [{ toolName: "sessions_send", asyncStarted: true }],
+              itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+              replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+              currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+            },
+          }),
+        );
+        expectComplete(terminal);
+        expect(terminal.result.meta.error).toBeUndefined();
+        expect(terminal.result.meta.continuationPending).toBe(true);
+        expect(terminal.result.payloads ?? []).toEqual([]);
+        operation.completeWithAfterClearBarrier(cleanup.promise);
+      }
       cleanup.resolve();
       const options = await observed.promise;
+      if (afterTurn) {
+        expect(resumedText).toContain('"answer":"Retained result"');
+        expect(deferredWork).toHaveBeenCalledTimes(1);
+        expect(options.source).toBe("tool_handoff");
+      }
       if (expectedRoute) {
         expect(options.deliveryContext).toEqual({ channel: "webchat" });
       } else {

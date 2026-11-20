@@ -305,6 +305,8 @@ ceiling. A committed change still retires the previous access if returning the
 result fails. An authorized self-downgrade receives its response before its
 connection closes.
 
+When the full `gateway` tool is available in chat, use `users.getRole` with an exact email alias or profile ID to inspect the assigned role, effective role, and source. An administrator can then use `users.setRole` with that profile ID and a configured role name, or an explicit `null` to clear the assignment and return to the mapped or default role. These actions use the requesting operator on the current Gateway, not a remote URL or token. A maintenance-only tool profile does not expose them.
+
 The Control UI distinguishes a role ceiling from limited browser pairing. When
 the authenticated role does not allow administrator access, its limited-access
 notice explains that device approval cannot grant it and does not offer
@@ -669,6 +671,17 @@ sessions and logs an `agent/sandbox` warning, preventing the shared agent
 workspace from becoming a writable bridge between guests. Maintainer sessions
 and other sessions without a role-required sandbox keep their configured scope
 and workspace access.
+
+A role may require a sandbox before sandboxing is set up, but the Gateway refuses
+to grant it until that sandbox can start. Creating an OpenClaw ID invite for the
+role, or changing a member to it, fails with `sandbox_unavailable` unless every
+agent the role can use has a reachable Docker or Podman backend and its sandbox
+image. The **Access** page runs the same check when it loads: unready roles are
+disabled in the role pickers, and **Ask OpenClaw to set it up** starts a chat
+beside the page where your default agent sets up the sandbox it reports
+missing. Choose **Check again** when it is done. Backends the Gateway cannot check, such as SSH or plugin backends, do not
+block. Existing members keep their role; `openclaw doctor` reports a missing
+engine or image for them and offers to build the default image.
 
 The Gateway records the authenticated creator and their sandbox requirement
 together before a new session first runs, including chat, the OpenAI-compatible

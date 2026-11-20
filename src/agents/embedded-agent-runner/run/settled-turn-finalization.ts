@@ -34,6 +34,7 @@ import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js"
 import { resolveRuntimeModelAttempt } from "./backend.js";
 import {
   isSettledTurnCutOffByOutputLimit,
+  resolveSettledTurnFinalizationRequest,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
 import { CUT_OFF_SUMMARY_NOTICE_TEXT } from "./incomplete-turn-resolution.js";
@@ -44,7 +45,6 @@ import {
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
-import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type TerminalPreparationInput = Parameters<typeof prepareEmbeddedRunTerminal>[0];
