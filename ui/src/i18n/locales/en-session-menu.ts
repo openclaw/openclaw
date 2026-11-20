@@ -133,6 +133,7 @@ const catalog = {
     groupMenu: en.sessionsView.groupMenu,
     groupDefaultsMenu: "New session defaults",
     renameGroupMenu: "Rename group",
+    archiveGroupMenu: "Archive all",
     deleteGroupMenu: "Delete group",
   },
 } satisfies TranslationMap;

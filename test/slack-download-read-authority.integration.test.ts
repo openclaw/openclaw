@@ -865,7 +865,11 @@ describe("Gateway message.action Slack download completion", () => {
         }
         expect(response.ok).toBe(false);
         expect(response.payload).toBeUndefined();
-        expect(response.error?.message).toMatch(/no longer active/i);
+        expect(response.error?.message).toMatch(
+          options.revoke === "turn"
+            ? "The message turn has ended. Start a new turn to retry."
+            : /no longer active/i,
+        );
         expect(fixture.gatewayResponses).toHaveLength(1);
         expect(fixture.gatewayCacheWrites.some((entry) => entry.ok)).toBe(false);
         expect(await filesUnder(fixture.mediaDir)).toEqual([fixture.preservedPath]);

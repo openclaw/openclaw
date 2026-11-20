@@ -12,7 +12,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
@@ -27,6 +26,7 @@ import type {
 } from "../../extensions/codex/src/session-catalog-index-state.js";
 import { CodexCatalogIndex } from "../../extensions/codex/src/session-catalog-index.js";
 import type { CodexSessionCatalogPage } from "../../extensions/codex/src/session-catalog-types.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -136,10 +136,6 @@ async function collect(): Promise<void> {
   await nextTurn();
   global.gc!();
   await nextTurn();
-}
-
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
 }
 
 function inspectPreviewStrings(snapshotPath: string) {
@@ -295,7 +291,7 @@ try {
     observer.disconnect();
   }
   const allocationBytes = inspector
-    ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+    ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
     : undefined;
   inspector?.disconnect();
   nativeInputs.length = 0;

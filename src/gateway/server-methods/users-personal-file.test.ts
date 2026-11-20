@@ -24,10 +24,7 @@ import type {
   UserProfileIdentity,
 } from "../../state/user-profiles.types.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
-import {
-  openclawIdTunnelRolePolicy,
-  setOpenClawIdTunnelPrincipalLookup,
-} from "../openclaw-id/tunnel-principal.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient } from "./client-types.js";
@@ -201,9 +198,7 @@ describe("personal USER.md self-service", () => {
       profileId: "alice-alias",
       scopes,
       openclawIdPrincipal: principal,
-      readCurrentRoleFacts: principal
-        ? () => ({ assignedRole: state.role, policy: openclawIdTunnelRolePolicy(principal) })
-        : undefined,
+      readCurrentRoleFacts: principal ? () => ({ assignedRole: state.role }) : undefined,
       assertCurrent: () => {
         if (!active) {
           throw new Error("requester revoked");
@@ -250,11 +245,12 @@ describe("personal USER.md self-service", () => {
     "routes the %s requester's chat tool from a foreign session to their canonical file",
     async (scope) => {
       if (scope === "operator.admin") {
+        state.role = "admin";
         const principal = {
           kind: "member" as const,
           peerKey: "admin-member",
           accountId: "alice",
-          role: "admin",
+          role: "reader",
         };
         client.internal = { openclawIdPrincipal: principal };
         config.gateway = {

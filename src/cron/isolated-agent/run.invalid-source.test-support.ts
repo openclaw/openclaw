@@ -5,6 +5,8 @@ import {
   type OpenClawIdTunnelPrincipal,
 } from "../../gateway/openclaw-id/tunnel-principal.js";
 import { GatewayDispatchUnavailableError } from "../../infra/restart-recovery-errors.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import type { CronStoredJob } from "../types.js";
 
 export const memberSourceCases = [
@@ -27,7 +29,7 @@ export function memberSourceCase(name: (typeof memberSourceCases)[number]) {
     kind: "member",
     peerKey: `iroh:${"ab".repeat(32)}`,
     accountId: "guest-account",
-    role: name === "unknown role" ? "unknown" : "guest",
+    role: "guest",
     authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
   } satisfies OpenClawIdTunnelPrincipal;
   const role = {
@@ -48,6 +50,11 @@ export function memberSourceCase(name: (typeof memberSourceCases)[number]) {
       },
     },
   };
+  const profile = ensureProfileForEmail("scheduled-member@example.test");
+  setUserProfileRole(
+    profile.id,
+    name === "changed role" ? "viewer" : name === "unknown role" ? "unknown" : "guest",
+  );
   const transientError = name.startsWith("storage")
     ? new Error("membership storage I/O failed")
     : name.startsWith("dispatch")
@@ -56,13 +63,11 @@ export function memberSourceCase(name: (typeof memberSourceCases)[number]) {
   const current =
     name === "removed member"
       ? undefined
-      : name === "changed role"
-        ? { ...principal, role: "viewer" }
-        : name === "changed account"
-          ? { ...principal, accountId: "other-account" }
-          : name === "changed listing"
-            ? { ...principal, authority: { ...principal.authority, listedSeq: 2 } }
-            : principal;
+      : name === "changed account"
+        ? { ...principal, accountId: "other-account" }
+        : name === "changed listing"
+          ? { ...principal, authority: { ...principal.authority, listedSeq: 2 } }
+          : principal;
   setOpenClawIdTunnelPrincipalLookup(
     name === "disabled membership lookup"
       ? undefined
@@ -86,10 +91,10 @@ export function memberSourceCase(name: (typeof memberSourceCases)[number]) {
       agentId: "main",
       sourceRunId: "source-run",
       snapshot: {
-        profileId: "member-profile",
+        profileId: profile.id,
         openclawIdPrincipal: principal,
         scopes: role.scopes,
-        assignedRole: null,
+        assignedRole: "guest",
         githubLogin: null,
         rolePolicy: role,
         grant: null,
@@ -110,9 +115,10 @@ export function memberSourceCase(name: (typeof memberSourceCases)[number]) {
     cfg,
     operatorSource,
     transientError,
-    refusal:
-      name === "lost scope"
-        ? "Restart recovery operator source policy changed."
-        : "OpenClaw ID membership authority changed",
+    refusal: ["lost scope", "changed role", "deleted role definition", "unknown role"].includes(
+      name,
+    )
+      ? "Restart recovery operator source policy changed."
+      : "OpenClaw ID membership authority changed",
   };
 }

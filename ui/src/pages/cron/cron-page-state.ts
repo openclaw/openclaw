@@ -13,6 +13,7 @@ import {
   normalizeCronFormState,
   validateCronForm,
 } from "../../lib/cron/form.ts";
+import { canManageCronJob } from "../../lib/cron/human-owner.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -48,7 +49,6 @@ import {
 } from "./delivery-conversations.ts";
 import { createCronEventEditor } from "./event-editor.ts";
 import { resolveCronEventPatch, validateCronEventSelection } from "./event-source.ts";
-import { canManageCronJob } from "./human-owner.ts";
 import * as cronRoute from "./route-model.ts";
 
 registerEnglishCatalog(registerCronEnglish);
@@ -384,7 +384,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (panelKey !== lastPanelKey) {
       presentation.retire();
       lastPanelKey = panelKey;
-      setDetailTab(cronRoute.resolveCronDetailTab(cron.cronEditingJob));
+      setDetailTab(cronRoute.resolveCronDetailTab(cron.cronEditingJob, routeSelection.target));
       const scroller = host().closest(".content");
       if (scroller instanceof HTMLElement && typeof scroller.scrollTo === "function") {
         scroller.scrollTo({ top: 0 });
@@ -406,7 +406,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
             cron === current &&
             connectionScope !== null &&
             gateway.isCurrent(connectionScope),
-          (job, runId) => selectJob(job, runId),
+          (job, runId) => selectJob(job, runId, routeData.settings),
         ),
       );
     }
@@ -494,10 +494,10 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     }
   }
 
-  function selectJob(job: CronJob, runId: string | null = null) {
-    routeSelection.select(job.id, runId);
+  function selectJob(job: CronJob, runId: string | null = null, settings?: true) {
+    routeSelection.select(job.id, runId, settings);
     pendingRunScroll = Boolean(runId);
-    setDetailTab(cronRoute.resolveCronDetailTab(job));
+    setDetailTab(cronRoute.resolveCronDetailTab(job, routeSelection.target));
     cron.cronCreateOpen = false;
     // Inspecting another run of the current saved job must not discard its draft.
     if (cron.cronEditingJob !== job) {

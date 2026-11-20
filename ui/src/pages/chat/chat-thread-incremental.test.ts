@@ -546,6 +546,43 @@ describe("older-page prepend reuse", () => {
     }
   };
 
+  it("resolves an older installer declaration against a saved slot beyond the rebuilt seam", () => {
+    resetChatThreadState();
+    const receipt = (id: string, ts: number, block: object) =>
+      message(id, "assistant", ts, [block], { provider: "openclaw", model: "gateway-injected" });
+    const planId = "template:planner";
+    const slot = { slotId: "weekly", name: "Weekly review" };
+    const declaration = receipt("plan", 1, {
+      type: "automation_creation_plan",
+      planId,
+      slots: [slot],
+    });
+    const saved = receipt("saved", 100, {
+      type: "automation_creation_result",
+      planId,
+      slotId: slot.slotId,
+      status: "created",
+      jobId: "persisted",
+    });
+    const retained = [
+      ...Array.from({ length: 12 }, (_, i) => [
+        message("prompt-" + i, "user", 2 * i + 2, "Question " + i),
+        message("reply-" + i, "assistant", 2 * i + 3, "Reply " + i),
+      ]).flat(),
+      saved,
+    ];
+    const all = [declaration, ...retained];
+    build("automation-prepend", retained, {});
+    const actual = build("automation-prepend", all, {});
+    expect(actual).toEqual(build("automation-full", all, {}, fresh()));
+    const rows = actual
+      .flatMap((item) => (item.kind === "group" ? item.messages : []))
+      .flatMap((entry) => normalizeMessage(entry.message).content)
+      .flatMap((block) => (block.type === "automation_creation_card" ? block.plan.rows : []));
+    expect(rows).toEqual([{ ...slot, status: "created", jobId: "persisted" }]);
+    resetChatThreadState();
+  });
+
   it("builds only an older page and its seam turns", () => {
     resetChatThreadState();
     const corpus = createPrependCorpus(3_000);

@@ -234,6 +234,8 @@ export async function settleSessionEventTurn(params: {
       jobId: automation.job.id,
       runStartedAt: automation.job.state.runningAtMs ?? params.runStartedAt,
       conversation: { sessionKey: params.sessionKey },
+      // This turn's own reply already carries the result in model context.
+      displayOnly: true,
       payloads,
       signal: params.signal,
       deliveryAttemptFence: {

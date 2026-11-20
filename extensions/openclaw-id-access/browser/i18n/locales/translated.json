@@ -23,7 +23,16 @@
     "roleChanged": "角色已更改。其设备将以新的权限重新连接。",
     "blocked": "已阻止",
     "undefinedRole": "此 claw 上未定义角色 {role}。请选择其他角色以恢复访问权限。",
-    "yourRole": "你的角色：{role}"
+    "yourRole": "你的角色：{role}",
+    "sandboxNotReady": "需要沙盒 · 尚未设置",
+    "sandboxNeeded": "{role} 角色需要沙盒。",
+    "sandboxEngineUnavailable": "{engine} 未在托管此 claw 的计算机上运行。",
+    "sandboxImageMissing": "此 claw 尚未安装所需的沙盒。",
+    "sandboxAskBody": "OpenClaw 可以为你完成设置。",
+    "sandboxAsk": "让 OpenClaw 完成设置",
+    "sandboxAsked": "OpenClaw 正在此页面旁的聊天中处理此事。完成后，请再次检查，即可邀请他人担任此角色。",
+    "sandboxAskFailed": "无法与 OpenClaw 发起聊天。请重试。",
+    "sandboxCheckAgain": "再次检查"
   },
   "zh-TW": {
     "role": "角色",
@@ -49,7 +58,16 @@
     "roleChanged": "角色已變更。對方的裝置將以新的權限重新連線。",
     "blocked": "已封鎖",
     "undefinedRole": "此 claw 未定義 {role} 角色。請選擇其他角色以恢復存取權限。",
-    "yourRole": "您的角色：{role}"
+    "yourRole": "您的角色：{role}",
+    "sandboxNotReady": "需要沙箱 · 尚未設定",
+    "sandboxNeeded": "{role} 角色需要沙箱。",
+    "sandboxEngineUnavailable": "{engine} 未在託管此 claw 的電腦上執行。",
+    "sandboxImageMissing": "此 claw 尚未安裝所需的沙箱。",
+    "sandboxAskBody": "OpenClaw 可以為你完成設定。",
+    "sandboxAsk": "請 OpenClaw 協助設定",
+    "sandboxAsked": "OpenClaw 正在此頁面旁的聊天中處理這項設定。完成後，請再次檢查，即可以此角色邀請他人。",
+    "sandboxAskFailed": "無法與 OpenClaw 開始聊天。請再試一次。",
+    "sandboxCheckAgain": "再次檢查"
   },
   "pt-BR": {
     "role": "Função",
@@ -75,7 +93,16 @@
     "roleChanged": "Função alterada. Os dispositivos dessa pessoa se reconectam com as novas permissões de acesso.",
     "blocked": "Bloqueado",
     "undefinedRole": "A função {role} não está definida neste claw. Escolha outra função para restaurar o acesso.",
-    "yourRole": "Sua função: {role}"
+    "yourRole": "Sua função: {role}",
+    "sandboxNotReady": "Sandbox necessário · ainda não configurado",
+    "sandboxNeeded": "A função {role} precisa de um sandbox.",
+    "sandboxEngineUnavailable": "{engine} não está em execução no computador que hospeda este claw.",
+    "sandboxImageMissing": "O sandbox dessa função ainda não está instalado neste claw.",
+    "sandboxAskBody": "O OpenClaw pode configurar isso para você.",
+    "sandboxAsk": "Pedir ao OpenClaw para configurar",
+    "sandboxAsked": "O OpenClaw está cuidando disso no chat ao lado desta página. Quando terminar, verifique novamente para convidar pessoas com esta função.",
+    "sandboxAskFailed": "Não foi possível iniciar um chat com o OpenClaw. Tente novamente.",
+    "sandboxCheckAgain": "Verificar novamente"
   },
   "de": {
     "role": "Rolle",
@@ -101,7 +128,16 @@
     "roleChanged": "Rolle geändert. Die Geräte dieser Person verbinden sich mit den neuen Zugriffsrechten erneut.",
     "blocked": "Blockiert",
     "undefinedRole": "Die Rolle {role} ist auf diesem Claw nicht definiert. Wähle eine andere Rolle, um den Zugriff wiederherzustellen.",
-    "yourRole": "Deine Rolle: {role}"
+    "yourRole": "Deine Rolle: {role}",
+    "sandboxNotReady": "Sandbox erforderlich · noch nicht eingerichtet",
+    "sandboxNeeded": "Die Rolle {role} benötigt eine Sandbox.",
+    "sandboxEngineUnavailable": "{engine} läuft nicht auf dem Computer, auf dem dieser Claw gehostet wird.",
+    "sandboxImageMissing": "Die Sandbox ist auf diesem Claw noch nicht installiert.",
+    "sandboxAskBody": "OpenClaw kann die Einrichtung für dich übernehmen.",
+    "sandboxAsk": "OpenClaw um die Einrichtung bitten",
+    "sandboxAsked": "OpenClaw arbeitet im Chat neben dieser Seite daran. Prüfe nach Abschluss erneut, ob du Personen mit dieser Rolle einladen kannst.",
+    "sandboxAskFailed": "Der Chat mit OpenClaw konnte nicht gestartet werden. Versuche es erneut.",
+    "sandboxCheckAgain": "Erneut prüfen"
   },
   "es": {
     "role": "Rol",
@@ -127,7 +163,16 @@
     "roleChanged": "Rol cambiado. Sus dispositivos se vuelven a conectar con los nuevos permisos de acceso.",
     "blocked": "Bloqueado",
     "undefinedRole": "El rol {role} no está definido en este claw. Elige otro rol para restablecer el acceso.",
-    "yourRole": "Tu rol: {role}"
+    "yourRole": "Tu rol: {role}",
+    "sandboxNotReady": "Se requiere un entorno aislado · aún sin configurar",
+    "sandboxNeeded": "El rol {role} necesita un entorno aislado.",
+    "sandboxEngineUnavailable": "{engine} no está en ejecución en el equipo que aloja este claw.",
+    "sandboxImageMissing": "Su entorno aislado aún no está instalado en este claw.",
+    "sandboxAskBody": "OpenClaw puede configurarlo por ti.",
+    "sandboxAsk": "Pedir a OpenClaw que lo configure",
+    "sandboxAsked": "OpenClaw está trabajando en ello en el chat junto a esta página. Cuando termine, vuelve a comprobarlo para invitar a personas con este rol.",
+    "sandboxAskFailed": "No se pudo iniciar un chat con OpenClaw. Inténtalo de nuevo.",
+    "sandboxCheckAgain": "Volver a comprobar"
   },
   "ja-JP": {
     "role": "ロール",
@@ -153,7 +198,16 @@
     "roleChanged": "ロールを変更しました。対象ユーザーのデバイスは新しいアクセス権限で再接続されます。",
     "blocked": "ブロック済み",
     "undefinedRole": "この claw ではロール {role} が定義されていません。アクセスを復元するには、別のロールを選択してください。",
-    "yourRole": "あなたのロール: {role}"
+    "yourRole": "あなたのロール: {role}",
+    "sandboxNotReady": "サンドボックスが必要 · 未設定",
+    "sandboxNeeded": "{role}ロールにはサンドボックスが必要です。",
+    "sandboxEngineUnavailable": "このclawをホストしているコンピューターで{engine}が実行されていません。",
+    "sandboxImageMissing": "このclawには、必要なサンドボックスがまだインストールされていません。",
+    "sandboxAskBody": "OpenClawに設定を任せることができます。",
+    "sandboxAsk": "OpenClawに設定を依頼",
+    "sandboxAsked": "OpenClawがこのページの横のチャットで設定を進めています。完了したら再確認して、このロールでユーザーを招待してください。",
+    "sandboxAskFailed": "OpenClawとのチャットを開始できませんでした。もう一度お試しください。",
+    "sandboxCheckAgain": "再確認"
   },
   "ko": {
     "role": "역할",
@@ -179,7 +233,16 @@
     "roleChanged": "역할이 변경되었습니다. 해당 멤버의 기기가 새 권한으로 다시 연결됩니다.",
     "blocked": "차단됨",
     "undefinedRole": "이 claw에 {role} 역할이 정의되어 있지 않습니다. 액세스 권한을 복원하려면 다른 역할을 선택하세요.",
-    "yourRole": "내 역할: {role}"
+    "yourRole": "내 역할: {role}",
+    "sandboxNotReady": "샌드박스 필요 · 아직 설정되지 않음",
+    "sandboxNeeded": "{role} 역할에는 샌드박스가 필요합니다.",
+    "sandboxEngineUnavailable": "이 claw를 호스팅하는 컴퓨터에서 {engine}이 실행되고 있지 않습니다.",
+    "sandboxImageMissing": "이 claw에는 아직 샌드박스가 설치되지 않았습니다.",
+    "sandboxAskBody": "OpenClaw가 대신 설정할 수 있습니다.",
+    "sandboxAsk": "OpenClaw에 설정 요청",
+    "sandboxAsked": "OpenClaw가 이 페이지 옆의 채팅에서 설정을 진행하고 있습니다. 완료되면 다시 확인하여 이 역할로 사람들을 초대하세요.",
+    "sandboxAskFailed": "OpenClaw와 채팅을 시작하지 못했습니다. 다시 시도하세요.",
+    "sandboxCheckAgain": "다시 확인"
   },
   "fr": {
     "role": "Rôle",
@@ -205,7 +268,16 @@
     "roleChanged": "Rôle modifié. Les appareils de cette personne se reconnectent avec les nouveaux droits d’accès.",
     "blocked": "Bloqué",
     "undefinedRole": "Le rôle {role} n’est pas défini sur ce claw. Choisissez un autre rôle pour rétablir l’accès.",
-    "yourRole": "Votre rôle : {role}"
+    "yourRole": "Votre rôle : {role}",
+    "sandboxNotReady": "Environnement isolé requis · pas encore configuré",
+    "sandboxNeeded": "Le rôle {role} nécessite un environnement isolé.",
+    "sandboxEngineUnavailable": "{engine} n’est pas en cours d’exécution sur l’ordinateur qui héberge ce claw.",
+    "sandboxImageMissing": "Son environnement isolé n’est pas encore installé sur ce claw.",
+    "sandboxAskBody": "OpenClaw peut le configurer pour vous.",
+    "sandboxAsk": "Demander à OpenClaw de le configurer",
+    "sandboxAsked": "OpenClaw s’en occupe dans la discussion à côté de cette page. Une fois la configuration terminée, vérifiez à nouveau pour inviter des personnes avec ce rôle.",
+    "sandboxAskFailed": "Impossible de démarrer une discussion avec OpenClaw. Réessayez.",
+    "sandboxCheckAgain": "Vérifier à nouveau"
   },
   "hi": {
     "role": "भूमिका",
@@ -231,7 +303,16 @@
     "roleChanged": "भूमिका बदल दी गई है। उनके डिवाइस नए पहुँच अधिकारों के साथ फिर से कनेक्ट होंगे।",
     "blocked": "ब्लॉक किया गया",
     "undefinedRole": "इस claw पर {role} भूमिका परिभाषित नहीं है। पहुँच बहाल करने के लिए कोई दूसरी भूमिका चुनें।",
-    "yourRole": "आपकी भूमिका: {role}"
+    "yourRole": "आपकी भूमिका: {role}",
+    "sandboxNotReady": "सैंडबॉक्स ज़रूरी है · अभी सेट अप नहीं हुआ है",
+    "sandboxNeeded": "{role} भूमिका के लिए सैंडबॉक्स ज़रूरी है।",
+    "sandboxEngineUnavailable": "इस claw को होस्ट करने वाले कंप्यूटर पर {engine} नहीं चल रहा है।",
+    "sandboxImageMissing": "इस claw पर अभी इसका सैंडबॉक्स इंस्टॉल नहीं है।",
+    "sandboxAskBody": "OpenClaw आपके लिए इसे सेट अप कर सकता है।",
+    "sandboxAsk": "OpenClaw से इसे सेट अप करने के लिए कहें",
+    "sandboxAsked": "OpenClaw इस पेज के बगल में मौजूद चैट में इस पर काम कर रहा है। काम पूरा होने पर, इस भूमिका वाले लोगों को आमंत्रित करने के लिए फिर से जाँचें।",
+    "sandboxAskFailed": "OpenClaw के साथ चैट शुरू नहीं हो सकी। फिर से कोशिश करें।",
+    "sandboxCheckAgain": "फिर से जाँचें"
   },
   "ar": {
     "role": "الدور",
@@ -257,7 +338,16 @@
     "roleChanged": "تم تغيير الدور. ستُعاد اتصالات أجهزة العضو بالصلاحيات الجديدة.",
     "blocked": "محظور",
     "undefinedRole": "الدور {role} غير معرّف على هذا الـ claw. اختر دورًا آخر لاستعادة الوصول.",
-    "yourRole": "دورك: {role}"
+    "yourRole": "دورك: {role}",
+    "sandboxNotReady": "بيئة معزولة مطلوبة · لم تُعَدّ بعد",
+    "sandboxNeeded": "يتطلب الدور {role} بيئة معزولة.",
+    "sandboxEngineUnavailable": "{engine} لا يعمل على الكمبيوتر الذي يستضيف هذا الـ claw.",
+    "sandboxImageMissing": "لم تُثبَّت بيئته المعزولة على هذا الـ claw بعد.",
+    "sandboxAskBody": "يمكن لـ OpenClaw إعداد ذلك لك.",
+    "sandboxAsk": "اطلب من OpenClaw إعداده",
+    "sandboxAsked": "يعمل OpenClaw على هذا في المحادثة بجانب هذه الصفحة. عند الانتهاء، تحقّق مجددًا لدعوة أشخاص بهذا الدور.",
+    "sandboxAskFailed": "تعذّر بدء محادثة مع OpenClaw. حاول مرة أخرى.",
+    "sandboxCheckAgain": "تحقّق مجددًا"
   },
   "it": {
     "role": "Ruolo",
@@ -283,7 +373,16 @@
     "roleChanged": "Ruolo modificato. I dispositivi del membro si riconnettono con i nuovi permessi di accesso.",
     "blocked": "Bloccato",
     "undefinedRole": "Il ruolo {role} non è definito su questo claw. Scegli un altro ruolo per ripristinare l'accesso.",
-    "yourRole": "Il tuo ruolo: {role}"
+    "yourRole": "Il tuo ruolo: {role}",
+    "sandboxNotReady": "Sandbox necessaria · non ancora configurata",
+    "sandboxNeeded": "Il ruolo {role} richiede una sandbox.",
+    "sandboxEngineUnavailable": "{engine} non è in esecuzione sul computer che ospita questo claw.",
+    "sandboxImageMissing": "La sandbox non è ancora installata su questo claw.",
+    "sandboxAskBody": "OpenClaw può configurarla per te.",
+    "sandboxAsk": "Chiedi a OpenClaw di configurarla",
+    "sandboxAsked": "OpenClaw se ne sta occupando nella chat accanto a questa pagina. Al termine, verifica di nuovo per invitare persone con questo ruolo.",
+    "sandboxAskFailed": "Impossibile avviare una chat con OpenClaw. Riprova.",
+    "sandboxCheckAgain": "Verifica di nuovo"
   },
   "tr": {
     "role": "Rol",
@@ -309,7 +408,16 @@
     "roleChanged": "Rol değiştirildi. Üyenin cihazları yeni erişim yetkileriyle yeniden bağlanır.",
     "blocked": "Engellendi",
     "undefinedRole": "{role} rolü bu claw üzerinde tanımlı değil. Erişimi yeniden sağlamak için başka bir rol seçin.",
-    "yourRole": "Rolünüz: {role}"
+    "yourRole": "Rolünüz: {role}",
+    "sandboxNotReady": "Sandbox gerekli · henüz kurulmadı",
+    "sandboxNeeded": "{role} rolü için bir sandbox gerekiyor.",
+    "sandboxEngineUnavailable": "{engine}, bu claw'ı barındıran bilgisayarda çalışmıyor.",
+    "sandboxImageMissing": "Bu claw'ın sandbox'ı henüz yüklü değil.",
+    "sandboxAskBody": "OpenClaw bunu sizin için kurabilir.",
+    "sandboxAsk": "OpenClaw'dan kurmasını isteyin",
+    "sandboxAsked": "OpenClaw, bu sayfanın yanındaki sohbette bunun üzerinde çalışıyor. İşlem tamamlandığında bu rolle kişileri davet etmek için tekrar kontrol edin.",
+    "sandboxAskFailed": "OpenClaw ile sohbet başlatılamadı. Tekrar deneyin.",
+    "sandboxCheckAgain": "Tekrar kontrol et"
   },
   "uk": {
     "role": "Роль",
@@ -335,7 +443,16 @@
     "roleChanged": "Роль змінено. Пристрої цього користувача перепідключаються з новими правами доступу.",
     "blocked": "Заблоковано",
     "undefinedRole": "Роль {role} не визначено для цього claw. Виберіть іншу роль, щоб відновити доступ.",
-    "yourRole": "Ваша роль: {role}"
+    "yourRole": "Ваша роль: {role}",
+    "sandboxNotReady": "Потрібна пісочниця · ще не налаштовано",
+    "sandboxNeeded": "Для ролі {role} потрібна пісочниця.",
+    "sandboxEngineUnavailable": "{engine} не запущено на комп’ютері, де розміщено цей claw.",
+    "sandboxImageMissing": "Пісочницю для цієї ролі ще не встановлено на цьому claw.",
+    "sandboxAskBody": "OpenClaw може налаштувати це для вас.",
+    "sandboxAsk": "Попросити OpenClaw налаштувати",
+    "sandboxAsked": "OpenClaw працює над цим у чаті поруч із цією сторінкою. Коли все буде готово, перевірте ще раз, щоб запросити людей із цією роллю.",
+    "sandboxAskFailed": "Не вдалося розпочати чат з OpenClaw. Спробуйте ще раз.",
+    "sandboxCheckAgain": "Перевірити ще раз"
   },
   "id": {
     "role": "Peran",
@@ -361,7 +478,16 @@
     "roleChanged": "Peran diubah. Perangkat mereka terhubung kembali dengan akses baru.",
     "blocked": "Diblokir",
     "undefinedRole": "Peran {role} tidak ditentukan pada claw ini. Pilih peran lain untuk memulihkan akses.",
-    "yourRole": "Peran Anda: {role}"
+    "yourRole": "Peran Anda: {role}",
+    "sandboxNotReady": "Sandbox diperlukan · belum disiapkan",
+    "sandboxNeeded": "Peran {role} memerlukan sandbox.",
+    "sandboxEngineUnavailable": "{engine} tidak berjalan di komputer yang menghosting claw ini.",
+    "sandboxImageMissing": "Sandbox untuk peran ini belum terpasang di claw ini.",
+    "sandboxAskBody": "OpenClaw dapat menyiapkannya untuk Anda.",
+    "sandboxAsk": "Minta OpenClaw untuk menyiapkannya",
+    "sandboxAsked": "OpenClaw sedang mengerjakan ini di obrolan di samping halaman ini. Setelah selesai, periksa lagi untuk mengundang orang dengan peran ini.",
+    "sandboxAskFailed": "Tidak dapat memulai obrolan dengan OpenClaw. Coba lagi.",
+    "sandboxCheckAgain": "Periksa lagi"
   },
   "pl": {
     "role": "Rola",
@@ -387,7 +513,16 @@
     "roleChanged": "Rola została zmieniona. Urządzenia tej osoby połączą się ponownie z nowymi uprawnieniami.",
     "blocked": "Zablokowano",
     "undefinedRole": "Rola {role} nie jest zdefiniowana w tej instancji claw. Wybierz inną rolę, aby przywrócić dostęp.",
-    "yourRole": "Twoja rola: {role}"
+    "yourRole": "Twoja rola: {role}",
+    "sandboxNotReady": "Wymagane środowisko izolowane · jeszcze nie skonfigurowano",
+    "sandboxNeeded": "Rola {role} wymaga środowiska izolowanego.",
+    "sandboxEngineUnavailable": "{engine} nie działa na komputerze, na którym jest uruchomiona ta instancja claw.",
+    "sandboxImageMissing": "Środowisko izolowane dla tej roli nie jest jeszcze zainstalowane w tej instancji claw.",
+    "sandboxAskBody": "OpenClaw może to skonfigurować za Ciebie.",
+    "sandboxAsk": "Poproś OpenClaw o konfigurację",
+    "sandboxAsked": "OpenClaw pracuje nad tym na czacie obok tej strony. Gdy skończy, sprawdź ponownie, aby zaprosić osoby z tą rolą.",
+    "sandboxAskFailed": "Nie udało się rozpocząć czatu z OpenClaw. Spróbuj ponownie.",
+    "sandboxCheckAgain": "Sprawdź ponownie"
   },
   "th": {
     "role": "บทบาท",
@@ -413,7 +548,16 @@
     "roleChanged": "เปลี่ยนบทบาทแล้ว อุปกรณ์ของสมาชิกจะเชื่อมต่อใหม่โดยใช้สิทธิ์การเข้าถึงใหม่",
     "blocked": "ถูกบล็อก",
     "undefinedRole": "ยังไม่ได้กำหนดบทบาท {role} ใน claw นี้ เลือกบทบาทอื่นเพื่อกู้คืนสิทธิ์การเข้าถึง",
-    "yourRole": "บทบาทของคุณ: {role}"
+    "yourRole": "บทบาทของคุณ: {role}",
+    "sandboxNotReady": "ต้องใช้แซนด์บ็อกซ์ · ยังไม่ได้ตั้งค่า",
+    "sandboxNeeded": "บทบาท {role} ต้องใช้แซนด์บ็อกซ์",
+    "sandboxEngineUnavailable": "{engine} ไม่ได้ทำงานอยู่บนคอมพิวเตอร์ที่โฮสต์ claw นี้",
+    "sandboxImageMissing": "ยังไม่ได้ติดตั้งแซนด์บ็อกซ์บน claw นี้",
+    "sandboxAskBody": "OpenClaw สามารถตั้งค่านี้ให้คุณได้",
+    "sandboxAsk": "ขอให้ OpenClaw ตั้งค่าให้",
+    "sandboxAsked": "OpenClaw กำลังดำเนินการในแชตข้างหน้านี้ เมื่อเสร็จแล้ว ให้ตรวจสอบอีกครั้งเพื่อเชิญผู้คนเข้าร่วมด้วยบทบาทนี้",
+    "sandboxAskFailed": "ไม่สามารถเริ่มแชตกับ OpenClaw ได้ โปรดลองอีกครั้ง",
+    "sandboxCheckAgain": "ตรวจสอบอีกครั้ง"
   },
   "vi": {
     "role": "Vai trò",
@@ -439,7 +583,16 @@
     "roleChanged": "Đã đổi vai trò. Thiết bị của họ sẽ kết nối lại với quyền truy cập mới.",
     "blocked": "Đã chặn",
     "undefinedRole": "Vai trò {role} chưa được định nghĩa trên claw này. Chọn vai trò khác để khôi phục quyền truy cập.",
-    "yourRole": "Vai trò của bạn: {role}"
+    "yourRole": "Vai trò của bạn: {role}",
+    "sandboxNotReady": "Cần có sandbox · chưa thiết lập",
+    "sandboxNeeded": "Vai trò {role} cần có sandbox.",
+    "sandboxEngineUnavailable": "{engine} hiện không chạy trên máy tính lưu trữ claw này.",
+    "sandboxImageMissing": "Sandbox chưa được cài đặt trên claw này.",
+    "sandboxAskBody": "OpenClaw có thể thiết lập giúp bạn.",
+    "sandboxAsk": "Yêu cầu OpenClaw thiết lập",
+    "sandboxAsked": "OpenClaw đang xử lý việc này trong cuộc trò chuyện bên cạnh trang này. Khi hoàn tất, hãy kiểm tra lại để mời những người có vai trò này.",
+    "sandboxAskFailed": "Không thể bắt đầu cuộc trò chuyện với OpenClaw. Hãy thử lại.",
+    "sandboxCheckAgain": "Kiểm tra lại"
   },
   "nl": {
     "role": "Rol",
@@ -465,7 +618,16 @@
     "roleChanged": "Rol gewijzigd. De apparaten van dit lid maken opnieuw verbinding met de nieuwe toegangsrechten.",
     "blocked": "Geblokkeerd",
     "undefinedRole": "De rol {role} is niet gedefinieerd op deze claw. Kies een andere rol om de toegang te herstellen.",
-    "yourRole": "Je rol: {role}"
+    "yourRole": "Je rol: {role}",
+    "sandboxNotReady": "Sandbox vereist · nog niet ingesteld",
+    "sandboxNeeded": "Voor de rol {role} is een sandbox nodig.",
+    "sandboxEngineUnavailable": "{engine} is niet actief op de computer waarop deze claw wordt gehost.",
+    "sandboxImageMissing": "De sandbox is nog niet op deze claw geïnstalleerd.",
+    "sandboxAskBody": "OpenClaw kan dit voor je instellen.",
+    "sandboxAsk": "Vraag OpenClaw om dit in te stellen",
+    "sandboxAsked": "OpenClaw werkt hieraan in de chat naast deze pagina. Controleer opnieuw zodra dit klaar is om mensen met deze rol uit te nodigen.",
+    "sandboxAskFailed": "Kan geen chat met OpenClaw starten. Probeer het opnieuw.",
+    "sandboxCheckAgain": "Opnieuw controleren"
   },
   "fa": {
     "role": "نقش",
@@ -491,7 +653,16 @@
     "roleChanged": "نقش تغییر کرد. دستگاه‌های این عضو با دسترسی جدید دوباره متصل می‌شوند.",
     "blocked": "مسدود شده",
     "undefinedRole": "نقش {role} در این claw تعریف نشده است. برای بازیابی دسترسی، نقش دیگری انتخاب کنید.",
-    "yourRole": "نقش شما: {role}"
+    "yourRole": "نقش شما: {role}",
+    "sandboxNotReady": "محیط ایزوله لازم است · هنوز راه‌اندازی نشده",
+    "sandboxNeeded": "نقش {role} به محیط ایزوله نیاز دارد.",
+    "sandboxEngineUnavailable": "{engine} روی رایانه‌ای که میزبان این claw است، اجرا نمی‌شود.",
+    "sandboxImageMissing": "محیط ایزولهٔ آن هنوز روی این claw نصب نشده است.",
+    "sandboxAskBody": "OpenClaw می‌تواند آن را برای شما راه‌اندازی کند.",
+    "sandboxAsk": "از OpenClaw بخواهید آن را راه‌اندازی کند",
+    "sandboxAsked": "OpenClaw در گفتگوی کنار این صفحه در حال انجام این کار است. پس از پایان کار، دوباره بررسی کنید تا بتوانید افراد را با این نقش دعوت کنید.",
+    "sandboxAskFailed": "شروع گفتگو با OpenClaw ممکن نشد. دوباره تلاش کنید.",
+    "sandboxCheckAgain": "بررسی دوباره"
   },
   "ru": {
     "role": "Роль",
@@ -517,7 +688,16 @@
     "roleChanged": "Роль изменена. Устройства участника переподключаются с новыми правами доступа.",
     "blocked": "Заблокировано",
     "undefinedRole": "Роль {role} не определена в этом claw. Выберите другую роль, чтобы восстановить доступ.",
-    "yourRole": "Ваша роль: {role}"
+    "yourRole": "Ваша роль: {role}",
+    "sandboxNotReady": "Требуется песочница · ещё не настроена",
+    "sandboxNeeded": "Для роли {role} нужна песочница.",
+    "sandboxEngineUnavailable": "{engine} не запущен на компьютере, где размещён этот claw.",
+    "sandboxImageMissing": "Песочница для этой роли ещё не установлена на этом claw.",
+    "sandboxAskBody": "OpenClaw может настроить её за вас.",
+    "sandboxAsk": "Попросить OpenClaw настроить песочницу",
+    "sandboxAsked": "OpenClaw выполняет настройку в чате рядом с этой страницей. Когда настройка завершится, проверьте ещё раз, чтобы приглашать людей с этой ролью.",
+    "sandboxAskFailed": "Не удалось начать чат с OpenClaw. Попробуйте ещё раз.",
+    "sandboxCheckAgain": "Проверить ещё раз"
   },
   "sv": {
     "role": "Roll",
@@ -543,7 +723,16 @@
     "roleChanged": "Rollen har ändrats. Medlemmens enheter återansluter med den nya behörigheten.",
     "blocked": "Blockerad",
     "undefinedRole": "Rollen {role} är inte definierad på denna claw. Välj en annan roll för att återställa åtkomsten.",
-    "yourRole": "Din roll: {role}"
+    "yourRole": "Din roll: {role}",
+    "sandboxNotReady": "Sandbox krävs · inte konfigurerad än",
+    "sandboxNeeded": "Rollen {role} behöver en sandbox.",
+    "sandboxEngineUnavailable": "{engine} körs inte på datorn som är värd för denna claw.",
+    "sandboxImageMissing": "Dess sandbox är inte installerad på denna claw än.",
+    "sandboxAskBody": "OpenClaw kan konfigurera detta åt dig.",
+    "sandboxAsk": "Be OpenClaw konfigurera det",
+    "sandboxAsked": "OpenClaw arbetar med detta i chatten bredvid den här sidan. Kontrollera igen när det är klart för att bjuda in personer med den här rollen.",
+    "sandboxAskFailed": "Det gick inte att starta en chatt med OpenClaw. Försök igen.",
+    "sandboxCheckAgain": "Kontrollera igen"
   },
   "ca": {
     "role": "Rol",
@@ -569,6 +758,15 @@
     "roleChanged": "S'ha canviat el rol. Els dispositius d'aquesta persona es tornen a connectar amb el nou accés.",
     "blocked": "Bloquejat",
     "undefinedRole": "El rol {role} no està definit en aquest claw. Trieu un altre rol per restablir l'accés.",
-    "yourRole": "El vostre rol: {role}"
+    "yourRole": "El vostre rol: {role}",
+    "sandboxNotReady": "Cal un entorn aïllat · encara no s'ha configurat",
+    "sandboxNeeded": "El rol {role} necessita un entorn aïllat.",
+    "sandboxEngineUnavailable": "{engine} no s'està executant a l'ordinador que allotja aquest claw.",
+    "sandboxImageMissing": "El seu entorn aïllat encara no està instal·lat en aquest claw.",
+    "sandboxAskBody": "OpenClaw ho pot configurar per tu.",
+    "sandboxAsk": "Demana a OpenClaw que ho configuri",
+    "sandboxAsked": "OpenClaw hi està treballant al xat que hi ha al costat d'aquesta pàgina. Quan hagi acabat, torna-ho a comprovar per convidar persones amb aquest rol.",
+    "sandboxAskFailed": "No s'ha pogut iniciar un xat amb OpenClaw. Torna-ho a provar.",
+    "sandboxCheckAgain": "Torna-ho a comprovar"
   }
 }

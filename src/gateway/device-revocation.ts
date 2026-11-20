@@ -351,6 +351,18 @@ export function retainGatewayDeviceRevocation(
   return releaseHold(capture);
 }
 
+/** Keep a retained capture indexed for a later start check; never checks caller authority. */
+export function retainGatewayDeviceRevocationIndex(
+  guard: (() => unknown) | undefined,
+): (() => void) | undefined {
+  const capture = guard ? captures.get(guard) : undefined;
+  if (!capture || capture.state.references === 0) {
+    return undefined;
+  }
+  capture.state.references += 1;
+  return releaseHold(capture);
+}
+
 export function invalidateGatewayDeviceRevocation(
   context: object,
   deviceId: string,
