@@ -624,6 +624,7 @@ export function createUserTurnTranscriptRecorder(
       message = applyMessageOverrides(message);
       resolvedMessagePromise = undefined;
       // Before the commit, the runtime commit chain stamps the row; acceptance never waits.
+      // A harness that self-persists only after queueMessage resolves would miss the stamp.
       await stampPersistedSteerTargetRunId(normalizedTargetRunId);
     },
     getPersistedMessage: () =>
