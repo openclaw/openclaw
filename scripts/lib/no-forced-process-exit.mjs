@@ -218,14 +218,20 @@ export default {
         }
       },
       VariableDeclarator(node) {
-        if (!node.init || node.id.type !== "ObjectPattern" || valueKind(node.init) !== "process") {
+        if (!node.init || node.id.type !== "ObjectPattern") {
           return;
         }
+        let receiver;
         for (const property of node.id.properties) {
           if (
             property.type === "Property" &&
             FORCED_EXITS.has(propertyName(property.key, property.computed))
           ) {
+            // Scope analysis is needed only when a property can violate the rule.
+            receiver ??= valueKind(node.init);
+            if (receiver !== "process") {
+              return;
+            }
             report(property);
           }
         }

@@ -76,6 +76,35 @@ it.each([
   });
   expect(reported).toBe(expected);
 });
+
+it("does not analyze scopes for unrelated destructuring", () => {
+  let scopeReads = 0;
+  const listeners = noForcedProcessExit.create({
+    cwd: process.cwd(),
+    physicalFilename: `${process.cwd()}/src/runtime.ts`,
+    sourceCode: {
+      text: 'const { pid } = process; process.on("exit", cleanup);',
+      scopeManager: {
+        get scopes() {
+          scopeReads += 1;
+          return [];
+        },
+      },
+    },
+    report() {
+      throw new Error("Unrelated destructuring must not be reported");
+    },
+  });
+  listeners.VariableDeclarator({
+    init: { type: "Identifier", name: "process", start: 16 },
+    id: {
+      type: "ObjectPattern",
+      properties: [{ type: "Property", key: { type: "Identifier", name: "pid" }, computed: false }],
+    },
+  });
+  expect(scopeReads).toBe(0);
+});
+
 let diagnostics: Array<{
   filename: string;
   code: string;
