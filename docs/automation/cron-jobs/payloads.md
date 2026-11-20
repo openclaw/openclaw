@@ -406,7 +406,10 @@ runtime does not parse `tasks:` blocks or read `HEARTBEAT.md`.
 
 With `payload.skipIfScratchEmpty: true` (`--skip-if-scratch-empty`), blank text,
 comments, headings, fence markers, and empty checklist stubs count as an empty
-checklist. Removing scratch with `--unset` is different: missing scratch does
+checklist. An empty checklist completes the run without a model call: history
+records `status: "ok"` and `completionStatus: "succeeded"` with the summary
+`Automation scratch is explicitly empty`, with no "did not start" notice or
+skipped-run alert. Removing scratch with `--unset` is different: missing scratch does
 not suppress a run. Disable the job when it should stop regardless of scratch.
 
 ### Command payloads

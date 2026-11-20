@@ -78,8 +78,8 @@ async function deliverPrimaryWebhook(
   if (
     plan.mode !== "webhook" ||
     result.triggerEval?.fired === false ||
-    // A skip before execution has status text, not output, even after a fired trigger.
-    (result.status === "skipped" && result.executionStarted === false)
+    // A run that never started has status text, not output, even after a fired trigger.
+    (result.status !== "error" && result.executionStarted === false)
   ) {
     return result;
   }

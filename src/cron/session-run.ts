@@ -221,11 +221,12 @@ export async function runCronSessionTurn(
       isCronScratchEffectivelyEmpty(scratch?.content)
     ) {
       return {
-        status: "skipped",
+        status: "ok",
         summary: "Automation scratch is explicitly empty",
         executionStarted: false,
         delivered: false,
         deliveryAttempted: false,
+        deliverySuppressionReason: "empty",
       };
     }
     const baseSessionKey = parseAgentSessionKey(params.sessionKey)?.rest ?? params.sessionKey;
