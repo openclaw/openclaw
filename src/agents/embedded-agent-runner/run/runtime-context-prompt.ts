@@ -68,6 +68,14 @@ export function appendCurrentInboundContext(
   return {
     ...context,
     text: append(context?.text),
+    ...(context?.participationAssessed
+      ? {
+          participationAssessed: {
+            text: append(context.participationAssessed.text),
+            fragments: [...context.participationAssessed.fragments, ...fragments],
+          },
+        }
+      : {}),
     ...(context?.resumableText !== undefined
       ? { resumableText: append(context.resumableText) }
       : {}),

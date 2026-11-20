@@ -12,7 +12,9 @@ import {
 } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { model as createModelFixture } from "../../agents/model-catalog-fixtures.test-support.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
+import { jsonResult } from "../../agents/tools/common.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/send.js";
+import type { ChannelMessageActionAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DecisionOutcome } from "../../decisions/host-outcomes.js";
@@ -146,6 +148,7 @@ export async function createGroupReplyFixture() {
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
   const sent: string[] = [];
+  const reactions: unknown[] = [];
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -154,7 +157,7 @@ export async function createGroupReplyFixture() {
         plugin: {
           ...createOutboundTestPlugin({
             id: "telegram",
-            capabilities: { chatTypes: ["group"] },
+            capabilities: { chatTypes: ["group"], reactions: true },
             messaging: {
               normalizeTarget: (raw) => stripNormalizedTargetProviderPrefixes(raw, ["telegram"]),
               targetResolver: {
@@ -169,6 +172,14 @@ export async function createGroupReplyFixture() {
               },
             },
           }),
+          actions: {
+            describeMessageTool: () => ({ actions: ["react"] }),
+            supportsAction: ({ action }) => action === "react",
+            handleAction: async ({ params }) => {
+              reactions.push({ emoji: params.emoji, messageId: params.messageId });
+              return jsonResult({ ok: true, added: params.emoji });
+            },
+          } satisfies ChannelMessageActionAdapter,
           config: createChannelTestPluginBase({ id: "telegram" }).config,
         },
       },
@@ -186,6 +197,7 @@ export async function createGroupReplyFixture() {
       To: `telegram:${groupId}`,
       SessionKey: `agent:main:telegram:group:${groupId}`,
       Provider: "telegram",
+      AccountId: "default",
       Surface: "telegram",
       ChatType: "group",
       GroupSubject: "Port discussion",
@@ -201,6 +213,7 @@ export async function createGroupReplyFixture() {
     storePath,
     requests,
     sent,
+    reactions,
     respond: (...next: ModelResponse[]) => {
       responses.push(...next);
     },
@@ -220,10 +233,11 @@ export async function createGroupReplyFixture() {
       messageId: string,
       groupId: string,
       options?: InternalGetReplyOptions,
+      overrides?: Partial<TemplateContext>,
     ) => {
       return dispatchInboundMessageWithBufferedDispatcher({
         cfg: config,
-        ctx: context(body, messageId, groupId),
+        ctx: context(body, messageId, groupId, overrides),
         replyOptions: options,
         dispatcherOptions: {
           deliver: (payload, info) =>

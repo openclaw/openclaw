@@ -209,14 +209,12 @@ export async function resolveTerminalReplyDelivery(params: {
   minimumAssistantMessageIndex?: number;
   resolveReplyDelivery?: ReplyDeliveryObserver;
   sourceReplyDeliveryState?: ReplyDeliveryState;
-  sourceOnly?: boolean;
 }): Promise<ReplyDeliveryState> {
   if (
-    params.sourceOnly ||
     params.sourceReplyDeliveryState === "delivered" ||
     params.sourceReplyDeliveryState === "pending"
   ) {
-    return params.sourceReplyDeliveryState ?? "missing";
+    return params.sourceReplyDeliveryState;
   }
   const { blockReplyPipeline, minimumAssistantMessageIndex = 0 } = params;
   if (params.sourceReplyDeliveryState === undefined) {

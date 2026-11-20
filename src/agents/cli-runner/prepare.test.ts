@@ -2045,8 +2045,6 @@ describe("prepareCliRunContext", () => {
     expect(resolveBootstrapContextForRun).toHaveBeenCalledWith(
       expect.objectContaining({ chatType: testCase.expectedChatType }),
     );
-    expect(context.systemPrompt).toContain("With approval, send a conversational reply");
-    expect(context.systemPrompt).toContain("Without approval, stale/joke/light ack");
   });
 
   it("invalidates content drift when the backend cannot receive a resumed system prompt", async () => {

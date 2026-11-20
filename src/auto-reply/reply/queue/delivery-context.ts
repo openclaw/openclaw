@@ -262,9 +262,11 @@ export function collectCurrentInboundContext(
   if (items.length <= 1) {
     return contexts[0]?.context;
   }
-  const renderField = (field: "text" | "resumableText") => {
+  const renderField = (field: "text" | "resumableText", assessed = false) => {
     const blocks = contexts.flatMap(({ context, index }) => {
-      const value = context[field];
+      const value = assessed
+        ? (context.participationAssessed?.text ?? context.text)
+        : context[field];
       return value ? [`Queued #${index + 1} context:\n${value}`] : [];
     });
     return blocks.length > 0 ? blocks.join("\n\n") : undefined;
@@ -280,6 +282,18 @@ export function collectCurrentInboundContext(
   return {
     text,
     ...(resumableText ? { resumableText } : {}),
+    ...(contexts.some(({ context }) => context.participationAssessed)
+      ? {
+          participationAssessed: {
+            text: renderField("text", true)!,
+            fragments: contexts.flatMap(({ context, index }) => [
+              { kind: "runtime-instruction" as const, text: `Queued #${index + 1} context:` },
+              ...(context.participationAssessed?.fragments ??
+                context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }]),
+            ]),
+          },
+        }
+      : {}),
     fragments: contexts.flatMap(({ context, index }) => {
       const fragments: RuntimeContextFragment[] = [
         { kind: "runtime-instruction", text: `Queued #${index + 1} context:` },
