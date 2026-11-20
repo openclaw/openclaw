@@ -113,10 +113,12 @@ function applyRemoteModelCatalogUpdateNow(
           return "superseded";
         }
       }
+      // Config publication replaces the cancellation controller; check the one this build used.
+      const cancellation = host.getCancellationSignal();
       try {
         if (
           !(await withRemoteModelCatalogSnapshot(catalog, () =>
-            publishPreparedModelRuntimeCatalogReplacement(host, catalog, previous),
+            publishPreparedModelRuntimeCatalogReplacement(host, catalog, previous, cancellation),
           ))
         ) {
           return "superseded";
@@ -128,7 +130,7 @@ function applyRemoteModelCatalogUpdateNow(
         if (
           error instanceof PreparedModelRuntimePublicationSupersededError ||
           error instanceof PluginInventoryRetiredError ||
-          host.getCancellationSignal().aborted
+          cancellation.aborted
         ) {
           return "superseded";
         }
@@ -255,6 +257,7 @@ async function publishPreparedModelRuntimeCatalogReplacement(
   host: PreparedModelRuntimeCatalogPublicationHost,
   catalog: ActiveRemoteModelCatalog,
   previous: ActiveRemoteModelCatalog | null,
+  signal: AbortSignal,
 ): Promise<boolean> {
   const claims = [...host.owners.values()]
     .filter((owner) => owner.provenance === "configured")
@@ -265,7 +268,6 @@ async function publishPreparedModelRuntimeCatalogReplacement(
   ) {
     return false;
   }
-  const signal = host.getCancellationSignal();
   const buildTimeoutMs = host.getBuildTimeoutMs();
   const publication = createCatalogReplacementCallbacks(
     host.owners,
