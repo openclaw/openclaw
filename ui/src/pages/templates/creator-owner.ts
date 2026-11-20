@@ -87,12 +87,6 @@ function requestTemplateCreator(
             ? "templatesDraft.reviewDisabled"
             : "templatesDraft.reviewUnavailable",
         ),
-        ...(unavailable === "disabled"
-          ? {
-              actionLabel: t("templatesDraft.openLabs"),
-              onAction: () => context.navigate("labs"),
-            }
-          : {}),
       });
     }
     return;

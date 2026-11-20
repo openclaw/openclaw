@@ -6,6 +6,7 @@ import type {
   ModelChoice,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-operator-authority.types.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -83,7 +84,7 @@ export function modelSelectionPoliciesMatch(
         cfg,
         agentId,
         catalog: [],
-        defaultProvider: model.provider,
+        defaultProvider: model?.provider ?? DEFAULT_PROVIDER,
         defaultModel: model,
         manifestPlugins,
       });
@@ -103,6 +104,7 @@ export function modelSelectionPoliciesMatch(
 type HistoricalModelFields = {
   model?: unknown;
   modelProvider?: unknown;
+  modelDisplayName?: unknown;
   activeModel?: unknown;
   activeModelProvider?: unknown;
   contextBudgetStatus?: unknown;
@@ -251,9 +253,23 @@ export function prepareOperatorModelPolicyPresentation(params: {
         continue;
       }
       const projected = projectRuntime(model);
+      const defaults = model.defaultModelRuntimes;
       visible.push(
-        model.runtimeChoices
-          ? { ...projected, runtimeChoices: model.runtimeChoices.map(projectRuntime) }
+        model.runtimeChoices || defaults
+          ? {
+              ...projected,
+              ...(model.runtimeChoices
+                ? { runtimeChoices: model.runtimeChoices.map(projectRuntime) }
+                : {}),
+              ...(defaults
+                ? {
+                    defaultModelRuntimes: {
+                      base: projectRuntime(defaults.base),
+                      alternatives: defaults.alternatives.map(projectRuntime),
+                    },
+                  }
+                : {}),
+            }
           : projected,
       );
     }
@@ -308,7 +324,7 @@ export function prepareOperatorModelPolicyPresentation(params: {
     }
     const projected = { ...row };
     // Nulls clear merge-event state; omit identifiers without replacing those clearing facts.
-    for (const field of ["modelProvider", "model"] as const) {
+    for (const field of ["modelProvider", "model", "modelDisplayName"] as const) {
       if (hideModel && projected[field] != null) {
         delete projected[field];
       }
@@ -398,7 +414,10 @@ export function prepareOperatorModelPolicyPresentation(params: {
         allowPluginNormalization: false,
       };
       const configuredDefault = resolveDefaultModelForAgent(normalization);
-      const selection = { ...normalization, defaultProvider: configuredDefault.provider };
+      const selection = {
+        ...normalization,
+        defaultProvider: configuredDefault?.provider ?? DEFAULT_PROVIDER,
+      };
       let aliasIndex: ReturnType<typeof buildModelAliasIndex> | undefined;
       const allowedReference = (raw: string) => {
         const ref = resolveModelRefFromString({
@@ -417,8 +436,8 @@ export function prepareOperatorModelPolicyPresentation(params: {
           (manualPolicy ??= createModelVisibilityPolicy({
             ...normalization,
             catalog,
-            defaultProvider: configuredDefault.provider,
-            defaultModel: configuredDefault,
+            defaultProvider: configuredDefault?.provider ?? DEFAULT_PROVIDER,
+            ...(configuredDefault ? { defaultModel: configuredDefault } : {}),
           })).allows(ref),
       });
       const modelSelectionPolicy = {

@@ -20,7 +20,7 @@ import {
   type OpenClawIdTunnelPrincipal,
 } from "../openclaw-id/tunnel-principal.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
@@ -109,7 +109,7 @@ it("keeps a linked owner's accepted work when the person's stored role changes",
     });
     const capture = async (principal?: OpenClawIdTunnelPrincipal) =>
       expectDefined(
-        await captureGatewayOperatorRunAuthority({
+        await prepareGatewayOperatorRunAuthority({
           client: {
             connId: `run-${principal?.kind ?? "person"}`,
             connectionSignal: new AbortController().signal,
@@ -144,20 +144,15 @@ it("keeps a linked owner's accepted work when the person's stored role changes",
     await setCanonicalUserProfileRole(person.id, "talker", {
       onCommitted: (id) => invalidateOperatorRolePolicy(id, { roleOnly: true }),
     });
-    expect(owner.authority.signal?.aborted).toBe(false);
-    expect(() => owner.authority.assertCurrent()).not.toThrow();
-    expect(personal.authority.signal?.aborted).toBe(false);
-    expect(personal.authority.assertCurrent).not.toThrow();
-    expect(personal.authority.reauthorize).toThrow();
+    expect(owner.authority.signal?.aborted).not.toBe(true);
+    expect(personal.authority.signal?.aborted).not.toBe(true);
     await expect(capture()).rejects.toThrow();
     const nextOwner = await capture(OWNER);
     expect(nextOwner.authority.profileId).toBe(person.id);
-    expect(nextOwner.authority.assertCurrent).not.toThrow();
     nextOwner.release();
     // Identity publications apply to new admissions, not accepted work.
     invalidateOperatorRolePolicy(person.id);
-    expect(owner.authority.signal?.aborted).toBe(false);
-    expect(owner.authority.assertCurrent).not.toThrow();
+    expect(owner.authority.signal?.aborted).not.toBe(true);
     owner.release();
     personal.release();
   }));

@@ -8,6 +8,7 @@ import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import { measuredRequestPressure, type OpenAICompletionsOptions } from "../provider-options.js";
 import {
+  PROVIDER_DEFERRED_TOOL_NAMES,
   PROVIDER_MODEL_INPUT,
   type ProviderContext,
   type ProviderModel,
@@ -297,7 +298,11 @@ export function buildOpenAICompletionsRequest(
   const convertedMessages = convertMessages(providerModel, context, compat, {
     cacheOptOutIndexes,
     supportsTools,
-    declaredToolNames: new Set(converted?.projection.tools.map((tool) => tool.name)),
+    // Deferred tools stay callable without a declaration; only unavailable history becomes text.
+    declaredToolNames: new Set([
+      ...(converted?.projection.tools.map((tool) => tool.name) ?? []),
+      ...(options?.[PROVIDER_DEFERRED_TOOL_NAMES] ?? []),
+    ]),
     preserveSystemPromptCacheBoundary:
       cacheControl !== undefined &&
       !managedCompat?.requiresStringContent &&

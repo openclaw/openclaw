@@ -52,11 +52,7 @@ export function readPackageReleaseLeases(
 export function acquirePackageReleaseLease(runningRoot: string): () => void {
   const releasePrefix = packageReleasePrefixOfRoot(fsSync.realpathSync.native(runningRoot));
   // Only a release that a package link has selected; other `releases/` trees have their own owners.
-  if (
-    process.platform === "win32" ||
-    !releasePrefix ||
-    !resolvePackageReleaseSlotForRootSync(runningRoot)
-  ) {
+  if (!releasePrefix || !resolvePackageReleaseSlotForRootSync(runningRoot)) {
     return () => {};
   }
   const releasesDir = path.dirname(releasePrefix);

@@ -6,12 +6,11 @@ import {
   bindSynchronousSessionSource,
   withSessionSourceValidation,
 } from "../config/sessions/session-source-authority.js";
+import { decideTurnGrant } from "../gateway/operator-admission.js";
 import {
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
-import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import * as gateway from "../plugins/runtime/gateway-context-binding.js";
 import * as run from "./admitted-run-context.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
@@ -99,17 +98,11 @@ it.each([false, true])("binds frozen Gateway routing (audit=%s)", async (enabled
 
 it("allocates once and reuses the first runtime admission across fallback", async () => {
   const sink = installSink();
-  let authorized = true;
-  const reauthorize = vi.fn(() => {
-    if (!authorized) {
-      throw new Error("Operator admission refused");
-    }
-  });
   const operatorAuthority = run.createAdmittedRunOperatorAuthority({
+    canonicalIdentity: null,
     profileId: "operator",
     scopes: ["operator.write"],
-    assertCurrent() {},
-    reauthorize,
+    grant: decideTurnGrant(["operator.write"]),
   });
   const prepared = prepareRun({
     cfg: enabledConfig,
@@ -121,12 +114,7 @@ it("allocates once and reuses the first runtime admission across fallback", asyn
     prepared.admit("worker", "worker-instance-1"),
   ]);
   expect(first).toBe(fallback);
-  authorized = false;
   expect(await prepared.admit("embedded")).toBe(first);
-  expect(reauthorize).toHaveBeenCalledOnce();
-  await expect(
-    prepareRun({ runId: "next-request", operatorAuthority }).admit("embedded"),
-  ).rejects.toThrow("Operator admission refused");
   expect(prepared.assertCurrent).not.toThrow();
   expect(first.executionIdentityToken).toBeDefined();
   expect(sink).toHaveBeenCalledExactlyOnceWith({
@@ -230,54 +218,16 @@ it("retains the first source failure after revocation without reviving authority
   source.mockImplementation(() => {
     throw failure;
   });
-  const revoked = (scope: string) =>
-    expect.objectContaining({
-      message: `${scope} authority is no longer active`,
-      cause: failure,
-    });
-  expect(assertActive).toThrow(revoked("admitted run"));
+  const revoked = expect.objectContaining({
+    message: "This agent run is no longer active. Start a new turn to retry.",
+    cause: failure,
+  });
+  expect(assertActive).toThrow(revoked);
   source.mockReset();
   expect(run.getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
   expect(assertActive).toThrow(expect.objectContaining({ cause: failure }));
-  expect(prepared.assertSourceCurrent).toThrow(revoked("source execution"));
+  expect(prepared.assertSourceCurrent).toThrow(revoked);
 });
-
-it.each([false, true])(
-  "publishes latched operator revocation without reviving its source (source signal=%s)",
-  (withSignal) => {
-    const source = new AbortController();
-    const unavailable = new GatewayOperatorAccessUnavailableError();
-    const revoked = new GatewayDispatchUnavailableError(
-      "ingress principal recovery (owner changed)",
-      true,
-    );
-    let failure: Error | undefined;
-    const authority = run.createAdmittedRunOperatorAuthority({
-      profileId: "queued-person",
-      scopes: ["operator.write"],
-      ...(withSignal ? { signal: source.signal } : {}),
-      assertCurrent() {
-        if (failure) {
-          throw failure;
-        }
-      },
-    });
-    expect(authority.assertCurrent).not.toThrow();
-    failure = unavailable;
-    expect(authority.assertCurrent).toThrow(unavailable);
-    expect(authority.signal?.aborted).not.toBe(true);
-    failure = undefined;
-    expect(authority.assertCurrent).not.toThrow();
-    failure = revoked;
-    expect(authority.assertCurrent).toThrow(revoked);
-    expect(authority.signal?.aborted).toBe(true);
-    expect(authority.signal?.reason).toBe(revoked);
-    expect(source.signal.aborted).toBe(false);
-    failure = undefined;
-    expect(authority.assertCurrent).toThrow(revoked);
-    expect(authority.signal?.reason).toBe(revoked);
-  },
-);
 
 it("closes generic authority while keeping a recovery-only lease active", async () => {
   const prepared = prepareRun({ runId: "run-private-lease" });
@@ -298,18 +248,14 @@ it("closes generic authority while keeping a recovery-only lease active", async 
 });
 
 it.each([false, true])("fences native recovery (refusedRebind=%s)", async (refusedRebind) => {
-  let current = true;
   let sourceHolds = 0;
   const source = prepareRun({
     runId: "native-source-lease",
     operatorAuthority: run.createAdmittedRunOperatorAuthority({
+      canonicalIdentity: null,
       profileId: "native-operator",
       scopes: ["operator.write"],
-      assertCurrent: () => {
-        if (!current || sourceHolds === 0) {
-          throw new Error("source claim lost");
-        }
-      },
+      grant: decideTurnGrant(["operator.write"]),
       retain: () => {
         sourceHolds++;
         return () => sourceHolds--;
@@ -343,11 +289,6 @@ it.each([false, true])("fences native recovery (refusedRebind=%s)", async (refus
   expect(() => run.readPreparedRunOperatorAuthority(prepared)).toThrow("no longer active");
   expect(prepared.assertSourceCurrent).not.toThrow();
   expect(assertRecoveryActive).not.toThrow();
-  current = false;
-  expect(assertRecoveryActive).toThrow("source claim lost");
-  current = true;
-  expect(assertRecoveryActive).toThrow("source execution authority is no longer active");
-  expect(prepared.assertSourceCurrent).toThrow("source execution authority is no longer active");
 });
 
 it.each(["hook failure", "outer close"])("closes authority on %s during admission", async (end) => {

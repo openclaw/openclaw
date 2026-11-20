@@ -5,10 +5,16 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { observe } from "./desktop-panel.test-support.ts";
+import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Systems workspace mocked Gateway E2E",
@@ -89,6 +95,152 @@ function installSystemsGateway(
 }
 
 suite.define(() => {
+  it.each([
+    { id: "gateway", reorder: false },
+    { id: "node:studio", reorder: false },
+    { id: "node:studio", reorder: true },
+  ])(
+    "keeps keyboard focus on $id across a background device refresh (reorder: $reorder)",
+    async ({ id, reorder }) => {
+      await suite.withPage(
+        { locale: "en-US", viewport: { width: 1280, height: 800 } },
+        async ({ page }) => {
+          const machines = (online: boolean) => ({
+            environments: [
+              { id: "gateway", type: "local", label: "Gateway machine", status: "available" },
+              {
+                id: "node:studio",
+                type: "node",
+                label: "Studio Mac",
+                platform: "darwin",
+                status: online ? "available" : "unavailable",
+              },
+              ...(reorder
+                ? ["Workshop A", "Workshop B", "Workshop C"].map((label, index) => ({
+                    id: "node:workshop-" + index,
+                    type: "node",
+                    label,
+                    status: "available",
+                  }))
+                : []),
+            ],
+          });
+          const gateway = await installSystemsGateway(page, 0, {
+            "environments.list": machines(!reorder),
+          });
+          await page.goto(suite.server.baseUrl + "systems");
+          const list = page.locator(".systems-sidebar");
+          const node = list.getByRole("button", { name: /Studio Mac/ });
+          const target =
+            id === "gateway" ? list.getByRole("button", { name: /Gateway machine/ }) : node;
+          await target.focus();
+          await page.keyboard.press("Shift+Tab");
+          await page.keyboard.press("Tab");
+          expect(await target.evaluate((el) => el === document.activeElement)).toBe(true);
+          const original = await target.evaluateHandle((el) => el);
+          const order = () =>
+            list.locator(".systems-group .systems-machine__name").allTextContents();
+          if (reorder) {
+            expect((await order()).at(-1)).toBe("Studio Mac");
+          }
+          await gateway.setMethodResponse("environments.list", machines(reorder));
+          await gateway.emitGatewayEvent("node.runnerInventory.changed", {});
+          await expect
+            .poll(() => node.getAttribute("data-status"))
+            .toBe(reorder ? "available" : "unavailable");
+          if (reorder) {
+            expect((await order())[0]).toBe("Studio Mac");
+          }
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await page.screenshot({
+              path:
+                suite.artifactDir +
+                "/system-focus-" +
+                (id === "gateway" ? "host" : "node") +
+                ".png",
+              animations: "disabled",
+            });
+          }
+          expect(await original.evaluate((el) => el === document.activeElement)).toBe(true);
+          await page.keyboard.press("Enter");
+          await expect.poll(() => target.getAttribute("aria-pressed")).toBe("true");
+        },
+      );
+    },
+  );
+  it.each([
+    { width: 390, locale: "en", textScale: 100, actual: "Actual" },
+    { width: 390, locale: "en", textScale: 140, actual: "Actual" },
+    { width: 820, locale: "en", textScale: 100, actual: "Actual" },
+    { width: 390, locale: "de", textScale: 100, actual: "Tatsächliche Größe" },
+  ])(
+    "keeps the complete desktop size label visible at $width px in $locale ($textScale%)",
+    async ({ width, locale, textScale, actual }) => {
+      await suite.withPage(
+        { viewport: { width, height: 844 }, hasTouch: true },
+        async ({ page }) => {
+          const gateway = await installSystemsGateway(page, 0, {
+            "environments.list": {
+              environments: [
+                {
+                  id: "gateway",
+                  type: "local",
+                  label: "Gateway machine",
+                  status: "available",
+                  desktop: true,
+                },
+              ],
+            },
+            "desktop.observe": observe("sizing"),
+          });
+          await page.addInitScript(
+            ({ key, locale: selectedLocale, textScale: selectedScale }) => {
+              localStorage.setItem("openclaw.i18n.locale", selectedLocale);
+              localStorage.setItem(key, JSON.stringify({ textScale: selectedScale }));
+            },
+            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), locale, textScale },
+          );
+          await page.goto(suite.server.baseUrl + "new");
+          await installScriptedRfbServer(page);
+          await page.evaluate(() => window.openclawControlUi!.navigate("systems"));
+          expect((await gateway.waitForRequest("desktop.observe")).params).toEqual({
+            source: { kind: "host" },
+            control: false,
+          });
+          const sizing = page.locator(".systems-desktop select.desktop-sizing");
+          await sizing.waitFor();
+          await page.evaluate(() => document.fonts.ready.then(() => {}));
+          const fitWidth = await sizing.evaluate((select) => select.clientWidth);
+          await sizing.selectOption("actual");
+          const measurement = await sizing.evaluate((select: HTMLSelectElement) => {
+            const style = getComputedStyle(select);
+            const context = document.createElement("canvas").getContext("2d")!;
+            context.font = style.font;
+            const label = select.selectedOptions[0]!.label;
+            return {
+              label,
+              width: select.clientWidth,
+              remaining:
+                select.getBoundingClientRect().width -
+                Number.parseFloat(style.borderLeftWidth) -
+                Number.parseFloat(style.borderRightWidth) -
+                Number.parseFloat(style.paddingLeft) -
+                Number.parseFloat(style.paddingRight) -
+                context.measureText(label).width,
+            };
+          });
+          expect(measurement.label).toBe(actual);
+          expect(measurement.remaining, "the label fits before the chevron").toBeGreaterThanOrEqual(
+            0,
+          );
+          expect(measurement.width, "changing size must not move neighboring actions").toBe(
+            fitWidth,
+          );
+        },
+      );
+    },
+  );
+
   it.each([390, 1280])(
     "keeps one useful Systems recovery message while reconnecting at %ipx",
     async (width) => {
@@ -280,12 +432,17 @@ suite.define(() => {
           });
           await page.goto(suite.server.baseUrl + "new");
           await waitForControlUiRoute(page, { routeId: "new-session" });
-          const inventoryReads = await gateway.deferNext("environments.list");
+          // New session also lists environments for its place picker; hold only the Systems read.
+          const inventoryRead = { includeDesktopSetup: true };
+          const inventoryReads = await gateway.deferNext("environments.list", inventoryRead);
           const backupReads = await gateway.deferNext("backup.status");
           await page.evaluate(() => {
             window.openclawControlUi!.navigate("systems");
           });
-          await gateway.waitForRequest("environments.list", { after: inventoryReads });
+          await gateway.waitForRequest("environments.list", {
+            match: inventoryRead,
+            after: inventoryReads,
+          });
           await gateway.waitForRequest("backup.status", { after: backupReads });
           await waitForControlUiRoute(page, { routeId: "systems" });
           await page.locator(".systems-body").waitFor();

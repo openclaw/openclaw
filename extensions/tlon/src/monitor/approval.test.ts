@@ -55,7 +55,7 @@ describe("formatApprovalRequest club replay explanation", () => {
       createPendingApproval({
         type: "dm",
         requestingShip: "~nec",
-        clubId: "0v3.club",
+        clubId: "0v3.clubs",
         messagePreview: "hello",
         originalMessage: {
           messageId: "m1",
@@ -65,23 +65,19 @@ describe("formatApprovalRequest club replay explanation", () => {
         },
       }),
     );
-    expect(stored).toContain(
-      "The message is answered as an unverified group DM sender, never as ~nec.",
-    );
-    expect(stored).not.toContain("will not be answered");
+    expect(stored).toContain("Approving permits this saved message only");
+    expect(stored).toContain("The reply goes to the club");
 
     const suppressed = formatApprovalRequest(
       createPendingApproval({
         type: "dm",
         requestingShip: "~nec",
-        clubId: "0v3.club",
+        clubId: "0v3.clubs",
         messagePreview: "hello",
       }),
     );
-    expect(suppressed).toContain(
-      "The message is not kept, so it will not be answered; have ~nec send it again in a normal direct message to get a reply.",
-    );
-    expect(suppressed).not.toContain("The message is answered");
+    expect(suppressed).toContain("No message was saved; approval only dismisses this request.");
+    expect(suppressed).not.toContain("The reply goes to the club");
   });
 });
 

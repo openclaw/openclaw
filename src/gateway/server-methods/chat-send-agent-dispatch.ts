@@ -133,17 +133,16 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     isAgentRunStarted: () => agentRunStarted,
     isRunCurrent,
     abortSignal: activeRunAbort.controller.signal,
-    onCommandBlock: isInternalTextSlashCommandTurn
-      ? (text) =>
-          broadcastChatDelta({
-            context,
-            runId: clientRunId,
-            sessionKey,
-            agentId,
-            text,
-            isCurrent: isRunCurrent,
-          })
-      : undefined,
+    commandTurn: isInternalTextSlashCommandTurn,
+    onCommandBlock: (text) =>
+      broadcastChatDelta({
+        context,
+        runId: clientRunId,
+        sessionKey,
+        agentId,
+        text,
+        isCurrent: isRunCurrent,
+      }),
     getReplyDispatchRun: () => replyDispatchRun,
     logGateway: context.logGateway,
     session,
@@ -409,15 +408,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   onTranscriptStartPreparation: () => diagnostics.scope("snapshot")?.finish,
                   abortSignal: activeRunAbort.controller.signal,
                   getProviderLoginConfig: context.getRuntimeConfig,
-                  assertProviderLoginAuthority: () => {
-                    client?.connectionSignal?.throwIfAborted();
-                    if (
-                      client?.invalidated ||
-                      !client?.connect.scopes?.includes("operator.admin")
-                    ) {
-                      throw new Error("Provider login authority is no longer active.");
-                    }
-                  },
                   // Retain this input identity while followup/collect owns its execution.
                   onFollowupQueueDisposition: queuedFollowup.onQueueDisposition,
                   onQueuedFollowupReplyBatch: queuedFollowup.onQueuedFollowupReplyBatch,
@@ -429,11 +419,11 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   thinkingLevelOverride: p.thinking,
                   normalizeThinkingLevelOverride: request.normalizeThinkingLevelOverride,
                   fastModeOverride: p.fastMode,
-                  queueModeOverride: p.queueMode,
+                  queueModeOverride: admission.operatorAuthority?.participationCeiling
+                    ? "followup"
+                    : p.queueMode,
                   userTurnTranscriptRecorder: userTurnRecorder,
-                  ...injectionDisposition.replyOptions(
-                    p.queueMode === "steer" && Boolean(messageInjectionTarget),
-                  ),
+                  ...injectionDisposition.replyOptions(Boolean(messageInjectionTarget)),
                   fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                   onAgentRunStart,
                   onPreparedAgentRunStart: ({

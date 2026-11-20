@@ -76,6 +76,7 @@ entry points at the page that now holds the content.
 - <a id="agents.defaults.compaction" /><a id="agents-defaults-compaction" />[`agents.defaults.compaction`](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.compaction)
 - <a id="agents.defaults.contextpruning" /><a id="agents-defaults-contextpruning" />[`agents.defaults.contextPruning`](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.contextpruning)
 - <a id="cache-ttl-mode-behavior" />[cache-ttl mode behavior](/gateway/config-agents/heartbeat-compaction-and-streaming#cache-ttl-mode-behavior)
+- <a id="agents.defaults.promptcachekeepwarm" /><a id="agents-defaults-promptcachekeepwarm" />[`agents.defaults.promptCacheKeepWarm`](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.promptcachekeepwarm)
 - <a id="block-streaming" />[Block streaming](/gateway/config-agents/heartbeat-compaction-and-streaming#block-streaming)
 - <a id="typing-indicators" />[Typing indicators](/gateway/config-agents/heartbeat-compaction-and-streaming#typing-indicators)
 - <a id="agentsdefaultssandbox" />[`agents.defaults.sandbox`](/gateway/config-agents/sandbox#agentsdefaultssandbox)

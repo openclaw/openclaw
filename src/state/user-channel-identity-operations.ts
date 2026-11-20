@@ -68,7 +68,7 @@ export async function readCanonicalUserChannelIdentityProfileId(
 ): Promise<string | undefined> {
   const reply = await executeExistingOpenClawStateRead(options, {
     type: "userProfiles.channelIdentity.resolve",
-    identity,
+    identity: { ...identity },
   });
   return reply?.linked?.profileId;
 }
@@ -110,6 +110,7 @@ async function changeIdentity(
       assertCurrent,
       createAdmission: (operation) => {
         let fence: ReturnType<typeof fenceUserProfileMutationAuthority> | undefined;
+        let notifyProfiles = false;
         const admission = createSqliteWorkerOperationAdmission((request, grant) => {
           if (
             (request.stage !== "transaction" && request.stage !== "commit") ||
@@ -134,6 +135,7 @@ async function changeIdentity(
             const { profiles, channels } = request.facts;
             if (
               !grant(() => {
+                notifyProfiles = profiles.length > 0 || channels.length > 0;
                 fence = fenceUserProfileMutationAuthority(context.admission, {
                   profiles,
                   identities: [],
@@ -152,7 +154,7 @@ async function changeIdentity(
         void operation.settled.then((settlement) => {
           const committed = admission.committed;
           if (
-            captured.action !== "authorize" &&
+            notifyProfiles &&
             committed &&
             isRecord(committed.facts) &&
             committed.facts.kind === "channel-identity" &&
@@ -271,7 +273,7 @@ export async function prepareUserChannelIdentityAuthority(
       return { linked: reply.linked, isCurrent };
     }
   }
-  throw new Error("Profile authority changed while preparing the channel request");
+  throw new Error("The profile snapshot could not settle. Retry the channel request");
 }
 
 export async function prepareUserProfileRoleAuthority(
@@ -397,5 +399,5 @@ async function prepareUserProfileAuthorityRead<Profile extends { profileId: stri
       };
     }
   }
-  throw new Error("Profile authority changed while preparing the administrative request");
+  throw new Error("The profile snapshot could not settle. Retry the administrative request");
 }

@@ -8,7 +8,9 @@ const catalog = {
       workingDetails: "Agent is working. View details",
     },
     composer: {
+      textOnlySuggestions: "Suggestions are text only.",
       composerInput: "Chat composer",
+      workspaceRemoved: "This conversation’s workspace was removed.",
       predictionHint: "Tab to complete",
       predictionAvailable:
         "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It won’t be sent automatically.",
@@ -45,8 +47,6 @@ const catalog = {
       runDone: "Done",
       runInterrupted: "Interrupted",
       localCancellationCaveat: "Cancellation requested; the local model may still be finishing.",
-      compactingContext: "Compacting context",
-      contextCompacted: "Context compacted",
       fallbackActive: "Fallback active: {model}",
       modelFallbackEvent: "Model fallback: {from} → {to}",
       modelRestoredEvent: "Returned to selected model: {from} → {to}",
@@ -333,6 +333,8 @@ const catalog = {
       tooLarge: "Too large to send: {names}{more}",
       tooLargeToast: "File too large. Try a smaller file.",
       openOriginal: "Open original",
+      compressionRequired: "Video is too large to send. Compress a copy or remove it.",
+      compressingVideo: "Compressing video…",
       compressToFit: "Compress to fit",
       retryCompression: "Retry compression",
       compressionHint: "Compress a smaller copy on this device. The original is unchanged.",
@@ -348,6 +350,7 @@ const catalog = {
       failureFileTooLarge: "Too large to attach. Look for this file in Files.",
       findInFiles: "Find in Files",
       findInFilesFor: "Find {name} in Files",
+      showInChatFor: "Show {name} in chat",
       failureInvalidReference:
         "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
       failureFileNotFound: "File not found. Check the path and try again.",

@@ -128,6 +128,8 @@
           {
             "id": "gemini-2.5-pro",
             "name": "Gemini 2.5 Pro",
+            "status": "deprecated",
+            "statusReason": "Google serves gemini-2.5-pro as gemini-3.8-flash from Dec 1, 2026, billed at that model's rate. Choose a replacement model.",
             "reasoning": true,
             "input": [
               "text",
@@ -145,6 +147,8 @@
           {
             "id": "gemini-2.5-flash",
             "name": "Gemini 2.5 Flash",
+            "status": "deprecated",
+            "statusReason": "Google serves gemini-2.5-flash as gemini-3.5-flash-lite from Dec 1, 2026, billed at that model's rate. Choose a replacement model.",
             "reasoning": true,
             "input": [
               "text",
@@ -391,7 +395,7 @@
       {
         "provider": "google",
         "model": "gemini-1.5-flash",
-        "reason": "Google shut down Gemini 1.5 Flash on 2025-09-29. Use google/gemini-2.5-flash."
+        "reason": "Google shut down Gemini 1.5 Flash on 2025-09-29. Use google/gemini-3.5-flash-lite."
       },
       {
         "provider": "google",
@@ -406,17 +410,17 @@
       {
         "provider": "google",
         "model": "gemini-2.0-flash",
-        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google/gemini-2.5-flash."
+        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google/gemini-3.5-flash-lite."
       },
       {
         "provider": "google",
         "model": "gemini-2.0-flash-001",
-        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google/gemini-2.5-flash."
+        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google/gemini-3.5-flash-lite."
       },
       {
         "provider": "google",
         "model": "gemini-2.0-flash-exp",
-        "reason": "Google shut down this Gemini 2.0 experimental model. Use google/gemini-2.5-flash."
+        "reason": "Google shut down this Gemini 2.0 experimental model. Use google/gemini-3.5-flash-lite."
       },
       {
         "provider": "google",
@@ -456,17 +460,17 @@
       {
         "provider": "google",
         "model": "gemini-2.0-flash-thinking-exp",
-        "reason": "Google shut down this Gemini 2.0 thinking experiment. Use google/gemini-2.5-flash."
+        "reason": "Google shut down this Gemini 2.0 thinking experiment. Use google/gemini-3.5-flash-lite."
       },
       {
         "provider": "google",
         "model": "gemini-2.0-flash-thinking-exp-01-21",
-        "reason": "Google shut down this Gemini 2.0 thinking experiment. Use google/gemini-2.5-flash."
+        "reason": "Google shut down this Gemini 2.0 thinking experiment. Use google/gemini-3.5-flash-lite."
       },
       {
         "provider": "google",
         "model": "gemini-2.0-flash-thinking-exp-1219",
-        "reason": "Google shut down this Gemini 2.0 thinking experiment. Use google/gemini-2.5-flash."
+        "reason": "Google shut down this Gemini 2.0 thinking experiment. Use google/gemini-3.5-flash-lite."
       },
       {
         "provider": "google",
@@ -506,12 +510,12 @@
       {
         "provider": "google",
         "model": "gemini-2.5-flash-preview-04-17",
-        "reason": "Google shut down this Gemini 2.5 Flash preview on 2025-07-15. Use google/gemini-2.5-flash."
+        "reason": "Google shut down this Gemini 2.5 Flash preview on 2025-07-15. Use google/gemini-3.5-flash-lite."
       },
       {
         "provider": "google",
         "model": "gemini-2.5-flash-preview-05-20",
-        "reason": "Google shut down this Gemini 2.5 Flash preview on 2025-11-18. Use google/gemini-2.5-flash."
+        "reason": "Google shut down this Gemini 2.5 Flash preview on 2025-11-18. Use google/gemini-3.5-flash-lite."
       },
       {
         "provider": "google",
@@ -1061,10 +1065,10 @@
       "method": "api-key",
       "choiceId": "gemini-api-key",
       "appGuidedSecret": true,
-      "choiceLabel": "Google AI Studio API key",
+      "choiceLabel": "Gemini API key",
       "choiceHint": "Supported API-key access from aistudio.google.com/apikey",
       "groupId": "google",
-      "groupLabel": "Google",
+      "groupLabel": "Gemini API key",
       "groupHint": "Supported API-key setup",
       "onboardingFeatured": true,
       "optionKey": "geminiApiKey",

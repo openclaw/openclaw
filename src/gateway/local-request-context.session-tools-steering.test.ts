@@ -34,7 +34,7 @@ import {
   sessionToolsTranscript,
   seedSessionToolsEntry,
 } from "./local-request-context.session-tools.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import * as operatorContinuation from "./server-plugin-in-process-dispatch.js";
@@ -97,7 +97,7 @@ describe("sessions_send steering custody", () => {
         }
         const context = sessionToolsContext();
         const captured = expectDefined(
-          await captureGatewayOperatorRunAuthority({ client, context }),
+          await prepareGatewayOperatorRunAuthority({ client, context }),
           "session writer authority",
         );
         try {
@@ -149,7 +149,7 @@ describe("sessions_send steering custody", () => {
                       sessionId: "session-tools-requester-id",
                       storePath: sessionToolsStorePath(cfg),
                     },
-                    assertCommitAllowed: captured.authority.assertCurrent,
+                    assertCommitAllowed: () => captured.authority.signal?.throwIfAborted(),
                     withTranscriptWrite: async (write) => await write(),
                   },
                   () =>
@@ -167,7 +167,10 @@ describe("sessions_send steering custody", () => {
                 if (!owned) {
                   expect((await sent).details).toMatchObject({
                     status: "error",
-                    error: "Session-scoped writes require your own session.",
+                    error:
+                      targetKind === "shared noncreator"
+                        ? "Session-scoped writes require your own session."
+                        : "session is shared for this connection",
                   });
                   expect(receiver.pendingCount()).toBe(0);
                   return;
@@ -212,7 +215,6 @@ describe("sessions_send steering custody", () => {
     ["abort", false],
     ["replaced run end", false],
     ["sender completed", true],
-    ["source revoked", true],
     ["receiver cancelled", true],
   ] as const)(
     "settles accepted steering custody after %s (backend settlement: %s)",
@@ -296,14 +298,6 @@ describe("sessions_send steering custody", () => {
                 }
                 receiver.end();
               }
-            } else if (outcome === "source revoked") {
-              turn.revoke(alice.profileId);
-              await expect(receiver.commit()).rejects.toThrow(/authority|access|revoked/i);
-              // After admission the receiving run owns the refused input; its end settles custody.
-              await setImmediate();
-              // The refused commit alone does not settle the receiver's steering custody.
-              expect(custodyLeases.some((lease) => lease.releases === 0)).toBe(true);
-              receiver.end();
             } else if (outcome === "receiver cancelled") {
               await receiver.cancel();
               expect(receiver.pendingCount()).toBe(0);
@@ -322,8 +316,9 @@ describe("sessions_send steering custody", () => {
             )
               .map(readTranscriptEventMessage)
               .filter((message) => message?.idempotencyKey === "participant-delayed-steer:user");
-            expect(messages).toHaveLength(outcome === "sender completed" ? 1 : 0);
-            if (outcome === "sender completed") {
+            const committed = outcome === "sender completed";
+            expect(messages).toHaveLength(committed ? 1 : 0);
+            if (committed) {
               expect(messages[0]).toMatchObject({
                 role: "user",
                 content: expect.stringContaining(
@@ -396,7 +391,7 @@ describe("runtime-only session authority", () => {
               undefined,
               {
                 message: expect.stringContaining(
-                  "Personal-tool turn authority is no longer active",
+                  "This agent run is no longer active. Start a new turn to retry.",
                 ),
               },
             ],

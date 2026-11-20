@@ -65,7 +65,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const byParent = new Map<string, Set<string>>(),
     byKey = new Map<string, Set<string>>();
   const indexes = { byStore, byAgent, byParent, byKey };
-  const referenced = (ref: string) => records.firstReferenced(ref, rows, byKey, stores.keys());
+  const referenced = (ref: string) =>
+    rowIdentities.firstReferenced(ref, rows, byKey, stores.keys());
   const dirty = new Set<string>();
   const recents = createSessionRowRecents({
     rows,
@@ -140,6 +141,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   });
   const archive = createSessionRowProjectionArchive({
     rows,
+    indexes,
     dirty,
     put,
     config: () => cfg,
@@ -157,8 +159,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       recents.track(row);
     },
   });
-  const markRelated = (row: records.Row, includeChildren = true) =>
-    archive.markRelated(row, indexes, includeChildren);
+  const { markRelated } = archive;
   function remove(id: string) {
     archive.forget(id);
     transcriptUpdates.remove(id);
@@ -190,10 +191,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     restoredRuns.update(previous?.storedEntry, row.storedEntry);
     childRows.replace(row);
     creators.update(previous, row);
-    if (previous) {
-      if (previous.generation !== row.generation) {
-        transcriptUpdates.remove(records.identity(row));
-      }
+    if (previous && previous.generation !== row.generation) {
+      transcriptUpdates.remove(records.identity(row));
     }
     rows.set(records.identity(row), row);
     recents.update(row);
@@ -244,7 +243,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     runAsOwner: inOwnerContext,
     registryFactsReady: () => Boolean(inOwnerContext(subagents.snapshotIdentity)),
     acquireEntry,
-    markRelated,
     placement: placementFacts,
     invalidateFacts: (row, domain) => {
       const categoryOnly = rowFacts.invalidate(row, domain);
@@ -274,7 +272,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     put,
     acquire(row, entry) {
       enqueue(acquireEntry(row, entry));
-      markRelated(row);
     },
     setConfig(next) {
       cfg = next;
@@ -511,6 +508,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   });
   const stop = subscribeSessionRowPublications({
     rows,
+    byKey,
     dirty,
     revisions,
     advanceRevision: () => epoch++,

@@ -1,5 +1,5 @@
 ---
-summary: "Google Gemini setup (AI Studio API key, Vertex AI, optional CLI runtime, and multimodal tools)"
+summary: "Google Gemini setup (Gemini API key, Vertex AI, optional CLI runtime, and multimodal tools)"
 title: "Google (Gemini)"
 read_when:
   - You want to use Google Gemini models with OpenClaw
@@ -17,11 +17,11 @@ The Google plugin provides access to Gemini models through Google AI Studio, plu
 
 ## Getting started
 
-For most installations, use a Google AI Studio API key. Use `google-vertex` when
+For most installations, use a Gemini API key. Use `google-vertex` when
 the Gateway already runs inside a managed Google Cloud environment.
 
 <Tabs>
-  <Tab title="AI Studio API key">
+  <Tab title="Gemini API key">
     **Recommended for:** standard Gemini API access.
 
     <Steps>
@@ -82,17 +82,17 @@ the Gateway already runs inside a managed Google Cloud environment.
 
   <Tab title="Gemini CLI runtime">
     **Advanced use only:** run a standard `google/*` model through an installed
-    Gemini CLI while keeping authentication on the supported AI Studio API-key
+    Gemini CLI while keeping authentication on the supported Gemini API key
     path.
 
     OpenClaw does not offer new Gemini CLI OAuth or Antigravity OAuth setup.
     [Google ended consumer Gemini CLI Login with Google access on June 18, 2026](https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals),
     and the [Antigravity terms](https://antigravity.google/terms) prohibit
     third-party tools from accessing the service through Antigravity OAuth. Use
-    an AI Studio API key or Vertex AI instead.
+    a Gemini API key or Vertex AI instead.
 
     <Steps>
-      <Step title="Configure Google AI Studio">
+      <Step title="Configure a Gemini API key">
         Complete the API-key setup in the first tab. OpenClaw must have a usable
         `google` API-key profile before the CLI runtime can be selected.
       </Step>
@@ -132,7 +132,7 @@ the Gateway already runs inside a managed Google Cloud environment.
     </Steps>
 
     - Runtime: `google-gemini-cli`
-    - Auth: selected Google AI Studio API-key profile
+    - Auth: selected Gemini API key profile
     - Model refs: `google/*`
 
     `google-gemini-cli` is the CLI backend the bundled Google plugin registers.
@@ -142,7 +142,7 @@ the Gateway already runs inside a managed Google Cloud environment.
 
     Existing valid Gemini CLI OAuth profiles remain executable for compatibility,
     but OpenClaw cannot create or repair them. If one breaks, replace it with a
-    Google AI Studio API-key profile.
+    Gemini API key profile.
 
     `google-gemini-cli/*` refs remain legacy compatibility aliases. New configs
     should use `google/*` model refs plus the explicit runtime selection above.
@@ -180,6 +180,12 @@ The bundled catalog also includes the stable `google/gemini-3.8-flash`, with a
 1,048,576-token context window and up to 65,536 output tokens. The built-in
 `gemini-flash` alias selects this model; `gemini-flash-lite` selects
 `google/gemini-3.5-flash-lite`.
+
+From December 1, 2026, Google serves `gemini-2.5-pro` requests with
+`gemini-3.8-flash` and `gemini-2.5-flash` requests with `gemini-3.5-flash-lite`,
+billed at the new model's rate ([Gemini API changelog](https://ai.google.dev/gemini-api/docs/changelog)).
+OpenClaw marks `google/gemini-2.5-pro` and `google/gemini-2.5-flash` as deprecated
+but keeps configured refs unchanged; choose a replacement model yourself.
 
 ## Capabilities
 
@@ -693,7 +699,7 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
       agents: {
         defaults: {
           models: {
-            "google/gemini-2.5-pro": {
+            "google/gemini-3.8-flash": {
               params: {
                 cachedContent: "cachedContents/prebuilt-context",
               },

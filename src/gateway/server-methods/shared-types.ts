@@ -504,12 +504,26 @@ export type GatewayRequestOptions = {
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
 export type SessionMutationAuthorization = {
+  /** Reuse the exact retained target's membership at synchronous mutation fences. */
+  readTargetSharing?: (target: {
+    sessionKey: string;
+    agentId?: string;
+  }) => import("../session-sharing-read.js").PreparedMutationSharing;
+  /** Host-resolved bounded participation, not public request data. */
+  participationCeiling?: import("../../agents/participation-ceiling.js").ParticipationCeiling;
+  participationSignal?: AbortSignal;
   /** Release the request's retained sharing facts after its final effect. */
   release?: () => void;
   /** Retain these facts until a detached effect settles, independently of the request. */
   retain?: () => () => void;
   /** Retain published sharing facts for a run, independently of request and writer guards. */
-  retainForRun?: () => { assertCurrent: () => void; release: () => void };
+  retainForRun?: () => {
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+    release: () => void;
+    participationAuthority?: import("../../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
+    participationCeiling?: import("../../agents/participation-ceiling.js").BoundParticipationCeiling;
+  };
   /** Transfer retained facts to admitted work; request cleanup then leaves them with that owner. */
   takeRelease?: () => () => void;
   bindCreation?: (
@@ -671,6 +685,8 @@ export type GatewayBroadcastOpts = {
   sessionSubscriptionVerified?: boolean;
   /** Question owner authorizes ordinary own-run recipients without a broad question grant. */
   questionRecipient?: (client: GatewayClient) => boolean;
+  /** Host-only exact live exec binding; does not replace session disclosure checks. */
+  participationApprovalRecipient?: (client: GatewayClient) => boolean;
   stateVersion?: GatewayBroadcastStateVersion;
   /** Private live-text ownership; omitting coalesce flushes this group's progress. */
   liveText?: {

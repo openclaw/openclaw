@@ -70,6 +70,7 @@ public struct OpenClawChatView: View {
     private let voiceNoteControl: OpenClawChatVoiceNoteControl?
     private let speech: OpenClawChatSpeechController?
     private let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
+    private let firstConnectionNotice: OpenClawChatFirstConnectionNotice?
 
     private enum Layout {
         static let newTurnAnchor = UnitPoint(x: 0.5, y: ChatReadingPolicy.turnAnchor)
@@ -125,7 +126,8 @@ public struct OpenClawChatView: View {
         dictationControl: OpenClawChatDictationControl? = nil,
         voiceNoteControl: OpenClawChatVoiceNoteControl? = nil,
         speech: OpenClawChatSpeechController? = nil,
-        mediaPlaybackAllowed: @escaping @MainActor @Sendable () -> Bool = { true })
+        mediaPlaybackAllowed: @escaping @MainActor @Sendable () -> Bool = { true },
+        firstConnectionNotice: OpenClawChatFirstConnectionNotice? = nil)
     {
         self.viewModel = viewModel
         self.resolveComposerModel = resolveComposerModel
@@ -151,6 +153,7 @@ public struct OpenClawChatView: View {
         self.voiceNoteControl = voiceNoteControl
         self.speech = speech
         self.mediaPlaybackAllowed = mediaPlaybackAllowed
+        self.firstConnectionNotice = firstConnectionNotice
     }
 
     public var body: some View {
@@ -1129,7 +1132,11 @@ extension OpenClawChatView {
     private func messageListOverlay(hasVisibleContent: Bool) -> some View {
         if !self.viewModel.isLoading, self.visibleEmptyAssistantIntro == nil {
             if let error = activeErrorText {
-                if !hasVisibleContent {
+                if !hasVisibleContent, let notice = self.firstConnectionNotice, chatErrorIsDisconnected(error) {
+                    notice.card
+                        .padding(.horizontal, 24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if !hasVisibleContent {
                     let presentation = self.errorPresentation(for: error)
                     ChatNoticeCard(
                         systemImage: presentation.systemImage,
@@ -1268,11 +1275,10 @@ extension OpenClawChatView {
     private func errorPresentation(
         for error: String) -> (title: String, message: String, systemImage: String, tint: Color)
     {
-        let lower = error.lowercased()
-        if lower.contains("not connected") || lower.contains("socket") {
+        if chatErrorIsDisconnected(error) {
             return ("Disconnected", "Reconnect to your gateway to continue.", "wifi.slash", .orange)
         }
-        if lower.contains("timed out") {
+        if error.lowercased().contains("timed out") {
             return ("Timed out", "The gateway took too long to respond.", "clock.badge.exclamationmark", .orange)
         }
         // Unknown errors: keep the raw text as the description so it stays actionable.
@@ -1575,43 +1581,6 @@ struct ChatRowPassInputs {
             byRun[runID, default: []].append(call)
         }
         return byRun
-    }
-}
-
-/// Applies drawer and scene visibility to the model. It reads `openClawChatIsObscured` itself, so
-/// opening or closing the sidebar drawer updates stream pacing and composer presentation without
-/// re-running the transcript.
-private struct ChatPresentationActivity: ViewModifier {
-    let viewModel: OpenClawChatViewModel
-    let isOnScreen: Bool
-    @Environment(\.openClawChatIsObscured) private var isObscured
-    #if os(macOS)
-    @Environment(\.appearsActive) private var appearsActive
-    #else
-    @Environment(\.scenePhase) private var scenePhase
-    #endif
-
-    /// A rejected message returns to the composer only while the user can see it.
-    private var isComposerPresentationActive: Bool {
-        #if os(macOS)
-        self.isOnScreen && self.appearsActive && !self.isObscured
-        #else
-        self.isOnScreen && self.scenePhase == .active && !self.isObscured
-        #endif
-    }
-
-    func body(content: Content) -> some View {
-        content
-            .onChange(of: ObjectIdentifier(self.viewModel)) { _, _ in
-                self.viewModel.streamPacing.interval = self.isObscured ? 0.5 : 0.15
-                self.viewModel.setComposerPresentationActive(self.isComposerPresentationActive)
-            }
-            .onChange(of: self.isComposerPresentationActive, initial: true) { _, active in
-                self.viewModel.setComposerPresentationActive(active)
-            }
-            .onChange(of: self.isObscured, initial: true) { _, obscured in
-                self.viewModel.streamPacing.interval = obscured ? 0.5 : 0.15
-            }
     }
 }
 

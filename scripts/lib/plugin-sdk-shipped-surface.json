@@ -1,5 +1,5 @@
 {
-  "commit": "e13cf15ece9bbd969b7362927c315362c90c97ff",
+  "commit": "6ea542fd97e2876aa4c871ccc494ed5419a03c5c",
   "entrypoints": {
     "account-core": [
       "DEFAULT_ACCOUNT_ID",
@@ -86,6 +86,7 @@
       "AgentHarnessCompactResult",
       "AgentHarnessDeliveryDefaults",
       "AgentHarnessModelCatalogParams",
+      "AgentHarnessModelRequestPolicyError",
       "AgentHarnessNativeCompaction",
       "AgentHarnessNativeCompactionParams",
       "AgentHarnessNativeCompactionRequest",
@@ -190,6 +191,7 @@
       "awaitAgentEndSideEffects",
       "awaitAgentHarnessAgentEndHook",
       "bootstrapHarnessContextEngine",
+      "buildAgentHarnessBasePrompt",
       "buildAgentHarnessUserInputAnswers",
       "buildAgentHookContextChannelFields",
       "buildAgentRuntimePlan",
@@ -246,6 +248,7 @@
       "formatErrorMessage",
       "formatFastModeAutoProgressText",
       "formatPrePromptPrecheckLog",
+      "formatSubagentProgressReference",
       "formatToolAggregate",
       "formatToolExecutionErrorMessage",
       "formatToolProgressOutput",
@@ -279,6 +282,7 @@
       "isToolWrappedWithBeforeToolCallHook",
       "isTranscriptOnlyOpenClawAssistantMessage",
       "listNodes",
+      "listToolPromptGuidance",
       "loadAgentHarnessMcpConfig",
       "loadCodexBundleMcpThreadConfig",
       "logAgentRuntimeToolDiagnostics",
@@ -363,6 +367,7 @@
       "toolPolicy",
       "wrapToolWithBeforeToolCallHook"
     ],
+    "agent-lifecycle": ["isAgentLifecycleYieldedWaiting", "resolveAgentRunLifecycleTerminalFacts"],
     "agent-media-payload": [
       "AgentMediaPayload",
       "buildAgentMediaPayload",
@@ -861,6 +866,7 @@
       "ChannelCommandConversationContext",
       "ChannelDirectoryAdapter",
       "ChannelDirectoryEntry",
+      "ChannelDisplayMention",
       "ChannelDoctorAdapter",
       "ChannelDoctorConfigMutation",
       "ChannelDoctorEmptyAllowlistAccountContext",
@@ -872,6 +878,7 @@
       "ChannelGroupContext",
       "ChannelLegacyStateMigrationPlan",
       "ChannelLogSink",
+      "ChannelMentionAdapter",
       "ChannelMessageActionAdapter",
       "ChannelMessageActionContext",
       "ChannelMessageActionDiscoveryContext",
@@ -1665,8 +1672,11 @@
     "context-engine-transcript-runtime": [
       "SessionTranscriptMessageEntry",
       "SessionTranscriptReadFenceError",
+      "SessionTranscriptReplayGroup",
+      "SessionTranscriptReplayGroupsParams",
       "SessionTranscriptVisibleMessageDeltaParams",
       "SessionTranscriptVisibleMessageDeltaResult",
+      "readSessionTranscriptReplayGroups",
       "readSessionTranscriptVisibleMessageDelta"
     ],
     "control-ui": [
@@ -1691,6 +1701,7 @@
       "ControlUiPageTarget",
       "ControlUiPanel",
       "ControlUiPlugin",
+      "ControlUiRecoveryStorageV1",
       "ControlUiReplacement",
       "ControlUiSession",
       "ControlUiSessionListQuery",
@@ -1710,7 +1721,8 @@
       "DoctorMemoryStatusPayload",
       "MemorySearchResponse",
       "createSessionHeaderLink",
-      "defineControlUiPlugin"
+      "defineControlUiPlugin",
+      "translateControlUiMessage"
     ],
     "control-ui-link-reader": [
       "ControlUiLinkReaderDescriptor",
@@ -1723,7 +1735,8 @@
     "conversation-binding-inspection-runtime": [
       "ConversationBindingInspection",
       "inspectConversationBinding",
-      "inspectConversationBindingAsync"
+      "inspectConversationBindingAsync",
+      "prepareConversationBindingInspections"
     ],
     "conversation-runtime": [
       "BindingTargetKind",
@@ -1817,7 +1830,9 @@
       "OpenClawPluginService",
       "OpenClawPluginServiceContext",
       "OpenClawPluginServiceContextV2",
+      "OpenClawPluginServiceContextV3",
       "OpenClawPluginServiceV2",
+      "OpenClawPluginServiceV3",
       "OpenClawPluginSessionsChangedEvent",
       "OpenClawPluginToolContext",
       "OpenClawPluginToolFactory",
@@ -1850,6 +1865,8 @@
       "PluginRuntime",
       "PluginRuntimeLifecycleRegistration",
       "PluginServiceSchedulerV1",
+      "PluginServiceSessionWorkContextV1",
+      "PluginServiceSessionWorkV1",
       "PluginSessionActionContext",
       "PluginSessionActionRegistration",
       "PluginSessionActionResult",
@@ -2000,6 +2017,7 @@
       "stripTargetKindPrefix",
       "tryReadSecretFileSync"
     ],
+    "cron-tool-defaults": ["CronToolDefaultsMode", "resolveCronToolDefaults"],
     "database-engine-runtime": [
       "DatabaseEngineInput",
       "getDatabaseEngineInput",
@@ -2063,8 +2081,16 @@
       "decisionResultV2ToV1",
       "decodeSystemOneResponse",
       "encodeSystemOneQuestions",
+      "isDecisionBatchV1Representable",
       "validateDecisionBatchV2",
       "validateDecisionResultV2"
+    ],
+    "decisions-http-runtime": [
+      "DecisionHttpExecution",
+      "DecisionHttpRoute",
+      "DecisionHttpUnavailable",
+      "evaluateDecisionHttp",
+      "executeDecisionHttp"
     ],
     "decisions-openai-runtime": ["evaluateOpenAICompatibleDecision", "supportsOpenAIDecisionBatch"],
     "dedupe-runtime": [
@@ -2113,6 +2139,7 @@
       "isValidDiagnosticTraceFlags",
       "isValidDiagnosticTraceId",
       "normalizeDiagnosticLane",
+      "normalizeDiagnosticTraceContext",
       "normalizeDiagnosticValue",
       "onDiagnosticEvent",
       "onInternalDiagnosticEvent",
@@ -2227,9 +2254,11 @@
       "GatewayIngressPrincipal",
       "GatewayIngressPrincipalBindingV1",
       "GatewayIngressPrincipalOptionsV1",
+      "GatewayIngressPrincipalRecovery",
       "GatewayIngressRequestOptionsV1",
       "GatewayIngressSocketV1",
-      "GatewayPluginReadCookieV1"
+      "GatewayPluginReadCookieV1",
+      "captureGatewayIngressPersonPrincipal"
     ],
     "gateway-method-runtime": [
       "GatewayMethodDispatchError",
@@ -2271,6 +2300,7 @@
       "isImplicitLocalGatewayTargetFromCli",
       "isLoopbackHost",
       "isNodeCommandAllowed",
+      "isSessionAccessRefreshingError",
       "mintPluginNodeCapabilityToken",
       "normalizePluginNodeCapabilityScopedUrl",
       "parseTimeoutMsWithFallback",
@@ -2797,7 +2827,8 @@
       "PluginCommandNativeCandidate",
       "PluginCommandReplyOptions",
       "PluginCommandRuntime",
-      "createPluginCommandRuntime"
+      "createPluginCommandRuntime",
+      "pluginCommandResultContinuesAgent"
     ],
     "plugin-config-runtime": [
       "createPluginConfigParser",
@@ -2843,7 +2874,9 @@
       "OpenClawPluginService",
       "OpenClawPluginServiceContext",
       "OpenClawPluginServiceContextV2",
+      "OpenClawPluginServiceContextV3",
       "OpenClawPluginServiceV2",
+      "OpenClawPluginServiceV3",
       "OpenClawPluginToolContext",
       "OpenClawPluginToolFactory",
       "PluginAgentEventEmitParams",
@@ -2888,6 +2921,8 @@
       "PluginRunContextPatch",
       "PluginRuntimeLifecycleRegistration",
       "PluginServiceSchedulerV1",
+      "PluginServiceSessionWorkContextV1",
+      "PluginServiceSessionWorkV1",
       "PluginSessionActionContext",
       "PluginSessionActionRegistration",
       "PluginSessionActionResult",
@@ -2962,6 +2997,12 @@
       "ProviderWebSocketSessionPolicy",
       "ProviderWrapStreamFnContext",
       "RealtimeTranscriptionProviderPlugin",
+      "RepositoryActor",
+      "RepositoryAdmission",
+      "RepositoryConnectionIdentity",
+      "RepositoryCredentialScope",
+      "RepositoryIntegration",
+      "RepositoryOperation",
       "SpeechProviderPlugin",
       "StorageBackend",
       "StorageObjectInfo",
@@ -2983,6 +3024,10 @@
       "WorkerProfileSuggestionDiscovery",
       "WorkerProvider",
       "WorkerProviderError",
+      "WorkerResourceReceipt",
+      "WorkerRetentionObservation",
+      "WorkerRetentionOperation",
+      "WorkerRetentionPolicy",
       "WorkerSshEndpoint",
       "WorkerSshIdentity",
       "WorkerSshIdentityRequest",
@@ -3189,9 +3234,11 @@
       "MediaPayloadInput",
       "OutboundReplyPayload",
       "ReasoningReplyPayload",
+      "ReplyMediaFailure",
       "ReplyPayload",
       "ReplyPayloadTtsSupplement",
       "SendableOutboundReplyParts",
+      "appendReplyMediaFailures",
       "buildMediaPayload",
       "buildTtsSupplementMediaPayload",
       "copyReplyPayloadMetadata",
@@ -4103,6 +4150,6 @@
       "isCompleteHtmlDocument"
     ]
   },
-  "release": "v2026.11.5",
+  "release": "v2026.11.10",
   "schema": "openclaw.plugin-sdk-shipped-surface/v1"
 }

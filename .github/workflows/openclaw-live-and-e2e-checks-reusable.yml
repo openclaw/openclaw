@@ -593,6 +593,8 @@ on:
         required: false
       ZAI_API_KEY:
         required: false
+      ZAI_CODING_API_KEY:
+        required: false
       Z_AI_API_KEY:
         required: false
       BYTEPLUS_ACCESS_KEY_ID:
@@ -2100,6 +2102,7 @@ jobs:
     timeout-minutes: 90
     outputs:
       groups_json: ${{ steps.groups.outputs.groups_json }}
+      max_parallel: ${{ steps.groups.outputs.max_parallel }}
     steps:
       - name: Checkout trusted release harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -2121,6 +2124,8 @@ jobs:
         env:
           LANES: ${{ inputs.docker_lanes }}
           GROUP_SIZE: ${{ inputs.targeted_docker_lane_group_size }}
+          # Share the existing capacity decision with ordering and matrix admission.
+          MAX_PARALLEL: ${{ inputs.use_github_hosted_runners && inputs.runner_group == '' && needs.validate_selected_ref.outputs.package_artifact_present == 'true' && contains(inputs.docker_lanes, 'published-upgrade-survivor') && !contains(inputs.docker_lanes, 'update-migration') && inputs.published_upgrade_survivor_scenarios != '' && 64 || 32 }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ needs.validate_selected_ref.outputs.upgrade_baseline }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: ${{ needs.validate_selected_ref.outputs.upgrade_baseline_scope }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ needs.validate_selected_ref.outputs.upgrade_baselines }}
@@ -2130,6 +2135,7 @@ jobs:
           echo "artifact_name=upgrade-baseline-checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(node -p 'crypto.randomUUID()')" >> "$GITHUB_OUTPUT"
           groups_json="$(node scripts/plan-targeted-docker-lane-groups.mjs --check-baselines .artifacts/upgrade-baseline-checks)"
           echo "groups_json=${groups_json}" >> "$GITHUB_OUTPUT"
+          echo "max_parallel=${MAX_PARALLEL}" >> "$GITHUB_OUTPUT"
 
       - name: Summarize published baseline checks
         if: always()
@@ -2151,8 +2157,7 @@ jobs:
     timeout-minutes: ${{ matrix.group.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
-      # Raise only the hosted expanded package-survivor matrix; retain other runner budgets.
-      max-parallel: ${{ inputs.use_github_hosted_runners && inputs.runner_group == '' && needs.validate_selected_ref.outputs.package_artifact_present == 'true' && contains(inputs.docker_lanes, 'published-upgrade-survivor') && !contains(inputs.docker_lanes, 'update-migration') && inputs.published_upgrade_survivor_scenarios != '' && 48 || 32 }}
+      max-parallel: ${{ fromJSON(needs.plan_docker_lane_groups.outputs.max_parallel) }}
       matrix:
         group: ${{ fromJson(needs.plan_docker_lane_groups.outputs.groups_json) }}
     env:
@@ -2694,20 +2699,33 @@ jobs:
               echo "Current job workflow identity does not match the trusted release harness." >&2
               exit 1
             }
-          producer_job_name="$(
-            gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${producer_job_id}" |
+          # The runner can start before the Actions Jobs API reports the current job as running.
+          # Reconcile read-only; never accept a different job, run, attempt, or lifecycle state.
+          for lookup in {1..7}; do
+            job_metadata="$(gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${producer_job_id}")"
+            producer_job_name="$(
               jq -er \
                 --arg id "$producer_job_id" \
                 --arg run_id "$GITHUB_RUN_ID" \
                 --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
-                'select(
+                '(select(
                   (.id | tostring) == $id and
                   (.run_id | tostring) == $run_id and
                   (.run_attempt | tostring) == $run_attempt and
                   .status == "in_progress" and
                   .conclusion == null
-                ) | .name | select(type == "string" and length > 0)'
-          )"
+                ) | .name | select(type == "string" and length > 0)) // ""' \
+                <<< "$job_metadata"
+            )"
+            if [[ -n "$producer_job_name" ]]; then
+              break
+            fi
+            if [[ "$lookup" == 7 ]]; then
+              echo "Unable to confirm running producer job $producer_job_id in run $GITHUB_RUN_ID attempt $GITHUB_RUN_ATTEMPT." >&2
+              exit 1
+            fi
+            sleep 5
+          done
           {
             printf 'job_id=%s\n' "$producer_job_id"
             printf 'job_name=%s\n' "$producer_job_name"
@@ -4521,9 +4539,9 @@ jobs:
             label: Native live gateway profiles OpenCode Go DeepSeek/GLM
             # The release workspace does not enable Global regions, so the active DeepSeek V4
             # routes reject every request, and upstream metadata deprecated
-            # deepseek-v4-flash-vision-exp, so discovery no longer lists it. These GLM refs
-            # were proven reachable from the release workspace.
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2,opencode-go/glm-5.3 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            # deepseek-v4-flash-vision-exp, so discovery no longer lists it. The authenticated
+            # catalog on 2026-11-21 lists glm-5.3 but no longer lists glm-5.2.
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             profiles: full
@@ -4553,9 +4571,9 @@ jobs:
             # Pinned while the release OpenCode workspace lacks Global regions: deepseek-v4.1-flash
             # returns 400 "requires Global regions", and upstream metadata deprecated the V4 Flash
             # routes. Restore dynamic selection (drop OPENCLAW_LIVE_GATEWAY_MODELS) once the
-            # workspace enables Global. Release-workspace discovery stopped listing glm-5.3 on
-            # 2026-10-18, so the smoke pins glm-5.2.
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2 OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            # workspace enables Global. The authenticated catalog on 2026-11-21 lists glm-5.3
+            # but no longer lists glm-5.2; this smoke must still verify real inference.
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 45
             profile_env_only: false
             profiles: stable
@@ -4713,6 +4731,14 @@ jobs:
           fetch-depth: 1
           path: .release-harness
 
+      - name: Report missing decision provider coverage
+        if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-test'
+        shell: bash
+        run: |
+          if [[ -f test/decision-index-providers.live.test.ts && -z "${CELERIS_API_KEY:-}${FASTINO_API_KEY:-}${NACE_API_KEY:-}${PERPLEXITY_API_KEY:-}" ]]; then
+            echo "::warning file=test/decision-index-providers.live.test.ts::No Celeris, Fastino, Nace, or Perplexity key is available to this job. Their live decision cases will skip. Check the job's credential configuration. The remaining tests will run."
+          fi
+
       - name: Setup Node environment
         if: steps.selection.outputs.run == 'true'
         uses: ./.github/actions/setup-node-env
@@ -4732,6 +4758,17 @@ jobs:
         uses: ./.release-harness/.github/actions/setup-playwright-chromium
         with:
           cache-mode: restore
+
+      - name: Select Z.AI Coding Plan credential
+        if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-src-agents-zai-coding'
+        shell: bash
+        env:
+          ZAI_CODING_API_KEY: ${{ secrets.ZAI_CODING_API_KEY }}
+        run: |
+          set -euo pipefail
+          : "${ZAI_CODING_API_KEY:?Set the ZAI_CODING_API_KEY Actions secret for Coding Plan tests}"
+          # Select before profile hydration; never fall back to standard API billing.
+          printf 'ZAI_API_KEY=%s\nZ_AI_API_KEY=\n' "$ZAI_CODING_API_KEY" >> "$GITHUB_ENV"
 
       - name: Hydrate live auth/profile inputs
         if: steps.selection.outputs.run == 'true'

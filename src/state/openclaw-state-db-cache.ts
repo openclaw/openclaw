@@ -6,7 +6,10 @@ import {
 import { registerNodeSqliteKyselyQueryErrorHandler } from "../infra/kysely-sync-cache-state.js";
 import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
-import { observeSqliteDatabaseAdmissionLocation } from "../infra/sqlite-database-admission.js";
+import {
+  observeSqliteDatabaseAdmissionLocation,
+  retireSqliteDatabaseDescriptorCustody,
+} from "../infra/sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
@@ -24,6 +27,7 @@ import {
 import {
   assertStateDatabaseBorrowersReleased,
   createStateDatabaseRetainer,
+  joinStateDatabaseBorrowersReleased,
   type StateDatabaseBorrowers,
 } from "./openclaw-state-db-borrow.js";
 import { createStateDatabaseCacheAdmission } from "./openclaw-state-db-cache.admission.js";
@@ -524,27 +528,25 @@ function retireOpenClawStateDatabaseHandle(
   }
 }
 
+/** Cached and disposal-only handles at one path or physical identity; all handles without one. */
+function stateDatabaseHandlesAt(pathname?: string, identity?: DatabasePathIdentity) {
+  return [...new Set([...retainedDatabaseHandles.values(), ...cachedDatabases.values()])].filter(
+    (database) =>
+      pathname === undefined ||
+      database.path === pathname ||
+      (identity !== undefined && databaseIdentities.get(database.db)?.key === identity.key),
+  );
+}
+
 /** Close cached and disposal-only handles, preserving independent cleanup failures. */
 function retireOpenClawStateDatabaseHandles(
   pathname?: string,
   options?: OpenClawStateDatabaseCloseOptions,
   identity?: DatabasePathIdentity,
 ): boolean {
-  const databases = new Set<StateDatabaseHandle>([
-    ...retainedDatabaseHandles.values(),
-    ...cachedDatabases.values(),
-  ]);
+  const databases = stateDatabaseHandlesAt(pathname, identity);
   const errors: unknown[] = [];
-  let found = false;
   for (const database of databases) {
-    if (
-      pathname !== undefined &&
-      database.path !== pathname &&
-      (identity === undefined || databaseIdentities.get(database.db)?.key !== identity.key)
-    ) {
-      continue;
-    }
-    found = true;
     try {
       retireOpenClawStateDatabaseHandle(database, true, options);
     } catch (error) {
@@ -552,7 +554,7 @@ function retireOpenClawStateDatabaseHandles(
     }
   }
   throwSqliteLifecycleErrors(errors, "OpenClaw state database cleanup failed.");
-  return found;
+  return databases.length > 0;
 }
 
 export function closeOpenClawStateDatabaseByPath(
@@ -564,6 +566,20 @@ export function closeOpenClawStateDatabaseByPath(
     options,
     asyncResources.identity(pathname),
   );
+}
+
+/** Seal after final release unless a read still borrows a handle; the next owner validates. */
+export function sealOpenClawStateDatabaseByPath(pathname: string): boolean {
+  const resolvedPath = resolveDatabasePath({ path: pathname });
+  const identity = asyncResources.identity(pathname);
+  if (
+    stateDatabaseHandlesAt(resolvedPath, identity).some(
+      (database) => borrowers.get(database.db)?.references.size,
+    )
+  ) {
+    return false;
+  }
+  return retireOpenClawStateDatabaseHandles(resolvedPath, undefined, identity);
 }
 
 export function closeOpenClawStateDatabase(options?: OpenClawStateDatabaseCloseOptions): void {
@@ -640,6 +656,21 @@ export async function closeOpenClawStateDatabaseAsync(
   });
 }
 
+/** The Gateway stop owner joins admitted native reads before mandatory custody retirement. */
+export async function joinOpenClawStateDatabaseBorrowers(): Promise<void> {
+  await Promise.all(
+    stateDatabaseHandlesAt().map((database) =>
+      joinStateDatabaseBorrowersReleased(borrowers.get(database.db), database.path),
+    ),
+  );
+}
+
+/** Join native consumers and identity descriptors before transferring store custody. */
+export async function releaseOpenClawStateDatabaseCustody(): Promise<void> {
+  await closeOpenClawStateDatabaseAsync();
+  retireSqliteDatabaseDescriptorCustody();
+}
+
 export function isOpenClawStateDatabaseOpen(pathname?: string): boolean {
   if (pathname !== undefined) {
     return cachedDatabases.get(resolveDatabasePath({ path: pathname }))?.db.isOpen === true;
@@ -677,6 +708,7 @@ export const openClawStateDatabaseCache = {
   clearOpenClawStateDatabaseOpenFailure,
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseByPath,
+  sealOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseHandle,
   closeUnpublishedOpenClawStateDatabaseHandle,

@@ -11,8 +11,8 @@ import type {
 //   operator scopes resolve through the linked Gateway profile.
 // While OpenClaw ID is off no resolver is published and nothing here runs.
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
+import { OperatorRefusalError } from "../operator-refusal.js";
 
 /** Who an admitted tunnel device is, decided by the Gateway's membership authority. */
 export type OpenClawIdTunnelPrincipal = (
@@ -113,6 +113,13 @@ export async function prepareOpenClawIdTunnelPrincipalLookup(): Promise<OpenClaw
     const principal = lookup?.(peerKey);
     return isOpenClawIdTunnelPrincipalAdmitted(principal) ? principal : undefined;
   };
+}
+
+/** Null means the membership owner has not published its current facts. */
+export function readOpenClawIdTunnelPrincipal(
+  peerKey: string,
+): OpenClawIdTunnelPrincipal | undefined | null {
+  return lookup ? lookup(peerKey) : null;
 }
 
 /**
@@ -243,9 +250,9 @@ export function currentOwnerDevicePrincipal(
     : undefined;
 }
 
-export class OpenClawIdPrincipalChangedError extends GatewayOperatorRecoveryAuthorizationError {
+export class OpenClawIdPrincipalChangedError extends OperatorRefusalError {
   constructor() {
-    super("OpenClaw ID membership authority changed");
+    super("sign-in-ended");
   }
 }
 

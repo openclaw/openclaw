@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunDirectAbortReason,
@@ -8,7 +9,6 @@ import {
 import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
-import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -52,12 +52,14 @@ import {
   prepareChatSendAcpRefresh,
 } from "./chat-send-admission-context.js";
 import {
+  createChatSessionRoutingAssertion,
   respondChatSendAdmissionError,
   respondChatSessionRoutingChanged,
+  SESSION_INCARNATION_CHANGED,
 } from "./chat-send-admission-errors.js";
 import {
   isLocalChatInputAdmission,
-  resolveCodexGoalAdmission,
+  resolveRuntimeGoalAdmission,
   withGoalChatPlacement,
   type PreparedGoalChatPlacement,
 } from "./chat-send-goal-admission.js";
@@ -76,6 +78,7 @@ import {
 import { bindChatSendPreparedSession } from "./chat-send-session-binding.js";
 import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
 import { prepareChatSendSessionEntry } from "./chat-send-session.js";
+import { prepareActiveSteerInput } from "./chat-send-steer-target.js";
 import {
   admitChatSendUploads,
   assertChatSendExclusiveAdmission,
@@ -92,6 +95,10 @@ import {
 export async function admitChatSend(params: ChatSendAdmissionParams) {
   const { request, session, respond, context, client, diagnostics } = params;
   const { p, turnKind } = request;
+  const steer = prepareActiveSteerInput(request, session, respond);
+  if (!steer.ok) {
+    return steer;
+  }
   const requestIdentity = request.goalOperation?.requestFingerprint ?? request.requestIdentity;
   const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
   const {
@@ -105,17 +112,15 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     requestedSessionId,
     backingSessionId,
     agentId,
-    resolvedSessionModel,
-    resolvedSessionAuthProvider,
+    resolvedSessionModel: sessionModel,
     activeRunScopeKey,
     timeoutMs,
     expectedLeafEntryId,
   } = session;
-  const assertSessionTargetCurrent = () => {
-    if (session.sessionRoutingChanged(context.getRuntimeConfig())) {
-      throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
-    }
-  };
+  const assertSessionTargetCurrent = createChatSessionRoutingAssertion(
+    session.sessionRoutingChanged,
+    context,
+  );
   const cachedMeta = { cached: true, runId: clientRunId };
   const { chatSendTraceAttributes, originatingRoute } = prepareChatSendAdmissionContext(params);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -193,7 +198,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   let localGoalAdmission = false;
   let localInputAdmission = false;
-  let codexGoalAdmission: "local" | "worker" | undefined;
+  let runtimeGoal: "local" | "worker" | undefined;
   let initialSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
@@ -216,7 +221,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       cfg,
       channel: originatingRoute.originatingChannel,
       sessionEntry: entry,
-      inlineMode: p.queueMode,
+      inlineMode: request.participating ? "followup" : p.queueMode,
     }),
     authority: { assertCurrent: () => assertSourceAuthority?.() },
     runId: clientRunId,
@@ -226,8 +231,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     timeoutMs,
     ownerConnId: normalizeOptionalString(client?.connId),
     ownerDeviceId: normalizeOptionalString(client?.connect?.device?.id),
-    providerId: resolvedSessionModel.provider,
-    authProviderId: resolvedSessionAuthProvider,
+    providerId: sessionModel?.provider,
+    authProviderId:
+      sessionModel && resolveProviderIdForAuth(sessionModel.provider, { config: cfg }),
     resolveTerminalProducer: (active) =>
       resolveActiveReplyRunOwnerForSignal(active.input.abortSignal),
     kind: "chat-send",
@@ -314,6 +320,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }
         const latestEntry = latestSession.entry;
         const latestSessionId = latestEntry?.sessionId;
+        // A reset between preparation and write admission must leave the replacement untouched.
+        if (request.targetPrecondition?.matches(latestEntry) === false) {
+          throw new Error(SESSION_INCARNATION_CHANGED);
+        }
         admittedSessionEntry = latestEntry;
         const requestConflict = resolveChatSendRequestConflict(
           { ...params, session: { ...session, entry: latestEntry } },
@@ -356,8 +366,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         if (!replyTargetsCaptured) {
           // Retain original opaque targets, including absence, across placement waits.
           // A message to people never steers the active run.
-          messageInjectionTarget =
-            p.queueMode === "steer" && !request.humanAddressed
+          messageInjectionTarget = request.activeSteer
+            ? steer.target
+            : p.queueMode === "steer" && !request.humanAddressed && !request.participating
               ? captureCurrentReplyMessageInjectionTarget(
                   admittedRunAbort.entry?.input.mailbox.owner.id ?? activeRunScopeKey,
                 )
@@ -387,9 +398,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }
         const placement = preparedPlacement?.facts.current();
         const acpMeta = acp?.meta ?? null;
-        codexGoalAdmission = resolveCodexGoalAdmission(params, latestSession, placement, acpMeta);
+        runtimeGoal = resolveRuntimeGoalAdmission(params, latestSession, placement, acpMeta);
         localInputAdmission =
-          !codexGoalAdmission &&
+          !runtimeGoal &&
           isLocalChatInputAdmission(
             params,
             latestSession,
@@ -404,10 +415,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
             sessionKeys: [sessionKey],
           }) === undefined;
         localGoalAdmission = Boolean(request.goalOperation && localInputAdmission);
-        if (request.goalOperation && !localGoalAdmission && !codexGoalAdmission) {
+        if (request.goalOperation && !localGoalAdmission && !runtimeGoal) {
           throw new SessionGoalOperationError(
             "invalid",
-            "Goal start or resume requires an idle built-in local session with recoverable history or a supported local or cloud-worker Codex session.",
+            "Goal start or resume requires an idle supported OpenClaw or Codex session with recoverable history and a matching execution placement.",
           );
         }
       }).catch((error: unknown) => {
@@ -471,8 +482,8 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         admittedRunAbort.controller.abort(reason);
       },
     });
-    if (codexGoalAdmission && !capturedOperator.authority) {
-      throw new Error("Codex Goals require a current authenticated operator request.");
+    if ((runtimeGoal || request.activeSteer) && !capturedOperator.authority) {
+      throw new Error("This input requires a current authenticated operator request.");
     }
     admittedRunAbort.initializeTiming({ now: Date.now(), timeoutMs });
     workPhase?.finish();
@@ -574,7 +585,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     return { ok: false as const };
   }
   assertSourceAuthority = () => {
-    capturedOperator.authority?.assertCurrent();
     assertAcceptedInputAuthority?.();
     assertSessionTargetCurrent();
     if (!gatewayWorkAdmission?.isActive()) {
@@ -706,7 +716,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }),
       localGoalAdmission,
       localInputAdmission,
-      codexGoalAdmission,
+      runtimeGoal,
       setDiscardAbandonedPreparedMedia: setDiscardPreparedMedia,
     },
   };

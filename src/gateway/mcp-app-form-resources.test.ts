@@ -519,39 +519,30 @@ describe("registered MCP form resource route", () => {
     expect(f.readResource).not.toHaveBeenCalled();
   });
 
-  it.each(["origin", "upload policy", "apps disabled"])(
-    "rechecks %s after await before writing uploads",
-    async (reason) => {
-      const gate = createDeferred();
-      const entered = createDeferred();
-      const provider = createMcpAppWorkspaceUploadProvider({
-        workspaceDir: state.root,
-        sessionKey,
-        agentId: "main",
-        assertCurrent,
-      });
-      const f = await fixture({
-        kind: "file",
-        upload: async (request) => {
-          entered.resolve();
-          await gate.promise;
-          return provider(request);
-        },
-      });
-      const pending = f.upload();
-      await entered.promise;
-      if (reason === "origin") {
-        state.current = false;
-      } else if (reason === "upload policy") {
-        state.uploads = false;
-      } else {
-        state.apps = false;
-      }
-      gate.resolve();
-      expect((await pending)[0]).toBe(false);
-      expect(await readdir(state.root)).toEqual([]);
-    },
-  );
+  it("rechecks the origin after await before writing uploads", async () => {
+    const gate = createDeferred();
+    const entered = createDeferred();
+    const provider = createMcpAppWorkspaceUploadProvider({
+      workspaceDir: state.root,
+      sessionKey,
+      agentId: "main",
+      assertCurrent,
+    });
+    const f = await fixture({
+      kind: "file",
+      upload: async (request) => {
+        entered.resolve();
+        await gate.promise;
+        return provider(request);
+      },
+    });
+    const pending = f.upload();
+    await entered.promise;
+    state.current = false;
+    gate.resolve();
+    expect((await pending)[0]).toBe(false);
+    expect(await readdir(state.root)).toEqual([]);
+  });
 
   it("withholds in-flight previews after resolution and retires disposed origins", async () => {
     const f = await fixture();

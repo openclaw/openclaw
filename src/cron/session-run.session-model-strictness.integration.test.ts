@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import { getAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isCompactionSummaryRequest } from "../../test/helpers/compaction-summary-request.js";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
@@ -26,7 +28,6 @@ import { refreshSessionPatchQueuedSelection } from "../gateway/server-methods/se
 import { createHotReloadHandlerTestParams } from "../gateway/server-reload-handlers.config.test-support.js";
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import * as globalHooks from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import {
@@ -246,7 +247,6 @@ describe("stored session model selections in scheduled session turns", () => {
       let revoked = false;
       let preparations = 0;
       let publications = 0;
-      let authorityRefusal: string | undefined;
       const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
       const effectPath = `${state.workspaceDir}/hook-effects.txt`;
       const effect = () => fs.appendFile(effectPath, "effect\n").then(() => undefined);
@@ -304,13 +304,8 @@ describe("stored session model selections in scheduled session turns", () => {
                 ),
               ).toBe("applied");
               publications++;
-              // Assert the real admitted target after every publication, before another edit.
-              try {
-                expectDefined(assertCurrent, "prepared scheduled target authority")();
-              } catch (error) {
-                authorityRefusal = formatErrorMessage(error);
-                throw error;
-              }
+              // The admitted target stays usable after every publication; config gates the start.
+              expectDefined(assertCurrent, "prepared scheduled target")();
               previous = config;
             }
           } finally {
@@ -341,7 +336,7 @@ describe("stored session model selections in scheduled session turns", () => {
         }
         const raw = await request.text();
         const body = JSON.parse(raw) as { model?: string };
-        if (params.preflightCompactionWatchdog && raw.includes("context summarization assistant")) {
+        if (params.preflightCompactionWatchdog && isCompactionSummaryRequest(raw)) {
           summaryRequests++;
           await vi.advanceTimersByTimeAsync(60_001);
         }
@@ -551,10 +546,18 @@ describe("stored session model selections in scheduled session turns", () => {
           },
           state.workspaceDir,
         );
+        // The seeded history alone crosses the shared 85% compaction trigger of the 128k
+        // window, so the first scheduled request compacts; the summary request stays below it.
+        const triggerTokens = resolveCompactionThreshold({
+          contextWindowTokens: 128_000,
+          reserveTokensFloor: 0,
+        });
+        const detail = "Background detail. ";
+        const detailRepeat = Math.ceil(((triggerTokens + 4_000) * 4) / 12 / detail.length);
         for (let turn = 0; turn < 12; turn++) {
           await seed.appendMessageAsync({
             role: "user",
-            content: `Earlier question ${turn}. ${"Background detail. ".repeat(250)}`,
+            content: `Earlier question ${turn}. ${detail.repeat(detailRepeat)}`,
             timestamp: turn + 1,
           });
           await seed.appendMessageAsync(
@@ -604,7 +607,6 @@ describe("stored session model selections in scheduled session turns", () => {
           requests,
           preparations,
           publications,
-          authorityRefusal,
           recoveryRequests: requestRecoveryRestart.mock.calls.length,
           hookEffects: await fs.readFile(effectPath, "utf8").catch(() => undefined),
         };
@@ -724,19 +726,12 @@ describe("stored session model selections in scheduled session turns", () => {
   it.each(policyCases)(
     "settles a scheduled occurrence across %s target preparation once",
     async (reload, status, calls, attempts, effects) => {
-      const {
-        result,
-        requests,
-        preparations,
-        publications,
-        authorityRefusal,
-        recoveryRequests,
-        hookEffects,
-      } = await runWithFailingPinnedModel({
-        storedPin: null,
-        payload: { fallbacks: reload === "fallback-auth" ? ["fallback/model-b"] : [] },
-        reload,
-      });
+      const { result, requests, preparations, publications, recoveryRequests, hookEffects } =
+        await runWithFailingPinnedModel({
+          storedPin: null,
+          payload: { fallbacks: reload === "fallback-auth" ? ["fallback/model-b"] : [] },
+          reload,
+        });
       expect(hookEffects).toBe(effects ? "effect\n" : undefined);
       if (reload === "provider-setup-sequence" || reload === "selected-model-denied") {
         expect(publications).toBe(4);
@@ -749,7 +744,8 @@ describe("stored session model selections in scheduled session turns", () => {
       }
       expect(recoveryRequests).toBe(0);
       if (reload === "selected-model-denied") {
-        expect(authorityRefusal).toContain("Session event configuration changed");
+        // Refused before any provider request, by the start's model policy check.
+        expect(result?.error).toContain("is not allowed by agents.defaults.modelPolicy.allow");
       }
       expect(result?.status, result?.error).toBe(status);
       expect(requests).toEqual(calls);

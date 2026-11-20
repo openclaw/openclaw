@@ -7,7 +7,7 @@ import { createHostIoPressureProbe } from "./host-io-pressure.js";
 const roots = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-async function kernelFixture() {
+async function kernelFixture(removalRoot?: string) {
   const root = roots.make("host-io-pressure-");
   const volume = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
   const btrfs = path.join(root, "sys/fs/btrfs");
@@ -23,7 +23,7 @@ async function kernelFixture() {
   );
   vi.spyOn(fs, "readdir").mockImplementation((_target, options) => readdir(btrfs, options));
   return {
-    probe: createHostIoPressureProbe(),
+    probe: createHostIoPressureProbe(removalRoot),
     psi: (some: number, full: number, sustained = 0) =>
       fs.writeFile(
         psi,
@@ -84,5 +84,15 @@ it("keeps paced cleanup available without Linux counters", async () => {
   const fixture = await kernelFixture();
   expect(await fixture.probe()).toBe(false);
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  expect(await fixture.probe()).toBe(false);
+});
+
+it("brakes retirement on a fresh 600 ms commit below the reservation watermark", async () => {
+  const fixture = await kernelFixture("/retired");
+  await fixture.psi(0, 0);
+  await fixture.stats(100, 5000, 2);
+  expect(await fixture.probe()).toBe(false);
+  await fixture.stats(101, 5600, 600);
+  expect(await fixture.probe()).toBe(true);
   expect(await fixture.probe()).toBe(false);
 });

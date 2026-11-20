@@ -1,5 +1,7 @@
 /* @vitest-environment jsdom */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import type { CronJob } from "../../../api/types.ts";
 import type { AutomationCreationRow } from "../../../lib/chat/automation-creation-card.ts";
 import { createCronJob } from "../../../test-helpers/cron.ts";
@@ -7,127 +9,45 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { mountPlan } from "./chat-created-automations.test-support.tsx";
 
 function createdSlot(jobId: string): AutomationCreationRow {
-  return { slotId: "slot-" + jobId, name: "Planned job", status: "created", jobId };
+  return { slotId: "slot-" + jobId, name: "Saved job", jobId };
 }
 
-it("reserves the whole plan before any job exists and settles its keyed slots independently", async () => {
-  const pending = (slotId: string, name: string): AutomationCreationRow => ({
-    slotId,
-    name,
-    status: "pending",
-  });
-  const alpha = pending("first", "Morning digest");
-  const beta = pending("second", "Evening digest");
-  const job = createCronJob("j2", "Evening recap");
-  const card = mountPlan([alpha, beta], () => job);
-  const group = card.getByRole("group", { name: "Automations" });
-  const heading = card.getByRole("heading", { name: "Automations" });
-  const rows = () => card.getAllByRole("listitem");
-  const [first, second] = rows();
-  if (!first || !second) {
-    throw new Error("Both declared slots must be mounted");
-  }
-  expect(first.querySelector("[role=status]")?.textContent).toContain(
-    "Morning digestCreating automation…",
+it("keeps the first saved job focused when another is confirmed", async () => {
+  const alpha = createCronJob("a", "Morning digest");
+  const beta = createCronJob("b", "Evening digest");
+  const first = createdSlot(alpha.id);
+  const card = mountPlan(
+    [first],
+    (_method, params) => (asOptionalRecord(params)?.id === alpha.id ? alpha : beta),
+    undefined,
+    true,
   );
-  expect(second.textContent).toContain("Evening digest");
-  expect(card.container.querySelectorAll(".chat-created-automations__clock")).toHaveLength(1);
-  expect(
-    card.container.querySelectorAll(
-      ".chat-created-automations__switch-placeholder[aria-hidden=true]",
-    ),
-  ).toHaveLength(2);
-  expect(group.querySelector("a, button, input, [tabindex], [role=switch]")).toBeNull();
-  expect(card.request).not.toHaveBeenCalled();
-
-  const created = { ...beta, status: "created", jobId: job.id } as const;
-  card.setPlan({ planId: "plan", rows: [{ ...alpha }, created] });
-  await waitForSolid(() => expect(card.getByRole("link", { name: /Evening recap/ })).toBeDefined());
-  expect(card.getAllByRole("switch")).toHaveLength(1);
-  expect(rows()[0]).toBe(first);
-  expect(rows()[1]).toBe(second);
+  await waitForSolid(() => expect(card.getByRole("switch")).toBeDefined());
+  const group = card.getByRole("group");
+  const row = card.getByRole("listitem");
   const toggle = card.getByRole("switch");
   toggle.focus();
-  card.setPlan({ planId: "plan", rows: [{ ...alpha, status: "failed" }, { ...created }] });
-  flush();
+  card.setPlan({ grouped: true, rows: [createdSlot(beta.id), { ...first }] });
+  await waitForSolid(() => expect(card.getAllByRole("switch")).toHaveLength(2));
   expect(card.getByRole("group")).toBe(group);
-  expect(card.getByRole("heading")).toBe(heading);
-  expect(rows()[0]).toBe(first);
-  expect(rows()[1]).toBe(second);
-  expect(first.textContent).toContain("Not created");
-  expect(first.querySelector("a, button, input, [tabindex], [role=switch]")).toBeNull();
-  expect(first.querySelector("svg[aria-hidden=true]")).not.toBeNull();
-  expect(card.getByRole("switch")).toBe(toggle);
+  expect(card.getAllByRole("listitem")[1]).toBe(row);
   expect(document.activeElement).toBe(toggle);
-  expect(card.request).toHaveBeenCalledTimes(1);
+  expect(card.request).toHaveBeenCalledTimes(2);
 });
 
-it("makes a newly confirmed row actionable while the exact read and its sibling are still pending", async () => {
+it("shows a saved job immediately but requires an exact read before enabling controls", async () => {
   const check = Promise.withResolvers<CronJob>();
-  const pending = { status: "pending", slotId: "a", name: "Hint" } as const;
-  const sibling = { status: "pending", slotId: "b", name: "Unfinished" } as const;
   const job = createCronJob("a", "Saved title", { enabled: false });
-  const changed = { ...job, enabled: true, configRevision: "after-write" };
-  const card = mountPlan([pending, sibling], (method) =>
-    method === "cron.update" ? changed : check.promise,
-  );
-  const saved = {
-    ...pending,
-    status: "created",
-    jobId: job.id,
-    definition: {
-      id: job.id,
-      name: job.name,
-      enabled: false,
-      configRevision: "config-revision-1",
-      schedule: { kind: "cron", expr: "0 * * * *" },
-    },
-  } as const;
-  card.setPlan({ planId: "plan", rows: [saved, sibling] });
-  flush();
-  const toggle = card.getByRole<HTMLInputElement>("switch", { name: "Resume: Saved title" });
-  expect(toggle.disabled).toBe(false);
-  expect(
-    card.container.querySelectorAll(".chat-created-automations__switch-placeholder"),
-  ).toHaveLength(1);
-  toggle.click();
+  const card = mountPlan([createdSlot(job.id)], () => check.promise);
+  expect(card.getByRole("status").textContent).toContain("Created");
+  expect(card.queryByRole("switch")).toBeNull();
+  expect(card.queryByRole("link")).toBeNull();
+  expect(card.request).toHaveBeenCalledWith("cron.get", { id: job.id }, expect.anything());
+  check.resolve(job);
   await waitForSolid(() =>
-    expect(card.request).toHaveBeenCalledWith("cron.update", {
-      id: "a",
-      expectedConfigRevision: job.configRevision,
-      patch: { enabled: true },
-    }),
+    expect(card.getByRole("switch", { name: "Resume: Saved title" })).toBeDefined(),
   );
-  check.resolve(changed);
-  await waitForSolid(() => expect(toggle.checked).toBe(true));
 });
-
-it.each([true, false])(
-  "does not treat a shared receipt as read permission or as current on reload (history=%s)",
-  async (history) => {
-    const pending = { slotId: "a", name: "Hint", status: "pending" } as const;
-    const saved = {
-      ...pending,
-      status: "created",
-      jobId: "a",
-      definition: { id: "a", name: "Former title", enabled: true, configRevision: "old" },
-    } as const;
-    const check = Promise.withResolvers<CronJob>();
-    const card = mountPlan(
-      [history ? saved : pending],
-      () => check.promise,
-      history ? ["operator.admin"] : ["operator.read"],
-    );
-    if (!history) {
-      card.setPlan({ planId: "plan", rows: [saved] });
-    }
-    flush();
-    expect(card.queryByRole("switch")).toBeNull();
-    expect(card.queryByRole("link")).toBeNull();
-    check.reject(new Error("Not found or inaccessible"));
-    await waitForSolid(() => expect(card.getByRole("status").textContent).toContain("unavailable"));
-  },
-);
 
 it("hydrates a standalone row, reconciles its independent switch, and opens that job's settings", async () => {
   let job = createCronJob("job/1", "Morning digest", {
@@ -175,7 +95,7 @@ it("hydrates a standalone row, reconciles its independent switch, and opens that
   );
 });
 
-it("groups identities under one clock and heading; unavailable jobs have no link or switch", async () => {
+it("keeps a removed job in the group without actions and reconciles later visibility changes", async () => {
   const alpha = createCronJob("a", "Alpha"),
     beta = createCronJob("b", "Beta");
   const jobs = new Map([alpha, beta].map((job) => [job.id, job]));
@@ -187,7 +107,11 @@ it("groups identities under one clock and heading; unavailable jobs have no link
           ? jobs.get(params.id)
           : undefined;
       if (!job) {
-        throw new Error("cron job not found");
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Job not found",
+          details: { code: "CRON_JOB_NOT_FOUND", jobId: alpha.id },
+        });
       }
       return job;
     },
@@ -206,12 +130,25 @@ it("groups identities under one clock and heading; unavailable jobs have no link
   await waitForSolid(() => {
     expect(card.getAllByRole("switch")).toHaveLength(1);
     expect(card.queryByRole("link", { name: /Alpha/ })).toBeNull();
-    expect(card.getByRole("status").textContent).toContain("unavailable");
+    expect(card.getByText("Removed", { exact: true })).toBeDefined();
+    expect(card.queryByRole("button")).toBeNull();
   });
   jobs.set(alpha.id, alpha);
-  card.getByRole("button", { name: "Retry" }).click();
+  card.invalidate();
   await waitForSolid(() => expect(card.getByRole("link", { name: /Alpha/ })).toBeDefined());
   expect(card.getAllByRole("switch")).toHaveLength(2);
+});
+
+it("offers Retry when reading the job fails temporarily", async () => {
+  const job = createCronJob("notes", "Weekly notes");
+  const card = mountPlan(
+    [createdSlot(job.id)],
+    vi.fn().mockRejectedValueOnce(new Error("Timed out")).mockResolvedValue(job),
+  );
+  const retry = await waitForSolid(() => card.getByRole("button", { name: "Retry" }));
+  expect(card.getByRole("status").textContent).toContain("Automation unavailable");
+  retry.click();
+  await waitForSolid(() => expect(card.getByRole("link", { name: /Weekly notes/ })).toBeDefined());
 });
 
 it("keeps the confirmed switch state while its reconciliation read is in flight", async () => {

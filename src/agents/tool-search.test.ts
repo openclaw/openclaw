@@ -504,7 +504,7 @@ describe("Tool Search", () => {
     "keeps gateway guidance consistent across surfaces with delegation denied=%s",
     (denyOpenClaw) => {
       const expected =
-        "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup.";
+        "Read Gateway config/schema. Local profile roles: users.getRole; users.setRole assigns or clears (admin). Owner request/operator schedule: update.run, restart, update.cleanup.";
       const authorizedTools = filterToolsByPolicy(
         [createGatewayTool(), ...createOpenClawDelegateToolsForRun({ sessionAgentId: "main" })],
         denyOpenClaw ? { deny: ["openclaw"] } : undefined,

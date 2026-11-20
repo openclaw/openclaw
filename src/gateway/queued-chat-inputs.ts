@@ -1,13 +1,19 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { captureOwedRequesterTarget, wakeOwedExec } from "../agents/bash-tools.exec-notify.js";
 import { readMessageClientSources } from "../chat/message-client-source.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
 import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
 import { preparePendingInputStore } from "../config/sessions/session-pending-input-store.js";
-import { parseSessionPendingInputMessage } from "../config/sessions/session-pending-input-value.js";
+import {
+  parseSessionPendingInputMessage,
+  readOwedKind,
+} from "../config/sessions/session-pending-input-value.js";
 import type { SessionPendingInputRow } from "../config/sessions/session-pending-input.types.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";
 import { resolvePendingInputEndCause } from "../sessions/user-turn-transcript-processing.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
@@ -62,6 +68,8 @@ export async function continueSessionQueuedInputs(
     assertCurrent: () => void;
     /** Ends every row with this cause instead of replaying it. */
     endCause?: SessionPendingInputEndCause;
+    /** A recovered source owner, rather than human chat, resumes this exact input. */
+    ownsInput?: (row: SessionPendingInputRow) => boolean;
   },
 ): Promise<DeferredQueuedInputReplay | undefined> {
   const assertCurrent = () => {
@@ -78,10 +86,47 @@ export async function continueSessionQueuedInputs(
     let dispatchAttempted = false;
     try {
       const message = parseSessionPendingInputMessage(row.message_json);
+      const owedKind = readOwedKind(row.message_json);
+      const owedText = message.content;
+      if (owedKind && typeof owedText === "string") {
+        // A result owed to this chat wakes its turn from the stored row; that turn appends it once.
+        // Like the live wake, one failed attempt gets one retry from the stored row. The wake runs
+        // as the requester whose turn started the command, admitted again from its recorded
+        // source; an older row without one wakes as the session principal.
+        const source = asOptionalRecord(asOptionalRecord(message)?.originFacts)?.operatorSource;
+        const owed = {
+          id: row.idempotency_key,
+          to: chatRef(target),
+          kind: owedKind,
+          text: owedText,
+        };
+        await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, async () => {
+          const requester =
+            source === undefined
+              ? undefined
+              : await captureOwedRequesterTarget(owed.to, source, context, assertCurrent);
+          // The admission is held until the last attempt settles, so the retry keeps it too.
+          void wakeOwedExec(
+            owed,
+            requester ? { expectedTarget: requester.target } : {},
+            undefined,
+            1,
+          ).finally(() => requester?.release());
+        });
+        return undefined;
+      }
+      if (message["__openclaw"]?.activeSteer) {
+        // Native delivery may have succeeded before a crash. Never replay into any run.
+        await failQueuedInput(target, row, assertCurrent, "restart-unrecoverable");
+        return undefined;
+      }
       const sender = readTranscriptSenderIdentity(message["__openclaw"]?.senderIdentity);
       // A paired browser's process-local tab/profile capability cannot survive restart.
       if (readMessageClientSources(message).some(isBrowserCopilotClient)) {
         throw new Error("Browser-bound queued input requires a fresh browser send");
+      }
+      if (options.ownsInput?.(row)) {
+        return undefined;
       }
       if (sender?.type !== "profile") {
         throw new Error("Queued input sender has no current human principal");
@@ -90,12 +135,12 @@ export async function continueSessionQueuedInputs(
         throw new Error("Queued input has no original operator source; submit a new request.");
       }
       admitted = await restoreGatewayQueuedOperatorRecovery({
+        agentId: target.agentId,
         context,
         source: decodeQueuedOperatorRecoverySource(JSON.parse(row.origin_source_json)),
         assertCurrent,
       });
       const { authority } = admitted;
-      authority.assertCurrent();
       if (authority.profileId !== sender.id) {
         throw new Error("Queued input operator source does not match its sender.");
       }
@@ -121,17 +166,11 @@ export async function continueSessionQueuedInputs(
             requestFingerprint: row.request_hash.startsWith("request:")
               ? row.request_hash.slice(8)
               : row.request_hash,
+            operatorAuthority: authority,
             requesterProfile: {
               id: authority.profileId,
               displayName: profile.displayName,
-              isCurrent: () => {
-                try {
-                  authority.assertCurrent();
-                  return true;
-                } catch {
-                  return false;
-                }
-              },
+              isCurrent: () => true,
             },
           },
           () =>
@@ -166,12 +205,6 @@ export async function continueSessionQueuedInputs(
                 signal: options.signal,
                 onExecution: (pending) => {
                   execution = pending;
-                },
-                assertPreparationCurrent: authority.assertCurrent,
-                sessionMutationCommitGuard: authority.assertCurrent,
-                hasCurrentClientAuthority: () => {
-                  authority.assertCurrent();
-                  return true;
                 },
               },
             ),

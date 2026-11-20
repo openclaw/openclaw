@@ -1,0 +1,8 @@
+# Exact-run steering: Gateway admission, literal delivery, no replay across retries/restart,
+# and accepted/rejected/uncertain outcomes; keyed/keyless privacy and malformed-source cases.
+# SQLite and memory custody are distinct owners; SQL conformance checks the 6/9-query budget.
+# Removed the keyed transformed-text unit replay: the Gateway hook-redaction case covers
+# matching and changed input through the Gateway handler. Remaining cases guard distinct
+# target, authority, persistence, default-off, and legacy-data contracts; no duplicate suite.
+# Revocation-only off/on tests were deleted; no replacement reload-race suite.
+397

@@ -1149,7 +1149,7 @@ jobs:
           DISPATCH_ID: ${{ inputs.dispatch_id }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           WORKFLOW_REVISION: *workflow_sha
-          EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
+          EVENT_BASE_SHA: &event_base_sha ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
           GH_TOKEN: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && github.token || '' }}
           PULL_REQUEST_NUMBER: *pr_number
           RELEASE_GATE: ${{ inputs.release_gate }}
@@ -1408,7 +1408,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: *diff_base
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+          fetch-ref: &base_fetch_ref ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect docs-only changes
         id: docs_scope
@@ -1439,14 +1439,14 @@ jobs:
           fi
 
       - name: Setup manifest pnpm
-        if: github.event_name == 'workflow_dispatch' && steps.checkout_ref.outputs.sha != github.workflow_sha
+        if: &manual_foreign_checkout github.event_name == 'workflow_dispatch' && steps.checkout_ref.outputs.sha != github.workflow_sha
         uses: ./.ci-harness/.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: ${{ steps.candidate_trust.outputs.cache_mode }}
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install manifest dependencies
-        if: github.event_name == 'workflow_dispatch' && steps.checkout_ref.outputs.sha != github.workflow_sha
+        if: *manual_foreign_checkout
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Check hybrid hosted assignment health
@@ -1612,7 +1612,7 @@ jobs:
       - name: Resolve security diff base
         id: diff_base
         env:
-          EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
+          EVENT_BASE_SHA: *event_base_sha
         run: |
           set -euo pipefail
           base_sha="$EVENT_BASE_SHA"
@@ -1641,7 +1641,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: *diff_base
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+          fetch-ref: *base_fetch_ref
 
       - name: Prepare trusted scanner config
         id: scanner_config
@@ -1843,7 +1843,7 @@ jobs:
 
       - name: Verify Control UI i18n source
         id: control_ui_i18n_source
-        if: ${{ !cancelled() && needs.preflight.outputs.reuse_control_ui_i18n_setup == 'true' && steps.node_setup.outcome == 'success' }}
+        if: &control_ui_i18n_setup_ready ${{ !cancelled() && needs.preflight.outputs.reuse_control_ui_i18n_setup == 'true' && steps.node_setup.outcome == 'success' }}
         continue-on-error: true
         env:
           COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
@@ -1859,7 +1859,7 @@ jobs:
 
       - name: Check Control UI locale parity
         id: control_ui_i18n_parity
-        if: ${{ !cancelled() && needs.preflight.outputs.reuse_control_ui_i18n_setup == 'true' && steps.node_setup.outcome == 'success' }}
+        if: *control_ui_i18n_setup_ready
         continue-on-error: true
         run: &control_ui_i18n_parity_run pnpm ui:i18n:check
 
@@ -1945,7 +1945,7 @@ jobs:
           retention-days: 7
 
       - name: Check bundled plugin generated assets
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: &dist_build_ready ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
         run: |
           set -euo pipefail
 
@@ -1962,7 +1962,7 @@ jobs:
           fi
 
       - name: Check generated schema validators
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: *dist_build_ready
         run: |
           set -euo pipefail
           if node --input-type=module <<'NODE'
@@ -2016,11 +2016,11 @@ jobs:
           retention-days: 1
 
       - name: Smoke test CLI launcher help
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: *dist_build_ready
         run: node openclaw.mjs --help
 
       - name: Smoke test CLI launcher status json
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: *dist_build_ready
         run: node openclaw.mjs status --json --timeout 1
 
       - name: Smoke test built CLI with Bun
@@ -2100,7 +2100,7 @@ jobs:
             ${{ github.repository }}-vitest-workers-built-v1-protected-${{ steps.node_setup.outputs.node-toolchain-cache-key }}-
 
       - name: Run built artifact checks
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: *dist_build_ready
         id: built_artifact_checks
         env:
           PARALLEL_GATEWAY_WATCH: ${{ runner.environment != 'github-hosted' && 'true' || 'false' }}
@@ -2468,7 +2468,7 @@ jobs:
   checks-ui:
     permissions:
       contents: read
-    name: ${{ needs.preflight.outputs.compatibility_target == 'true' && 'checks-ui' || format('checks-ui ({0}/{1})', matrix.shard, needs.preflight.outputs.ui_test_shard_count) }}
+    name: ${{ needs.preflight.outputs.compatibility_target == 'true' && needs.preflight.outputs.ui_test_shard_count == '1' && 'checks-ui' || format('checks-ui ({0}/{1})', matrix.shard, needs.preflight.outputs.ui_test_shard_count) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_ui_tests == 'true'
     # Keep unit shards on the existing hybrid pool; hosted retries and overrides remain available.
@@ -2520,6 +2520,8 @@ jobs:
           OPENCLAW_NODE_TEST_CONFIGS_JSON: '["ui/vitest.config.ts"]'
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ needs.preflight.outputs.ui_test_groups_gzip_base64 }}
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
+          UI_TEST_SHARD: ${{ matrix.shard }}
+          UI_TEST_SHARD_COUNT: ${{ needs.preflight.outputs.ui_test_shard_count }}
           OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ format('["--maxWorkers", "3", "--reporter=verbose", "--reporter=github-actions", "--reporter=./scripts/lib/vitest-resource-reporter.mts"{0}]', needs.preflight.outputs.compatibility_target != 'true' && format(', "--shard={0}/{1}"', matrix.shard, needs.preflight.outputs.ui_test_shard_count) || '') }}
         run: |
           if [[ "$COMPATIBILITY_TARGET" == "true" && "$OPENCLAW_CI_TEST_RUNTIME_POLICY" != "bun-all" && "$OPENCLAW_CI_TEST_RUNTIME_POLICY" != "dual-all" ]]; then
@@ -2527,7 +2529,11 @@ jobs:
             # Give legacy browser fixtures enough headroom on shared hosted runners.
             # Isolate files because older suites can still leak module mocks between tests.
             # Do not retry whole files: several rely on one-shot mocked browser globals.
-            pnpm --dir ui test --testTimeout=30000 --isolate
+            shard_args=()
+            if [[ "$UI_TEST_SHARD_COUNT" -gt 1 ]]; then
+              shard_args+=("--shard=$UI_TEST_SHARD/$UI_TEST_SHARD_COUNT")
+            fi
+            pnpm --dir ui test --testTimeout=30000 --isolate "${shard_args[@]}"
           else
             # Three workers deliberately exercise stable non-default file packing so
             # isolate:false mock-registry leaks fail close to the introducing change.
@@ -2610,7 +2616,7 @@ jobs:
         if: matrix.task == 'control-ui'
         timeout-minutes: 20
         env:
-          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: &ui_e2e_diagnostic_dir .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           VITEST_SHARD_INDEX: ${{ matrix.shard }}
           VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
           OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers || 2 }}
@@ -2624,6 +2630,8 @@ jobs:
           const webkitSuites = new Set([
             resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
             resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-composer-native-selection.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-mention-invite-editing.e2e.test.ts"),
             resolve("ui/src/e2e/chat-mcp-app-fullscreen.e2e.test.ts"),
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
             resolve("ui/src/e2e/overlay-menu-swap-webkit.e2e.test.ts"),
@@ -2677,7 +2685,7 @@ jobs:
         # Fail the step before the job deadline so progress diagnostics can upload.
         timeout-minutes: 20
         env:
-          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: *ui_e2e_diagnostic_dir
           VITEST_SHARD_INDEX: ${{ matrix.shard }}
           VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
           OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers || 2 }}
@@ -2700,8 +2708,8 @@ jobs:
       - name: Collect synthetic Control UI failure evidence
         if: failure() && steps.ui_e2e_tests.outcome == 'failure'
         env:
-          DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
-          EVIDENCE_DIR: .artifacts/control-ui-e2e-failures/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          DIAGNOSTIC_DIR: *ui_e2e_diagnostic_dir
+          EVIDENCE_DIR: &ui_e2e_evidence_dir .artifacts/control-ui-e2e-failures/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
         shell: python
         run: |
           import os
@@ -2732,7 +2740,7 @@ jobs:
         uses: *upload_artifact_v7
         with:
           name: control-ui-e2e-failure-${{ matrix.shard }}-${{ github.run_attempt }}
-          path: .artifacts/control-ui-e2e-failures/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: *ui_e2e_evidence_dir
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
@@ -3094,6 +3102,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-ripgrep
 
       - name: Run baseline ratchets
+        timeout-minutes: 12
         env:
           RATCHET_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
         shell: bash
@@ -3170,10 +3179,10 @@ jobs:
       - *linux_node_checkout_step
       - name: Smoke test trusted Git owner action
         id: git_owner_smoke
-        if: matrix.task == 'bundled-protocol' || matrix.task == 'ci-routing' || matrix.task == 'contracts-plugins-ci-routing'
+        if: &protocol_routing_task matrix.task == 'bundled-protocol' || matrix.task == 'ci-routing' || matrix.task == 'contracts-plugins-ci-routing'
         uses: ./.ci-harness/.github/actions/git-owner
       - name: Verify trusted Git owner bootstrap
-        if: matrix.task == 'bundled-protocol' || matrix.task == 'ci-routing' || matrix.task == 'contracts-plugins-ci-routing'
+        if: *protocol_routing_task
         env:
           OWNER_PATH: ${{ steps.git_owner_smoke.outputs.owner-path }}
         shell: bash
@@ -3755,6 +3764,7 @@ jobs:
           sparse-checkout: |
             scripts/ci-run-node-test-shard.mts
             scripts/lib/ci-node-test-groups-codec.mts
+            scripts/lib/ci-test-output.mts
             scripts/lib/ci-test-observations.mjs
             scripts/lib/direct-run.mjs
             scripts/lib/local-check-runtime.mts
@@ -4830,9 +4840,10 @@ jobs:
     timeout-minutes: ${{ matrix.shard == 'pg16-smoke' && 15 || 30 }}
     strategy:
       fail-fast: false
-      max-parallel: 4
+      # Let every PR row, including the separate PG16 smoke, start in the same wave.
+      max-parallel: 7
       matrix:
-        shard: [1/4, 2/4, 3/4, 4/4, pg16-smoke]
+        shard: [1/6, 2/6, 3/6, 4/6, 5/6, 6/6, pg16-smoke]
         exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[]' || '[{"shard":"pg16-smoke"}]') }}
     steps:
       - *linux_node_checkout_step
@@ -4882,16 +4893,16 @@ jobs:
           fi
 
       - name: Check config docs baseline
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
+        if: &docs_content_ready ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
         run: pnpm config:docs:check
 
       - name: Check plugin inventory
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
+        if: *docs_content_ready
         run: pnpm plugins:inventory:check
 
       - name: Checkout ClawHub docs source
         id: clawhub_docs
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
+        if: *docs_content_ready
         shell: bash
         env:
           CHECKOUT_KIND: clawhub
@@ -5157,8 +5168,8 @@ jobs:
     env:
       NATIVE_RUNTIME_ARTIFACT_ID: ${{ needs.build-artifacts.outputs.native_runtime_artifact_id }}
       HISTORICAL_TARGET: *historical_target
-      MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
-      OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
+      MACOS_PRIMARY_PHASE: &macos_primary_phase ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
+      OPENCLAWKIT_TEST_EXECUTION: &openclawkit_test_execution ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps: &macos_swift_steps
       - name: Start Swift cache clock
         id: swift-cache-clock
@@ -5713,8 +5724,8 @@ jobs:
     timeout-minutes: 30
     env:
       HISTORICAL_TARGET: *historical_target
-      MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
-      OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
+      MACOS_PRIMARY_PHASE: *macos_primary_phase
+      OPENCLAWKIT_TEST_EXECUTION: *openclawkit_test_execution
     steps: *macos_swift_steps
 
   ios-build:
@@ -5730,7 +5741,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: ${{ fromJSON(github.event_name == 'schedule' && '["tests"]' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && ((needs.preflight.outputs.validation_tier == 'main' || needs.preflight.outputs.compatibility_target == 'true') && '["tests"]' || '["release","tests"]') || '["smoke"]') }}
+        phase: ${{ fromJSON((github.event_name == 'schedule' || needs.preflight.outputs.validation_tier == 'main' || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main')) && '["tests"]' || '["smoke"]') }}
     runs-on: *hosted_xcode_runner
     timeout-minutes: 150
     env:
@@ -5759,7 +5770,7 @@ jobs:
 
       - name: Restore iOS source packages
         id: ios-packages-cache
-        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        if: &ios_cache_enabled steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
         continue-on-error: true
         timeout-minutes: 3
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -5769,7 +5780,7 @@ jobs:
 
       - name: Restore Watch RTC build inputs
         id: watch-rtc-cache
-        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        if: *ios_cache_enabled
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with: &watch_rtc_cache_inputs
           path: &watch_rtc_cache_paths |
@@ -5906,12 +5917,18 @@ jobs:
         run: |
           set -euo pipefail
           if [[ ( "$IOS_CI_PHASE" == "smoke" || "$IOS_MAIN_TIER" == "true" ) && "$HISTORICAL_TARGET" != "true" ]]; then
-            # Full manual validation retains the universal simulator build.
+            # Ordinary app CI uses the selected simulator architecture.
             if [[ -n "${IOS_SIMULATOR_ID:-}" ]]; then
               export IOS_DEST="platform=iOS Simulator,id=$IOS_SIMULATOR_ID"
             else
               export IOS_DEST="generic/platform=iOS Simulator"
             fi
+          fi
+          export OPENCLAW_CI_SIMSLIM_BINARY=""
+          if [[ -n "${IOS_SIMULATOR_ID:-}" && -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
+            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
+            ./scripts/install-simslim.sh "$simslim_dir"
+            export OPENCLAW_CI_SIMSLIM_BINARY="$simslim_dir/simslim"
           fi
           python3 - <<'PY'
           import os
@@ -5931,11 +5948,8 @@ jobs:
                   if os.environ.get("IOS_SIMULATOR_ID"):
                       preparation = subprocess.Popen(["/bin/bash", "-euo", "pipefail", "-c", '''
           xcrun simctl bootstatus "$IOS_SIMULATOR_ID" -b
-          if [[ -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
-            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
-            ./scripts/install-simslim.sh "$simslim_dir"
-            OPENCLAW_CI_SIMSLIM_BINARY="$simslim_dir/simslim" \
-              ./scripts/ios-simulator-prepare.sh "$IOS_SIMULATOR_ID"
+          if [[ -n "$OPENCLAW_CI_SIMSLIM_BINARY" ]]; then
+            ./scripts/ios-simulator-prepare.sh "$IOS_SIMULATOR_ID"
           fi
           '''], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                   if os.environ["HISTORICAL_TARGET"] != "true" and (
@@ -5957,18 +5971,6 @@ jobs:
                           "-showBuildTimingSummary",
                           "build-for-testing",
                       ], check=True)
-                      if os.environ["IOS_CI_PHASE"] == "tests" and os.environ.get("IOS_MAIN_TIER") != "true":
-                          # The UI scheme owns a separate test runner. Prepare it once,
-                          # retaining the same universal destination and build settings.
-                          subprocess.run([
-                              "python3", ".ci-harness/scripts/ci-xcodebuild.py",
-                              "-project", "apps/ios/OpenClaw.xcodeproj",
-                              "-scheme", "OpenClawUITests",
-                              "-configuration", "Debug",
-                              *package_args,
-                              "-destination", "generic/platform=iOS Simulator",
-                              "-showBuildTimingSummary", "build-for-testing",
-                          ], check=True)
                       with open(os.environ["GITHUB_ENV"], "a") as environment:
                           environment.write("IOS_TEST_BUILD_PREPARED=true\n")
                   else:
@@ -6009,26 +6011,6 @@ jobs:
           fi
           finish_checks
 
-      - name: Build iOS app (Release)
-        if: ${{ !cancelled() && steps.ios-swift-tools.outcome == 'success' && (steps.watch-rust-toolchain.outcome == 'success' || steps.watch-rust-toolchain.outcome == 'skipped') && matrix.phase == 'release' }}
-        run: |
-          set -euo pipefail
-          ./scripts/ios-configure-signing.sh
-          ./scripts/ios-write-version-xcconfig.sh
-          node scripts/ios-write-swift-filelist.mjs
-          xcodegen generate --spec apps/ios/project.yml --project apps/ios
-          project_args=(-project apps/ios/OpenClaw.xcodeproj)
-          if [[ "$HISTORICAL_TARGET" != "true" && "$IOS_FROZEN_TARGET" != "true" ]]; then
-            project_args+=(-clonedSourcePackagesDirPath "$PWD/apps/ios/build/SourcePackages")
-          fi
-          xcodebuild \
-            "${project_args[@]}" \
-            -scheme OpenClaw \
-            -configuration Release \
-            -destination "generic/platform=iOS" \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-
       - *apple_mermaid_cache_save
 
       - name: Save iOS source packages
@@ -6048,13 +6030,6 @@ jobs:
         with:
           path: *watch_rtc_cache_paths
           key: ${{ steps.watch-rtc-cache.outputs.cache-primary-key }}
-
-      - name: Prove native managed document download and export
-        id: ios_attachment_tests
-        if: ${{ !cancelled() && steps.ios-swift-tools.outcome == 'success' && matrix.phase == 'tests' && needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.compatibility_target != 'true' }}
-        env:
-          BASELINE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: /bin/bash scripts/test-ios-chat-attachments.sh "$BASELINE_SHA"
 
       - name: Run focused iOS voice cleanup simulator tests
         id: ios_voice_cleanup_tests
@@ -6160,100 +6135,7 @@ jobs:
             "${test_args[@]}" \
             "$test_action"
           run_check "iOS Access restart proof" python3 scripts/ios-access-restart-proof.py "${IOS_SIMULATOR_ID:?}"
-          if [[ "$IOS_CI_PHASE" == "tests" && "$IOS_MAIN_TIER" != "true" ]]; then
-            run_check "iOS Watch delivery UI tests" run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.log xcodebuild \
-              "${project_args[@]}" \
-              -scheme OpenClawUITests \
-              -configuration Debug \
-              -destination "platform=iOS Simulator,id=${IOS_SIMULATOR_ID:?}" \
-              -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.xcresult \
-              -parallel-testing-enabled NO \
-              -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings \
-              -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testNestedCustomToolsExposeResultsQuietDetailsAndPendingAuthority \
-              -only-testing:OpenClawUITests/BootstrapSetupFailureUITests \
-              "$test_action"
-          fi
           finish_checks
-
-      - name: Run focused Apple Watch operation simulator tests
-        if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' && steps.ios-simulator.outcome == 'success' && matrix.phase == 'tests' && needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.compatibility_target != 'true' }}
-        run: |
-          set -euo pipefail
-          source .ci-harness/scripts/lib/swift-toolchain.sh
-          project_args=(-project apps/ios/OpenClaw.xcodeproj)
-          if [[ "$HISTORICAL_TARGET" != "true" && "$IOS_FROZEN_TARGET" != "true" ]]; then
-            project_args+=(-clonedSourcePackagesDirPath "$PWD/apps/ios/build/SourcePackages")
-          fi
-          simulator_id="$(
-            xcrun simctl list devices available --json | node --input-type=module -e '
-              const chunks = [];
-              for await (const chunk of process.stdin) chunks.push(chunk);
-              const runtimes = JSON.parse(Buffer.concat(chunks).toString("utf8")).devices;
-              const simulator = Object.values(runtimes)
-                .flat()
-                .find((device) => device.isAvailable && device.name.startsWith("Apple Watch"));
-              if (!simulator) {
-                console.error("No available Apple Watch simulator for operation lifecycle tests");
-                process.exit(1);
-              }
-              process.stdout.write(simulator.udid);
-            '
-          )"
-          # Reuse the Watch products already compiled by the generic iOS build.
-          # Resolve the selected target product from Xcode, not its DerivedData naming.
-          xcodebuild_args=(
-            "${project_args[@]}"
-            -scheme OpenClawWatchApp
-            -configuration Debug
-            -destination "platform=watchOS Simulator,id=${simulator_id}"
-            CODE_SIGNING_ALLOWED=NO
-          )
-          test_args=(
-            -parallel-testing-enabled NO
-            -only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests
-            -only-testing:OpenClawWatchTests/WatchSpeechPlaybackTests
-            -only-testing:OpenClawWatchTests/WatchRealtimeMediaTests
-            -only-testing:OpenClawWatchTests/WatchGatewayConfigurationTests
-            -only-testing:OpenClawWatchTests/WatchTypographyTests
-          )
-          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchBuild.log xcodebuild \
-            "${xcodebuild_args[@]}" "${test_args[@]}" build-for-testing
-          app_path="$(
-            xcodebuild "${xcodebuild_args[@]}" -showBuildSettings -json |
-              node --input-type=module -e '
-                import path from "node:path";
-                const chunks = [];
-                for await (const chunk of process.stdin) chunks.push(chunk);
-                const targets = JSON.parse(Buffer.concat(chunks).toString("utf8"))
-                  .filter((target) => target.target === "OpenClawWatchApp");
-                if (targets.length !== 1) throw new Error("Expected one Watch app target from Xcode");
-                const { TARGET_BUILD_DIR, FULL_PRODUCT_NAME } = targets[0].buildSettings;
-                if (!path.isAbsolute(TARGET_BUILD_DIR) || !FULL_PRODUCT_NAME) {
-                  throw new Error("Expected an absolute Watch app product from Xcode");
-                }
-                process.stdout.write(path.join(TARGET_BUILD_DIR, FULL_PRODUCT_NAME));
-              '
-          )"
-          companion_id="$(
-            xcrun simctl list pairs --json | node --input-type=module -e '
-              const chunks = [];
-              for await (const chunk of process.stdin) chunks.push(chunk);
-              const pairs = Object.values(JSON.parse(Buffer.concat(chunks).toString("utf8")).pairs);
-              const pair = pairs.find((entry) => entry.watch.udid === process.argv[1]);
-              process.stdout.write(pair?.phone.udid ?? "");
-            ' "$simulator_id"
-          )"
-          # XCTest connects through the paired phone, which can differ from IOS_SIMULATOR_ID.
-          if [[ -n "$companion_id" ]]; then
-            xcrun simctl bootstatus "$companion_id" -b
-          fi
-          xcrun simctl boot "$simulator_id" 2>/dev/null || true
-          xcrun simctl bootstatus "$simulator_id" -b
-          xcrun simctl install "$simulator_id" "$app_path"
-          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.log xcodebuild \
-            "${xcodebuild_args[@]}" "${test_args[@]}" \
-            -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.xcresult \
-            test-without-building
 
       - name: Record iOS build-cache input metadata
         id: record-ios-build-cache-metadata
@@ -6272,7 +6154,7 @@ jobs:
           key: ${{ steps.ios-build-cache.outputs.cache-primary-key }}
 
       - name: Upload iOS lifecycle simulator evidence
-        if: ${{ always() && ((steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped') || (steps.ios_voice_cleanup_tests.outcome != '' && steps.ios_voice_cleanup_tests.outcome != 'skipped') || (steps.ios_attachment_tests.outcome != '' && steps.ios_attachment_tests.outcome != 'skipped')) }}
+        if: ${{ always() && ((steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped') || (steps.ios_voice_cleanup_tests.outcome != '' && steps.ios_voice_cleanup_tests.outcome != 'skipped')) }}
         uses: *upload_artifact_v7
         with:
           name: ios-lifecycle-tests-${{ needs.preflight.outputs.checkout_revision }}
@@ -6284,23 +6166,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  ios-release-e2e:
-    permissions:
-      actions: read
-      contents: read
-    needs: [preflight]
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.checkout_revision == github.sha && needs.preflight.outputs.compatibility_target != 'true' && needs.preflight.outputs.run_ios_build == 'true' }}
-    uses: ./.github/workflows/ios-release-e2e.yml
-    with:
-      target_sha: *checkout_sha
-      mode: stock
-
   ios-screenshot-capture:
     permissions:
       contents: read
     name: "ios-screenshots"
     needs: [preflight]
-    if: &ios_screenshot_capture_gate ${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_ios_screenshots == 'true') }}
+    if: &ios_screenshot_capture_gate ${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && (github.event_name != 'workflow_dispatch' || inputs.release_gate) && needs.preflight.outputs.run_ios_screenshots == 'true' }}
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('xcode-27-xlarge'))) || ('xcode-27-xlarge') }}
     timeout-minutes: 90
     env:
@@ -6366,7 +6237,7 @@ jobs:
 
       - name: Restore Watch RTC build inputs
         id: watch-rtc-cache
-        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        if: *ios_cache_enabled
         continue-on-error: true
         timeout-minutes: 3
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -6374,7 +6245,7 @@ jobs:
 
       - name: Restore screenshot source packages
         id: ios-packages-cache
-        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        if: *ios_cache_enabled
         continue-on-error: true
         timeout-minutes: 3
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -6526,16 +6397,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  android-release-e2e:
-    permissions:
-      actions: read
-      contents: read
-    needs: [preflight]
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.checkout_revision == github.sha && needs.preflight.outputs.compatibility_target != 'true' && needs.preflight.outputs.run_android_job == 'true' }}
-    uses: ./.github/workflows/android-release-e2e.yml
-    with:
-      target_sha: *checkout_sha
-
   android:
     permissions:
       contents: read
@@ -6546,7 +6407,7 @@ jobs:
     timeout-minutes: ${{ matrix.task == 'build-play' && ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1) || github.repository != 'openclaw/openclaw') && 35 || 20 }}
     strategy:
       fail-fast: false
-      max-parallel: ${{ (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) != 'github' && github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && github.repository == 'openclaw/openclaw' && github.run_attempt == 1 && 4 || 2 }}
+      max-parallel: 4
       matrix: ${{ fromJson(needs.preflight.outputs.android_matrix) }}
     steps:
       - &android_checkout_step
@@ -6582,7 +6443,8 @@ jobs:
         id: android-toolchain
         uses: ./.ci-harness/.github/actions/setup-android-toolchain
         with:
-          cache-mode: ${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}
+          cache-mode: &android_cache_write ${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}
+          gradle-cache-key: ${{ matrix.task }}
           install-native-deps: ${{ needs.preflight.outputs.use_compatible_android_ci != 'true' && 'true' || 'false' }}
 
       - name: Restore Robolectric Maven cache
@@ -6624,8 +6486,6 @@ jobs:
         env:
           BOAT_TEST_RUNNER: ${{ needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 }}
           JAVA_HOME: ${{ steps.android-toolchain.outputs.gradle-java-home }}
-          CI_RUNNER_BACKEND: ${{ ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != 'openclaw/openclaw')) && 'github' || 'blacksmith' }}
-          CI_MAIN_QUALIFICATION: ${{ needs.preflight.outputs.ci_shape == 'main' && 'true' || 'false' }}
           TASK: ${{ matrix.task }}
           RUN_LINT: ${{ matrix.lint && 'true' || 'false' }}
           APP_LINT: ${{ matrix.app_lint || '' }}
@@ -6662,36 +6522,6 @@ jobs:
               if [ "$RUN_LINT" = "true" ]; then
                 run_check "Android Wear lint" ./gradlew "${android_build_metadata[@]}" --continue --no-daemon --build-cache :wear:lintDebug
               fi
-              ;;
-            build-play)
-              if [ "$CI_RUNNER_BACKEND" = "github" ] || { [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$CI_MAIN_QUALIFICATION" != "true" ]; }; then
-                # GitHub-hosted runners have less memory headroom. Separate Gradle
-                # processes release each variant's build state before the next starts.
-                run_check "Android Play build and lint" ./gradlew --continue --no-daemon --build-cache \
-                  :app:assemblePlayDebug \
-                  :app:lintPlayDebug
-                run_check "Android third-party build and lint" ./gradlew --continue --no-daemon --build-cache \
-                  :app:assembleThirdPartyDebug \
-                  :app:lintThirdPartyDebug
-                run_check "Android benchmark and shared Wear build and lint" ./gradlew --continue --no-daemon --build-cache \
-                  :benchmark:assembleDebug \
-                  :wear-shared:assembleDebug \
-                  :wear-shared:lintDebug
-              else
-                run_check "Android phone build and lint" ./gradlew --continue --no-daemon --build-cache \
-                  :app:assemblePlayDebug \
-                  :app:assembleThirdPartyDebug \
-                  :app:lintPlayDebug \
-                  :app:lintThirdPartyDebug \
-                  :benchmark:assembleDebug \
-                  :wear-shared:assembleDebug \
-                  :wear-shared:lintDebug
-              fi
-              ;;
-            build-wear)
-              run_check "Android Wear build and lint" ./gradlew --continue --no-daemon --build-cache \
-                :wear:assembleDebug \
-                :wear:lintDebug
               ;;
             build-play-compat)
               # Frozen targets keep their target-owned Android build contract. New lint rules
@@ -6757,7 +6587,7 @@ jobs:
       contents: read
     name: "android-screenshots"
     needs: [preflight]
-    if: ${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_android_screenshots == 'true') }}
+    if: ${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && (github.event_name != 'workflow_dispatch' || inputs.release_gate) && needs.preflight.outputs.run_android_screenshots == 'true' }}
     runs-on: *ubuntu_linux_runner
     timeout-minutes: 90
     steps:
@@ -6847,6 +6677,8 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-android-toolchain
         with:
           cache-mode: *cache_mode
+          gradle-cache-mode: *android_cache_write
+          gradle-cache-key: access-native
           install-native-deps: "true"
 
       - name: Run packaged Access crypto and production TLS on Android
@@ -6864,9 +6696,18 @@ jobs:
           acceleration="$(/usr/bin/timeout --signal=TERM --kill-after=2s 15s emulator -accel-check 2>&1)"
           printf '%s\n' "$acceleration"
           grep -Eiq '\bKVM\b.*\b(available|usable)\b' <<<"$acceleration"
+          gradle_args=(
+            -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE"
+            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.NativeTransportQualificationSuite
+            -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          )
+          # Keep compilation off the emulator's boot path and reuse those exact APK inputs.
+          node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
+            :app:assemblePlayDebug :app:assemblePlayDebugAndroidTest "${gradle_args[@]}"
           printf 'no\n' | avdmanager create avd --name openclaw-access --package "$SYSTEM_IMAGE" --device pixel_6
           # Bound disposable userdata so the hosted runner can boot after SDK setup.
-          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -partition-size 4096 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
+          # The strict 16 KiB image exhausts its default 2560 MiB during instrumentation.
+          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -memory 4096 -partition-size 4096 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
           emulator_pid=$!
           trust_evidence="$RUNNER_TEMP/android-native-tls-trust"
           mkdir -p "$trust_evidence"
@@ -6921,10 +6762,7 @@ jobs:
             bash scripts/android-native-tls-trust.sh prepare "$trust_evidence"
           ' bash "$trust_evidence" "$EXPECTED_PAGE_SIZE"
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
-            :app:connectedPlayDebugAndroidTest --info \
-            -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
-            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.NativeTransportQualificationSuite \
-            -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            :app:connectedPlayDebugAndroidTest --info "${gradle_args[@]}"
           apk="$(python3 - <<'PY'
           from pathlib import Path
           import json
@@ -7065,6 +6903,19 @@ jobs:
           console.log(`OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=${scenario}`);
           NODE
 
+      - name: Pin previous schema reader source
+        if: github.event_name == 'pull_request' && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor ')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          fork="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${PR_BASE}...${PR_HEAD}" --jq .merge_base_commit.sha)"
+          [[ "$fork" =~ ^[0-9a-f]{40}$ ]]
+          git -c credential.helper= fetch --no-tags --depth=1 origin "$fork"
+          printf 'OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA=%s\n' "$fork" >> "$GITHUB_ENV"
+
       # Smoke packages include declarations for every public entrypoint.
       - name: Prepare Docker smoke package
         if: github.event_name == 'pull_request' || (inputs.release_gate && needs.preflight.outputs.ci_qualification != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main') || needs.preflight.outputs.validation_tier == 'main' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && github.repository == 'openclaw/openclaw')
@@ -7100,7 +6951,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload sanitized upgrade survivor proof
-        if: always() && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' published-upgrade-survivor ')
+        if: always() && (contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' published-upgrade-survivor ') || contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor '))
         uses: *upload_artifact_v7
         with:
           name: docker-seed-upgrade-survivor-proof
@@ -7109,6 +6960,24 @@ jobs:
             .artifacts/docker-tests/????????T??????Z/failures.json
             .artifacts/docker-tests/upgrade-survivor-*/summary.json
             .artifacts/docker-tests/upgrade-survivor-*/failure.json
+            .artifacts/upgrade-survivor/release-update-survivor/migration-bulk-access.json
+            .artifacts/upgrade-survivor/release-update-survivor/healthy/summary.json
+            .artifacts/upgrade-survivor/release-update-survivor/healthy/trial.json
+            .artifacts/upgrade-survivor/release-update-survivor/healthy/rows-before.json
+            .artifacts/upgrade-survivor/release-update-survivor/healthy/rows-after.json
+            .artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read.json
+            .artifacts/upgrade-survivor/release-update-survivor/healthy/update-runs.json
+            .artifacts/upgrade-survivor/release-update-survivor/healthy/gateway-launcher.log
+            .artifacts/upgrade-survivor/release-update-survivor/crash/summary.json
+            .artifacts/upgrade-survivor/release-update-survivor/crash/trial.json
+            .artifacts/upgrade-survivor/release-update-survivor/crash/rows-before.json
+            .artifacts/upgrade-survivor/release-update-survivor/crash/rows-after.json
+            .artifacts/upgrade-survivor/release-update-survivor/crash/crash-after-migration.json
+            .artifacts/upgrade-survivor/release-update-survivor/crash/update-runs.json
+            .artifacts/upgrade-survivor/release-update-survivor/crash/gateway-launcher.log
+            .artifacts/upgrade-survivor/release-update-survivor/downgrade/downgrade-source.json
+            .artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.json
+            .artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.log
           include-hidden-files: true
           if-no-files-found: warn
 
@@ -7150,11 +7019,9 @@ jobs:
       - macos-swift
       - macos-swift-packages
       - ios-build
-      - ios-release-e2e
       - ios-screenshot-capture
       - ios-screenshot-evidence
       - android
-      - android-release-e2e
       - android-screenshots
       - android-access-native
       - docker-seed-e2e
@@ -7176,11 +7043,19 @@ jobs:
           ref: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.sha || github.event.pull_request.base.ref }}
           persist-credentials: false
           sparse-checkout: |
+            .github/actions/setup-pnpm-store-cache/ensure-node.sh
             scripts/ci-pr-failure-report.mjs
             scripts/ci-known-main-red.mjs
             scripts/lib/ci-node-test-evidence.mjs
             scripts/lib/ci-static-check-evidence.mjs
           sparse-checkout-cone-mode: false
+      - name: Setup Node.js
+        env:
+          REQUESTED_NODE_VERSION: ${{ env.NODE_VERSION }}
+        run: |
+          set -euo pipefail
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
       - name: Classify completed PR failures
         id: report
         env:
@@ -7228,11 +7103,9 @@ jobs:
       - macos-swift
       - macos-swift-packages
       - ios-build
-      - ios-release-e2e
       - ios-screenshot-capture
       - ios-screenshot-evidence
       - android
-      - android-release-e2e
       - android-screenshots
       - android-access-native
       - docker-seed-e2e
@@ -7250,13 +7123,16 @@ jobs:
           SUMMARY_JSON: ${{ needs.pr-failure-report.outputs.summary_json }}
           FAILURES_JSON: ${{ needs.pr-failure-report.outputs.failures_json }}
         run: |
-          node --input-type=module <<'EOF'
-          import { appendFileSync } from "node:fs";
-          const summary = JSON.parse(process.env.SUMMARY_JSON);
-          appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
-          console.log(summary);
-          console.log(`Failure classification JSON: ${process.env.FAILURES_JSON}`);
-          EOF
+          python3 - <<'PY'
+          import json
+          import os
+
+          summary = json.loads(os.environ["SUMMARY_JSON"])
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+              output.write(summary)
+          print(summary)
+          print(f"Failure classification JSON: {os.environ['FAILURES_JSON']}")
+          PY
       - name: Record published-driver dispatch limitation
         if: always() && needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision != github.sha
         run: |
@@ -7300,12 +7176,10 @@ jobs:
             macos-swift=${{ needs.macos-swift.result }}|${{ needs.preflight.outputs.run_macos_swift }}
             macos-swift-packages=${{ needs.macos-swift-packages.result }}|${{ needs.preflight.outputs.run_macos_swift }}
             ios-build=${{ needs.ios-build.result }}|${{ needs.preflight.outputs.run_ios_build }}
-            ios-release-e2e=${{ needs.ios-release-e2e.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.checkout_revision == github.sha && needs.preflight.outputs.compatibility_target != 'true' && needs.preflight.outputs.run_ios_build == 'true' }}
-            ios-screenshot-capture=${{ needs.ios-screenshot-capture.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_ios_screenshots == 'true') }}
-            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_ios_screenshots == 'true') }}
+            ios-screenshot-capture=${{ needs.ios-screenshot-capture.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && (github.event_name != 'workflow_dispatch' || inputs.release_gate) && needs.preflight.outputs.run_ios_screenshots == 'true' }}
+            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && (github.event_name != 'workflow_dispatch' || inputs.release_gate) && needs.preflight.outputs.run_ios_screenshots == 'true' }}
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
-            android-release-e2e=${{ needs.android-release-e2e.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.checkout_revision == github.sha && needs.preflight.outputs.compatibility_target != 'true' && needs.preflight.outputs.run_android_job == 'true' }}
-            android-screenshots=${{ needs.android-screenshots.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_android_screenshots == 'true') }}
+            android-screenshots=${{ needs.android-screenshots.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && (github.event_name != 'workflow_dispatch' || inputs.release_gate) && needs.preflight.outputs.run_android_screenshots == 'true' }}
             android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
             published-driver-update=${{ needs.published-driver-update.result }}|${{ needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha }}
@@ -7386,11 +7260,9 @@ jobs:
       - macos-swift
       - macos-swift-packages
       - ios-build
-      - ios-release-e2e
       - ios-screenshot-capture
       - ios-screenshot-evidence
       - android
-      - android-release-e2e
       - android-screenshots
       - android-access-native
       - docker-seed-e2e

@@ -62,6 +62,17 @@ function interactiveTooltipContent(tooltip: TooltipElement) {
   return tooltip.shadowRoot?.querySelector(".tooltip-rich-content");
 }
 
+// Fake timers cannot advance CSS animations; motion contracts live in tooltip.browser.test.ts.
+beforeEach(() => {
+  document.documentElement.style.setProperty("--openclaw-tooltip-popup-show-duration", "0ms");
+  document.documentElement.style.setProperty("--openclaw-tooltip-popup-hide-duration", "0ms");
+});
+
+afterEach(() => {
+  document.documentElement.style.removeProperty("--openclaw-tooltip-popup-show-duration");
+  document.documentElement.style.removeProperty("--openclaw-tooltip-popup-hide-duration");
+});
+
 describe("openclaw-tooltip", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -480,7 +491,13 @@ describe("openclaw-tooltip", () => {
     vi.advanceTimersByTime(1);
     await expectOpenCount(1);
 
+    // The card's padding keeps it open, not only its slotted content.
+    const surface = currentTooltipSurface(tooltip)!;
     dispatchMousePointer(trigger, "pointerleave");
+    dispatchMousePointer(surface, "pointerenter");
+    vi.advanceTimersByTime(300);
+    await expectOpenCount(1);
+    dispatchMousePointer(surface, "pointerleave");
     vi.advanceTimersByTime(299);
     await expectOpenCount(1);
     vi.advanceTimersByTime(1);

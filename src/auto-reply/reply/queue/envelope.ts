@@ -5,10 +5,10 @@ import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
-  type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { buildCollectPrompt } from "../../../utils/queue-helpers.js";
@@ -262,6 +262,7 @@ export function requiresIndividualCollectDrain(item: FollowupRun): boolean {
     // Keep its original recorder/event; only unconsumed sources may regroup.
     item.userTurnTranscriptRecorder?.hasPersisted() === true ||
     item.disableCollectBatching === true ||
+    item.operatorAuthority?.participationCeiling !== undefined ||
     item.run.skillLibraryAuthoring !== undefined ||
     item.currentInboundEventKind === "room_event" ||
     item.currentInboundAudio === true

@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "../agents/tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { captureAmbientGatewayOperatorAuthority } from "../gateway/operator-invocation-authority.js";
+import { OperatorRefusalError } from "../gateway/operator-refusal.js";
 import type { OperatorRunRecoverySnapshot } from "../gateway/operator-run-recovery-source.codec.js";
-import { restoreGatewayOperatorSource } from "../gateway/operator-run-recovery.js";
+import {
+  restoreGatewayOperatorSource,
+  restoreScheduledAutomationOperator,
+  type RestoredGatewayOperatorAuthority,
+} from "../gateway/operator-run-recovery.js";
 import { runWithOperatorToolGatewayAuthority } from "../gateway/operator-tool-gateway-authority.js";
 import { runWithPluginSessionWorkAuthority } from "../gateway/plugin-session-work-authority.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
@@ -18,8 +20,10 @@ import {
 } from "../gateway/session-access-authority.js";
 import { SessionMutationAuthorizationChangedError } from "../gateway/session-mutation-authorization-error.js";
 import { requireSessionRowProjection } from "../gateway/session-row-projection-access.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { createCorePluginStateKeyedStoreV2 } from "../plugin-state/plugin-state-store.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -98,7 +102,6 @@ export function createPluginServiceSessionWork(params: {
       throw new Error("Session work requires its registered tool owner");
     }
     const caller = getGatewayToolCallerIdentity();
-    const assertCaller = captureGatewayToolCallerAssertion();
     if (caller && (caller.agentId !== input.agentId || caller.sessionKey !== input.sessionKey)) {
       throw new Error("Session work must target the invoking agent's own conversation");
     }
@@ -122,9 +125,7 @@ export function createPluginServiceSessionWork(params: {
         if (context() !== owner) {
           throw new Error("Session work Gateway changed");
         }
-        assertCaller?.();
         captured.assertInvocationCurrent?.();
-        captured.authority?.assertCurrent();
         assertSession?.();
       };
       assertCurrent();
@@ -261,7 +262,7 @@ export function createPluginServiceSessionWork(params: {
           );
         }
       };
-      let restored: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefined;
+      let restored: RestoredGatewayOperatorAuthority | undefined;
       let session: Awaited<ReturnType<typeof prepareGatewaySessionAccessAuthority>> | undefined;
       const active = new AbortController();
       let started = false;
@@ -270,21 +271,24 @@ export function createPluginServiceSessionWork(params: {
         active.signal.throwIfAborted();
       };
       try {
-        restored = await restoreGatewayOperatorSource({
-          snapshot: accepted.snapshot,
-          target: accepted.target,
-          context: owner,
-          assertCurrent: assertOwner,
-          prepareCurrent: async () => {
-            const current = await durable.lookup(id);
-            assertOwner();
-            await projection.prepareMembership();
-            assertTarget();
-            if (!isDeepStrictEqual(current, accepted)) {
-              throw new SessionWorkAuthorizationError("Accepted source no longer owns this work");
-            }
-          },
-        });
+        const latest = await durable.lookup(id);
+        assertOwner();
+        await projection.prepareMembership();
+        assertTarget();
+        if (!isDeepStrictEqual(latest, accepted)) {
+          throw new SessionWorkAuthorizationError("Accepted source no longer owns this work");
+        }
+        const { snapshot } = accepted;
+        const restore = { context: owner, agentId: accepted.target.agentId };
+        // Work accepted inside a chat turn needs write now. Work a cron run accepted carries the
+        // automation's source without write, so it needs the automation grant now.
+        restored = operatorScopeSatisfied("operator.sessions.write", snapshot.scopes)
+          ? await restoreGatewayOperatorSource({ ...restore, snapshot, assertCurrent: assertOwner })
+          : await restoreScheduledAutomationOperator({
+              ...restore,
+              source: { kind: "gateway", snapshot },
+              assertCurrent: assertOwner,
+            });
         const authority = restored.authority;
         const signal = AbortSignal.any([
           params.signal,
@@ -294,7 +298,6 @@ export function createPluginServiceSessionWork(params: {
         const assertCurrent = () => {
           try {
             signal.throwIfAborted();
-            authority.assertCurrent();
             assertBorrow();
           } catch (error) {
             // A transient preparation failure closes this borrow. Catch handlers
@@ -342,10 +345,7 @@ export function createPluginServiceSessionWork(params: {
             }),
             context: owner,
             ownSessionOnly: false,
-            assertInvocationCurrent: () => {
-              assertTarget();
-              authority.assertCurrent();
-            },
+            assertInvocationCurrent: assertTarget,
           }),
         );
         const retained = session.authority.retain();
@@ -375,19 +375,21 @@ export function createPluginServiceSessionWork(params: {
           throw error;
         }
         if (
+          isOperatorAuthorityUnavailable(error) ||
+          (error instanceof GatewayDispatchUnavailableError && error.retryable) ||
           error instanceof SessionAccessPreparationPendingError ||
           active.signal.reason instanceof SessionAccessPreparationPendingError
         ) {
           assertOwner();
           return {
             status: "unavailable",
-            reason: "Session access is refreshing",
+            reason: "Operator or session access is refreshing",
             retryAfterMs: 5000,
           };
         }
         if (
           !(error instanceof SessionMutationAuthorizationChangedError) &&
-          !(error instanceof GatewayOperatorRecoveryAuthorizationError) &&
+          !(error instanceof OperatorRefusalError) &&
           !(error instanceof SessionWorkAuthorizationError)
         ) {
           throw error;

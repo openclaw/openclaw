@@ -50,11 +50,29 @@ export type StoredClaw = {
   member_browser_requests?: Record<string, MemberBrowserRequestState>;
   /** Accepted kit-use evidence; retained after kit, browser, and member removal. */
   member_recovery_uses?: MemberRecoveryUse[];
+  /**
+   * Unlinks this computer signed that Discovery has not confirmed yet (pending-unlink.ts sends
+   * them when Discovery is reachable). They belong to earlier claw ids, not to `claw_id`.
+   */
+  pending_unlinks?: Array<{
+    statement: SignedStatement<"ClawUnlink">;
+    /** The unlinked claw's address, for status. */
+    hostname: string;
+    /** The Discovery that held the unlinked claw. */
+    discovery_url: string;
+    /** Discovery's refusal code when it refused the unlink for good; it is not sent again. */
+    refused?: string;
+  }>;
   /** Discovery publication state (a mirror; never authority). */
   discovery: {
     owner_account_id: string | null;
     published_binding_seq: number;
     published_snapshot_seq: number;
+    /**
+     * True from linking until a registration is first sent, so Discovery cannot hold the claw and
+     * unlinking it is local only. Absent on records linked before this was kept: unknown.
+     */
+    registration_unsent?: boolean;
     /** A publication was requested and has not succeeded yet (publication-retry.ts). */
     publish_pending?: boolean;
     /** issued_at of the last snapshot Discovery accepted (freshness/v1 re-signs it hourly). */
@@ -102,6 +120,23 @@ export function assertSameClawIdentity(
   ) {
     throw new Error("claw identity changed during registration recovery");
   }
+}
+
+/** A claw record with no authority, binding or Discovery progress yet. */
+export function emptyRecord(clawId: string): StoredClaw {
+  return {
+    v: 1,
+    claw_id: clawId,
+    hostname: null,
+    authority: null,
+    binding: null,
+    discovery: {
+      owner_account_id: null,
+      published_binding_seq: 0,
+      published_snapshot_seq: 0,
+      mailbox_cursor: null,
+    },
+  };
 }
 
 /** Refuses oversized opaque metadata without truncating account identities or mailbox cursors. */

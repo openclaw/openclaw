@@ -1,5 +1,7 @@
 /* @vitest-environment jsdom */
+
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { openAIModel } from "../chat-thread-fixtures.test-support.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import { threadFixture } from "./chat-transcript-fixture.test-support.tsx";
 import {
@@ -82,6 +84,7 @@ const work = (runId: string, timestamp: number) => ({
 });
 const reply = (runId: string, timestamp: number, content = "Finished " + runId) => ({
   role: "assistant",
+  ...openAIModel,
   content,
   timestamp,
   runId,

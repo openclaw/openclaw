@@ -17,7 +17,7 @@ import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
-import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
+import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-outbox.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import type { RequesterOrigin } from "../requester-origin.js";
 import type { AgentMessage } from "../runtime/index.js";

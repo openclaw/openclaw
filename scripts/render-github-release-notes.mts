@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { validateReleaseManifestAdvisoryJobs } from "./full-release-validation-policy.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.runtime.mjs";
 import { changelogFormat, findReleaseChangelog } from "./lib/release-changelog.mjs";
+import { readReleaseManifestWaivers } from "./lib/release-manifest-waivers.mts";
 import {
   compactReleaseNotes,
   OPENCLAW_RELEASE_TAG_PATTERN,
@@ -90,7 +91,9 @@ function normalizeVerification(verification: string, manifest: unknown) {
   if (manifest === undefined) {
     return normalizeTail(verification);
   }
-  validateReleaseManifestAdvisoryJobs(manifest);
+  validateReleaseManifestAdvisoryJobs(manifest, {
+    waiverPolicy: readReleaseManifestWaivers(manifest),
+  });
   return normalizeTail(verification)
     .split("\n")
     .filter((line) => !line.startsWith(ADVISORY_LINE_PREFIX))

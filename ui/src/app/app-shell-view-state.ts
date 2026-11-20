@@ -30,6 +30,7 @@ import {
   isMobileNavLayout,
   shouldFloatShellHeader,
   shouldMergeChatChrome,
+  usesBrowserDrawer,
 } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
@@ -46,7 +47,6 @@ import {
   isDesktopPanelAvailable,
   isHomePanelAvailable,
 } from "./panel-availability.ts";
-import { resolveProfileAppearancePrefs } from "./server-prefs-profile.ts";
 import { NAV_WIDTH_MAX, normalizeCatalogOpenTarget } from "./settings.ts";
 import type { ShellLayoutOwner } from "./shell-layout-owner.ts";
 import { currentThemeBranding } from "./theme-branding.ts";
@@ -61,6 +61,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly custodianMinimizeRequestId: number;
+  readonly firstUse: boolean;
   readonly desktopNavigationExpanded: boolean;
   readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;
@@ -168,7 +169,6 @@ export function readShellView(host: ShellViewHost) {
       activeRoute === "cron");
   const settingsTakeover = settingsRoute && !host.onboardingMode && !nativeEmbed;
   const onboarding = host.onboardingMode;
-  const memoryImportActive = onboarding && activeRoute !== "custodian";
   // Drawer motion invalidates only the bindings that read its presentation.
   const navDrawerOpen = () => {
     host.navigationRevision();
@@ -260,21 +260,16 @@ export function readShellView(host: ShellViewHost) {
     method: "sessions.create",
     params: {},
     sessionScope: true,
+    missingScopeReasonKey: "sessionsView.createPermissionDenied",
   });
   const newSessionDisabledReason = newSessionAccess.allowed ? undefined : newSessionAccess.reason;
   const workspacePluginsEnabled = activeRoute !== "plugins" && activeRoute !== "plugin-settings";
   const uiSettings = context.theme.settings;
-  // Unknown profile preferences are not absence. Keep the first shell paint
-  // image-free so a saved None choice cannot download artwork before hydration.
-  const profileId = gatewaySnapshot.selfUser?.id;
-  const backgroundReady =
-    gatewayConnected &&
-    (!profileId ||
-      resolveProfileAppearancePrefs(context.gateway.connection.gatewayUrl, profileId) !== null);
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session" || activeRoute === "systems";
   const sidebarProperties = {
+    newSessionInRail: usesBrowserDrawer(mobileNavLayout),
     connectionPending: initialGatewayConnection,
     basePath: context.basePath,
     activeRouteId: activeRoute,
@@ -286,6 +281,7 @@ export function readShellView(host: ShellViewHost) {
         : APP_ROUTE_IDS.filter((routeId) => routeId !== "templates"),
     sessionKey: host.routeState.sessionRouteNotice ? "" : host.activeSessionKey,
     connected: gatewayConnected,
+    communityInviteAllowed: host.shellNavigation.communityInviteAllowed,
     connectionStatus,
     footerControlsOverlap: host.shellLayout.footerControlsOverlap,
     storedOutboxes: host.storedOutboxes,
@@ -367,7 +363,11 @@ export function readShellView(host: ShellViewHost) {
     onRefresh: host.refreshControlUi,
     onNavigate: host.shellNavigation.navigate,
   };
+  const registeredPluginTitle = () => pluginPageLabel(context, host.routeState.location);
   const settingsSidebarProps: SettingsSidebarFallbackProps = {
+    get embeddedPluginTitle() {
+      return nativeEmbed && activeRoute === "plugin" ? registeredPluginTitle() : undefined;
+    },
     presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
     activeRouteId: activeRoute,
     pluginTabs: gatewaySnapshot.hello?.controlUiTabs?.filter((tab) => tab.placement === "settings"),
@@ -413,6 +413,7 @@ export function readShellView(host: ShellViewHost) {
     desktopPanelAvailable,
     homePanelAvailable,
     custodianPanelAvailable,
+    firstUse: host.firstUse,
     activeRoute,
     workboardLayout,
     sessionRoute,
@@ -425,7 +426,6 @@ export function readShellView(host: ShellViewHost) {
     embedSettings,
     settingsTakeover,
     onboarding,
-    memoryImportActive,
     get navDrawerOpen() {
       return navDrawerOpen();
     },
@@ -441,8 +441,10 @@ export function readShellView(host: ShellViewHost) {
       // The brand alone: "Ask OpenClaw" has no centered room beside History's three-button pill.
       return activeRoute === "custodian"
         ? currentThemeBranding().brandName
-        : pageTitleForRoute(activeRoute, context.nativeDeviceSettings?.snapshot, () =>
-            pluginPageLabel(context, host.routeState.location),
+        : pageTitleForRoute(
+            activeRoute,
+            context.nativeDeviceSettings?.snapshot,
+            registeredPluginTitle,
           );
     },
     get navCollapsed() {
@@ -466,7 +468,6 @@ export function readShellView(host: ShellViewHost) {
     newSessionDisabledReason,
     workspacePluginsEnabled,
     uiSettings,
-    backgroundReady,
     chatLikeRoute,
     sidebarProperties,
     embedNavigation,

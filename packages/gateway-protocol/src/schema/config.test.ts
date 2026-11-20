@@ -1,6 +1,9 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { validateConfigSchemaLookupResult } from "../validators/operations.js";
+import {
+  validateConfigSchemaLookupResult,
+  validateUpdateRunParams,
+} from "../validators/operations.js";
 import {
   ConfigSchemaResponseSchema,
   UpdateAvailableSchema,
@@ -155,6 +158,42 @@ describe("update protocol schemas", () => {
       Value.Check(UpdateRunParamsSchema, { requester: { ...requester, senderIsOwner: true } }),
     ).toBe(false);
     expect(Value.Check(UpdateRunParamsSchema, { requester: { senderId: 123 } })).toBe(false);
+  });
+
+  it("accepts optional update consent and exactly one closed checkout identity", () => {
+    const validRequests = [
+      {},
+      { acceptCapabilities: true },
+      { acceptCapabilities: false },
+      { checkout: { gitCommonDir: "/checkouts/openclaw/.git" } },
+      { checkout: { packageRoot: "/packages/openclaw" } },
+      {
+        acceptCapabilities: true,
+        checkout: { gitCommonDir: "/checkouts/openclaw/.git" },
+      },
+    ];
+    const invalidRequests = [
+      { acceptCapabilities: "true" },
+      { acceptCapabilities: null },
+      { checkout: null },
+      { checkout: {} },
+      { checkout: { gitCommonDir: "" } },
+      { checkout: { packageRoot: "" } },
+      { checkout: { gitCommonDir: 123 } },
+      { checkout: { packageRoot: 123 } },
+      { checkout: { gitCommonDir: "/repo/.git", packageRoot: "/repo" } },
+      { checkout: { gitCommonDir: "/repo/.git", extra: true } },
+      { checkout: { packageRoot: "/repo", extra: true } },
+      { checkout: { root: "/repo" } },
+    ];
+    for (const request of validRequests) {
+      expect(Value.Check(UpdateRunParamsSchema, request)).toBe(true);
+      expect(validateUpdateRunParams(request)).toBe(true);
+    }
+    for (const request of invalidRequests) {
+      expect(Value.Check(UpdateRunParamsSchema, request)).toBe(false);
+      expect(validateUpdateRunParams(request)).toBe(false);
+    }
   });
 
   it("accepts only closed, exact tracked Git targets for update.run", () => {

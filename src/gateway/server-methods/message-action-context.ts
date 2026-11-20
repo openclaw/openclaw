@@ -21,6 +21,7 @@ import {
   selectMessageActionRequesterIdentity,
   type MessageActionAuthorization,
 } from "../message-action-turn-capability.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { captureAgentRuntimeTurnAssertion } from "./agent-runtime-authority.js";
 import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 
@@ -111,7 +112,10 @@ export function createMessageActionRuntimeAuthority(
       try {
         assertAdmissionCurrent?.();
         return true;
-      } catch {
+      } catch (error) {
+        if (error instanceof SessionMutationAuthorizationChangedError) {
+          throw error;
+        }
         return false;
       }
     },

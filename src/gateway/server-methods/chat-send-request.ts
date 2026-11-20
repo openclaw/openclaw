@@ -26,6 +26,7 @@ import {
   type AttachedChatWorkContext,
 } from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
+import { captureSessionWorkTarget } from "../../config/sessions/session-work-start.js";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -67,6 +68,8 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
+  activeSteer?: { runId: string; profileId: string };
+  participating?: true;
   normalizeThinkingLevelOverride?: boolean;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
@@ -74,6 +77,7 @@ export type NormalizedChatSendRequest = {
   clientInfo?: GatewayClientInfo;
   supportsTaskSuggestions: boolean;
   p: ChatSendRequestParams;
+  targetPrecondition?: ReturnType<typeof captureSessionWorkTarget>;
   explicitOrigin?: ChatSendExplicitOrigin;
   inboundMessage: string;
   systemInputProvenance?: InputProvenance;
@@ -109,11 +113,46 @@ type NormalizeChatSendRequestResult =
   | { ok: true; value: NormalizedChatSendRequest }
   | { ok: false; error: string; reason?: string };
 
+/** Attach host-admitted participation after wire normalization, before session preparation. */
+export function applyChatSendParticipation(
+  request: NormalizedChatSendRequest,
+): NormalizeChatSendRequestResult {
+  const { p } = request;
+  if (
+    request.goalOperation ||
+    p.intent ||
+    request.providerReviewAcknowledgment ||
+    p.deliver === true ||
+    request.explicitOrigin ||
+    p.originatingChannel !== undefined ||
+    p.originatingTo !== undefined ||
+    p.originatingAccountId !== undefined ||
+    p.originatingThreadId !== undefined ||
+    request.toolBindings ||
+    p.toolBindings ||
+    p.thinking !== undefined ||
+    p.fastMode !== undefined ||
+    p.fastAutoOnSeconds !== undefined
+  ) {
+    return {
+      ok: false,
+      error:
+        "Participating inputs cannot change goals, delivery routes, tool bindings, or runtime settings.",
+    };
+  }
+  request.participating = true;
+  request.suppressCommandInterpretation = true;
+  request.stopCommand = false;
+  request.turnKind = "main";
+  return { ok: true, value: request };
+}
+
 /** Validate and normalize the wire request before session or lifecycle work begins. */
 export function normalizeChatSendRequest(params: {
   params: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
+  activeSteer?: { runId: string; profileId: string };
   goalResume?: SessionGoalOperation & { action: "resume" };
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
 }): NormalizeChatSendRequestResult | Promise<NormalizeChatSendRequestResult> {
@@ -173,7 +212,8 @@ export function normalizeChatSendRequest(params: {
   if (
     (p.systemInputProvenance ||
       p.systemProvenanceReceipt ||
-      suppressCommandInterpretation ||
+      (suppressCommandInterpretation &&
+        recoveredInput?.target.message["__openclaw"]?.suppressCommandInterpretation !== true) ||
       explicitOriginResult.value) &&
     !params.trustedSystemInput &&
     !hasGatewayAdminScope(params.client)
@@ -212,8 +252,7 @@ export function normalizeChatSendRequest(params: {
       p.thinking !== undefined ||
       p.fastMode !== undefined ||
       p.fastAutoOnSeconds !== undefined ||
-      p.timeoutMs !== undefined ||
-      controlUiReconnectResume.resumeRequested)
+      p.timeoutMs !== undefined)
   ) {
     // Recovery reads the persisted input and session settings, not transient run overrides.
     return reject(
@@ -227,7 +266,10 @@ export function normalizeChatSendRequest(params: {
 
   const hasGoalOperation = params.goalResume !== undefined || p.intent !== undefined;
   const commandInterpretationSuppressed =
-    suppressCommandInterpretation || hasGoalOperation || providerReview !== undefined;
+    suppressCommandInterpretation ||
+    hasGoalOperation ||
+    providerReview !== undefined ||
+    params.activeSteer !== undefined;
   // This text comes from the current provider review, not a browser-supplied command.
   const inboundMessage = p.intent || providerReview ? p.message : sanitizedMessageResult.message;
   const systemInputProvenance = params.goalResume
@@ -311,19 +353,26 @@ export function normalizeChatSendRequest(params: {
   const modelMessage = workContext
     ? [rawMessage, formatChatWorkContext(workContext.snapshot)].filter(Boolean).join("\n\n")
     : rawMessage;
+  const targetPrecondition = captureSessionWorkTarget(p);
   const requestInput = JSON.stringify([
     p.message,
+    ...(params.activeSteer
+      ? [{ operation: "active-steer", sessionId: p.sessionId, ...params.activeSteer }]
+      : []),
     p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
     ...(workContext ? [workContext.snapshot] : []),
     ...(p.appContext ? [{ appContext: stableStringify(p.appContext) }] : []),
     ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
+    ...(targetPrecondition ? [targetPrecondition.requestIdentity] : []),
   ]);
 
   const value: NormalizedChatSendRequest = {
+    ...(params.activeSteer ? { activeSteer: params.activeSteer } : {}),
     chatSendReceivedAtMs,
     clientInfo,
     supportsTaskSuggestions,
     p,
+    targetPrecondition,
     ...(params.providerReviewAcknowledgment
       ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }
       : {}),
@@ -344,7 +393,13 @@ export function normalizeChatSendRequest(params: {
     ...(mentions.value ? { mentions: mentions.value } : {}),
     reconnectResumeRequested: controlUiReconnectResume.resumeRequested,
   };
-  if (stopCommand) {
+  if (recoveredInput?.operatorAuthority?.participationCeiling) {
+    const attached = applyChatSendParticipation(value);
+    if (!attached.ok) {
+      return attached;
+    }
+  }
+  if (value.stopCommand) {
     return { ok: true, value };
   }
   if (recoveredInput) {

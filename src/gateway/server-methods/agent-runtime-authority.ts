@@ -15,7 +15,7 @@ export function captureAgentRuntimeTurnAssertion(
   }
   return () => {
     if (!isMessageActionTurnCurrent(identity)) {
-      throw new TypeError("agent runtime authority is no longer active");
+      throw new TypeError("The message turn has ended. Start a new turn to retry.");
     }
   };
 }

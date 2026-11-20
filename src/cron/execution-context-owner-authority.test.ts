@@ -66,8 +66,7 @@ vi.mock("../agents/tools/in-process-gateway.js", async (importOriginal) => ({
 
 const { createOpenClawCodingToolsInternalAsync } = await import("../agents/agent-tools.js");
 const { resolveGatewayScopedTools } = await import("../gateway/tool-resolution.js");
-const { createAdmittedHostCapabilityTestFixture } =
-  await import("../agents/harness/host-capability.test-support.js");
+const { createAgentHarnessHostCapabilities } = await import("../agents/harness/host-capability.js");
 const { admitScheduledOccurrence } = await import("./execution-context-admission.js");
 const { resolveScheduledSenderBit } = await import("./execution-context-registry.js");
 const { prepareCronRunAdmission } = await import("./run-admission.js");
@@ -172,7 +171,7 @@ async function admitRun(stored: CronStoredJob) {
     agentId: "main",
     trigger: "cron",
   });
-  const scheduledExecution = occurrence.mint({
+  const scheduledExecution = await occurrence.mint({
     cfg: CFG,
     agentId: "main",
     runId: "run-1",
@@ -231,23 +230,25 @@ async function embeddedTools(run: Run) {
   });
 }
 
-// Codex builds its dynamic tools through the harness host from the same attempt bit;
+// Codex builds its dynamic tools through the harness host from the same admitted run;
 // the host stays open while the tools are probed.
 async function codexOwnerOnly(run: Run) {
-  const host = await createAdmittedHostCapabilityTestFixture({
-    runId: "codex-run",
-    agentId: "main",
-    sessionId: "run-session",
-    sessionKey: RUN_KEY,
-    workspaceDir: "/workspace",
-    config: CFG,
+  const host = createAgentHarnessHostCapabilities({
+    attempt: {
+      runId: "run-1",
+      agentId: "main",
+      sessionId: "run-session",
+      sessionKey: RUN_KEY,
+      workspaceDir: "/workspace",
+      config: CFG,
+      admittedRunContext: run.admitted,
+    },
+    pluginId: "codex",
   });
   try {
     const tools =
-      (await host.hostCapabilities.createToolSurfaceAsync?.({
+      (await host.capabilities.createToolSurfaceAsync?.({
         sessionKey: RUN_KEY,
-        trigger: "cron",
-        jobId: "job-1",
         ...(run.senderIsOwner !== undefined ? { senderIsOwner: run.senderIsOwner } : {}),
         toolConstructionPlan: {
           includeBaseCodingTools: false,
@@ -259,8 +260,7 @@ async function codexOwnerOnly(run: Run) {
       })) ?? [];
     return await callableOwnerOnly(tools);
   } finally {
-    host.closeHost();
-    host.closeAdmission();
+    host.close();
   }
 }
 
@@ -334,29 +334,6 @@ describe("scheduled owner authority", () => {
       await embeddedTools({ ...run, senderIsOwner: true }),
     );
     expect(explicitOwner).toContain("intent");
-    run.settle();
-  });
-
-  it("refuses an owner-only call once the requester stops being an owner mid-run", async () => {
-    seedParent();
-    const run = await admitRun(job({ ...linked, createdActor: PROFILE }));
-    expect(run.senderIsOwner).toBeUndefined();
-    for (const tools of [await embeddedTools(run), await cliTools(run)]) {
-      profile.current = true;
-      const gateway = tools.find((tool) => tool.name === "gateway")!;
-      // While the requester is current the call passes the owner recheck.
-      const current = await gateway
-        .execute("current", { action: "config.get" }, undefined, undefined)
-        .then(
-          () => "",
-          (error: unknown) => String(error),
-        );
-      expect(current).not.toMatch(/no longer an owner/);
-      profile.current = false;
-      await expect(
-        gateway.execute("revoked", { action: "config.get" }, undefined, undefined),
-      ).rejects.toThrow(/no longer an owner/);
-    }
     run.settle();
   });
 

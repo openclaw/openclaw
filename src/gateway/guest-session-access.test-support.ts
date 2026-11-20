@@ -1,14 +1,21 @@
 import { X509Certificate } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import * as lifecycleRuntime from "../cli/gateway-cli/lifecycle.runtime.js";
+import { prepareGatewayRestartIteration } from "../cli/gateway-cli/run-loop-startup.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
+import {
+  closeProvider,
+  listenProvider,
+  writeToolCall,
+} from "./gateway-provider-fixture.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import {
   connectGatewayClient,
@@ -20,7 +27,21 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 
 type GatewayEvent = { event?: string; payload?: unknown };
 
-type GuestGatewayOptions = { origin?: string; others?: "none" | "view" | "invited" };
+type GuestGatewayOptions = {
+  origin?: string;
+  others?: "none" | "view" | "invited";
+  approvalOwnership?: boolean;
+  invitedScopes?: OperatorScope[];
+  maxInvitedAccess?: "read" | "suggest" | "send";
+  invitedTools?: string[];
+  cronEnabled?: boolean;
+  invitedAlsoAllow?: string[];
+  setupPlugins?: (
+    state: Awaited<ReturnType<typeof createOpenClawTestState>>,
+  ) => Promise<OpenClawConfig["plugins"]>;
+  tools?: OpenClawConfig["tools"];
+  onInvitedEvent?: (event: GatewayEvent) => void;
+};
 
 async function startInvitedGuestGateway(
   signal: AbortSignal,
@@ -34,6 +55,7 @@ async function startInvitedGuestGateway(
       VITEST: process.env.VITEST,
       OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_SKIP_CRON: options.cronEnabled ? undefined : "1",
     },
     prepareProfileCatalog: true,
   });
@@ -42,23 +64,46 @@ async function startInvitedGuestGateway(
   const bob = ensureProfileForEmail("bob@committed-mention.example.test");
   const carol = ensureProfileForEmail("carol@committed-mention.example.test");
   setDisplayName(alice.id, "Alice");
-  setUserProfileRole(alice.id, "administrator");
+  setUserProfileRole(alice.id, options.approvalOwnership ? "guest" : "administrator");
   setDisplayName(bob.id, "Bob");
   setUserProfileRole(bob.id, "guest");
   setDisplayName(carol.id, "Carol");
   setUserProfileRole(carol.id, "invited");
+  const senderEmail = options.approvalOwnership
+    ? "admin@committed-mention.example.test"
+    : "alice@committed-mention.example.test";
+  if (options.approvalOwnership) {
+    setUserProfileRole(ensureProfileForEmail(senderEmail).id, "administrator");
+  }
   const events: Record<"guest" | "invited" | "sender", GatewayEvent[]> = {
     guest: [],
     invited: [],
     sender: [],
   };
   const providerRequests: string[] = [];
-  const providerReplies: { beforeReply?: () => Promise<void> } = {};
+  const providerReplies: {
+    beforeReply?: () => Promise<void>;
+    reply?: (body: string, response: ServerResponse) => void;
+  } = {};
   const provider = createServer((request, response) => {
     void readRequestText(request)
       .then(async (body) => {
         providerRequests.push(body);
         await providerReplies.beforeReply?.();
+        if (providerReplies.reply) {
+          providerReplies.reply(body, response);
+          return;
+        }
+        const input = (JSON.parse(body) as { input?: Array<{ type?: string }> }).input ?? [];
+        const lastOutput = input.findLastIndex((item) => item.type === "function_call_output");
+        if (
+          options.approvalOwnership &&
+          !body.includes("Generate a concise session title") &&
+          JSON.stringify(input.slice(lastOutput + 1)).includes("RUN_EXEC")
+        ) {
+          writeToolCall(response, "exec", { command: "printf approval-proof" });
+          return;
+        }
         writeOpenAiResponsesText(response, {
           text: "Acknowledged.",
           messageId: "mention-reply",
@@ -73,8 +118,10 @@ async function startInvitedGuestGateway(
     "committed-mention",
   );
   const scopes: OperatorScope[] = ["operator.admin"];
-  const guestScopes: OperatorScope[] = ["operator.sessions.read", "operator.sessions.write"];
-  const invitedScopes: OperatorScope[] = [
+  const guestScopes: OperatorScope[] = options.approvalOwnership
+    ? ["operator.read", "operator.write", "operator.approvals"]
+    : ["operator.sessions.read", "operator.sessions.write"];
+  const invitedScopes: OperatorScope[] = options.invitedScopes ?? [
     "operator.read",
     "operator.write",
     "operator.questions",
@@ -89,6 +136,7 @@ async function startInvitedGuestGateway(
         "alice@committed-mention.example.test",
         "bob@committed-mention.example.test",
         "carol@committed-mention.example.test",
+        ...(options.approvalOwnership ? [senderEmail] : []),
       ],
       allowLoopback: true,
       deviceAutoApprove: { enabled: true, scopes: [...scopes, ...guestScopes, ...invitedScopes] },
@@ -96,7 +144,8 @@ async function startInvitedGuestGateway(
     identityScopes: {
       "bob@committed-mention.example.test": guestScopes,
       "carol@committed-mention.example.test": invitedScopes,
-      "alice@committed-mention.example.test": scopes,
+      "alice@committed-mention.example.test": options.approvalOwnership ? guestScopes : scopes,
+      ...(options.approvalOwnership ? { [senderEmail]: scopes } : {}),
     },
   };
   const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
@@ -108,7 +157,8 @@ async function startInvitedGuestGateway(
     "x-forwarded-proto": "https",
   });
   const origin = options.origin ?? "https://control.example.test";
-  const gateway = await startGatewayWithClient({
+  const plugins = await options.setupPlugins?.(state);
+  const startup = {
     configPath: state.configPath,
     auth,
     secure: true,
@@ -139,10 +189,17 @@ async function startInvitedGuestGateway(
           [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
         },
       },
-      plugins: { slots: { memory: "none" } },
-      tools: {
+      plugins: plugins ?? { slots: { memory: "none" } },
+      ...(options.approvalOwnership ? { session: { dmScope: "main" as const } } : {}),
+      tools: options.tools ?? {
         profile: "minimal",
-        alsoAllow: ["read", "sessions_history", "sessions_search"],
+        alsoAllow: [
+          "read",
+          "sessions_history",
+          "sessions_search",
+          ...(options.approvalOwnership ? ["exec"] : []),
+        ],
+        ...(options.approvalOwnership ? { exec: { host: "gateway" as const } } : {}),
       },
       gateway: {
         auth,
@@ -157,60 +214,108 @@ async function startInvitedGuestGateway(
               scopes: ["operator.admin"],
               sessions: { others: "write" },
             },
+            creator: {
+              agents: ["main"],
+              scopes: ["operator.read", "operator.write"],
+              sessions: { others: "write" },
+            },
             invited: {
               agents: ["main"],
               scopes: invitedScopes,
-              sessions: { others: options.others ?? "invited" },
+              sessions: {
+                others: options.others ?? "invited",
+                maxInvitedAccess: options.maxInvitedAccess,
+                invitedTools: options.invitedTools,
+                invitedAlsoAllow: options.invitedAlsoAllow,
+              },
             },
             guest: {
               agents: ["main"],
               scopes: guestScopes,
-              sessions: { others: options.others ?? "invited" },
+              sessions: {
+                others: options.approvalOwnership ? "write" : (options.others ?? "invited"),
+              },
             },
           },
         },
       },
     },
+  } satisfies Parameters<typeof startGatewayWithClient>[0];
+  let gateway = await startGatewayWithClient(startup);
+  let stopped = false;
+  cleanup.defer(async () => {
+    if (!stopped) {
+      await gateway.server.close({ reason: "committed mention cleanup" });
+    }
   });
-  cleanup.defer(() => gateway.server.close({ reason: "committed mention cleanup" }));
   cleanup.defer(() => disconnectGatewayClient(gateway.client));
-  const sender = await connectGatewayClient({
-    signal,
-    url: `wss://127.0.0.1:${gateway.port}`,
-    tlsFingerprint,
-    origin,
-    edgeAuthHeaders: headers("alice@committed-mention.example.test"),
-    clientName: "openclaw-control-ui",
-    mode: "webchat",
-    scopes: ["operator.admin"],
-    caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
-    onEvent: (event) => events.sender.push(event),
-    deviceIdentity: loadOrCreateDeviceIdentity({
-      path: state.path("sender-device", "client", "credentials.sqlite"),
-    }),
-  });
+  const connectSender = () =>
+    connectGatewayClient({
+      signal,
+      url: `wss://127.0.0.1:${gateway.port}`,
+      tlsFingerprint,
+      origin,
+      edgeAuthHeaders: headers(senderEmail),
+      clientName: "openclaw-control-ui",
+      mode: "webchat",
+      scopes: ["operator.admin"],
+      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
+      onEvent: (event) => events.sender.push(event),
+      deviceIdentity: loadOrCreateDeviceIdentity({
+        path: state.path("sender-device", "client", "credentials.sqlite"),
+      }),
+    });
+  let sender = await connectSender();
   cleanup.defer(() => disconnectGatewayClient(sender));
-  const invited = await connectGatewayClient({
-    signal,
-    url: `wss://127.0.0.1:${gateway.port}`,
-    tlsFingerprint,
-    origin,
-    edgeAuthHeaders: headers("carol@committed-mention.example.test"),
-    clientName: "openclaw-control-ui",
-    mode: "webchat",
-    scopes: invitedScopes,
-    caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
-    onEvent: (event) => events.invited.push(event),
-    deviceIdentity: loadOrCreateDeviceIdentity({
-      path: state.path("invited-device", "client", "credentials.sqlite"),
-    }),
-  });
+  const connectInvited = () =>
+    connectGatewayClient({
+      signal,
+      url: `wss://127.0.0.1:${gateway.port}`,
+      tlsFingerprint,
+      origin,
+      edgeAuthHeaders: headers("carol@committed-mention.example.test"),
+      clientName: "openclaw-control-ui",
+      mode: "webchat",
+      scopes: invitedScopes,
+      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
+      onEvent: (event) => {
+        events.invited.push(event);
+        options.onInvitedEvent?.(event);
+      },
+      deviceIdentity: loadOrCreateDeviceIdentity({
+        path: state.path("invited-device", "client", "credentials.sqlite"),
+      }),
+    });
+  let invited = await connectInvited();
   cleanup.defer(() => disconnectGatewayClient(invited));
   return {
     state,
-    gateway,
-    sender,
-    invited,
+    get gateway() {
+      return gateway;
+    },
+    get sender() {
+      return sender;
+    },
+    get invited() {
+      return invited;
+    },
+    async restart(whileStopped?: () => Promise<void>) {
+      await disconnectGatewayClient(invited);
+      await disconnectGatewayClient(sender);
+      await disconnectGatewayClient(gateway.client);
+      await gateway.server.close({
+        reason: "participation restart proof",
+        restartExpectedMs: 1_500,
+      });
+      stopped = true;
+      await whileStopped?.();
+      await prepareGatewayRestartIteration(lifecycleRuntime, { warn: console.warn }, () => true);
+      gateway = await startGatewayWithClient(startup);
+      stopped = false;
+      sender = await connectSender();
+      invited = await connectInvited();
+      await gateway.server.startupSettled;
+    },
     alice,
     bob,
     carol,

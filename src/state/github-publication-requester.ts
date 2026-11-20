@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import {
+  publicationSessionParticipationSchema,
+  sessionParticipationTargetSchema,
+} from "../config/sessions/session-participation-source.js";
 import { openClawIdRecoveryPrincipalSchema } from "../gateway/openclaw-id/tunnel-principal-schema.js";
+
+const participationSchema = z.strictObject({
+  ceiling: publicationSessionParticipationSchema,
+  target: sessionParticipationTargetSchema,
+});
 
 const requesterSchema = z
   .strictObject({
@@ -19,12 +28,9 @@ const requesterSchema = z
         aliasBindingIds: z.array(z.uuid()),
       })
       .nullable(),
-    origin: z
-      .strictObject({
-        agentId: z.string().min(1),
-        sessionKey: z.string().min(1),
-        sessionId: z.string().min(1),
-        lifecycleRevision: z.string().min(1).nullable(),
+    participation: participationSchema.optional(),
+    origin: sessionParticipationTargetSchema
+      .extend({
         runId: z.string().min(1).optional(),
       })
       .optional(),
@@ -39,12 +45,31 @@ const requesterSchema = z
     (value) =>
       !value.openclawIdPrincipal ||
       (value.actor.kind === "operator" && value.openclawIdPrincipal.kind !== "node"),
+  )
+  .refine(
+    (value) =>
+      !value.participation ||
+      (value.actor.kind === "operator" &&
+        value.actor.profileId === value.participation.ceiling.profileId &&
+        value.participation.target.agentId === value.participation.ceiling.source.agentId),
   );
 
 type RequesterData = z.infer<typeof requesterSchema>;
 export type GitHubPublicationOrigin = Readonly<NonNullable<RequesterData["origin"]>>;
+type ParticipationData = z.infer<typeof participationSchema>;
+export type GitHubPublicationParticipation = Readonly<{
+  ceiling: Readonly<
+    Omit<ParticipationData["ceiling"], "tools" | "toolConstraints" | "source" | "execPolicy"> & {
+      tools?: readonly string[];
+      toolConstraints?: readonly (readonly string[])[];
+      source: Readonly<ParticipationData["ceiling"]["source"]>;
+      execPolicy?: Readonly<NonNullable<ParticipationData["ceiling"]["execPolicy"]>>;
+    }
+  >;
+  target: Readonly<ParticipationData["target"]>;
+}>;
 export type GitHubPublicationRequesterSnapshot = Readonly<
-  Omit<RequesterData, "actor" | "scopes" | "grant" | "origin"> & {
+  Omit<RequesterData, "actor" | "scopes" | "grant" | "origin" | "participation"> & {
     actor: Readonly<RequesterData["actor"]>;
     scopes: readonly string[];
     grant: Readonly<
@@ -53,10 +78,36 @@ export type GitHubPublicationRequesterSnapshot = Readonly<
       }
     > | null;
     origin?: GitHubPublicationOrigin;
+    participation?: GitHubPublicationParticipation;
   }
 >;
 
 const MAX_REQUESTER_BYTES = 64 * 1024;
+
+export function immutableGitHubPublicationParticipation(
+  value: GitHubPublicationParticipation,
+): GitHubPublicationParticipation {
+  return Object.freeze({
+    ceiling: Object.freeze({
+      ...value.ceiling,
+      ...(value.ceiling.tools
+        ? { tools: Object.freeze([...new Set(value.ceiling.tools)].toSorted()) }
+        : {}),
+      ...(value.ceiling.toolConstraints
+        ? {
+            toolConstraints: Object.freeze(
+              value.ceiling.toolConstraints.map((allow) => Object.freeze([...allow])),
+            ),
+          }
+        : {}),
+      ...(value.ceiling.execPolicy
+        ? { execPolicy: Object.freeze({ ...value.ceiling.execPolicy }) }
+        : {}),
+      source: Object.freeze({ ...value.ceiling.source }),
+    }),
+    target: Object.freeze({ ...value.target }),
+  });
+}
 
 /** Accepted task requests survive source deletion; a later run never changes their identity. */
 export function deriveGitHubPublicationTaskId(
@@ -115,6 +166,9 @@ function immutableRequester(
             ...(value.origin.runId ? { runId: value.origin.runId } : {}),
           }),
         }
+      : {}),
+    ...(value.participation
+      ? { participation: immutableGitHubPublicationParticipation(value.participation) }
       : {}),
   });
 }

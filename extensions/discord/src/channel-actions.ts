@@ -1,4 +1,7 @@
-import { createUnionActionGate } from "openclaw/plugin-sdk/channel-actions";
+import {
+  createUnionActionGate,
+  optionalNonNegativeIntegerSchema,
+} from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -11,7 +14,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
 import { coerceDiscordComponentParam, readDiscordComponentSpec } from "./components.js";
@@ -69,6 +72,84 @@ const discordActionGroups: ReadonlyArray<{
   { gate: "events", actions: ["event-list", "event-create"] },
   { gate: "moderation", actions: ["timeout", "kick", "ban"], defaultEnabled: false },
   { gate: "presence", actions: ["set-presence"], defaultEnabled: false },
+];
+
+const optionalStringSchema = (description?: string) =>
+  Type.Optional(Type.String(description === undefined ? undefined : { description }));
+const optionalBooleanSchema = (description?: string) =>
+  Type.Optional(Type.Boolean(description === undefined ? undefined : { description }));
+const actionFields = (
+  actions: readonly ChannelMessageActionName[],
+  properties: Record<string, TSchema>,
+): ChannelMessageToolSchemaContribution => ({ actions, properties, visibility: "all-configured" });
+const channelLayoutActions: readonly ChannelMessageActionName[] = [
+  "channel-create",
+  "channel-edit",
+  "channel-move",
+  "category-create",
+  "category-edit",
+  "category-delete",
+];
+const moderationActions: readonly ChannelMessageActionName[] = ["timeout", "kick", "ban"];
+
+// Discord-only params for shared action names. Core keeps channel-neutral fields,
+// so other channels' turns do not carry guild, role, or channel-layout fields.
+// All-configured keeps them for Discord actions advertised from bound or scheduled turns.
+const discordActionFieldSchemas: readonly ChannelMessageToolSchemaContribution[] = [
+  actionFields(
+    [
+      "search",
+      "thread-list",
+      "thread-create",
+      "thread-reply",
+      "channel-info",
+      "channel-list",
+      "channel-delete",
+      ...channelLayoutActions,
+      "permissions",
+      "member-info",
+      "role-info",
+      "role-add",
+      "role-remove",
+      "event-create",
+      "event-list",
+      ...moderationActions,
+      "emoji-list",
+      "emoji-upload",
+      "sticker-upload",
+      "voice-status",
+    ],
+    { guildId: optionalStringSchema() },
+  ),
+  actionFields(["role-add", "role-remove"], { roleId: optionalStringSchema() }),
+  actionFields(["search"], { authorIds: Type.Optional(Type.Array(Type.String())) }),
+  actionFields(["emoji-upload"], {
+    emojiName: optionalStringSchema("Name for an uploaded custom emoji."),
+    roleIds: Type.Optional(Type.Array(Type.String())),
+  }),
+  actionFields(["sticker-upload"], {
+    stickerName: optionalStringSchema(),
+    stickerDesc: optionalStringSchema(),
+    stickerTags: optionalStringSchema(),
+  }),
+  actionFields(moderationActions, {
+    deleteDays: optionalNonNegativeIntegerSchema({ maximum: 7 }),
+    durationMin: optionalNonNegativeIntegerSchema(),
+    until: optionalStringSchema(),
+  }),
+  actionFields(channelLayoutActions, {
+    channelType: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description: "Numeric channel type; avoids schema type collision.",
+      }),
+    ),
+    position: optionalNonNegativeIntegerSchema(),
+    nsfw: optionalBooleanSchema(),
+    rateLimitPerUser: optionalNonNegativeIntegerSchema(),
+    categoryId: optionalStringSchema(),
+    clearParent: optionalBooleanSchema("Clear parent/category when supported."),
+  }),
 ];
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
@@ -160,6 +241,11 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
         ),
       },
     });
+    for (const contribution of discordActionFieldSchemas) {
+      if (contribution.actions?.some((action) => actions.has(action))) {
+        schema.push(contribution);
+      }
+    }
     return {
       actions: Array.from(actions),
       capabilities: ["presentation"],

@@ -41,6 +41,7 @@ import {
   readExistingAgentSchemaMeta,
   assertExistingAgentSchemaOwner,
   assertCurrentAgentSchemaMetadata,
+  assertCanonicalAgentPersistenceVersion,
 } from "./openclaw-agent-db-schema-read.js";
 import {
   ensureSessionAdditiveColumns,
@@ -53,7 +54,10 @@ import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
   AGENT_PROGRESS_CARD_SCHEMA_SQL,
 } from "./openclaw-agent-progress-card-schema.js";
-import { RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL } from "./openclaw-agent-schema-history.js";
+import {
+  getOpenClawAgentMigrationSchema,
+  RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL,
+} from "./openclaw-agent-schema-history.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
@@ -266,6 +270,7 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
   options: { agentId: string; pathname: string; requireCanonicalIndexes?: boolean },
   readTable?: SqliteTableContractReader,
 ): void {
+  assertCanonicalAgentPersistenceVersion(database, options.pathname);
   const agentId = normalizeAgentId(options.agentId);
   const metadata = readExistingAgentSchemaMeta(database);
   assertCurrentAgentSchemaMetadata(metadata, agentId, options.pathname);
@@ -443,8 +448,20 @@ export function finishAgentSchemaMigration(
   assertMigration: () => void,
   integrity?: { tables: readonly string[]; foreignKeyTables?: readonly string[] },
 ): void {
+  const previousVersion = readSqliteUserVersion(db);
+  const previousMetadata = readExistingAgentSchemaMeta(db);
+  // Floor-aware readers start at v43; retain strict publication for older history.
+  const additive =
+    previousVersion >= 43 &&
+    previousVersion < targetVersion &&
+    collectSqliteSchemaIssues(
+      db,
+      getOpenClawAgentMigrationSchema(previousVersion),
+      AGENT_SCHEMA_COMPATIBILITY,
+    ).length === 0;
+  const minReader = additive ? (previousMetadata?.minReader ?? previousVersion) : targetVersion;
   writeSqliteUserVersion(db, targetVersion);
-  persistAgentSchemaMetadata(db, agentId, targetVersion);
+  persistAgentSchemaMetadata(db, agentId, targetVersion, minReader);
   assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);
   for (const table of integrity?.tables ?? []) {
     if (tableExists(db, table)) {

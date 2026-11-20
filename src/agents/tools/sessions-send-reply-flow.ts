@@ -21,6 +21,7 @@ import { resolveSubagentAnnounceTimeoutMs } from "../subagents/announce/subagent
 import type { FollowupCompletionOwner } from "../subagents/completion/session-followup-completion.types.js";
 import {
   getGatewayToolCallerIdentity,
+  readRetainedRequesterToolCaller,
   resolveGatewayToolOperatorSelection,
 } from "./gateway-caller-context.js";
 import {
@@ -48,10 +49,13 @@ export function startSessionsSendReplyFlow(
   const { completion } = params;
   const continueOwned = async <T>(run: () => Promise<T>) =>
     params.replyMode === "peer"
-      ? runWithGatewayToolContinuationContext(run, { retainRequester: true })
+      ? runWithGatewayToolContinuationContext(run, {
+          retainRequester: true,
+          agentId: params.requesterAgentId,
+        })
       : completion
-        ? completion.request.custody.run(run)
-        : runWithGatewayToolContinuationContext(run);
+        ? completion.request.custody.runWithRequester(run)
+        : runWithGatewayToolContinuationContext(run, { agentId: params.requesterAgentId });
   const run = async () => {
     const settledReply = params.reply ?? (await completion?.take());
     const requesterCompletion = params.replyMode === "peer" ? undefined : completion;
@@ -103,7 +107,7 @@ export function startSessionsSendReplyFlow(
                 threadId: stringifyRouteThreadId(params.requesterOrigin?.threadId),
               },
               privateCompletion: true,
-              agentToolCaller: params.requester,
+              agentToolCaller: params.requester ?? readRetainedRequesterToolCaller(),
               expectFinal: true,
               onAccepted: (payload) => {
                 const receipt = asOptionalRecord(payload);

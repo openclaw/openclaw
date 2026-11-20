@@ -2,11 +2,13 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
 import type { SessionGitHubPublicationPublished } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import type { GatewaySchedulerClock } from "../../infra/gateway-scheduler.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { admitScheduledOccurrence } from "../execution-context-admission.js";
 import { createCronServiceWithStateForTest, createNoopLogger } from "../service.test-harness.js";
 import type { CronServiceDeps } from "../service/state.js";
 import { runCronSessionTurn } from "../session-run.js";
@@ -44,6 +46,9 @@ export function createOperatorContinuationService(params: {
           "explicit continuation session target",
         ),
       }),
+    // Scheduled runs take their job scope from the occurrence admission, as on the Gateway.
+    admitScheduledOccurrence: ({ job }) =>
+      admitScheduledOccurrence({ cfg: params.config, job, agentId: "main", trigger: "cron" }),
     runIsolatedAgentJob: (request) =>
       params.runIsolated({
         ...request,
@@ -53,6 +58,27 @@ export function createOperatorContinuationService(params: {
         sessionKey: `cron:${request.job.id}`,
       }),
   });
+}
+export function prepareContinuationRoleConfig(config: OpenClawConfig, enabled: boolean) {
+  if (enabled) {
+    config.gateway = {
+      ...config.gateway,
+      roles: {
+        default: "writer",
+        definitions: {
+          writer: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+        },
+      },
+    };
+  }
+  if (config.gateway?.roles) {
+    config.gateway.roles.definitions.blocked = {
+      scopes: [],
+      agents: [],
+      sessions: { others: "none" },
+    };
+  }
+  setRuntimeConfigSnapshot(config);
 }
 
 export const publication: SessionGitHubPublicationPublished = {

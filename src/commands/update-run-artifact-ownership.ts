@@ -18,6 +18,7 @@ export const NOT_PROVABLY_UPDATER_OWNED_REASONS: ReadonlySet<string> = new Set([
   "unmanifested-recovery-original",
   "update-run-record-missing",
   "unreceipted-displaced-database",
+  "orphan-database-snapshot",
 ]);
 
 export type UpdateRunArtifactOwnership = {

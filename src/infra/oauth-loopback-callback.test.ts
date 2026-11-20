@@ -124,6 +124,8 @@ describe("OAuth loopback callback server", () => {
       });
       const { response, body } = await expectResponse(responsePromise, 200);
       expect(body).toContain("Authorization received");
+      // Control UI and chat sign-ins land here too; there may be no terminal to return to.
+      expect(body).not.toContain("terminal");
       expect(Object.fromEntries(response.headers)).toMatchObject({
         "cache-control": "no-store",
         "referrer-policy": "no-referrer",

@@ -228,7 +228,7 @@ async function resolveCapabilityModelCandidatesForTool(params: {
   return uniqueStrings(
     buildCapabilityProviderDefaultRefs({
       providers: [...configuredProviders.values()],
-      preferredProvider: resolveDefaultModelRef(params.cfg).provider,
+      preferredProvider: resolveDefaultModelRef(params.cfg)?.provider,
       normalizeProviderId,
     }),
   );

@@ -11,7 +11,10 @@ import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/type
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
-import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
+import {
+  sessionWorktreeAvailability,
+  type SessionWorktreeObservation,
+} from "../agents/worktrees/session-lifecycle.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
@@ -26,11 +29,7 @@ import { resolveSessionModelOverrideSource } from "../config/sessions/model-over
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  buildProjectedAgentRunIndex,
-  resolveProjectedAgentRunModel,
-  type ProjectedAgentRunIndex,
-} from "../infra/agent-run-registry.js";
+import { buildProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -39,8 +38,6 @@ import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-statu
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
-import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
-import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { channelAvatarRevision } from "./channel-avatar-reference.js";
@@ -57,7 +54,10 @@ import {
   freezeSessionRow,
   freezeSessionRowPatch,
 } from "./session-row-identity.js";
-import { readSessionRowModelFacts } from "./session-row-model-facts.js";
+import {
+  readSessionRowModelFacts,
+  resolveGatewaySessionActiveModel,
+} from "./session-row-model-facts.js";
 import { projectSessionRowProviderReview } from "./session-row-provider-review.js";
 import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
@@ -108,6 +108,7 @@ export function readSessionRowInputs(params: {
   runtimeResolution?: SessionRuntimeResolution;
   preparedModelMetadata?: PluginMetadataSnapshot | null;
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
+  preparedWorktree?: SessionWorktreeObservation | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   preparedTitle?: Pick<
@@ -167,7 +168,7 @@ export function readSessionRowInputs(params: {
           transcriptUsage: params.transcriptUsage,
         })
       : undefined;
-  const { provider, model } = selectedModel;
+  const { provider, model } = selectedModel ?? {};
   // Display aliases do not change the selected route's catalog or runtime policy.
   const activeModel = resolveGatewaySessionActiveModel({
     cfg,
@@ -208,6 +209,10 @@ export function readSessionRowInputs(params: {
 
   return {
     inputs: {
+      worktreeState:
+        entry?.worktree && params.preparedWorktree !== undefined
+          ? sessionWorktreeAvailability(params.preparedWorktree, key)
+          : undefined,
       cfg,
       key,
       entry,
@@ -246,13 +251,11 @@ export function readSessionRowInputs(params: {
         thinkingProjection.agentRuntime,
       ),
       contextWindowProfile,
-      fastModeState: resolveFastModeState({
-        cfg,
-        provider,
-        model,
-        agentId,
-        sessionEntry: entry,
-      }),
+      // Fast mode is a model property; a session without a model has none.
+      fastModeState:
+        provider && model
+          ? resolveFastModeState({ cfg, provider, model, agentId, sessionEntry: entry })
+          : undefined,
       hasAutomation: sessionHasAutomation(key, cfg, agentId) ? true : undefined,
       rowModelIdentity,
       selectedModel,
@@ -308,72 +311,17 @@ export function buildGatewaySessionRow(
   return presentSessionRow(materializeSessionRow(inputs), presentation);
 }
 
-export function resolveGatewaySessionActiveModel(params: {
-  cfg: OpenClawConfig;
-  active?: boolean;
-  activeModel?: { provider: string; model: string } | null;
-  terminalModel?: { modelProvider: string; model: string } | null;
-  agentId: string;
-  storeAgentId?: string;
-  sessionId?: string;
-  sessionKey: string;
-  projectedAgentRuns: ProjectedAgentRunIndex;
-  selectedModel: { provider: string; model: string };
-  entry?: InternalSessionEntry;
-  storePath: string;
-}): { provider: string; model: string } | undefined {
-  const liveModel = resolveProjectedAgentRunModel({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    index: params.projectedAgentRuns,
-  });
-  if (params.active ?? liveModel !== undefined) {
-    return liveModel ?? undefined;
-  }
-  if (!params.entry?.fallbackNotice) {
-    return undefined;
-  }
-  const { selectedModel } = params;
-
-  const fallbackEntry =
-    params.activeModel === undefined
-      ? readSessionFallbackModel({
-          selectedProvider: selectedModel.provider,
-          selectedModel: selectedModel.model,
-          sessionEntry: params.entry,
-          config: params.cfg,
-          terminalModel: params.terminalModel ?? null,
-          sessionScope: {
-            agentId: params.storeAgentId ?? params.agentId,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-          },
-        })
-      : params.activeModel
-        ? { modelProvider: params.activeModel.provider, model: params.activeModel.model }
-        : undefined;
-  const { selected, active } = resolveSelectedAndActiveModel({
-    selectedProvider: selectedModel.provider,
-    selectedModel: selectedModel.model,
-    sessionEntry: fallbackEntry ?? params.entry,
-  });
-  return resolveActiveFallbackState({
-    selectedModelRef: selected.label,
-    activeModelRef: active.label,
-    config: params.cfg,
-    state: params.entry,
-  }).active
-    ? { provider: active.provider, model: active.model }
-    : undefined;
-}
-
 export function refreshSessionRowProfiles(materialized: ReturnType<typeof materializeSessionRow>) {
   return replaceSessionRowFacts(materialized, projectSessionRowProfiles(materialized.source));
 }
 
 export function materializeSessionRow(
   input: ReturnType<typeof readSessionRowInputs>["inputs"],
-  previous?: { publicationIdentity: object; row: Readonly<GatewaySessionRow> },
+  previous?: {
+    publicationIdentity: object;
+    row: Readonly<GatewaySessionRow>;
+    source: { childLinks?: Readonly<ReturnType<typeof projectSessionRowChildLinks>> };
+  },
 ) {
   const { cfg, key, entry } = input;
   const observerDigest =
@@ -422,6 +370,7 @@ export function materializeSessionRow(
       ? { sessionRoot: entry.sessionRoot }
       : {}),
     ...definedSessionRowField("worktree", entry?.worktree),
+    ...definedSessionRowField("worktreeState", input.worktreeState),
     ...definedSessionRowField("deviceFolder", entry?.deviceFolder),
     ...definedSessionRowField("repositoryWorkspaceId", entry?.repositoryWorkspaceId),
     ...(input.repository ? { repository: input.repository } : {}),
@@ -518,9 +467,9 @@ export function materializeSessionRow(
     ...definedSessionRowField("cyberAccessProgram", entry?.cyberAccessProgram),
     ...definedSessionRowField("fastMode", entry?.fastMode),
     ...definedSessionRowField("toolOverrides", entry?.toolOverrides),
-    ...definedSessionRowField("effectiveFastMode", input.fastModeState.mode),
-    ...definedSessionRowField("effectiveFastModeSource", input.fastModeState.source),
-    ...definedSessionRowField("fastAutoOnSeconds", input.fastModeState.fastAutoOnSeconds),
+    ...definedSessionRowField("effectiveFastMode", input.fastModeState?.mode),
+    ...definedSessionRowField("effectiveFastModeSource", input.fastModeState?.source),
+    ...definedSessionRowField("fastAutoOnSeconds", input.fastModeState?.fastAutoOnSeconds),
     ...definedSessionRowField("verboseLevel", entry?.verboseLevel),
     ...definedSessionRowField("traceLevel", entry?.traceLevel),
     ...definedSessionRowField("reasoningLevel", entry?.reasoningLevel),
@@ -553,9 +502,10 @@ export function materializeSessionRow(
     }).mode,
     ...definedSessionRowField("modelProvider", input.rowModelIdentity.provider),
     ...definedSessionRowField("model", input.rowModelIdentity.model),
+    ...definedSessionRowField("modelDisplayName", input.thinkingProjection.catalogEntry?.name),
     ...definedSessionRowField(
       "modelOverrideSource",
-      input.selectedModel.storedOverrideSource === "parent"
+      input.selectedModel?.storedOverrideSource === "parent"
         ? "inherited"
         : resolveSessionModelOverrideSource(entry),
     ),
@@ -570,8 +520,8 @@ export function materializeSessionRow(
       "contextBudgetStatus",
       resolveProjectedSessionContextBudgetStatus({
         entry,
-        provider: input.selectedModel.provider,
-        model: input.selectedModel.model,
+        provider: input.selectedModel?.provider,
+        model: input.selectedModel?.model,
         contextTokens: input.contextTokens,
       }),
     ),
@@ -613,11 +563,11 @@ export function materializeSessionRow(
       freshSessionTotalTokens: input.freshSessionTotalTokens,
       estimatedCostUsd: input.estimatedCostUsd,
       subagentRunInputs: input.subagentRunInputs,
-      lastMessagePreview: input.lastMessagePreview,
-      lastAssistantMessage: input.lastAssistantMessage,
-      childLinks: freezeTrustedJsonSnapshot<
-        Readonly<ReturnType<typeof projectSessionRowChildLinks>>
-      >(projectSessionRowChildLinks(input.childLinks)),
+      // The relation reader returns the previous frozen list when its child facts match.
+      childLinks:
+        input.childLinks === previous?.source.childLinks
+          ? previous?.source.childLinks
+          : freezeTrustedJsonSnapshot(projectSessionRowChildLinks(input.childLinks)),
     }),
   });
 }
@@ -628,12 +578,15 @@ export function replaceSessionRowFacts(
   row?: Partial<GatewaySessionRow>,
   source?: Partial<ReturnType<typeof materializeSessionRow>["source"]>,
 ): ReturnType<typeof materializeSessionRow> {
-  const nextSource = source ? { ...materialized.source, ...source } : materialized.source;
+  const nextRow = row ? freezeSessionRowPatch(materialized.row, row) : materialized.row;
+  if (!source && nextRow === materialized.row) {
+    return materialized;
+  }
   freezeTrustedJsonSnapshot(source?.childLinks);
   return Object.freeze({
     publicationIdentity: materialized.publicationIdentity,
-    row: row ? freezeSessionRowPatch(materialized.row, row) : materialized.row,
-    source: Object.freeze(nextSource),
+    row: nextRow,
+    source: source ? Object.freeze({ ...materialized.source, ...source }) : materialized.source,
   });
 }
 

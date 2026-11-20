@@ -38,6 +38,7 @@ import {
   resetTimeConfig,
   primeMainAgentRun,
   backendGatewayClient,
+  localOwnerCliClient,
   operatorWriteCliClient,
   waitForAgentCommandCall,
   invokeAgent,
@@ -66,10 +67,7 @@ describe("gateway agent handler", () => {
         },
         idempotencyKey: "test-public-provenance-accounting",
       },
-      {
-        reqId: "public-provenance-accounting",
-        client: operatorWriteCliClient(["operator.admin"]),
-      },
+      { reqId: "public-provenance-accounting", client: localOwnerCliClient() },
     );
 
     const callArgs = await waitForAgentCommandCall<{

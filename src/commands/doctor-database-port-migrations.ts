@@ -15,7 +15,10 @@ import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { createPluginDoctorStateMigrationInput } from "../infra/state-migrations.plugin-doctor.js";
 import { preparePluginDoctorContractModules } from "../plugins/doctor-contract-preparation.js";
-import { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
+import {
+  listPluginDoctorStateMigrationEntries,
+  PluginDoctorStateMigrationDeclarationError,
+} from "../plugins/doctor-contract-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { readBackupEngine } from "../snapshot/database-backup.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
@@ -132,16 +135,32 @@ export async function assertDatabasePortPluginMigrationsComplete(params: {
   await withArtifactPreservingStateReads(
     async () => {
       let entries: ReturnType<typeof listPluginDoctorStateMigrationEntries>;
+      const unavailable: string[] = [];
       try {
         await preparePluginDoctorContractModules({
           ...params,
           includeDisabled: true,
           surfaces: ["stateMigrations"],
         });
-        entries = listPluginDoctorStateMigrationEntries({ ...params, includeDisabled: true });
-      } catch {
+        entries = listPluginDoctorStateMigrationEntries({
+          ...params,
+          includeDisabled: true,
+          onUnavailablePlugin: (pluginId, reason) => {
+            unavailable.push(
+              `Could not load the Doctor migration contract for plugin "${pluginId}": ${reason}`,
+            );
+          },
+        });
+      } catch (error) {
+        const detail =
+          error instanceof PluginDoctorStateMigrationDeclarationError ? ` ${error.message}` : "";
         throw new DatabasePortError(
-          "Database port could not inspect registered plugin migrations. Run openclaw doctor --fix first, then retry port.",
+          `Database port could not inspect registered plugin migrations.${detail} Run openclaw doctor --fix first, then retry port.`,
+        );
+      }
+      if (unavailable.length > 0) {
+        throw new DatabasePortError(
+          `Database port could not inspect registered plugin migrations.\n${unavailable.join("\n")}\nFix or remove each named plugin, then retry the port.`,
         );
       }
       const pending: string[] = [];

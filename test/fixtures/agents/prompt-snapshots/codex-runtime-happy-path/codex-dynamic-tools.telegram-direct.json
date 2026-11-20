@@ -115,7 +115,7 @@
           "type": "string"
         },
         "effectId": {
-          "description": "sendWithEffect id/name.",
+          "description": "Numeric Telegram message effect id; private chats only.",
           "type": "string"
         },
         "emoji": {
@@ -138,9 +138,6 @@
         },
         "gatewayUrl": {
           "type": "string"
-        },
-        "gifPlayback": {
-          "type": "boolean"
         },
         "groupId": {
           "type": "string"
@@ -573,12 +570,6 @@
         },
         "target": {
           "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
-          "type": "string"
-        },
-        "targetAuthor": {
-          "type": "string"
-        },
-        "targetAuthorUuid": {
           "type": "string"
         },
         "targets": {
@@ -1720,13 +1711,15 @@
       },
       {
         "deferLoading": true,
-        "description": "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup.",
+        "description": "Read Gateway config/schema. Local profile roles: users.getRole; users.setRole assigns or clears (admin). Owner request/operator schedule: update.run, restart, update.cleanup.",
         "inputSchema": {
           "properties": {
             "action": {
               "enum": [
                 "config.get",
                 "config.schema.lookup",
+                "users.getRole",
+                "users.setRole",
                 "update.run",
                 "restart",
                 "update.cleanup"
@@ -1736,6 +1729,10 @@
             "dryRun": {
               "description": "update.cleanup only: preview without removing recovery copies.",
               "type": "boolean"
+            },
+            "email": {
+              "description": "users.getRole: exact email alias instead of profileId.",
+              "type": "string"
             },
             "gatewayToken": {
               "type": "string"
@@ -1750,6 +1747,22 @@
             "path": {
               "description": "Required for config.schema.lookup; optional for config.get.",
               "type": "string"
+            },
+            "profileId": {
+              "description": "Canonical target profile ID for users.getRole or users.setRole.",
+              "type": "string"
+            },
+            "role": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "users.setRole: configured role name, or explicit null to clear the assignment."
             },
             "timeoutMs": {
               "minimum": 1,
@@ -2201,7 +2214,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Send a message to a permitted session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. Explicit per-agent send destinations can permit messaging without transcript access. A session identifies model context, not an external address. When a new turn starts, its reply reaches you once: inline when available, otherwise as a later inter-session input. Continue with another sessions_send; post to channels with message. Accepted results report target admission as `targetDisposition: \"queued\"` or `\"steered\"`; `delivery.status` is only later reply delivery state, and neither proves target completion. Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. Ordinary peer sends start a separate turn. A send to your own busy child steers its active run instead of queueing a turn for after it ends; a zero-wait send to an eligible run-scoped target may use its active input queue. An idle recipient or a default self-send starts a new turn; timeoutSeconds bounds waiting for the separately admitted turn’s reply. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup always starts a separate turn and preserves its independent reply; it does not resume a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`. Thread chats rejected: target parent channel. Missing configured-agent main created. status \"no_reply\" is terminal, so do not wait for another reply. A timeoutSeconds:0 send that starts a new turn for your existing native child gives this turn a completion to await with sessions_yield, even while queued. watch:true requires status visibility and additionally reports later target-session changes; on a steer it can claim the child's existing pending completion.",
+        "description": "Send a message to a permitted session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. Explicit per-agent send destinations can permit messaging without transcript access. A session identifies model context, not an external address. When a new turn starts, its reply reaches you once: inline when available, otherwise as a later inter-session input. Continue with another sessions_send; post to channels with message. Accepted results report target admission as `targetDisposition: \"queued\"` or `\"steered\"`; `delivery.status` is only later reply delivery state, and neither proves target completion. Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. Ordinary peer sends start a separate turn. As a supervised child, a send to the parent that receives your final result starts no parent turn and gets no reply: it joins the parent's active run or is recorded in its history for the parent's next turn. A send to your own busy child steers its active run instead of queueing a turn for after it ends; a zero-wait send to an eligible run-scoped target may use its active input queue. An idle recipient or a default self-send starts a new turn; timeoutSeconds bounds waiting for the separately admitted turn’s reply. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup always starts a separate turn and preserves its independent reply; it does not resume a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`. Thread chats rejected: target parent channel. Missing configured-agent main created. status \"no_reply\" is terminal, so do not wait for another reply. A timeoutSeconds:0 send that starts a new turn for your existing native child gives this turn a completion to await with sessions_yield, even while queued. watch:true requires status visibility and additionally reports later target-session changes; on a steer it can claim the child's existing pending completion.",
         "inputSchema": {
           "properties": {
             "agentId": {

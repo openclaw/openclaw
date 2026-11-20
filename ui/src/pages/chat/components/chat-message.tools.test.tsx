@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { getByText, isInaccessible, queryByText } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import { createNestedToolActivity } from "../../../../../src/sessions/nested-tool-activity.js";
@@ -203,7 +204,7 @@ describe("grouped chat rendering", () => {
     expect(items.filter((item) => item.kind === "stream")).toHaveLength(1);
     renderActivityGroup(groups, { showReasoning: false, isToolMessageExpanded: () => true });
     await settleToolBridges(harness.view);
-    expect(elementText(".chat-activity-group__label")?.trim()).toBe("Ran commands, used tools");
+    expect(elementText(".chat-activity-group__label")?.trim()).toBe("Ran commands");
     expectCount(".chat-tool-row", 2);
   });
 
@@ -265,9 +266,13 @@ describe("grouped chat rendering", () => {
     });
     await renderHistory([call, abort]);
     expect(elementText(".chat-activity-group__label")).toBe("Interrupted actions");
-    expect(harness.view.textContent).toContain("No result available.");
+    const operation = requireElement(".chat-tool-msg-collapse--manual", HTMLElement);
+    expect(isInaccessible(getByText(operation, "interrupted"))).toBe(false);
+    expect(elementText(".chat-tool-card__outcome")).toBe("No result available.");
     await renderHistory([{ ...call, __openclaw: { id: "next-call", runId: "next-run" } }, abort]);
     expect(elementText(".chat-activity-group__label")).toBe("Commands");
+    expect(queryByText(harness.view, "interrupted")).toBeNull();
+    expect(elementText(".chat-tool-card__outcome")).toBe("No result available.");
     const completed = await renderHistory([
       call,
       abort,
@@ -281,6 +286,7 @@ describe("grouped chat rendering", () => {
     expect(elementText(".chat-tool-row__cmd")).toBe("check-workspace");
     expect(harness.view.textContent).not.toContain("outcome unknown");
     expect(harness.view.textContent).toContain("Workspace checked.");
+    expect(queryByText(harness.view, "interrupted")).toBeNull();
     expectCount(".chat-tool-row", 1);
     expectAbsent(".chat-tool-row--running");
   });
@@ -432,52 +438,54 @@ describe("grouped chat rendering", () => {
     },
   );
 
-  it("groups adjacent successful image inspections without losing their original details", async () => {
+  it("keeps an image inspection waiting for approval outside command activity", async () => {
+    const messages = [
+      createAssistantMessage([createToolCall("command", "exec", { command: "ls preview.png" })]),
+      createToolResultMessage("command", "exec", "preview.png", { details: { exitCode: 0 } }),
+      createAssistantMessage([createToolCall("inspect", "view_image", { path: "preview.png" })]),
+      createToolResultMessage("inspect", "view_image", "Inspection awaits approval.", {
+        isError: true,
+        details: { status: "approval-pending", approvalId: "inspect-approval" },
+      }),
+    ];
+    const history = attachHistoryActivity(prepareChatHistoryFixture(messages));
+    renderActivityGroup(groupsOf(buildItems({ messages: history.messages })), {
+      showReasoning: false,
+    });
+    await settleToolBridges(harness.view);
+    const row = harness.view.querySelector(".chat-tool-msg-summary");
+    expect(row?.querySelector(".chat-tool-row__title")?.textContent).toBe("View image");
+    expect(row?.querySelector('[role="status"]')?.textContent).toBe("Blocked");
+  });
+
+  it("opens the matching result from a group of image inspections", async () => {
     let timestamp = 0;
-    const inspect = (id: string, count = 1, runId = "images", isError = false) => [
+    const inspect = (id: string) => [
       createAssistantMessage([createToolCall(id, "view_image", { path: `/tmp/${id}.png` })], {
         timestamp: ++timestamp,
-        runId,
       }),
       createToolResultMessage(
         id,
         "view_image",
         [
-          { type: "text", text: isError ? "Image unavailable" : "Inspection completed" },
-          ...Array.from({ length: isError ? 0 : count }, (_, index) => ({
-            type: "image",
-            data: "cG5n",
-            mimeType: "image/png",
-            alt: `${id}-${index}`,
-          })),
+          { type: "text", text: "Inspection completed" },
+          { type: "image", data: "cG5n", mimeType: "image/png", alt: id },
         ],
-        { timestamp: ++timestamp, runId, isError },
+        { timestamp: ++timestamp, isError: false },
       ),
     ];
     const onOpenSidebar = vi.fn();
-    const onToggle = vi.fn();
-    const show = async (messages: TestMessage[], expanded = false) => {
-      renderActivityGroup(groupsOf(buildItems({ messages })), {
+    renderActivityGroup(
+      groupsOf(buildItems({ messages: [...inspect("first"), ...inspect("second")] })),
+      {
         showReasoning: false,
-        isToolMessageExpanded: () => expanded,
-        onToggleToolMessageExpanded: onToggle,
+        isToolMessageExpanded: () => true,
         onOpenSidebar,
-      });
-      await settleToolBridges(harness.view);
-    };
-    const first = inspect("first");
-    const second = inspect("second", 2);
-    await show([...first, ...second]);
-    expect(harness.view.textContent).toContain("Viewed 3 images");
-    expectCount(".chat-message-image", 0);
-    requireElement(".chat-tool-msg-summary", HTMLButtonElement).click();
-    expect(onToggle).toHaveBeenCalledOnce();
-    const disclosureId = onToggle.mock.calls[0]![0];
-    await show([...first, ...second], true);
-    expectCount(".chat-message-image", 3);
-    expect(harness.view.textContent).not.toContain("Inspection completed");
+      },
+    );
+    await settleToolBridges(harness.view);
     const detailButtons = harness.view.querySelectorAll<HTMLButtonElement>(
-      '[aria-label="Open tool details in side panel"]',
+      '.chat-activity-group__body [aria-label="Open tool details in side panel"]',
     );
     expect(detailButtons).toHaveLength(2);
     detailButtons[1]!.click();
@@ -485,47 +493,6 @@ describe("grouped chat rendering", () => {
       kind: "tool-output",
       card: { args: { path: "/tmp/second.png" } },
     });
-    requireElement(".chat-tool-msg-summary", HTMLButtonElement).click();
-    expect(onToggle.mock.calls.at(-1)).toEqual([disclosureId, true]);
-
-    // The first call remains the disclosure owner before a second result arrives.
-    await show(first);
-    requireElement(".chat-tool-msg-summary", HTMLButtonElement).click();
-    expect(onToggle.mock.calls.at(-1)).toEqual([disclosureId, false]);
-
-    const command = [
-      createAssistantMessage([createToolCall("command", "exec", { command: "true" })], {
-        timestamp: ++timestamp,
-        runId: "images",
-      }),
-      createToolResultMessage("command", "exec", "done", {
-        timestamp: ++timestamp,
-        runId: "images",
-        details: { exitCode: 0 },
-      }),
-    ];
-    for (const barrier of [
-      command,
-      [
-        createAssistantMessage("Checking another view.", {
-          timestamp: ++timestamp,
-          runId: "images",
-        }),
-      ],
-      inspect("failed", 0, "images", true),
-      [
-        createAssistantMessage(
-          [createToolCall("pending", "view_image", { path: "/tmp/pending.png" })],
-          { timestamp: ++timestamp, runId: "images" },
-        ),
-      ],
-    ]) {
-      await show([...first, ...barrier, ...inspect("after")]);
-      expect(harness.view.textContent).not.toMatch(/Viewed \d+ images/);
-      expect(harness.view.textContent!.match(/Viewed image/g)).toHaveLength(2);
-    }
-    await show([...first, ...inspect("different-run", 1, "another-run")]);
-    expect(harness.view.textContent).not.toContain("Viewed 2 images");
   });
 
   it.each([false, true])("names subagent lifecycle rows (tool search: %s)", async (dispatched) => {

@@ -1,10 +1,8 @@
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import {
-  GatewayDispatchUnavailableError,
-  GatewayOperatorRecoveryAuthorizationError,
-} from "../infra/restart-recovery-errors.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import type { GatewayIngressPrincipalRecovery } from "../plugins/gateway-ingress.types.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import { prepareGatewayIngressPrincipalAdmission } from "./remote-ingress-principal-admission.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
@@ -14,7 +12,7 @@ type Owner = {
   assertCurrent(): void;
 };
 // Routing only: the plugin's canonical grant owner makes every authorization decision.
-const owners = new WeakMap<GatewayRequestContext, Map<string, Owner>>();
+const owners = new WeakMap<object, Map<string, Owner>>();
 
 export function registerIngressPrincipalRecovery(
   context: GatewayRequestContext,
@@ -65,7 +63,7 @@ export async function captureIngressPrincipalRecovery(
 }
 
 export async function restoreIngressPrincipalRecovery(
-  context: GatewayRequestContext,
+  context: object,
   source: { pluginId: string; audienceId: string; recoveryId?: string },
   profileId: string,
   scopes: readonly string[],
@@ -85,15 +83,13 @@ export async function restoreIngressPrincipalRecovery(
     );
   });
   if (!grant) {
-    throw new GatewayOperatorRecoveryAuthorizationError(
-      "The original ingress grant is no longer available.",
-    );
+    throw new OperatorRefusalError("sign-in-ended");
   }
   const admission = await prepareGatewayIngressPrincipalAdmission(
     grant.principal,
     AbortSignal.any([owner.signal, grant.signal]),
   ).catch((cause: unknown) => {
-    throw new GatewayOperatorRecoveryAuthorizationError(undefined, { cause });
+    throw new OperatorRefusalError("sign-in-ended", { cause });
   });
   const assertCurrent = () => {
     admission?.assertCurrent();
@@ -109,22 +105,16 @@ export async function restoreIngressPrincipalRecovery(
     if (
       grant.audienceId !== source.audienceId ||
       (source.recoveryId !== undefined && grant.recoveryId !== source.recoveryId) ||
-      currentProfile !== profileId ||
-      !roleScopesAllow({
-        role: "operator",
-        requestedScopes: scopes,
-        allowedScopes: grant.operatorScopeCeiling,
-      })
+      currentProfile !== profileId
     ) {
-      throw new GatewayOperatorRecoveryAuthorizationError(
-        "The original ingress grant identity or scope ceiling changed.",
-      );
+      throw new OperatorRefusalError("sign-in-ended");
     }
   };
   try {
     assertCurrent();
     return {
       assertCurrent,
+      scopes: intersectOperatorScopes(scopes, grant.operatorScopeCeiling),
       signal: AbortSignal.any([
         owner.signal,
         grant.signal,

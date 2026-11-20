@@ -198,9 +198,10 @@ describe("subagent maintenance protection", () => {
       ["in progress", payload({ delivery: { status: "in_progress" } }), true],
       ["no completion expected", payload({ expectsCompletionMessage: false }), false],
       ["pending without expectation", payload({ expectsCompletionMessage: undefined }), true],
+      // Legacy suspended rows stay protected until the sweeper settles them into history.
       ["suspended", suspended(0), true],
-      ["suspended without timestamp", suspended(), false],
-      ["suspended string timestamp", suspended("1"), false],
+      ["suspended without timestamp", suspended(), true],
+      ["suspended string timestamp", suspended("1"), true],
       [
         "kill reconciliation after cleanup",
         afterCleanup({ killReconciliation: { killedAt: 0 } }),

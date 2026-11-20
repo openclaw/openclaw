@@ -4,18 +4,22 @@ import {
   missingScopeErrorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import {
   resolveSessionMethodScope,
   type SessionOperatorScope,
 } from "../../shared/session-method-scopes-base.js";
 import { holdsCronManagementGrant } from "../cron-creator-authority-grant.js";
+import { authorizeParticipationExecApprovalMethod } from "../exec-approval-participation.js";
+import { readParticipantPublicationAuthority } from "../github-publication-participation.js";
 import { isInProcessSessionRun } from "../in-process-session-run.js";
 import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
   resolveAgentRuntimeCronScope,
+  requiresSessionParticipation,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "../method-scopes.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
@@ -24,18 +28,25 @@ import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
 } from "../operator-role-policy.js";
-import { PUBLICATION_READ_SCOPE, APPROVALS_SCOPE, isOperatorScope } from "../operator-scopes.js";
-import { isPublicationReaderCurrent, isPublicationReaderMethod } from "../publication-reader.js";
+import { APPROVALS_SCOPE, isOperatorScope } from "../operator-scopes.js";
+import {
+  isPublicationTransportCurrent,
+  isPublicationTransportEnabled,
+  isPublicationTransportMethod,
+  isPublicationTransportScope,
+} from "../publication-reader.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { isDirectCronOwnerClient, isHumanCronMutation } from "./cron-human-owner.js";
+import { resolveAuthenticatedPersonalGatewayProfileId } from "./gateway-personal-caller.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";
 
 /** Resolve the grant's dispatch ceiling without rechecking source or role liveness. */
-export function authorizeGatewayMethodScopes(
+function authorizeGatewayMethodScopes(
   method: string,
   scopes: readonly string[],
   params: unknown,
   methodRegistry: GatewayMethodRegistryView,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ) {
   const registeredScope = methodRegistry.getScope(method);
   let scopeAuth = isOperatorScope(registeredScope)
@@ -50,9 +61,11 @@ export function authorizeGatewayMethodScopes(
     : authorizeOperatorScopesForMethod(method, scopes, params);
   if (!scopeAuth.allowed && isInProcessSessionRun(method, params)) {
     scopeAuth = authorizeOperatorScopesForRequiredScope(
-      scopeAuth.missingScope,
+      operatorAuthority?.participationCeiling ? "operator.read" : scopeAuth.missingScope,
       scopes,
-      "operator.sessions.write",
+      operatorAuthority?.participationCeiling
+        ? "operator.sessions.read"
+        : "operator.sessions.write",
       method,
     );
   }
@@ -65,27 +78,30 @@ export function authorizeGatewayMethod(
   params: unknown,
   methodRegistry: GatewayMethodRegistryView,
   context: GatewayRequestContext,
-): { error: ErrorShape | null; sessionScope?: SessionOperatorScope } {
+): { error: ErrorShape | null; sessionScope?: SessionOperatorScope; participationRequired?: true } {
   if (
-    client?.internal?.publicationReader ||
-    client?.connect.scopes?.includes(PUBLICATION_READ_SCOPE)
+    client?.internal?.publicationTransport ||
+    client?.connect.scopes?.some(isPublicationTransportScope)
   ) {
-    const admission = client.internal?.publicationReader;
+    const admission = client.internal?.publicationTransport;
     const allowed =
-      isPublicationReaderCurrent(admission) &&
+      isPublicationTransportCurrent(admission) &&
+      isPublicationTransportEnabled(admission.scope) &&
       !client.invalidated &&
       client.isDeviceTokenAuth === true &&
       client.connect.role === "operator" &&
       client.connect.scopes?.length === 1 &&
-      client.connect.scopes[0] === PUBLICATION_READ_SCOPE &&
+      client.connect.scopes[0] === admission.scope &&
       client.connect.device?.id === admission.deviceId &&
       client.internal?.operatorDeviceTokenIdentity?.key === admission.key &&
       !client.internal?.syntheticClient &&
       !client.authenticatedUserProfile &&
       !client.internal?.operatorRoleActor &&
-      isPublicationReaderMethod(methodRegistry, method);
+      isPublicationTransportMethod(methodRegistry, method, admission.scope);
     return {
-      error: allowed ? null : errorShape(ErrorCodes.FORBIDDEN, "publication reader method denied"),
+      error: allowed
+        ? null
+        : errorShape(ErrorCodes.FORBIDDEN, "publication transport method denied"),
     };
   }
   // Pre-connect and health requests are allowed through; role/scope checks require the
@@ -106,7 +122,12 @@ export function authorizeGatewayMethod(
     return { error: null };
   }
   if (client.invalidated) {
-    return { error: errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed") };
+    return {
+      error: errorShape(
+        ErrorCodes.FORBIDDEN,
+        "This connection lost access. Reconnect and try again.",
+      ),
+    };
   }
   if (resolveGatewayOperatorRoleActor(client)?.kind === "operator") {
     const roleError = authorizeCurrentOperatorRoleScopes(
@@ -122,6 +143,22 @@ export function authorizeGatewayMethod(
     // the handlers bind both calls to the connection's exact device identity.
     return { error: null };
   }
+  const participationApproval = authorizeParticipationExecApprovalMethod({
+    method,
+    params,
+    client,
+    manager: context.execApprovalManager,
+  });
+  if (participationApproval !== undefined) {
+    return {
+      error: participationApproval
+        ? null
+        : errorShape(
+            ErrorCodes.FORBIDDEN,
+            "Only the session creator or an administrator may review this participation approval.",
+          ),
+    };
+  }
   if (scopes.includes(ADMIN_SCOPE)) {
     return { error: null };
   }
@@ -129,8 +166,24 @@ export function authorizeGatewayMethod(
   if (registeredScope === APPROVALS_SCOPE && isHostPluginApprovalCall(method, client)) {
     return { error: null };
   }
-  const scopeAuth = authorizeGatewayMethodScopes(method, scopes, params, methodRegistry);
+  const scopeAuth = authorizeGatewayMethodScopes(
+    method,
+    scopes,
+    params,
+    methodRegistry,
+    client.internal?.operatorRunAuthority,
+  );
   if (!scopeAuth.allowed) {
+    if (
+      requiresSessionParticipation(method, scopes, params) &&
+      (readParticipantPublicationAuthority(method, params) !== undefined ||
+        (!client.internal?.syntheticClient &&
+          resolveAuthenticatedPersonalGatewayProfileId(client)) ||
+        (method === "chat.send" &&
+          client.internal?.operatorRunAuthority?.participationCeiling !== undefined))
+    ) {
+      return { error: null, participationRequired: true };
+    }
     // Handlers recheck the stored human owner at the mutation commit boundary.
     if (isHumanCronMutation(method) && isDirectCronOwnerClient(client)) {
       return { error: null };

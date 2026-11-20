@@ -65,7 +65,6 @@ async function prepareCreation(request: GatewayRequestHandlerOptions) {
   const assertCurrent = () => {
     try {
       authority.assertCurrent();
-      operator?.assertCurrent();
       request.sessionMutationAuthorization?.assertCurrent();
     } catch {
       // The added preflight must keep creation's public authorization envelope,
@@ -198,7 +197,7 @@ async function replayCreation(
       runStarted: false,
       creationReplayed: true,
       publicRead: Boolean(resolveSessionPublicShare(entry)),
-      resolved: { modelProvider: model.provider, model: model.model },
+      resolved: { modelProvider: model?.provider, model: model?.model },
     },
     meta: { cached: true },
   };

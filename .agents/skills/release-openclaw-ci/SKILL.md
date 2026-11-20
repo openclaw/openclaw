@@ -7,6 +7,23 @@ description: "Run, watch, debug, and summarize OpenClaw full release CI, release
 
 Use with `$release-openclaw-maintainer` and `$openclaw-testing` for candidate validation, install/update proof, live-provider checks, and CI recovery.
 
+## Fast-track approval boundary
+
+The sole approval gate is the normal GitHub Actions `npm-release` environment,
+reviewed by an eligible npm release manager. No Firebase service, chat/group
+approval, approval URL or manually supplied approver/time is required. Agents
+must not approve the environment using a human's token. Preparation and scoped
+dispatch do not require a separate chat decision.
+
+Pass exception evidence with `--fast-track-request <packet.json>` to
+`pnpm release:publish-preflight`, forwarded as `fast_track_request`. Preserve
+original FRV results and sealed bytes. Bounded policy: 20 commits AND 15,000
+added/deleted lines, excluding enumerated package manifests/lockfiles from LOC
+only. Partial-FRV retains a complete outstanding-check snapshot without a delta
+ceiling. Neither establishes a fully validated baseline. Post-expiry recovery
+uses the original packet-bound GitHub publication receipt and verified job start
+time. See the [release skill](../release-openclaw-maintainer/SKILL.md#fast-track-publication-uses-github-approval).
+
 ## Guardrails
 
 ### Scope and authority
@@ -23,12 +40,12 @@ Use with `$release-openclaw-maintainer` and `$openclaw-testing` for candidate va
 ### Frozen identities and qualification
 
 - Record **C** (candidate), **Q** (qualification), **P** (admission/aggregate/verifier/publisher), rerun group, profile, effective soak, and context/transport refs. Code SHA and Release SHA are lifecycle roles, not extra workflow identities.
-- Default **Q=C**. Freeze C/Q; select trusted P on main or a protected publication tag. C need not be P's ancestor. Independent Q must be reviewed and a verified main ancestor.
-- Q owns the complete workflow/reusable-workflow, action, script, planner, contract, harness, and coverage closure. P owns aggregate decisions and checked-in waivers. Future-main checks/scenarios are not implicit requirements.
+- Default **Q=C**. Freeze C/Q; select trusted P on main or a protected publication tag. C need not be P's ancestor. Executable Q must be reviewed with verified tooling lineage; authorized grant-only descendants follow the Q ledger procedure.
+- Q owns the complete workflow/reusable-workflow, action, script, planner, contract, harness, and coverage closure. Q also owns the pinned grant ledger; P owns aggregate evaluation, not grant data. Future-main checks/scenarios are not implicit requirements.
 - Missing contracts need a deliberate Q repair or candidate backport; never substitute moving main. Q-only repair may preserve C, but needs new Q, request/admission, and a successful parent. Never edit an old request or relabel failed FRV. P-only repair can preserve C/Q and valid original evidence.
 - Candidate tags: absent is allowed; existing lightweight/annotated tags must resolve to exact C. Conflicts or failed remote lookup stop validation; never move a tag to recover.
 - Protected lightweight `release-publish/<12sha>-<provenance-run>` tags identify P, not Q. Suffix = tag-creation provenance, not current parent. Publication/checklist `--workflow-sha` selects **P**; FRV `--workflow-sha` selects **Q**.
-- FRV must succeed under pinned P's [waiver policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers); every other required lane must pass. [Stable publication](#publication-requirements) needs stable/full evidence, mandatory soak, and blocking performance. Beta proof cannot qualify stable; only checked-in performance exceptions apply.
+- Unless an exact human-approved fast-track packet is supplied, FRV must succeed with P evaluating pinned Q’s [waiver policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers); every other required lane must pass. [Stable publication](#publication-requirements) needs stable/full evidence, mandatory soak, and blocking performance. Beta proof cannot qualify stable; only checked-in performance exceptions apply.
 - All-group qualification covers all nine Linux/Windows/macOS Gateway install/upgrade combinations. Preserve first failures, identities, and complete evidence.
 - Regular releases may use one Code SHA = Release SHA and one successful fresh full parent for both roles and exact publication bytes. Later notes-only reuse requires the complete delta from Code SHA to change the selected `CHANGELOG/YYYY.M.PATCH.md`, optionally `CHANGELOG.md` and its matching `CHANGELOG/records/YYYY.M.PATCH.md`; no other paths, renames, or deletions. Changed bytes still need qualification.
 - Extended-stable validates one exact branch tip, not regular Code-SHA/Release-SHA reuse.
@@ -53,9 +70,9 @@ Use with `$release-openclaw-maintainer` and `$openclaw-testing` for candidate va
 
 - FRV separates child dispatch, Release Decision, and Diagnostic Drain. `fail_fast=false` makes **zero** child-cancellation calls; Drain follows selected children to terminal unless cancelled itself or denied GitHub API access. `fail_fast=true` may cancel only the exact active child owning a blocker.
 - Same-parent continuation requires the root's original logged `fail_fast=false`; the controller checks before mutation.
-- A parent that sealed its own candidate artifacts cannot continue: reruns make prior-attempt artifacts unavailable. Keep C/Q frozen, supersede it, and start fresh all-group FRV.
+- A parent that sealed its own candidate artifacts cannot use same-parent continuation: reruns make prior-attempt artifacts unavailable. Before starting fresh all-group FRV, assess [receipt-backed aggregate recovery](#receipt-backed-aggregate-recovery) with frozen C/Q and the original receipts.
 - One immutable execution-plan artifact seals original parent attempt, exact child tuples/titles, coverage, gates, and reuse identity; identical bytes are cached by exact run ID. Decision, Drain, manifests, evidence validation, and final verification consume the current attempt's artifact.
-- Collector retry: restore/validate cached plan, re-upload, adopt the same children. Missing plan is orchestration failure—not permission to reconstruct or redispatch.
+- Collector retry: restore/validate cached plan, re-upload, adopt the same children. Missing plan is orchestration failure—not permission to reconstruct or redispatch. If same-parent recovery is unavailable, use the [receipt-backed recovery decision](#receipt-backed-aggregate-recovery), not another blind parent retry.
 - Before `passed`, Decision rechecks reused evidence: sealed target/evidence SHAs, policy, changed paths, selected/root runs, source manifest, trusted tooling identity, and exact children. Sealing alone is not trust.
 - Parent retry selects newest Decision and Drain independently; both must bind the same immutable plan even if source attempts differ.
 - Child retry stays in-plan only with exact run ID, workflow path/ref/Q, dispatch title/event, target, candidate, and validation inputs. Newer attempts replace matching jobs; absent jobs carry forward. Duplicate identities, missing/regressed attempts, or changed tuples fail closed.
@@ -72,15 +89,39 @@ Use with `$release-openclaw-maintainer` and `$openclaw-testing` for candidate va
 - Reused Testboxes check recorded source after first successful run. Source-only edits can reuse; base/dependency/wrapper/workflow drift needs a fresh lease. Never use `OPENCLAW_TESTBOX_ALLOW_STALE=1` for release proof.
 - Supported committed-candidate capsule: from C's checkout, run `node scripts/crabbox-wrapper.mjs run --blacksmith-ref main -- <command>`. Capsule preserves C/dependencies; main supplies admission limits. If wrapper contract is absent, use exact-target release validation with separate Validation/Tooling SHAs. Never dispatch candidate Testbox refs or borrow another checkout's wrapper.
 
+## Receipt-backed aggregate recovery
+
+**Check this path before replacing a drained FRV for a sealing/collector failure.** A failed parent, missing execution-plan cache/artifact, or unavailable same-parent continuation does not by itself require rerunning tests. After a reviewed tooling-only repair, `pnpm frv recover` can authenticate the original submission/admission and retained producer/child receipts under current trusted P, without changing C/Q or rebuilding publication artifacts.
+
+`continue --failed` retries eligible failed work and reseals the same parent using its original plan. **`recover` creates a separate receipt-backed aggregate**; it does not turn the original failed parent green. Use the [canonical recovery contract](../../../docs/reference/full-release-validation/evidence.md#receipt-backed-aggregate-recovery), including for originally admitted beta, stable, full, and extended-stable selections.
+
+1. Confirm the original parent and selected work are terminal; classify failures and preserve the original admission, attempts, receipts, artifact identities, and Q grants. Recovery cannot replace unwaived required coverage, grant its own waivers, change Q, or repair invalid package bytes.
+2. Select the exact current trusted-main P containing the reviewed recovery repair. Let the helper discover and authenticate the original evidence; never hand-reconstruct a plan or recovery request.
+3. Dispatch once with a new private request file:
+
+   ```bash
+   pnpm frv recover --run <original-parent-run-id> \
+     --workflow-sha <exact-trusted-main-P> --request-file <private-request-path> --json
+   ```
+
+4. Retain that file. For an attempted, interrupted, or unconfirmed request, reconcile **only that request**, never submit another:
+
+   ```bash
+   pnpm frv recover --reconcile-request <private-request-path> --json
+   ```
+
+5. Require authenticated, complete recovery and the normal final verification/publication preflight. A dispatched/running recovery is not qualification or publication. Missing evidence, changed attempts, or lost authority fail closed; diagnose that refusal before choosing fresh qualification. Record original and recovery run IDs separately and retain raw waived failures.
+
 ## Repair release tooling without changing the product (C ≠ Q)
 
 Use [tooling recovery](../../../docs/reference/full-release-validation/dispatch.md#recover-qualification-tooling-without-changing-the-candidate) for workflow, runner, harness, planner, receipt, or qualification-contract defects (November 2026 plan-cache incident), not shipped-byte defects.
 
-| Defect owner                      | Change                                                                         | Preserve                                                                               |
-| --------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| Product                           | C; qualify new source/package/version                                          | No Q workaround for a real product failure                                             |
-| Qualification                     | Review/land repair on main; pin exact main-ancestor Q and its complete closure | Frozen C                                                                               |
-| Admission/verifier/publisher only | P                                                                              | C/Q and valid evidence; explicitly select new Q if admission/workflow support needs it |
+| Defect owner                      | Change                                                                      | Preserve                                                                               |
+| --------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Product                           | C; qualify new source/package/version                                       | No Q workaround for a real product failure                                             |
+| Qualification                     | Review/land executable repair on main; pin exact Q and its complete closure | Frozen C                                                                               |
+| Waiver grants only                | Commit authorized ledger data directly to Q; new Q request/admission        | C, P, and eligible raw receipts, reevaluated under new Q grants                        |
+| Admission/verifier/publisher only | P                                                                           | C/Q and valid evidence; explicitly select new Q if admission/workflow support needs it |
 
 1. Record diagnosis, old C/Q/P, request, run/attempt, and artifacts.
 2. Review new Q/P. Preserve C, context, profile, coverage, soak, platforms, publication scope, and frozen baseline selections.
@@ -102,7 +143,7 @@ pnpm ci:full-release -- \
 5. Let the helper create Q transport and obtain immutable P admission. Never hand-construct either or select moving main.
 6. Reuse the exact successful parent through `pnpm release:candidate -- --full-release-validation-run-id <run> --skip-dispatch`, retaining original tag, P, route, scope, and other options. Checklist `--workflow-sha` means **P**; its fresh dispatch defaults Q=C. Avoid a second Q=C qualification.
 7. Reconciliation preserves original Q. Changing Q needs a new request, never an edited record.
-8. Reuse is neither automatic nor automatically invalid: preserve producer Q/run/attempt and authenticated receipt; require identical workload closure, exact C/inputs/candidate bindings, current artifacts, and policy acceptance. Shared-script changes invalidate all roles; non-normal-CI roles compare full workflow/root trees. Rerun invalid/failed work and reverify retained package/image payloads; never relabel a failed parent green.
+8. Reuse is neither automatic nor automatically invalid: preserve producer Q/run/attempt and authenticated receipt; require authenticated producer tooling, exact C/inputs/candidate bindings, current artifacts, and acceptance under current Q grants. Tooling changes alone do not invalidate execution; deliberately opt out of reuse when the new harness must run. Rerun invalid or unwaived failed work and reverify retained package/image payloads; never relabel a failed parent green.
 9. Require successful final verification before publication. Supplemental Telegram: retained admitted Q ref/harness, package C. Parallels: isolated Q checkout/dependencies, exact C tarballs. Never use moving main or P's harness.
 10. Record replacement tuple/evidence in handoff. This procedure grants no merge, dispatch, or publication authority.
 
@@ -216,7 +257,7 @@ An `all` run without soak for an actual beta package on its matching canonical r
   pnpm frv verify --run <successful-parent-run-id>
   ```
 
-- Plans predating attempt-aware evidence cannot continue: settle the owned tree, preserve old receipts, and start fresh all-group FRV. Never reconstruct old state. Attempt-aware plans retain the parent and targeted recovery rules above.
+- Plans predating attempt-aware evidence cannot use same-parent continuation: settle the owned tree and preserve old receipts. Assess [receipt-backed aggregate recovery](#receipt-backed-aggregate-recovery) against its original-admission/receipt requirements before choosing fresh all-group FRV; never reconstruct old state. Attempt-aware plans retain the parent and targeted recovery rules above.
 - Controller retry handles: `ci`, `plugin-prerelease`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`, `npm-telegram`, `performance`. Removed: `release-checks`. `qa` is a direct-child manual aggregate, not a controller retry API.
 - Filters fail closed unless they belong to the selected group. All-group also accepts `cross_os_suite_filter`; e.g. `-f cross_os_suite_filter=ubuntu,macos` excludes Windows. `npm-stable-v1`/`npm-beta-v1` still qualify with explicitly filtered OS omissions if all Linux suites remain selected and other policy requirements hold. Never turn an empty derived filter into an unfiltered broad run.
 - New all-group parents require changed shared orchestration, evidence invalid for the selected tuple, or explicit operator request. Record the invalidating event.
@@ -224,12 +265,13 @@ An `all` run without soak for an actual beta package on its matching canonical r
 
 ## Preflight
 
-Run in approved isolation, outside trusted admission/dispatch tooling:
+Run checks that execute candidate code in approved isolation, outside trusted admission/dispatch tooling.
 
 **Before dispatch**
 
-- Run `pnpm check:test-mock-exports --base <frozen-sha>` in exact candidate checkout with frozen dependencies.
-- Failure blocks dispatch; rerun after any candidate change. FRV repeats before child fanout. Keep candidate execution outside trusted admission.
+- Fresh validation through `pnpm ci:full-release` scans committed mock exports with trusted local tooling. Failure blocks dispatch for that candidate SHA. The helper does not run candidate code.
+- When dispatching directly without the helper, run `pnpm check:test-mock-exports --base <frozen-sha>` in an approved isolated exact-candidate checkout with frozen dependencies. FRV repeats the guard before child fanout.
+- `--skip-local-mock-preflight` logs the candidate SHA and defers only the local check to the hosted workflow. Build-only and retained requests are unchanged.
 
 **Before full matrix dispatch**
 
@@ -284,19 +326,12 @@ With `reuse_evidence=true`:
 
 - Within **two minutes**, scan at most **100** recent runs, probe at most **40** target receipt inventories, and fully validate at most **five** matching receipts per role. Nonmatching inventories do not spend full-validation budget.
 - Empty-string inputs equal absent inputs (GitHub omits them from `github.event.inputs`); nonempty defaults and candidate descriptor bytes match exactly.
-- Successful children, or failed children accepted by current P policy, may come from failed, cancelled, or active parents at the same Q, or across Q only with authenticated Git-tree proof of identical workload closure. Independent Q requires verified main ancestry; missing/unsupported/changed closure fails closed.
-
-| Closure     | Exact contents                                                                                                                                                                                                                                                        |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| All roles   | Owning/reusable workflows, local actions, complete scripts tree, root config/dependency files. Shared-script changes invalidate every child, regardless of control-only intent.                                                                                       |
-| Normal CI   | Also complete `config`, `packages`, `src`, `test` trees for Q-owned harness dependencies; even unrelated changes there invalidate reuse. Other product directories come from C and are excluded. Unrelated parent-workflow changes alone do not invalidate normal CI. |
-| Other roles | Conservatively all workflows and full root tree.                                                                                                                                                                                                                      |
-
+- Raw successful children, or failed children accepted by current Q grants, may come from failed, cancelled, or active parents at the same Q or across Q. Independent Q requires authenticated tooling lineage; the original producer Q is not relabeled.
 - Logs identify reuse, evaluated rejections, skipped runs, and fresh dispatches. Current-parent adoption witness/immutable plan bind each selection.
-- Admitted P evaluates retained failures using the current candidate version; a matching waiver avoids redispatch after the required initial run. Frozen Q still supplies dispatch-input defaults.
-- Collectors/final verification recheck live attempt/conclusion, closure, main ancestry, inputs, artifact identity/digest/expiry, and successful trusted seal/upload. A newer attempt invalidates reuse; never rerun an adopted child to repair collection.
+- Admitted P evaluates retained evidence using the candidate and pinned Q grants. A whole-child waiver does not require any run. Frozen Q still supplies dispatch inputs.
+- Collectors/final verification recheck live attempt/conclusion, tooling lineage, inputs, artifact identity/digest/expiry, and successful trusted seal/upload. A newer attempt invalidates reuse; never rerun an adopted child to repair collection.
 - Current-parent source/publication admission, successful-parent changelog reuse, and artifact producers' sealed receipts are unchanged.
-- Cross-Q reuse retains original producer Q, exact C/role/effective inputs/defaults/candidate descriptor/receipt/artifact/live attempt. Green jobs or parent-only fixes do not establish eligibility; changed closure needs fresh children. Whole-parent authenticated reuse has a separate exact-Q contract with independently authenticated P. Never relabel failed FRV; tooling recovery requires a fresh successful parent.
+- Cross-Q reuse retains original producer Q, exact C/role/effective inputs/defaults/candidate descriptor/receipt/artifact/live attempt. Green jobs alone do not establish eligibility. Set `reuse_evidence=false` when fresh execution under the new Q is required. Whole-parent authenticated reuse has a separate exact-Q contract with independently authenticated P. Never relabel failed FRV; eligible P-only repairs may use a separate [receipt-backed aggregate](#receipt-backed-aggregate-recovery), otherwise qualify through a new successful parent.
 
 ### Optional beta performance
 
@@ -317,7 +352,7 @@ gh workflow run openclaw-performance.yml \
 ```
 
 - No separate mandatory prepublish wait for this beta signal. Compare available Kova, gateway-startup, and CLI-startup metrics with earlier release evidence/clawgrit before publish/closeout; record regressions and investigate product impact.
-- Stable/full needs blocking performance, subject only to checked-in policy's exact Kova grants. Retain failed reports; failed-job grants do not exempt not-run jobs.
+- Stable/full needs blocking performance, subject only to checked-in policy's exact Kova grants. Retain failed reports; record waived work separately from passing tests.
 - `npm-beta-v1` defers performance. Every selected child still needs terminal evidence and proof of artifact-only publication.
 
 ### Admit and dispatch the exact tuple
@@ -338,7 +373,7 @@ pnpm ci:full-release \
   -f publication_selection_json="$PUBLICATION_SELECTION"
 ```
 
-- Q defaults to C; candidate-route `--workflow-sha <Q>` selects an explicit reviewed main ancestor. C owns source, package bytes, version, baselines; Q owns complete qualification closure. P may use an existing protected `release-publish/*` tag at its exact SHA.
+- Q defaults to C; candidate-route `--workflow-sha <Q>` selects assessed executable tooling or its authorized ledger-only descendant. C owns source, package bytes, version, baselines; Q owns complete qualification closure. P may use an existing protected `release-publish/*` tag at its exact SHA.
 - Review candidate/coverage before dispatch: admission records operator attestation, not a bot exception. Scheduled main qualification explicitly uses `--trusted-workflow-ref main` and trusted-main semantics.
 - Beta publication: `npmDistTag=beta`. Use `route=prepared` only for intended prepared-button consumers. Source admission neither qualifies registry state nor authorizes publishing.
 - Purposes: nonpublish investigations `validation_purpose=diagnostic` with no publication selection; recurring main `main-qualification`; exact published-package confidence `postpublish-confidence`. Select coverage/profile independently.
@@ -355,7 +390,7 @@ pnpm ci:full-release \
 - Regular `release/*` validation must include `target_context_ref` (helper `--target-ref`); never raw-dispatch without it. Canonical `release/*`/`extended-stable/*` workflow refs remain supported; Telegram must retain exact parent workflow ref/SHA through OIDC and attestation.
 - Trusted-workflow release-branch CI passes `target_ref` + `release_candidate_ref`, never `release_gate` (requires workflow head == target). PR-head `ci.yml` fallback below is different and uses `release_gate=true`.
 - A frozen Code SHA may precede an advanced canonical release branch only if still its ancestor and package version is the branch's final version or matching beta prerelease. Extended-stable branches/all tags require exact package-version match.
-- Fresh qualification: Q=C or explicit reviewed main-ancestor `--workflow-sha <Q>` on candidate route; pass P separately. Missing contracts require deliberate Q repair/candidate backport, never main fallback. Tooling-only repair: [new admission](../../../docs/reference/full-release-validation/dispatch.md#recover-qualification-tooling-without-changing-the-candidate), unchanged C/new request.
+- Fresh qualification: Q=C or an assessed Q (including its authorized ledger-only descendant) through `--workflow-sha <Q>` on the candidate route; pass P separately. Missing contracts require deliberate Q repair/candidate backport, never main fallback. Tooling-only repair: [new admission](../../../docs/reference/full-release-validation/dispatch.md#recover-qualification-tooling-without-changing-the-candidate), unchanged C/new request.
 - Historical/cross-revision route: `--trusted-workflow-ref main --workflow-sha <recorded-main-tooling-sha>` (or protected tooling tag). New requests allow diagnostic, main-qualification, postpublish-confidence only—not publish qualification. Existing historical publish requests reopen before that restriction, keeping original trusted-main ancestry contract; they are not candidate-owned evidence. Never refresh recorded identities from moving main. Reuse stays enabled unless operator chooses `-f reuse_evidence=false`.
 
 ### Release notes and publication bytes
@@ -369,13 +404,13 @@ pnpm ci:full-release \
 - Regular final qualification records SDK reports for `beta` and `latest`; review actual channel acknowledgement. Prepared descriptors live in `publicationArtifacts`. Release Prepare adopts the manifest's plugin npm descriptor and prepares only ClawHub; it never repacks plugin npm after FRV. Reusing product evidence never substitutes Code-SHA packages/images for Release-SHA bytes.
 - Failed independent npm qualification: `pnpm frv continue --failed` retries failed npm jobs on original run, carries successful preparation/diagnostic children, and verifies receipts in parent. Failure alone does not reject continuation. Frozen workflows retain original receipt logic; local controller upgrades do not retrofit it. Final verification owns recovery result.
 - SHA-pinned helper infers beta for matching beta candidates, stable for stable/correction versions, and passes C/Q/P. Canonical beta `all` without soak uses `npm-beta-v1`; main/non-beta targets cannot. Run deferred native, performance, Telegram, broad live QA/E2E postpublish against exact package with `run_release_soak=true` or explicit groups. Stable/full force soak. Native publication retains build/signing/notarization/promotion gates. After focused fixes use a narrow `rerun_group`, never automatic widening.
-- At seal, parent records SDK evidence digest from qualified npm receipt and resolves per-package npm plans against registry. Manifest `publishInputs` supplies publisher/preflight defaults. SDK API changes still need operator acknowledgement; evidence grants no authority. Mutation owners recheck live authority, selectors, immutable bytes.
+- At seal, parent records SDK evidence digest from qualified npm receipt and resolves per-package npm plans against registry. Manifest `publishInputs` supplies publisher/preflight defaults. SDK API changes still need acknowledgement: the release agent reviews and acknowledges them, stopping for the operator only if a change looks harmful. Evidence grants no authority. Mutation owners recheck live authority, selectors, immutable bytes.
 
 ### Publication requirements
 
-- Publish with `release_profile=from-validation` (sealed profile). Selected FRV must **succeed**; stable needs stable/full evidence, soak, blocking performance.
+- Publish with `release_profile=from-validation` (sealed profile). Ordinary publication requires successful FRV; stable needs stable/full evidence, soak and blocking performance. An exact approved fast-track packet may accept validation gaps, never missing or mismatched sealed artifacts, signing, source admission or publication authority.
 - Decide blocker/flake for every failed test. Same-Release-SHA flakes: at most two reruns plus main fix-in-parallel issue/PR, never flake-only re-cut.
-- An eligible exact failed leaf may receive a reviewed [release-tooling grant](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers). Land/pin P, then run/revalidate FRV without changing C/Q. Publisher cannot grant waivers or accept failed FRV. Unwaived failures and missing/skipped/cancelled/unknown required coverage block.
+- A reviewed [release-tooling waiver](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers) removes the obligation to run the named job. A `step` selector only matches the first incomplete or failed step of that job. Omit `jobName` to waive the whole child role and its descendants: do not dispatch, look up, or reuse that child. Keep raw outcomes. Land/pin P, then run/revalidate FRV without changing C/Q. Publisher cannot grant ad hoc waivers. Without an exact approved fast-track packet, failed FRV, unwaived missing/skipped/cancelled/unknown required coverage and invalid required evidence block. Approval accepts the recorded validation gap; the original FRV stays failed or incomplete. See [#204382](https://github.com/openclaw/openclaw/pull/204382) and [the Performance cancellation](https://github.com/openclaw/openclaw/actions/runs/45327586533) that blocked [FRV 45326913251](https://github.com/openclaw/openclaw/actions/runs/45326913251).
 
 ### Publish children
 
@@ -420,7 +455,7 @@ Historical awaited v2 children could stage most packages, then one failure faile
 
 ### Extended-stable validation
 
-For `.33+` use candidate-owned helper: exact frozen branch-tip C; Q=C or explicit reviewed main ancestor owning full qualification closure; independently trusted P admits/verifies. Canonical `extended-stable/YYYY.M.33` supplies context, not workflow authority. Deliberately repair Q/backport missing contracts, never silently follow main.
+For `.33+` use candidate-owned helper: exact frozen branch-tip C; Q=C or assessed Q (including its authorized ledger-only descendant) owning full qualification closure; independently trusted P admits/verifies. Canonical `extended-stable/YYYY.M.33` supplies context, not workflow authority. Deliberately repair Q/backport missing contracts, never silently follow main.
 
 ```bash
 VALIDATION_SHA="<exact-candidate-sha>"
@@ -521,7 +556,7 @@ Read actual conclusions for every selected lane. `passed` requires pinned P's po
 | Blocker                                                                                  | Recovery                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Confirmed product/code                                                                   | Fix release branch, freeze new Code SHA, invalidate product evidence.                                                                                                                                                                                                                                                                                                                                                                                               |
-| Qualification harness/contract                                                           | Keep C; tooling-only repair, new admission/request with reviewed main-ancestor Q and successful parent. Preserve superseded evidence/invalidation reason.                                                                                                                                                                                                                                                                                                           |
+| Qualification harness/contract                                                           | Keep C; tooling-only repair, new admission/request with reviewed exact Q and successful parent. Preserve superseded evidence/invalidation reason.                                                                                                                                                                                                                                                                                                                   |
 | P-only admission/verifier/publisher                                                      | Keep C/Q/original artifacts; repair independent trusted P and affected surface.                                                                                                                                                                                                                                                                                                                                                                                     |
 | Infrastructure/credentials                                                               | Keep C/Q/P; repair external prerequisite, retry failed surface only.                                                                                                                                                                                                                                                                                                                                                                                                |
 | Wrapper/monitor                                                                          | Keep child/candidate identities; record wrapper result separately.                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -558,3 +593,5 @@ Record:
 - Known gaps/unrelated failures.
 
 Lessons/recovery patterns: `references/release-ci-notes.md`.
+
+For public-safe approval evidence, follow [public request packets](../release-openclaw-maintainer/references/fast-track.md#public-request-packets).

@@ -28,9 +28,9 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { throwExpectedCliError } from "../expected-cli-error.js";
 import { collectOption } from "../program/helpers.js";
-import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
+import type { CapabilityEnvelope } from "./result-types.js";
 
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
 const HEIC_MODEL_RUN_MIMES = new Set([
@@ -158,6 +158,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
         const agent = resolveCapabilityAgentOption(command, opts.agent);
         const run = async (
           gateway?: <R>(params: Record<string, unknown>, modelOverride: boolean) => Promise<R>,
+          localGatewayAbsent?: true,
         ): Promise<CapabilityEnvelope> => {
           const files = opts.file as string[] | undefined;
           const requestedModel = opts.model as string | undefined;
@@ -176,6 +177,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
             ? await resolveLocalCapabilityRuntimeConfig({
                 commandName: "infer model run",
                 targetIds: getModelsCommandSecretTargetIds(),
+                ...(localGatewayAbsent ? { localGatewayAbsent } : {}),
               })
             : await captureRuntimeConfigAsyncReader()();
           const agentId = resolveCapabilityProviderAgentId(cfg, agent, "infer model run");
@@ -463,7 +465,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
             ? "refuse"
             : ({ requestOwner }) =>
                 run((params) => requestOwner("agent", params, { expectFinal: true })),
-          runLocal: () => run(),
+          runLocal: ({ localGatewayAbsent }) => run(undefined, localGatewayAbsent),
         });
       }),
     );

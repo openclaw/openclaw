@@ -71,7 +71,7 @@ If the Gateway denies the upgrade because it exceeds your assigned operator role
 - Direct loopback needs no shared secret only when `gateway.auth.mode: "none"` is explicitly configured. That disables gateway auth and is not the recommended Control UI setup. Tailscale Serve and trusted-proxy modes can avoid a pasted shared secret only when their respective identity checks succeed.
 - Tailscale Serve can skip the pairing round trip for Control UI operator sessions when `gateway.auth.allowTailscale: true`, Tailscale identity verifies, and the browser presents its device identity. Device-less browsers and node-role connections still follow the normal device checks.
 - Direct Tailnet binds and LAN browser connects still require explicit approval. Browser profiles without device identity cannot use loopback auto-approval.
-- Each browser profile generates a unique device ID, so switching browsers or clearing browser data requires re-pairing.
+- Each browser profile generates a unique device ID, so switching browsers or clearing browser data requires re-pairing. On HTTPS and loopback origins, simultaneous first visits in the same profile share that identity. On non-loopback plain HTTP, connect one tab before opening others; cross-tab identity coordination requires the browser's secure-context Web Locks API.
 - Private windows and browser profiles that discard site data on exit, including Firefox Never remember history, also discard the stored device identity and per-device token. They will appear as a new browser after each restart; use a persistent browser profile to stay paired, and remove stale entries with `openclaw devices remove <deviceId>` when the paired-device list grows.
 
 </Note>
@@ -128,6 +128,8 @@ An already paired administrator can create the iOS/Android connection QR without
 </Steps>
 
 Creating a setup code requires `operator.admin`; **Connect a device** is disabled in the sidebar identity menu and settings for sessions without it. Operators with `operator.pairing` can still review and approve eligible operator-device requests from **Devices**. A setup code contains a short-lived bootstrap credential, so treat the QR and copied code like a password while they are valid. For remote pairing, the Gateway must resolve to `wss://` (for example, through Tailscale Serve/Funnel); plain `ws://` is limited to loopback and private LAN addresses. See [Pairing](/channels/pairing#pair-from-the-control-ui-recommended) for the full security and fallback details.
+
+A new install listens only on its own computer, so no phone can reach it yet. In that case **Connect a device** shows **Set up secure access** instead of a code: [Tailscale Serve](/gateway/tailscale) is recommended, and the trusted-home-network option explains what `gateway.bind lan` opens and how to undo it. The Dashboard does not change your settings. Apply your chosen option on the Gateway host. After restarting the Gateway, wait for the Dashboard to reconnect, reopen **Connect a device**, and choose **Create setup code**.
 
 ## Runtime config endpoint
 

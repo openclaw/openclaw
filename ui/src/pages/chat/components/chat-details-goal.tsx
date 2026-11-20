@@ -10,6 +10,7 @@ import {
 } from "solid-js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import type {
   ChatGoalAction,
@@ -26,7 +27,6 @@ import {
   ChatGoalMetrics,
   ChatGoalRecoveryAction,
   ChatGoalRecoveryMessage,
-  GoalIcon,
 } from "./chat-composer-goal.tsx";
 
 export type ChatDetailsGoalProps = {
@@ -282,7 +282,7 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
           fallback={
             <PanelEmptyState
               presentation="mobile"
-              icon={<GoalIcon />}
+              icon={<Icon name="target" />}
               heading={t("chat.goals.empty")}
               description=""
             />

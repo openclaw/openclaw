@@ -6,6 +6,7 @@ export const WRITE_SCOPE = "operator.write" as const;
 export const CRON_SCOPE = "operator.cron" as const;
 export const SESSION_READ_SCOPE = "operator.sessions.read" as const;
 export const PUBLICATION_READ_SCOPE = "operator.session-share.read" as const;
+export const PUBLICATION_STEER_SCOPE = "operator.session-share.steer" as const;
 export const SESSION_WRITE_SCOPE = "operator.sessions.write" as const;
 export const APPROVALS_SCOPE = "operator.approvals" as const;
 export const QUESTIONS_SCOPE = "operator.questions" as const;
@@ -20,6 +21,7 @@ const KNOWN_OPERATOR_SCOPE_VALUES = [
   CRON_SCOPE,
   SESSION_READ_SCOPE,
   PUBLICATION_READ_SCOPE,
+  PUBLICATION_STEER_SCOPE,
   SESSION_WRITE_SCOPE,
   APPROVALS_SCOPE,
   QUESTIONS_SCOPE,
@@ -53,7 +55,7 @@ export function normalizeOperatorScopeList(
 }
 
 /** Authenticated UI administration is separate from browser identity and local execution. */
-export function resolveGatewayUiAdminSource(
+export function isGatewayUiAdmin(
   client:
     | {
         connect: { scopes?: readonly string[]; client: { id?: string; mode?: string } };
@@ -61,15 +63,11 @@ export function resolveGatewayUiAdminSource(
       }
     | null
     | undefined,
-): "control-ui-admin" | "native-app-admin" | undefined {
-  if (!hasGatewayAdminScope(client)) {
-    return undefined;
-  }
-  if (client?.internal?.controlUiAdmin === true) {
-    return "control-ui-admin";
-  }
-  return client?.internal?.authenticatedOperator === true &&
-    isNativeAppUiClient(client.connect.client)
-    ? "native-app-admin"
-    : undefined;
+): boolean {
+  return (
+    hasGatewayAdminScope(client) &&
+    (client?.internal?.controlUiAdmin === true ||
+      (client?.internal?.authenticatedOperator === true &&
+        isNativeAppUiClient(client.connect.client)))
+  );
 }

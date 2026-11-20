@@ -1,4 +1,5 @@
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
+import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
@@ -16,6 +17,7 @@ import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-e
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
   prepareTerminatedCollectorLaunch,
   prepareSwarmCollectorCompletion,
@@ -219,7 +221,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               settleFailedLaunch,
             }),
       );
-      authority = await captureOperatorToolGatewayContinuationContext();
+      authority = await captureOperatorToolGatewayContinuationContext(undefined, {
+        retainRequester: true,
+      });
       const assertCurrent = () => {
         options.assertCurrent?.();
         authority?.assertCurrent();
@@ -231,6 +235,10 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         }
       };
       assertCurrent();
+      // Restart re-admits this source for the woken parent turn; unavailable ones get the baseline.
+      const requesterOperatorSource = captureQueuedOperatorRecoverySource(
+        authority?.operatorAuthority,
+      );
       preparedRows = await prepareSubagentRegistrationRows(
         childSessionKey,
         [
@@ -321,6 +329,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               },
               cfg,
             );
+          if (requesterOperatorSource && requesterOperatorSource.kind !== "unavailable") {
+            entry.requesterOperatorSource = requesterOperatorSource;
+          }
           const postimages = this.planSupersededKillReconciliations(rows, entry);
           postimages.set(runId, entry);
           plannedEntry = entry;
@@ -357,7 +368,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 subagentRuns.bindCompletionAuthority(
                   entry,
                   authority,
-                  options.requesterRunInstance,
+                  options.requesterRunInstance ??
+                    getGatewayToolCallerIdentity()?.operationalRunInstance,
+                  options.requesterRunInstance
+                    ? { runId: options.requesterRunInstance.runId }
+                    : undefined,
                 );
                 custodyTransferred = true;
               }
