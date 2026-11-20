@@ -57,6 +57,7 @@ beside **Filter & sort**, and opens New session for the selected agent; in team 
 choose an agent from its menu first. Command-palette search sits below the three view buttons.
 Search failures show **Couldn’t search sessions. Try again.**, rather than an empty result.
 If message search is unavailable, the palette still shows matching session titles and details.
+Middle-click a search result, or use Cmd+click on Mac or Ctrl+click on Windows and Linux, to open its destination in a new browser tab without closing the palette.
 Use the list's collapse button to hide it, or press ⌘B on
 Mac or Ctrl+B on Windows/Linux. Clicks use the normal sidebar animation; the
 keyboard shortcut opens or closes navigation immediately. Reduced-motion preferences

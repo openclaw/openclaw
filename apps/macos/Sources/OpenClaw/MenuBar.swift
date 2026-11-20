@@ -414,7 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             fputs("OpenClaw client credentials need recovery. \(message)\n", stderr)
         }
-        NSApplication.shared.terminate(nil)
+        Self.requestTermination()
     }
 
     private func finishLaunchingWithCredentials(launchPlan: AppLaunchRuntimePlan) {

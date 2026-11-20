@@ -57,7 +57,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/scripts/pr-review-artifacts.node.mjs!",
   // The PR cache suite launches this standalone Node regression by path.
   "test/scripts/pr-cache-deferral.node.mjs!",
-  // The compiler scheduling test launches this dependency-hook fixture by exact path.
+  // Compiler tests launch these dependency-hook fixtures by exact path.
+  "test/scripts/fixtures/vitest-worker-build-identity.cjs!",
   "test/scripts/fixtures/vitest-worker-scheduling.cjs!",
   // The cache test launches this isolated GC worker through runRetentionNodeScript.
   "test/scripts/vitest-worker-cache-retention.test-support.ts!",

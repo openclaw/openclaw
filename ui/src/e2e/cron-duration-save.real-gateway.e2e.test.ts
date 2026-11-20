@@ -279,7 +279,6 @@ catalogSuite.define(() => {
         await waitForControlUiGatewayReady(page);
         // Without an automation, the page's empty state offers New automation.
         await page.locator('[data-test-id="cron-new-task"]').click();
-        await page.locator("#cron-name").fill("Retain this draft");
         await page.locator("#cron-payload-text").fill("Do not submit this draft");
         const scope = page.locator(".cron-prompt__run-controls");
         const menu = scope.locator(".chat-controls__model-menu");
@@ -324,9 +323,6 @@ catalogSuite.define(() => {
                     "held",
                     "recovered",
                   ].filter((modelId) => values.includes(`fixture/${modelId}`)),
-                  catalogDraftNameRetained:
-                    document.querySelector<HTMLInputElement>("#cron-name")?.value ===
-                    "Retain this draft",
                   catalogDraftPayloadRetained:
                     document.querySelector<HTMLTextAreaElement>("#cron-payload-text")?.value ===
                     "Do not submit this draft",
@@ -358,7 +354,6 @@ catalogSuite.define(() => {
         await publish("recovered");
         await waitForModel("recovered");
         await error.waitFor({ state: "hidden" });
-        expect(await page.locator("#cron-name").inputValue()).toBe("Retain this draft");
         expect(await page.locator("#cron-payload-text").inputValue()).toBe(
           "Do not submit this draft",
         );

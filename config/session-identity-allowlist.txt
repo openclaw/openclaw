@@ -793,8 +793,7 @@ src/gateway/desktop/computer-service.ts	2
 src/gateway/device-revocation.ts	1
 src/gateway/event-web-push.ts	2
 src/gateway/exec-approval-authority.ts	1
-src/gateway/exec-approval-consumption.ts	1
-src/gateway/exec-approval-manager.ts	4
+src/gateway/exec-approval-manager.ts	2
 src/gateway/exec-approval-resolution-authority.ts	1
 src/gateway/gateway-codex-harness.command-evidence.live-helpers.ts	1
 src/gateway/github-oauth-lifecycle.ts	1
@@ -837,7 +836,6 @@ src/gateway/mention-inbox-recording.ts	5
 src/gateway/mention-inbox.ts	4
 src/gateway/message-action-turn-capability.ts	8
 src/gateway/node-claude-skill-runtime.ts	20
-src/gateway/node-invoke-plugin-approval.ts	2
 src/gateway/node-invoke-plugin-policy.ts	4
 src/gateway/node-registry-pairing.ts	2
 src/gateway/node-registry-private.ts	7
@@ -870,7 +868,6 @@ src/gateway/server-discovery-runtime.ts	2
 src/gateway/server-maintenance.ts	1
 src/gateway/server-methods/agent-expected-session.ts	5
 src/gateway/server-methods/agent-run-handler.ts	1
-src/gateway/server-methods/agent-runtime-authority.ts	2
 src/gateway/server-methods/agent-session-patch.ts	13
 src/gateway/server-methods/agent-session-prepare.ts	5
 src/gateway/server-methods/agent-subagent-registration.ts	15
@@ -940,15 +937,13 @@ src/gateway/server-methods/cron.ts	4
 src/gateway/server-methods/doctor-memory-provider-status.ts	1
 src/gateway/server-methods/environments.session-exec.ts	1
 src/gateway/server-methods/environments.session-tool-policy.ts	2
-src/gateway/server-methods/environments.session.ts	6
+src/gateway/server-methods/environments.session.ts	5
 src/gateway/server-methods/exec-approval.ts	3
 src/gateway/server-methods/factory-github-proof.ts	1
 src/gateway/server-methods/github-personal-authorization.ts	8
 src/gateway/server-methods/mcp-auth-login.ts	1
 src/gateway/server-methods/memory-provider.ts	1
 src/gateway/server-methods/message-action-context.ts	2
-src/gateway/server-methods/message-operation-result.ts	1
-src/gateway/server-methods/message-operation-route.ts	2
 src/gateway/server-methods/models-auth-login.ts	1
 src/gateway/server-methods/nodes.event.ts	2
 src/gateway/server-methods/nodes.invoke.ts	2
@@ -1038,7 +1033,6 @@ src/gateway/server-worker-placement-runtime-refresh.ts	1
 src/gateway/server-worker-placement-session-evidence.ts	2
 src/gateway/server-worker-placement-session-target.ts	25
 src/gateway/server-worker-placement-startup.ts	4
-src/gateway/server/ws-connection/authenticated-request-dispatch.ts	1
 src/gateway/server/ws-connection/connect-admission.ts	1
 src/gateway/server/ws-connection/connect-session.ts	2
 src/gateway/server/ws-connection/connect-user-profile.ts	1
@@ -1100,7 +1094,6 @@ src/gateway/session-row-projection.ts	3
 src/gateway/session-row-provider-review.ts	2
 src/gateway/session-row-selection-facts.ts	2
 src/gateway/session-row-transcript-backfill.ts	2
-src/gateway/session-runtime-authority.ts	1
 src/gateway/session-send-delivery.ts	4
 src/gateway/session-sharing-authorization-async.ts	2
 src/gateway/session-sharing-authorization.ts	2

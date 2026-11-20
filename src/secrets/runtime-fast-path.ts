@@ -110,7 +110,7 @@ function hasActiveRuntimeWebFetchProviderSurface(
   return hasCredentialBearingObjectValue(fetch, defaults);
 }
 
-function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
+export function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
   const web = config.tools?.web;
   const defaults = config.secrets?.defaults;
   const fetchExplicitlyDisabled =
