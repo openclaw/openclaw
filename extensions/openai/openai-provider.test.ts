@@ -19,11 +19,6 @@ import {
   runWrappedPayloadCase,
 } from "./test-support/responses-model.test-support.js";
 
-// mock-isolation: Registry lookup behavior is covered by openai-codex-discovery.test.ts.
-vi.mock("./codex-client-version.js", () => ({
-  resolveOpenAICodexClientVersion: async () => "0.169.0",
-}));
-
 function openaiConfig(
   openai: Omit<Partial<ModelProviderConfig>, "models"> & {
     models?: Partial<ModelProviderConfig["models"][number]>[];
