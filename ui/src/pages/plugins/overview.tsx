@@ -423,6 +423,7 @@ export function renderPluginMetadata(
                 <a
                   class="plugin-metadata__link plugin-metadata__repository"
                   href={repository.href}
+                  aria-label={repository.name}
                   target="_blank"
                   rel="noopener noreferrer"
                 >

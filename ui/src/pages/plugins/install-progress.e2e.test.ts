@@ -35,6 +35,7 @@ describeControlUiE2e("plugin install button progress", () => {
     );
     const install = cards.first().getByRole("button", { name: "Install Calendar Plus" });
     await install.waitFor();
+    const cardCount = await cards.count();
     await gateway.deferNext("plugins.install");
     await install.click();
     await gateway.waitForRequest("plugins.install");
@@ -53,9 +54,7 @@ describeControlUiE2e("plugin install button progress", () => {
       restartRequired: false,
     });
     await gateway.waitForRequest("plugins.catalog.browse", { after: 1 });
-    await expect
-      .poll(() => cards.locator(".plugin-catalog-card__status").count())
-      .toBe(await cards.count());
+    await expect.poll(() => cards.locator(".plugin-catalog-card__status").count()).toBe(cardCount);
     expect(await cards.locator(".plugin-install-action__button").count()).toBe(0);
     expect(await gateway.getRequests("plugins.list")).toHaveLength(lists);
     if (captureUiProof) {
@@ -78,7 +77,7 @@ describeControlUiE2e("plugin install button progress", () => {
         },
       ],
     });
-    expect(await cards.locator(".plugin-catalog-card__status").count()).toBe(await cards.count());
+    expect(await cards.locator(".plugin-catalog-card__status").count()).toBe(cardCount);
   });
 
   it.each([
@@ -252,7 +251,9 @@ describeControlUiE2e("plugin install button progress", () => {
           await expectText(button, "Installing");
           expect(await card.isVisible()).toBe(true);
           expect(await applying.count()).toBe(1);
-          expect(await enabled.count()).toBe(0);
+          expect(
+            await page.getByRole("switch", { name: "Calendar Plus", exact: true }).count(),
+          ).toBe(0);
           expect(await pluginButton("Uninstall").count()).toBe(0);
         }
         await capture("runtime", [1440, 390]);

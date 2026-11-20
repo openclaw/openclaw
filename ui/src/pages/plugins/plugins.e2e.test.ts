@@ -246,6 +246,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await gateway.waitForRequest("plugins.catalog.browse", {
         match: { intent: "all", query: "matrix", pageSize: 100 },
       });
+      await role(catalog, "link", "Matrix").waitFor();
       expect(await catalog.locator(".plugin-catalog-section").count()).toBe(0);
       expect(
         await catalog.locator(".plugin-catalog-grid--results .plugin-catalog-card").count(),
@@ -299,7 +300,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await page.getByText("code-plugin", { exact: true }).count()).toBe(0);
       expect(
         await detailSidebar
-          .getByRole("link", { name: /^openclaw\/\s*openclaw$/u })
+          .getByRole("link", { name: "openclaw/openclaw", exact: true })
           .getAttribute("href"),
       ).toBe("https://github.com/openclaw/openclaw");
       expect(
@@ -378,9 +379,13 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       source: "official",
       pluginId: "local-calendar",
     });
-    await page
-      .getByRole("switch", { name: "Local Calendar", checked: false, exact: true })
-      .waitFor();
+    const enable = page.getByRole("switch", {
+      name: "Local Calendar",
+      checked: false,
+      exact: true,
+    });
+    await enable.waitFor();
+    expect(await enable.isEnabled()).toBe(true);
     expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
     expect(await gateway.getRequests("connect")).toHaveLength(connects);
     expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
@@ -440,9 +445,13 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     await gateway.deferNext("plugins.install");
     await role(page, "button", "Install").click();
     await gateway.waitForRequest("plugins.install");
+    const inventoryReads = (await gateway.getRequests("plugins.list")).length;
     await setInstalled(gateway, { ...matrixEnabled, catalogId: matrixDiscoveryPlugin.id });
     await reconnectMockGateway(page, gateway);
-    await page.getByRole("switch", { name: "Matrix", checked: true, exact: true }).waitFor();
+    await gateway.waitForRequest("plugins.list", { after: inventoryReads });
+    const enabled = page.getByRole("switch", { name: "Matrix", checked: true, exact: true });
+    await enabled.waitFor();
+    expect(await enabled.isEnabled()).toBe(true);
     expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
     expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
     expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
@@ -480,7 +489,25 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
   });
 
   it("renders grouped catalog cards and switches to raw filtered results", async () => {
-    const { page, gateway } = await setup();
+    const documentPlugin = {
+      id: "ch_ZG9jdW1lbnRz",
+      local: matrixDiscoveryPlugin.local,
+      catalog: {
+        name: "Documents",
+        summary: "Index documents.",
+        categories: ["documents-files"],
+        official: false,
+      },
+    } satisfies typeof matrixDiscoveryPlugin;
+    const { page, gateway } = await setup({
+      "plugins.catalog.browse": {
+        cases: [
+          { match: { category: "documents-files" }, response: { items: [documentPlugin] } },
+          { match: { category: "scheduling" }, response: { items: [localOnlyDiscoveryPlugin] } },
+          ...pluginMethodResponses()["plugins.catalog.browse"].cases,
+        ],
+      },
+    });
     await page.goto(`${server.baseUrl}plugins`);
     const explore = page.getByRole("region", { name: "Explore plugins" });
     await role(explore, "heading", "Featured").waitFor();
@@ -508,8 +535,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       category: "documents-files",
       pageSize: 100,
     });
+    const grid = explore.locator(".plugin-catalog-grid--results");
+    await role(grid, "link", "Documents").waitFor();
     expect(await explore.locator(".plugin-catalog-section").count()).toBe(0);
-    await role(explore, "link", "Matrix").waitFor();
     const search = explore.getByRole("searchbox", { name: "Search plugins" });
     await search.fill("matrix");
     await expectBrowse(gateway, {
@@ -518,25 +546,25 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       pageSize: 100,
       searchSource: "openclaw-control-ui",
     });
+    await role(grid, "link", "Matrix").waitFor();
     expect(await explore.locator(".plugin-catalog-section").count()).toBe(0);
-    expect(
-      await explore.locator(".plugin-catalog-grid--results .plugin-catalog-card").count(),
-    ).toBe(1);
+    expect(await grid.locator(".plugin-catalog-card").count()).toBe(1);
     await matrixCard.locator(".plugin-catalog-card__primary-link").click();
     await expect
       .poll(() => new URL(page.url()).pathname)
       .toBe(`/plugins/${matrixDiscoveryPlugin.id}`);
     await page.goto(`${server.baseUrl}plugins`);
-    await page.setViewportSize({ height: 1024, width: 768 });
     await role(explore, "button", "Scheduling").click();
     await expectBrowse(gateway, {
       intent: "all",
       category: "scheduling",
       pageSize: 100,
     });
-    const grid = page.locator(".plugin-catalog-grid").first();
+    await role(grid, "link", "Local Calendar").waitFor();
     const columns = () =>
       grid.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length);
+    await expect.poll(columns).toBe(2);
+    await page.setViewportSize({ height: 1024, width: 768 });
     await expect.poll(columns).toBe(1);
     await page.setViewportSize({ height: 852, width: 393 });
     await expect.poll(columns).toBe(1);

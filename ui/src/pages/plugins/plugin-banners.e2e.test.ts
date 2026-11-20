@@ -58,7 +58,7 @@ describeControlUiE2e("Plugin pages without generic trust banners", () => {
           "plugins.inspect": {
             ...calendarInspection,
             plugin: calendarPlugin,
-            overview: { hasNativeUi: true },
+            overview: { hasNativeUi: true, capabilities: { ui: ["page"] } },
           },
         },
       });
@@ -81,9 +81,15 @@ describeControlUiE2e("Plugin pages without generic trust banners", () => {
             : page.getByRole("button", { name: "Install", exact: true });
       await action.waitFor();
       expect(await action.isEnabled()).toBe(true);
+      if (scenario === "native-ui") {
+        await content.getByText("Adds dedicated plugin pages.", { exact: true }).waitFor();
+      }
       if (process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1") {
         const directory = createControlUiE2eArtifactDir("plugin-banners");
-        const frame = await takeControlUiScreenshotFrame(page, content, [action], {
+        // The switch input receives interaction; its sibling paints the visible track.
+        const visibleAction =
+          scenario === "native-ui" ? action.locator("+ .settings-toggle__control") : action;
+        const frame = await takeControlUiScreenshotFrame(page, content, [visibleAction], {
           animations: "disabled",
         });
         writeFileSync(path.join(directory, scenario + ".png"), frame.png);
