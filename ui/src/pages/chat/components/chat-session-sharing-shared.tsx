@@ -1,13 +1,4 @@
-import type { JSX } from "@solidjs/web";
-import {
-  action,
-  createMemo,
-  createOptimistic,
-  createSignal,
-  Errored,
-  onSettled,
-  Show,
-} from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, onSettled, Show } from "solid-js";
 import { SESSION_VISIBILITY_VALUES } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing-constants.js";
 import type { SessionMemberPermissionLevel } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type {
@@ -18,14 +9,11 @@ import type {
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
-
-registerEnglishCatalog(registerSessionPeopleEnglish);
 
 export type ChatSessionSharingOutcome =
   | { status: "success" }
@@ -253,39 +241,6 @@ export function createChatSessionSharingPresentation(
   }
 
   return { read, scope, select, completion, busy: () => activity().saving() };
-}
-
-export function ChatSessionSharingError(props: {
-  error?: string;
-  completion?: Promise<void>;
-  pending?: boolean;
-  children: (message: string) => JSX.Element;
-}) {
-  // Keep the promise inside a receipt: a bare Promise used as Show's condition is awaited.
-  const attempt = createMemo(() => props.completion && { result: props.completion });
-  return (
-    <Show
-      when={props.error}
-      fallback={
-        <Show when={!props.pending}>
-          <Show when={attempt()} keyed>
-            {(receipt) => {
-              const outcome = createMemo(() => receipt.result.then(() => null), {
-                loadingValue: null,
-              });
-              return (
-                <Errored fallback={(error) => <>{props.children(formatUiError(error()))}</>}>
-                  {outcome()}
-                </Errored>
-              );
-            }}
-          </Show>
-        </Show>
-      }
-    >
-      {(error) => <>{props.children(error())}</>}
-    </Show>
-  );
 }
 
 export function canManageChatSessionSharing(

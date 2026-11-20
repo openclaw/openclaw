@@ -1,10 +1,27 @@
 import type { TranslationMap } from "../lib/types.ts";
 import { registerChatSessionEnglish } from "./en-chat-session.ts";
+import { registerSessionPeopleEnglish } from "./en-session-people.ts";
 import { en } from "./en.ts";
 
 const catalog = {
   chat: {
     sessionSharing: {
+      loweringAccessCancelsQueued: "Lowering access cancels {name}’s queued messages",
+      sharedDescription: "Everyone with access can send",
+      readOnlyDescription: "Others can only read",
+      suggestDescription: "Others suggest for approval",
+      draftDescription: "Creator and admins only",
+      linkSharing: "Link sharing",
+      anyoneWithLink: "Anyone with the link",
+      publicLinkDescription: "Anyone can read without signing in.",
+      publicDraftDescription: "The public link stays readable in draft.",
+      linkUnavailable: "Link unavailable",
+      permissions: "Permissions",
+      canRead: "Can read",
+      canSuggest: "Can suggest",
+      canSend: "Can send",
+      searchPeople: "Search people…",
+      closeSearch: "Close search",
       noPeopleFound: "No people match your search.",
       tryAnotherName: "Try another name",
       visibility: "Visibility",
@@ -28,6 +45,7 @@ const catalog = {
 export const registerChatSessionSharingEnglish = Object.assign(
   () => {
     registerChatSessionEnglish();
+    registerSessionPeopleEnglish();
     Object.assign(en.chat.sessionSharing, catalog.chat.sessionSharing);
   },
   { catalog },

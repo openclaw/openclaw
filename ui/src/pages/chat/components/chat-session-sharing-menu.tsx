@@ -16,6 +16,7 @@ import type { MenuControls, MenuEntry, MenuItem } from "../../../components/soli
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ChatSessionSharingError } from "./chat-session-sharing-error.tsx";
 import {
   type ChatSessionSharingProps,
   type ChatSessionSharingOutcome,
@@ -23,7 +24,6 @@ import {
   ChatSessionSharingModeIcon,
   projectChatSessionSharingRoster,
   chatSessionPermissionLabel,
-  ChatSessionSharingError,
   createChatSessionSharingPresentation,
 } from "./chat-session-sharing-shared.tsx";
 
