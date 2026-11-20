@@ -31,7 +31,6 @@ export type PluginDiscoveryState = {
 };
 
 const CATALOG_PAGE_SIZE = 100;
-const CATALOG_SECTION_SIZE = 8;
 
 type CatalogPageArgs = readonly [
   client: GatewayBrowserClient,
@@ -65,8 +64,7 @@ function rankedOverviewShelf(
       (left, right) =>
         (left.catalog[rank] ?? Number.MAX_SAFE_INTEGER) -
         (right.catalog[rank] ?? Number.MAX_SAFE_INTEGER),
-    )
-    .slice(0, CATALOG_SECTION_SIZE);
+    );
 }
 
 export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange: () => void) {

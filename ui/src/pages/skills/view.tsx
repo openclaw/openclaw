@@ -22,6 +22,7 @@ import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
 import { isSkillAvailable } from "../../lib/skills-shared.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
 import { SkillDialogBoundary } from "./skill-dialog-boundary.tsx";
+import { SkillTile } from "./skill-page-parts.tsx";
 import { SkillStateStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
 import type { SkillsProps, SkillsStatusFilter } from "./view-types.ts";
 
@@ -294,12 +295,17 @@ function SkillsToolbar(props: {
 
 function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
   const verdict = createMemo(() => verdictForSkill(props.skill, props.view.state.clawhubVerdicts));
+  const owner = () => {
+    const link = props.skill.clawhub;
+    return link?.valid && link.ownerHandle ? `@${link.ownerHandle}` : null;
+  };
   const status = () => {
     latest(props.view.readClawHubVerdicts);
     return verdictStatus(verdict(), isPending(props.view.readClawHubVerdicts));
   };
   return (
-    <div class="settings-row plugins-item plugins-item--clickable">
+    <div class="settings-row plugins-item plugins-item--clickable skill-inventory-row">
+      <SkillTile emoji={props.skill.emoji} />
       <button
         type="button"
         class="settings-row__text plugins-item__detail-button"
@@ -307,14 +313,10 @@ function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
         onClick={() => props.view.onDetailOpen(props.skill.skillKey)}
       >
         <span class="settings-row__title">
-          <Show when={props.skill.emoji}>
-            {(emoji) => (
-              <>
-                <span>{emoji()}</span>{" "}
-              </>
-            )}
+          <span class="skill-inventory-row__name">{props.skill.name}</span>
+          <Show when={owner()}>
+            {(handle) => <span class="skill-inventory-row__owner">{handle()}</span>}
           </Show>
-          {props.skill.name}
         </span>
         <span class="settings-row__desc">{clampText(props.skill.description, 140)}</span>
       </button>

@@ -83,6 +83,21 @@ export function splitFrontmatter(content: string): { description?: string; body:
 
 type DiffLine = { kind: "same" | "add" | "remove"; text: string };
 
+/** Added and removed line counts of a loaded comparison; null when too large to compare. */
+export function diffCounts(before: string, after: string): { add: number; remove: number } | null {
+  const lines = diffLines(before, after);
+  if (!lines) {
+    return null;
+  }
+  let add = 0;
+  let remove = 0;
+  for (const line of lines) {
+    add += line.kind === "add" ? 1 : 0;
+    remove += line.kind === "remove" ? 1 : 0;
+  }
+  return { add, remove };
+}
+
 // Skills cap at 200 KB, which can mean tens of thousands of lines; the LCS table is quadratic.
 const MAX_DIFF_CELLS = 2_000_000;
 
