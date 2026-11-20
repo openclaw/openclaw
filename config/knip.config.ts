@@ -1619,6 +1619,7 @@ const config = {
         // knowledge-source-ingest/SKILL.md has agents run these bundled scripts by path.
         "skills/knowledge-source-ingest/scripts/chat-transcript.mjs!",
         "skills/knowledge-source-ingest/scripts/discrawl-normalize.mjs!",
+        "skills/knowledge-source-ingest/scripts/slack-read-normalize.mjs!",
         "skills/knowledge-source-ingest/scripts/source-manifest.mjs!",
         // skill-packaging.test.ts runs this skill-reference generator with --check.
         "scripts/sync-skill-references.mjs",
