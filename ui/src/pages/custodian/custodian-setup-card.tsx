@@ -202,7 +202,8 @@ function ApiKeyForm(props: {
         const form = event.currentTarget;
         const data = new FormData(form);
         const provider = props.providers.find((entry) => entry.id === data.get("provider"));
-        const key = String(data.get("key") ?? "").trim();
+        const value = data.get("key");
+        const key = typeof value === "string" ? value.trim() : "";
         if (provider && key) {
           props.onConnect(provider, key);
           form.reset();

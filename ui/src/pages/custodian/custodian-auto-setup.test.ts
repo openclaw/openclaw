@@ -318,7 +318,7 @@ it("retires a held activation when the visible store is replaced", async () => {
 });
 
 it("sets up a local model from the card, as on the Mac", async () => {
-  const lmStudioModel = {
+  const lmStudioModel: Detection["candidates"][number] = {
     kind: "provider-auto:lmstudio",
     brandId: "lmstudio",
     label: "LM Studio",
