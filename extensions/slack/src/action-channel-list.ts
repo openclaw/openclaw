@@ -47,7 +47,13 @@ export async function listSlackReadableConversations(params: {
     if (membersOnly && !conversation.isMember) {
       continue;
     }
-    const target = formatSlackTarget({ teamId, kind: "channel", id: conversation.id });
+    // Identity keeps the caller's qualification so an unqualified current context matches;
+    // policy uses the resolved listing workspace.
+    const target = formatSlackTarget({
+      teamId: params.requestedTeamId,
+      kind: "channel",
+      id: conversation.id,
+    });
     const allowed = await isSlackResolvedReadTargetAllowed({
       account,
       cfg: params.cfg,

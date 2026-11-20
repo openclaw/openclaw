@@ -133,8 +133,9 @@ DMs that are not configured.
 
 `teamId` names the workspace the listed IDs belong to, so `teamId` plus `id` is a
 stable conversation key. It is the requested or trusted current workspace, or the
-workspace of the token used: the running Slack monitor's workspace for the bot token,
-otherwise Slack's `auth.test` answer. A requested `teamId` that differs from the
+workspace of the token used: the running Slack monitor's workspace when the token is
+the one the monitor authenticated (the user token for `postAs: "user"`, otherwise the bot
+token), otherwise Slack's `auth.test` answer. A requested `teamId` that differs from the
 token's workspace fails instead of mislabeling results. Workspace-qualified channel
 entries (`team:<team>:channel:<id>`) apply to listed conversations even when the
 caller omits `teamId`; `read` resolves the token's workspace the same way when such

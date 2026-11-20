@@ -1,6 +1,7 @@
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type { ResolvedSlackAccount } from "./accounts.js";
+import { hasSlackTeamScopedPolicy } from "./action-read-policy.js";
 import type { SlackConversationListOptions, SlackTokenWorkspace } from "./conversation-list.js";
 import { SLACK_CONVERSATION_LIST_TYPES } from "./cursor-pages.js";
 import { getSlackInstallationTeamId } from "./installation-identity-state.js";
@@ -31,7 +32,7 @@ export function resolveSlackReadAsToken(
 
 /**
  * Workspace whose policy applies to conversations read with the selected token: the
- * requested one, the monitor's when it authenticated this bot token, else auth.test.
+ * requested one, the monitor's when it authenticated this same credential, else auth.test.
  */
 export async function resolveSlackTokenPolicyTeamId(params: {
   account: ResolvedSlackAccount;
@@ -40,8 +41,10 @@ export async function resolveSlackTokenPolicyTeamId(params: {
   lookup: () => Promise<SlackTokenWorkspace>;
 }): Promise<string | undefined> {
   const { account, requestedTeamId } = params;
+  // The monitor authenticates the user token for user identity and the bot token otherwise.
+  const monitorToken = account.identity === "user" ? account.userToken : account.botToken;
   const installTeamId =
-    params.selectedToken && params.selectedToken === account.botToken?.trim()
+    params.selectedToken && params.selectedToken === monitorToken?.trim()
       ? getSlackInstallationTeamId(account.accountId)
       : undefined;
   const workspace = installTeamId
@@ -58,6 +61,21 @@ export async function resolveSlackTokenPolicyTeamId(params: {
     );
   }
   return requestedTeamId ?? workspace.teamId;
+}
+
+/** Policy workspace for a read target the caller left unqualified. */
+export async function resolveSlackReadPolicyTeamId(params: {
+  account: ResolvedSlackAccount;
+  targetTeamId?: string;
+  selectedToken?: string;
+  lookup: () => Promise<SlackTokenWorkspace>;
+}): Promise<string | undefined> {
+  return (
+    params.targetTeamId ??
+    (hasSlackTeamScopedPolicy(params.account)
+      ? await resolveSlackTokenPolicyTeamId(params)
+      : undefined)
+  );
 }
 
 export function readSlackConversationListParams(

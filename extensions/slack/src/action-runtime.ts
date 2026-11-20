@@ -20,10 +20,9 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import type { ResolvedSlackAccount } from "./accounts.js";
 import { listSlackReadableConversations } from "./action-channel-list.js";
 import type { SlackActionContext } from "./action-context.js";
-import { resolveSlackReadAsToken, resolveSlackTokenPolicyTeamId } from "./action-read-params.js";
+import { resolveSlackReadAsToken, resolveSlackReadPolicyTeamId } from "./action-read-params.js";
 import {
   hasSlackRequesterAccount,
-  hasSlackTeamScopedPolicy,
   isSlackDmTargetConfigured,
   isSlackResolvedReadTargetAllowed,
   resolveSlackChannelReadPolicy,
@@ -128,10 +127,12 @@ async function assertSlackReadTargetAllowed(params: {
   cfg: OpenClawConfig;
   channelId: string;
   teamId?: string;
+  policyTeamId?: string;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   context?: SlackActionContext;
   token?: string;
 }) {
+  const policy = { ...params, teamId: params.policyTeamId ?? params.teamId };
   const deny = () => {
     throw new Error("Slack read target channel is not allowed.");
   };
@@ -174,10 +175,7 @@ async function assertSlackReadTargetAllowed(params: {
     return;
   }
 
-  const preliminary = resolveSlackChannelReadPolicy({
-    ...params,
-    currentConversation,
-  });
+  const preliminary = resolveSlackChannelReadPolicy({ ...policy, currentConversation });
   if (preliminary.channelExplicitlyDisabled) {
     deny();
   }
@@ -207,7 +205,7 @@ async function assertSlackReadTargetAllowed(params: {
   ) {
     deny();
   }
-  if (!(await isSlackResolvedReadTargetAllowed({ ...params, info, currentConversation }))) {
+  if (!(await isSlackResolvedReadTargetAllowed({ ...policy, info, currentConversation }))) {
     deny();
   }
 }
@@ -215,6 +213,8 @@ async function assertSlackReadTargetAllowed(params: {
 type SlackActionChannelTarget = {
   channelId: string;
   teamId?: string;
+  /** Workspace for policy when the caller's target is unqualified; identity keeps teamId. */
+  policyTeamId?: string;
 };
 
 function resolveTrustedCurrentSlackTeamId(params: {
@@ -321,6 +321,7 @@ export async function handleSlackAction(
       cfg,
       channelId: target.channelId,
       teamId: target.teamId,
+      policyTeamId: target.policyTeamId,
       conversationReadOrigin: context?.conversationReadOrigin,
       context,
       token,
@@ -603,19 +604,16 @@ export async function handleSlackAction(
         const target = resolveChannelTarget();
         const { channelId } = target;
         const readToken = resolveSlackReadAsToken(account, params);
-        const policyTeamId =
-          target.teamId ??
-          (hasSlackTeamScopedPolicy(account)
-            ? await resolveSlackTokenPolicyTeamId({
-                account,
-                selectedToken: readToken ?? resolveSlackOperationToken(account, "read"),
-                lookup: () =>
-                  slackActionRuntime.resolveSlackTokenWorkspace(
-                    buildActionOpts("read", undefined, readToken),
-                  ),
-              })
-            : undefined);
-        await assertReadTargetAllowed({ ...target, teamId: policyTeamId }, readToken);
+        const policyTeamId = await resolveSlackReadPolicyTeamId({
+          account,
+          targetTeamId: target.teamId,
+          selectedToken: readToken ?? resolveSlackOperationToken(account, "read"),
+          lookup: () =>
+            slackActionRuntime.resolveSlackTokenWorkspace(
+              buildActionOpts("read", undefined, readToken),
+            ),
+        });
+        await assertReadTargetAllowed({ ...target, policyTeamId }, readToken);
         const readOpts = buildActionOpts("read", target.teamId, readToken);
         const limit = readPositiveIntegerParam(params, "limit", {
           message: "limit must be a positive integer.",

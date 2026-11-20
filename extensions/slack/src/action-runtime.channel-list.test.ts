@@ -4,6 +4,7 @@ import { handleSlackAction, type SlackActionContext } from "./action-runtime.js"
 import { createSlackActions } from "./channel-actions.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { listSlackMessageActions } from "./message-actions.js";
+import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 const list = vi.hoisted(() => vi.fn());
 const history = vi.hoisted(() => vi.fn());
@@ -254,4 +255,49 @@ it("rejects readAs when the requested token is not configured", async () => {
   );
   expect(list).not.toHaveBeenCalled();
   expect(history).not.toHaveBeenCalled();
+});
+
+it("does not reuse a user-identity monitor workspace for the companion bot token", async () => {
+  installation = registerSlackInstallationState("default", "workspace", "TUSER");
+  authTest.mockImplementation(async (token: string) => ({
+    ok: true,
+    team_id: token === "xoxb-bot" ? "TBOT" : "TUSER",
+  }));
+  const cfg = slackConfig({
+    postAs: "user",
+    userToken: "xoxp-user",
+    groupPolicy: "open",
+    channels: { "team:TBOT:channel:C1": { enabled: false } },
+  });
+
+  const listed = await listChannels(cfg, { readAs: "bot" }, {});
+  expect(listed.teamId).toBe("TBOT");
+  expect(listed.channels.map((channel) => channel.id)).not.toContain("C1");
+  await expect(
+    handleSlackAction({ action: "readMessages", channelId: "C1", readAs: "bot" }, cfg, {}),
+  ).rejects.toThrow("Slack read target channel is not allowed.");
+  expect(history).not.toHaveBeenCalled();
+  expect((await listChannels(cfg, { readAs: "user" })).teamId).toBe("TUSER");
+});
+
+it.each([
+  { name: "no workspace-qualified policy", channels: {} },
+  { name: "an unrelated workspace-qualified entry", channels: { "team:T1:channel:C9": {} } },
+])("keeps the unqualified current DM readable with $name", async ({ channels }) => {
+  const cfg = slackConfig({ channels });
+  const context = {
+    ...buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      context: { ChatType: "direct", Channel: "slack", To: "user:U123", NativeChannelId: "D123" },
+    }),
+    currentChannelProvider: "slack",
+    requesterAccountId: "default",
+  };
+  list.mockResolvedValueOnce({ ok: true, channels: [{ id: "D123", is_im: true, user: "U123" }] });
+
+  const listed = await listChannels(cfg, { types: ["im"] }, context);
+  expect(listed.channels.map((channel) => channel.id)).toEqual(["D123"]);
+  await handleSlackAction({ action: "readMessages", channelId: "D123" }, cfg, context);
+  expect(history).toHaveBeenCalledWith(expect.objectContaining({ channel: "D123" }));
 });
