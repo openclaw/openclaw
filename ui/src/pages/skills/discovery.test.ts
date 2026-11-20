@@ -26,11 +26,8 @@ function renderDiscovery(
   return container;
 }
 
-/** Installed skills sit in one summary line until the Installed chip lists them. */
-function showInstalled(container: HTMLElement) {
-  [...container.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")]
-    .find((chip) => chip.textContent === "Installed")!
-    .click();
+function openInstalled(container: HTMLElement) {
+  container.querySelector<HTMLButtonElement>(".skill-installed-shelf")!.click();
   flush();
 }
 
@@ -139,7 +136,10 @@ describe("unified skill discovery", () => {
       await route;
     }
     await waitForFast(() => expect(shelfText(mounted.container)).toContain("Prefetched status"));
-    showInstalled(mounted.container);
+    openInstalled(mounted.container);
+    await waitForFast(() =>
+      expect(mounted.container.querySelector(".skill-installed-heading")).not.toBeNull(),
+    );
     expect(
       mounted.container.querySelector('[data-skill-id="library:' + entry.skillId + '"]'),
     ).not.toBeNull();
@@ -164,11 +164,11 @@ describe("unified skill discovery", () => {
     const libraries = buildSkillLibraryMock().map((item) => item.entry);
     const onLibraryOpen = vi.fn();
     const container = renderDiscovery({
+      installed: true,
       libraryEntries: libraries,
       onLibraryOpen,
       skill: { name: libraries[0]!.name, source: "openclaw-library" },
     });
-    showInstalled(container);
     expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(3);
     const cards = [...container.querySelectorAll(".plugin-catalog-card")];
     expect(cards[0]?.textContent).toContain("Alice");

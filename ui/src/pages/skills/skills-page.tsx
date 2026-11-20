@@ -585,7 +585,7 @@ export function SkillsPage(props: SkillsPageProps) {
   };
   return (
     <openclaw-skills-page>
-      <Show when={!pageRoute.page()}>
+      <Show when={!pageRoute.page() && !pageRoute.installed()}>
         <SkillsHeader
           surface={surface()}
           onNavigate={(tab) => context.navigate(tab)}
@@ -615,6 +615,7 @@ export function SkillsPage(props: SkillsPageProps) {
             clawhubSearchEpoch={gateway.epoch}
             surface={surface()}
             libraryEntries={library.state.list ? library.entries() : undefined}
+            libraryLoading={library.state.loading}
             onLibraryOpen={(skillId) => void library.open(skillId)}
             library={
               surface() === "discovery" ? (
@@ -679,6 +680,10 @@ export function SkillsPage(props: SkillsPageProps) {
                 void mutations.run(() => installSkill(data, skillKey, name, installId));
               }
             }}
+            installed={pageRoute.installed()}
+            browseHref={pageRoute.browseHref()}
+            onInventoryOpen={pageRoute.openInventory}
+            onBrowse={() => pageRoute.navigateList("skills")}
             listHref={pageRoute.listHref()}
             onDetailOpen={pageRoute.openInstalled}
             onDetailClose={pageRoute.close}

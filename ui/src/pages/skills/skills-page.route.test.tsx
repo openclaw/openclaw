@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  dynamicRouteFromPath,
   pathForClawHubSkill,
   pathForInstalledSkill,
   skillPageFromPath,
@@ -32,6 +33,8 @@ describe("Skill page addresses", () => {
       kind: "clawhub",
       ref: "@steipete/gog",
     });
+    expect(dynamicRouteFromPath("/ui/skills/installed", "/ui")?.[0]).toBe("skills");
+    expect(skillPageFromPath("/skills/installed")).toBeNull();
     // The workshop keeps its own address.
     expect(skillPageFromPath("/skills/workshop")).toBeNull();
     expect(skillPageFromPath("/skills/installed/..")).toBeNull();
@@ -52,6 +55,55 @@ describe("Skill page addresses", () => {
 });
 
 describe("Installed skill page route", () => {
+  it("returns from a skill to the same installed inventory and filter", async () => {
+    const report = createReport([
+      createSkill(),
+      createSkill({ name: "Calendar", skillKey: "calendar" }),
+    ]);
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.status") return report;
+      if (method === "skills.library.list") return personalLibrary;
+      if (method === "skills.search") return { results: [] };
+      throw new Error("Unexpected method: " + method);
+    });
+    const { page, context, publishRouteData } = mountSkills(request, "discovery");
+    publishRouteData({ report });
+    await waitForFast(() => expect(page.querySelector(".skill-installed-shelf")).not.toBeNull());
+    page.querySelector<HTMLButtonElement>(".skill-installed-shelf")!.click();
+    expect(context.navigate).toHaveBeenLastCalledWith("skills", {
+      pathname: "/skills/installed",
+      search: "",
+    });
+    await waitForFast(() =>
+      expect(page.querySelector(".skill-installed-heading h1")?.textContent).toBe(
+        "Installed skills",
+      ),
+    );
+    const filter = page.querySelector<HTMLInputElement>('input[name="installed-skills-search"]')!;
+    filter.value = "repo";
+    filter.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitForFast(() =>
+      expect(page.querySelector('[data-skill-id="local:calendar"]')).toBeNull(),
+    );
+    const row = page.querySelector<HTMLButtonElement>('[data-skill-id="local:repo-skill"] button')!;
+    row.click();
+    await waitForFast(() =>
+      expect(page.querySelector(".skill-page h1")?.textContent).toBe("Repo Skill"),
+    );
+    const back = page.querySelector<HTMLAnchorElement>(
+      ".skill-page .plugins-settings-breadcrumb__parent",
+    )!;
+    expect(back.textContent).toBe("Installed skills");
+    back.click();
+    await waitForFast(() => expect(page.querySelector(".skill-page")).toBeNull());
+    expect(context.navigate).toHaveBeenLastCalledWith("skills", {
+      pathname: "/skills/installed",
+      search: "",
+    });
+    expect(filter.value).toBe("repo");
+    expect(page.querySelector('[data-skill-id="local:repo-skill"] button')).toBe(row);
+  });
+
   function inventory() {
     const report = createReport([createSkill()]);
     const request = vi.fn(async (method: string) => {

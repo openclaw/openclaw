@@ -55,6 +55,7 @@ export type SkillsProps = {
   surface?: "discovery" | "settings";
   /** Undefined until the library owner accepts its first inventory. */
   libraryEntries?: SkillLibraryEntry[];
+  libraryLoading?: boolean;
   onLibraryOpen?: (skillId: string) => void;
   library?: JSX.Element;
   pageMenu?: () => JSX.Element;
@@ -80,6 +81,10 @@ export type SkillsProps = {
     retry: () => void;
   };
   onInstall: (skillKey: string, name: string, installId: string) => void;
+  installed?: boolean;
+  browseHref?: string;
+  onInventoryOpen?: () => void;
+  onBrowse?: () => void;
   /** Where a skill page's first crumb leads: the list it was opened from. */
   listHref: string;
   /** Opens an installed skill's page. */

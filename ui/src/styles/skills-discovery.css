@@ -68,6 +68,40 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+.skill-installed-heading {
+  display: grid;
+  gap: 10px;
+  padding-block-start: 14px;
+}
+
+.skill-installed-heading .page-title {
+  margin: 0;
+}
+
+/* Focus announces the heading on navigation; it is not an interactive control. */
+.skill-installed-heading .page-title:focus {
+  outline: none;
+}
+
+.skill-installed-back {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 6px;
+  padding-block: 4px;
+  color: var(--muted-strong);
+  text-decoration: none;
+}
+
+.skill-installed-back:hover {
+  color: var(--text-strong);
+}
+
+.skill-installed-back svg {
+  width: 15px;
+  height: 15px;
+}
+
 /* Installed skills in one raised line above the registry: marks, name, the first names. */
 .skill-installed-shelf {
   display: flex;
@@ -193,6 +227,10 @@
 }
 
 @media (max-width: 640px) {
+  .skill-installed-heading {
+    padding-block-start: 8px;
+  }
+
   .plugin-catalog-results--rows .plugin-catalog-row__main > .skill-tile {
     margin-top: 1px;
   }

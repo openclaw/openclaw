@@ -23,6 +23,7 @@ const catalog = {
     noClawHubResults: "No skills match your search on ClawHub.",
     notScannedByClawHub: "Not scanned by ClawHub",
     installed: "Installed",
+    searchInstalled: "Search installed skills",
     installedRef: "Installed {ref}",
     skillEnabled: "Skill enabled",
     skillDisabled: "Skill disabled",

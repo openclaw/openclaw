@@ -90,7 +90,7 @@ it("windows skill discovery while preserving keyboard traversal, notices, detail
       description: "A local skill for browsing a large installed inventory.",
     }),
   );
-  const [query, setQuery] = createSignal("");
+  const [installed, setInstalled] = createSignal(false);
   const [notice, setNotice] = createSignal<{ ref: string; kind: "error"; text: string } | null>(
     null,
   );
@@ -100,16 +100,16 @@ it("windows skill discovery while preserving keyboard traversal, notices, detail
     report: createReport(skills),
     clawhubResults: [],
     onDetailOpen,
-    onClawHubQueryChange: setQuery,
   });
   renderSkills(
     {
       ...props,
+      onInventoryOpen: () => setInstalled(true),
+      get installed() {
+        return installed();
+      },
       state: {
         ...props.state,
-        get clawhubSearchQuery() {
-          return query();
-        },
         get clawhubInstallMessage() {
           return notice();
         },
@@ -120,8 +120,7 @@ it("windows skill discovery while preserving keyboard traversal, notices, detail
   const cards = () => [...container.querySelectorAll<HTMLElement>("[data-skill-id]")];
   const card = (index: number) =>
     container.querySelector<HTMLElement>(`[data-skill-id="local:window-skill-${index}"]`)!;
-  // Installed skills open as their own list from the Installed chip.
-  await page.getByRole("button", { name: "Installed", exact: true }).click();
+  await page.getByRole("button", { name: "Installed skills", exact: true }).click();
   await waitForSolid(() => {
     expect(cards().length).toBeGreaterThan(4);
     expect(cards().length).toBeLessThan(100);
@@ -176,7 +175,9 @@ it("windows skill discovery while preserving keyboard traversal, notices, detail
   await page.getByRole("button", { name: "Open Window skill 0999 details", exact: true }).click();
   expect(onDetailOpen).toHaveBeenLastCalledWith("window-skill-999");
 
-  const search = container.querySelector<HTMLInputElement>('input[name="skills-search"]')!;
+  const search = container.querySelector<HTMLInputElement>(
+    'input[name="installed-skills-search"]',
+  )!;
   await userEvent.fill(search, "Window skill 0999");
   await waitForSolid(() => {
     expect(cards()).toHaveLength(1);
