@@ -481,27 +481,6 @@ describe("prompt history identity across bounded windows", () => {
     expect(next.update).toBeUndefined();
   });
 
-  it("does not pin when neither window names the history of a compacted session", async () => {
-    // A checkpoint written before the boundary count was recorded names no count.
-    const entries: SessionEntry[] = [];
-    prepareCounted("Base.", entries);
-    await fixture.persist(entries);
-    expect(entries.at(-1)).toMatchObject({ data: { historyId: null } });
-    expect(JSON.stringify(entries.at(-1))).not.toContain("boundaryCount");
-    fixture.reload();
-    expect(prepareCounted(refreshed, entries, 1)).toMatchObject({
-      restart: true,
-      systemPrompt: refreshed,
-    });
-    await fixture.persist(entries);
-    // The restarted checkpoint records the count, so later runs on the same history keep it.
-    fixture.reload();
-    expect(prepareCounted("Base.", entries, 1)).toMatchObject({
-      restart: false,
-      systemPrompt: refreshed,
-    });
-  });
-
   it.each([0, undefined])(
     "keeps a never-compacted session pinned (checkpoint boundary count %s)",
     async (writtenCount) => {

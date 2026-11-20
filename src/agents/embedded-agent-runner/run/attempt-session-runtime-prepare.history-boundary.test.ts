@@ -16,12 +16,7 @@ import { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-
 
 const mocks = vi.hoisted(() => ({ prepareSessionManager: vi.fn() }));
 
-vi.mock("../../anthropic-payload-log.js", () => ({ createAnthropicPayloadLogger: () => ({}) }));
-vi.mock("../../cache-trace.js", () => ({ createCacheTrace: () => ({}) }));
-vi.mock("../tool-result-truncation.js", () => ({ restoreCacheTtlToolResultProjections: vi.fn() }));
-vi.mock("./attempt-setup.js", () => ({
-  installEmbeddedAttemptContextGuards: () => ({ remove: vi.fn() }),
-}));
+// mock-isolation: A synthetic agent session stands in; the bounded SQLite manager stays real.
 vi.mock("./attempt-session-prepare.js", () => ({
   prepareEmbeddedAttemptAgentSession: async (input: {
     onSessionCreated: (session: unknown) => void;
@@ -33,12 +28,7 @@ vi.mock("./attempt-session-prepare.js", () => ({
   prepareEmbeddedAttemptSessionBoundary: () => ({}),
   prepareEmbeddedAttemptSessionManager: mocks.prepareSessionManager,
 }));
-vi.mock("./attempt-session-settle.js", () => ({
-  createEmbeddedAttemptSessionSettleTracker: () => ({
-    abortActiveSession: vi.fn(),
-    buildAbortSettlePromise: () => null,
-  }),
-}));
+// mock-isolation: The synthetic session has no provider stream to wrap.
 vi.mock("./attempt-stream-settle.js", () => ({
   prepareEmbeddedAttemptTransport: async () => ({ compactionReplayEnabled: true }),
 }));
@@ -267,10 +257,9 @@ it("keeps the first history's series after a rewind past a later compaction", as
   // Count 1 with the compaction outside the window: the series is named unknown:1.
   const first = await session.run("P1");
   expect(hasCompaction(first.manager)).toBe(false);
-  const rewindTo = expectDefined(
-    first.manager.getBranch().findLast(isCheckpoint)?.id,
-    "checkpoint",
-  );
+  const checkpoint = first.manager.getBranch().findLast(isCheckpoint);
+  expect(checkpoint).toMatchObject({ data: { historyId: "unknown:1", boundaryCount: 1 } });
+  const rewindTo = expectDefined(checkpoint?.id, "checkpoint");
   const writer = await session.open();
   await writer.appendCompactionAsync("Later summary.", rewindTo, 1_000);
   expect((await session.run("P2")).prepared).toMatchObject({ restart: true, systemPrompt: "P2" });
@@ -310,15 +299,5 @@ it("restarts at a visible compaction after a counted checkpoint", async () => {
     restart: true,
     seriesStatus: "restarted:history",
     systemPrompt: "P2",
-  });
-});
-
-it("records an unknown history as unknown:<boundaryCount>", async () => {
-  const session = await openCompactedSession("history-boundary-unknown-id");
-  await session.pushOut();
-  const { manager } = await session.run();
-  expect(hasCompaction(manager)).toBe(false);
-  expect(manager.getBranch().findLast(isCheckpoint)).toMatchObject({
-    data: { historyId: "unknown:1", boundaryCount: 1 },
   });
 });
