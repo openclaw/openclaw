@@ -1,6 +1,7 @@
-/* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
+import type { SessionWorkspaceStatResult } from "../api/types.ts";
 import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../lib/presentation.ts";
 import { mockDocumentVisibility, restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
@@ -192,7 +193,7 @@ it("rechecks retained file links when read permissions change, ignoring old answ
     sessionKey: string;
     files: { path: string; status: "missing" }[];
   }) => void;
-  const statFiles = vi.fn(async () => ({
+  const statFiles = vi.fn(async (): Promise<SessionWorkspaceStatResult> => ({
     sessionKey: workspace.sessionKey,
     files: [{ path: "/tmp/report.md", status: "missing" as const }],
   }));

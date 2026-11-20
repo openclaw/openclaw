@@ -686,7 +686,7 @@ export function sessionWorkspaceFileLinkProps(
     workspaceFileLinkScope: scope,
     onWorkspaceFileLinks: (links: HTMLAnchorElement[]) =>
       checkSessionWorkspaceFileLinks(state, links, scope),
-    onOpenWorkspaceFile: (target: MarkdownFileLinkTarget) =>
+    onOpenWorkspaceFile: (target: WorkspaceFileLinkTarget) =>
       void openSessionWorkspaceFile(state, target),
     onOpenManagedArtifact: (href: string) => openSessionWorkspaceManagedArtifact(state, href),
   };
