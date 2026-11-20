@@ -5,12 +5,20 @@ import { createSlackActions } from "./channel-actions.js";
 import { listSlackMessageActions } from "./message-actions.js";
 
 const list = vi.hoisted(() => vi.fn());
+const history = vi.hoisted(() => vi.fn());
+const authTest = vi.hoisted(() => vi.fn());
 const createSlackLookupClient = vi.hoisted(() =>
-  vi.fn((_token: string) => ({ conversations: { list } })),
+  vi.fn((_token: string) => ({ auth: { test: authTest }, conversations: { list, history } })),
+);
+const createSlackReadClient = vi.hoisted(() =>
+  vi.fn((_token: string) => ({
+    conversations: { info: async () => ({ channel: { is_im: true, user: "U1" } }) },
+  })),
 );
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
   createSlackLookupClient,
+  createSlackReadClient,
 }));
 
 const direct: SlackActionContext = { conversationReadOrigin: "direct-operator" };
@@ -34,12 +42,23 @@ async function listChannels(
   context: SlackActionContext = direct,
 ) {
   const result = await handleSlackAction({ action: "channelList", ...params }, cfg, context);
-  return result.details as { channels: Array<{ id: string }>; nextPageToken?: string };
+  return result.details as {
+    teamId?: string;
+    channels: Array<{ id: string }>;
+    nextPageToken?: string;
+  };
+}
+
+function lookupTokens() {
+  return createSlackLookupClient.mock.calls.map(([token]) => token);
 }
 
 beforeEach(() => {
   list.mockReset().mockResolvedValue({ ok: true, channels: conversations });
+  history.mockReset().mockResolvedValue({ ok: true, messages: [], has_more: false });
+  authTest.mockReset().mockResolvedValue({ ok: true, team_id: "T1" });
   createSlackLookupClient.mockClear();
+  createSlackReadClient.mockClear();
 });
 
 it("lists only member channels with the bot token, excluding archived by default", async () => {
@@ -54,6 +73,7 @@ it("lists only member channels with the bot token, excluding archived by default
   });
   expect(details).toEqual({
     ok: true,
+    teamId: "T1",
     channels: [
       {
         id: "C1",
@@ -96,7 +116,12 @@ it("forwards type filters, archived opt-in, and cursor paging", async () => {
     limit: 1000,
     cursor: "dGVhbTpDMQ==",
   });
-  expect(details).toEqual({ ok: true, channels: [], nextPageToken: "dGVhbTpDMg==" });
+  expect(details).toEqual({
+    ok: true,
+    teamId: "T1",
+    channels: [],
+    nextPageToken: "dGVhbTpDMg==",
+  });
   await expect(listChannels(slackConfig(), { types: ["dm"] })).rejects.toThrow(
     "types must be one or more of",
   );
@@ -133,7 +158,7 @@ it("gates discovery and execution on actions.channelInfo", async () => {
     channel: "slack",
     action: "channel-list",
     cfg: slackConfig(),
-    params: { types: ["im"], limit: 10, pageToken: "next", includeArchived: true },
+    params: { types: ["im"], limit: 10, pageToken: "next", includeArchived: true, readAs: "bot" },
   });
   expect(invoke).toHaveBeenCalledWith(
     {
@@ -143,9 +168,53 @@ it("gates discovery and execution on actions.channelInfo", async () => {
       pageToken: "next",
       includeArchived: true,
       teamId: undefined,
+      readAs: "bot",
       accountId: undefined,
     },
     expect.anything(),
     undefined,
   );
+});
+
+it("reports an explicit workspace without an auth.test lookup", async () => {
+  const details = await listChannels(slackConfig(), { teamId: "T2" });
+
+  expect(details.teamId).toBe("T2");
+  expect(authTest).not.toHaveBeenCalled();
+});
+
+it.each([
+  { readAs: undefined, token: "xoxp-user", dm: "D7", ids: ["C1", "C2", "G1", "D1", "G2"] },
+  { readAs: "bot", token: "xoxb-bot", dm: "D8", ids: ["C1", "G1", "D1", "G2"] },
+  { readAs: "user", token: "xoxp-user", dm: "D9", ids: ["C1", "C2", "G1", "D1", "G2"] },
+])("lists and reads with readAs $readAs", async ({ readAs, token, dm, ids }) => {
+  const cfg = slackConfig({ userToken: "xoxp-user", allowFrom: ["U1"] });
+  const details = await listChannels(cfg, { readAs });
+  expect(details.channels.map((channel) => channel.id)).toEqual(ids);
+
+  // A delegated DM read resolves the DM owner, so both lookups prove the selected token.
+  await handleSlackAction({ action: "readMessages", channelId: dm, readAs }, cfg, {});
+  expect(createSlackReadClient.mock.calls.map(([used]) => used)).toEqual([token]);
+  expect(lookupTokens()).toEqual([token, token]);
+});
+
+it("rejects readAs when the requested token is not configured", async () => {
+  await expect(listChannels(slackConfig(), { readAs: "user" })).rejects.toThrow(
+    'Slack readAs "user" requires a configured user token',
+  );
+  await expect(
+    handleSlackAction(
+      { action: "readMessages", channelId: "C1", readAs: "user" },
+      slackConfig(),
+      direct,
+    ),
+  ).rejects.toThrow('Slack readAs "user" requires a configured user token');
+  await expect(
+    listChannels({ channels: { slack: { userToken: "xoxp-user" } } }, { readAs: "bot" }),
+  ).rejects.toThrow('Slack readAs "bot" requires a configured bot token');
+  await expect(listChannels(slackConfig(), { readAs: "admin" })).rejects.toThrow(
+    'Slack readAs must be "bot" or "user".',
+  );
+  expect(list).not.toHaveBeenCalled();
+  expect(history).not.toHaveBeenCalled();
 });

@@ -126,6 +126,22 @@ export function describeSlackMessageTool({
       },
     });
   }
+  const readAsActions = (["read", "channel-list"] as const).filter((action) =>
+    actions.includes(action),
+  );
+  if (readAsActions.length > 0) {
+    schema.push({
+      actions: readAsActions,
+      properties: {
+        readAs: Type.Optional(
+          stringEnum(["bot", "user"] as const, {
+            description:
+              'Slack token for read and channel-list. Omit for the account default (the user token when configured, else the bot token). "bot" forces the bot token; "user" requires a configured user token.',
+          }),
+        ),
+      },
+    });
+  }
   for (const [action, createProperties] of [
     ["download-file", createSlackFileActionSchema],
     ["send", createSlackSendActionSchema],

@@ -318,6 +318,7 @@ export function createSlackActions(
           after: readStringParam(actionParams, "after"),
           messageId: readStringParam(actionParams, "messageId"),
           threadId: readStringParam(actionParams, "threadId"),
+          readAs: readStringParam(actionParams, "readAs"),
         });
       }
 
@@ -387,6 +388,7 @@ export function createSlackActions(
           pageToken: readStringParam(actionParams, "pageToken"),
           includeArchived: readBooleanParam(actionParams, "includeArchived"),
           teamId: readStringParam(actionParams, "teamId"),
+          readAs: readStringParam(actionParams, "readAs"),
         });
       }
 

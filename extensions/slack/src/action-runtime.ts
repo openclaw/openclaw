@@ -19,6 +19,7 @@ import {
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "./accounts.js";
 import type { SlackActionContext } from "./action-context.js";
+import { readSlackConversationListParams, resolveSlackReadAsToken } from "./action-read-params.js";
 import {
   hasSlackRequesterAccount,
   isSlackDmTargetConfigured,
@@ -32,8 +33,8 @@ import {
 } from "./action-threading.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import type { SlackConversationInfo } from "./channel-type.js";
-import { SLACK_CONVERSATION_LIST_TYPES, type SlackConversationListType } from "./cursor-pages.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
+import { getSlackInstallationTeamId } from "./installation-identity-state.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { hasSlackNativeDataBlock } from "./native-data-blocks.js";
 import { mergeSlackSendResults } from "./send-results.js";
@@ -58,8 +59,6 @@ const messagingActions = new Set([
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 const SLACK_REACTION_RESULT_LIMIT = 100;
-const SLACK_CONVERSATION_LIST_DEFAULT_LIMIT = 200;
-const SLACK_CONVERSATION_LIST_MAX_LIMIT = 1000;
 
 function readSlackResultLimit(params: Record<string, unknown>) {
   return Math.min(
@@ -129,6 +128,7 @@ async function assertSlackReadTargetAllowed(params: {
   teamId?: string;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   context?: SlackActionContext;
+  token?: string;
 }) {
   const deny = () => {
     throw new Error("Slack read target channel is not allowed.");
@@ -157,6 +157,7 @@ async function assertSlackReadTargetAllowed(params: {
       channelId: params.channelId,
       teamId: params.teamId,
       operation: "read",
+      ...(params.token ? { token: params.token } : {}),
       assertDirectAdapterHandoff: params.context?.assertDirectAdapterHandoff,
     });
     if (
@@ -193,6 +194,7 @@ async function assertSlackReadTargetAllowed(params: {
     channelId: params.channelId,
     teamId: params.teamId,
     operation: "read",
+    ...(params.token ? { token: params.token } : {}),
     ...(preliminary.shouldResolveName ? { requireFreshName: true } : {}),
     assertDirectAdapterHandoff: params.context?.assertDirectAdapterHandoff,
   });
@@ -206,26 +208,6 @@ async function assertSlackReadTargetAllowed(params: {
   if (!(await isSlackResolvedReadTargetAllowed({ ...params, info, currentConversation }))) {
     deny();
   }
-}
-
-function readSlackConversationListTypes(value: unknown): SlackConversationListType[] {
-  if (value === undefined) {
-    return ["public_channel", "private_channel"];
-  }
-  const requested: unknown = typeof value === "string" ? value.split(",") : value;
-  const known = new Set<unknown>(SLACK_CONVERSATION_LIST_TYPES);
-  if (
-    !Array.isArray(requested) ||
-    requested.length === 0 ||
-    requested.some((entry) => !known.has(typeof entry === "string" ? entry.trim() : entry))
-  ) {
-    throw new Error(
-      `Slack channel-list types must be one or more of: ${SLACK_CONVERSATION_LIST_TYPES.join(", ")}.`,
-    );
-  }
-  return SLACK_CONVERSATION_LIST_TYPES.filter((type) =>
-    requested.some((entry) => typeof entry === "string" && entry.trim() === type),
-  );
 }
 
 type SlackActionChannelTarget = {
@@ -316,8 +298,8 @@ export async function handleSlackAction(
     throw new Error("Slack channel creation is disabled.");
   }
 
-  const buildActionOpts = (operation: "read" | "write", teamId?: string) => {
-    const token = resolveSlackOperationToken(account, operation);
+  const buildActionOpts = (operation: "read" | "write", teamId?: string, readToken?: string) => {
+    const token = readToken ?? resolveSlackOperationToken(account, operation);
     if (!token && account.identity === "user") {
       throw new Error(`Slack operation token missing for account "${account.accountId}".`);
     }
@@ -331,7 +313,7 @@ export async function handleSlackAction(
     };
   };
 
-  const assertReadTargetAllowed = async (target: SlackActionChannelTarget) => {
+  const assertReadTargetAllowed = async (target: SlackActionChannelTarget, token?: string) => {
     await assertSlackReadTargetAllowed({
       account,
       cfg,
@@ -339,6 +321,7 @@ export async function handleSlackAction(
       teamId: target.teamId,
       conversationReadOrigin: context?.conversationReadOrigin,
       context,
+      token,
     });
   };
 
@@ -617,8 +600,9 @@ export async function handleSlackAction(
       case "readMessages": {
         const target = resolveChannelTarget();
         const { channelId } = target;
-        await assertReadTargetAllowed(target);
-        const readOpts = buildActionOpts("read", target.teamId);
+        const readToken = resolveSlackReadAsToken(account, params);
+        await assertReadTargetAllowed(target, readToken);
+        const readOpts = buildActionOpts("read", target.teamId, readToken);
         const limit = readPositiveIntegerParam(params, "limit", {
           message: "limit must be a positive integer.",
         });
@@ -777,24 +761,17 @@ export async function handleSlackAction(
     if (!isActionEnabled("channelInfo")) {
       throw new Error("Slack channel list is disabled.");
     }
-    const types = readSlackConversationListTypes(params.types);
     const teamId =
       readStringParam(params, "teamId") ?? resolveTrustedCurrentSlackTeamId({ account, context });
     assertSlackDetachedTargetAllowed(account.accountId, teamId);
-    const readToken = resolveSlackOperationToken(account, "read");
+    const readAsToken = resolveSlackReadAsToken(account, params);
+    const readToken = readAsToken ?? resolveSlackOperationToken(account, "read");
     // A bot sees every public channel; list only conversations its token can read.
     const membersOnly = !readToken || readToken !== account.userToken?.trim();
     const page = await slackActionRuntime.listSlackConversations({
-      ...buildActionOpts("read", teamId),
-      types,
-      includeArchived: readBooleanParam(params, "includeArchived") === true,
-      limit: Math.min(
-        readPositiveIntegerParam(params, "limit", {
-          message: "limit must be a positive integer.",
-        }) ?? SLACK_CONVERSATION_LIST_DEFAULT_LIMIT,
-        SLACK_CONVERSATION_LIST_MAX_LIMIT,
-      ),
-      cursor: readStringParam(params, "pageToken"),
+      ...buildActionOpts("read", teamId, readAsToken),
+      knownTeamId: teamId ?? getSlackInstallationTeamId(account.accountId),
+      ...readSlackConversationListParams(params),
     });
     const requesterAccount = hasSlackRequesterAccount(account, context);
     const channels = [];
@@ -825,6 +802,7 @@ export async function handleSlackAction(
     }
     return jsonResult({
       ok: true,
+      ...(page.teamId ? { teamId: page.teamId } : {}),
       channels,
       ...(page.nextCursor ? { nextPageToken: page.nextCursor } : {}),
     });

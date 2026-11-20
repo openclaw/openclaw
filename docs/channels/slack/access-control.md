@@ -101,12 +101,14 @@ DMs that are not configured.
   is `["public_channel", "private_channel"]`; DMs are listed only on request.
 - `includeArchived`: archived conversations are excluded unless this is `true`.
 - `limit`: Slack page size, default `200`, maximum `1000`.
+- `readAs`: `"bot"` or `"user"`; see [Read token selection](#read-token-selection).
 - `pageToken`: pass the previous `nextPageToken` until it is absent. Filtering runs
   after Slack returns a page, so a page can hold fewer results than `limit`, or none.
 
 ```json
 {
   "ok": true,
+  "teamId": "T0123456789",
   "channels": [
     {
       "id": "C0123456789",
@@ -129,12 +131,28 @@ DMs that are not configured.
 }
 ```
 
+`teamId` names the workspace the listed IDs belong to, so `teamId` plus `id` is a
+stable conversation key. It is the requested or trusted current workspace, the
+workspace of the running Slack monitor, or otherwise Slack's `auth.test` answer for
+the token used.
+
 Pass an entry's `id` as `channelId` to `read`. `channels.slack.actions.channelInfo`
 controls this action. Listing uses `conversations.list`, which needs `channels:read`,
 `groups:read`, `mpim:read`, or `im:read` for each requested type; the default manifest
 includes all four. A missing scope returns Slack's `missing_scope` error with the
 needed scope. In Enterprise Grid, pass `teamId` or call from a Slack conversation in
 the target workspace.
+
+### Read token selection
+
+`read` and `channel-list` accept `readAs` to choose the Slack token explicitly:
+
+- Omitted: the account default. Reads use `userToken` when configured, otherwise the bot token.
+- `"bot"`: the bot token, even when `userToken` is configured. Fails when no bot token is configured.
+- `"user"`: the user token. Fails when `userToken` is not configured.
+
+The selected token also performs the conversation lookups for the read-target check.
+Channel and DM policy apply the same way for every choice.
 
 ## Live policy changes
 
