@@ -95,7 +95,7 @@ it("does not analyze scopes for unrelated destructuring", () => {
       throw new Error("Unrelated destructuring must not be reported");
     },
   });
-  expect(listeners.VariableDeclarator).toBeTypeOf("function");
+  expect(typeof listeners.VariableDeclarator).toBe("function");
   listeners.VariableDeclarator?.({
     init: { type: "Identifier", name: "process", start: 16 },
     id: {
