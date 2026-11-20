@@ -141,7 +141,7 @@ describe("hosted model pricing", () => {
 
   afterEach(resetPricing);
 
-  it("prices the prepared activation snapshot and follows enablement reloads", async () => {
+  it("prepares pricing policy once and honors config changes over retained inventory", async () => {
     await using cache = createPluginCache();
     await withPluginCache(cache, async () => {
       const prepare = (enabled: boolean) => {
@@ -150,17 +150,15 @@ describe("hosted model pricing", () => {
           models: { catalogRefresh: { enabled: false } },
         };
         const snapshot = createPluginMetadataSnapshotFixture({
-          plugins: [
-            {
-              id: "fixture",
-              origin: "global",
-              modelCatalog: {
-                providers: {
-                  fixture: { models: [{ id: "model", cost: { input: 7, output: 9 } }] },
-                },
+          plugins: ["fixture", "other", "third"].map((id) => ({
+            id,
+            origin: "global" as const,
+            modelCatalog: {
+              providers: {
+                [id]: { models: [{ id: "model", cost: { input: 7, output: 9 } }] },
               },
             },
-          ],
+          })),
         });
         snapshot.index.plugins = projectInstalledPluginIndexPolicy({
           plugins: snapshot.index.plugins,
@@ -172,19 +170,23 @@ describe("hosted model pricing", () => {
       const enabled = prepare(true);
       const disabled = prepare(false);
       const activation = vi.spyOn(pluginConfig, "createPluginActivationSource");
-      for (const generation of [enabled, disabled, enabled]) {
+      for (const [inventory, requested] of [
+        [enabled, disabled],
+        [disabled, enabled],
+        [enabled, disabled],
+      ] as const) {
         await withPluginMetadataSnapshotScope(
-          generation.snapshot,
+          inventory.snapshot,
           async () => {
-            const context = await prepareModelPricingContext(generation.config);
+            const context = await prepareModelPricingContext(requested.config);
             expect(resolveModelPricing(context, "fixture/model")?.input).toBe(
-              generation === enabled ? 7 : undefined,
+              requested === enabled ? 7 : undefined,
             );
           },
-          { config: generation.config, trustConfigIdentity: true },
+          { config: inventory.config, trustConfigIdentity: true },
         );
       }
-      expect(activation).not.toHaveBeenCalled();
+      expect(activation).toHaveBeenCalledTimes(2);
     });
   });
 
