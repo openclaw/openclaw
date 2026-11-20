@@ -41,6 +41,7 @@ it("renders live sharing events through the transcript notice owner and clears o
       agentId: "main",
       action: "member-added",
       identityId: "member-alice",
+      identityLabel: "Alice Collaborator",
       access: "suggest",
       actorState: "unknown",
       ts: 1_000,
@@ -48,7 +49,7 @@ it("renders live sharing events through the transcript notice owner and clears o
   });
   await draw();
   expect(container.querySelector(".chat-notice")?.textContent).toContain(
-    "member-alice was invited with Suggest access",
+    "Alice Collaborator was invited with Suggest access",
   );
   expect(state.chatMessages).toEqual([]);
   state.connectionEpoch += 1;

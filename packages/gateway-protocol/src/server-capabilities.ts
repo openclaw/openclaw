@@ -44,6 +44,7 @@ export const GATEWAY_SERVER_CAPS = {
   PUBLISHED_MODEL_CATALOG: "published-model-catalog",
   PROFILE_BINDING: "profile-binding-v1",
   PROGRESS_CARD_AGENT_SCOPE: "progress-card-agent-scope-v1",
+  SESSION_APPROVAL_RECIPIENTS: "session-approval-recipients-v1",
   SESSION_SCOPED_CHAT_METADATA: "session-scoped-chat-metadata",
   SESSION_SCOPED_MODEL_CATALOG: "session-scoped-model-catalog",
   SESSION_UNREAD_ACK_CONTRACT: "session-unread-ack-contract",

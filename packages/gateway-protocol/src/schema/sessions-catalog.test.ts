@@ -356,6 +356,7 @@ describe("session sharing protocol", () => {
         ...baseEvent,
         action: "member-access-changed",
         identityId: "alice",
+        identityLabel: "Alice Collaborator",
         access,
       });
     }

@@ -17,6 +17,7 @@ function sharingEvent(payload: Record<string, unknown> = {}, evidence = false): 
       sessionKey: "agent:main:main",
       agentId: "main",
       identityId: "member-alice",
+      identityLabel: "Alice Collaborator",
       access: "send",
       ts: 1_000,
       ...(evidence
@@ -42,8 +43,12 @@ describe("live sharing transcript notices", () => {
     );
     const notices = currentChatSharingNotices(state);
     expect(notices.map(projectChatSharingNotice)).toMatchObject([
-      { kind: "notice", label: "Taylor invited member-alice with Send access", timestamp: 1_000 },
-      { kind: "notice", label: "member-alice’s access changed to Read", timestamp: 2_000 },
+      {
+        kind: "notice",
+        label: "Taylor invited Alice Collaborator with Send access",
+        timestamp: 1_000,
+      },
+      { kind: "notice", label: "Alice Collaborator’s access changed to Read", timestamp: 2_000 },
     ]);
     expect(notices.map((notice) => notice.afterMessageId)).toEqual(["previous", "previous"]);
     handlePageGatewayEvent(state, sharingEvent({ access: undefined }));
@@ -52,6 +57,21 @@ describe("live sharing transcript notices", () => {
     expect(state.chatMessages).toBe(messages);
     expect(request).not.toHaveBeenCalled();
     stop();
+  });
+
+  it("uses an unknown-person label instead of an opaque identity or actor id", () => {
+    const { state } = createSessionEventState();
+    handlePageGatewayEvent(
+      state,
+      sharingEvent({
+        action: "member-access-changed",
+        identityLabel: "  ",
+        actor: { type: "human", id: "opaque-actor-id" },
+      }),
+    );
+    expect(currentChatSharingNotices(state).map(projectChatSharingNotice)).toMatchObject([
+      { label: "Unknown person’s access changed to Send" },
+    ]);
   });
 
   it("leaves old/non-ceiling, unrelated and malformed sharing events unchanged", () => {

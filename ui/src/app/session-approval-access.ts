@@ -1,3 +1,4 @@
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.ts";
 import type { GatewayHelloOk } from "../api/gateway.ts";
 import { hasOperatorApprovalsAccess } from "./operator-access.ts";
 import { resolveSelfPresenceUser, type AuthenticatedUser } from "./user-profile.ts";
@@ -14,6 +15,7 @@ export function canSubscribeSessionApprovals(
   return (
     hasOperatorApprovalsAccess(hello.auth ?? null) ||
     Boolean(
+      hello.features?.capabilities?.includes(GATEWAY_SERVER_CAPS.SESSION_APPROVAL_RECIPIENTS) &&
       hello.auth?.role === "operator" &&
       (selfUser?.id ||
         hello.auth.profileActivityViewerId ||

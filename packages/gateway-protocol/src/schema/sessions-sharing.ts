@@ -152,6 +152,7 @@ const SessionSharingEventTargetFields = {
 const SessionSharingEventChangeFields = {
   visibility: Type.Optional(SessionVisibilitySchema),
   identityId: Type.Optional(NonEmptyString),
+  identityLabel: Type.Optional(NonEmptyString),
   access: Type.Optional(SessionMemberPermissionLevelSchema),
   ts: Type.Integer({ minimum: 0 }),
 };
