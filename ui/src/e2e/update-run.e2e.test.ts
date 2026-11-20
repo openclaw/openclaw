@@ -4,8 +4,10 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { configResponse } from "./chat-flow-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { sidebarCronJob } from "./sidebar-customization.test-support.ts";
 import { createUpdateRunFixture } from "./update-run.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI update run E2E" });
@@ -15,6 +17,95 @@ function text(root: Page | Locator, value: string, exact = true) {
 }
 
 suite.define(() => {
+  it.each([390, 1280])("keeps one update summary in the Inbox at %i px", async (width) => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        colorScheme: "dark",
+        deviceScaleFactor: 2,
+        reducedMotion: "reduce",
+        serviceWorkers: "block",
+        viewport: { width, height: 844 },
+      },
+      async ({ page }) => {
+        const now = Date.now();
+        const run = {
+          ...createUpdateRunFixture(),
+          phase: "finished",
+          status: "failed",
+          reason: "preflight-no-good-commit",
+          target: { kind: "git", channel: "dev" },
+          finishedAtMs: now,
+          steps: [
+            { step: "requested", status: "completed" },
+            { step: "staging", status: "completed" },
+            { step: "validating", status: "failed" },
+          ],
+        } as const;
+        const job = sidebarCronJob({
+          id: "memory-dreaming",
+          name: "Memory Dreaming Promotion",
+          state: { lastRunStatus: "error", lastRunAtMs: now - 6 * 60 * 60 * 1000 },
+        });
+        const gateway = await installMockGateway(page, {
+          updateAvailable: null,
+          methodResponses: {
+            "cron.list": {
+              jobs: [compactCronJobFixture(job)],
+              snapshotRevision: "update-inbox",
+              total: 1,
+              offset: 0,
+              limit: 50,
+              hasMore: false,
+              nextOffset: null,
+            },
+            "update.status": { lastRun: run },
+            "update.runs.get": { run },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("update.status");
+        if (width === 390) {
+          await page.getByRole("button", { name: "Expand sidebar" }).click();
+        }
+        await page.locator(".sidebar-issues-button:visible").click();
+        const panel = page.locator("#sidebar-issues-panel");
+        const row = panel.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        const summary = row.locator("summary");
+        await summary.click();
+        await text(panel, job.name).waitFor();
+        const capture = panel.locator(
+          ".sidebar-issues-panel__tabs, .sidebar-issues-panel__list-wrap",
+        );
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          panel,
+          [capture.first(), row.locator("details")],
+          {
+            animations: "disabled",
+          },
+        );
+        await writeFile(path.join(suite.artifactDir, `update-inbox-${width}.png`), frame.png);
+        expect(await text(row, "2 of 4 phases complete").count()).toBe(1);
+        expect(
+          await row
+            .locator("details")
+            .evaluate((element) => element.scrollWidth <= element.clientWidth),
+        ).toBe(true);
+        const review = row.getByRole("button", { name: "View update details", exact: true });
+        await review.press("Enter");
+        const dialog = page.locator("openclaw-modal-dialog");
+        await dialog
+          .getByText(/OpenClaw update failed: preflight-no-good-commit/)
+          .first()
+          .waitFor();
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+      },
+    );
+  });
+
   it("keeps an app update in the top-right toast across phases and reconnect", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },

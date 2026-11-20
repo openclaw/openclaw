@@ -449,6 +449,8 @@ version and restart the Gateway.
 New-update notifications in the Inbox and account menu appear only for the
 `stable` and `beta` channels. The `dev` channel can still check and start updates
 here manually, and active update progress and recovery messages remain visible.
+Expand a recorded update in **Inbox → System** and choose **View update details**
+to open its report without starting another update.
 
 For `dev` git updates, the confirmation, run report, and available-update status
 show the installed → target short commit SHAs on a separate line below the commit
