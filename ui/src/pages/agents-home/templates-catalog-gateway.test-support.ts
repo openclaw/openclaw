@@ -1,4 +1,5 @@
-import type { Page } from "playwright";
+import type { Browser, Page } from "playwright";
+import { onTestFinished } from "vitest";
 import type {
   ClawHubTemplateCatalogDetail,
   ClawHubTemplateCatalogEntry,
@@ -31,6 +32,37 @@ export const skillExcerpt =
   "Research trips and compare destinations against the approved itinerary. ".repeat(24);
 const config = { gateway: { controlUi: { experimental: { templates: true } } } };
 export const agentsList = makeBootRoster({ agents: [{ id: "main", name: "Main" }] });
+
+export function createTemplateCatalogFixture(runtime: () => { browser: Browser; baseUrl: string }) {
+  return async function fixture(
+    viewport = { width: 1440, height: 900 },
+    entry: ClawHubTemplateCatalogEntry = workflowOperator,
+    detailPublisher: Partial<Pick<ClawHubTemplateCatalogEntry, "ownerHandle" | "official">> = {},
+    loading = false,
+    colorScheme: "light" | "dark" = "light",
+    linkPreviews = false,
+    catalogEntries: ClawHubTemplateCatalogEntry[] = [entry],
+  ) {
+    const { browser, baseUrl } = runtime();
+    const context = await browser.newContext({
+      colorScheme,
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: viewport.width, height: viewport.height },
+    });
+    onTestFinished(() => context.close());
+    const page = await context.newPage();
+    const gateway = await installTemplateCatalogGateway(page, {
+      entry,
+      detailPublisher,
+      loading,
+      linkPreviews,
+      catalogEntries,
+    });
+    await page.goto(`${baseUrl}templates`);
+    return { page, gateway };
+  };
+}
 
 export async function installTemplateCatalogGateway(
   page: Page,
