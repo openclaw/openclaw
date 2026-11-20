@@ -77,6 +77,7 @@ export function projectionOperations(
     markPhase: (phase: LocalWorkspacePausePhase) => void;
   },
   reason: LocalWorkspacePauseReason = "reconcile",
+  markPhase = quiescence?.markPhase,
 ) {
   let checkpointPreparation: LocalWorkspacePreparedEntry[] | undefined;
   let checkpointObjects: Array<[string, string]> | undefined;
@@ -204,7 +205,7 @@ export function projectionOperations(
     if (target === "projection") {
       await quiescence?.resume();
     }
-    quiescence?.markPhase("scan");
+    markPhase?.("scan");
     await assertLocalWorkspaceDirectory(source?.root ?? sourcePath(target));
     const snapshot = await readManifest({
       kind: "scan",
@@ -240,13 +241,14 @@ export function projectionOperations(
       update,
       application: { assertCurrent, workerAuthority },
       quiescence,
+      markPhase,
     });
   const cleanupAccepted = async () => {
     const selected = current();
     if (!selected.pending_ref || selected.pending_target) {
       return;
     }
-    quiescence?.markPhase("cleanup");
+    markPhase?.("cleanup");
     await deleteStagedWorkerWorkspaceResult({
       root: owner.worktree.repoRoot,
       stagedResultRef: selected.pending_ref,
@@ -337,7 +339,7 @@ export function projectionOperations(
                 assertCurrent,
               })
             : baseline;
-        quiescence?.markPhase("staging");
+        markPhase?.("staging");
         await stageLocalWorkspaceCheckpoint(
           {
             root: owner.worktree.path,
@@ -370,7 +372,7 @@ export function projectionOperations(
       if (!refresh || refreshStartedHere) {
         await quiescence?.resume();
       }
-      quiescence?.markPhase("materialization");
+      markPhase?.("materialization");
       const refreshBaseline = refresh ? await baselineDocument() : undefined;
       await withStagedWorkerWorkspaceManifest(
         {
@@ -406,7 +408,7 @@ export function projectionOperations(
               assertCurrent,
               workerAuthority,
               freezeTarget: target === "projection" ? quiescence?.pause : undefined,
-              onPhase: quiescence?.markPhase,
+              onPhase: markPhase,
             },
             current,
             update,
@@ -416,12 +418,12 @@ export function projectionOperations(
             refreshBaseCommit: refresh ? snapshot.current.baseCommit! : undefined,
             rawManifest: snapshot.currentManifestRaw,
             manifestRef: snapshot.currentManifestRef,
-            beforeCommit: () => quiescence?.markPhase("acceptance"),
+            beforeCommit: () => markPhase?.("acceptance"),
           });
           if (!refresh || !current().pending_target) {
             await quiescence?.resume();
           }
-          quiescence?.markPhase("cleanup");
+          markPhase?.("cleanup");
         },
       );
       if (refresh && target === "canonical" && current().pending_target === "projection") {

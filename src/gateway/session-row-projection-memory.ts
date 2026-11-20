@@ -128,6 +128,11 @@ export async function withMemorySessionRows<T>(
           sessionKey: query.key,
           entry,
           hasBoard: snapshot.hasBoard,
+          transcriptHasMessages:
+            actor.storage!.readCurrent(
+              { type: "session.history.count", input: { sessionId: entry.sessionId } },
+              authority,
+            ) > 0,
           transcriptAssistantMessage: "unknown",
           activitySummaryWatermark: readSessionActivitySummary(entry)
             ? snapshot.transcript.watermark

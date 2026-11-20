@@ -38,7 +38,7 @@ it("adopts completion as host input and observes current notification policy", a
         sessionKey,
         requesterOrigin: { sessionKey, messageProvider: "telegram", senderId: "456" },
       },
-      () => prepareAdoptedDurableProcessNotification(process, "durable-exec"),
+      () => prepareAdoptedDurableProcessNotification(process),
     );
     const target = expectDefined(process.notifySessionTarget, "adopted completion target");
     expect(target.sessionId).toBe("durable-exec");
@@ -50,13 +50,13 @@ it("adopts completion as host input and observes current notification policy", a
   });
 });
 
-it("adopts wakes only for current, eligible sessions", async () => {
+it("adopts wakes by chat key across transcript successors, only for eligible sessions", async () => {
   await withOpenClawTestState({ label: "durable-exec-eligibility" }, async (state) => {
     setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
     openOpenClawStateDatabase({ env: state.env });
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
     for (const [kind, extra, adopted] of [
-      ["reset", { sessionId: "replacement" }, false],
+      ["successor", { sessionId: "replacement" }, true],
       ["archived", { archivedAt: 1 }, false],
       ["dashboard:spawned", { spawnDepth: 1, spawnedBy: "agent:main:main" }, false],
       ["cron:job:run:ended", {}, false],
@@ -75,8 +75,10 @@ it("adopts wakes only for current, eligible sessions", async () => {
       });
       const process = createProcessSessionFixture({ id: kind, backgrounded: true });
       Object.assign(process, { agentId: "main", sessionKey, notifyOnExit: true });
-      await prepareAdoptedDurableProcessNotification(process, "original");
-      expect(process.notifySessionTarget?.sessionId, kind).toBe(adopted ? "original" : undefined);
+      await prepareAdoptedDurableProcessNotification(process);
+      expect(process.notifySessionTarget?.sessionId, kind).toBe(
+        adopted ? (kind === "successor" ? "replacement" : "original") : undefined,
+      );
       expect(process.notifyOnExit, kind).toBe(adopted);
     }
   });

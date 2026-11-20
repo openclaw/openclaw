@@ -525,6 +525,17 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var historyRouteLocalUserEchoIDs: Set<UUID> = []
     var historyRequiresCanonicalReplacement = false
+    /// Boundary before the oldest loaded page; nil once the session start is loaded.
+    var historyOlderCursor: String?
+    var isLoadingOlderHistory = false
+    /// Only a failed older read offers a manual retry; auto-loading stays off until it succeeds.
+    var olderHistoryLoadFailed = false
+    /// Rows prepended from older pages. A newest-page refresh does not contain them, so it keeps them.
+    @ObservationIgnored var olderHistoryMessageIDs: Set<UUID> = []
+    @ObservationIgnored var olderHistoryLoad: (id: UInt64, cursor: String, task: Task<Bool, Never>)?
+    @ObservationIgnored var lastOlderHistoryLoadID: UInt64 = 0
+    /// Runs synchronously just before older rows are published, so a view can record its reading position.
+    @ObservationIgnored var olderHistoryWillPrepend: (@MainActor () -> Void)?
     @ObservationIgnored
     var historyRefresh: (
         request: HistoryRequest,
@@ -1273,6 +1284,7 @@ extension OpenClawChatViewModel {
         self.historyDeltaMessageIDs = []
         self.historyRouteLocalUserEchoIDs = []
         self.historyRequiresCanonicalReplacement = false
+        self.resetOlderHistory()
         self.resetSessionReactions()
         self.invalidateComposerCapabilities()
         self.modelSelectionID = Self.defaultModelSelectionID

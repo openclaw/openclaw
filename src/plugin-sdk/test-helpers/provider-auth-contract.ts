@@ -2,9 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import {
+  registerProviderPlugins as registerProviders,
+  requireRegisteredProvider as requireProvider,
+} from "../../test-utils/plugin-registration.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import type { WizardMultiSelectParams, WizardPrompter, WizardSelectParams } from "../setup.js";
-import { registerProviders, requireProvider } from "./contracts-testkit.js";
 
 type LoginOpenAICodexOAuth = (params: unknown) => Promise<{
   access: string;

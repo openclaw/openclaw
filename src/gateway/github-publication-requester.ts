@@ -28,13 +28,14 @@ import { openClawIdRecoveryPrincipalSchema } from "./openclaw-id/tunnel-principa
 import {
   isOpenClawIdTunnelPrincipalCurrent,
   OpenClawIdPrincipalChangedError,
-  openclawIdTunnelRolePolicy,
+  openclawIdSubjectRolePolicy,
   prepareOpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
 import {
   GatewayOperatorAccessDeniedError,
   resumeGatewayOperatorAccessGrant,
 } from "./operator-access-policy.js";
+import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
@@ -204,16 +205,17 @@ function prepareRequesterPolicy(
     if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
       throw new GitHubPublicationRequesterUnavailableError();
     }
-    const role =
-      openclawIdTunnelRolePolicy(principal) ??
-      (profile
+    const role = openclawIdSubjectRolePolicy(principal, () =>
+      profile
         ? resolveOperatorRolePolicyForAssignment(
             profile.profileId,
             profile.assignedRole,
             config,
             profile.githubLogin ?? null,
+            operatorRoleSubject(profile),
           )
-        : undefined);
+        : undefined,
+    );
     if (
       !roleScopesAllow({
         role: "operator",
@@ -398,12 +400,13 @@ export async function prepareGitHubPublicationRequesterV2(
       }
     }
     const principal =
-      source?.authority.openclawIdPrincipal?.kind === "member"
+      source?.authority.openclawIdPrincipal?.kind === "member" ||
+      source?.authority.openclawIdPrincipal?.kind === "owner"
         ? openClawIdRecoveryPrincipalSchema.parse(source.authority.openclawIdPrincipal)
         : undefined;
     const snapshot: GitHubPublicationRequesterSnapshot = Object.freeze({
       version: 1,
-      authenticationSource: principal ? "openclaw-id-member" : "non-member",
+      authenticationSource: principal?.kind === "member" ? "openclaw-id-member" : "non-member",
       actor: Object.freeze(
         source
           ? { kind: "operator" as const, profileId: source.authority.profileId }

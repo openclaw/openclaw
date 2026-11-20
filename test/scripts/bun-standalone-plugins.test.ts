@@ -21,12 +21,11 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "../../src/plugins/official-external-plugin-catalog.js";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 const temporary: string[] = [];
 afterEach(() => {
-  for (const directory of temporary.splice(0)) {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  cleanupTempDirs(temporary);
 });
 
 function fixture() {

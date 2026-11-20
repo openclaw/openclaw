@@ -4,8 +4,10 @@ import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import * as toast from "../../../lib/toast.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
@@ -72,6 +74,7 @@ function detail(
       catalog: { name: "WhatsApp", summary: "WhatsApp Web chats", official: true, ...catalog },
       local: { installed, action: installed ? "manage" : "install", ...local },
     },
+    detail: { packageName: catalog.packageName ?? "@openclaw/whatsapp" },
   };
 }
 
@@ -234,11 +237,21 @@ describe("ClawHub chat recommendations", () => {
     expect(request).toHaveBeenCalledTimes(reads);
   });
 
-  it("opens the install review and updates after reconnect", async () => {
+  it("installs an official plugin from the card and leaves policy review to the plugin page", async () => {
     let installed = false;
-    const { card, context, request, harness, client } = mount(async () =>
-      detail(installed, { author: "@openclaw", packageName: "@openclaw/whatsapp" }),
-    );
+    const notify = vi.spyOn(toast, "showToast").mockReturnValue(true);
+    const { card, context, request } = mount(async (method) => {
+      if (method === "plugins.install") {
+        installed = true;
+        return {
+          ok: true,
+          plugin: { id: "whatsapp" },
+          restartRequired: false,
+          warnings: ["Link a phone to finish setup."],
+        };
+      }
+      return detail(installed, { author: "@openclaw" });
+    });
     await vi.waitFor(() => expect(part(card, "install")?.textContent?.trim()).toBe("Install"));
     expectPublisher(card, recommendation.name);
     await vi.waitFor(() => expect(part(card, "icon svg")).not.toBeNull());
@@ -250,21 +263,53 @@ describe("ClawHub chat recommendations", () => {
       pathname: `/plugins/${recommendation.id}`,
       search: "",
     });
-    part(card, "install")!.click();
-    expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
-      pathname: `/plugins/${recommendation.id}`,
-      search: "?action=install",
-    });
-    expect(request.mock.calls.every(([method]) => method !== "plugins.install")).toBe(true);
+    vi.mocked(context.navigate).mockClear();
 
-    installed = true;
-    harness.emit(client, false);
-    harness.emit(client, true);
+    // A second click before the config queue admits the first must not install twice.
+    part(card, "install")!.click();
+    part(card, "install")!.click();
     await vi.waitFor(() => expect(part(card, "installed")?.textContent).toContain("Installed"));
+    expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toEqual([
+      [
+        "plugins.install",
+        { source: "clawhub", packageName: "@openclaw/whatsapp" },
+        expect.anything(),
+      ],
+    ]);
+    expect(context.navigate).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ severity: "warning", message: "Link a phone to finish setup." }),
+    );
     expect(part(card, "installed svg")).not.toBeNull();
     expect(part(card, "install")).toBeNull();
     expect(part(card, "dismiss")).toBeNull();
     expect(part(card, "listing")).not.toBeNull();
+
+    // The Gateway asks for a review that only the plugin page presents.
+    const warned = mount(async (method) => {
+      if (method === "plugins.install") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Install policy warning",
+          details: {
+            installPolicyCode: "install_policy_warning_acknowledgement_required",
+            targetName: "@openclaw/whatsapp",
+            targetType: "plugin",
+            requestMode: "install",
+            reason: "ClawScan found issues to review.",
+          },
+        });
+      }
+      return detail(false);
+    });
+    await vi.waitFor(() => expect(part(warned.card, "install")).not.toBeNull());
+    part(warned.card, "install")!.click();
+    await vi.waitFor(() =>
+      expect(warned.context.navigate).toHaveBeenLastCalledWith("plugins", {
+        pathname: `/plugins/${recommendation.id}`,
+        search: "",
+      }),
+    );
   });
 
   it("offers sign-in for an installed plugin until its account is connected", async () => {

@@ -32,12 +32,13 @@ which can be started again.
 - **Knowledge Consolidation** files claims that
   [maintenance](/plugins/knowledge/maintenance) left unlinked, creates pages for
   subjects that deserve one, supersedes status snapshots by their outcome,
-  records outcomes in page State, retires written Timelines, and reviews up to
-  five pages a run so each reads as a current explanation. It runs on its
-  own schedule: weekly on Sundays at 3:45 AM in your time zone by default, or
-  nightly at 3:45 AM, after maintenance links what it can. Each run is an agent
-  turn over every unlinked claim, so nightly uses more tokens. Maintenance
-  itself never starts it.
+  records outcomes in page State, retires written Timelines, and reviews pages
+  so each reads as a current explanation. It runs on its own schedule: weekly
+  on Sundays at 3:45 AM in your time zone by default, or nightly at 3:45 AM,
+  after maintenance links what it can. A weekly run works toward retiring 15
+  written Timelines and reviewing 6 pages; a nightly run, 10 and 5. Each run is
+  an agent turn over every unlinked claim, so nightly uses more tokens.
+  Maintenance itself never starts it.
 - **Learn from conversations** saves the decisions, preferences, commitments,
   and lessons in your conversations. Ongoing runs check for newly finished
   conversations daily at 4:00 AM in your time zone. Conversations already
@@ -123,6 +124,7 @@ This scribe keeps Knowledge consolidated: it files each claim that names no page
 
 Settings:
 - Runs weekly, Sundays at 3:45 AM America/Los_Angeles (cron `45 3 * * 0`).
+- Each run: retire 15 written Timelines and review 6 pages.
 
 Steps:
 1. Call knowledge_status. Go on when the scope is private and writes are enabled; a never-written store reports "unprovisioned" and is created by your first Knowledge call. Otherwise stop: ...
@@ -146,6 +148,9 @@ Run message:
 ```text
 Scheduled run of the Knowledge scribe "Knowledge Consolidation". Don't ask questions: nobody is watching this turn.
 
+Settings:
+- Each run: retire 15 written Timelines and review 6 pages.
+
 Steps:
 1. Call knowledge_status. ...
 2. Follow every step of the "Scribe runs" section of the knowledge-claim-consolidation skill: link and retire unlinked claims, retire written Timelines, and review pages. Do each step even when no claim is left to link. ...
@@ -154,9 +159,11 @@ Steps:
 ```
 ````
 
-Each scheduled run receives the automation's run message. To change what later
-runs do, edit the scribe's automation on the Automations page: its message is
-the run message, and its schedule is the scribe's schedule.
+Each scheduled run receives the automation's run message. To change when it
+runs, use **Change…** next to **Schedule** in the scribe's detail. To change what later runs
+do, ask the scribe's conversation to change its run message. Editing the
+message on the Automations page drops the authority of your turn that its runs
+use.
 
 ## After updating OpenClaw
 
@@ -220,6 +227,11 @@ succeeded before the page starts the first run, and whether a run needs
 attention. It shows the sentence of the last run's line as its result; answers
 to setup, repair and update turns are not run results.
 
+A scheduled Learn from Granola run works toward ingesting 4 meetings; a
+one-time run ingests every pending meeting. Each amount is a target: a run
+stops short only when nothing is left that something outside the run holds
+back.
+
 A Learn from Granola run reports `needs attention` when it left meetings pending,
 ingested none, and nothing outside the run held them back. A meeting stays
 pending only while it is still being recorded, its transcript is not ready, or
@@ -231,16 +243,17 @@ Open a scribe for its schedule, next and last run, model, failure alert, and
 recent runs. Learn from Granola also shows the Granola plugin's state as its
 source.
 
-| Control            | Effect                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Run now            | Requests a run of the automation. It can wait for scheduler capacity; acceptance is not a running-state report. If a run is already in progress, it does not start another.                                                                                                                                                                                                                                 |
-| Disable / Enable   | Disables or enables scheduled runs. While an enabled automation is running, **Stop and disable** also requests cancellation. Enable schedules future runs; it does not resume a cancelled run. **Run now** remains an explicit override.                                                                                                                                                                    |
-| Remove automation… | Removes the automation and requests cancellation of any active run. The conversation is kept.                                                                                                                                                                                                                                                                                                               |
-| Open conversation  | Opens the scribe's conversation.                                                                                                                                                                                                                                                                                                                                                                            |
-| Open run           | In **Recent runs**: opens a run of an ongoing scribe on the Automations page, which keeps its transcript.                                                                                                                                                                                                                                                                                                   |
-| Replace with new…  | For a scribe whose saved run message differs and carries replaced wording: lists the lines that change and asks the conversation to use the new message when you confirm.                                                                                                                                                                                                                                   |
-| Repair             | Gets the automation running again. For an archived conversation it restores the conversation and turns the automation back on, without a model turn. For a deleted conversation, or a failing scribe, it asks the scribe's conversation (a new one when deleted) to recreate its automation there, keeping its schedule and run message (an unchanged earlier message becomes the new one), and turn it on. |
-| Start again…       | For a failing scribe without an automation: opens the start dialog and sends a new prompt in the same conversation.                                                                                                                                                                                                                                                                                         |
+| Control            | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Run now            | Requests a run of the automation. It can wait for scheduler capacity; acceptance is not a running-state report. If a run is already in progress, it does not start another.                                                                                                                                                                                                                                                                                                                                                                                  |
+| Disable / Enable   | Disables or enables scheduled runs. While an enabled automation is running, **Stop and disable** also requests cancellation. Enable schedules future runs; it does not resume a cancelled run. **Run now** remains an explicit override.                                                                                                                                                                                                                                                                                                                     |
+| Change…            | Next to **Schedule**: picks a schedule the start dialog offers, or a custom one (every day, weekdays or once a week, at one time), and a time zone. Saving asks the scribe's conversation to re-declare its automation with the new schedule, in the same kind of turn as an update, so runs keep the authority of your turn. It keeps the run message and other saved options, except that an unedited Knowledge Consolidation message takes the run amounts of the new schedule. The scribe shows **Updating…** until its automation has the new schedule. |
+| Remove automation… | Removes the automation and requests cancellation of any active run. The conversation is kept.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Open conversation  | Opens the scribe's conversation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Open run           | In **Recent runs**: opens a run of an ongoing scribe on the Automations page, which keeps its transcript.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Replace with new…  | For a scribe whose saved run message differs and carries replaced wording: lists the lines that change and asks the conversation to use the new message when you confirm.                                                                                                                                                                                                                                                                                                                                                                                    |
+| Repair             | Gets the automation running again. For an archived conversation it restores the conversation and turns the automation back on, without a model turn. For a deleted conversation, or a failing scribe, it asks the scribe's conversation (a new one when deleted) to recreate its automation there, keeping its schedule and run message (an unchanged earlier message becomes the new one), and turn it on.                                                                                                                                                  |
+| Start again…       | For a failing scribe without an automation: opens the start dialog and sends a new prompt in the same conversation.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Controls need write access. Disable, enable, and removal are rejected if the
 automation changed since the page read it; the page shows the error, and

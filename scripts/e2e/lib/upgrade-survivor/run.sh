@@ -1036,7 +1036,7 @@ initialize_state() {
   else
     openclaw_test_state_create "$STATE_HOME_ROOT" minimal
   fi
-  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] || [ "$SCENARIO" = "git-release" ]; then
     account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
     if [ -z "$account_home" ]; then
       echo "Could not resolve the current account home" >&2
@@ -1203,9 +1203,13 @@ for (const { durationMs, diagnostics, ...step } of cleanups) {
   assert.deepEqual(step, {
     name: "recovery-artifact-cleanup", command: "openclaw update cleanup", cwd: "", exitCode: 0,
   }, "second update recovery cleanup did not finish cleanly");
-  assert(Array.isArray(diagnostics) && diagnostics.length === 1 &&
-    typeof diagnostics[0] === "string" &&
-    /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]),
+  // The summary comes first; one line per removed or kept item may follow.
+  // Earlier releases reported one fixed sentence.
+  assert(Array.isArray(diagnostics) && diagnostics.length >= 1 &&
+    diagnostics.every((line) => typeof line === "string") &&
+    (/^Update backup cleanup removed \d+ items? \(\d+ logical bytes, [^)]+\)\./.test(diagnostics[0]) ||
+      (diagnostics.length === 1 &&
+        /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]))),
     "second update omitted its verified recovery cleanup outcome");
 }
 // Advisory guidance is product prose that releases reword; require one, not its text.
@@ -2475,6 +2479,12 @@ phase storage-preflight storage_preflight
 phase validate-update-restart-mode validate_update_restart_mode
 phase validate-worker-cell validate_worker_cell
 phase reset-run-state reset_run_state
+if [ "$SCENARIO" = "git-release" ]; then
+  source scripts/e2e/lib/upgrade-survivor/git-release.sh
+  run_git_release_survivor
+  run_completed="1"
+  exit 0
+fi
 phase install-baseline install_baseline
 phase initialize-state initialize_state
 if [ "$SCENARIO" = "session-share" ]; then

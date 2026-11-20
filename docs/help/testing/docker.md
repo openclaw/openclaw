@@ -55,6 +55,28 @@ without mutating the host auth store:
 
   Manual `base` runs also exercise a removed custom plugin path when the published updater supports invalid-config admission. Older drivers, including releases before `2026.7.2-beta.5` and the July extended-stable line, keep that fixture unseeded and record why it was not exercised; the normal update, migration, state, and readiness assertions still run. An explicit `missing-load-path` scenario requires a compatible baseline. Floating baseline tags are checked again against the installed version before fixture seeding. See [update admission](/cli/update#candidate-owned-admission) for the published-driver limitation.
 
+  Git checkout release migration is an explicit, model-free scenario:
+  `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=git-release bash scripts/e2e/upgrade-survivor-docker.sh`.
+  The baseline is main commit `7db69bedeab6` (reports `2026.11.5`), a build with
+  the `node_modules` release layout; the `v2026.11.5` tag predates that layout.
+  The lane shares local Git objects read-only, builds that commit with its pinned
+  pnpm inside Linux behind a local upstream, and installs a service through the
+  systemctl fixture. The first update converts the checkout to the old release
+  layout but leaves the checkout's service untouched, so the lane reinstalls the
+  service from the release link to start the release launcher. With DuckDuckGo
+  configured as the web search provider, that Gateway fails at startup with the
+  web-search contract type-stripping error, and `tools.invoke` for `web_search`
+  fails. The lane then moves upstream `main` to the checkout's committed HEAD. It
+  records that the baseline updater fails when run from the release (its own
+  `.mts` scripts are under `node_modules`), updates from the checkout with the
+  baseline updater, then updates again with the candidate updater. The second
+  update must move the release outside `node_modules`,
+  remove the old link, start the Gateway, and allow the same `tools.invoke`
+  request. Phase timings, update output, request
+  results, and per-request Gateway logs are retained in the lane artifact
+  directory. This scenario is excluded from aggregate `all` runs and requires no
+  provider keys.
+
 - Session runtime context smoke: `pnpm test:docker:session-runtime-context` verifies hidden runtime context transcript persistence, Doctor repair of affected duplicated prompt-rewrite branches, and automatic transcript cold storage through a real Gateway running the installed package. Small, dated synthetic histories exercise the maintenance worker, changes to `session.maintenance.coldStorage.afterDays` without a Gateway restart, exact transcript restoration, explicit errors for missing archive files, Activity listing without rehydration, and history preservation across restart and portable backup recovery.
 - Bun global install and runtime smoke: `bash scripts/e2e/bun-global-install-smoke.sh` packs the current tree, installs it with `bun install -g --trust` in an isolated home, verifies OpenClaw's lifecycle scripts ran, and executes the installed package with Bun 1.4.4 or newer. It checks representative CLI state, bundled image providers, a mocked local agent turn, Gateway readiness and health, and a mocked agent turn through the Bun-hosted Gateway. Reuse a prebuilt tarball with `OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host build with `OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0`, or copy `dist/` from a built Docker image with `OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE=openclaw-dockerfile-smoke:local`.
 - Bun-only runtime smoke (Linux x64): run `bash scripts/e2e/bun-only-runtime-smoke.sh` with `OPENCLAW_BUN_ONLY_SMOKE_PACKAGE_TGZ=/path/to/openclaw-candidate.tgz`, `BUN_BIN=/path/to/pinned-fork/bun` (the fork pinned in `.github/actions/setup-test-bun/action.yml`), and `OPENCLAW_BUN_ONLY_SMOKE_ARTIFACT_DIR=/path/to/artifacts`. Set `OPENCLAW_BUN_ONLY_SMOKE_HIDE_SYSTEM_NODE=1` to mask system Node with recording sentinels inside the smoke's private mount namespace; this requires passwordless `sudo`, `unshare`, and `setpriv`. It only affects the smoke's process tree, leaves host Node unchanged, and drops back to the invoking user before running the harness. Node must be available before the smoke for payload preparation. The harness then makes one Node-free install attempt with the documented Bun launcher marker; an install failure fails the lane without retrying with Node. Without the flag, runtime preconditions fail if real Node remains reachable.

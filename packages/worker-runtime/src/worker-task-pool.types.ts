@@ -143,6 +143,7 @@ export type Task<Input, Output> = Omit<PromiseWithResolvers<Output>, "resolve"> 
     retire: boolean;
     closing?: RetainedOperation<void>;
     complete?: () => void;
+    onCloseError?: (error: unknown) => void;
   };
   inputBytes: number;
   computePermit?: WorkerComputePermit;

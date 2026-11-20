@@ -2,7 +2,10 @@ import { appendFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
 import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
-import { isTestFileTarget } from "./lib/changed-path-facts.mjs";
+import {
+  getChangedPathFacts as getHarnessChangedPathFacts,
+  isTestFileTarget,
+} from "./lib/changed-path-facts.mjs";
 import { blacksmithRunnerLabel } from "./lib/ci-blacksmith-capacity.mjs";
 import {
   formatIosSimulatorSelectionSummary,
@@ -1564,7 +1567,15 @@ const nodeTestShards = targetNodeTestShards
         : undefined);
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
-    const capacity =
+    let targetVolumes;
+    try {
+      if (shard.targetVolumes?.length && nodeTestGroupsCodec) {
+        targetVolumes = encodeNodeTestGroups(shard.targetVolumes);
+      }
+    } catch {
+      // Missing accounting must not change or prevent the execution plan.
+    }
+    let capacity =
       process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat" ||
       (remainingBoatNodeJobs > 0 &&
         !shard.requiresDist &&
@@ -1578,6 +1589,13 @@ const nodeTestShards = targetNodeTestShards
             ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
           ])
         : undefined;
+    if (capacity && nodeRunnerBackend === "github") {
+      // Hosted packing assumes 16 GiB. Preserve that floor and its CPU envelope.
+      capacity =
+        capacity.runner === "boat"
+          ? undefined
+          : { ...capacity, cpuBudget: Math.min(capacity.cpuBudget, shard.cpuBudget ?? 4, 4) };
+    }
     const auditCliObservations =
       eventName === "schedule" &&
       isCanonicalRepository &&
@@ -1602,6 +1620,9 @@ const nodeTestShards = targetNodeTestShards
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
+      // Accounting is optional and must fit the same per-environment-string bound as group pools.
+      target_volumes_gzip_base64:
+        targetVolumes && targetVolumes.length <= 60_000 ? targetVolumes : undefined,
       configs: packedGroups ? undefined : shard.configs,
       env: shard.env,
       includePatterns: packedGroups ? undefined : shard.includePatterns,
@@ -1999,6 +2020,14 @@ const manifest = {
   run_pr_kysely_guardrails: runPrKyselyGuardrails,
   split_pr_guards: splitPrGuards,
   narrow_check_paths_json: runCheckPlan ? JSON.stringify(changedPaths) : "",
+  // Full lint shards exclude test/. Keep its changed inputs for the fallback
+  // lint step without changing compiler, guard, or extension planning.
+  changed_root_test_paths_json:
+    runCheck && runtimePullRequest && !frozenTarget && !compatibilityTarget
+      ? JSON.stringify(
+          (changedPaths ?? []).filter((file) => getHarnessChangedPathFacts(file).isRootTestSource),
+        )
+      : "[]",
   run_check_plan: runCheckPlan,
   check_plan_input_json: runCheckPlan
     ? JSON.stringify({

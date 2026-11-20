@@ -142,6 +142,11 @@ physical file metadata. A recovery-quick receipt remains distinct from a full
 verification. The seal is reconstructible verification metadata, not database state
 or a backup.
 
+Shutdown publishes seals during database close, before process exit. A slow close
+step's diagnostic grace does not skip later retirement: shutdown awaits its actual
+settlement, bounded by the process watchdog. A watchdog report of no pending steps
+does not establish successful close; a rejected step can leave later steps unrun.
+
 During shutdown, idle session-reader pools retire without their normal warm-cache
 delay. Accepted reads and writes settle through their existing owners before the
 last writer closes. A reader that fails to retire retains its cleanup custody;
@@ -676,8 +681,12 @@ and ownership), the snapshot child checks the exact database's recorded Gateway
 or embedded-writer owner. A verified live process uses the existing online-backup
 owner in one read transaction while writes continue. Native SQLite may update SHM
 read marks; it does not change stored rows or the WAL. An absent, dead, or
-unverifiable owner retains the artifact-preserving copy path. Explicit inherited
-snapshots and offline maintenance/recovery remain byte-neutral. Snapshot failures
+unverifiable owner retains the artifact-preserving copy path. If a live writer
+moves a complete WAL family (main, WAL, and index present) through every copy
+attempt, that path takes one read transaction instead; only a live connection can
+keep checkpointing, so the index is current and its 96-byte commit header stays
+unchanged. Explicit inherited snapshots and offline maintenance/recovery remain
+byte-neutral whenever no writer is active. Snapshot failures
 remain errors with their original diagnostics; they never become empty inventory.
 Migration publication rechecks the current generation inside the same native
 write transaction that protects synchronous publication. Empty historical state

@@ -4,12 +4,14 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
-import { watchDirectory } from "./directory-watch-host.js";
+import { createDirectoryWatchChannel, watchDirectory } from "./directory-watch-host.js";
 import { observeOwnedDirectory } from "./owned-directory-observation.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -141,6 +143,44 @@ describe("directory watch host", () => {
     expect(synchronousOpen).not.toHaveBeenCalled();
     expect(synchronousStat).not.toHaveBeenCalled();
     expect(synchronousAccess).not.toHaveBeenCalled();
+  });
+
+  it("uses one helper for the host and a worker and retires it when both release", async () => {
+    const spawned = vi.spyOn(childProcess, "spawn");
+    syncBuiltinESMExports();
+    const directory = tempDirs.make("directory-watch-shared-");
+    const localReady = Promise.withResolvers<void>();
+    const local = watchDirectory(directory, () => localReady.resolve());
+    const channel = createDirectoryWatchChannel();
+    const workerUrl = new URL("./directory-watch-host.test-support.ts", import.meta.url);
+    const worker = new Worker(workerUrl, {
+      execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
+      workerData: { directory, port: channel.port },
+      transferList: [channel.port],
+    });
+    let terminated = false;
+    try {
+      const [message] = await once(worker, "message");
+      await localReady.promise;
+      expect(message).toBeUndefined();
+      expect(spawned).toHaveBeenCalledTimes(1);
+      const helper = spawned.mock.results[0]!.value;
+      const exited = once(helper, "exit");
+      local.close();
+      const changed = once(worker, "message");
+      await fs.promises.writeFile(path.join(directory, "probe"), "");
+      await expect(changed).resolves.toEqual(["probe"]);
+      await worker.terminate();
+      terminated = true;
+      channel.close();
+      await exited;
+    } finally {
+      if (!terminated) {
+        await worker.terminate();
+      }
+      local.close();
+      channel.close();
+    }
   });
 
   it("observes missing nested roots and their replacements through asynchronous admission", async () => {

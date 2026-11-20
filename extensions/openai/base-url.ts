@@ -1,34 +1,20 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const OPENAI_CODEX_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/codex";
-// Bundled @openai/codex pin, reported when the Codex plugin cannot name the
-// binary its turns run; the client-version contract test keeps it equal to
-// extensions/codex's exact dependency.
-const OPENAI_CODEX_CLIENT_VERSION = "0.169.0";
-
-export type OpenAICodexModelsEndpointContext = {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  agentDir?: string;
-};
 
 /**
- * ChatGPT model-list URL. The backend gates models on the client version, so
- * discovery reports the Codex binary this process's turns run.
+ * ChatGPT model-list URL. The backend hides models whose `minimal_client_version` is above
+ * `client_version`, so list as the numeric OpenClaw release that Responses turns send in their
+ * `version` header (provider attribution owns that value and its `99.0.0` fallback).
+ * Live 2026-11-18: 2026.11.5, 0.169.0 and 99.0.0 listed the same models; 0.164.0 hid GPT-6.2
+ * and 0.0.0 returned a frozen legacy list. Accepted: a Codex-harness binary older than a
+ * listed model fails that turn with its update instructions.
  */
-export async function resolveOpenAICodexModelsEndpoint(
-  context: OpenAICodexModelsEndpointContext = {},
-): Promise<string> {
-  // Lazy runtime facade: keeps the Codex plugin surface off provider registration.
-  const { resolveCodexClientVersion } =
-    await import("openclaw/plugin-sdk/codex-client-version-runtime");
+export async function resolveOpenAICodexModelsEndpoint(): Promise<string> {
+  const { resolveProviderRequestPolicy } = await import("openclaw/plugin-sdk/provider-http");
   const clientVersion =
-    (await resolveCodexClientVersion({
-      config: context.config,
-      env: context.env,
-      agentDir: context.agentDir,
-    })) ?? OPENAI_CODEX_CLIENT_VERSION;
+    resolveProviderRequestPolicy({ provider: "openai", baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL })
+      .attributionHeaders?.version ?? "99.0.0";
   return `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${encodeURIComponent(clientVersion)}`;
 }
 

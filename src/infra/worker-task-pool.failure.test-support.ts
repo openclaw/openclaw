@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
+import { closeDefaultRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
+import { createOwnedWorkerTaskPool, WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
 
 // Attribute known tasks without publishing source paths or arbitrary input labels.
 const directory = await fs.mkdtemp(path.join(os.tmpdir(), "private-task-attribution-"));
@@ -104,6 +105,102 @@ try {
       process.off("unhandledRejection", observeUnhandled);
     }
   }
+  await fs.writeFile(
+    workerPath,
+    `
+    import { parentPort } from "node:worker_threads";
+    parentPort.once("message", ({ port }) => {
+      port.on("message", ({ input, taskId }) => {
+        if (input === "throw") {
+          throw Object.assign(new Error("original worker fault", { cause: new Error("root cause") }), { code: "E_WORKER_FIXTURE" });
+        }
+        if (input === "exit") process.exit(77);
+        if (input === "close") return port.close();
+        if (input === "oom") {
+          const allocations = [];
+          for (;;) allocations.push(new Array(131072).fill(allocations.length));
+        }
+        port.postMessage({ status: "ok", taskId, value: 42 });
+      });
+      port.postMessage({ status: "ready" });
+    });
+  `,
+  );
+  for (const [mode, failure] of [
+    ["owned", "throw"],
+    ["owned", "exit"],
+    ["owned", "oom"],
+    ["owned", "close"],
+    ["ordinary", "throw"],
+  ] as const) {
+    const pool = createOwnedWorkerTaskPool<string, number>(
+      {
+        workerUrl: pathToFileURL(workerPath),
+        workerOptions: {
+          execArgv: [],
+          resourceLimits: { maxOldGenerationSizeMb: 16, maxYoungGenerationSizeMb: 4 },
+        },
+        maxWorkers: 1,
+      },
+      { retainedTransport: true, databaseAccess: "read-only" },
+    );
+    let retired = false;
+    const options = {
+      inputBytes: 1234,
+      timeoutMs: 10_000,
+      onExecutionSettled: (receipt: { retired: boolean }) => {
+        retired = receipt.retired;
+      },
+    };
+    const task = mode === "owned" ? pool.runTask(failure, options) : undefined;
+    const result = task?.result ?? pool.run(failure, options);
+    try {
+      const error: unknown = await result.catch((reason: unknown) => reason);
+      await task?.close();
+      assert.ok(error instanceof WorkerTaskError);
+      assert.equal(error.code, "unavailable");
+      assert.match(
+        error.message,
+        /task=memoryIndex.task admittedInputBytes=1234 exchanges=0 stage=running/,
+      );
+      if (failure === "throw" || failure === "oom") {
+        assert.ok(error.cause instanceof Error);
+        assert.equal(
+          Reflect.get(error.cause, "code"),
+          failure === "throw" ? "E_WORKER_FIXTURE" : "ERR_WORKER_OUT_OF_MEMORY",
+        );
+        if (failure === "throw") {
+          assert.match(error.message, /original worker fault/);
+          assert.ok(error.cause.cause instanceof Error);
+          assert.equal(error.cause.cause.message, "root cause");
+        }
+      } else {
+        assert.match(
+          error.message,
+          failure === "exit" ? /worker exited with code 77/ : /Native worker task channel closed/,
+        );
+      }
+      assert.equal(retired, true);
+      assert.equal(await pool.run("success", { timeoutMs: 10_000 }), 42);
+      console.log(
+        JSON.stringify({
+          mode,
+          failure,
+          message: error.message,
+          cause:
+            error.cause instanceof Error
+              ? { message: error.cause.message, code: Reflect.get(error.cause, "code") }
+              : undefined,
+          retired,
+          successor: 42,
+        }),
+      );
+    } finally {
+      await task?.close();
+      await pool.close();
+    }
+  }
 } finally {
+  await closeDefaultRetainedNativeWorkerSource();
   await fs.rm(directory, { recursive: true, force: true });
 }

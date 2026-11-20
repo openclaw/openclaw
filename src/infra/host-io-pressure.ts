@@ -1,7 +1,54 @@
 import fs from "node:fs/promises";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 
 // Optional cleanup should yield before second-long metadata commits compound.
 const SLOW_COMMIT_MS = 1_000;
+// 2026-11-20: #202197's paced unlink still reached 100 GiB with fast commits.
+const RESERVATION_HIGH = 40 * 1024 ** 3;
+const RESERVATION_LOW = 20 * 1024 ** 3;
+
+async function resolveBtrfsReservationCounter(root: string): Promise<string | undefined> {
+  try {
+    const directory = await fs.open(root, "r");
+    let mountId: string | undefined;
+    try {
+      mountId = /^mnt_id:\s+(\d+)$/m.exec(
+        await fs.readFile(`/proc/self/fdinfo/${directory.fd}`, "utf8"),
+      )?.[1];
+    } finally {
+      await directory.close();
+    }
+    const fields = (await fs.readFile("/proc/self/mountinfo", "utf8"))
+      .split("\n")
+      .find((line) => mountId && line.startsWith(`${mountId} `))
+      ?.split(" ");
+    const boundary = fields?.indexOf("-") ?? -1;
+    const source = fields?.[boundary + 2];
+    if (boundary < 6 || fields?.[boundary + 1] !== "btrfs" || !source) {
+      return undefined;
+    }
+    const stat = await fs.stat(decodeMountInfoPath(source), { bigint: true });
+    // Btrfs subvolumes have synthetic st_dev values; match the backing device.
+    const major = ((stat.rdev >> 8n) & 0xfffn) | ((stat.rdev >> 32n) & 0xfffff000n);
+    const minor = (stat.rdev & 0xffn) | ((stat.rdev >> 12n) & 0xffffff00n);
+    for (const id of await fs.readdir("/sys/fs/btrfs")) {
+      if (!/^[\da-f-]{36}$/i.test(id)) {
+        continue;
+      }
+      const base = `/sys/fs/btrfs/${id}`;
+      for (const device of await fs.readdir(`${base}/devices`)) {
+        if (
+          (await readKernelCounter(`${base}/devices/${device}/dev`)).trim() === `${major}:${minor}`
+        ) {
+          return `${base}/allocation/metadata/bytes_may_use`;
+        }
+      }
+    }
+  } catch {
+    // Unavailable mount/device metadata leaves ordinary pacing in place.
+  }
+  return undefined;
+}
 
 async function readKernelCounter(filePath: string): Promise<string> {
   try {
@@ -21,8 +68,11 @@ async function readKernelCounter(filePath: string): Promise<string> {
 }
 
 /** One maintenance owner samples host counters; no background poller or retained filesystem list. */
-export function createHostIoPressureProbe(): () => Promise<boolean> {
+export function createHostIoPressureProbe(root?: string): () => Promise<boolean> {
   let previous = new Map<string, { commits: number; totalMs: number }>();
+  const reservationCounter =
+    process.platform === "linux" && root ? resolveBtrfsReservationCounter(root) : undefined;
+  let reservationPressure = false;
   return async () => {
     if (process.platform !== "linux") {
       return false;
@@ -32,6 +82,12 @@ export function createHostIoPressureProbe(): () => Promise<boolean> {
     // Co-tenant IO is normal. Brake only when at least half the last minute was
     // stalled, or our own IO round trip / filesystem commits take a full second.
     let pressured = Number(/^some avg10=[\d.]+ avg60=([\d.]+)/m.exec(psi)?.[1]) >= 50;
+    const counter = await reservationCounter;
+    if (counter) {
+      const reserved = Number(await readKernelCounter(counter));
+      reservationPressure = reserved >= (reservationPressure ? RESERVATION_LOW : RESERVATION_HIGH);
+      pressured ||= reservationPressure;
+    }
     const next = new Map<string, { commits: number; totalMs: number }>();
     const filesystems = await fs.readdir("/sys/fs/btrfs").catch(() => []);
     for (const id of filesystems) {
