@@ -29,6 +29,7 @@ it("keeps the state read registry's static contracts acyclic, including type imp
   expect(collectStronglyConnectedComponents(graph)).toEqual([]);
 });
 
+// mock-isolation: Importing the migration writer must fail to prove this read stays writer-free.
 vi.mock("../infra/deferred-plugin-migrations.js", () => {
   throw new Error("Migration writer must not load for a pending-migration read");
 });

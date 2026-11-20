@@ -218,7 +218,8 @@ vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => ({
   resolveRuntimeSyntheticAuthProviderRefs: () => [],
 }));
 
-vi.mock("./legacy-inherited-auth-dir.js", () => ({
+vi.mock("./legacy-inherited-auth-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./legacy-inherited-auth-dir.js")>()),
   resolveLegacyInheritedAuthDir: () => mocks.agentDir,
 }));
 
@@ -267,7 +268,8 @@ vi.mock("./embedded-agent-runner/model.static-catalog.js", async (importOriginal
   createBundledStaticCatalogModelResolver: () => mocks.resolveStaticCatalogModel,
 }));
 
-vi.mock("../logging/subsystem.js", () => ({
+vi.mock("../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
   createSubsystemLogger: createMockSubsystemLogger,
 }));
 
