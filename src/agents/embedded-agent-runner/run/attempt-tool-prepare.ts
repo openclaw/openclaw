@@ -531,8 +531,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         ]);
         attempt.permissionMode = mode ?? undefined;
         attempt.execOverrides = { ...baseExecOverrides };
-        const policy = mode ? { root: params.setup.sessionPermissionRoot, mode } : undefined;
-        const nextTools = await constructTools(policy, toolAbortSignal);
+        const permission = mode ? { root: params.setup.sessionPermissionRoot, mode } : undefined;
+        const nextTools = await constructTools(permission, toolAbortSignal);
         toolsRaw.splice(0, toolsRaw.length, ...nextTools);
       },
       get webSearchUnconfigured() {

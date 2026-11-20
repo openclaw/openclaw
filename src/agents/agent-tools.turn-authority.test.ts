@@ -7,10 +7,7 @@ import {
   bindAgentToolAvailability,
   finalizeAgentToolAvailability,
 } from "./agent-tool-availability.js";
-import {
-  rewrapToolWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
-} from "./agent-tools.before-tool-call.wrapper.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
 import { isHostSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
 import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";

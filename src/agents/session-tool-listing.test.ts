@@ -209,10 +209,10 @@ it("re-pins after /compact on a cron turn with the owner turn's tool list", () =
   // From the #201655 upgrade run: a cron turn right after /compact pinned one more tool than
   // the chat had, and the next owner turn stayed on that list.
   using chat = retainEmbeddedSessionPromptState(sessionId);
-  const owner = send(chat.state, turns.user!);
-  const before = definitions(owner);
+  const ownerTurn = send(chat.state, turns.user!);
+  const before = definitions(ownerTurn);
   const cron = send(chat.state, turns.cron!, { compactions: 1 });
-  expect(definitions(cron.built)).toEqual(definitions(owner.built));
+  expect(definitions(cron.built)).toEqual(definitions(ownerTurn.built));
   expect(definitions(cron)).toEqual(before);
   expect(definitions(send(chat.state, turns.user!, { compactions: 1 }))).toEqual(before);
 });
