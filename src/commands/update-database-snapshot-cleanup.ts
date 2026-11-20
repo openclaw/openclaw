@@ -1,7 +1,7 @@
 /** Pre-migration `.databases` snapshot directories update runs left behind, in update cleanup. */
 import fs from "node:fs";
 import path from "node:path";
-import { resolveUserPath } from "../infra/home-dir.js";
+import { resolveRequiredHomeDir, resolveUserPath } from "../infra/home-dir.js";
 import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migration-manifest.js";
 import { readUpdateDatabaseSnapshotReceipt } from "../infra/update-database-snapshot-receipt.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
@@ -44,9 +44,20 @@ export function collectUpdateDatabaseSnapshots(params: {
   }
   // Runs are listed newest first; a reused package-backup name belongs to its latest run.
   const owners = new Map<string, UpdateRunRecord>();
+  // The ledger writes `~` for the OpenClaw home and the OS home alike; when they
+  // differ a home-relative receipt names two directories, so it attributes none.
+  const homes = new Set(
+    [resolveRequiredHomeDir(params.env), params.env.HOME, params.env.USERPROFILE].flatMap((home) =>
+      home ? [path.resolve(home)] : [],
+    ),
+  );
   for (const run of history.runs) {
     const recorded = readUpdateDatabaseSnapshotReceipt(run);
-    const directory = recorded?.startsWith("~") ? resolveUserPath(recorded, params.env) : recorded;
+    const directory = !recorded?.startsWith("~")
+      ? recorded
+      : homes.size === 1
+        ? resolveUserPath(recorded, params.env)
+        : undefined;
     if (
       directory &&
       path.isAbsolute(directory) &&
@@ -62,20 +73,32 @@ export function collectUpdateDatabaseSnapshots(params: {
     if (!fs.lstatSync(parent, { throwIfNoEntry: false })?.isDirectory()) {
       continue;
     }
-    for (const entry of params.scan?.directory(parent) ??
-      fs.readdirSync(parent, { withFileTypes: true })) {
-      if (entry.isDirectory() && isSnapshotName(entry.name)) {
-        directories.add(path.join(parent, entry.name));
+    try {
+      for (const entry of params.scan?.directory(parent) ??
+        fs.readdirSync(parent, { withFileTypes: true })) {
+        if (entry.isDirectory() && isSnapshotName(entry.name)) {
+          directories.add(path.join(parent, entry.name));
+        }
       }
+    } catch {
+      // An unreadable earlier install root still lists the snapshots its runs recorded.
     }
   }
   for (const directory of [...directories].toSorted()) {
     if (params.scan && !params.scan.available()) {
       break;
     }
-    const stat = fs.lstatSync(directory, { bigint: true, throwIfNoEntry: false });
-    // Most runs already removed theirs. An alias is not the directory the run recorded.
-    if (!stat?.isDirectory() || hasSymbolicLinkInDirectoryPath(directory)) {
+    let stat: fs.BigIntStats | undefined;
+    let bytes: number;
+    try {
+      stat = fs.lstatSync(directory, { bigint: true, throwIfNoEntry: false });
+      // Most runs already removed theirs. An alias is not the directory the run recorded.
+      if (!stat?.isDirectory() || hasSymbolicLinkInDirectoryPath(directory)) {
+        continue;
+      }
+      bytes = params.scan ? params.scan.logicalBytes(directory) : logicalBytes(directory);
+    } catch {
+      // An unreadable location must not hide the other artifacts cleanup can retire.
       continue;
     }
     const run = owners.get(directory);
@@ -83,7 +106,7 @@ export function collectUpdateDatabaseSnapshots(params: {
       kind: "database-snapshot",
       path: directory,
       runs: run ? [run.runId] : [],
-      bytes: params.scan ? params.scan.logicalBytes(directory) : logicalBytes(directory),
+      bytes,
       outcome: "protected",
       reason: "orphan-database-snapshot",
     };

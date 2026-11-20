@@ -49,6 +49,7 @@ async function withSnapshotHistory(
   const redactedRoot = path.join(outsideHome, "checkout");
   const env = {
     HOME: home,
+    USERPROFILE: home,
     OPENCLAW_HOME: undefined,
     OPENCLAW_PROFILE: undefined,
     OPENCLAW_STATE_DIR: undefined,
@@ -257,5 +258,16 @@ it("keeps a superseded snapshot whose recorded path became a symlink", async () 
     expect(result.snapshots[snapshots.supersededPackage!]).toBeUndefined();
     expect(fs.existsSync(path.join(moved, "payload", "openclaw.sqlite"))).toBe(true);
     expect(fs.existsSync(snapshots.supersededPreviousRoot!)).toBe(false);
+  });
+});
+
+it("attributes no home-relative snapshot while the ledger's home names two directories", async () => {
+  await withSnapshotHistory(async (snapshots) => {
+    await withEnvAsync({ USERPROFILE: path.dirname(snapshots.supersededPackage!) }, async () => {
+      const result = await runCleanup({ yes: true });
+      expect(result.snapshots[snapshots.supersededPreviousRoot!]).toBeUndefined();
+      expect(fs.existsSync(snapshots.supersededPreviousRoot!)).toBe(true);
+      expect(fs.existsSync(snapshots.supersededPackage!)).toBe(false);
+    });
   });
 });
