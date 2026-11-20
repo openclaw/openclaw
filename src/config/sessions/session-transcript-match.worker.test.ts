@@ -177,6 +177,41 @@ it("recovers the exact complete child answer without preventing host event progr
     expect(old.prepared.isCurrent()).toBe(true);
   }));
 
+it.each([
+  { order: "answer then notice", eventIds: ["answer", "notice"], expectedAnswer: true },
+  { order: "notice then answer", eventIds: ["notice", "answer"], expectedAnswer: true },
+  { order: "notice only", eventIds: ["notice"], expectedAnswer: false },
+] as const)("selects the visible child result with $order", ({ eventIds, expectedAnswer }) =>
+  withOpenClawTestState({ label: "transcript-fallback-notice" }, async (state) => {
+    const scope = transcriptScope(state, "fallback-child");
+    const runId = "fallback-run";
+    const answer = assistant("answer", runId, { __openclaw: { runId, runTerminal: true } });
+    const notice = assistant("notice", runId, {
+      content: [{ type: "text", text: "Selected model fixture/a restored (was fixture/b)." }],
+      provider: "openclaw",
+      model: "delivery-mirror",
+      openclawDeliveryMirror: {
+        kind: "model-fallback",
+        phase: "restored",
+        runId,
+        fromModel: "fixture/b",
+        toModel: "fixture/a",
+      },
+    });
+    const eventsById = { answer, notice };
+    const events = eventIds.map((id) => eventsById[id]);
+    await createSessionEntryWithTranscript(scope, () => ({
+      ok: true,
+      entry: { sessionId: scope.sessionId, updatedAt: 1 },
+      transcriptEvents: events,
+    }));
+
+    // Keep the notice in history even though it cannot serve as the run's result.
+    await expect(loadSessionTranscriptEvents(scope)).resolves.toEqual(events);
+    await expectMatch(scope, { kind: "visible-final", runId }, expectedAnswer ? answer : undefined);
+  }),
+);
+
 it("keeps match filters and active anchors authoritative across worker payload encodings", () =>
   withOpenClawTestState({ label: "transcript-match-encodings" }, async (state) => {
     await captureRuntimeConfigAsyncReader()();
