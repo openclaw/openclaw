@@ -54,22 +54,21 @@ export function linkReaderPrefetchRef(
 
 export function markdownBlocksRef(
   presented: () => PresentationValue,
-  onFileLinks?: (links: HTMLElement[]) => void,
-  fileLinkScope?: () => string | undefined,
+  onScan?: () => ((root: HTMLElement) => void) | undefined,
 ): (element: HTMLElement) => void {
   const [element, setElement] = createSignal<HTMLElement>();
   const owner = createMemo(() => {
     const root = element();
-    const current = root && new MarkdownBlocks(root, onFileLinks);
+    const current = root && new MarkdownBlocks(root, onScan);
     onCleanup(() => current?.dispose());
     return current;
   });
   const readPresentation = createPresentationReader(() => owner()?.update(false));
   createEffect(
-    () => [owner(), presented(), fileLinkScope?.()] as const,
-    ([current, value, scope]) => {
+    // A replaced scan callback rescans, so its consumer observes the current transcript.
+    () => [owner(), presented(), onScan?.()] as const,
+    ([current, value]) => {
       const active = readPresentation(value);
-      current?.refreshFileLinks(scope);
       current?.update(active);
     },
   );

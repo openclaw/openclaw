@@ -110,11 +110,7 @@ export function markdownFileLinkFromEvent(event: Event): MarkdownFileLinkTarget 
     return null;
   }
   const link = target.closest<HTMLAnchorElement>("a[data-file-path]");
-  return link && markdownFileLinkFromAnchor(link);
-}
-
-export function markdownFileLinkFromAnchor(link: HTMLAnchorElement): MarkdownFileLinkTarget | null {
-  const path = link.dataset.filePath;
+  const path = link?.dataset.filePath;
   if (!path) {
     return null;
   }
