@@ -356,7 +356,8 @@ final class OnboardingAISetupModel {
                     }
                     finishConnected(
                         kind: "existing-model",
-                        activationOwner: receiptOwner)
+                        activationOwner: receiptOwner,
+                        handoff: Self.activationHandoff(modelTarget: result.modelTarget))
                     if self.connected {
                         return .connected
                     }
@@ -642,7 +643,9 @@ extension OnboardingAISetupModel {
                 pending: providerAuthReconciliationPending,
                 state: result.persistedActivationState)
             {
-                finishConnected(kind: "provider-auth")
+                finishConnected(
+                    kind: "provider-auth",
+                    handoff: Self.activationHandoff(modelTarget: providerAuthReconciliationPending?.modelTarget))
                 return
             }
             self.candidates = result.candidates
@@ -1572,7 +1575,7 @@ extension OnboardingAISetupModel {
         else { return false }
         self.serverLease = lease
         self.clearProviderAuth()
-        finishConnected(kind: "provider-auth")
+        finishConnected(kind: "provider-auth", handoff: Self.activationHandoff(modelTarget: modelTarget))
         return true
     }
 
@@ -1633,7 +1636,7 @@ extension OnboardingAISetupModel {
     private func finishConnected(
         kind: String,
         activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner? = nil,
-        handoff: OnboardingDashboardHandoff = .custodianOnboarding)
+        handoff: OnboardingDashboardHandoff)
     {
         let routeIdentity = self.routeIdentityProvider()?.trimmingCharacters(in: .whitespacesAndNewlines)
         let completedReceipt = OnboardingSystemAgentResumeStore.markCompleted(

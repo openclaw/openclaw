@@ -67,7 +67,13 @@ enum AppNavigationActions {
             search: DashboardRouteMap.custodianOnboardingSearch)
     }
 
-    static func openChat(sessionKey: String? = nil, agentID: String? = nil, draft: String? = nil) {
+    /// Native chat focuses its composer on open; `focusComposer` asks the web chat to match.
+    static func openChat(
+        sessionKey: String? = nil,
+        agentID: String? = nil,
+        draft: String? = nil,
+        focusComposer: Bool = false)
+    {
         AppActivation.shared.activate()
         if AppStateStore.shared.nativeExperienceEnabled {
             WebChatManager.shared.show(sessionKey: sessionKey, agentID: agentID, draft: draft)
@@ -104,7 +110,7 @@ enum AppNavigationActions {
                 // and any server-derived defaults fenced through actual draft dispatch.
                 await DashboardManager.shared.show(
                     atPath: path,
-                    search: WebChatRoute.dashboardSearch(draft: draft),
+                    search: WebChatRoute.dashboardSearch(draft: draft, focusComposer: focusComposer),
                     target: .primary,
                     ifCurrent: isCurrent)
             } catch {

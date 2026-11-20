@@ -6,7 +6,7 @@ import Testing
 @MainActor
 struct OnboardingUtilitySetupTests {
     @Test(arguments: [false, true], ["existing-model", "provider-auto:apple-fm"])
-    func `activation and verification retain the setup assistant destination`(utility: Bool, kind: String) throws {
+    func `activation and verification choose the destination for the activated role`(utility: Bool, kind: String) throws {
         var payload: [String: Any] = ["ok": true, "modelRef": "apple-fm/on-device"]
         if utility { payload["modelTarget"] = "utility" }
         let direct = try JSONDecoder().decode(
@@ -19,8 +19,8 @@ struct OnboardingUtilitySetupTests {
             preparedModelRef: nil,
             modelActivation: payload.mapValues { AnyCodable($0) },
             activationRejection: nil).get()
-        let expected: OnboardingDashboardHandoff = utility || kind != "existing-model"
-            ? .custodianOnboarding : .dashboard
+        let expected: OnboardingDashboardHandoff = utility
+            ? .custodianOnboarding : kind == "existing-model" ? .dashboard : .chat
 
         #expect(direct.modelTarget == (utility ? .utility : nil))
         #expect(direct.handoff(for: kind) == expected)
