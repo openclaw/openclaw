@@ -84,7 +84,7 @@ function transcriptContent(messages: unknown[] | undefined) {
 
 // Fixed provider decisions; real identified operators, tools, authority and persisted effects.
 it(
-  "completes authorized Goal returns and cancels retained work on role loss or Stop",
+  "finishes started Goal returns after role loss, refuses the next start, and honors Stop",
   { timeout: 120_000 },
   async ({ signal }) => {
     const state = await createOpenClawTestState({
@@ -183,8 +183,8 @@ it(
         } else if (scenario.parentCalls === 4) {
           expect(text).toContain(scenario.childResult);
           expect(text).toContain("Active goal:");
-          // Hold actual provider I/O after the committed child return. The retained
-          // turn still ends when its profile authority is revoked or Stop is requested.
+          // Hold actual provider I/O after the committed child return. Role loss
+          // must let this turn finish; explicit Stop must close the provider.
           response.once("close", () => {
             if (!response.writableFinished) {
               scenario.providerCancelled.resolve();
@@ -201,17 +201,15 @@ it(
             });
           }
         } else if (scenario.parentCalls === 5) {
-          expect(scenario.stop || scenario.revoke).toBe(false);
+          expect(scenario.stop).toBe(false);
           expect(typeof output === "string" ? JSON.parse(output) : output).toMatchObject({
             status: "forbidden",
           });
           reply(scenario.settledText + " The remaining Goal item is unfinished.");
         } else if (scenario.parentCalls === 6) {
-          expect(scenario.revoke).toBe(false);
           expect(text).toContain("Advance the active goal");
           writeToolCall(response, "update_goal", { status: "complete" });
         } else if (scenario.parentCalls === 7) {
-          expect(scenario.revoke).toBe(false);
           reply(scenario.finalText);
         } else {
           throw new Error("Unexpected Goal authority provider request");
@@ -384,13 +382,6 @@ it(
           ).toBe(true);
           await admin.request("users.setRole", { profileId: scenario.profile.id, role: "revoked" });
           revokedEventBoundary = events.length;
-          await wait(
-            awaitGateBeforeSettlement(
-              scenario.providerCancelled.promise,
-              waitForGatewayActiveWork(30_000),
-              "Role revocation settled without cancelling the retained Goal provider request",
-            ),
-          );
           scenario.releaseSettlement.resolve();
         } else if (scenario.stop) {
           expect(await admin.request("sessions.abort", { key: scenario.sessionKey })).toMatchObject(
@@ -417,7 +408,7 @@ it(
         expect(
           loadSessionEntry({ agentId: "main", sessionKey: scenario.sessionKey })?.goal,
         ).toMatchObject(
-          scenario.stop || scenario.revoke
+          scenario.stop
             ? { status: "paused", continuationTurns: 0 }
             : { status: "complete", continuationTurns: 1 },
         );
@@ -437,7 +428,7 @@ it(
         expect(finals).toHaveLength(scenario.revoke || scenario.stop ? 0 : 1);
         expect(
           history.messages.filter((message) => assistantText(message) === scenario.finalText),
-        ).toHaveLength(scenario.revoke || scenario.stop ? 0 : 1);
+        ).toHaveLength(scenario.stop ? 0 : 1);
         if (scenario.revoke) {
           // The administrator may still inspect the canonical history; only the
           // revoked requester's publication stream is required to be silent.
@@ -451,7 +442,7 @@ it(
             history.messages.some((message) =>
               assistantText(message)?.includes(scenario.settledText),
             ),
-          ).toBe(false);
+          ).toBe(true);
           expect(
             events.slice(beforeRevocation.events).filter((event) => {
               const payload = asOptionalRecord(event.payload);
@@ -506,7 +497,27 @@ it(
               );
             }),
           ).toEqual([]);
-          expect(scenario.parentCalls).toBe(beforeRevocation.parent);
+          expect(scenario.parentCalls).toBe(7);
+          const revoked = await connectGatewayClient({
+            ...connection,
+            url: `wss://127.0.0.1:${gateway.port}`,
+            scopes,
+            edgeAuthHeaders: headers(scenario.name),
+            deviceIdentity: loadOrCreateDeviceIdentity({
+              path: state.path(scenario.name, "client", "credentials.sqlite"),
+            }),
+          });
+          cleanup.defer(() => disconnectGatewayClient(revoked));
+          await expect(
+            revoked.request("chat.send", {
+              sessionKey: scenario.sessionKey,
+              message: `Try again: ${scenario.prompt}`,
+              idempotencyKey: randomUUID(),
+            }),
+          ).rejects.toThrow("missing scope: operator.write");
+          const refusedDrained = await wait(waitForGatewayActiveWork(30_000));
+          expect(refusedDrained.drained).toBe(true);
+          expect(scenario.parentCalls).toBe(7);
           expect(scenario.childCalls).toBe(beforeRevocation.child);
         } else if (scenario.stop) {
           expect(scenario.parentCalls).toBe(beforeRevocation.parent);
