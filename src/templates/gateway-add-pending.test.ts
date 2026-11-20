@@ -27,6 +27,7 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { withResolvedClawHubSource } from "./clawhub-source.js";
+import { createTemplateCronGateway } from "./cron-gateway.js";
 import {
   applyTemplateAddForGateway,
   TemplateGatewayPlanBlockedError,
@@ -84,7 +85,6 @@ it.each([
         outcome === "admitted-runtime-retry" || outcome === "admitted-config-retry";
       const originZone = outcome === "admitted-runtime-retry" ? "America/New_York" : undefined;
       let deviceTimeZone = originZone;
-      const cronAdd = vi.fn(async (_job: Record<string, unknown>) => ({ id: "fixture-weekly" }));
       await fs.writeFile(
         manifest,
         "---\n" +
@@ -257,7 +257,6 @@ it.each([
           ? { agentId: "fixture-first", planIntegrity: review!.planIntegrity }
           : {}),
         getPlanningContext: async () => ({ config, sourceMcpServers: {}, deviceTimeZone }),
-        ...(retrySchedule ? { cronGateway: { add: cronAdd } } : {}),
         policyConfig: { configPath: state.configPath, env: state.env },
         configWriteOptions: {
           beforeCommit: async () => {
@@ -463,19 +462,30 @@ it.each([
         expect(newerVersion.blockers).toContainEqual(
           expect.objectContaining({ code: "agent_id_collision" }),
         );
-        result = await applyTemplateAddForGateway(applyInput);
+        const scheduler = retrySchedule ? createDeletionCron(state) : undefined;
+        try {
+          result = await applyTemplateAddForGateway({
+            ...applyInput,
+            cronGateway:
+              scheduler &&
+              createTemplateCronGateway(scheduler.cron, () => config, applyInput.assertCurrent),
+          });
+          expect(result, JSON.stringify(result)).toMatchObject({ status: "complete", sessionKey });
+          if (scheduler) {
+            const jobs = await scheduler.cron.list({ includeDisabled: true });
+            expect(jobs.map((job) => job.schedule)).toEqual([
+              { kind: "cron", expr: "0 9 * * 1", tz: originZone ?? "Europe/Paris" },
+            ]);
+          }
+        } finally {
+          await scheduler?.stop();
+        }
         if (before) {
           const after = await fs.stat(profile);
           expect({ ino: after.ino, mtimeMs: after.mtimeMs }).toEqual({
             ino: before.ino,
             mtimeMs: before.mtimeMs,
           });
-        }
-        expect(result, JSON.stringify(result)).toMatchObject({ status: "complete", sessionKey });
-        if (retrySchedule) {
-          expect(cronAdd.mock.calls.map(([job]) => job.schedule)).toEqual([
-            { kind: "cron", expr: "0 9 * * 1", tz: originZone ?? "Europe/Paris" },
-          ]);
         }
         expect(loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })?.sessionId).toBe(
           admittedSessionId,
