@@ -242,6 +242,8 @@ export function renderUpdateRunReport(
     currentHealth?: UpdateRunReportHealth;
     mode?: UpdateRunResult["mode"] | "package";
     markdownLimit?: number;
+    /** Saved warning text that current state proves resolved; the stored run is unchanged. */
+    isResolvedWarning?: (message: string) => boolean;
   } = {},
 ): UpdateRunReport {
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
@@ -286,7 +288,8 @@ export function renderUpdateRunReport(
   // An owed step restates the warning it was recorded with; report that failure once.
   const warnings = [
     ...updateRunWarningMessages(run.steps).filter(
-      (message) => !owed.some((step) => message.startsWith(step.reason)),
+      (message) =>
+        !opts.isResolvedWarning?.(message) && !owed.some((step) => message.startsWith(step.reason)),
     ),
     ...owed.map(formatUpdateOwedStep),
   ].map((message) => `Warning: ${message}`);

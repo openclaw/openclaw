@@ -104,6 +104,26 @@ function render(patch: Partial<ReportRecord>) {
 
 afterEach(() => vi.restoreAllMocks());
 
+it("omits saved warning text that current state proves resolved", () => {
+  const record = run({
+    steps: [
+      {
+        step: "warning:session-sqlite",
+        status: "completed",
+        detail: "store: [transcript_filename_mismatch] file: verified mismatch",
+      },
+      { step: "warning:other", status: "completed", detail: "unrelated warning" },
+    ],
+  });
+  const report = renderUpdateRunReport(record, {
+    isResolvedWarning: (message) => message.includes("transcript_filename_mismatch"),
+  });
+  const text = [report.headline, ...report.lines].join("\n");
+  expect(text).not.toContain("transcript_filename_mismatch");
+  expect(text).toContain("unrelated warning");
+  expect(report.headline).toContain("1 warning needs attention");
+});
+
 it("reports repeated database-path advisories once across Doctor phases", () => {
   const detail =
     "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.";
