@@ -28,10 +28,8 @@ vi.mock("../plugins/provider-discovery.js", async (importOriginal) => ({
   resolveRuntimePluginDiscoveryProviders: discoverProviders,
 }));
 
-import {
-  ensureOpenClawModelsJson as ensureModels,
-  planOpenClawModelsJsonSource as planSource,
-} from "./models-config.js";
+import { planOpenClawModelsJsonSourceWithInput as planSource } from "./models-config.core.js";
+import { ensureOpenClawModelsJson as ensureModels } from "./models-config.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 import {
   loadPersistedPluginModelCatalogsReadOnly,

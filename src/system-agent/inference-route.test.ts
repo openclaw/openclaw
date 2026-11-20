@@ -9,6 +9,7 @@ import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig as resolveRoute,
 } from "./inference-route.js";
+import { describeSystemAgentConfigConflict } from "./setup-config-snapshot.js";
 
 const model = (id: string) => buildCatalogModel(id, { contextWindow: 8192, maxTokens: 2048 });
 const workspaceAgent = (config: OpenClawConfig, agentId: string, workspaceDir?: string) =>
@@ -173,6 +174,24 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
     expect(candidate.sourceConfig).toBe(config);
     expect(config).toEqual(before);
   });
+
+  it.each([undefined, "openclaw", "crestodian"])(
+    "diagnoses authored collisions, not managed execution entries (%s)",
+    async (reservedId) => {
+      const config = devConfig();
+      if (reservedId) {
+        config.agents!.entries![reservedId] = {};
+      }
+      const route = await resolveRoute(config, "dev");
+      assert(route);
+      const issue = describeSystemAgentConfigConflict(route.runConfig);
+      if (reservedId) {
+        expect(issue).toContain(`Agent id "${reservedId}" is reserved`);
+      } else {
+        expect(issue).toBeUndefined();
+      }
+    },
+  );
 
   it.each([undefined, "codex"])("preserves explicit harness policy (%s)", async (runtime) => {
     const route = await resolveRoute(devConfig(runtime));

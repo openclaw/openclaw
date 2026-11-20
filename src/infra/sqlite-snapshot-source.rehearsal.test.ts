@@ -2,17 +2,90 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import * as reads from "../state/artifact-preserving-state-reads.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import * as state from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
+import {
+  openSqliteReadOnlyDatabase,
+  prepareArtifactPreservingSqliteRead,
+} from "./sqlite-snapshot-source.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each(["drained", "wal", "wal-symlink", "journal", "journal-symlink", "unowned"])(
+  "prepares an in-place inspection only with maintenance custody (%s)",
+  async (kind) => {
+    const root = fs.realpathSync(dirs.make("sqlite-custodied-read-"));
+    const file = path.join(root, "agent.sqlite");
+    exec(file, "CREATE TABLE probe(value INTEGER); INSERT INTO probe VALUES (42)");
+    if (kind.startsWith("wal")) {
+      const source = path.join(root, "wal-source.sqlite");
+      using db = openNodeSqliteDatabase(source);
+      db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;");
+      db.exec("CREATE TABLE probe(value INTEGER); INSERT INTO probe VALUES (42)");
+      for (const suffix of ["", "-wal", "-shm"]) {
+        fs.copyFileSync(source + suffix, file + suffix);
+      }
+    }
+    if (kind.startsWith("journal")) {
+      fs.writeFileSync(`${file}-journal`, Buffer.alloc(512));
+    }
+    const requested = kind.endsWith("-symlink") ? path.join(root, "linked.sqlite") : file;
+    if (requested !== file) {
+      fs.symlinkSync(file, requested);
+    }
+    const before = fs.readFileSync(file);
+    const entries = fs
+      .readdirSync(root)
+      .filter((name) => name.startsWith("agent.sqlite"))
+      .toSorted();
+    const inspect = () =>
+      reads.withArtifactPreservingStateReads(
+        async () => {
+          await prepareArtifactPreservingSqliteRead(requested);
+          using db = openSqliteReadOnlyDatabase(requested);
+          expect(db.prepare("SELECT value FROM probe").get()).toEqual({ value: 42 });
+          expect(db.location() === file).toBe(kind === "drained");
+          expect(() => db.exec("UPDATE probe SET value = 99")).toThrow(/readonly/);
+        },
+        { agentDatabases: true },
+      );
+    if (kind === "unowned") {
+      await inspect();
+    } else {
+      await withDoctorSqliteMaintenanceLock({
+        env: { ...process.env, OPENCLAW_STATE_DIR: root },
+        operation: "synthetic stopped inspection",
+        run: async (authority) => {
+          const scope = createOpenClawDatabaseMaintenanceScope({
+            schemaMaintenance: true,
+            assertOwnerCurrent: () => authority.assertCurrent(),
+            assertDatabaseAccess: () => authority.assertCurrent(),
+          });
+          try {
+            await scope.run(inspect);
+          } finally {
+            await scope.close();
+          }
+        },
+      });
+    }
+    expect(fs.readFileSync(file)).toEqual(before);
+    expect(
+      fs
+        .readdirSync(root)
+        .filter((name) => name.startsWith("agent.sqlite"))
+        .toSorted(),
+    ).toEqual(entries);
+  },
+);
 
 function rehearsalEnv(root: string): NodeJS.ProcessEnv {
   return {

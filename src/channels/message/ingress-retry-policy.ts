@@ -5,6 +5,7 @@
  */
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { PreparedModelRuntimeRecoveryError } from "../../agents/prepared-model-runtime-admission-errors.js";
+import { InboundDedupePendingError } from "../../auto-reply/reply/inbound-dedupe-error.js";
 import { computeBackoff } from "../../infra/backoff.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 
@@ -13,8 +14,15 @@ export const DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_INGRESS_RETRY_BASE_MS = 1_000;
 export const DEFAULT_INGRESS_RETRY_MAX_MS = 3 * 60_000;
 const MAX_RECOVERY_RETRIES = 4_096;
+// Allow normal queue waits beyond the five-minute stall timeout, but never hide a stuck lane forever.
+const MAX_PENDING_CUSTODY_MS = 30 * 60_000;
 
-type IngressRecoveryRetry = { recoveryFailures: number; nextEligibleAt?: number };
+type IngressRecoveryRetry = {
+  recoveryFailures: number;
+  nextEligibleAt?: number;
+  pendingSince?: number;
+  pendingDelayMs?: number;
+};
 // Budgets reset on process restart because runtime owners re-publish on startup.
 const recoveryRetries = new WeakMap<object, Map<string, IngressRecoveryRetry>>();
 
@@ -104,6 +112,30 @@ export function resolveIngressFailureDisposition(params: {
   const now = params.now ?? Date.now();
   const attempt = (params.event.attempts ?? 0) + 1;
   const message = params.formatError(params.err);
+  const errors = collectNestedErrorCandidates(params.err);
+  const previousRetry = params.event.retry;
+  const pendingSince = previousRetry?.pendingSince ?? now;
+  if (
+    now - pendingSince < MAX_PENDING_CUSTODY_MS &&
+    errors.some((error) => error instanceof InboundDedupePendingError)
+  ) {
+    const pendingDelayMs = Math.min(
+      (previousRetry?.pendingDelayMs ?? DEFAULT_INGRESS_RETRY_BASE_MS / 2) * 2,
+      params.config?.maxMs ?? DEFAULT_INGRESS_RETRY_MAX_MS,
+    );
+    return {
+      kind: "release",
+      attempt: params.event.attempts ?? 0,
+      message,
+      recordAttempt: false,
+      retry: {
+        recoveryFailures: previousRetry?.recoveryFailures ?? 0,
+        pendingSince,
+        pendingDelayMs,
+        nextEligibleAt: now + pendingDelayMs,
+      },
+    };
+  }
   const nonRetryable = params.resolveNonRetryableFailure?.(params.err) ?? null;
   if (nonRetryable) {
     return {
@@ -113,8 +145,6 @@ export function resolveIngressFailureDisposition(params: {
       attempt,
     };
   }
-  const errors = collectNestedErrorCandidates(params.err);
-  const previousRetry = params.event.retry;
   const recovery = errors.find(
     (error): error is PreparedModelRuntimeRecoveryError =>
       error instanceof PreparedModelRuntimeRecoveryError,
@@ -142,7 +172,7 @@ export function resolveIngressFailureDisposition(params: {
         kind: "release",
         attempt,
         message,
-        ...(previousRetry ? { retry: { recoveryFailures: previousRetry.recoveryFailures } } : {}),
+        ...(previousRetry ? { retry: { ...previousRetry, nextEligibleAt: undefined } } : {}),
       };
 }
 

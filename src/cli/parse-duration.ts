@@ -58,11 +58,10 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
   const tokenRe = /(\d+(?:\.\d+)?)(ms|s|m|h|d)/g;
   for (const match of trimmed.matchAll(tokenRe)) {
     const [full, valueRaw, unitRaw] = match;
-    const index = match.index ?? -1;
-    if (!full || !valueRaw || !unitRaw || index < 0) {
+    if (!full || !valueRaw || !unitRaw) {
       throw invalidDuration(raw);
     }
-    if (index !== consumed) {
+    if (match.index !== consumed) {
       throw invalidDuration(raw, "each composite segment needs a unit");
     }
     totalMs += parseDurationToken(raw, valueRaw, unitRaw);

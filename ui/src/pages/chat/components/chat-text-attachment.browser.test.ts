@@ -124,7 +124,7 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
       await expect.poll(() => panel.querySelector("article")).not.toBeNull();
       const raw = expectDefined(
         [...panel.querySelectorAll("button")].find(
-          (button) => button.textContent?.trim() === "View Raw Text",
+          (button) => button.textContent?.trim() === "View raw text",
         ),
         "Raw view action",
       );

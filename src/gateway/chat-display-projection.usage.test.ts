@@ -5,7 +5,7 @@ it.each([
   { state: "available", report: { state: "available" } },
   { state: "unavailable", report: { state: "unavailable" } },
   { state: "invalid", report: undefined },
-])("projects only the public usage completeness state: $state", ({ state, report }) => {
+])("projects only the public usage and cache completeness states: $state", ({ state, report }) => {
   expect(
     projectChatDisplayMessages([
       {
@@ -15,6 +15,7 @@ it.each([
           input: 0,
           totalTokens: 0,
           usageReport: { state, internal: "private provider metadata" },
+          cacheTelemetry: { state, internal: "private provider metadata" },
           cost: { total: 0, usageReport: { state } },
         },
       },
@@ -26,7 +27,7 @@ it.each([
       usage: {
         input: 0,
         totalTokens: 0,
-        ...(report ? { usageReport: report } : {}),
+        ...(report ? { usageReport: report, cacheTelemetry: report } : {}),
         cost: { total: 0 },
       },
     },

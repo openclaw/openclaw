@@ -10,7 +10,8 @@ import {
 } from "../../test/helpers/gateway/chat-display-replay.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { loadPreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import * as backoff from "../infra/backoff.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -322,6 +323,16 @@ it(
       );
       expect(installed?.pluginId).toBe("xai");
       expect(typeof installed?.provider.classifyFailoverReason).toBe("function");
+      // Settle catalog persistence before chat retains the initially absent session store.
+      const cfg = loadConfig();
+      for (const agentId of scenarios) {
+        const owner = await loadPreparedModelRuntimeSnapshot({
+          config: cfg,
+          agentId,
+          agentDir: path.join(state, "agents", agentId, "agent"),
+        });
+        await owner.loadFullModelCatalog?.({ refresh: true, wait: true });
+      }
       for (const selected of scenarios) {
         scenario = selected;
         const check = (actual: unknown) => expect.soft(actual, scenario);

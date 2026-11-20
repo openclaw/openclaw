@@ -1,3 +1,0 @@
-# /fork: source outcome durability, completed-prefix selection, live authority,
-# literal recap/model-replay separation, and Telegram adapter boundaries.
-683

@@ -92,7 +92,7 @@ export function createCodexSessionCatalogNodeHostCommands(
         if (error instanceof CatalogParamsError) {
           throw error;
         }
-        throw new Error("Codex app-server transcript is unavailable", { cause: error });
+        throw new Error("Codex app-server chat history is unavailable", { cause: error });
       }
     },
   });
@@ -199,7 +199,7 @@ export async function readCodexSessionTranscript(params: {
   limit: number;
   source?: CodexCatalogHome;
 }): Promise<CodexSessionTranscriptPage> {
-  const cursor = readControlCursor(params.cursor, "transcript request");
+  const cursor = readControlCursor(params.cursor, "chat history request");
   // The read RPC leaves `limit` open-ended; every provider owns its own ceiling.
   const limit = normalizeLimit(
     params.limit,

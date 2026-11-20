@@ -1,16 +1,10 @@
-import { getModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  encodeTextSystemOneRequest,
-  decodeTextSystemOneResponse,
-  type DecisionBatchV2,
-  type DecisionProviderContextV2,
-  type ProviderDecisionOutcomeV2,
+import type {
+  DecisionBatchV2,
+  DecisionProviderContextV2,
+  ProviderDecisionOutcomeV2,
 } from "openclaw/plugin-sdk/decisions";
-import { executeDecisionJsonRequest } from "openclaw/plugin-sdk/decisions-unary-runtime";
-import {
-  createProviderCredentialMatcher,
-  resolveProviderHttpRequestConfig,
-} from "openclaw/plugin-sdk/provider-http";
+import { evaluateDecisionHttp } from "openclaw/plugin-sdk/decisions-http-runtime";
+import { decodeBasetenDecisionResult, encodeBasetenDecisionRequest } from "./decision-codec.js";
 import { BASETEN_BASE_URL, BASETEN_DECISION_MODEL_IDS } from "./models.js";
 
 export async function evaluateBasetenDecision(
@@ -27,52 +21,11 @@ export async function evaluateBasetenDecision(
   ) {
     return { status: "unavailable", reason: "unsupported-input" };
   }
-  const auth = context.auth;
-  if (auth.mode !== "api-key" || !auth.apiKey) {
-    return { status: "unavailable", reason: "credentials-unavailable" };
-  }
-  return executeDecisionJsonRequest({
-    body: encodeTextSystemOneRequest(batch, context.model.id),
-    decode: (payload) => decodeTextSystemOneResponse(batch, payload),
-    apiKey: auth.apiKey,
-    signal: context.signal,
-    deadlineMonotonicMs: context.deadlineMonotonicMs,
-    isAdmissible: context.isAdmissible,
-    prepareTransport: () => {
-      const preparedRequest = getModelProviderRequestTransport(context.model);
-      const requestConfig = resolveProviderHttpRequestConfig({
-        provider: "baseten",
-        capability: "other",
-        transport: "http",
-        baseUrl: context.model.baseUrl ?? BASETEN_BASE_URL,
-        defaultBaseUrl: BASETEN_BASE_URL,
-        headers: context.model.headers,
-        defaultHeaders: {
-          ...(!preparedRequest?.auth || preparedRequest.auth.mode === "provider-default"
-            ? { Authorization: `Bearer ${auth.apiKey}` }
-            : {}),
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        request: preparedRequest
-          ? {
-              proxy: preparedRequest.proxy,
-              tls: preparedRequest.tls,
-              allowPrivateNetwork: preparedRequest.allowPrivateNetwork,
-            }
-          : undefined,
-      });
-      return {
-        ...requestConfig,
-        url: requestConfig.baseUrl.replace(/\/$/, "") + "/systemone",
-        reflectsCredential: createProviderCredentialMatcher({
-          headers: requestConfig.headers,
-          request: preparedRequest,
-          configuredHeaderNames: Object.keys(context.model.headers ?? {}),
-          defaultAuthHeader: "Authorization",
-          defaultAuthPrefix: "Bearer ",
-        }),
-      };
-    },
+  return evaluateDecisionHttp(context, {
+    provider: "baseten",
+    baseUrl: context.model.baseUrl ?? BASETEN_BASE_URL,
+    endpointPath: "systemone",
+    body: encodeBasetenDecisionRequest(batch, context.model.id),
+    decode: (payload) => decodeBasetenDecisionResult(batch, payload),
   });
 }

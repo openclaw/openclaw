@@ -134,7 +134,6 @@ export function useQueuedCollectorFixture() {
           normalizedSpawned: {},
           requestDeliveryHint: undefined,
           expectedExistingSessionId: entry?.sessionId,
-          hasRestoredCronContinuation: false,
           resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
           now: Date.now(),
           isSystemGatewayRun: true,
@@ -301,6 +300,7 @@ export function useQueuedCollectorFixture() {
     reserveSwarmRun({ runId, groupId, maxConcurrent: 1, activeRunIds: [] });
     const created = await createInitialSubagentSession({
       cfg: getRuntimeConfig(),
+      projectRequester: { kind: "internal" },
       requesterAgentId: "main",
       targetAgentId: "main",
       childSessionKey,

@@ -148,6 +148,26 @@ it("keeps qualified and unqualified prepared presence faces distinct", async () 
   });
 });
 
+it("never puts an unnamed viewer's authentication email in an activity link", async () => {
+  const id = "c3e32452-0467-47e5-aafa-233cd5dae29f";
+  const facepile = mountFacepile({
+    personActivity: { basePath: "", navigate: vi.fn() },
+    staticUsers: [
+      {
+        id,
+        identity: { type: "profile", id },
+        email: "private-login@example.test",
+        watchedSessions: [],
+      },
+    ],
+  });
+  await waitForSolid(async () => {
+    await facepile.updateComplete;
+    expect(attrs(facepile, "a", "href")).toEqual(["/activity/person-c3e324520467"]);
+    expect(facepile.textContent).not.toContain("private-login");
+  });
+});
+
 it("shares cached self avatars and resolves teammate metadata only when missing", async () => {
   setAvatarGatewayOrigin("https://gateway.example.test", ["viewer-token"]);
   const fetchAvatar = vi.spyOn(globalThis, "fetch").mockImplementation(

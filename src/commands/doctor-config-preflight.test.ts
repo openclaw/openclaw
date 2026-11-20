@@ -194,11 +194,12 @@ describe("runDoctorConfigPreflight", () => {
   });
 
   it.each([
-    [undefined, true],
-    ["recoverable", false],
+    [undefined, undefined, true],
+    ["recoverable", undefined, false],
+    ["recoverable", "deferred", true],
   ] as const)(
-    "retains unresolved migration outcomes for retirement admission (%s)",
-    async (warningDisposition, expected) => {
+    "retains unresolved migration outcomes for retirement admission (%s, %s)",
+    async (warningDisposition, outcome, expected) => {
       await withDoctorConfigPreflightHome(async (home) => {
         await writeOpenClawConfig(home, { plugins: { enabled: false } });
         const retiredState = await import("./doctor-retired-state-repair.js");
@@ -206,6 +207,7 @@ describe("runDoctorConfigPreflight", () => {
           changes: [],
           warnings: ["Manual state repair remains"],
           warningDisposition,
+          outcome,
         });
 
         const preflight = await runDoctorConfigPreflight(doctorRepairOptions);
@@ -420,54 +422,24 @@ describe("runDoctorConfigPreflight", () => {
     });
   });
 
-  it("logs config warnings as structured records when stdout is non-interactive", async () => {
-    await withStdoutIsTTY(false, async () => {
-      setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
+  it.each([false, true])("reports config warnings for stdout (TTY: %s)", async (isTTY) => {
+    await withStdoutIsTTY(isTTY, async () => {
+      if (!isTTY) {
+        setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
+      }
       const consoleSink = loggingState.rawConsole ?? console;
       const warnSpy = vi.spyOn(consoleSink, "warn").mockImplementation(() => undefined);
-
       await withDoctorConfigPreflightHome(async (home) => {
         await writeOpenClawConfig(home, {
           plugins: { deny: ["missing-doctor-warning-plugin"] },
         });
-
         const preflight = await runDoctorConfigPreflight({
           ...configOnlyOptions,
           invalidConfigNote: false,
         });
         expect(preflight.snapshot.valid).toBe(true);
       });
-
-      const records = warnSpy.mock.calls
-        .map(([value]) => String(value).trim())
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
-      expect(records).toContainEqual(
-        expect.objectContaining({
-          level: "warn",
-          subsystem: "config",
-          message: expect.stringContaining(
-            "plugins.deny: plugin not found: missing-doctor-warning-plugin",
-          ),
-        }),
-      );
-      expect(noteMock).not.toHaveBeenCalledWith(expect.anything(), "Config warnings");
-    });
-  });
-
-  it("renders current config warnings with their config paths", async () => {
-    await withStdoutIsTTY(true, async () => {
-      await withDoctorConfigPreflightHome(async (home) => {
-        await writeOpenClawConfig(home, {
-          plugins: { deny: ["missing-doctor-warning-plugin"] },
-        });
-
-        const preflight = await runDoctorConfigPreflight({
-          ...configOnlyOptions,
-          invalidConfigNote: false,
-        });
-        expect(preflight.snapshot.valid).toBe(true);
-
+      if (isTTY) {
         const output = noteMock.mock.calls.map(([message]) => message).join("\n");
         expect(noteMock).toHaveBeenCalledWith(
           expect.stringContaining(
@@ -476,7 +448,22 @@ describe("runDoctorConfigPreflight", () => {
           "Config warnings",
         );
         expect(output).not.toContain("- : ");
-      });
+      } else {
+        const records = warnSpy.mock.calls
+          .map(([value]) => String(value).trim())
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        expect(records).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            subsystem: "config",
+            message: expect.stringContaining(
+              "plugins.deny: plugin not found: missing-doctor-warning-plugin",
+            ),
+          }),
+        );
+        expect(noteMock).not.toHaveBeenCalledWith(expect.anything(), "Config warnings");
+      }
     });
   });
 

@@ -170,6 +170,7 @@ it("extracts the last successful blacksmith-testbox timing stamp", () => {
 GitHub Actions run: https://github.com/openclaw/openclaw/actions/runs/1234
 {"not":"a stamp"}
 not json at all
+{"provider":"blacksmith-testbox","leaseId":"tbx_earlier","exitCode":0,"runStatus":"passed"}
 {"provider":"blacksmith-testbox","leaseId":"tbx_first","exitCode":1,"runStatus":"failed"}
 {"provider":"blacksmith-testbox","leaseId":"tbx_final","exitCode":0,"runStatus":"passed"}
 GitHub Actions run: https://github.com/openclaw/openclaw/actions/runs/9999

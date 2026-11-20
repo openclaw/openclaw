@@ -19,6 +19,7 @@ import type { CallGatewayOptions } from "../gateway/call.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { HealthSummary } from "./health.js";
 import type { StatusUsageSummaryOptions } from "./status-usage.runtime.js";
 import { formatDaemonRuntimeShort } from "./status.format.js";
@@ -60,6 +61,8 @@ async function queryStatusGateway<T>(
   params: StatusGatewayQuery,
   buildRequest: () => Pick<CallGatewayOptions, "method" | "params">,
 ): Promise<Result<T, StatusGatewayFailure>> {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   const { callGateway } = await import("../gateway/call.js");
   const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
   if (timeoutMs === 0) {
@@ -71,9 +74,16 @@ async function queryStatusGateway<T>(
     timeoutMs,
     config: params.config,
     ...params.callOverrides,
+    signal,
   }).then<Result<T, StatusGatewayFailure>, Result<T, StatusGatewayFailure>>(
-    (value) => ({ ok: true, value }),
-    (cause: unknown) => ({ ok: false, error: { kind: "request", cause } }),
+    (value) => {
+      signal?.throwIfAborted();
+      return { ok: true, value };
+    },
+    (cause: unknown) => {
+      signal?.throwIfAborted();
+      return { ok: false, error: { kind: "request", cause } };
+    },
   );
 }
 
@@ -206,7 +216,9 @@ async function buildDaemonStatusSummary(serviceLabel: "gateway" | "node", timeou
       ...(wrapperPath ? { wrapperPath } : {}),
       ...(installationDrift
         ? {
-            installationDrift: formatGatewayServiceInstallationDrift(installationDrift, state.env),
+            installationDrift: formatGatewayServiceInstallationDrift(installationDrift, state.env, {
+              command: state.command,
+            }),
           }
         : {}),
     };
@@ -235,8 +247,21 @@ async function buildDaemonStatusSummary(serviceLabel: "gateway" | "node", timeou
   };
 }
 
+/** Ends an interrupted scan quietly; other scan failures keep their report. */
+export async function reportStatusScanFailureUnlessInterrupted(
+  error: unknown,
+  runtime: RuntimeEnv,
+  timeoutMs?: number,
+): Promise<undefined> {
+  const signal = getAsyncWorkSignal();
+  if (signal?.aborted && error === signal.reason) {
+    return undefined;
+  }
+  return await reportStatusScanFailure(error, runtime, timeoutMs);
+}
+
 /** Preserve independent service diagnostics when local status collection refuses state. */
-export async function reportStatusScanFailure(
+async function reportStatusScanFailure(
   error: unknown,
   runtime: RuntimeEnv,
   timeoutMs?: number,
@@ -293,6 +318,8 @@ export async function resolveStatusRuntimeSnapshot(params: {
     gatewayProbeDeadlineMs: number;
   }) => Promise<StatusGatewayHealth>;
 }) {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   const securityAudit = params.includeSecurityAudit
     ? await (params.resolveSecurityAudit ?? resolveStatusSecurityAudit)({
         config: params.config,
@@ -321,7 +348,11 @@ export async function resolveStatusRuntimeSnapshot(params: {
             gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
           }).catch(
             params.suppressHealthErrors
-              ? (error: unknown) => ({ error: String(error) })
+              ? (error: unknown) => {
+                  // Interrupts stay interrupts; only real probe failures collapse into JSON.
+                  signal?.throwIfAborted();
+                  return { error: String(error) };
+                }
               : undefined,
           )
       : undefined;
@@ -336,6 +367,8 @@ export async function resolveStatusRuntimeSnapshot(params: {
         })
       : null;
   const [gatewayService, nodeService] = await resolveStatusServiceSummaries(params.timeoutMs);
+  // An interrupt landed while local probes ran; never publish a half-built snapshot.
+  signal?.throwIfAborted();
   return {
     securityAudit,
     usage,

@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { Show, createMemo } from "solid-js";
 import { ConfigNode } from "../../components/config-form.node.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
-import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { SettingsSection, SettingsUnavailable } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginManager } from "../../plugins/control-ui-manager.solid.tsx";
 import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
@@ -18,13 +18,13 @@ function AdvancedSettingsFields(options: InventoryProps): JSX.Element {
   return (
     <Show
       when={options.connected || Boolean(config())}
-      fallback={<SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />}
+      fallback={<SettingsUnavailable message={t("pluginsPage.connectToManage")} />}
     >
       <Show
         when={config()}
         fallback={
           !options.configError && !options.configSchemaLoading && options.configValue ? (
-            <SettingsEmpty message={t("pluginsPage.schemaUnavailable")} carapace />
+            <SettingsUnavailable message={t("pluginsPage.schemaUnavailable")} />
           ) : null
         }
       >

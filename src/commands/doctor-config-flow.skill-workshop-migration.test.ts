@@ -3,7 +3,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
@@ -56,18 +55,19 @@ it.each([
       const saved = await repair(configPath);
 
       expect(saved.skills).toEqual({ load: { watch: false } });
-      expect(saved.plugins.entries["skill-workshop"]).toEqual({ config: expected });
+      // The plugin owns the skill_workshop tool, so Doctor's tool-config auto-enable marks it on.
+      expect(saved.plugins.entries["skill-workshop"]).toEqual({ enabled: true, config: expected });
       expect(saved.meta.migrations.skillWorkshopPlugin).toBe(true);
       const snapshot = await readConfigFileSnapshot();
       expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
-      // The runtime reads the moved settings, not defaults.
-      expect(resolveSkillWorkshopConfig(snapshot.config).autonomous).toMatchObject(
-        expected.autonomous,
-      );
+      // The runtime reads the moved settings from the plugin's own config path.
+      expect(
+        snapshot.config.plugins?.entries?.["skill-workshop"]?.config?.autonomous,
+      ).toMatchObject(expected.autonomous);
 
       // A second Doctor run finds nothing left to move.
       const again = await repair(configPath);
-      expect(again.plugins.entries["skill-workshop"]).toEqual({ config: expected });
+      expect(again.plugins.entries["skill-workshop"]).toEqual({ enabled: true, config: expected });
       expect(again.skills).toEqual({ load: { watch: false } });
     }),
 );

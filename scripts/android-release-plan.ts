@@ -8,7 +8,6 @@ import {
   resolveAndroidStorePlan,
   validateAndroidStorePlan,
 } from "./lib/android-store-version.ts";
-import { resolveAndroidVersion } from "./lib/android-version.ts";
 
 function main(): void {
   const { values, positionals } = parseArgs({
@@ -68,14 +67,11 @@ function main(): void {
     process.stdout.write(`${JSON.stringify(actual)}\n`);
     return;
   }
-  const pinned = resolveAndroidVersion(rootDir);
   const packageJson = JSON.parse(readFileSync(path.join(rootDir, "package.json"), "utf8")) as {
     version: string;
   };
   const plan = resolveAndroidStorePlan({
     gatewayVersion: packageJson.version,
-    pinnedVersion: pinned.canonicalVersion,
-    pinnedVersionCode: pinned.versionCode,
     sourceSha: git("rev-parse", "HEAD"),
     snapshot,
     refs,

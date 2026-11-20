@@ -34,7 +34,8 @@ type ConfigViewOptions = Partial<
     ConfigData,
     | "schemaRead"
     | "onRetrySchema"
-    | "appearanceDisplayReady"
+    | "configReadAccess"
+    | "appearanceDataRequested"
     | "onAppearanceDataNeeded"
     | "mutationAllowed"
     | "openFileAllowed"
@@ -74,6 +75,8 @@ type ConfigViewOptions = Partial<
     | "nativeNotifications"
     | "onNativeNotificationsRequestPermission"
     | "onNativeNotificationsSendTest"
+    | "notificationAgents"
+    | "onNotificationAgentsLoad"
     | "onWebPushSubscribe"
     | "onWebPushUnsubscribe"
     | "onWebPushTest"
@@ -103,6 +106,8 @@ type ConfigViewOptions = Partial<
   excludeSections?: readonly string[];
   /** Embedded schema editors can provide their own section chrome. */
   embeddedEditor?: boolean;
+  /** A section narrowed by the page is titled for what is left in it. */
+  sectionTitle?: string;
   /** Append Advanced sections without blocking one browser task. */
   progressive?: boolean;
   sectionPrelude?: JSX.Element;

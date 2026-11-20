@@ -1,5 +1,9 @@
 import { asOptionalObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
+import type {
+  ExplainToolAvailabilityParams,
+  ToolAvailabilityReport,
+} from "../agents/tool-availability-explanation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   OpenKeyedStoreOptions,
@@ -60,6 +64,13 @@ type BundledHealthApi = {
     getHealthCheck: typeof getHealthCheck;
     registerHealthCheck: typeof registerHealthCheck;
   }) => void;
+  registerSkillWorkshopDoctorChecks?: (host: {
+    getHealthCheck: typeof getHealthCheck;
+    registerHealthCheck: typeof registerHealthCheck;
+    explainToolAvailability: (
+      params: ExplainToolAvailabilityParams,
+    ) => Promise<ToolAvailabilityReport>;
+  }) => void;
 };
 
 type WorkerProviderHealthApi = {
@@ -92,32 +103,17 @@ type BundledHealthCheckParams = {
   ) => Promise<T>;
 };
 
-function defineHealthCheckRegistration(
-  register: (
-    params: BundledHealthCheckParams,
-    registerCheck: typeof registerHealthCheck,
-  ) => HealthFinding[] | void,
-  updateReadiness?: "post-plugin",
-) {
-  // Owners retain callback and check identities when refreshing their registration state.
-  // Declare phase ownership before loading their implementation, then carry it onto each check.
-  const registerCheck = updateReadiness
-    ? (check: Parameters<typeof registerHealthCheck>[0]) =>
-        registerHealthCheck(Object.assign(check, { updateReadiness }))
-    : registerHealthCheck;
-  return {
-    updateReadiness,
-    register: (params: BundledHealthCheckParams) => register(params, registerCheck),
-  };
-}
-
-const HEALTH_CHECK_REGISTRATIONS = [
-  defineHealthCheckRegistration(registerMemoryCoreHealthChecks, "post-plugin"),
-  defineHealthCheckRegistration(registerCodexHealthChecks),
-  defineHealthCheckRegistration(registerPolicyHealthChecks),
-  defineHealthCheckRegistration(registerOpenAIHealthChecks),
-  defineHealthCheckRegistration(registerCuaHealthChecks),
-  defineHealthCheckRegistration(registerBundledWorkerProviderHealthChecks),
+const HEALTH_CHECK_REGISTRATIONS: readonly ((
+  params: BundledHealthCheckParams,
+  registerCheck: typeof registerHealthCheck,
+) => HealthFinding[] | void)[] = [
+  registerMemoryCoreHealthChecks,
+  registerCodexHealthChecks,
+  registerPolicyHealthChecks,
+  registerOpenAIHealthChecks,
+  registerCuaHealthChecks,
+  registerSkillWorkshopHealthChecks,
+  registerBundledWorkerProviderHealthChecks,
 ];
 
 function loadMemoryCoreHealthApi(): BundledHealthApi {
@@ -161,17 +157,13 @@ export function resolveBundledHealthCheckPluginStateMode(
 export function registerBundledHealthChecks(
   params: BundledHealthCheckParams & { updateReadiness?: "post-plugin" },
 ): HealthFinding[] {
-  const findings: HealthFinding[] = [];
-  for (const registration of HEALTH_CHECK_REGISTRATIONS) {
-    if (
-      params.updateReadiness !== undefined &&
-      registration.updateReadiness !== params.updateReadiness
-    ) {
-      continue;
-    }
-    findings.push(...(registration.register(params) ?? []));
+  // Plugin-owned checks never gate an update; their findings surface after restart.
+  if (params.updateReadiness !== undefined) {
+    return [];
   }
-  return findings;
+  return HEALTH_CHECK_REGISTRATIONS.flatMap(
+    (register) => register(params, registerHealthCheck) ?? [],
+  );
 }
 
 function registerMemoryCoreHealthChecks(
@@ -325,6 +317,26 @@ function registerOpenAIHealthChecks(
     dirName: "openai",
     artifactBasename: "doctor-health-api.js",
   }).registerOpenAIDoctorChecks?.({ getHealthCheck, registerHealthCheck: registerCheck });
+}
+
+function registerSkillWorkshopHealthChecks(
+  _params: BundledHealthCheckParams,
+  registerCheck: typeof registerHealthCheck,
+): void {
+  // Registered even while the plugin is disabled: the check reports that plugin switch. A
+  // package without the plugin has no Workshop tool to diagnose, so a missing artifact is skipped.
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync<BundledHealthApi>({
+    dirName: "skill-workshop",
+    artifactCandidates: ["doctor-health-api.js"],
+  })?.registerSkillWorkshopDoctorChecks?.({
+    getHealthCheck,
+    registerHealthCheck: registerCheck,
+    async explainToolAvailability(params) {
+      const { explainToolAvailability } =
+        await import("../agents/tool-availability-explanation.js");
+      return await explainToolAvailability(params);
+    },
+  });
 }
 
 function registerCuaHealthChecks(

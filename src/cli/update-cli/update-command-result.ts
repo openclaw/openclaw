@@ -235,6 +235,8 @@ export function formatUpdateFinalizationError(error: unknown): string {
 
 export type MutableUpdateExecutionResult = {
   mutationStarted: boolean;
+  /** A candidate Doctor or boot check may have written live state; only then can its schema have moved. */
+  candidateOpenedState: boolean;
   result: UpdateRunResult;
   failure?: { cause: unknown; detail: string };
   preManagedServiceStop: PreManagedServiceStop | undefined;
@@ -289,18 +291,22 @@ export function createUpdateCommandFailureResult(
     (admissionFailure
       ? `The installation and Gateway were left unchanged. ${failure.detail ?? cause.message}`
       : failure.detail);
-  const reason =
-    cause instanceof UpdateRequesterRevokedError
-      ? cause.code
-      : ownershipFailure && admission
-        ? "config-read-failed"
-        : preMutationFailure || pkgOwnershipFailure
-          ? cause.reason
-          : admissionFailure
-            ? "managed-service-preflight"
-            : lockFailure
-              ? "file_lock_timeout"
-              : "update-failed";
+  // Progress receipts wrap the guard's refusal in their recording failure.
+  const revocation = collectNestedErrorCandidates(cause).find(
+    (candidate): candidate is UpdateRequesterRevokedError =>
+      candidate instanceof UpdateRequesterRevokedError,
+  );
+  const reason = revocation
+    ? revocation.code
+    : ownershipFailure && admission
+      ? "config-read-failed"
+      : preMutationFailure || pkgOwnershipFailure
+        ? cause.reason
+        : admissionFailure
+          ? "managed-service-preflight"
+          : lockFailure
+            ? "file_lock_timeout"
+            : "update-failed";
   const stepResult = preMutationFailure ? cause.stepResult : undefined;
   const doctorFailureFacts = collectUpdateDoctorFailureFacts(failure.cause);
   const failedStep: UpdateStepResult = stepResult?.failedStep ?? {

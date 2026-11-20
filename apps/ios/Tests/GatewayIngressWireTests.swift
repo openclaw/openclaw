@@ -480,7 +480,9 @@ extension GatewayIngressControllerTests {
                     response: IngressWireFixture.media, kind: .image, expectedGatewayID: config.effectiveStableID)
             }
             media = pendingMedia
-            try await waitForIngress { server.requests.count == initial + 2 }
+            try await waitForIngress(
+                "arrivals=\(server.requests.count - initial), socketDone=\(socketFinished), mediaDone=\(mediaFinished)")
+            { server.requests.count == initial + 2 }
             switch action {
             case "forget": try await ingress.forget(stableID: fixture.stableID)
             case "replaceAccount":

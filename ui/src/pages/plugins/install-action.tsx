@@ -23,6 +23,7 @@ export type PluginInstallActionProps = {
   progress?: PluginInstallProgress;
   busy?: boolean;
   disabled?: boolean;
+  title?: string;
   pluginName?: string;
   buttonClass?: string;
   primary?: boolean;
@@ -119,12 +120,12 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
             "plugin-install-action__button",
             {
               primary: props.primary && !failed(),
-              "oc-action-primary": props.primary && !failed(),
               "oc-action-secondary": !props.primary || failed(),
               "plugin-install-action__button--failed": failed(),
             },
           ]}
           disabled={props.disabled && canInstall()}
+          title={props.title}
           aria-label={
             props.pluginName && (canInstall() || failed())
               ? t(

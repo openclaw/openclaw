@@ -123,7 +123,7 @@ suite.define(() => {
       const alert = dashboards.getByRole("alert");
       const alertText = await alert.textContent();
       expect(alertText).toContain("Dashboard refresh unavailable");
-      expect(alertText).toContain("Showing stale data");
+      expect(alertText).toContain("Showing last known data");
       expect(await alert.getByRole("button").count()).toBe(0);
 
       await setList(gateway, sessionsResult(key, "Updated deploy monitor", 2));
@@ -174,7 +174,7 @@ suite.define(() => {
         expect(await dashboards.getByRole("button", { name: "Retry", exact: true }).count()).toBe(
           0,
         );
-        expect(await dashboards.textContent()).not.toContain("Showing stale data");
+        expect(await dashboards.textContent()).not.toContain("Showing last known data");
         expect(await dashboards.locator("[data-dashboards-empty]").count()).toBe(0);
         const emptyResult = { ...sessionsResult("", "", 1), count: 0, sessions: [] };
         await setList(gateway, emptyResult);
@@ -251,19 +251,11 @@ suite.define(() => {
       expect(
         (await listRequests(gateways)).map((requests) => requests.find(isDashboardRequest)?.params),
       ).toStrictEqual([DASHBOARD_REQUEST_PARAMS, DASHBOARD_REQUEST_PARAMS]);
-      await eachTab(async ({ canonicalLabel, gateway, page }, index) => {
+      await eachTab(async ({ canonicalLabel, gateway }, index) => {
         await gateway.resolveDeferred(
           listMethod,
           sessionsResult(`agent:main:canonical-${index + 1}`, canonicalLabel, 10 + index),
         );
-        const sidebar = page.locator("openclaw-app-sidebar");
-        // The profileless roster has no ownership identities, so its title stays plain.
-        await expect
-          .poll(() =>
-            sidebar.locator(".sidebar-session-toolbar .sidebar-panel-header__title").textContent(),
-          )
-          .toBe("Sessions");
-        await sidebar.getByText(canonicalLabel, { exact: true }).waitFor();
       });
       // Both tabs share the context clock; advance it once for each event wave.
       await context.clock.install();

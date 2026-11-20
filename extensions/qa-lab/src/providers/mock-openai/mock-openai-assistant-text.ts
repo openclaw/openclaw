@@ -136,17 +136,26 @@ export function buildImageInspectionReply(
   return undefined;
 }
 
-export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
-  const prompt = extractLastUserText(input);
-  const completionContexts = [prompt, ...extractCurrentRuntimeContextTexts(input).toReversed()];
+export function buildImageGenerationCompletionReply(input: ResponsesInputItem[]) {
+  const { current } = splitMockConversationContext(extractLastUserText(input));
+  const completionContexts = [current, ...extractCurrentRuntimeContextTexts(input).toReversed()];
   const completedImageMediaPath = completionContexts
     .map(readCompletedImageGenerationMediaPath)
     .find(Boolean);
-  if (completedImageMediaPath) {
-    const reply = "Protocol note: generated the QA lighthouse image successfully.";
-    return hasCurrentGeneratedMediaDelivery(input)
-      ? reply
-      : `${reply}\nMEDIA:${completedImageMediaPath}`;
+  if (!completedImageMediaPath) {
+    return undefined;
+  }
+  const reply = "Protocol note: generated the QA lighthouse image successfully.";
+  return hasCurrentGeneratedMediaDelivery(input)
+    ? reply
+    : `${reply}\nMEDIA:${completedImageMediaPath}`;
+}
+
+export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
+  const prompt = extractLastUserText(input);
+  const imageCompletionReply = buildImageGenerationCompletionReply(input);
+  if (imageCompletionReply) {
+    return imageCompletionReply;
   }
   const toolOutput = extractToolOutput(input);
   const scenarioToolOutput =

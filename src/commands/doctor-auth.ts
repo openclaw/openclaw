@@ -1,4 +1,3 @@
-import { dirname } from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
@@ -30,11 +29,9 @@ import {
 import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
 import { withAuthProfileReaderCleanup } from "../agents/auth-profiles/reader-cleanup.js";
 import { prepareAgentAuthProfileRowsRead } from "../agents/auth-profiles/sqlite-read.js";
-import {
-  resolveAuthProfileDatabasePath,
-  resolveAuthProfileDatabaseOwnerId,
-} from "../agents/auth-profiles/sqlite.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -115,9 +112,8 @@ export async function collectSharedAuthStoreFindings(
     return [];
   }
   const databasePath = resolveSharedAuthStorePath(env);
-  const source = prepareAgentAuthProfileRowsRead({
+  const source = await prepareAgentAuthProfileRowsRead({
     databasePath,
-    agentId: resolveAuthProfileDatabaseOwnerId(dirname(databasePath)),
     env,
   });
   const readable = await withAuthProfileReaderCleanup(
@@ -253,6 +249,7 @@ type AuthIssue = AuthHealthSummary["profiles"][number];
 
 type AuthProfileHealthTarget = {
   label: string;
+  agentId?: string;
   agentDir?: string;
 };
 
@@ -271,7 +268,7 @@ async function listAuthProfileHealthTargets(
     const agentDir = resolveAgentDir(cfg, agentId);
     const databasePath = resolveAuthProfileDatabasePath(agentDir);
     if (!targets.has(databasePath) && (await hasLocalAuthProfileStoreSourceAsync(agentDir))) {
-      targets.set(databasePath, { label: `Agent ${agentId}`, agentDir });
+      targets.set(databasePath, { label: `Agent ${agentId}`, agentId, agentDir });
     }
   }
 
@@ -402,6 +399,33 @@ async function collectAuthProfileTargetFindings(params: {
   const findings: HealthFinding[] = [];
   const owner = params.labelStores ? `${params.target.label} auth profile` : "Auth profile";
   const path = resolveAuthStorePathForDisplay(params.target.agentDir);
+  const orderedProfiles = new Map(
+    Object.entries(params.store.order ?? {}).flatMap(([provider, profileIds]) =>
+      profileIds.map((profileId) => [profileId, provider] as const),
+    ),
+  );
+  for (const [profileId, provider] of orderedProfiles) {
+    if (
+      params.store.profiles[profileId] ||
+      (await findPersistedAuthProfileCredentialAsync({
+        agentDir: params.target.agentDir,
+        profileId,
+      }))
+    ) {
+      continue;
+    }
+    findings.push({
+      checkId: AUTH_PROFILES_CHECK_ID,
+      severity: "warning",
+      category: "fix-now",
+      message: `${owner} ${profileId} is referenced by saved ${provider} account order but has no effective credential.`,
+      path,
+      target: profileId,
+      requirement: "missing_ordered_profile",
+      fixHint: `Inspect available accounts with openclaw models auth list${params.target.agentId ? ` --agent ${quoteCliArg(params.target.agentId)}` : ""} --provider ${quoteCliArg(provider)}. Restore the missing credential or explicitly change the saved account order.`,
+      docsUrl: "https://docs.openclaw.ai/concepts/oauth",
+    });
+  }
   for (const cooldown of await collectAuthProfileCooldowns(params.store)) {
     findings.push({
       checkId: AUTH_PROFILES_CHECK_ID,

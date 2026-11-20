@@ -249,7 +249,7 @@ conformance("pending input workers", () => {
   afterEach(async () => {
     const retained = receipts.splice(0);
     for (const receipt of retained) {
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
     }
     await Promise.all(retained.map(async (receipt) => receipt.settled?.()));
   });
@@ -275,10 +275,10 @@ conformance("pending input workers", () => {
 
   it("retains failed sends while excluding legacy interrupted and consumed inputs from history", async () => {
     const retained = await stage("retained");
-    retained.finish("cancelled");
+    retained.finish("cancelled", "failed");
     await retained.settled?.();
     const legacy = await stage("legacy-interrupted");
-    legacy.finish("interrupted");
+    legacy.finish("interrupted", "failed");
     await legacy.settled?.();
     expect(await readSessionSubmittedInput(scope, "legacy-interrupted:user")).toEqual(
       legacy.message,
@@ -314,7 +314,7 @@ conformance("pending input workers", () => {
     assert(first.completeAsync);
     const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
     expect(await first.completeAsync(outcome)).toEqual(outcome);
-    first.finish("interrupted");
+    first.finish("interrupted", "failed");
     await first.settled?.();
 
     const replay = await stage("completed", true);

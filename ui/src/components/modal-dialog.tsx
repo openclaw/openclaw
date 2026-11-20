@@ -10,9 +10,10 @@ import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
 import { containsComposed } from "./overlay-registry.ts";
 import { ModalDialogContent } from "./solid/modal-dialog.tsx";
 import { retainShadowStyles } from "./solid/shadow-styles.ts";
+import iconButtonStyles from "./solid/icon-button.css?inline";
 import modalStyles from "./solid/modal-dialog.css?inline";
 import modalScrollLockStyles from "./solid/modal-scroll-lock.css?inline";
-import overlayStyles from "./solid/overlay.css?inline";
+import overlayStyles from "./solid/overlay-shadow.css?inline";
 
 export type ModalDialogProperties = {
   open: boolean;
@@ -276,7 +277,12 @@ function createModalPolicy(host: OpenClawModalDialog): ModalPolicy {
       }
       return dispatch(type, cancelable);
     },
-    onRootChange: (root) => retainShadowStyles(root, [overlayStyles, modalStyles]),
+    onRootChange: (root) =>
+      retainShadowStyles(root, [
+        ...("host" in root ? [overlayStyles] : []),
+        iconButtonStyles,
+        modalStyles,
+      ]),
     native: {
       isOpen: () => dialog.open,
       show: () => {

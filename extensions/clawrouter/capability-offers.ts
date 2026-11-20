@@ -32,6 +32,7 @@ const UNIFIED_ROUTES: Record<string, string> = {
   "openai.responses": "/v1/responses",
   "openai.embeddings": "/v1/embeddings",
   "openai.images_generations": "/v1/images/generations",
+  "openai.images_edits": "/v1/images/edits",
   "openai.audio_speech": "/v1/audio/speech",
 };
 
@@ -182,7 +183,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
   timeoutMs: () => number;
   signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
-  /** Require a recent proxy-key observation for a credential-scoped native consumer. */
+  /** Require a recent proxy-key observation for consumers without model-scoped grants. */
   requireFreshProxyCatalog?: boolean;
 }): Promise<ClawRouterCapabilityOffer[]> {
   params.signal?.throwIfAborted();
@@ -223,7 +224,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
       const catalog = asOptionalRecord(body);
       const scope = asOptionalRecord(catalog?.scope);
       const observedAt =
-        typeof catalog?.observedAt === "string" ? Date.parse(catalog.observedAt) : NaN;
+        typeof catalog?.observedAt === "string" ? Date.parse(catalog.observedAt) : Number.NaN;
       const age = Date.now() - observedAt;
       if (
         !Number.isFinite(age) ||

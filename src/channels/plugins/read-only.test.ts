@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -7,12 +8,15 @@ import {
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
 } from "../../plugins/loader.test-fixtures.js";
+import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import { withPluginGenerationSourceCustody } from "../../plugins/plugin-generation-source-lookup.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import {
   rebasePluginMetadataSnapshotManifestRegistry,
   resolvePluginMetadataSnapshot,
   restorePluginMetadataSnapshot,
 } from "../../plugins/plugin-metadata-snapshot.js";
+import * as setupModule from "../../plugins/plugin-setup-module.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -24,6 +28,7 @@ import {
   listReadOnlyChannelPluginsForConfig,
   listReadOnlyChannelPluginsForConfigAsync,
   resolveReadOnlyChannelPluginsForConfig,
+  resolveReadOnlyChannelPluginsForConfigAsync,
 } from "./read-only.js";
 import {
   writeBundledSetupChannelPlugin,
@@ -153,6 +158,135 @@ afterEach(() => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("listReadOnlyChannelPluginsForConfig", () => {
+  it("resolves selected channel setup through the async preparation path", async () => {
+    const fixture = setupFixture();
+    await using cache = createPluginCache();
+    await withPluginCache(cache, () =>
+      withPluginGenerationSourceCustody(async () => {
+        const plugins = await listReadOnlyChannelPluginsForConfigAsync(
+          fixture.cfg,
+          coldOptions(true),
+        );
+        expectExternalChatSetupOnlyPluginLoaded({ ...fixture, plugins });
+      }),
+    );
+  });
+
+  it.each(["worker", "cleanup"] as const)(
+    "propagates fatal %s failure from async channel preparation",
+    async (kind) => {
+      const fixture = setupFixture();
+      const failure =
+        kind === "worker"
+          ? new Error("Channel preparation worker exited unexpectedly")
+          : new AggregateError(
+              [new Error("Private receipt cleanup failed")],
+              "Channel preparation and cleanup failed",
+            );
+      const prepare = vi
+        .spyOn(setupModule, "preparePluginSetupModuleLoader")
+        .mockRejectedValueOnce(failure);
+      await using cache = createPluginCache();
+      const resolution = withPluginCache(cache, () =>
+        withPluginGenerationSourceCustody(() =>
+          resolveReadOnlyChannelPluginsForConfigAsync(fixture.cfg, coldOptions(true)),
+        ),
+      );
+
+      await expect(resolution).rejects.toBe(failure);
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(prepare).toHaveBeenCalledWith(
+        expect.objectContaining({ id: fixture.pluginId }),
+        path.join(fixture.pluginDir, "setup-entry.cjs"),
+        fixture.pluginDir,
+      );
+      expectMarkers(fixture.setupMarker, fixture.fullMarker);
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each(["missing", "hardlink", "symlink"] as const)(
+    "settles selected %s setup failures while preparing a healthy sibling",
+    async (failureKind) => {
+      const invalid = writeExternalSetupChannelPlugin({
+        pluginId: "invalid-plugin",
+        channelId: "invalid-chat",
+        setupRequiresRuntime: true,
+      });
+      const healthy = writeExternalSetupChannelPlugin({
+        pluginId: "healthy-plugin",
+        channelId: "healthy-chat",
+      });
+      const cfg = {
+        channels: {
+          "invalid-chat": { token: "configured" },
+          "healthy-chat": { token: "configured" },
+        },
+        plugins: {
+          load: { paths: [invalid.pluginDir, healthy.pluginDir] },
+          allow: [invalid.pluginId, healthy.pluginId],
+        },
+      };
+      const metadataSnapshot = resolvePluginMetadataSnapshot({ config: cfg });
+      const setupEntry = path.join(invalid.pluginDir, "setup-entry.cjs");
+      const hostileSource = path.join(makePluginLoaderTempDir(), "payload.cjs");
+      fs.writeFileSync(hostileSource, "throw new Error('rejected setup must not execute');");
+      fs.unlinkSync(setupEntry);
+      if (failureKind === "hardlink") {
+        fs.linkSync(hostileSource, setupEntry);
+      } else if (failureKind === "symlink") {
+        fs.symlinkSync(hostileSource, setupEntry);
+      }
+      const options = { ...coldOptions(true), metadataSnapshot };
+      await using syncCache = createPluginCache();
+      const expected = withPluginCache(syncCache, () =>
+        resolveReadOnlyChannelPluginsForConfig(cfg, options),
+      );
+      expect(pluginIds(expected.plugins)).toContain("healthy-chat");
+      expect(expected.loadFailures).toEqual([
+        expect.objectContaining({
+          channelId: "invalid-chat",
+          pluginId: "invalid-plugin",
+          source: setupEntry,
+          message: expect.stringContaining("Unable to open channel setup entry"),
+        }),
+      ]);
+      fs.unlinkSync(healthy.setupMarker);
+      const identity = fs.statSync(path.join(healthy.pluginDir, "setup-entry.cjs"), {
+        bigint: true,
+      });
+      const read = fs.readSync;
+      let originalReads = 0;
+      vi.spyOn(fs, "readSync").mockImplementation(((fd: number, ...args: unknown[]) => {
+        const current = fs.fstatSync(fd, { bigint: true });
+        if (current.dev === identity.dev && current.ino === identity.ino) {
+          originalReads++;
+          // Isolated Vitest workers capture inline; the main-thread rendezvous has separate coverage.
+          if (isMainThread) {
+            throw new Error("async setup must not synchronously recapture the original source");
+          }
+        }
+        return Reflect.apply(read, fs, [fd, ...args]);
+      }) as typeof fs.readSync);
+      await using asyncCache = createPluginCache();
+      const actual = await withPluginCache(asyncCache, () =>
+        withPluginGenerationSourceCustody(() =>
+          resolveReadOnlyChannelPluginsForConfigAsync(cfg, options),
+        ),
+      );
+      expect(actual.loadFailures).toEqual(expected.loadFailures);
+      expect(actual.missingConfiguredChannelIds).toEqual(expected.missingConfiguredChannelIds);
+      expect(pluginIds(actual.plugins)).toEqual(pluginIds(expected.plugins));
+      expect(findPlugin(actual.plugins, "healthy-chat")?.meta.blurb).toBe("setup entry");
+      expect(fs.existsSync(healthy.setupMarker)).toBe(true);
+      expect(fs.existsSync(invalid.setupMarker)).toBe(false);
+      if (isMainThread) {
+        expect(originalReads).toBe(0);
+      } else {
+        expect(originalReads).toBeGreaterThan(0);
+      }
+    },
+  );
+
   it.each(["registered", "ineligible"])(
     "skips saved-auth I/O for %s channels until discovery needs it",
     async (state) => {

@@ -67,24 +67,35 @@ function snapshotTree(root: string): string[] {
     });
 }
 
-it.each(
-  (["sha1", "sha256"] as const).flatMap((objectFormat) =>
-    [false, true].map((cached) => ({ objectFormat, cached })),
+it.each([
+  ...(["sha1", "sha256"] as const).flatMap((objectFormat) =>
+    [false, true].map((cached) => ({ objectFormat, cached, legacy: false })),
   ),
-)("fetches only missing commits ($objectFormat/$cached)", async ({ objectFormat, cached }) => {
-  const state = fixture(false, false, false, objectFormat);
-  if (cached) {
-    state.installedGit("fetch", "upstream.with.dots");
-  }
-  state.commit("2026.7.3", 15);
-  const result = await state.run({
-    channel: "dev",
-    devTarget: { mode: "detached", ref: state.target },
-  });
+  { objectFormat: "sha1" as const, cached: true, legacy: true },
+])(
+  "fetches only missing commits ($objectFormat/$cached/legacy=$legacy)",
+  async ({ objectFormat, cached, legacy }) => {
+    const state = fixture(false, false, false, objectFormat);
+    if (cached) {
+      state.installedGit("fetch", "upstream.with.dots");
+    }
+    state.commit("2026.7.3", 15);
+    const command: CommandRunner = (argv, options) =>
+      legacy && argv.includes("--no-lazy-fetch")
+        ? Promise.resolve({ code: 129, stdout: "", stderr: "unknown option: --no-lazy-fetch" })
+        : state.runCommand(argv, options);
+    const result = await state.run(
+      {
+        channel: "dev",
+        devTarget: { mode: "detached", ref: state.target },
+      },
+      command,
+    );
 
-  state.expectUpdated(result);
-  expect(state.calls.some((argv) => argv.includes("fetch"))).toBe(!cached);
-});
+    state.expectUpdated(result);
+    expect(state.calls.some((argv) => argv.includes("fetch"))).toBe(!cached);
+  },
+);
 
 it.each(["unsupported", "timeout-zero", "signal-zero"] as const)(
   "settles cached probes before discovery (%s)",

@@ -375,6 +375,7 @@ export function readResidentSessionRow(
         lastAssistantMessage: row.lastAssistantMessage,
       },
       skipTranscriptUsageFallback: true,
+      hasMessages: databaseFacts.transcriptHasMessages ?? row.hasMessages,
       includeSwarmChildren: true,
       childLinks: prepared ? undefined : params.links,
     });
@@ -414,7 +415,8 @@ export function readResidentSessionRow(
     activitySummaryEnabled,
     databaseFacts,
   };
-  const facts = row.facts?.matches(factsInput) ? row.facts : readSessionRowFacts(factsInput);
+  const priorFacts = row.materialized?.source.cfg === cfg ? row.facts : undefined;
+  const facts = priorFacts?.matches(factsInput) ? priorFacts : readSessionRowFacts(factsInput);
   row.privateSource?.assertCurrent();
   return {
     materialized,

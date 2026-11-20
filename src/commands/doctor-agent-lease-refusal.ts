@@ -1,5 +1,5 @@
-import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { SqliteSnapshotCleanupError } from "../infra/sqlite-lifecycle-errors.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";

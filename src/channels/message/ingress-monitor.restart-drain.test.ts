@@ -189,6 +189,51 @@ it("rearms queued ingress after a restart signal rolls back without an idle obse
   });
 });
 
+it("does not claim queued ingress when restart fences its pending snapshot", async () => {
+  await withQueue(async (queue) => {
+    const raw: RawEvent = { id: "restart-snapshot", lane: "a", text: "deliver after rollback" };
+    await queue.enqueue(
+      raw.id,
+      { version: 1, rawEvent: JSON.stringify(raw) },
+      { laneKey: "lane:a" },
+    );
+    const admission: { signal: ReturnType<typeof beginGatewayRestartSignalAdmission> } = {
+      signal: null,
+    };
+    const listUnsettled = queue.listUnsettled!.bind(queue);
+    const snapshot = vi.spyOn(queue, "listUnsettled").mockImplementationOnce(async (...args) => {
+      const rows = await listUnsettled(...args);
+      admission.signal = beginGatewayRestartSignalAdmission();
+      expect(admission.signal).not.toBeNull();
+      return rows;
+    });
+    const claim = vi.spyOn(queue, "claim");
+    const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const monitor = createMonitor(queue, deliver);
+    try {
+      monitor.start();
+      await monitor.waitForPumpIdle();
+      expect(claim).not.toHaveBeenCalled();
+      expect(deliver).not.toHaveBeenCalled();
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending()).toEqual([
+        expect.objectContaining({ id: raw.id, attempts: 0 }),
+      ]);
+      expect(admission.signal?.rollback()).toBe(true);
+      await monitor.waitForIdle();
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(await queue.listClaims()).toEqual([]);
+    } finally {
+      admission.signal?.rollback();
+      await monitor.stop();
+      snapshot.mockRestore();
+      claim.mockRestore();
+    }
+  });
+});
+
 it("holds queued ingress until host suspension reopens admission", async () => {
   await withQueue(async (queue) => {
     const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
@@ -343,21 +388,30 @@ it.each(["pause", "stop"] as const)(
   },
 );
 
-it("propagates a rejected pump wrapper without spinning idle or stop waits", async () => {
+it.each(["sync", "async"] as const)("recovers after a %s pump wrapper rejection", async (mode) => {
   await withQueue(async (queue) => {
     const rejection = new Error("pump wrapper rejected");
+    let reject = true;
     const monitor = createMonitor(
       queue,
       async () => {},
       undefined,
-      async () => {
-        throw rejection;
+      (work) => {
+        if (!reject) {
+          return work();
+        }
+        if (mode === "sync") {
+          throw rejection;
+        }
+        return Promise.reject(rejection);
       },
     );
     monitor.start();
-
     await expect(monitor.waitForIdle()).rejects.toBe(rejection);
-    await expect(monitor.stop()).rejects.toBe(rejection);
+    reject = false;
+    monitor.requestDrain();
+    await expect(monitor.waitForIdle()).resolves.toBeUndefined();
+    await expect(monitor.stop()).resolves.toBeUndefined();
   });
 });
 

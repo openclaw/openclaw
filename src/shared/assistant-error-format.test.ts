@@ -4,6 +4,7 @@ import {
   formatProviderRefusalText as formatRefusal,
   formatRawAssistantErrorForUi as formatError,
   formatTransportErrorCopy as transportError,
+  isProviderRefusalNoticeText,
   isKnownTransportErrorCode,
   parseApiErrorInfo as parseError,
 } from "./assistant-error-format.js";
@@ -33,6 +34,36 @@ it.each([
 ])("formats %s refusal guidance", (category, expected) => {
   const diagnostics = [{ type: "provider_refusal", details: { category } }];
   expect(formatRefusal({ diagnostics })).toBe(expected);
+});
+
+// Every copy this formatter emits is what the run-failure notice has to keep.
+it.each([
+  ["legacy misalignment transcript", { errorCode: "misalignment_policy_violation" }],
+  [
+    "misalignment with findings",
+    { diagnostics: [{ type: "provider_refusal", details: { category: "misalignment" } }] },
+  ],
+  [
+    "categorised refusal",
+    { diagnostics: [{ type: "provider_refusal", details: { category: "bio" } }] },
+  ],
+  ["uncategorised refusal", { diagnostics: [{ type: "provider_refusal", details: {} }] }],
+])("recognizes the copy produced for a %s", (_label, message) => {
+  const copy = formatRefusal(message);
+  expect(copy).toBeTruthy();
+  expect(isProviderRefusalNoticeText(copy as string)).toBe(true);
+});
+
+it("leaves paraphrased refusal reminders out of canonical notice copy", () => {
+  expect(isProviderRefusalNoticeText("The provider refused this request.")).toBe(false);
+  expect(
+    isProviderRefusalNoticeText(
+      "Note: The provider refused this request. Revise the request and try again.",
+    ),
+  ).toBe(false);
+  expect(
+    isProviderRefusalNoticeText("The provider stopped this request as a safety precaution."),
+  ).toBe(false);
 });
 
 it("extracts guarded upstream status", () => {
@@ -71,7 +102,7 @@ it("extracts the final upstream rejection from a proxy failure envelope", () => 
 it("does not return raw HTML after an HTTP reason phrase", () => {
   const raw = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body><h1>502</h1></body></html>";
   expect(formatError(raw)).toBe(
-    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
   );
 });
 

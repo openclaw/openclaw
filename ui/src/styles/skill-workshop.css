@@ -52,6 +52,10 @@
   overflow: hidden;
 }
 
+.sw-layout > .sw-list:only-child {
+  grid-column: 1 / -1;
+}
+
 .sw-layout > .sw-detail {
   display: flex;
   flex-direction: column;
@@ -276,9 +280,8 @@
   font-size: var(--control-ui-text-sm);
 }
 
-.sw-notice--warning {
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
-  color: var(--text);
+.sw-detail-alert {
+  margin: 0 var(--space-5) var(--space-3);
 }
 
 .sw-tabs {
@@ -553,6 +556,8 @@
   font-size: var(--control-ui-text-xs);
 }
 
+/* Outranks the carapace settings-group block display so the panel stacks with gaps. */
+.sw-empty.settings-group.oc-settings-group,
 .sw-empty {
   display: grid;
   justify-items: center;
@@ -560,6 +565,15 @@
   padding: var(--space-8, 48px) var(--space-5);
   color: var(--muted);
   text-align: center;
+}
+
+.sw-empty__title {
+  color: var(--oc-text-primary);
+}
+
+.sw-empty .oc-banner {
+  justify-self: stretch;
+  text-align: start;
 }
 
 .sw-empty__icon svg {

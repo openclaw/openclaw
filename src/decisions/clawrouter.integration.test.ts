@@ -5,6 +5,7 @@ import {
   resetDecisionTestRuntime,
   activateDecisionRegistry,
   decisionOptions,
+  prepareDecisionRuntime,
 } from "../agents/decision-inference.test-support.js";
 import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { createDecisionTool } from "../agents/tools/decision-tool.js";
@@ -20,9 +21,7 @@ import type { DecisionBatchV2 } from "./types-v2.js";
 
 const batch: DecisionBatchV2 = {
   state: { type: "text", text: "A damaged parcel" },
-  questions: {
-    damaged: { type: "boolean", instructions: "Is it damaged?" },
-  },
+  questions: { damaged: { type: "boolean", instructions: "Is it damaged?" } },
 };
 const catalog = {
   providers: [
@@ -123,18 +122,15 @@ it.each(["default", "per-agent"])(
             const evaluate = (agentId = "main") =>
               evaluateDecisionV2InRegistry(batch, decisionOptions({ agentId }), registry, config);
             try {
-              await using prepared = await acquireAgentRunPreparedModelRuntime(
-                {
-                  config,
-                  agentId: "main",
-                  agentDir: resolveAgentDir(config, "main"),
-                  workspaceDir: config.agents.defaults.workspace,
-                  loadRuntimePlugins: true,
-                  runtimePluginSelections: [
-                    { provider: "clawrouter", modelId: "openai/gpt-6-luna", agentId: "main" },
-                  ],
-                },
-                { catalogMode: "static" },
+              // Compile the lazy core executor and host SDK before the operation deadline starts.
+              const instance = getPluginInstance(registry.decisionProviders[0]!.host.record)!;
+              instance.loadModule("openclaw/plugin-sdk/agent-harness-runtime");
+              await import("../agents/decision-inference.js");
+              await using prepared = await prepareDecisionRuntime(
+                config,
+                "clawrouter",
+                "openai/gpt-6-luna",
+                "main",
               );
               const outcome = await evaluate();
               expect(
@@ -150,7 +146,12 @@ it.each(["default", "per-agent"])(
                   pluginId: "clawrouter",
                 }),
               );
-              expect(outcome).toMatchObject({
+              expect(
+                outcome,
+                outcome.status === "unavailable"
+                  ? `Decision unavailable: ${outcome.reason}`
+                  : undefined,
+              ).toMatchObject({
                 status: "ok",
                 result: {
                   model: "gpt-6-luna",

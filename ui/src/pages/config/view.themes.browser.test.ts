@@ -5,7 +5,11 @@ import {
 } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import "../../styles.css";
-import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
+import {
+  renderAppearance,
+  renderConfigInto,
+  requiredConfigElement,
+} from "./config-view.test-support.tsx";
 
 const catalog = (...themes: ThemeCatalogEntry[]) => ({ error: null, themes });
 const theme = (
@@ -54,9 +58,15 @@ it("offers plugin and personal themes from the shared catalog with their descrip
       }),
     ),
   });
-  const pluginTheme = themeButton(container, "space-pack/xenovessel");
-  expect(pluginTheme?.title).toBe("Alien theme");
-  pluginTheme?.click();
+  const pluginTheme = requiredConfigElement(
+    container,
+    '[data-theme-id="space-pack/xenovessel"]',
+    HTMLButtonElement,
+  );
+  expect(pluginTheme.title).toBe("Alien theme");
+  expect(pluginTheme.querySelector(".settings-theme-card__palette")).not.toBeNull();
+  expect(pluginTheme.querySelector(".settings-theme-card__icon")).toBeNull();
+  pluginTheme.click();
   expect(setTheme).toHaveBeenCalledWith("space-pack/xenovessel");
   const personalTheme = themeButton(container, "user/candlelight")!;
   expect(personalTheme.textContent).toContain("Candlelight");
@@ -65,7 +75,11 @@ it("offers plugin and personal themes from the shared catalog with their descrip
   expect(personalTheme.querySelector(".settings-theme-card__palette")).not.toBeNull();
   props.theme = "claw";
   renderConfigInto(props, container);
-  expect(personalTheme.querySelector(".settings-theme-card__icon")).not.toBeNull();
+  expect(personalTheme.querySelector(".settings-theme-card__palette")).not.toBeNull();
+  expect(personalTheme.querySelector(".settings-theme-card__icon")).toBeNull();
+  expect(
+    container.querySelector(".settings-theme-card:last-child .settings-theme-card__icon"),
+  ).not.toBeNull();
 });
 
 it.each(["profile", "device-local"] as const)(
@@ -82,9 +96,7 @@ it.each(["profile", "device-local"] as const)(
       },
     });
     await updatePickers(container);
-    expect(container.textContent).toContain(
-      `${missingTheme} is unavailable. Using Claw until the theme becomes available again.`,
-    );
+    expect(container.textContent).toContain(`${missingTheme} is unavailable. Using Claw for now.`);
     const claw = themeButton(container, "claw");
     expect(claw?.getAttribute("aria-pressed")).toBe("true");
     expect(container.querySelector('[data-accent-preset="default"]')?.classList).toContain(

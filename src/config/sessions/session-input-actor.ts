@@ -3,9 +3,14 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import { captureSessionPendingInputWorkerCustody } from "./session-accessor.sqlite-pending-inputs.js";
-import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
+import { prepareSqliteScope } from "./session-accessor.sqlite-read-scope.js";
+import {
+  resolveSqliteSessionKey,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionEntryTargetPatchScope } from "./session-accessor.types.js";
 import type {
   SessionActor,
@@ -74,7 +79,7 @@ export async function acquireSessionInputActor(
     ...requestedTarget,
     target: { ...requestedTarget.target, canonicalKey: sessionKey },
   };
-  const database = {
+  let database = {
     agentId,
     path: target.readSource?.path ?? target.storePath,
     env: target.env,
@@ -101,6 +106,22 @@ export async function acquireSessionInputActor(
           databaseIdentity: memory.actor.target.database.incarnation,
         },
       },
+    };
+  }
+  if (!target.readSource) {
+    // Fresh targets retain a logical selector; the scope owner selects its physical store.
+    const prepared = toDatabaseOptions(
+      await prepareSqliteScope({
+        agentId,
+        storePath: target.storePath,
+        sessionKey,
+        env: target.env,
+      }),
+    );
+    database = {
+      agentId: prepared.agentId,
+      path: resolveOpenClawAgentSqlitePath(prepared),
+      env: prepared.env,
     };
   }
   const { createSessionActorFactory } = await import("./session-actor-durable.js");
@@ -181,6 +202,7 @@ export async function getSessionInputActor(
         snapshot(authority: SessionActorAuthority) {
           return memory.actor.snapshot(authority);
         },
+        assertCurrent: () => memory.actor.assertCurrent(),
       };
     }
     return undefined;
@@ -198,23 +220,25 @@ export async function getSessionInputActor(
     throw new Error("Input actor differs from the recorder's admitted target");
   }
   const custody = captureSessionPendingInputWorkerCustody();
+  const guard = <T>(operation: () => T): T => {
+    try {
+      return operation();
+    } catch (error) {
+      // A closed input actor must remain a custody refusal, not enable fallback.
+      if (custody) {
+        throw new SessionPendingInputCustodyError("Pending input actor is unavailable", {
+          cause: error,
+        });
+      }
+      throw error;
+    }
+  };
   return {
     ...acquired,
     phase: binding.phase,
     storageAuthority: acquired.storageAuthority ?? getSessionActorStorageBinding(scope)?.authority,
-    snapshot(authority: SessionActorAuthority) {
-      try {
-        return acquired.actor.snapshot(authority);
-      } catch (error) {
-        // A closed input actor must remain a custody refusal, not enable fallback.
-        if (custody) {
-          throw new SessionPendingInputCustodyError("Pending input actor is unavailable", {
-            cause: error,
-          });
-        }
-        throw error;
-      }
-    },
+    assertCurrent: () => guard(() => acquired.actor.assertCurrent()),
+    snapshot: (authority: SessionActorAuthority) => guard(() => acquired.actor.snapshot(authority)),
   };
 }
 
