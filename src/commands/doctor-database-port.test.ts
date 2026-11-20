@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { DatabasePortError } from "../infra/database-engine/port-command.worker.js";
 import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { doctorDatabasePort, type DatabasePortOptions } from "./doctor-database-port.js";
 
@@ -94,6 +99,51 @@ describe.skipIf(process.platform === "win32")("database port engine-selection ad
       },
       { to: "postgres", dryRun: true },
       /requires --family|require --family/,
+    );
+  });
+});
+
+describe.skipIf(process.platform === "win32")("database port Doctor contract preflight", () => {
+  it.each([
+    { status: "healthy", source: "module.exports = {};" },
+    { status: "unavailable", source: 'throw new Error("fixture contract load failed");' },
+  ])("handles an undeclared plugin with a $status contract", async ({ status, source }) => {
+    await withOpenClawTestState(
+      { scenario: "minimal", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+      async (state) => {
+        const plugin = "port-fixture";
+        const root = `extensions/${plugin}`;
+        await state.writeJson(`${root}/openclaw.plugin.json`, {
+          id: plugin,
+          configSchema: { type: "object" },
+        });
+        await state.writeText(`${root}/index.cjs`, "module.exports = {};");
+        await state.writeText(`${root}/doctor-contract-api.cjs`, source);
+        await state.writeConfig({ database: { engine: "sqlite", postgres } });
+
+        if (status === "healthy") {
+          await expect(
+            doctorDatabasePort({ family: "state", to: "postgres", dryRun: true }),
+          ).resolves.toMatchObject({ phase: "preflight", stores: [] });
+          return;
+        }
+
+        openOpenClawStateDatabase({ env: state.env });
+        await closeOpenClawStateDatabaseAsync();
+        const database = state.statePath("state", "openclaw.sqlite");
+        const before = await fs.readFile(database);
+        const configBefore = await fs.readFile(state.configPath);
+        const port = doctorDatabasePort({ family: "state", to: "postgres" });
+        await expect(port).rejects.toBeInstanceOf(DatabasePortError);
+        await expect(port).rejects.toThrow(
+          /plugin "port-fixture": .*fixture contract load failed.*Fix or remove each named plugin.*retry/s,
+        );
+        expect(await fs.readFile(database)).toEqual(before);
+        expect(await fs.readFile(state.configPath)).toEqual(configBefore);
+        await expect(fs.stat(state.statePath("recovery", "database-port"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      },
     );
   });
 });
