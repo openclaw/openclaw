@@ -404,7 +404,7 @@ export async function runPluginCommandScheduledTurn(params: {
           assertTurn();
           admission = prepareCronRunAdmission({
             // The operator source was restored above, so its requester is current.
-            scheduledExecution: request.occurrence.mint({
+            scheduledExecution: await request.occurrence.mint({
               cfg,
               agentId: schedule.parent.agentId,
               runId,

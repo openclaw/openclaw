@@ -135,7 +135,7 @@ async function runOccurrence(
     sessionKey: RUN_KEY,
     jobId: job.id,
     deliveryAttemptFence: null,
-    scheduledExecution: occurrence.mint({
+    scheduledExecution: await occurrence.mint({
       ...owner,
       runId: "run-1",
       runSessionKey: RUN_KEY,

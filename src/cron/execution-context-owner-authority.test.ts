@@ -172,7 +172,7 @@ async function admitRun(stored: CronStoredJob) {
     agentId: "main",
     trigger: "cron",
   });
-  const scheduledExecution = occurrence.mint({
+  const scheduledExecution = await occurrence.mint({
     cfg: CFG,
     agentId: "main",
     runId: "run-1",

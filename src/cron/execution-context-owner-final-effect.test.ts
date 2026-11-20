@@ -143,7 +143,7 @@ async function approveFromScheduledRun(runtime: "embedded" | "cli", revokeDuring
     deliveryAttemptFence: null,
     // The Gateway binds its request context to the admitted run, as cron does.
     resolveGatewayContext: () => context,
-    scheduledExecution: occurrence.mint({
+    scheduledExecution: await occurrence.mint({
       cfg: CFG,
       agentId: "main",
       runId: "run-1",

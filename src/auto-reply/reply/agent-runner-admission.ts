@@ -24,7 +24,7 @@ import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 
 /** Owns reply admission and closes its delivery grant after deferred and terminal writes settle. */
-export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string) {
+export async function prepareReplyTurnExecution(params: AgentTurnParams, runId: string) {
   const admittedRunContext: { current?: AdmittedRunContext } = {};
   const gatewayContextResolver =
     readChannelContextGatewayContextResolver(params.sessionCtx) ??
@@ -55,7 +55,7 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
   const cronAdmission =
     automation && sessionKey
       ? prepareCronRunAdmission({
-          scheduledExecution: automation.occurrence.mint({
+          scheduledExecution: await automation.occurrence.mint({
             cfg: selectLiveRuntimeConfig(params.followupRun.run.config),
             agentId: params.followupRun.run.agentId,
             runId,

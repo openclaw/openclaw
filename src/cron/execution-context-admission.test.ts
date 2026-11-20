@@ -63,7 +63,7 @@ function admit(stored: CronStoredJob) {
 
 async function mint(stored: CronStoredJob) {
   const occurrence = await admit(stored);
-  return { occurrence, minted: occurrence.mint(RUN) };
+  return { occurrence, minted: await occurrence.mint(RUN) };
 }
 
 beforeEach(() => {
@@ -121,7 +121,7 @@ describe("admitScheduledOccurrence", () => {
         trigger: "cron",
       });
       try {
-        expect(occurrence.mint({ ...RUN, cfg }).result).toMatchObject({
+        expect((await occurrence.mint({ ...RUN, cfg })).result).toMatchObject({
           status: "ready",
           facts: {
             authority: { owner, basis: owner ? "channel-owner" : "none" },
@@ -260,8 +260,8 @@ describe("admitScheduledOccurrence", () => {
       lifecycleRevision: "rev-1",
     });
     const occurrence = await admit(job(LINKED_JOB));
-    const first = occurrence.mint(RUN);
-    const retry = occurrence.mint({ ...RUN, runId: "run-2" });
+    const first = await occurrence.mint(RUN);
+    const retry = await occurrence.mint({ ...RUN, runId: "run-2" });
     expect(readSessionEntryInWorker).toHaveBeenCalledOnce();
     expect(prepareSessionGenerationFacts).toHaveBeenCalledOnce();
     expect(first.result).toMatchObject({
@@ -287,12 +287,13 @@ describe("admitScheduledOccurrence", () => {
       }),
     );
     const runSessionKey = PARENT_KEY;
-    expect(occurrence.mint({ ...RUN, runSessionKey }).result).toMatchObject({
+    expect((await occurrence.mint({ ...RUN, runSessionKey })).result).toMatchObject({
       status: "ready",
       facts: { authority: { owner: false, basis: "operator-source" } },
     });
     expect(
-      occurrence.mint({ ...RUN, runSessionKey, operatorAuthority: RESTORED_OPERATOR }).result,
+      (await occurrence.mint({ ...RUN, runSessionKey, operatorAuthority: RESTORED_OPERATOR }))
+        .result,
     ).toMatchObject({
       status: "ready",
       facts: { authority: { owner: true, basis: "operator-source" } },
@@ -374,7 +375,7 @@ describe("occurrence pause", () => {
     expect(prepareSessionGenerationFacts).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKey: PARENT_KEY, ...row }),
     );
-    expect(occurrence.mint(RUN).result).toMatchObject({
+    expect((await occurrence.mint(RUN)).result).toMatchObject({
       status: "ready",
       facts: {
         principal: { kind: "parent", parent: { sessionKey: PARENT_KEY, ...row } },

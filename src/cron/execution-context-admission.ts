@@ -1,8 +1,7 @@
 /**
- * Admits one scheduled occurrence: reads the parent row once, runs the
- * requester's owner check and holds the parent generation for the whole
- * occurrence. Each admitted run then mints its context from those facts. A
- * failure here never fails the run.
+ * Reads the parent row once and holds its generation for the occurrence.
+ * Each trigger or payload run checks its requester's current ownership when
+ * it starts, then keeps that decision fixed for the run.
  */
 import { access } from "node:fs/promises";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
@@ -70,7 +69,7 @@ function ingressFor(boundary: string | undefined): ScheduledAdmissionFacts["ingr
   return boundary === "gateway.hooks.agent" ? "webhook" : "channel-join";
 }
 
-/** The requester's owner status at this occurrence's admission. */
+/** The requester's owner status at one run's admission. */
 type RequesterOwnerCheck = Readonly<{
   owner: boolean;
   recoveryReference?: PreparedCommandOwnerAuthority["recoveryReference"];
@@ -79,7 +78,7 @@ type RequesterOwnerCheck = Readonly<{
 const NOT_OWNER: RequesterOwnerCheck = { owner: false };
 
 /**
- * Owner check for requesters the occurrence can verify; operator sources are checked per run.
+ * Owner check for requesters a run can verify; operator sources are restored per run.
  * Scheduler turns about a job (its repair or notices) take the same check.
  */
 export async function checkRequesterOwner(
@@ -253,17 +252,14 @@ export async function admitScheduledOccurrence(
     agentId: params.agentId,
   });
   let parentRow: ScheduledAdmissionFacts["parentRow"];
-  let requesterOwner: RequesterOwnerCheck | undefined;
+  let requester: ScheduledRequesterRef | undefined;
   let generation: TranscriptLease | undefined;
   let pause: CronParentUnavailable | undefined;
   let childParent: ScheduledOccurrence["childParent"];
   let parentWatch: ParentResetWatch | undefined;
   try {
     if (params.trigger === "cron" && hasTransferredCronOwner(job) && !job.operatorSource) {
-      const requester = resolveScheduledRequester(job);
-      if (requester.kind !== "operator-source") {
-        requesterOwner = await checkRequesterOwner(params.cfg, requester);
-      }
+      requester = resolveScheduledRequester(job);
     }
     if (!("error" in principal) && principal.kind === "parent") {
       const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
@@ -271,9 +267,7 @@ export async function admitScheduledOccurrence(
       });
       const parent = await readParent(principal.parent.sessionKey, storePath);
       parentRow = parent.row;
-      if (!requesterOwner && principal.requester.kind !== "operator-source") {
-        requesterOwner = await checkRequesterOwner(params.cfg, principal.requester);
-      }
+      requester ??= principal.requester;
       const live = classifyScheduledParent(parentRow);
       const parentSessionKey = principal.parent.sessionKey;
       // A failed read never pauses.
@@ -330,9 +324,13 @@ export async function admitScheduledOccurrence(
   return {
     ...(pause ? { pause } : {}),
     ...(childParent ? { childParent } : {}),
-    mint(run) {
+    async mint(run) {
       let result: ScheduledExecutionContextResult;
       try {
+        const requesterOwner =
+          requester && requester.kind !== "operator-source"
+            ? await checkRequesterOwner(run.cfg, requester)
+            : undefined;
         const facts = assembleScheduledAdmissionFacts(
           {
             cfg: run.cfg,

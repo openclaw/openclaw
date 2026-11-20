@@ -536,7 +536,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       });
       releaseRuntime = release;
       admission = prepareCronRunAdmission({
-        scheduledExecution: params.occurrence.mint({
+        scheduledExecution: await params.occurrence.mint({
           cfg: runtime.context.config,
           agentId: runtime.context.agentId,
           runId,
