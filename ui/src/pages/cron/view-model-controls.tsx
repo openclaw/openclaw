@@ -1,12 +1,18 @@
-import { createMemo } from "solid-js";
+import { createMemo, Show } from "solid-js";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { resolveChatThinkingSelectState } from "../../lib/chat/thinking.ts";
-import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
+import {
+  modelCatalogRefreshError,
+  resolveModelCatalogState,
+} from "../../lib/model-catalog-store.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ChatModelControls } from "../chat/components/chat-model-controls.tsx";
 import type { ChatModelControlsProps } from "../chat/components/chat-model-controls.types.ts";
 import {
   reconcileDraftModelSelection,
   resolveDraftModelControls,
+  resolveDraftModelTarget,
   type NewSessionModelMetadata,
 } from "../new-session/model-target.ts";
 import type { CronProps } from "./view-types.ts";
@@ -16,6 +22,41 @@ const SESSION_KEY = "cron-editor";
 // Automation payloads carry a model and a reasoning level; speed, context window,
 // access program and runtime stay with the agent's defaults.
 const NO_FAST_MODE = { active: false, currentOverride: "", label: "", supported: false } as const;
+
+export function CronModelWarning(props: Pick<CronProps, "form" | "models">) {
+  const warning = createMemo(() => {
+    const catalog = props.models.catalog;
+    if (!catalog?.hasSnapshot || catalog.retired) {
+      return null;
+    }
+    const model = props.form.payloadModel.trim();
+    if (!model) {
+      return modelCatalogRefreshError(catalog);
+    }
+    const target = resolveDraftModelTarget(model, undefined, catalog.models);
+    const entry = target?.entry;
+    if (entry?.available === true) {
+      return null;
+    }
+    if (entry?.available === false && entry.unavailableReason) {
+      return t(`cron.form.modelWarning.${entry.unavailableReason}`, {
+        model: entry.name,
+        provider: providerDisplayLabel(entry.provider, entry),
+      });
+    }
+    // A partial catalog may not identify the failed provider. Don't invent a cause.
+    return catalog.refreshFailed &&
+      (!catalog.refreshFailures?.length ||
+        catalog.refreshFailures.some(({ provider }) => !provider || provider === target?.provider))
+      ? t("cron.form.modelWarning.unconfirmed", { model })
+      : null;
+  });
+  return (
+    <Show when={warning()}>
+      {(message) => <InlineAlert tone="warning">{message()}</InlineAlert>}
+    </Show>
+  );
+}
 
 /** The session composer's model and reasoning pickers, bound to the automation's payload. */
 export function CronModelControls(

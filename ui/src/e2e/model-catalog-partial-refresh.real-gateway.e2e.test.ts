@@ -86,7 +86,94 @@ const suite = createControlUiE2eSuite({
   },
 });
 
+async function refreshPartialCatalog() {
+  let catalog = await client.request<ModelCatalogResult>(
+    "models.list",
+    { agentId: "main", view: "configured", refresh: true },
+    { timeoutMs: 30_000 },
+  );
+  await expect
+    .poll(async () => {
+      if (!catalog.refreshFailed || catalog.pendingProviders?.length) {
+        catalog = await client.request<ModelCatalogResult>(
+          "models.list",
+          { agentId: "main", view: "configured" },
+          { timeoutMs: 30_000 },
+        );
+      }
+      // An empty initial pending list is not a completed provider outcome.
+      return catalog.refreshFailed === true && !catalog.pendingProviders?.length;
+    })
+    .toBe(true);
+  return catalog;
+}
+
 suite.define(() => {
+  it("reopens the saved automation model without blaming it for an unrelated discovery failure", async () => {
+    await refreshPartialCatalog();
+    const model = "openai/gpt-5.4";
+    const { id } = await client.request<{ id: string }>("cron.add", {
+      name: "Garden summary",
+      agentId: "main",
+      enabled: false,
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      schedule: { kind: "every", everyMs: 3_600_000 },
+      payload: { kind: "agentTurn", message: "Summarize the fictional garden.", model },
+      delivery: { mode: "none" },
+    });
+    const dashboard = await instance.cli(["dashboard", "--json"]);
+    expect(dashboard.code, dashboard.stderr).toBe(0);
+    const { browserUrl }: { browserUrl: string } = JSON.parse(dashboard.stdout);
+    const url = new URL(browserUrl);
+    url.pathname = "/cron";
+    url.search = new URLSearchParams({ job: id, tab: "settings" }).toString();
+    await suite.withPage({ locale: "en-US" }, async ({ page }) => {
+      let catalog: unknown;
+      page.on("websocket", (socket) => {
+        let catalogId: string | undefined;
+        socket.on("framesent", ({ payload }) => {
+          const frame = requireRecord(JSON.parse(payload.toString()));
+          if (frame.method === "models.list" && typeof frame.id === "string") {
+            const params = requireRecord(frame.params);
+            if (params.view === "configured" && params.agentId === "main") {
+              catalogId = frame.id;
+            }
+          }
+        });
+        socket.on("framereceived", ({ payload }) => {
+          const frame = requireRecord(JSON.parse(payload.toString()));
+          if (catalogId && frame.type === "res" && frame.id === catalogId && frame.ok) {
+            catalog = frame.payload;
+          }
+        });
+      });
+      await page.goto(url.href);
+      await expect
+        .poll(() => catalog)
+        .toMatchObject({
+          refreshFailed: true,
+          models: expect.arrayContaining([
+            expect.objectContaining({ provider: "openai", id: "gpt-5.4", available: true }),
+          ]),
+          providerOutcomes: expect.arrayContaining([
+            { provider: "github-copilot", status: "unavailable" },
+          ]),
+        });
+      const picker = page.locator("fieldset.cron-editor [data-chat-model-select]");
+      await expect.poll(() => picker.getAttribute("data-chat-select-value")).toBe(model);
+      // A saved value renders before discovery. Wait for its catalog display name, not just the ID.
+      await expect
+        .poll(() => picker.locator(".chat-controls__inline-select-label").textContent())
+        .toBe("GPT-5.4");
+      expect(
+        await page
+          .locator(".cron-page .callout.danger:visible, .cron-page .callout.warn:visible")
+          .allTextContents(),
+      ).toEqual([]);
+    });
+  });
+
   it("retains existing-chat controls after another provider fails to refresh", async () => {
     const key = "agent:main:partial-refresh";
     const { sessionId } = await client.request<SessionsCreateResult>(
@@ -96,24 +183,7 @@ suite.define(() => {
     );
     expect.assert(typeof sessionId === "string");
     await client.request("sessions.patch", { key, thinkingLevel: "high" }, { timeoutMs: 30_000 });
-    let catalog = await client.request<ModelCatalogResult>(
-      "models.list",
-      { agentId: "main", view: "configured", refresh: true },
-      { timeoutMs: 30_000 },
-    );
-    await expect
-      .poll(async () => {
-        if (!catalog.refreshFailed || catalog.pendingProviders?.length) {
-          catalog = await client.request<ModelCatalogResult>(
-            "models.list",
-            { agentId: "main", view: "configured" },
-            { timeoutMs: 30_000 },
-          );
-        }
-        // An empty initial pending list is not a completed provider outcome.
-        return catalog.refreshFailed === true && !catalog.pendingProviders?.length;
-      })
-      .toBe(true);
+    const catalog = await refreshPartialCatalog();
     await fs.writeFile(
       path.join(suite.artifactDir, "models-list.json"),
       JSON.stringify(catalog, null, 2),

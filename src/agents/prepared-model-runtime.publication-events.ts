@@ -123,14 +123,17 @@ export function createCatalogAttemptReporter(
         });
       }
     },
-    withRefreshStatus: (catalog: ModelCatalogSnapshot) => {
-      const nativeOutcomes = Object.values(catalog.nativeProviderOutcomes ?? {}).flat();
+    withRefreshStatus: (catalog: ModelCatalogSnapshot, inventory = catalog) => {
+      // The display projection can expose a native outcome in providerOutcomes as well.
+      // Only acquisition-owned outcomes identify which listing failed.
+      const providerOutcomes = inventory.providerOutcomes;
+      const nativeOutcomes = Object.values(inventory.nativeProviderOutcomes ?? {}).flat();
       const readRefreshFailures = (): ModelCatalogSnapshot["refreshFailures"] => {
         const failures = (["provider", "native"] as const).flatMap((acquisition) => {
           const providers = new Set(attempt.failedProviders[acquisition]);
-          const outcomes = acquisition === "native" ? nativeOutcomes : catalog.providerOutcomes;
+          const outcomes = acquisition === "native" ? nativeOutcomes : providerOutcomes;
           for (const outcome of outcomes ?? []) {
-            if (outcome.status === "unavailable") {
+            if (outcome.status === "unavailable" && outcome.unavailableReason !== "no-account") {
               providers.add(outcome.provider);
             }
           }

@@ -17,7 +17,7 @@ import {
   CronSelect,
   FieldRow,
 } from "./view-fields.tsx";
-import { CronModelControls } from "./view-model-controls.tsx";
+import { CronModelControls, CronModelWarning } from "./view-model-controls.tsx";
 import {
   ScheduleControls,
   ScheduleDetails,
@@ -379,6 +379,9 @@ function PromptBlock(
         </div>
       </div>
       <div class="cron-editor-tray-errors">
+        {props.isAgentTurn ? (
+          <CronModelWarning form={props.form} models={props.models} />
+        ) : undefined}
         <TrayErrors
           fieldErrors={props.fieldErrors}
           fields={[...TRAY_SCHEDULE_FIELDS, "payloadModel", "payloadThinking"]}

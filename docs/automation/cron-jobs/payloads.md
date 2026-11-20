@@ -33,7 +33,7 @@ The weekly Skill Workshop curator (declaration key `skill-collection-review:<age
   Creation preserves leading and trailing whitespace in nonblank prompts and treats a whitespace-only message input as missing.
 </ParamField>
 <ParamField path="--model" type="string">
-  Model override; must resolve to an allowed model or the run fails with a validation error.
+  Model override; must resolve to an allowed model or the run fails with a validation error. In Settings, an available model stays selected without a warning if another provider fails to refresh. If the selected route is unavailable for a known reason, Settings names the model and provider and explains what to do.
 </ParamField>
 <ParamField path="--fallbacks" type="string">
   Per-job fallback model list, for example `--fallbacks openai/gpt-5.6-sol,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.

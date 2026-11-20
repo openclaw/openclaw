@@ -759,13 +759,32 @@ describe("native selection authority", () => {
     const { owner, a, loadA } = await pickerFixture(true);
     const api = { provider: a.provider, id: "api-model", name: "API model" };
     const ready = { provider: a.provider, status: "ready" } as const;
-    setProviderCatalog([api], [ready]);
+    const unavailable = { provider: a.provider, status: "unavailable" } as const;
+    const signedOut = { ...unavailable, unavailableReason: "no-account" } as const;
+    loadA.mockResolvedValue({ entries: [a], outcomes: [signedOut] });
+    const observed = await owner.loadFullModelCatalog!({ refresh: true });
+    expect(observed.providerOutcomes).toContainEqual(signedOut);
+    expect(observed.refreshFailed).toBeUndefined();
+
     loadA.mockResolvedValue({
       entries: [],
-      outcomes: [{ provider: a.provider, status: "unavailable", rejectionScope: "catalog" }],
+      outcomes: [unavailable],
     });
+    const nativeFailure = { acquisition: "native", provider: a.provider };
+    const nativeOnly = await owner.loadFullModelCatalog!({ refresh: true });
+    expect(nativeOnly.providerOutcomes).toContainEqual(unavailable);
+    expect(nativeOnly.refreshFailures).toEqual([nativeFailure]);
+
+    setProviderCatalog([api], [unavailable]);
+    const both = await owner.loadFullModelCatalog!({ refresh: true });
+    expect(both.refreshFailures).toEqual([
+      { acquisition: "provider", provider: a.provider },
+      nativeFailure,
+    ]);
+    setProviderCatalog([api], [ready]);
     const partial = await owner.loadFullModelCatalog!({ refresh: true });
     expect(partial.refreshFailed).toBe(true);
+    expect(partial.refreshFailures).toEqual([nativeFailure]);
     expect(partial.providerOutcomes?.filter(({ provider }) => provider === a.provider)).toEqual([
       ready,
     ]);

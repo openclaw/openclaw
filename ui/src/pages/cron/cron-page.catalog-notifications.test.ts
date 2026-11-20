@@ -10,6 +10,47 @@ import {
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
 import { catalogModel, cronRpc, emitEvent } from "./cron-rpc.test-support.ts";
+import { createCronViewJob } from "./view.test-support.ts";
+
+it("explains only known unavailability of the selected route and follows edits without refetching", async () => {
+  const model = "clawrouter/openai/fixture-model";
+  const job = createCronViewJob("saved-model", {
+    agentId: "main",
+    enabled: false,
+    sessionTarget: "isolated",
+    payload: { kind: "agentTurn", message: "Summarize a fictional garden.", model },
+  });
+  const row = { id: "openai/fixture-model", provider: "clawrouter", name: "Garden model" };
+  const request = cronRpc({
+    "cron.get": () => job,
+    "models.list": () => ({
+      refreshFailed: true,
+      refreshFailures: [{ acquisition: "native", provider: "openai" }],
+      models: [
+        { ...row, available: false, unavailableReason: "auth-failed" },
+        { id: "fixture-model", provider: "openai", name: "Garden model", available: true },
+        { ...row, id: "unknown", available: false },
+      ],
+    }),
+  });
+  const page = createPage(createContext(createGateway(createTestGatewayClient(request), true)), {
+    render: true,
+  });
+  try {
+    page.routeSearch = "?job=saved-model&tab=settings";
+    const warning = () => page.querySelector(".cron-editor .callout.warn")?.textContent;
+    await waitForCronPage(() => expect(warning()).toMatch(/Garden model.*ClawRouter.*account/i));
+    page.patchForm({ payloadModel: "openai/fixture-model" });
+    await waitForCronPage(() => expect(warning()).toBeUndefined());
+    page.patchForm({ payloadModel: "clawrouter/unknown" });
+    await page.settle();
+    expect(warning()).toBeUndefined();
+    expect(page.cron.cronForm.payloadModel).toBe("clawrouter/unknown");
+    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+  } finally {
+    page.remove();
+  }
+});
 
 afterEach(() => {
   document.body.replaceChildren();

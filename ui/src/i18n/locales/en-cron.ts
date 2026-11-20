@@ -298,6 +298,18 @@ const enCron = {
       includeReasoning: "Include reasoning",
       includeReasoningHelp: "Adds the model’s reasoning to the results when it’s available.",
       model: "Model",
+      modelWarning: {
+        unconfirmed:
+          "Couldn’t confirm whether {model} is available. Check Models or choose another model.",
+        "missing-auth":
+          "{model} needs a {provider} account. Add one in Models or choose another model.",
+        "auth-failed":
+          "{model} can’t authenticate with {provider}. Check the account in Models or choose another model.",
+        cooldown:
+          "{model} is cooling down on {provider}. Wait for the cooldown to end or choose another model.",
+        "unsupported-runtime":
+          "{model} on {provider} isn’t supported by this runtime. Choose another model.",
+      },
       customModel: "Custom model…",
       thinking: "Reasoning",
       failureAlerts: "Failure alerts",

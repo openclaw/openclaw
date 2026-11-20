@@ -10,7 +10,6 @@ import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import type { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import {
   loadModelCatalog,
-  modelCatalogRefreshError,
   readAgentModelCatalog,
   subscribeModelCatalogCache,
 } from "../../lib/model-catalog-store.ts";
@@ -47,7 +46,7 @@ export function resolveCronModelAgentId(
 
 /** Presents admitted cron work; the plain owners retain every request decision. */
 export function createCronPresentation(deps: CronPresentationDeps) {
-  type ModelReceipt = { state: CronState; agentId: string; result: Promise<void> };
+  type ModelReceipt = { state: CronState; agentId: string; result: Promise<unknown> };
   const [modelReceipt, setModelReceipt] = createSignal<ModelReceipt | null>(null);
   const modelRead = createMemo(() => modelReceipt()?.result.then(() => null) ?? null);
   const cronModelCatalog = createMemo(
@@ -175,20 +174,11 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       deps.connection.isCurrent(connectionScope) &&
       modelRequest === request &&
       deps.modelAgentId(cronState) === agentId;
-    const result = loadModelCatalog(client, { agentId })
-      .then((catalog) => {
-        if (isCurrent()) {
-          const error = modelCatalogRefreshError(catalog);
-          if (error) {
-            throw new Error(error);
-          }
-        }
-      })
-      .catch((error: unknown) => {
-        if (isCurrent()) {
-          throw error;
-        }
-      });
+    const result = loadModelCatalog(client, { agentId }).catch((error: unknown) => {
+      if (isCurrent()) {
+        throw error;
+      }
+    });
     setModelReceipt({ ...request, result });
     // The boundary observes failures; fire-and-forget callers still consume
     // completion if their view retires before reading it.

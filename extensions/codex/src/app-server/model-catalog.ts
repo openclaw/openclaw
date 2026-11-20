@@ -181,7 +181,11 @@ export function createCodexAppServerModelCatalog(runtime: string) {
                 ? observedType
                 : undefined
               : undefined;
-            return { models, isCurrent, accountType } as const;
+            // A user-home login probe promised an account. A conflicting RPC result is not a
+            // signed-out observation, nor is a provider that does not use OpenAI accounts.
+            const noAccount =
+              !usesNativeHome && account.requiresOpenaiAuth && account.account === null;
+            return { models, isCurrent, accountType, noAccount } as const;
           } catch (error) {
             // Discovery owns its deadline; retire unanswered work without aborting sibling leases.
             if (isCodexAppServerIndeterminateRequestCancellationError(error)) {
@@ -218,6 +222,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
           {
             provider: "openai",
             status: observation.accountType ? "ready" : "unavailable",
+            ...(result.noAccount ? { unavailableReason: "no-account" } : {}),
             ...(observation.accountType
               ? {
                   modelAccessPrograms: result.models.flatMap((model) =>

@@ -8,6 +8,8 @@ export type ProviderCatalogOutcome = {
   /** Limits an auth rejection to catalog discovery rather than model execution. */
   rejectionScope?: "catalog";
   status: "ready" | "auth-rejected" | "unavailable";
+  /** Discovery succeeded but found no account; the route is not ready. Not a refresh failure. */
+  unavailableReason?: "no-account";
   /** Accepted selections advertised by this authenticated account, never static model support. */
   modelAccessPrograms?: readonly {
     modelId: string;

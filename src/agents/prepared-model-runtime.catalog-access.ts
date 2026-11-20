@@ -95,7 +95,7 @@ export function createPersistentModelCatalogAccess(
     setPreparedModelFullCatalogAuth(catalog, auth, readCurrentUsage);
   const projectInventory = createPreparedModelCatalogProjection({ ...params, normalizeProvider });
   const project = (...args: Parameters<typeof projectInventory>) =>
-    attempt.withRefreshStatus(projectInventory(...args));
+    attempt.withRefreshStatus(projectInventory(...args), args[0].catalog);
   const publishInventory = createCatalogInventoryPublisher(params.inventoryOwner);
   const {
     retainedInventory,
@@ -518,7 +518,7 @@ export function createPersistentModelCatalogAccess(
       .catch((error: unknown) => {
         attempt.failed(error, failedProviders ?? providerIds, "native");
         if (published.catalog) {
-          attempt.withRefreshStatus(published.catalog);
+          attempt.withRefreshStatus(published.catalog, published.inventory?.catalog);
         }
         throw error;
       })

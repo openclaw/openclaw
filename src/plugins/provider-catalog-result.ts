@@ -20,6 +20,9 @@ export function copyProviderCatalogOutcomes(
     if (entry.rejectionScope) {
       outcome.rejectionScope = entry.rejectionScope;
     }
+    if (entry.status === "unavailable" && entry.unavailableReason === "no-account") {
+      outcome.unavailableReason = entry.unavailableReason;
+    }
     if (entry.status === "ready") {
       if (entry.modelAccessPrograms) {
         outcome.modelAccessPrograms = entry.modelAccessPrograms.map((model) => ({

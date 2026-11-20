@@ -175,6 +175,7 @@ process.stdin.on("end", () => process.exit(0));
           {
             provider: "openai",
             status: mode === "absent-key" ? "unavailable" : "ready",
+            ...(mode === "absent-key" ? { unavailableReason: "no-account" } : {}),
             ...(accountType ? { modelAccessPrograms: [] } : {}),
           },
         ]);
