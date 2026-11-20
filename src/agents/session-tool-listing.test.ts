@@ -357,3 +357,49 @@ it("refuses every continuation effect on a cron-runner turn in a series a user t
   });
   expect(triggerCompaction).toHaveBeenCalledTimes(1);
 });
+
+it("lists no continuation tool on any turn while continuation is disabled", async () => {
+  const names = ["continue_work", "continue_delegate", "request_compaction"];
+  const disabled: OpenClawConfig = {
+    ...config,
+    agents: { ...config.agents, defaults: { continuation: { enabled: false } } },
+    tools: { ...config.tools, alsoAllow: ["computer", ...names] },
+  };
+  setRuntimeConfigSnapshot(disabled);
+  // A live runner still passes its callbacks; the config alone decides.
+  const turn = (options: ToolOptions): ToolOptions => ({
+    ...options,
+    config: disabled,
+    continueWorkOpts: { requestContinuation: vi.fn() },
+    requestCompactionOpts: {
+      sessionId,
+      contextUsageOrigin: "live_runner",
+      getContextUsage: () => 0.95,
+      triggerCompaction: vi.fn(async () => ({ ok: true, compacted: true })),
+    },
+  });
+  const listed = (tools: AnyAgentTool[]) =>
+    tools.map((tool) => tool.name).filter((name) => names.includes(name));
+  // A series pinned by a user turn and one pinned by a cron-runner turn, each first request a
+  // fixed listing.
+  for (const order of [
+    [turns.user!, turns.cron!, turns.execWake!, turns.subagent!, turns.steer!, turns.allowlisted!],
+    [turns.cron!, turns.user!, turns.steer!],
+  ]) {
+    clearEmbeddedSessionPromptStates([sessionId]);
+    using chat = retainEmbeddedSessionPromptState(sessionId);
+    for (const options of order) {
+      const sent = send(chat.state, turn(options));
+      expect(listed(sent)).toEqual([]);
+      expect(listed(sent.built)).toEqual([]);
+      // Nor does Tool Search hold one.
+      const dispatch = sent.find((tool) => tool.name === "dispatch_action");
+      await expect(
+        dispatch!.execute("disabled-compact", {
+          id: "request_compaction",
+          args: { reason: "context is full" },
+        }),
+      ).rejects.toThrow("Unknown tool id: request_compaction");
+    }
+  }
+});
