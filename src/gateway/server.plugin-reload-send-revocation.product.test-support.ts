@@ -62,8 +62,9 @@ const DONE = "BOB-TARGET-COMPLETED-7d2e";
 const WAKE =
   "Continue the original task in this conversation. Do not repeat a completed operation.";
 const UNDELIVERED = "could not continue this conversation automatically";
-// Observed refusal: Bob's revoked authority ends the retained Gateway continuation.
-const CONTINUATION_REVOKED = "Gateway continuation authority is no longer active";
+// The accepted continuation survives; the next start checks Bob's original source.
+const CONTINUATION_REVOKED =
+  "operator source authority is no longer active. Reconnect to the Gateway, then resend your message. If access is denied, ask an administrator to restore it.";
 const ORIGIN = "https://control.revocation.example.test";
 const ADMIN = "admin@revocation.example.test";
 const ALICE = "alice@revocation.example.test";
@@ -517,7 +518,14 @@ it.for(["allowed", "revoked"] as const)(
       expect(await withinTest(reload, signal)).toMatchObject({ ok: true });
       await withinTest(
         Promise.race([
-          revoked ? notice.promise : Promise.all([targetEffect.promise, handoffWake.promise]),
+          revoked
+            ? Promise.race([
+                notice.promise,
+                Promise.race([targetEffect.promise, handoffWake.promise]).then(() => {
+                  throw new Error("Revoked replay produced a target effect or wake");
+                }),
+              ])
+            : Promise.all([targetEffect.promise, handoffWake.promise]),
           failure.promise,
         ]),
         signal,
@@ -590,7 +598,11 @@ it.for(["allowed", "revoked"] as const)(
             sessionKey: targetKey,
             sessionId: targetEntry.sessionId,
           }),
-        ).toEqual({ items: [], total: 0 });
+        ).toMatchObject(
+          revoked
+            ? { items: [{ runId: result.runId, state: "cancelled" }], total: 1 }
+            : { items: [], total: 0 },
+        );
       }
       if (revoked) {
         expect(revocation).toEqual({ method: revokeMethod, bobRefused: true });
@@ -603,7 +615,7 @@ it.for(["allowed", "revoked"] as const)(
         expect(notices).toHaveLength(1);
         // The host notice carries the refused replay's own settled outcome.
         const noticeText = messageText(durableNotices[0]);
-        expect(noticeText).toContain(UNDELIVERED + ": " + CONTINUATION_REVOKED);
+        expect(noticeText).toContain(UNDELIVERED + ": ");
         settledOutcome = between(noticeText, "Its result: ", ". Send a message");
         expect(settledOutcome).toEqual({
           outcomes: [
