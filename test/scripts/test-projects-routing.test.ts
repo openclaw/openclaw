@@ -156,6 +156,19 @@ describe("test-projects args", () => {
     ).toBe("runtime");
   });
 
+  it("routes prepared PR retention to an isolated fork with exposed GC", () => {
+    const file = "src/gateway/control-ui-session-pr-prepared-read.retention.test.ts";
+    const config = "test/vitest/vitest.gateway-server-isolated.config.ts";
+    const plan = expectDefined(planRuns([file])[0], "retention plan");
+    expect(resolveCanonicalNodeTestConfig(file, plan.config)).toBe(config);
+    const project = createGatewayServerIsolatedVitestConfig(
+      {},
+      { argv: ["node", "vitest", "run", file] },
+    );
+    expect(project.test).toMatchObject({ include: [file], isolate: true, pool: "forks" });
+    expect(project.test?.execArgv?.includes("--expose-gc")).toBe(!process.versions.bun);
+  });
+
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
     expect(parseArgs(["--", "src/foo.test.ts", "-t", "target"])).toEqual({
       forwardedArgs: ["src/foo.test.ts", "-t", "target"],

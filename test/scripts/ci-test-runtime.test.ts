@@ -12,6 +12,15 @@ const bunEligible = "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts";
 const config = "test/vitest/vitest.unit-fast.config.ts";
 
 describe("CI runtime job inventory", () => {
+  it.each(["bun-all", "dual-all"] as const)(
+    "keeps forced-GC retention on Node under %s",
+    (policy) => {
+      const file = "src/gateway/control-ui-session-pr-prepared-read.retention.test.ts";
+      expect(resolveCiTestRuntimeSelections({ targets: [file] }, policy)).toEqual([
+        { runtime: "node" },
+      ]);
+    },
+  );
   it("keeps Node exceptions once and both-host coverage in a mixed bun-all group", () => {
     const group = { configs: [config], includePatterns: [nodeOnly, bothHosts, bunEligible] };
     const original = resolveCiTestRuntimeSelections(group, "bun-all");

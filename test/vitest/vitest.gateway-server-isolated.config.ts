@@ -31,6 +31,8 @@ export function createGatewayServerIsolatedVitestConfig(
       isolate: true,
       // Real Gateway fixtures own the shared-state broker on the process main thread.
       pool: "forks",
+      // Prepared-source retention uses forced V8 collection in this process owner.
+      execArgv: [...(sharedTest.execArgv ?? []), ...(process.versions.bun ? [] : ["--expose-gc"])],
       runner: undefined,
       setupFiles: [resolveRepoRootPath("test/setup.env.ts")],
       include: includeFromEnv ?? cliInclude ?? gatewayServerIsolatedTestFiles,

@@ -107,6 +107,7 @@ const nodeRequiredFiles = new Set([
   "packages/ai/src/transports/openai-responses-websocket.test.ts",
   "src/agents/agent-tools.execution-validation.test.ts",
   "src/config/sessions/session-accessor.pending-input-retention.test.ts",
+  "src/gateway/control-ui-session-pr-prepared-read.retention.test.ts",
   "src/gateway/session-list-history-retention.test.ts",
   "src/gateway/session-row-projection.retention.test.ts",
   "src/gateway/session-database-retention.test.ts",

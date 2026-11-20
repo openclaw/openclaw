@@ -614,6 +614,8 @@ export const gatewayMethodsTestExclude = [
 
 // Gateway server tests that need private process state or a private module graph.
 export const gatewayServerIsolatedTestFiles = [
+  // Forced V8 collection needs --expose-gc, which Node worker threads reject.
+  "src/gateway/control-ui-session-pr-prepared-read.retention.test.ts",
   // Real provider and subagent lifecycle registrations must survive the whole scenario.
   "src/gateway/gateway.prompt-cache.test.ts",
   "src/gateway/server.subagent-prompt-recent.gateway.test.ts",
