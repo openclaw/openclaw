@@ -301,7 +301,7 @@ describe("Cron mutation outcomes through the in-process router", () => {
   );
 
   it.each([true, false])(
-    "preserves a revoked caller's response only for actual queue acceptance: %s",
+    "preserves the completed queue decision after caller revocation (accepted: %s)",
     async (accepted) => {
       await withCronGateway(async (fixture) => {
         const now = Date.now();
@@ -334,7 +334,12 @@ describe("Cron mutation outcomes through the in-process router", () => {
               processInstanceId,
             });
           } else {
-            await expect(pending).rejects.toThrow(/authority.*no longer active/i);
+            await expect(pending).resolves.toMatchObject({
+              ok: true,
+              ran: false,
+              reason: "not-due",
+              processInstanceId,
+            });
           }
           expect(responseBoundaryObserved).toBe(true);
           const queuedAtMs = (await readJob(fixture, job.id))?.state.queuedAtMs;

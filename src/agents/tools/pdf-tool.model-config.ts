@@ -48,7 +48,6 @@ export type PdfToolActiveModel = {
 
 type PdfModelConfigContext = {
   cfg?: OpenClawConfig;
-  agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
 };

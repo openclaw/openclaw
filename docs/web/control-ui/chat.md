@@ -1457,6 +1457,11 @@ Absolute external `http(s)` embed URLs stay blocked by default, except for the d
 
 Widgets created by `show_widget` load through the authenticated Gateway connection in every sandbox mode, including while settings are loading. In `strict` mode, their content remains visible but scripted interactions are disabled. Authenticated conversation readers, including guests, receive the configured sandbox policy without needing general operator read access. Bootstrap does not grant access to plugin modules or configuration settings that their scopes do not allow.
 
+Widgets that are no longer available keep their error visible instead of reloading on later chat
+activity or when their chat row remounts. Reload the page or ask the agent to
+recreate the widget. Temporary loading failures retry up to five times with exponential
+backoff; after that, the error offers a manual **Retry**.
+
 When a live widget moves into the assistant's final reply, Chrome and Edge 133+
 and Firefox 144+ preserve its playback and local interaction state. Browsers
 without atomic DOM moves, including Safari, reload the widget during that move.

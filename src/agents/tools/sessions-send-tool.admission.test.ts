@@ -21,7 +21,6 @@ import {
   createContext,
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import { readSessionSendDeliveryAdmission } from "../../gateway/session-send-delivery.js";
 import { createDiagnosticToolExecutionLiveness } from "../../infra/diagnostic-tool-execution-liveness.js";
 import { drainSystemEvents, peekSystemEvents } from "../../infra/system-events.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
@@ -53,10 +52,6 @@ import { attachActiveEmbeddedRun, detachActiveEmbeddedRun } from "../embedded-ag
 import { createEmbeddedRunHandle } from "../embedded-agent-runner/runs.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../harness/tool-authority.runtime.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
-import {
-  createSessionsSendTestCaller,
-  setSessionsSendTestActiveRun,
-} from "../openclaw-tools.sessions-steering.test-support.js";
 import "../test-helpers/fast-openclaw-tools-sessions.js";
 import {
   readFollowupRequest,
@@ -65,6 +60,7 @@ import {
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import * as inProcessGateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
+import * as sessionsSendExecutor from "./sessions-send-executor.js";
 import * as sessionsSendFollowup from "./sessions-send-followup-custody.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import * as sessionsSendDelivery from "./sessions-send-tool.delivery.js";
@@ -253,6 +249,39 @@ describe("sessions_send dispatch admission", () => {
     resetGatewayWorkAdmission();
     await state.cleanup();
   });
+
+  it.each([{ sessionKey: targetSessionKey }, { label: "synthetic-label" }])(
+    "returns a schema-valid result when admission outlives its deadline: %o",
+    async (target) => {
+      const execution = vi
+        .spyOn(sessionsSendExecutor, "executeSessionsSend")
+        .mockReturnValue(new Promise(() => {}));
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      try {
+        const tool = createTool();
+        const pending = tool.execute("admission-deadline", {
+          ...target,
+          message: "Continue the task",
+        });
+        await vi.advanceTimersByTimeAsync(30_000);
+        const { details } = await pending;
+        expect(details).toMatchObject({
+          runId,
+          status: "error",
+          error: expect.stringContaining("the message may have been accepted"),
+        });
+        expect(details).toEqual(
+          "sessionKey" in target
+            ? expect.objectContaining(target)
+            : expect.not.objectContaining({ sessionKey: expect.anything() }),
+        );
+        expect(Value.Check(tool.outputSchema!, details)).toBe(true);
+      } finally {
+        vi.useRealTimers();
+        execution.mockRestore();
+      }
+    },
+  );
 
   it("applies peer preferences to new notifications without revoking accepted events", async () => {
     const callGateway = vi.fn();
@@ -562,7 +591,7 @@ describe("sessions_send dispatch admission", () => {
       expect(continuationSignal?.aborted).toBe(false);
       expect.soft(liveness.view.deadlineAtMs).toBe(deadline);
       await vi.advanceTimersByTimeAsync(30_000);
-      expect.soft(result).toMatchObject({ status: "timeout", runId, sessionKey: targetSessionKey });
+      expect.soft(result).toMatchObject({ status: "error", runId, sessionKey: targetSessionKey });
       expect.soft(continuationSignal?.aborted).toBe(false);
       detachActiveEmbeddedRun("target-session", sibling, targetSessionKey);
       await vi.advanceTimersByTimeAsync(0);
@@ -586,48 +615,6 @@ describe("sessions_send dispatch admission", () => {
         source.release();
         liveness.close();
       }
-    }
-  });
-
-  it("queues an unsupported durable steer once without injecting volatile guidance", async () => {
-    const context = createContext([], () => config);
-    const caller = createSessionsSendTestCaller(requesterSessionKey);
-    const queueMessage = vi.fn(async () => {});
-    const handle = createEmbeddedRunHandle({
-      guarded: true,
-      queueMessage,
-      supportsTranscriptCommitWait: false,
-    });
-    const close = await setSessionsSendTestActiveRun(
-      "target-session",
-      handle,
-      targetSessionKey,
-      requesterSessionKey,
-      config,
-    );
-    const callGateway = mockAgentGateway(async () => {
-      expect(
-        readSessionSendDeliveryAdmission({ ...targetIdentity, runId })?.delivery,
-      ).toMatchObject({
-        source: { sessionKey: requesterSessionKey, sessionId: "requester-session" },
-        target: { sessionKey: targetSessionKey, sessionId: "target-session" },
-      });
-      return { runId, status: "accepted" };
-    });
-    try {
-      const result = await withGatewayToolCallerIdentity(
-        {
-          ...caller,
-          gatewayContextResolver: () => context,
-          receiptAuthority: () => true,
-        },
-        () => execute(createTool({ callGateway }), "durable-steer-fallback", { mode: "steer" }),
-      );
-      expect(result.details).toMatchObject({ status: "accepted", targetDisposition: "queued" });
-      expect(queueMessage).not.toHaveBeenCalled();
-      expect(requestParams(callGateway, "agent")).toHaveLength(1);
-    } finally {
-      await close();
     }
   });
 

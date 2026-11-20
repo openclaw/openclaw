@@ -15,6 +15,7 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
+import { idleIoPriorityArgv } from "../../process/idle-io-priority.js";
 import { withChildProcessOperation } from "../../process/spawn-diagnostics.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { prepareSandboxStateOwnerPath } from "../sandbox/state-owner-path.js";
@@ -109,20 +110,26 @@ async function write(command: FsSafeCopyWrite, options: WorktreeFilesystemOption
   // A process owns its descriptor table. Never terminate a JS worker while
   // fs-safe's native task still borrows descriptors opened by that worker.
   const result = await withChildProcessOperation("worktree.filesystem", () =>
-    runCommandBuffersWithTimeout([process.execPath, ...resolveRuntimeWorkerArgv(workerUrl())], {
-      input: JSON.stringify(command),
-      prepareInput: () => prepareWorktreeFilesystemMutation(options, source),
-      beforeInput: () => {
-        options.signal?.throwIfAborted();
-        source.assertCurrent();
+    runCommandBuffersWithTimeout(
+      idleIoPriorityArgv(
+        [process.execPath, ...resolveRuntimeWorkerArgv(workerUrl())],
+        options.idleIoPriority,
+      ),
+      {
+        input: JSON.stringify(command),
+        prepareInput: () => prepareWorktreeFilesystemMutation(options, source),
+        beforeInput: () => {
+          options.signal?.throwIfAborted();
+          source.assertCurrent();
+        },
+        signal: options.signal,
+        timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
+        killGraceMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
+        maxOutputBytes: 64 * 1024,
       },
-      signal: options.signal,
-      timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
-      killGraceMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
-      killProcessTree: true,
-      requireProcessTreeExtinction: true,
-      maxOutputBytes: 64 * 1024,
-    }),
+    ),
   );
   options.signal?.throwIfAborted();
   source.assertCurrent();

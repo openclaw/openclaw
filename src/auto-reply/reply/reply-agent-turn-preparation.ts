@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { prepareChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -528,6 +529,9 @@ export async function prepareReplyAgentTurn<TConfigured>(
       turn.releaseSourceAdmission = releaseSourceAdmission;
       const preflightEntry = session.current();
       try {
+        // This same once-only preparation also guards runtime admission below.
+        // Check before maintenance can invoke a model for the queued request.
+        await prepareChildSessionPublication(turn.queued.run);
         await params.signalRunStart?.();
         const resolvedVerboseLevel =
           normalizeVerboseLevel(

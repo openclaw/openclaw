@@ -12,11 +12,11 @@ import {
   agentRouteFromPath,
   canonicalPluginTabLocation,
   dynamicRouteFromPath,
+  isApplicationEntryPath,
   isSessionRouteId,
   pathForAgentPanel,
   pathForRoute,
   locationForRoute,
-  pluginSlugCandidate,
   pluginTabSlugFromPath,
   routeIdFromPath,
   setPluginTabSlugs,
@@ -169,6 +169,9 @@ function canonicalRouteLocation(
   location: RouteLocation,
   basePath: string,
 ): RouteLocation {
+  if (isApplicationEntryPath(location.pathname, basePath)) {
+    return { ...location, pathname: pathForRoute("chat", basePath) };
+  }
   return (
     canonicalSettingsLocation(routeId, location, basePath) ??
     (routeId === "model-setup"
@@ -270,17 +273,6 @@ export async function startApplicationRouter(
     history.replace({
       ...location,
       pathname: pathForAgentPanel(initialAgentRoute.agentId, null, basePath),
-    });
-    location = history.location();
-  }
-  // Single-segment plugin deep links wait for hello before outlet recovery.
-  if (
-    routeIdFromPath(location.pathname, basePath) === null &&
-    !pluginSlugCandidate(location.pathname, basePath)
-  ) {
-    history.replace({
-      ...location,
-      pathname: router.pathForRoute("chat", basePath),
     });
     location = history.location();
   }

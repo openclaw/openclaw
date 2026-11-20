@@ -1,15 +1,17 @@
 // Install transport fixtures before publication owners enter the module cache.
 // oxfmt-ignore
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   decodeGitHubPublicationRequester,
   encodeGitHubPublicationRequester,
 } from "../state/github-publication-requester.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   ensureCanonicalUserProfileForOpenClawIdIdentity,
   mergeCanonicalUserProfiles,
+  setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
@@ -86,19 +88,23 @@ describe("member publication authority", () => {
     sandbox: "required",
     realWorktree: true,
   });
+  beforeEach(async () => {
+    onTestFinished((await prepareUserProfileCatalog()).release);
+  });
 
   it.each(
     (["allowed", "removed", "downgraded", "policy required"] as const).flatMap((change) =>
       ["recorded-source", "principal-only"].map((format) => ({ change, format })),
     ),
   )(
-    "uses the connection's membership on queued publication ($change, $format)",
+    "uses the canonical profile role and current membership on queued publication ($change, $format)",
     async ({ change, format }) => {
       const f = await createRequesterPublicationFixture(checkpoint, "repository");
       const linked = await ensureCanonicalUserProfileForOpenClawIdIdentity({
         accountId: "publication-member",
       });
       await mergeCanonicalUserProfiles(linked.id, f.guestProfile);
+      await setCanonicalUserProfileRole(f.guestProfile, "maintainer");
       setOpenClawIdTunnelPrincipalLookup(() => principal);
       const captured = await createGitHubPublicationRequesterFixture({
         profileId: f.guestProfile,
@@ -190,6 +196,7 @@ describe("member publication authority", () => {
       const config = structuredClone(f.config);
       delete config.gateway!.roles!.default;
       setRuntimeConfigSnapshot(config);
+      await setCanonicalUserProfileRole(f.guestProfile, "maintainer");
       if (change === "linked owner") {
         setOpenClawIdTunnelPrincipalLookup(() => ownerPrincipal);
       }
@@ -278,6 +285,9 @@ describe("member publication authority", () => {
         accountId: "publication-owner",
       });
       await mergeCanonicalUserProfiles(linked.id, f.guestProfile);
+      if (change === "other sign-in") {
+        await setCanonicalUserProfileRole(f.guestProfile, "maintainer");
+      }
       setOpenClawIdTunnelPrincipalLookup(() => ownerPrincipal);
       const captured = await createGitHubPublicationRequesterFixture({
         profileId: f.guestProfile,
@@ -313,9 +323,9 @@ describe("member publication authority", () => {
       expect(f.publishedTitles).toEqual(["recorded-source-publication"]);
     },
   );
-  it("uses a nonadministrator member's role instead of the restrictive profile default", async () => {
+  it("uses the assigned nonadministrator profile role despite a stale member role label", async () => {
     const f = await createRequesterPublicationFixture(checkpoint, "repository");
-    const writer = { ...principal, role: "writer" };
+    const writer = { ...principal, role: "stale-role-label" };
     const next = structuredClone(f.config);
     next.gateway!.roles!.definitions.writer = {
       scopes: ["operator.write"],
@@ -323,6 +333,7 @@ describe("member publication authority", () => {
       sessions: { others: "write" },
     };
     setRuntimeConfigSnapshot(next);
+    await setCanonicalUserProfileRole(f.guestProfile, "writer");
     setOpenClawIdTunnelPrincipalLookup(() => writer);
     const captured = await createGitHubPublicationRequesterFixture({
       profileId: f.guestProfile,
@@ -342,6 +353,7 @@ describe("member publication authority", () => {
   });
   it("waits for membership hydration rather than permanently revoking a valid requester", async () => {
     const f = await createRequesterPublicationFixture(checkpoint, "repository");
+    await setCanonicalUserProfileRole(f.guestProfile, "maintainer");
     setOpenClawIdTunnelPrincipalLookup(() => principal);
     const captured = await createGitHubPublicationRequesterFixture({
       profileId: f.guestProfile,

@@ -12,7 +12,7 @@ Everything under Settings, plus the settings-owned pages the sidebar links to.
 
 Browser-settings upgrades support shapes written by releases shipped on or after July 1, 2026. Older top-level session selections are ignored; select a session again in the sidebar. Saved conversations remain on the Gateway.
 
-**Back to app** returns to the workspace page you were using before opening Settings, including its selected session and URL filters. Escape does the same when an editor or dialog is not using that key. Moving between Settings pages does not change the return destination.
+**Back to app**, beside the **Settings** title, returns to the workspace page you were using before opening Settings, including its selected session and URL filters. On macOS, Settings leaves navigation to the title bar when its **Back** button is available. Escape does the same when an editor or dialog is not using that key. Moving between Settings pages does not change the return destination.
 
 In **Search settings**, Escape clears the search before leaving Settings. While an input method is composing text, Escape stays with that input method instead of clearing the search or navigating away.
 
@@ -492,7 +492,7 @@ creation. Keeping the app open lets creation finish when the agent is ready.
 
 ## Settings
 
-Inside **Settings**, the dedicated sidebar includes **Ask OpenClaw** and starts with a **Search settings** field for quickly finding settings sections.
+Inside **Settings**, the dedicated sidebar puts the **Settings** title, agent picker, and any back arrow on one row, followed by a **Search settings** field for quickly finding settings sections. **Ask OpenClaw** sits above the **Preferences** group.
 
 Form edits save automatically. If the connection changes while edits are pending,
 autosave pauses until you choose **Save** to keep them or **Reload Config** to
