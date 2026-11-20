@@ -145,6 +145,8 @@ describe("managed removal custody", () => {
       const removed = await remove(created.id);
       await started.promise;
       expect(await read(retired)).toBe("base\n");
+      expect((await service.gc()).orphansDeleted).toBe(0);
+      expect(await read(retired)).toBe("base\n");
       await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await git(repo, "branch", "--list", created.branch)).toBe("");
       const restored = await service.restore({ id: created.id });
