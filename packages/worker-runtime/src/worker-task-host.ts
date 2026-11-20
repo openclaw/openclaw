@@ -2,6 +2,10 @@ import type { Transferable, WorkerOptions } from "node:worker_threads";
 import type { RetainedOperation } from "./retained-operation.js";
 import type { WorkerLifecycle, RetainedNativeWorker } from "./worker-lifecycle.js";
 import type { WorkerComputeCapacity } from "./worker-task-capacity.js";
+import type {
+  WorkerTaskPoolOptions,
+  WorkerTaskPoolOwnerOptions,
+} from "./worker-task-pool.types.js";
 
 export type WorkerRetirementReason =
   | "idle_timeout"
@@ -48,7 +52,13 @@ export type WorkerTaskHost = {
   observeResourceReply?(this: void): void;
   /** Capture diagnostics before construction detaches from the task's async context. */
   captureWorkerStartObserver?(url: URL): (() => void) | undefined;
-  workerStarted(worker: WorkerLifecycle, pool: object): void;
+  workerStarted(
+    worker: WorkerLifecycle,
+    pool: object,
+    maxWorkers: number,
+    options: Pick<WorkerTaskPoolOptions<unknown>, "idleTimeoutMs" | "burstIdleTimeoutMs">,
+    owner: Pick<WorkerTaskPoolOwnerOptions, "retainOneIdleWorker">,
+  ): void;
   workerRetiring(worker: WorkerLifecycle, reason: WorkerRetirementReason): void;
   /** Join host effects accepted by this worker before releasing its execution capacity. */
   workerStopped?(worker: WorkerLifecycle): void | Promise<void>;
