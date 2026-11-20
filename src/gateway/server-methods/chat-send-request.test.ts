@@ -425,3 +425,18 @@ it.each([
     }
   },
 );
+
+it.each([
+  ["guarded", "full", "guarded"],
+  ["full", "read-only", "read-only"],
+  ["workspace", "full", "workspace"],
+  [undefined, "full", "guarded"],
+] as const)(
+  "never widens retained participant permission %s to %s",
+  async (accepted, current, expected) => {
+    const request = await normalizeValue();
+    attachChatSendParticipationCeiling(request, { ...participationCeiling, permission: accepted });
+    attachChatSendParticipationCeiling(request, { ...participationCeiling, permission: current });
+    expect(request.participationCeiling?.permission).toBe(expected);
+  },
+);

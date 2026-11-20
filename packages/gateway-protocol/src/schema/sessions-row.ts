@@ -296,6 +296,8 @@ export const SessionRowSchema = Type.Object(
     sharingRole: Type.Optional(SessionSharingRoleSchema),
     /** Recipient-local invitation level, only for ceiling-role participants. */
     invitedAccess: Type.Optional(SessionMemberPermissionLevelSchema),
+    /** Recipient-local role/session permission ceiling for invited sends. */
+    invitedPermission: Type.Optional(SessionPermissionModeSchema),
     /** Recipient-local send admission; null explicitly clears a previous restriction. */
     sendDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     /** Recipient-local workspace admission; null clears a previous read restriction. */

@@ -429,6 +429,17 @@ ceiling, treating an unspecified invitation level as `"read"`. Omitting the fiel
 preserves existing membership behavior. A `"send"` invitation permits bounded
 participation with a session-read scope, not general operator write authority.
 
+Set `sessions.invitedPermission` on an invited-session role to choose `read-only`,
+`guarded`, `workspace` (default), or `full`. Each input captures the lower of this
+ceiling and the session's permission mode. Read-only also denies file mutations;
+guarded uses human approval, workspace uses the command reviewer, and full removes
+the participation-specific exec ceiling. Session, model, host, and tool restrictions
+still apply. File tools remain contained to the session root in every mode. Shell
+execution is not an OS filesystem sandbox; isolate untrusted programs separately.
+Human approvals remain creator/admin-only, and the participant cannot grant them.
+Queued and recovered inputs retain the captured ceiling; policy changes may narrow
+it but never widen it. Stored inputs predating this field retain guarded authority.
+
 Set `sessions.invitedTools` alongside `maxInvitedAccess` to replace the participant
 tool ceiling with an explicit list of core tool names. Omission keeps these defaults:
 `read`, `write`, `edit`, `apply_patch`, `ls`, `exec`, `process`, `web_search`,
@@ -449,8 +460,8 @@ The Gateway captures this ceiling on each accepted input and preserves it in
 queued input and restart recovery. Re-admission may narrow the captured list but
 never widens it; a wider role policy applies to newly submitted inputs. Participant
 turns require Gateway-local **OpenClaw** execution, not a native/CLI harness or
-remote worker. Allowing `exec` never disables its approval ceiling, host approval
-requirements, sandbox policy, or workspace containment.
+remote worker. Allowing `exec` never disables the admitted permission ceiling, host approval
+requirements, sandbox policy, or file-tool containment.
 
 To enable invitation-only discovery, set the guest role's `sessions.others` to
 `"invited"` after upgrading. Existing role definitions keep their current behavior.

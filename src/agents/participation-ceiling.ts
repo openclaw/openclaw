@@ -1,3 +1,4 @@
+import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
 
 /** Host-stamped input authority. Never accept this field from message text or RPC parameters. */
@@ -7,10 +8,14 @@ export type ParticipationCeiling = {
   readonly sessionKey: string;
   /** Exact core names captured at admission; omission retains the default for stored inputs. */
   readonly tools?: readonly string[];
+  /** Effective permission captured at admission; missing stored values retain guarded authority. */
+  readonly permission?: SessionPermissionMode;
 };
 
 /** Participation defaults live here; other policy layers may only narrow these capabilities. */
-export const PARTICIPATION_EXEC_CEILING = "ask" as const;
+export function participationPermission(ceiling: ParticipationCeiling): SessionPermissionMode {
+  return ceiling.permission ?? "guarded";
+}
 export const PARTICIPATION_TOOL_ALLOWLIST = Object.freeze([
   "read",
   "write",

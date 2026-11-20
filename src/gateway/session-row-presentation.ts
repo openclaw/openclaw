@@ -1,6 +1,7 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { prepareRunningBackgroundProcessCount } from "../agents/bash-process-observation.js";
+import { intersectSessionPermissionModes } from "../agents/session-permission-exec-mode.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -319,6 +320,13 @@ export function prepareProjectedSessionPresentation(
       (access.access === "read" || access.access === "suggest" || access.access === "send")
         ? access.access
         : undefined;
+    viewerFacts.invitedPermission =
+      viewerFacts.invitedAccess === "send"
+        ? intersectSessionPermissionModes(
+            sharing.invitedPermission,
+            value.entry.permissionMode ?? "full",
+          )
+        : undefined;
     // Summary modes omit this diagnostic; their disclosure still uses current sharing facts.
     viewerFacts.sendDisabledReason =
       rowMode === "sidebar" || rowMode === "dashboard"
@@ -536,7 +544,8 @@ export function prepareProjectedSessionPresentation(
       : excludedSwarmKeys && JSON.stringify([...excludedSwarmKeys]);
     recipientFacts[7] = recipientView?.workspaceReadDisabledReason;
     recipientFacts[8] = recipientView?.invitedAccess;
-    recipientFacts.length = 9;
+    recipientFacts[9] = recipientView?.invitedPermission;
+    recipientFacts.length = 10;
     const variants = signature === undefined ? undefined : views?.get(signature);
     const current = variants?.find((cached) => sameFacts(cached.facts, recipientFacts));
     if (current) {

@@ -7,6 +7,7 @@ import {
   PARTICIPATION_TOOL_ALLOWLIST,
   type ParticipationCeiling,
 } from "../agents/participation-ceiling.js";
+import { intersectSessionPermissionModes } from "../agents/session-permission-exec-mode.js";
 import { requiresSessionParticipation } from "./method-scopes.js";
 import { readQueuedParticipationProfile } from "./queued-chat-input-admission.js";
 import { resolveAuthenticatedPersonalGatewayProfileId } from "./server-methods/gateway-personal-caller.js";
@@ -103,6 +104,10 @@ export function createSessionParticipationAuthorization(
         profileId,
         sessionKey: target.canonicalKey,
         tools: [...(policy?.invitedTools ?? PARTICIPATION_TOOL_ALLOWLIST)],
+        permission: intersectSessionPermissionModes(
+          policy?.invitedPermission ?? "workspace",
+          target.entry.permissionMode ?? "full",
+        ),
       };
       return { error: null };
     },

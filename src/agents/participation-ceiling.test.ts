@@ -282,3 +282,32 @@ it("widens deferred core tools without granting plugin or MCP collisions", async
   expect(plugin.execute).not.toHaveBeenCalled();
   expect(mcp.execute).not.toHaveBeenCalled();
 });
+
+it.each([
+  ["read-only", "full", "deny", true],
+  ["guarded", "full", "ask", false],
+  ["workspace", "full", "auto", false],
+  ["full", "full", "full", false],
+  ["full", "guarded", "ask", false],
+  ["workspace", "read-only", "deny", true],
+] as const)("caps participant %s in session %s at %s", (permission, session, mode, readOnly) => {
+  const participationCeiling = { ...ceiling, permission };
+  const options = {
+    participationCeiling,
+    sessionPermissionPolicy: { mode: session, root: "/workspace" },
+  };
+  expect(projectAgentToolsExecPolicy({ options, execConfig: {}, model: {} }).mode).toBe(mode);
+  expect(
+    resolveExecDefaults({
+      participationCeiling,
+      sessionEntry: { permissionMode: session },
+      sandboxAvailable: false,
+      execApprovals: { version: 1 },
+    }).mode,
+  ).toBe(mode);
+  expect(prepareCoreToolPolicy(options)).toMatchObject({
+    readOnly,
+    workspaceOnly: true,
+    strictWorkspaceRoot: true,
+  });
+});

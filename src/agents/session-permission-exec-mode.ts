@@ -7,7 +7,7 @@ import {
 } from "../infra/exec-approvals-core.js";
 import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
-import { PARTICIPATION_EXEC_CEILING, type ParticipationCeiling } from "./participation-ceiling.js";
+import { participationPermission, type ParticipationCeiling } from "./participation-ceiling.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
@@ -132,7 +132,12 @@ export function projectEffectiveExecPolicy(params: {
   participationCeiling?: ParticipationCeiling;
 }) {
   const ceilings = params.participationCeiling
-    ? [...(params.modelExecCeilings ?? []), PARTICIPATION_EXEC_CEILING]
+    ? [
+        ...(params.modelExecCeilings ?? []),
+        resolveSessionPermissionExecMode({
+          mode: participationPermission(params.participationCeiling),
+        }),
+      ]
     : (params.modelExecCeilings ?? []);
   const policy = ceilings.reduce<ExecPolicyFields>(
     (current, ceiling) => applyExecModeCeiling(current, ceiling),

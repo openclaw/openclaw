@@ -50,7 +50,10 @@ export function roleOptions(roles: Role[], locale: string) {
           role.maxInvitedAccess
             ? roleText(locale, "invitedAccess", {
                 level: roleText(locale, `invitationLevels.${role.maxInvitedAccess}`),
-              })
+              }) +
+              (role.maxInvitedAccess === "send"
+                ? ` · ${roleText(locale, "invitedPermission", { mode: roleText(locale, `permissions.${role.invitedPermission ?? "workspace"}`) })}`
+                : "")
             : roleText(locale, `sessions.${role.sessions}`),
           roleText(
             locale,

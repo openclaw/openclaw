@@ -105,6 +105,7 @@ it("admits only bounded methods for a send invitation with read scope", async ()
                 profileId,
                 sessionKey: scope.sessionKey,
                 tools: PARTICIPATION_TOOL_ALLOWLIST,
+                permission: "workspace",
               });
             }
             result.authorization?.release?.();
