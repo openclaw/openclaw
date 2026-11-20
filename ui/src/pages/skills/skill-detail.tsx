@@ -30,11 +30,11 @@ import {
   SkillMonoFact,
   SkillPageSection,
   SkillSecurityFact,
-  SkillTile,
   type SkillSecurityTone,
 } from "./skill-page-parts.tsx";
 import { MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
 import { verdictForSkill, verdictStatus } from "./skill-status.tsx";
+import { SkillTile } from "./skill-tile.tsx";
 import type { SkillsProps } from "./view-types.ts";
 
 type BinRow = { kind: "bin"; names: string[]; missing: boolean; install: boolean };

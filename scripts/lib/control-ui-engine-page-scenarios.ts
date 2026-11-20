@@ -877,15 +877,22 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   skills: {
-    ready: ".skill-discovery [data-skill-id]",
-    rows: {
-      selector: ".skill-discovery [data-skill-id]",
-      minimum: 1000,
-      totalSelector: ".skill-discovery [aria-setsize]",
-    },
+    // The first visit summarizes the installed inventory; opening it is a separate action.
+    ready: ".skill-discovery .skill-installed-shelf",
+    rows: { selector: ".skill-discovery .skill-installed-shelf", minimum: 1 },
     action: {
-      label: "Filter discovered skills to one installed skill",
+      label: "Open all 1,000 installed skills, then filter to one match",
       run: async (page) => {
+        await page.locator(".skill-installed-shelf").click();
+        await page.waitForFunction(() => {
+          const discovery = document.querySelector(".skill-discovery");
+          return (
+            discovery !== null &&
+            discovery.querySelector('[data-skill-id="local:data-skill-0000"]') !== null &&
+            discovery.querySelector('[data-skill-id="local:data-skill-0999"]') !== null &&
+            discovery.querySelector("[aria-setsize]")?.getAttribute("aria-setsize") === "1000"
+          );
+        });
         await page.locator(".skill-discovery input[type=search]").fill("Data skill 0999");
         await page.waitForFunction(() => {
           const rows = document.querySelectorAll(".skill-discovery [data-skill-id]");
@@ -894,7 +901,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
           );
         });
         await frames(page);
-        return { matchingSkills: 1 };
+        return { fixtureSkills: 1000, openedInstalledSkills: 1000, matchingSkills: 1 };
       },
     },
   },

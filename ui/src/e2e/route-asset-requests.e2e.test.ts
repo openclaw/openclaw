@@ -151,6 +151,31 @@ suite.define(() => {
           expect(readerRequests).toBe(0);
         }
         if (route === "skills") {
+          // The measured first visit ends at the shelf. Opening the full inventory is later work.
+          await page.locator(".skill-installed-shelf").click();
+          await page.waitForFunction(() => {
+            const discovery = document.querySelector(".skill-discovery");
+            return (
+              discovery !== null &&
+              discovery.querySelector('[data-skill-id="local:data-skill-0000"]') !== null &&
+              discovery.querySelector('[data-skill-id="local:data-skill-0999"]') !== null &&
+              discovery.querySelector("[aria-setsize]")?.getAttribute("aria-setsize") === "1000"
+            );
+          });
+          const search = page.locator(".skill-discovery input[type=search]");
+          await search.fill("Data skill 0999");
+          await page.waitForFunction(() => {
+            const rows = document.querySelectorAll(".skill-discovery [data-skill-id]");
+            return (
+              rows.length === 1 &&
+              rows[0]?.getAttribute("data-skill-id") === "local:data-skill-0999"
+            );
+          });
+          await search.fill("");
+          await page.waitForFunction(() =>
+            document.querySelector('.skill-discovery [aria-setsize="1000"]'),
+          );
+          expect(readerRequests).toBe(0);
           const held = await holdModuleResponse(page, reader);
           try {
             await page

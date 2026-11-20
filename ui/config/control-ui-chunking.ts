@@ -94,7 +94,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
   switch (controlUiBootManifestKey(id)) {
     case "ui/src/pages/plugins/catalog-grid.tsx":
     case "ui/src/pages/plugins/plugin-card.tsx":
-      // Catalogs already load both; a lazy skill reader must not split their first visit.
+    case "ui/src/pages/plugins/catalog-skeleton.tsx":
+    case "ui/src/components/solid/middle-truncated.tsx":
+      // Keep catalog presentation together without acquiring the lazy reader or tooltip.
       return "plugin-catalog-runtime";
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
@@ -279,6 +281,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/config-form.array-items.ts":
       // Lightweight shape readers must not acquire analysis, validation, or Settings copy.
       return "config-form-utils-runtime";
+    case "ui/src/components/solid/catalog-discovery.tsx":
     case "ui/src/components/solid/settings-ui.tsx":
     case "ui/src/components/solid/switch.tsx":
     case "ui/src/pages/config/settings-section-header.tsx":

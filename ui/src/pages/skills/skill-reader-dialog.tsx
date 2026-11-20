@@ -19,10 +19,10 @@ import { renderPluginOfficialBadge } from "../plugins/plugin-card.tsx";
 import {
   SkillPageSection,
   SkillSecurityFact,
-  SkillTile,
   type SkillSecurityTone,
 } from "./skill-page-parts.tsx";
 import { installedReference } from "./skill-status.tsx";
+import { SkillTile } from "./skill-tile.tsx";
 import type { SkillsProps } from "./view-types.ts";
 
 export function MarkdownContent(props: {

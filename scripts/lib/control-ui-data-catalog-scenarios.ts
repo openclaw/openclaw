@@ -775,12 +775,13 @@ function skillsRefreshScenario(roundTripMs: 0 | 100): InteractionScenario {
 function catalogEntryScenario(roundTripMs: 0 | 100): InteractionScenario {
   return {
     ...fixture,
+    fixtureOverrides: () => createDataCatalogFixture(1, "all"),
     id: `data-catalog-first-render${roundTripMs ? "-100ms" : ""}`,
     route: pathForRoute("new-session"),
     expected: "The initial catalog request presents the eight-card Tools overview shelf.",
     rowSelector: ".plugin-catalog-card",
     createRequestHandlers: () => {
-      const { entries } = createDataCatalogInventory();
+      const { entries } = createDataCatalogInventory(1, "all");
       return {
         "plugins.catalog.browse": async (params: unknown): Promise<PluginDiscoveryResult> => {
           if (
@@ -849,6 +850,7 @@ function catalogScenario(
   const retainedByPage = new WeakMap<Page, JSHandle<(Element | null)[]>>();
   return {
     ...fixture,
+    fixtureOverrides: () => createDataCatalogFixture(1, "all"),
     id: `data-catalog-${action}${roundTripMs ? "-100ms" : ""}`,
     route: pathForRoute("plugins"),
     expected: append
@@ -857,7 +859,7 @@ function catalogScenario(
     rowSelector: ".plugin-catalog-card",
     createRequestHandlers: roundTripMs
       ? () => {
-          const { entries } = createDataCatalogInventory();
+          const { entries } = createDataCatalogInventory(1, "all");
           return {
             "plugins.catalog.browse": async (params: unknown): Promise<PluginDiscoveryResult> => {
               if (!isRecord(params)) {
@@ -1128,6 +1130,7 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
   {
     ...fixture,
     id: "data-catalog-scroll",
+    fixtureOverrides: () => createDataCatalogFixture(1, "all"),
     route: pathForRoute("plugins"),
     expected:
       "All 1,000 sorted catalog entries remain reachable after scrolling through the window.",
