@@ -253,6 +253,152 @@ function absent(cfg: OpenClawConfig, ...ids: string[]) {
 }
 
 describe("security audit trust model findings", () => {
+  function mailroomConfig(): OpenClawConfig {
+    return {
+      agents: {
+        entries: {
+          main: {},
+          mailroom: { tools: { allow: ["message"], elevated: { enabled: false } } },
+        },
+      },
+      bindings: [{ agentId: "mailroom", match: { channel: "agentmail", accountId: "default" } }],
+      channels: { agentmail: { dmPolicy: "open", allowFrom: ["*"] } },
+    };
+  }
+
+  it("does not expose privileged agents through an exactly isolated account binding", () => {
+    const cfg = mailroomConfig();
+    expect(collectExposureMatrixFindings(cfg)).toEqual([]);
+    expect(collectLikelyMultiUserSetupFindings(cfg)).toContainEqual(
+      expect.objectContaining({ checkId: multiUser }),
+    );
+  });
+
+  it.each([
+    { peer: { kind: "direct", id: "sender" } },
+    { peer: { kind: "group", id: "*" } },
+    { guildId: "guild", roles: ["operator"] },
+    { teamId: "team" },
+  ] satisfies Array<Partial<Binding["match"]>>)(
+    "retains sender-specific privileged routes: %j",
+    (match) => {
+      const cfg = mailroomConfig();
+      cfg.bindings!.push({ agentId: "main", match: { channel: "agentmail", ...match } });
+      for (const id of [elevated, runtime, control]) {
+        checkFinding(collectExposureMatrixFindings(cfg), id, {
+          ...critical,
+          detail: ["agents.entries.main"],
+          notDetail: ["agents.defaults"],
+        });
+      }
+    },
+  );
+
+  it("reports the runtime default agent on an unbound open channel", () => {
+    const cfg = mailroomConfig();
+    cfg.bindings = [];
+    cfg.agents!.ownership = "explicit";
+    cfg.agents!.defaults = { systemAgent: { agentId: "main" } };
+    checkFinding(collectExposureMatrixFindings(cfg), runtime, {
+      ...critical,
+      detail: ["agents.entries.main"],
+      notDetail: ["agents.entries.mailroom", "agents.defaults"],
+    });
+  });
+
+  it("requires both global and reachable-agent elevated enablement", () => {
+    const cfg = mailroomConfig();
+    cfg.tools = { elevated: { enabled: true } };
+    expect(collectExposureMatrixFindings(cfg).some((finding) => finding.checkId === elevated)).toBe(
+      false,
+    );
+    cfg.agents!.entries!.mailroom!.tools!.elevated!.enabled = true;
+    checkFinding(collectExposureMatrixFindings(cfg), elevated, {
+      detail: ["agents.entries.mailroom"],
+      notDetail: ["agents.entries.main", "agents.defaults"],
+    });
+    cfg.tools.elevated!.enabled = false;
+    expect(collectExposureMatrixFindings(cfg).some((finding) => finding.checkId === elevated)).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    "channels.unknown.dmPolicy",
+    "channels.agentmail.rooms.room.dmPolicy",
+    "channels.defaults.groupPolicy",
+  ])("keeps all agent/default contexts for unresolved scope %s", (scope) => {
+    checkFinding(collectExposureMatrixFindings(mailroomConfig(), [scope]), runtime, {
+      detail: ["agents.defaults", "agents.entries.main", "reachability is unresolved"],
+    });
+  });
+
+  it.each(["*", " DEFAULT ", undefined])("normalizes account binding %s", (accountId) => {
+    const cfg = mailroomConfig();
+    cfg.bindings = [{ agentId: "mailroom", match: { channel: " AGENTMAIL ", accountId } }];
+    expect(collectExposureMatrixFindings(cfg)).toEqual([]);
+  });
+
+  it("keeps privileged wildcard-account overrides but excludes other accounts", () => {
+    const cfg = mailroomConfig();
+    cfg.bindings!.push({ agentId: "main", match: { channel: "agentmail", accountId: "other" } });
+    expect(collectExposureMatrixFindings(cfg)).toEqual([]);
+    cfg.bindings = [
+      ...cfg.bindings!,
+      { agentId: "main", match: { channel: "agentmail", accountId: "*" } },
+    ];
+    checkFinding(collectExposureMatrixFindings(cfg), runtime, { detail: ["agents.entries.main"] });
+  });
+
+  it.each(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"] as const)(
+    "does not infer agent reachability from dmScope=%s",
+    (dmScope) => {
+      const cfg = mailroomConfig();
+      cfg.session = { dmScope };
+      expect(collectExposureMatrixFindings(cfg)).toEqual([]);
+    },
+  );
+
+  it("includes accounts inheriting the channel's open policy", () => {
+    const cfg = mailroomConfig();
+    cfg.channels!.agentmail.accounts = { work: {} };
+    cfg.bindings!.push({ agentId: "main", match: { channel: "agentmail", accountId: "work" } });
+    checkFinding(collectExposureMatrixFindings(cfg), runtime, { detail: ["agents.entries.main"] });
+    cfg.channels!.agentmail = {
+      dmPolicy: "allowlist",
+      accounts: { default: { dmPolicy: "open" } },
+    };
+    expect(collectExposureMatrixFindings(cfg)).toEqual([]);
+  });
+
+  it("includes a configured nonstandard default account", () => {
+    const cfg = mailroomConfig();
+    cfg.channels!.agentmail.defaultAccount = "work";
+    cfg.bindings!.push({ agentId: "main", match: { channel: "agentmail", accountId: "work" } });
+    checkFinding(collectExposureMatrixFindings(cfg), runtime, { detail: ["agents.entries.main"] });
+  });
+
+  it("falls back conservatively for invalid route targets", () => {
+    const cfg = mailroomConfig();
+    cfg.bindings!.push({
+      agentId: "missing",
+      match: { channel: "agentmail", peer: { kind: "direct", id: "sender" } },
+    });
+    checkFinding(collectExposureMatrixFindings(cfg), runtime, {
+      detail: ["agents.defaults", "agents.entries.main", "reachability is unresolved"],
+    });
+  });
+
+  it.each([{ sender: ["main", "mailroom"] }, { sender: { agents: ["main", "mailroom"] } }])(
+    "falls back conservatively for broadcast fan-out %j",
+    (broadcast) => {
+      const cfg = { ...mailroomConfig(), broadcast };
+      checkFinding(collectExposureMatrixFindings(cfg), runtime, {
+        detail: ["agents.entries.main", "reachability is unresolved"],
+      });
+    },
+  );
+
   it.each([
     { name: "inherited", groupPolicy: undefined, expected: true },
     { name: "explicitly disabled", groupPolicy: "disabled", expected: false },
@@ -407,7 +553,8 @@ describe("security audit trust model findings", () => {
       ),
       control,
       {
-        detail: ["agents.entries.ops", "agents.defaults"],
+        detail: ["agents.entries.ops"],
+        notDetail: ["agents.defaults"],
       },
     );
     absent(openGroup({ profile: "coding", deny: ["gateway", "cron", "plugins"] }), control);

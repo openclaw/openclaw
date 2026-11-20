@@ -3,12 +3,10 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
-import { resolveConfiguredToolPolicies } from "../agents/agent-tools.policy.js";
+import { listAgentEntries, resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
-import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { describeBinding } from "../commands/agents.binding-format.js";
 import { mergeAccountConfig } from "../config/channel-account-config.js";
@@ -24,6 +22,11 @@ import {
 } from "../gateway/node-command-policy.js";
 import { listEffectiveGroupRouteBindings } from "../routing/resolve-route.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
+import {
+  collectToolExposureContexts,
+  listAuditAgentToolContexts,
+  resolveExposureAgentIds,
+} from "./audit-exposure-contexts.js";
 import { listConfiguredOpenInboundPolicyPaths } from "./audit-open-inbound.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { GATEWAY_CONTROL_PLANE_TOOLS } from "./dangerous-tools.js";
@@ -255,77 +258,6 @@ export function listPotentialMultiUserSignals(
   }
 
   return Array.from(out);
-}
-
-type AuditAgentToolContext = {
-  label: string;
-  agentId?: string;
-  tools?: AgentToolsConfig;
-};
-
-function listAuditAgentToolContexts(cfg: OpenClawConfig): AuditAgentToolContext[] {
-  const contexts: AuditAgentToolContext[] = [{ label: "agents.defaults" }];
-  for (const agent of listAgentEntries(cfg)) {
-    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
-      continue;
-    }
-    contexts.push({
-      label: `agents.entries.${agent.id}`,
-      agentId: agent.id,
-      tools: agent.tools,
-    });
-  }
-  return contexts;
-}
-
-function collectToolExposureContexts(cfg: OpenClawConfig): {
-  riskyContexts: string[];
-  hasRuntimeRisk: boolean;
-  controlPlaneContexts: string[];
-} {
-  const riskyContexts: string[] = [];
-  const controlPlaneContexts: string[] = [];
-  let hasRuntimeRisk = false;
-  for (const context of listAuditAgentToolContexts(cfg)) {
-    const sandboxMode = resolveSandboxConfigForAgent(cfg, context.agentId).mode;
-    const policies = resolveConfiguredToolPolicies({
-      cfg,
-      agentTools: context.tools,
-      sandboxMode,
-      agentId: context.agentId ?? null,
-    });
-    const controlPlaneTools = GATEWAY_CONTROL_PLANE_TOOLS.filter((tool) =>
-      isToolAllowedByPolicies(tool, policies),
-    );
-    if (controlPlaneTools.length > 0) {
-      const profile = context.tools?.profile ?? cfg.tools?.profile ?? "none";
-      controlPlaneContexts.push(
-        `${context.label} (profile=${profile}; controlPlane=[${controlPlaneTools.join(", ")}])`,
-      );
-    }
-    const runtimeTools = ["exec", "process"].filter((tool) =>
-      isToolAllowedByPolicies(tool, policies),
-    );
-    const fsTools = ["read", "write", "edit", "apply_patch"].filter((tool) =>
-      isToolAllowedByPolicies(tool, policies),
-    );
-    const fsWorkspaceOnly = context.tools?.fs?.workspaceOnly ?? cfg.tools?.fs?.workspaceOnly;
-    const runtimeUnguarded = runtimeTools.length > 0 && sandboxMode !== "all";
-    const fsUnguarded = fsTools.length > 0 && sandboxMode !== "all" && fsWorkspaceOnly !== true;
-    if (!runtimeUnguarded && !fsUnguarded) {
-      continue;
-    }
-    if (runtimeUnguarded) {
-      hasRuntimeRisk = true;
-    }
-    riskyContexts.push(
-      `${context.label} (sandbox=${sandboxMode}; runtime=[${runtimeTools.join(", ") || "off"}]; fs=[${fsTools.join(", ") || "off"}]; fs.workspaceOnly=${
-        fsWorkspaceOnly === true ? "true" : "false"
-      })`,
-    );
-  }
-
-  return { riskyContexts, hasRuntimeRisk, controlPlaneContexts };
 }
 
 export function collectSyncedFolderFindings(params: {
@@ -840,21 +772,40 @@ export function collectExposureMatrixFindings(
     return findings;
   }
 
-  const elevatedEnabled = cfg.tools?.elevated?.enabled !== false;
-  if (elevatedEnabled) {
+  const agentIds = resolveExposureAgentIds(cfg, openInboundPolicies);
+  const contexts = agentIds
+    ? agentIds.map((agentId) => ({
+        label: `agents.entries.${agentId}`,
+        agentId,
+        tools: resolveAgentConfig(cfg, agentId)?.tools,
+      }))
+    : listAuditAgentToolContexts(cfg);
+  const elevatedContexts = contexts.filter(
+    (context) =>
+      cfg.tools?.elevated?.enabled !== false && context.tools?.elevated?.enabled !== false,
+  );
+  const routingDetail = agentIds
+    ? "Contexts are limited to potentially reachable agents under channel/account routing.\n"
+    : "Routing reachability is unresolved; all agent/default contexts are considered.\n";
+  if (elevatedContexts.length > 0) {
     findings.push({
       checkId: "security.exposure.open_groups_with_elevated",
       severity: "critical",
       title: "Open group/DM policy with elevated tools enabled",
       detail:
         `Found inbound policy="open" at:\n${openInboundPolicies.map((p) => `- ${p}`).join("\n")}\n` +
+        routingDetail +
+        `Elevated tool exposure contexts:\n${elevatedContexts.map((context) => `- ${context.label}`).join("\n")}\n` +
         "With tools.elevated enabled, a prompt injection in those conversations can become a high-impact incident.",
       remediation:
         'Set each listed group/DM policy to "allowlist" and keep elevated allowlists extremely tight.',
     });
   }
 
-  const { riskyContexts, hasRuntimeRisk, controlPlaneContexts } = collectToolExposureContexts(cfg);
+  const { riskyContexts, hasRuntimeRisk, controlPlaneContexts } = collectToolExposureContexts(
+    cfg,
+    contexts,
+  );
 
   if (riskyContexts.length > 0) {
     findings.push({
@@ -864,6 +815,7 @@ export function collectExposureMatrixFindings(
       detail:
         `Found inbound policy="open" at:\n${openInboundPolicies.map((p) => `- ${p}`).join("\n")}\n` +
         `Risky tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}\n` +
+        routingDetail +
         "Prompt injection in open conversations can trigger command/file actions in these contexts.",
       remediation:
         'For open groups or DMs, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
@@ -878,6 +830,7 @@ export function collectExposureMatrixFindings(
       detail:
         `Found inbound policy="open" at:\n${openInboundPolicies.map((p) => `- ${p}`).join("\n")}\n` +
         `Control-plane tool exposure contexts:\n${controlPlaneContexts.map((line) => `- ${line}`).join("\n")}\n` +
+        routingDetail +
         "Prompt injection in open conversations can trigger OpenClaw updates, plugin changes, or scheduled automation.",
       remediation: `For open groups or DMs, deny control-plane tools (${GATEWAY_CONTROL_PLANE_TOOLS.map((tool) => `\`${tool}\``).join(", ")}) and prefer tools.profile="messaging". Tighten dmPolicy/groupPolicy to pairing or allowlist when possible.`,
     });

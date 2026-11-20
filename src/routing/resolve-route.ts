@@ -607,6 +607,22 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   );
 }
 
+/** Conservative ingress reachability, including sender-specific binding overrides. */
+export function listPotentialRouteAgentIds(
+  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId">,
+): string[] {
+  const agentIds = new Set([resolveAgentRoute(input).agentId]);
+  const { bindings } = getEvaluatedBindingsForChannelAccount(
+    input.cfg,
+    normalizeLowercaseStringOrEmpty(input.channel),
+    normalizeAccountId(input.accountId),
+  );
+  for (const { binding } of bindings) {
+    agentIds.add(pickFirstExistingAgentId(input.cfg, binding.agentId));
+  }
+  return [...agentIds];
+}
+
 /** @internal Lists bindings selectable by at least one group/channel route under runtime precedence. */
 export function listEffectiveGroupRouteBindings(cfg: OpenClawConfig) {
   const bindings = listRouteBindings(cfg);
