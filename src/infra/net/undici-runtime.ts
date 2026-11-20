@@ -5,6 +5,7 @@ import {
   buildHttp1ProxyAgentOptions,
   buildProxyConnectOptions,
   loadUndiciModule,
+  type Http1AgentOptions,
 } from "./undici-dispatcher-options.js";
 import { withUndiciErrorDiagnostics } from "./undici-error-diagnostics.js";
 
@@ -53,7 +54,7 @@ export function createHttp1Agent(
   // still tear those children down; otherwise the socket keeps the process alive.
   const ownedOriginDispatchers = new Set<import("undici").Dispatcher>();
   const createOriginDispatcher = agentOptions.factory;
-  const factory: typeof createOriginDispatcher = (origin, childOptions) => {
+  const factory: Http1AgentOptions["factory"] = (origin, childOptions) => {
     const child = createOriginDispatcher(origin, childOptions);
     for (const tracked of ownedOriginDispatchers) {
       if (Reflect.get(tracked, "destroyed") === true) {

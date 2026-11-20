@@ -150,6 +150,20 @@ it("loads lazily, retries failed initialization, and reuses the installed API be
 
   expect(output.trim()).toBe("ok");
 });
+it("keeps a callable origin factory when an explicit factory is undefined", () => {
+  const agent = createHttp1Agent({ factory: undefined }) as unknown as MockAgent;
+  const client = agent.createOriginDispatcher({ connections: 1 });
+
+  expect(client).toBeInstanceOf(MockClient);
+  expect(poolCtor).not.toHaveBeenCalled();
+});
+it("keeps an explicit custom origin factory when one is provided", () => {
+  const customFactory = vi.fn(() => new MockClient(new URL("https://custom.test"), {}));
+  const agent = createHttp1Agent({ factory: customFactory as never }) as unknown as MockAgent;
+  agent.createOriginDispatcher({ connections: 1 });
+
+  expect(customFactory).toHaveBeenCalledTimes(1);
+});
 it("handles an internal error from direct agent client before connect", () => {
   const agent = createHttp1Agent() as unknown as MockAgent;
   const client = agent.createOriginDispatcher({ connections: 1 });
