@@ -365,6 +365,11 @@ Open **Pages → Systems**, or visit `/systems`, to inspect this computer, cloud
 devices, and paired devices available to your connection. Use the pin button
 beside Systems in Pages, or drag it into the rail, to keep a personal shortcut.
 
+On mobile web, opening Systems from Pages keeps the drawer open
+so you can choose from its list. Other page links still dismiss the drawer.
+Press Escape or use the drawer toggle to return to the page. Native hosts keep
+their existing navigation behavior.
+
 While Systems is open, select **Sessions** in the rail to show its contextual
 device list in place of conversations. Pages and Users remain separate views.
 The middle list scrolls independently of the rail; the sidebar header and the

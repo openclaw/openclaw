@@ -189,10 +189,13 @@ suite.define(() => {
           );
           await writeFile(`${proofDir}/${name}.png`, frame.png);
         };
-        const navigate = async (path: string) => {
+        const navigate = async (path: "activity" | "systems") => {
           await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
           await page.locator('[data-navigation-view="pages"]').click();
           await page.locator(`.sidebar-pages a[href$="/${path}"]`).click();
+          await waitForControlUiRoute(page, { routeId: path });
+          // Systems opens its list in the phone drawer; measure the page after dismissal.
+          await page.keyboard.press("Escape");
         };
         await page.goto(suite.server.baseUrl + "systems");
         await page

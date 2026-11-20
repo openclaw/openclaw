@@ -2,7 +2,7 @@ import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
-import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
@@ -21,6 +21,7 @@ import type { GatewayStatusProps } from "./gateway-status.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import { selectSidebarContext, type ContextualSidebar } from "./sidebar-context-state.ts";
+import type { SidebarRouteView } from "./sidebar-menus-types.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 export type AppSidebarProps = {
@@ -62,9 +63,7 @@ export type AppSidebarProps = {
   onOpenNewSession: ((agentId: string, target?: NewSessionTarget) => void) | undefined;
   onUpdateSidebarEntries: ((entries: string[]) => void) | undefined;
   onPairMobile: (() => void) | undefined;
-  onNavigate:
-    | ((routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void)
-    | undefined;
+  onNavigate: SidebarRouteView["onNavigate"];
 };
 
 export const appSidebarProperties = {

@@ -644,7 +644,11 @@ export function createSidebarMenus(deps: {
           label={titleForRoute(routeId, t)}
           href={sessionTarget()?.href ?? pathForRoute(routeId, view.basePath)}
           active={isSidebarRouteActive(view.activeRouteId, routeId)}
-          onNavigate={() => view.onNavigate?.(routeId, sessionTarget()?.options)}
+          onNavigate={() =>
+            routeId === "systems"
+              ? view.onNavigate?.(routeId, undefined, "sidebar-section")
+              : view.onNavigate?.(routeId, sessionTarget()?.options)
+          }
         />
       );
       return <Show when={view.enabledRouteIds?.includes(routeId) ?? true}>{link}</Show>;
