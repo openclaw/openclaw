@@ -30,7 +30,7 @@ import type { AgentInternalEvent } from "../../internal-events.js";
 import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
 import type { ModelFallbackAvailability } from "../../model-fallback.types.js";
-import type { ContinuationRunToolOptions } from "../../openclaw-tools.types.js";
+import type { ContinuationRunToolOptions } from "../../openclaw-tools.continuation.types.js";
 import type { ReplyDeliveryObserver } from "../../reply-completion.js";
 import type { ResolvedToolPromptFinalizer } from "../../resolved-tool-prompt.types.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";

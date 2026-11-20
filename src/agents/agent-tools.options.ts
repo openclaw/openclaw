@@ -18,11 +18,9 @@ import type {
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import type { DelegationCapability } from "./delegation-capability.js";
 import type { ModelAuthMode } from "./model-auth.js";
+import type { ContinuationRunToolOptions } from "./openclaw-tools.continuation.types.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
-import type {
-  ContinuationRunToolOptions,
-  OpenClawSharedToolsOptions,
-} from "./openclaw-tools.types.js";
+import type { OpenClawSharedToolsOptions } from "./openclaw-tools.types.js";
 import type { SandboxContext } from "./sandbox/types.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";

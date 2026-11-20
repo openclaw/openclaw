@@ -16,14 +16,13 @@ import type { resolveConversationQuestionInputMode } from "./conversation-capabi
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "./exec-defaults.js";
 import type { InstalledSkill } from "./installed-skill-catalog.js";
+import type { ContinuationRunToolOptions } from "./openclaw-tools.continuation.types.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
-import type { ContinueWorkRequest } from "./tools/continue-work-tool.js";
 import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
-import type { RequestCompactionRunOpts } from "./tools/request-compaction-tool.js";
 import type {
   SessionsYieldCallback,
   SessionsYieldRuntimeClaim,
@@ -122,20 +121,6 @@ export type OpenClawSharedToolsOptions = {
   claimYieldCompletion?: () => SessionsYieldRuntimeClaim | Promise<SessionsYieldRuntimeClaim>;
   /** Records hot-path tool-prep stages for reply startup diagnostics. */
   recordToolPrepStage?: (name: string) => void;
-};
-
-/** Continuation tool wiring a run supplies; see openclaw-tools.continuation.ts. */
-export type ContinuationRunToolOptions = {
-  /** Whether this run consumes the continue_delegate staging queue. */
-  drainsContinuationDelegateQueue?: boolean;
-  /** Runs whose lifecycle owner cannot execute any same-session continuation tools. */
-  disableContinuationTools?: boolean;
-  /** Callback for continue_work to request a post-turn continuation. */
-  continueWorkOpts?: {
-    requestContinuation: (request: ContinueWorkRequest) => void;
-  };
-  /** Closures for request_compaction when continuation is enabled. */
-  requestCompactionOpts?: RequestCompactionRunOpts;
 };
 
 export type OpenClawToolsOptions = {
