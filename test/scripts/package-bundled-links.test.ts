@@ -3,7 +3,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { create as createTar } from "tar";
+import { create as createTar } from "tar/raw";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   hasMissingBundledDependencies,

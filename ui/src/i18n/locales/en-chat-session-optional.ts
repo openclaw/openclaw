@@ -31,6 +31,9 @@ const catalog = {
       contextShowAll: "Show all {count}",
     },
     sessionAutomation: {
+      creating: "Creating automation…",
+      notCreated: "Not created",
+      unavailable: "Automation unavailable",
       emptyHint: "Automations attached to this session will appear here.",
       scheduleUnavailable: "Schedule unavailable",
       atTime: "at {time}",

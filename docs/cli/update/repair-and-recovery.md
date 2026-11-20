@@ -340,11 +340,12 @@ The update refuses and names the command to run, in most cases
 `openclaw update repair`, when the update ran with `--no-restart` and the
 Gateway is still stopped, when finishing the installed version fails, when the
 Gateway started that update, when an update may still be running, or when the
-update lease store no longer holds that update's lease. After a restart cleared
-that store, the update still settles the recovery on Linux and macOS hosts when
-the killed update recorded that it ran in an earlier boot of the same machine.
-Windows, containers, and updates killed while running an older version keep
-the refusal. See
+update lease store no longer holds that update's lease. A source checkout also
+refuses when the build that update installed has the same version and build ID
+as the build it replaced. After a restart cleared that store, the update still
+settles the recovery on Linux and macOS hosts when the killed update recorded
+that it ran in an earlier boot of the same machine. Windows, containers, and
+updates killed while running an older version keep the refusal. See
 [how updates run](/cli/update/how-updates-run#replacing-the-package-directory).
 
 ### Interrupted state restore
@@ -1133,9 +1134,9 @@ exclusive offline ownership, or asks the running Gateway to perform retirement
 under its own live ownership. It does not stop or restart the Gateway for cleanup.
 This also applies to the macOS app's CLI updates and `--no-restart`; that flag does
 not bypass state ownership. Gateway-owned restart completion performs the same
-retirement after it records success. A failed update that never reached repair or
-activation attempts the same retirement after its failure is recorded, including
-its own capture.
+retirement after it records success. A failed update attempts the same retirement
+after its failure is recorded when no update recovery is pending. One that never
+reached repair or activation also retires its own capture.
 
 External supervisors using `update migrate` and `update finish` attempt the same
 cleanup when they finish an accepted update, after retiring their rollback journal.
@@ -1163,6 +1164,77 @@ a historical index may reference an original in another manifest. Independently
 eligible update and Doctor captures can still be retired.
 There is no age-only expiration of update captures or migration originals, no
 total-size cap, and no byte-budget-driven deletion.
+
+<a id="what-automatic-cleanup-deletes" />
+
+### What automatic cleanup deletes
+
+Automatic cleanup deletes a file only when it can prove the updater made it: the
+name and location match what the updater writes, a record links it to an update
+run, and the file still matches that record. Run order, not file times, decides
+what is old.
+
+After an update is verified successful (the new version is serving and its health
+check passed), cleanup deletes at once:
+
+- the Doctor pre-migration backups that update's Doctor took
+  (`<database>.pre-startup-migration-<id>.bak`). Their manifest in
+  `session-sqlite-migration-runs/` records the update's run id (`updateRunId`), and
+  that run's outcome releases them. The live database keeping its inode is not
+  required: the updater's own rollback and the startup swap replace that file.
+- the restorable pre-migration database snapshots that update took
+  (`<package-backup>.databases`, or `.artifacts/<name>.databases` for Git
+  checkouts), as before.
+- an already-current run's own original-state capture, when that run ends.
+- the same Doctor backups, `<database>.migrated-<runId>` files, and failed or
+  rolled-back original-state captures of every earlier update that finished
+  before the verified one started. A database rollback writes
+  `<database>.migrated-<runId>.receipt.json` before it moves the migrated files
+  aside; cleanup deletes only the files that receipt lists, with the recorded
+  device, inode, size, and modification time, then the receipt.
+- superseded original-state captures, by the rules above.
+
+Doctor backups whose manifest predates `updateRunId` keep their previous rules: they
+are removed only after Doctor marked them complete and a later successful update
+superseded them; otherwise they stay and are listed.
+
+A cleanup that ran before the update's health verification was recorded runs again
+at the next cleanup point once verification lands.
+
+Without a later verified update, cleanup decides per database, not per run: an older
+backup of a database is deleted only when a newer run left a Doctor backup of that same
+database whose recorded content still verifies, and only while no update recovery is
+pending and no update run is unfinished. A newer run whose backup of a database is
+damaged or missing stands in for nothing, and moved-aside `.migrated-<runId>` files never
+stand in for an older backup (their receipt records no checksum). Backups taken by one
+Doctor run are kept or deleted together. So every database with an intact backup and no
+verified update after it keeps at least one intact backup. No backup is deleted while
+the live database it belongs to is missing.
+
+Cleanup never deletes:
+
+- Doctor cron repair backups (`openclaw.sqlite.doctor-cron-*.bak`).
+- backups without a manifest or receipt, including Doctor backups written before
+  manifests existed and `.migrated-*` files from before receipts existed.
+- a backup whose manifest names an update run with no record.
+- anything a pending recovery or an unfinished update run references.
+- `.databases` snapshot directories left by earlier updates, and snapshots whose
+  automatic restoration was unavailable; no receipt links them to a verified run.
+  Doctor reports older npm snapshot directories with their size.
+- files outside the state directory, the install root, and the release prefix, or
+  any name the updater does not write, such as your own `openclaw.sqlite.bak`.
+
+The update result's `recovery-artifact-cleanup` step lists what was removed with its
+logical size and the total (file lengths; sparse or cloned files can release less disk
+space), what was kept and why, and each file kept as
+`Kept: not provably ours` with its size. To decide about those, ask your agent with
+`openclaw triage`; an unmanifested backup can also be removed with
+`openclaw update cleanup --include-unmanifested <path>`. A deletion that fails is a
+warning on the update and never changes its outcome; the next update retries it.
+The run record keeps the summary line and any warning; a cleanup that runs again after
+late verification replaces them.
+These rules apply when the installed updater or Gateway that finishes the update
+includes them; manifests and receipts written by older builds stay protected.
 
 `openclaw status` (including `--json`) and read-only Doctor report local recovery
 copy logical bytes and counts by kind: update captures, standalone Doctor

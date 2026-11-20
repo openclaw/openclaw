@@ -1,6 +1,6 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import { getPreparedModelRuntimeTestApi, usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
@@ -43,6 +43,7 @@ import {
   acquireReadOnlyPreparedModelRuntime as acquireReadOnly,
   activateStandalonePreparedModelRuntime as activate,
   getPreparedModelRuntimeSnapshot as readSnapshot,
+  getPendingPreparedModelRuntimeReplacement,
   loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale as markStale,
   prepareModelRuntimeSnapshot as prepare,
@@ -52,6 +53,7 @@ import {
   applyRemoteModelCatalogUpdate,
 } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
+import * as runtimeOwners from "./prepared-model-runtime.owner.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const pendingBuilds: Array<() => Promise<void>> = [];
@@ -551,6 +553,120 @@ describe("remote catalog publication boundaries", () => {
       });
     return { preparing, commit, pricingSpy };
   }
+
+  it("keeps staged registration current but recovers retirement only after commit", async () => {
+    await setup({ allowGatewaySubagentBinding: true });
+    using batches = vi.spyOn(runtimeOwners, "publishPreparedModelRuntimeOwnerBatch");
+    const { preparing, commit, pricingSpy } = holdPricing();
+    const adoption = applyRemoteModelCatalogUpdate(() => config);
+    let recovery: Promise<void> | undefined;
+    try {
+      await preparing.promise;
+      const candidate = batches.mock.calls.at(-1)![0].ownersToPublish[0]!;
+      const snapshot = candidate.snapshot!;
+      expect(snapshot.isCurrent()).toBe(true);
+      expect(getPendingPreparedModelRuntimeReplacement()).toBeUndefined();
+      candidate.onPluginGenerationRetired!();
+      expect(getPendingPreparedModelRuntimeReplacement()).toBeUndefined();
+
+      commit.resolve();
+      expect(await adoption).toBe("published");
+      expect(snapshot.isCurrent()).toBe(true);
+      candidate.onPluginGenerationRetired!();
+      recovery = getPendingPreparedModelRuntimeReplacement();
+      expect(recovery).toBeDefined();
+      await recovery;
+      expect(snapshot.isCurrent()).toBe(false);
+      expect(readSnapshot(candidate.input)?.isCurrent()).toBe(true);
+    } finally {
+      commit.resolve();
+      await Promise.allSettled([adoption, recovery]);
+      pricingSpy.mockRestore();
+    }
+  });
+
+  it("releases the pricing deadline when preparation settles", async () => {
+    await setup();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { preparing, commit, pricingSpy } = holdPricing();
+    const adoption = applyRemoteModelCatalogUpdate(() => config);
+    try {
+      await preparing.promise;
+      expect(vi.getTimerCount()).toBe(1);
+      commit.resolve();
+      expect(await adoption).toBe("published");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      commit.resolve();
+      await Promise.allSettled([adoption]);
+      pricingSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares one pricing deadline across configs without starting later work after timeout", async () => {
+    await setup();
+    for (const agentId of ["other", "last"]) {
+      await publish(
+        fixture.agentInput(agentId, {
+          ...config,
+          messages: { responsePrefix: agentId },
+        }),
+        { provenance: "configured", catalogMode: "static" },
+      );
+    }
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(100);
+    const started = [createDeferred(), createDeferred()];
+    const finished = [createDeferred(), createDeferred()];
+    const preparePricing = pricing.prepareModelPricingContext;
+    const pendingPricing: ReturnType<typeof preparePricing>[] = [];
+    let calls = 0;
+    const pricingSpy = vi
+      .spyOn(pricing, "prepareModelPricingContext")
+      .mockImplementation((...args) => {
+        const index = calls++;
+        const pending = (async () => {
+          started[index]?.resolve();
+          await finished[index]?.promise;
+          return preparePricing(...args);
+        })();
+        pendingPricing.push(pending);
+        return pending;
+      });
+    let settled = false;
+    const adoption = applyRemoteModelCatalogUpdate(() => config).catch((error: unknown) => {
+      settled = true;
+      return error;
+    });
+    try {
+      await started[0]!.promise;
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(80);
+      finished[0]!.resolve();
+      await started[1]!.promise;
+      await vi.advanceTimersByTimeAsync(19);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await adoption).toMatchObject({
+        name: "AbortError",
+        message: "Operation aborted",
+        cause: { name: "TimeoutError", message: "The operation was aborted due to timeout" },
+      });
+      expect(calls).toBe(2);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
+      expect(readSnapshot(fixture.agentInput("default", config))?.isCurrent()).toBe(true);
+    } finally {
+      for (const gate of finished) {
+        gate.resolve();
+      }
+      await Promise.allSettled([adoption, ...pendingPricing]);
+      pricingSpy.mockRestore();
+      vi.useRealTimers();
+    }
+    expect(calls).toBe(2);
+  });
 
   it("models.list does not retry after the remote replacement itself loses authority", async () => {
     await setup();

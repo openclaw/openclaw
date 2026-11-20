@@ -268,6 +268,13 @@ more than the build diagnostic. The label does not promise 32 usable CPUs; see
 
 ### Blacksmith runner capacity
 
+Current PRs use the 2-vCPU runner for central type checks that run only the
+extension-test and scripts graphs. This includes full-check plans when all five
+core stripes are present and own the root-test partitions. Frozen, release,
+compatibility and other graph layouts retain their existing allocation. The
+[original sizing proof](https://github.com/openclaw/openclaw/pull/197786) covers
+these two serial compiler graphs; this changes allocation, not test coverage.
+
 Main CI previously used `blacksmith-32vcpu-ubuntu-2404` for test types,
 core type stripes, and runtime-topology checks
 to compensate for smaller delivered machines.
@@ -434,9 +441,10 @@ outputs reach GitHub can prevent automated cleanup; the provider expiry limits
 compute lifetime, but does not prove data deletion. An unconfirmed deletion
 reports its operation ID for reconciliation with `boat deletion status`.
 
-Mantis Discord and web UI actor authorization, request resolution, and ref
-validation use `ubuntu-24.04`. Their live proof jobs retain separate runtime
-placement and deadlines.
+Mantis Discord and web UI actor authorization, request resolution, ref validation,
+and ordinary proof orchestration use `ubuntu-24.04`. This preserves access for all
+authorized maintainers without requiring Boat account admission. Request-bound
+isolated proof jobs retain their separate runtime placement and deadlines.
 
 Mantis scenario dispatch and QA actor/ref validation also use `ubuntu-24.04`.
 The QA controls honor their `runner_group` input. Reusable live/E2E and QA
@@ -516,12 +524,14 @@ canonical-main admission, protected environments, commands, and 120-minute deadl
 ### Hourly plugin routing
 
 Plugin Prerelease prepares hourly extension jobs for the repository-wide Boat
-backend. Its manifest translates the resolved physical two-CPU Blacksmith class
+backend. Only file-bounded extension shards qualify for Boat. Mixed extension
+batches use GitHub-hosted runners after observed Boat RAM and swap exhaustion; their
+parallelism and file inventory are unchanged. The manifest translates the resolved physical two-CPU Blacksmith class
 to `boat` (four CPUs, 8 GiB) and the four-CPU class to `boat-large` (eight CPUs,
 16 GiB). Canonical scheduled first attempts use the same account start budget
 as ordinary CI: at most 20 jobs per run, with daily, hourly, and minute headroom.
-Missing or unavailable limits select no Boat jobs. Overflow retains the resolved
-Blacksmith class; inactive matrices consume no allowance. This is a snapshot,
+Missing or unavailable limits select no Boat jobs. Overflow uses
+`ubuntu-24.04`; inactive matrices consume no allowance. This is a snapshot,
 not an atomic reservation across concurrent workflows. Logical planner labels
 and test concurrency stay unchanged. Manual dispatches and retries use
 `ubuntu-24.04`; runner groups, coverage,
@@ -552,15 +562,16 @@ within the existing 77-row Node cap, even for docs-only or empty change sets.
 The dispatch actor supplies author provenance; both actor and starter must be
 in the rollout list below to allocate Boat runners. It does not change the repository backend.
 
-`OPENCLAW_CI_RUNNER_BACKEND=boat` uses the existing hybrid logical plan. Only
+`OPENCLAW_CI_RUNNER_BACKEND=boat` uses a GitHub-hosted logical plan for ordinary CI. Only
 same-repository first attempts whose source author and starter are each one of
 `davemorin`, `jalehman`, `joshavant`, `steipete`, or `vincentkoc` may allocate Boat
 runners. Other authors, starters, forks, and retries use GitHub-hosted runners.
-For ordinary admitted runs, hybrid remains the base route. Preflight reads the
-configured Boat organization's included start allowance and sends at most 20 of
-the longest eligible Node rows to Boat. Checks, builds and other rows retain
-hybrid routing. Missing credentials, unreadable limits or exhausted headroom
-select zero Boat rows. Explicit qualification dispatches retain their full
+Preflight reads the configured Boat organization's included start allowance and
+sends at most 20 of the longest eligible Node rows to `boat-large` or
+`boat-xlarge`. Each runtime row consumes one start. These rows retain the hosted
+plan's memory floor and use at most four CPUs. Checks, builds, smaller Node rows,
+the prepared-workspace proof, and overflow use GitHub-hosted runners. Missing
+credentials, unreadable limits or exhausted headroom select zero Boat rows. Explicit qualification dispatches retain their full
 Boat route. See [Boat start admission](/ci/capacity#boat-start-admission).
 Source author still means the PR creator or push commit author; an owner merging
 a contributor commit does not change that provenance. Scheduled and ordinary

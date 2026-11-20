@@ -77,6 +77,8 @@ export async function createOperatorRecoveryFixture(params: {
   tokenlessDevice?: boolean;
   gatewayAccessGrant?: GatewayAccessGrantRef;
   sharedGeneration?: string;
+  /** Proxy-verified identity of a tokenless trusted-proxy handshake. */
+  trustedProxyUser?: string;
   clientInfo?: Pick<GatewayClientInfo, "id" | "mode">;
   localOperator?: boolean;
   sourceIngress?: "control-ui" | "internal";
@@ -107,7 +109,11 @@ export async function createOperatorRecoveryFixture(params: {
   };
   client.authPolicy = captureGatewayAuthPolicy(config, {
     role: "operator",
-    authMethod: params.tokenlessDevice || params.openclawIdPrincipal ? "trusted-proxy" : "token",
+    authMethod:
+      params.tokenlessDevice || params.openclawIdPrincipal || params.trustedProxyUser
+        ? "trusted-proxy"
+        : "token",
+    verifiedIdentity: params.trustedProxyUser,
   });
   if (params.sharedGeneration !== undefined) {
     client.usesSharedGatewayAuth = true;

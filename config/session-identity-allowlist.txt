@@ -226,7 +226,6 @@ extensions/workboard/src/lifecycle-sync.ts	8
 extensions/workboard/src/session-link.ts	2
 extensions/workboard/src/sessions-board.ts	7
 extensions/workboard/src/store-card-helpers.ts	7
-extensions/workboard/src/store-evidence.ts	4
 extensions/workboard/src/store-notifications.ts	2
 extensions/workboard/src/store-workflow.ts	1
 extensions/workboard/src/store.ts	20
@@ -408,13 +407,12 @@ src/agents/session-maintenance/run.ts	6
 src/agents/session-model-auto-revert.ts	5
 src/agents/session-placement-admission.ts	4
 src/agents/session-placement-computer.ts	4
-src/agents/sessions/agent-session-compaction.ts	2
+src/agents/sessions/agent-session-compaction.ts	1
 src/agents/sessions/agent-session-inspection.ts	5
 src/agents/sessions/auth-storage-oauth-refresh.ts	1
 src/agents/sessions/background-result-placement.ts	2
 src/agents/sessions/extensions/metadata-actions.ts	1
 src/agents/sessions/sdk.ts	1
-src/agents/sessions/session-compaction-persistence.ts	1
 src/agents/sessions/session-manager-append-codec.ts	2
 src/agents/sessions/session-manager-append.ts	3
 src/agents/sessions/session-manager-branching.ts	4
@@ -795,8 +793,7 @@ src/gateway/desktop/computer-service.ts	2
 src/gateway/device-revocation.ts	1
 src/gateway/event-web-push.ts	2
 src/gateway/exec-approval-authority.ts	1
-src/gateway/exec-approval-consumption.ts	1
-src/gateway/exec-approval-manager.ts	4
+src/gateway/exec-approval-manager.ts	2
 src/gateway/exec-approval-resolution-authority.ts	1
 src/gateway/gateway-codex-harness.command-evidence.live-helpers.ts	1
 src/gateway/github-oauth-lifecycle.ts	1
@@ -839,7 +836,6 @@ src/gateway/mention-inbox-recording.ts	5
 src/gateway/mention-inbox.ts	4
 src/gateway/message-action-turn-capability.ts	8
 src/gateway/node-claude-skill-runtime.ts	20
-src/gateway/node-invoke-plugin-approval.ts	2
 src/gateway/node-invoke-plugin-policy.ts	4
 src/gateway/node-registry-pairing.ts	2
 src/gateway/node-registry-private.ts	7
@@ -851,7 +847,7 @@ src/gateway/operator-approval-session-events.ts	4
 src/gateway/operator-approval-store.receipts.ts	1
 src/gateway/operator-approval-store.rows.ts	3
 src/gateway/operator-invocation-authority.ts	3
-src/gateway/operator-run-authority.ts	2
+src/gateway/operator-run-authority.ts	1
 src/gateway/operator-run-recovery.ts	3
 src/gateway/plugin-command-scheduled-run.ts	9
 src/gateway/question-manager.ts	4
@@ -872,7 +868,6 @@ src/gateway/server-discovery-runtime.ts	2
 src/gateway/server-maintenance.ts	1
 src/gateway/server-methods/agent-expected-session.ts	5
 src/gateway/server-methods/agent-run-handler.ts	1
-src/gateway/server-methods/agent-runtime-authority.ts	2
 src/gateway/server-methods/agent-session-patch.ts	13
 src/gateway/server-methods/agent-session-prepare.ts	5
 src/gateway/server-methods/agent-subagent-registration.ts	15
@@ -942,15 +937,13 @@ src/gateway/server-methods/cron.ts	4
 src/gateway/server-methods/doctor-memory-provider-status.ts	1
 src/gateway/server-methods/environments.session-exec.ts	1
 src/gateway/server-methods/environments.session-tool-policy.ts	2
-src/gateway/server-methods/environments.session.ts	6
+src/gateway/server-methods/environments.session.ts	5
 src/gateway/server-methods/exec-approval.ts	3
 src/gateway/server-methods/factory-github-proof.ts	1
 src/gateway/server-methods/github-personal-authorization.ts	8
 src/gateway/server-methods/mcp-auth-login.ts	1
 src/gateway/server-methods/memory-provider.ts	1
 src/gateway/server-methods/message-action-context.ts	2
-src/gateway/server-methods/message-operation-result.ts	1
-src/gateway/server-methods/message-operation-route.ts	2
 src/gateway/server-methods/models-auth-login.ts	1
 src/gateway/server-methods/nodes.event.ts	2
 src/gateway/server-methods/nodes.invoke.ts	2
@@ -1040,7 +1033,6 @@ src/gateway/server-worker-placement-runtime-refresh.ts	1
 src/gateway/server-worker-placement-session-evidence.ts	2
 src/gateway/server-worker-placement-session-target.ts	25
 src/gateway/server-worker-placement-startup.ts	4
-src/gateway/server/ws-connection/authenticated-request-dispatch.ts	1
 src/gateway/server/ws-connection/connect-admission.ts	1
 src/gateway/server/ws-connection/connect-session.ts	2
 src/gateway/server/ws-connection/connect-user-profile.ts	1
@@ -1102,7 +1094,6 @@ src/gateway/session-row-projection.ts	3
 src/gateway/session-row-provider-review.ts	2
 src/gateway/session-row-selection-facts.ts	2
 src/gateway/session-row-transcript-backfill.ts	2
-src/gateway/session-runtime-authority.ts	1
 src/gateway/session-send-delivery.ts	4
 src/gateway/session-sharing-authorization-async.ts	2
 src/gateway/session-sharing-authorization.ts	2
@@ -1345,7 +1336,7 @@ src/infra/system-run-approval-binding.ts	1
 src/infra/system-run-cwd-binding.ts	1
 src/infra/update-candidate-predecessor-stop.ts	3
 src/infra/update-database-backup.ts	1
-src/infra/update-database-generations.ts	2
+src/infra/update-database-generations.ts	1
 src/infra/update-doctor-migration-attribution.ts	1
 src/infra/update-doctor-process-custody.ts	4
 src/infra/update-doctor-scan-receipts.ts	2

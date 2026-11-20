@@ -16,6 +16,7 @@ import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-loc
 import { runPackagePostInstallVerification } from "../../infra/package-update-verification-step.js";
 import { materializeUpdateCandidateStateWorker } from "../../infra/update-candidate-state.test-support.js";
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
+import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import * as processRunner from "../../process/exec.js";
@@ -52,7 +53,10 @@ vi.mock("./update-command-service.js", () => ({
   maybeRestartService: mocks.restart,
   resolveUpdatedGatewayRestartPort: async () => 19101,
 }));
+import * as recoveryStore from "../../infra/update-run-recovery-store.js";
 import * as updateShared from "./shared.js";
+import * as cohortModule from "./update-command-cohort.js";
+import * as databaseBackupModule from "./update-command-database-backup.js";
 import * as packageModule from "./update-command-package.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import {
@@ -650,19 +654,28 @@ it.for([
     );
     expect(mocks.restart).toHaveBeenCalledTimes(restored ? 1 : 0);
     const packageRestored = restored || service !== "stopped" || !previousVerified;
+    const reason =
+      restored || service !== "stopped"
+        ? result.reason
+        : change === "unknown-runtime" ||
+            change === "new-shared-deferred" ||
+            change.startsWith("new-agent-previous-")
+          ? "rollback-state-unverified"
+          : previousVerified
+            ? "state-migrated-no-rollback"
+            : "previous-version-unverified";
     expect(outcome.result).toMatchObject({
       ...(packageRestored ? { root: previousRoot, after: result.before } : {}),
-      reason:
-        restored || service !== "stopped"
-          ? result.reason
-          : change === "unknown-runtime" ||
-              change === "new-shared-deferred" ||
-              change.startsWith("new-agent-previous-")
-            ? "rollback-state-unverified"
-            : previousVerified
-              ? "state-migrated-no-rollback"
-              : "previous-version-unverified",
+      reason,
     });
+    // Each refusal here has evidence: an unknown root, a store the previous version cannot
+    // open, a forward schema or preserved edits. Its reason is also the recorded risk.
+    const recovery = outcome.result.recovery;
+    expect(recovery?.serviceRestartSafe === false ? recovery.dataAtRisk : undefined).toBe(
+      reason === "rollback-state-unverified" || reason === "state-migrated-no-rollback"
+        ? reason
+        : undefined,
+    );
     if (service !== "stopped") {
       expect(mocks.stop).not.toHaveBeenCalled();
       expect(outcome.result.recovery).toMatchObject({
@@ -795,3 +808,157 @@ it.each([
     restart: mocks.restart,
   });
 });
+
+it.for([
+  ...(process.platform === "win32" || process.getuid?.() === 0 ? [] : ["schema-read-denied"]),
+  "no-baseline",
+] as const)("refuses rollback after %s without marking data at risk", async (failure) => {
+  const env = { OPENCLAW_STATE_DIR: serviceStateDir };
+  const agent = path.join(serviceStateDir, "agents/main/agent/openclaw-agent.sqlite");
+  setVersion(path.join(serviceStateDir, "state/openclaw.sqlite"), 7);
+  setVersion(agent, 3);
+  const { configSnapshot, schemaVersions } = await readRollbackFixtureState(serviceStateDir, env);
+  if (failure === "schema-read-denied") {
+    // The rollback's schema read fails; nothing tells whether Doctor migrated it.
+    fs.chmodSync(agent, 0o000);
+  }
+  const rollback = vi.fn(async () => restoredStep());
+  let outcome: Awaited<ReturnType<typeof rollbackFailedUpdate>>;
+  try {
+    outcome = await runRollback({
+      configSnapshot,
+      schemaVersions: failure === "no-baseline" ? undefined : schemaVersions,
+      previousVerified: true,
+      preManagedServiceStop: stoppedService({ running: false }),
+      packageTransaction: { backupRoot: "/backup", rollback, complete: vi.fn() },
+    });
+  } finally {
+    fs.chmodSync(agent, 0o600);
+  }
+  expect(rollback).not.toHaveBeenCalled();
+  expect(mocks.stop).not.toHaveBeenCalled();
+  expect(mocks.restart).not.toHaveBeenCalled();
+  expect(outcome).toMatchObject({
+    rolledBack: false,
+    result: {
+      status: "error",
+      root: candidateRoot,
+      reason: "rollback-state-unverified",
+      rollbackOutcome: { status: "not-attempted" },
+    },
+  });
+  expect({ ...outcome.result.recovery }).not.toHaveProperty("dataAtRisk");
+  expect(
+    resolveUpdateResultNextAction({ result: outcome.result, env, serviceRunning: false }),
+  ).not.toMatch(/data at risk|Keep the Gateway stopped/u);
+});
+
+it("keeps the risk when configuration cannot be restored after the package was", async () => {
+  const env = { OPENCLAW_STATE_DIR: serviceStateDir };
+  setVersion(path.join(serviceStateDir, "state/openclaw.sqlite"), 7);
+  const configDir = dirs.make("rollback-config-restore-");
+  const configPath = path.join(configDir, "openclaw.json");
+  const original = '{"gateway":{"mode":"local","port":19101}}\n';
+  const candidate = '{"gateway":{"mode":"local","port":19102}}\n';
+  fs.writeFileSync(configPath, original);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  const { configSnapshot, schemaVersions } = await readRollbackFixtureState(serviceStateDir, {
+    ...env,
+    OPENCLAW_CONFIG_PATH: configPath,
+  });
+  fs.writeFileSync(configPath, candidate);
+  // The package restore succeeds; the configuration it must restore then cannot be read.
+  const rollback = vi.fn(async () => {
+    fs.rmSync(configPath);
+    fs.mkdirSync(configPath);
+    return restoredStep("package rollback");
+  });
+  const outcome = await runRollback({
+    configSnapshot,
+    schemaVersions,
+    activationConfig: {
+      path: configPath,
+      raw: original,
+      hash: hashConfigRaw(candidate),
+      doctorOwned: true,
+    },
+    previousVerified: true,
+    preManagedServiceStop: stoppedService({ running: false, serviceEnv: env }),
+    packageTransaction: { backupRoot: previousRoot, rollback, complete: vi.fn() },
+  });
+  expect(rollback).toHaveBeenCalledOnce();
+  expect(fs.statSync(configPath).isDirectory()).toBe(true);
+  expect(outcome).toMatchObject({
+    rolledBack: false,
+    result: {
+      status: "error",
+      root: previousRoot,
+      reason: "rollback-state-unverified",
+      recovery: { serviceRestartSafe: false, dataAtRisk: "rollback-state-unverified" },
+    },
+  });
+  expect(mocks.restart).not.toHaveBeenCalled();
+});
+
+it
+  .skipIf(process.platform === "win32" || process.getuid?.() === 0)
+  .each(["databases", "plugin cohort"] as const)(
+  "keeps the risk when the recheck after a %s restore cannot be read",
+  async (restored) => {
+    const env = { OPENCLAW_STATE_DIR: serviceStateDir };
+    const agent = path.join(serviceStateDir, "agents/main/agent/openclaw-agent.sqlite");
+    // The run ledger creates the shared state database with its real schema.
+    const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+    setVersion(agent, 3);
+    const { configSnapshot, schemaVersions } = await readRollbackFixtureState(serviceStateDir, env);
+    const run = { runId, env, executorFence: { assertCurrent: () => {} } };
+    // The restore succeeds; the state recheck that follows it cannot read the agent store.
+    const unreadableAfterRestore = () => fs.chmodSync(agent, 0o000);
+    if (restored === "databases") {
+      setVersion(agent, 4);
+      vi.spyOn(databaseBackupModule, "restoreFailedUpdateDatabases").mockImplementation(
+        async () => {
+          setVersion(agent, 3);
+          unreadableAfterRestore();
+          return true;
+        },
+      );
+    } else {
+      // Rollback reads only the cohort's config publications before settling it.
+      const pair = { cohort: { publications: [] } } as unknown as PluginCohortRecoveryPair;
+      vi.spyOn(recoveryStore, "loadPluginCohortRecovery").mockReturnValue(pair);
+      vi.spyOn(cohortModule, "settleUpdatePluginCohortInCandidate").mockImplementation(async () => {
+        unreadableAfterRestore();
+        return { configPaths: [] };
+      });
+    }
+    const rollback = vi.fn(async () => restoredStep());
+    let outcome: Awaited<ReturnType<typeof rollbackFailedUpdate>>;
+    try {
+      outcome = await runRollback({
+        configSnapshot,
+        schemaVersions,
+        opts: { json: true, run },
+        previousVerified: true,
+        databaseBackup: {
+          directory: path.join(serviceStateDir, "backup"),
+          databases: [],
+          missingPaths: [],
+          sourcePaths: [],
+          sourceGenerations: {},
+          warnings: [],
+        },
+        preManagedServiceStop: stoppedService({ running: false }),
+        packageTransaction: { backupRoot: "/backup", rollback, complete: vi.fn() },
+      });
+    } finally {
+      fs.chmodSync(agent, 0o600);
+    }
+    expect(rollback).not.toHaveBeenCalled();
+    expect(outcome.result).toMatchObject({
+      status: "error",
+      reason: "rollback-state-unverified",
+      recovery: { serviceRestartSafe: false, dataAtRisk: "rollback-state-unverified" },
+    });
+  },
+);

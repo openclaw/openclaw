@@ -121,11 +121,12 @@ it.each<{
         try {
           cfg = config([], scopes);
           publishOperatorRoleConfigChange(context);
-          expect(execution.signal.aborted).toBe(true);
-          expect(execution.assertCurrent).toThrow();
-          expect(channel.assertCurrent).toThrow();
+          expect(execution.signal.aborted).toBe(false);
+          expect(execution.assertCurrent).not.toThrow();
+          expect(channel.assertCurrent).not.toThrow();
+          expect(captured.authority.reauthorize).toThrow();
           cfg = config(grants, scopes);
-          expect(execution.assertCurrent).toThrow();
+          expect(execution.assertCurrent).not.toThrow();
         } finally {
           execution.release();
         }
@@ -178,7 +179,7 @@ it("does not acquire admin execution authority from a privileged internal adapte
   }));
 
 it.each<{ grants: Grants | undefined }>([{ grants: undefined }, { grants: ["daybreak_blue"] }])(
-  "retains scheduled Access authority with ceiling $grants but rejects a changed snapshot",
+  "retains admitted scheduled Access authority with ceiling $grants but refuses fresh work after a policy change",
   ({ grants }) =>
     withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
       const profile = ensureProfileForEmail("access-recovery@example.test");
@@ -190,17 +191,23 @@ it.each<{ grants: Grants | undefined }>([{ grants: undefined }, { grants: ["dayb
       );
       const restored = expectDefined(await fixture.restore(), "restored source");
       using _ = { [Symbol.dispose]: restored.release };
-      expect(() =>
-        assertOperatorAccessProgramAllowed(restored.authority, "daybreak_blue"),
-      ).not.toThrow();
-      const red = () => assertOperatorAccessProgramAllowed(restored.authority, "daybreak_red");
-      if (grants) {
-        expect(red).toThrow();
-      } else {
-        expect(red).not.toThrow();
-      }
+      const assertAccessCeiling = () => {
+        expect(() =>
+          assertOperatorAccessProgramAllowed(restored.authority, "daybreak_blue"),
+        ).not.toThrow();
+        const red = () => assertOperatorAccessProgramAllowed(restored.authority, "daybreak_red");
+        if (grants) {
+          expect(red).toThrow();
+        } else {
+          expect(red).not.toThrow();
+        }
+      };
+      assertAccessCeiling();
       fixture.setConfig(config([]));
-      expect(restored.authority.assertCurrent).toThrow();
+      expect(restored.authority.assertCurrent).not.toThrow();
+      expect(restored.authority.signal?.aborted).toBe(false);
+      expect(restored.authority.reauthorize).toThrow();
       await expect(fixture.restore()).rejects.toThrow();
+      assertAccessCeiling();
     }),
 );

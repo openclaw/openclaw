@@ -95,6 +95,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     operatorDeviceTokenIdentity?: Readonly<PairedDeviceTokenIdentity> | null;
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Handshake-attested non-remote gateway-client backend; never accepted from wire params. */
+    localBackendClient?: true;
     /** Device key W of a connection relayed by the OpenClaw ID tunnel child; never from wire params. */
     openclawIdPeerKey?: string;
     /** Original peer admission; every later grant checks the live membership owner. */

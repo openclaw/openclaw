@@ -100,6 +100,8 @@ export type OpenClawSharedToolsOptions = {
   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   runtimeToolAllowlist?: string[];
+  /** The session lists one fixed set: the run allowlist gates calls, never construction. */
+  fixedToolListing?: boolean;
   /** Session-owned Gateway publication surface; the broker checks current identity and authority. */
   githubPublicationAvailable?: boolean;
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
@@ -204,6 +206,8 @@ export type OpenClawToolsOptions = {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   /** Restrict cron operations to the active cron job's self-scoped surface. */
   cronSelfRemoveOnlyJobId?: string;
+  /** Host-stamped user turn; non-conversational callers retain the native add contract. */
+  requireCronCreationPlan?: boolean;
   /** Process-local completion authority restricted to the current source conversation. */
   sourceReplyOnly?: boolean;
   /**

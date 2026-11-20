@@ -766,11 +766,7 @@ const TEST_HELPER_NORMALIZE_TEXT_TARGETS = [
 ];
 const HAPPY_PATH_PROMPT_SNAPSHOT_HELPER_TEST_TARGETS = ["test/scripts/prompt-snapshots.test.ts"];
 const APPCAST_TEST_TARGETS = ["test/appcast.test.ts", "test/scripts/make-appcast.test.ts"];
-const CODEX_VERSION_CONTRACT_TEST_TARGETS = [
-  "extensions/codex/src/manifest.test.ts",
-  "extensions/openai/openai-provider.test.ts",
-  "test/scripts/codex-client-version-contract.test.ts",
-];
+const CODEX_VERSION_CONTRACT_TEST_TARGETS = ["extensions/codex/src/manifest.test.ts"];
 // The iframe script and native document load as assets outside the import graph.
 const MERMAID_RENDERER_TEST_TARGETS = [
   "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
@@ -4412,9 +4408,10 @@ function resolveToolingTestTargets(
     semanticTargets.length ||
     conventionalTargets?.length,
   );
+  // A conventional filename is an owner hint, not an exhaustive consumer list.
   const importGraphResult =
     !options.boundedOwners &&
-    !hasDirectOwner &&
+    (!hasDirectOwner || conventionalTargets?.length) &&
     (options.forceFullImportGraph ||
       TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => implementationPath.endsWith(ext)))
       ? options.forceFullImportGraph

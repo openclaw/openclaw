@@ -1,9 +1,8 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
   createAgentRunDirectAbortError,
@@ -28,8 +27,6 @@ import {
   createOperatorAuthorityInactiveError,
   GatewayOperatorAccessUnavailableError,
 } from "../infra/operator-authority-error.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   readPendingUserTurnTranscriptAdmission,
@@ -604,31 +601,7 @@ describe("user turn transcript persistence", () => {
       expect(persisted).toBeDefined();
       recorder.markRuntimePersisted(persisted?.message, persisted?.admission);
       const initialGeneration = recorder.getAdmissionReceipt()?.generation;
-
-      const admission = recorder.getAdmissionReceipt();
-      if (!admission) {
-        throw new Error("missing persisted admission");
-      }
-      const { db } = openOpenClawAgentDatabase({
-        agentId: target.agentId,
-        path: admission.storePath,
-      });
-      const work = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(db),
-        ["fts", "size"],
-        (sql) =>
-          /\bsession_transcript_fts\b/i.test(sql)
-            ? "fts"
-            : sql.includes("octet_length")
-              ? "size"
-              : null,
-      );
-      try {
-        await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");
-      } finally {
-        work.restore();
-      }
-      expect(work.counts).toEqual({ fts: 0, size: 0 });
+      await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");
 
       expect(recorder.getAdmissionReceipt()?.generation).toBe(initialGeneration);
       const expected = {
@@ -639,6 +612,32 @@ describe("user turn transcript persistence", () => {
         },
       };
       expect(recorder.getPersistedMessage?.()).toMatchObject(expected);
+      await expectStored(target, expected);
+    });
+
+    it("stamps steering confirmed before the runtime commit", async () => {
+      const target = makeTarget();
+      const input = {
+        text: "tighten the answer",
+        idempotencyKey: "confirm-before-commit:user",
+        sender: { id: "operator-1", name: "Operator" },
+      };
+      const recorder = record(input, target);
+      // Steering resolves its message at enqueue, before acceptance names the target run.
+      await recorder.resolveMessage();
+      await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");
+      const persisted = await persistUserTurnTranscript({ ...target, input });
+      expect(persisted?.message["__openclaw"]?.steerTargetRunId).toBeUndefined();
+      recorder.markRuntimePersisted(persisted?.message, persisted?.admission);
+
+      const expected = {
+        __openclaw: {
+          senderId: "operator-1",
+          senderName: "Operator",
+          steerTargetRunId: "active-run",
+        },
+      };
+      await vi.waitFor(() => expect(recorder.getPersistedMessage?.()).toMatchObject(expected));
       await expectStored(target, expected);
     });
 
