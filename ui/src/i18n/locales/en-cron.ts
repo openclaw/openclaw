@@ -71,6 +71,7 @@ const enCron = {
     detail: {
       tabsLabel: "Automation details",
       newTitle: "New automation",
+      editTitle: "Edit automation",
       newSubtitle: "Describe what OpenClaw should do, then pick when it runs.",
       back: "All automations",
       settingsTab: "Settings",
@@ -204,6 +205,8 @@ const enCron = {
       runsIn: "Runs in",
       mainSession: "Main session",
       isolatedSession: "Its own session",
+      linkedSession: "Its own linked session",
+      existingSession: "Existing session",
       sessionHelp:
         "Main adds the task to the agent’s main session. Isolated starts a reply in a separate session.",
       activeHours: "Only run during set hours",

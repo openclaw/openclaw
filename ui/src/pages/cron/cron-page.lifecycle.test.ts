@@ -684,7 +684,6 @@ it.each(["hello", "roster after same-scope intent", "roster after editor opens"]
         expect(page.cronCatalogModels).toEqual([]);
       }
       await waitForCronPage(() => {
-        expect(text(page, ".cron-detail-title") ?? "").toContain(job.name);
         expect(page.querySelector("details.cron-advanced > summary")).not.toBeNull();
         expect(inputValue(page, "#cron-name")).toBe(edited ? "Unsaved name" : job.name);
       });
@@ -740,7 +739,6 @@ it("refreshes off-page condition activity without replacing unsaved settings", a
   expect(page.cron.cronJobs).toEqual([]);
   expect(page.cron.cronEditingJob).toBe(definition);
   expect(page.cron.cronEditingJob?.configRevision).toBe("saved-definition");
-  expect(text(page, ".cron-detail-title")).toContain("Saved automation");
   expect(page.cron.cronForm).toBe(draft);
   expect(inputValue(page, "#cron-name")).toBe("Unsaved automation");
   // Leaving the settings shows the refreshed runtime facts in the header and history.
