@@ -10310,9 +10310,12 @@ describe("package artifact reuse", () => {
     ]) {
       expect(checkout.with?.["sparse-checkout"]).toBe("scripts");
     }
-    expect(
-      workflowStep(summary, "Checkout release state verifier").with?.["sparse-checkout"],
-    ).toBeUndefined();
+    const stateVerifier = workflowStep(summary, "Checkout release state verifier");
+    expect(stateVerifier.with).toMatchObject({
+      ref: "${{ github.sha }}",
+      "persist-credentials": false,
+    });
+    expect(stateVerifier.with?.["sparse-checkout"]).toBeUndefined();
     expect(discovery.outputs?.state).toBe("${{ steps.discover.outputs.state }}");
     expect(workflowStep(discovery, "Discover trusted release candidate").run).toContain(
       "full-release-candidate-reuse.mjs discover",
@@ -15110,9 +15113,11 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(releaseManifest.env).toMatchObject({
       FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ steps.full_run.outputs.attempt }}",
+      PUBLICATION_MANIFEST_DIR: "${{ runner.temp }}/full-release-validation-manifest",
     });
-    expect(releaseManifest.run).toContain("--acquire-publication-manifest");
-    expect(releaseManifest.run).toContain("--expected-run-attempts-json");
+    expect(releaseManifest.run).toContain(
+      'node .release-validation-tooling/scripts/release-ci-summary.mjs --acquire-publication-manifest "${FULL_RELEASE_VALIDATION_RUN_ID}"',
+    );
 
     expect(npmRun.env).toMatchObject({
       FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
@@ -15124,9 +15129,19 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(npmManifest.env).toMatchObject({
       FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ inputs.full_release_validation_run_attempt }}",
+      PUBLICATION_MANIFEST_DIR: "full-release-validation",
     });
-    expect(npmManifest.run).toContain("--acquire-publication-manifest");
-    expect(npmManifest.run).toContain("--expected-run-attempts-json");
+    expect(npmManifest.run).toContain(
+      'node trusted-workflow/scripts/release-ci-summary.mjs --acquire-publication-manifest "${FULL_RELEASE_VALIDATION_RUN_ID}"',
+    );
+    for (const acquisition of [releaseManifest, npmManifest]) {
+      expect(acquisition.run).toContain('--repo "${GITHUB_REPOSITORY}"');
+      expect(acquisition.run).toContain("--expected-run-attempts-json");
+      expect(acquisition.run).toContain('"${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"');
+      expect(acquisition.run).toContain(
+        '> "${PUBLICATION_MANIFEST_DIR}/full-release-validation-manifest.json"',
+      );
+    }
   });
 
   it("keeps release publish artifacts and release-note ordering wired", () => {
@@ -15191,8 +15206,11 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT:
         "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
+      PUBLICATION_MANIFEST_DIR: "${{ runner.temp }}/full-release-validation-manifest",
     });
-    expect(publishDownload.run).toContain("--acquire-publication-manifest");
+    expect(publishDownload.run).toContain(
+      'node .release-harness/scripts/release-ci-summary.mjs --acquire-publication-manifest "${FULL_RELEASE_VALIDATION_RUN_ID}"',
+    );
     expect(publishDownload.run).toContain("--expected-run-attempts-json");
     expect(publishOrchestration.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",

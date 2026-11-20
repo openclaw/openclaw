@@ -41,7 +41,7 @@ type DeviceTokenContext = Pick<
   handler: { ingressAttribution: Parameters<typeof openclawIdPeerKeyOf>[0] };
 };
 
-export async function issueGatewayConnectDeviceTokens(params: {
+async function issueGatewayConnectDeviceTokens(params: {
   state: DeviceTokenInputs;
   scopes: string[];
   hasApprovedDeviceBaseline: boolean;

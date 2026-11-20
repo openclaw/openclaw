@@ -253,6 +253,7 @@ const REQUESTER_TURN_FAILURES = new Set<SubagentAnnounceDeliveryResult["reason"]
   "requester_preparation_changed",
   "requester_state_conflict",
   "requester_transcript_conflict",
+  "visible_reply_missing",
 ]);
 
 /**
