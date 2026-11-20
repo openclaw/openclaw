@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { gitReleaseSlot, resolveGitReleasePrefix } from "../infra/git-release-paths.js";
 import { recordCommandProcessFailure } from "../process/exec-result.js";
 import { VERSION } from "../version.js";
 import {
@@ -36,6 +37,36 @@ describe("update-cli", () => {
     });
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expectNoSideEffects(update.updateGitRelease, update.replaceConfigFile, mocks.spawn);
+  });
+
+  it("pins the compatibility host version to the downgraded target during current-process post-core plugin convergence (#87914)", async () => {
+    update.mockGitUpdateAfterMutation(
+      update.makeOkUpdateResult({
+        before: { version: "2026.4.14" },
+        after: { version: "2026.4.10" },
+      }),
+    );
+    const releaseRoot = gitReleaseSlot(resolveGitReleasePrefix());
+    mocks.readPackageVersion.mockImplementation(async (pkgRoot: string) =>
+      pkgRoot === releaseRoot ? "2026.4.10" : "2026.4.14",
+    );
+
+    delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    let hostVersionDuringPluginUpdate: string | undefined = "unset";
+    mocks.updateNpmInstalledPlugins.mockImplementation(async () => {
+      hostVersionDuringPluginUpdate = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+      return { changed: false, config: f.baseConfig, outcomes: [] };
+    });
+
+    try {
+      await update.updateCommand({ yes: true });
+
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(hostVersionDuringPluginUpdate).toBe("2026.4.10");
+      expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
+    } finally {
+      delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    }
   });
 
   it("runs updated plugin migrations for a plugin-only current-process update", async () => {

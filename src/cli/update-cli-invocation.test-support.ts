@@ -185,7 +185,8 @@ export function createGitUpdateAfterMutationFixture(
     const releases = path.join(prefix, "releases");
     await fs.mkdir(releases, { recursive: true });
     const releasePrefix = await fs.mkdtemp(path.join(releases, "fixture-"));
-    const releaseRoot = path.join(releasePrefix, "lib", "node_modules", "openclaw");
+    // `<stateDir>/git-install/openclaw -> releases/<id>/openclaw`, as `updateGitRelease` publishes.
+    const releaseRoot = path.join(releasePrefix, "openclaw");
     await writeOpenClawPackageFixture(releaseRoot, result.after?.version ?? "1.0.0", {
       builtSha: result.after?.sha ?? "a".repeat(40),
       entrySource: "export {};\n",

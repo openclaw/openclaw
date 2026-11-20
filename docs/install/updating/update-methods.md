@@ -67,9 +67,9 @@ the Gateway; use the [Git installer](/install/installer) when changing that
 installation's owner. Normal package-to-package updates keep using pnpm or Bun.
 
 Git updates build the complete runtime, including plugins and the Control UI,
-in a detached release worktree. Dev updates preserve local commits by
-rebasing the candidate before its build. The updater uses `git worktree move`
-to put the validated release in place, then publishes a release link.
+in a detached release worktree at the path it serves from. Dev updates preserve local
+commits by rebasing the candidate before its build. After validation, the updater
+publishes a release link.
 It does not move the source checkout's `HEAD` or replace its built runtime.
 The running Gateway keeps its release; the next start loads the selected one.
 Candidate installs and nested build commands use a private pnpm virtual store,

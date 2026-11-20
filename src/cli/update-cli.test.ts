@@ -48,6 +48,7 @@ describe("update-cli", () => {
     mockFileBackedPathExists,
     mockNpmGlobalCommands,
     mockPackageInstallAtCaseDir,
+    mockPackageInstallStatus,
     setTty,
     setupNonInteractiveDowngrade,
     setupInstalledPackageAtNodeModules,
@@ -552,6 +553,62 @@ describe("update-cli", () => {
       check.expectNoSideEffects(gitUpdate, mocks.sourceRuntimeCompletion);
     },
   );
+
+  it("update wizard forwards explicit consent before the subcommand", async () => {
+    const root = await fs.realpath(tempDirs.make("openclaw-update-wizard-"));
+    const tempDir = path.join(root, "openclaw");
+    const nodeModules = path.join(root, "prefix", "lib", "node_modules");
+    const packageRoot = path.join(nodeModules, "openclaw");
+    const sha = "a".repeat(40);
+    const databaseEngines = ["sqlite", "postgres"];
+    await writeOpenClawPackageFixture(packageRoot, "2026.4.10", { inventory: true });
+    mockPackageInstallStatus(packageRoot);
+    mockFileBackedPathExists();
+    mockNpmGlobalCommands(
+      nodeModules,
+      async (argv) => {
+        if (argv[0] === "git" && argv[1] === "clone") {
+          const stagingDir = check.requireValue(argv.at(-1), "clone destination");
+          await writeOpenClawPackageFixture(stagingDir, VERSION, {
+            git: true,
+            databaseEngines,
+          });
+          return commandResult();
+        }
+        return undefined;
+      },
+      tempDir,
+    );
+    vi.spyOn(cli.updateCliShared, "tryWriteCompletionCache").mockResolvedValueOnce("completed");
+    await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {
+      setTty(true);
+      mocks.select.mockResolvedValue("dev");
+      // Create the checkout, then restart: the first release converges plugins only when activated.
+      mocks.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(true);
+      cli.mockGitUpdateAfterMutation(cli.makeOkUpdateResult({ after: { sha, version: VERSION } }), {
+        databaseEngines,
+      });
+
+      const program = new Command();
+      program.exitOverride();
+      cli.registerUpdateCli(program);
+      await program.parseAsync(["node", "openclaw", "update", "--accept-capabilities", "wizard"]);
+
+      expect(cli.readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+      const call = vi.mocked(gitUpdate).mock.calls[0]?.[0];
+      expect(call?.opts.channel).toBe("dev");
+      // The release converges plugins in this process; no update child receives the consent.
+      const updateInvocations = mocks.spawn.mock.calls
+        .map(([, args]) => args)
+        .filter((args) => args[1] === "update");
+      expect(updateInvocations).toEqual([]);
+      // Stdout is not a TTY, so only the forwarded consent supplies a consent handler.
+      expect(cli.runPostCorePluginConvergenceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ onCapabilityConsent: expect.any(Function) }),
+      );
+      expect(runtime.exit).not.toHaveBeenCalledWith(1);
+    });
+  });
 
   it.each([
     {

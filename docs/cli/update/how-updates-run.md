@@ -1532,11 +1532,11 @@ the sentinel.
 
     Dev skips local commit replay with a warning when shallow boundaries or unrelated history hide a shared ancestor with the target. Optional local checkout and rebase each have a ten-minute deadline, shortened by an explicit `--timeout`. If replay times out, that candidate is validated without local replay; conflicts retain the existing walk back through older candidates, and interruption stops the attempt.
 
-    Releases live under `<state>/git-install/releases/<id>/lib/node_modules/openclaw`. The build runs beside that final path, outside `node_modules`, because Node cannot strip types there. After validation, `git worktree move` puts the release in place. The updater does not import a candidate pack into the checkout or copy the built runtime over its files.
+    Releases live at `<state>/git-install/releases/<id>/openclaw`. Each release is built and checked at that path, so the update validates the tree the Gateway serves from. The updater does not import a candidate pack into the checkout or copy the built runtime over its files.
 
     When switching a package installation to Git, the updater clones the source checkout and builds its first release from it. The global npm package's `openclaw.mjs` then starts the release link's CLI.
 
-    On Windows, the release link is an NTFS junction. A junction at the former build path keeps absolute pnpm links valid after the worktree moves.
+    On Windows, the release link is an NTFS junction, which needs no administrator rights.
 
     Dev can walk back up to 10 commits to find the newest buildable version. Confirmed ENOSPC storage failures stop immediately with `preflight-insufficient-space`; free space on the preflight staging and package-manager store filesystems before retrying. Shared package-manager stores are not deleted. Update builds skip TypeScript declaration generation by default. Set `OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` to explicitly request declarations. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run source lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
 
@@ -1549,7 +1549,9 @@ the sentinel.
     Runs Doctor health checks, config and plugin planning, and the isolated migration and test Gateway checks described above. Validation failure leaves the old Gateway serving. If validation leaves source edits in the temporary worktree, progress reports a failed candidate clean check.
   </Step>
   <Step title="Activate and verify">
-    Checks that the service's Node can load the completed release with `--version`, then publishes it through `<state>/git-install/lib/node_modules/openclaw`. This is a symlink on POSIX and a junction on Windows. The service runs through `<state>/git-install/openclaw-launcher.mjs`; the CLI runs the release link's `dist/entry.js`.
+    Checks that the service's Node can load the completed release with `--version`, then publishes it through `<state>/git-install/openclaw`. This is a symlink on POSIX and a junction on Windows. The service runs through `<state>/git-install/openclaw-launcher.mjs`; the CLI runs the release link's `dist/entry.js`.
+
+    Windows cannot rename onto a junction, so a switch removes the old junction and then renames the new one into place. A process killed between those two steps leaves no `git-install\openclaw`; the temporary `.openclaw.release-link-*` junction beside it still names the new release. Rename it to `openclaw`, or run `openclaw update` from the source checkout, which recreates a missing link.
 
     Publication selects a release; it does not replace the running Gateway's files. The next Gateway start loads the selected release and upgrades state at boot. With `--no-restart`, publication leaves the old link selected and records the new release as pending for the next service start.
 
