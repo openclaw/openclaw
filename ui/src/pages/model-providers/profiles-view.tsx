@@ -1,11 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, mapArray, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, mapArray, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
+import { moveArrayEntry } from "../../lib/array-order.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { isAccessTokenExpiry, isOAuthRefreshPending } from "../../lib/model-auth.ts";
@@ -21,7 +21,7 @@ import {
 } from "./account-usage.tsx";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
 import type { ModelProviderCard, ModelProviderPendingLogout } from "./data.ts";
-import { startProfileRowDrag } from "./profile-row-drag.ts";
+import { reorderByArrow, startProfileRowDrag } from "./profile-reorder.ts";
 import {
   needsOAuthSignIn,
   profileAuthProblem,
@@ -374,45 +374,41 @@ export function ProviderProfiles(
     keyAction?: () => JSX.Element;
   },
 ) {
-  let section!: HTMLElement;
-  const rowElements = new Map<string, HTMLElement>();
   const card = () => props.card;
   const groups = createMemo(() => profileGroups(card(), props.profileOrders));
   // Account numbers follow the saved inventory, not the editable priority order.
-  const identities = createMemo(
-    () =>
-      new Map(
-        card().profiles.map((profile) => [
-          profile.profileId,
-          profileIdentity(profile, card().profiles),
-        ]),
-      ),
-  );
+  const identity = (profile: ProviderProfile) => profileIdentity(profile, card().profiles);
   const rows = createMemo(() =>
     groups().flatMap((group) => group.profiles.map((profile) => ({ group, profile }))),
   );
-  const subscriptions = createMemo(() =>
-    rows().filter(
-      ({ group, profile }) => group.provider === "openai" && profile.type !== "api_key",
-    ),
-  );
+  const subscriptionGroup = createMemo(() => groups().find((group) => group.provider === "openai"));
   const readings = mapArray(
     () => {
       const scope = props.accountUsage;
-      return scope ? subscriptions().map(({ profile }) => ({ id: profile.profileId, scope })) : [];
+      return scope
+        ? (subscriptionGroup()?.profiles ?? [])
+            .filter((profile) => profile.type !== "api_key")
+            .map((profile) => ({ profile, scope }))
+        : [];
     },
-    (entry) =>
-      createAccountUsage(
-        () => entry().scope,
-        () => entry().id,
-      ),
-    { keyed: (entry) => entry.id },
+    (entry) => {
+      const name = createMemo(() => identity(entry().profile));
+      return {
+        ...createAccountUsage(
+          () => entry().scope,
+          () => entry().profile.profileId,
+        ),
+        name,
+        status: () =>
+          profileStatus(entry().profile, card().catalogStatus === "auth-rejected", true),
+      };
+    },
+    { keyed: (entry) => entry.profile.profileId },
   );
   const reads = createMemo(
     () => new Map(readings().map((read) => [read.account().profileId, read])),
   );
   const grouped = () => readings().length > 1;
-  const subscriptionGroup = () => subscriptions()[0]?.group;
   const canReorderBars = () =>
     props.canMutate && Boolean(subscriptionGroup()?.complete) && !subscriptionGroup()?.lock;
   const explanations = () => [
@@ -425,28 +421,10 @@ export function ProviderProfiles(
         !grouped() || !reads().has(profile.profileId) || profile.profileId === expandedAccount(),
     ),
   );
-  const profileList = () => (
-    <div class="model-providers__profile-list" role="list">
-      <For each={listedRows()} keyed={(row) => row.profile.profileId}>
-        {(row) => (
-          <ProviderProfileRow
-            {...props}
-            row={row()}
-            usageRead={reads().get(row().profile.profileId)}
-            grouped={grouped() && row().group === subscriptionGroup()}
-            section={() => section}
-            rowElements={rowElements}
-            identity={identities().get(row().profile.profileId)!}
-          />
-        )}
-      </For>
-    </div>
-  );
   return (
     <Show when={card().profiles.length > 0}>
       <section
         class="model-providers__profiles"
-        ref={(element) => (section = element)}
         aria-label={`${t("modelProviders.profiles.title")}: ${card().displayName}`}
       >
         <Show when={explanations().length > 0 || card().profileOrderStoredProviders.length > 0}>
@@ -478,17 +456,10 @@ export function ProviderProfiles(
         <Show when={grouped()}>
           <AccountUsageBars
             readings={readings()}
-            identities={identities()}
             expandedAccount={expandedAccount()}
             onToggleAccount={(id) =>
               setExpandedAccount((current) => (current === id ? undefined : id))
             }
-            status={(id) => {
-              const profile = subscriptions().find((row) => row.profile.profileId === id)?.profile;
-              return (
-                profile && profileStatus(profile, card().catalogStatus === "auth-rejected", true)
-              );
-            }}
             canReorder={canReorderBars()}
             onReorder={(ids) => {
               const group = subscriptionGroup();
@@ -505,7 +476,21 @@ export function ProviderProfiles(
             }}
           />
         </Show>
-        <Show when={listedRows().length}>{profileList()}</Show>
+        <Show when={listedRows().length}>
+          <div class="model-providers__profile-list" role="list">
+            <For each={listedRows()} keyed={(row) => row.profile.profileId}>
+              {(row) => (
+                <ProviderProfileRow
+                  {...props}
+                  row={row()}
+                  usageRead={reads().get(row().profile.profileId)}
+                  grouped={grouped() && row().group === subscriptionGroup()}
+                  identity={identity(row().profile)}
+                />
+              )}
+            </For>
+          </div>
+        </Show>
       </section>
     </Show>
   );
@@ -516,22 +501,14 @@ function ProviderProfileRow(
     row: { profile: ProviderProfile; group: ReturnType<typeof profileGroups>[number] };
     card: ModelProviderCard;
     identity: string;
-    section: () => HTMLElement;
-    rowElements: Map<string, HTMLElement>;
     usageRead?: AccountUsageRead;
     grouped: boolean;
     keyAction?: () => JSX.Element;
   },
 ) {
   let rowElement!: HTMLElement;
-  const drag = createPointerDrag();
+  const drag = createPointerDrag({ cancelOnEscape: true });
   const profile = () => props.row.profile;
-  onSettled(() => {
-    const initialProfileId = profile().profileId;
-    const rowElements = props.rowElements;
-    rowElements.set(initialProfileId, rowElement);
-    return () => rowElements.delete(initialProfileId);
-  });
   const group = () => props.row.group;
   const provider = () => group().provider;
   const order = () => group().order;
@@ -562,31 +539,13 @@ function ProviderProfileRow(
     !props.canMutate ? (props.mutationBlockedReason ?? "") : logoutLabel();
   const reorderBlocked = () =>
     !props.canMutate ? (props.mutationBlockedReason ?? "") : (group().explanation ?? "");
-  const reorder = (targetId: string, position: ArrayDropPosition) => {
+  const reorder = (targetId: string) => {
     if (canMove()) {
       props.onProfileOrderChange(
         props.card.id,
         provider(),
-        moveArrayEntry(order(), profile().profileId, targetId, position),
+        moveArrayEntry(order(), profile().profileId, targetId),
       );
-    }
-  };
-  const move = (event: Event, delta: -1 | 1) => {
-    const targetId = order()[index() + delta];
-    if (!canMove() || !targetId) {
-      return;
-    }
-    const control = event.currentTarget;
-    const restoreFocus = control instanceof HTMLButtonElement && document.activeElement === control;
-    reorder(targetId, delta < 0 ? "before" : "after");
-    if (restoreFocus) {
-      // Keep keyboard focus after keyed rows move
-      // on this account so the next move still acts on the same row.
-      queueMicrotask(() => {
-        if (control.isConnected && document.activeElement === document.body) {
-          control.focus({ preventScroll: true });
-        }
-      });
     }
   };
   return (
@@ -612,21 +571,14 @@ function ProviderProfileRow(
                 startProfileRowDrag({
                   event,
                   canMove: canMove(),
-                  provider: provider(),
                   row: rowElement,
-                  section: props.section(),
-                  rows: group().profiles.flatMap((entry) => {
-                    const element = props.rowElements.get(entry.profileId);
-                    return element ? [element] : [];
-                  }),
                   move: reorder,
                   drag,
                 });
               }}
               onKeyDown={(event: KeyboardEvent) => {
-                if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-                  event.preventDefault();
-                  move(event, event.key === "ArrowUp" ? -1 : 1);
+                if (canMove()) {
+                  reorderByArrow(event, order(), index(), "vertical", reorder);
                 }
               }}
             >
@@ -650,7 +602,7 @@ function ProviderProfileRow(
       </Show>
       <ProfileIdentity profile={profile()} identity={props.identity} />
       <span class="model-providers__profile-status">
-        {providerStatusCoversAccount(props.card)
+        {(props.grouped && props.usageRead) || providerStatusCoversAccount(props.card)
           ? undefined
           : profileStatus(profile(), props.card.catalogStatus === "auth-rejected", true)}
       </span>
@@ -669,7 +621,7 @@ function ProviderProfileRow(
               const slot = event.currentTarget.selectedIndex;
               const target = order()[slot];
               if (target && slot !== index()) {
-                reorder(target, slot < index() ? "before" : "after");
+                reorder(target);
               }
             }}
           />

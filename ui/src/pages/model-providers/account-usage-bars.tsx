@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, Loading, Show } from "solid-js";
+import { createMemo, createSignal, For, Loading, omit, Show } from "solid-js";
 import {
   remainingPercent,
   remainingTone,
@@ -8,25 +8,38 @@ import {
 import { moveArrayEntry } from "../../lib/array-order.ts";
 import { formatNumber } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
 import { createPointerDrag } from "../../lib/reactive/pointer-drag.ts";
 import { accountCreditBalance, type AccountUsageRead } from "./account-usage.tsx";
+import { neighborOffset, reorderByArrow } from "./profile-reorder.ts";
+
+function UsageTrack(props: { label?: string; children: JSX.Element }) {
+  return (
+    <div
+      class="model-providers__usage-window"
+      role={props.label === undefined ? undefined : "group"}
+      aria-label={props.label}
+    >
+      <span class={props.label === undefined ? undefined : "model-providers__usage-label"}>
+        {props.label}
+      </span>
+      <div class="model-providers__usage-track">{props.children}</div>
+    </div>
+  );
+}
 
 /** Equal slots compare accounts, not token capacity. Only windows with the same label share a track. */
 export function AccountUsageBars(props: {
-  readings: AccountUsageRead[];
-  identities: Map<string, string>;
+  readings: (AccountUsageRead & { name: () => string; status: () => JSX.Element })[];
   expandedAccount?: string;
   onToggleAccount: (id: string) => void;
-  status: (id: string) => JSX.Element;
   canReorder: boolean;
   onReorder: (ids: string[]) => void;
 }) {
   const ids = createMemo(() => props.readings.map((read) => read.account().profileId));
   const tracks = createMemo(() => {
-    const identities = props.identities;
     const accounts = props.readings.map((read) => ({
       id: read.account().profileId,
+      name: read.name(),
       value: read.result(),
     }));
     const labels = new Set(
@@ -37,7 +50,7 @@ export function AccountUsageBars(props: {
     );
     return Array.from(labels, (label) => ({
       label,
-      segments: accounts.map(({ id, value }) => {
+      segments: accounts.map(({ id, name, value }) => {
         const window = value.snapshot?.windows.find((w) => !w.groupLabel && w.label === label);
         const percent = window && remainingPercent(window);
         const reset = window && resetText(window);
@@ -52,7 +65,7 @@ export function AccountUsageBars(props: {
           percent,
           tone: window && remainingTone(window),
           detail: [
-            identities.get(id),
+            name,
             label,
             quota,
             reset?.date && t("usage.providerUsage.resets", { date: reset.date }),
@@ -63,7 +76,7 @@ export function AccountUsageBars(props: {
       }),
     }));
   });
-  const drag = createPointerDrag();
+  const drag = createPointerDrag({ cancelOnEscape: true });
   const [preview, setPreview] = createSignal<{
     source: number;
     target: number;
@@ -79,13 +92,7 @@ export function AccountUsageBars(props: {
     if (index === p.source) {
       return `${p.dx}px`;
     }
-    if (p.source < index && index <= p.target) {
-      return `${-p.pitch}px`;
-    }
-    if (p.target <= index && index < p.source) {
-      return `${p.pitch}px`;
-    }
-    return "0px";
+    return `${neighborOffset(index, p.source, p.target, p.pitch)}px`;
   };
   const [selected, select] = createSignal<{ id: string; label: string }>();
   const move = (source: string, target: string) => {
@@ -98,35 +105,7 @@ export function AccountUsageBars(props: {
     ) {
       return;
     }
-    props.onReorder(
-      moveArrayEntry(
-        current,
-        source,
-        target,
-        current.indexOf(source) < current.indexOf(target) ? "after" : "before",
-      ),
-    );
-  };
-  const reorderByKey = (event: KeyboardEvent, id: string, index: number) => {
-    if (event.key === "Escape") {
-      drag.cancel();
-      select(undefined);
-      return;
-    }
-    if (!props.canReorder || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) {
-      return;
-    }
-    event.preventDefault();
-    const target = ids()[index + (event.key === "ArrowLeft" ? -1 : 1)];
-    const button = event.currentTarget;
-    if (target && button instanceof HTMLButtonElement) {
-      move(id, target);
-      queueMicrotask(() => {
-        if (button.isConnected) {
-          button.focus({ preventScroll: true });
-        }
-      });
-    }
+    props.onReorder(moveArrayEntry(current, source, target));
   };
   let chart!: HTMLElement;
   const startDrag = (event: PointerEvent, source: number) => {
@@ -170,38 +149,56 @@ export function AccountUsageBars(props: {
       setPreview({ source, target, pitch, dx });
     };
     const cleanup = () => {
-      stopKeydown();
       suppressPointerClick = dragged;
       setPreview(undefined);
     };
-    const stopKeydown = listen(
-      cell.ownerDocument,
-      "keydown",
-      (e) => {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          e.stopPropagation();
-          drag.cancel();
+    drag.start(event, cell, {
+      move: update,
+      cancel: cleanup,
+      end: (p) => {
+        update(p);
+        cleanup();
+        if (target !== source) {
+          move(initialIds[source]!, initialIds[target]!);
         }
       },
-      true,
-    );
-    if (
-      !drag.start(event, cell, {
-        move: update,
-        cancel: cleanup,
-        end: (p) => {
-          update(p);
-          cleanup();
-          if (target !== source) {
-            move(initialIds[source]!, initialIds[target]!);
-          }
-        },
-      })
-    ) {
-      stopKeydown();
-    }
+    });
   };
+  function ColumnButton(
+    cell: JSX.ButtonHTMLAttributes<HTMLButtonElement> & {
+      index: number;
+      activate: () => void;
+    },
+  ) {
+    const attributes = omit(cell, "index", "activate", "title", "children");
+    return (
+      <button
+        {...attributes}
+        type="button"
+        title={preview() ? undefined : cell.title}
+        data-movable={props.canReorder || undefined}
+        data-grabbed={preview()?.source === cell.index || undefined}
+        style={{ translate: translation(cell.index) }}
+        aria-keyshortcuts={props.canReorder ? "ArrowLeft ArrowRight" : undefined}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            select(undefined);
+          } else if (props.canReorder) {
+            const source = ids()[cell.index]!;
+            reorderByArrow(e, ids(), cell.index, "horizontal", (target) => move(source, target));
+          }
+        }}
+        onPointerDown={(e) => startDrag(e, cell.index)}
+        onClick={(e) => {
+          if (!e.detail || !suppressPointerClick) {
+            cell.activate();
+          }
+        }}
+      >
+        {cell.children}
+      </button>
+    );
+  }
   const selectedDetail = () =>
     tracks()
       .find((track) => track.label === selected()?.label)
@@ -214,147 +211,101 @@ export function AccountUsageBars(props: {
       aria-label={t("modelProviders.limits.subscriptionLimits")}
     >
       <Loading fallback={<small>{t("common.loading")}</small>}>
-        <div class="model-providers__usage-window">
-          <span />
-          <div class="model-providers__usage-track">
-            <For each={ids()}>
-              {(id, index) => {
-                const plan = () => props.readings[index()]?.result().snapshot?.plan?.trim();
-                return (
-                  <button
-                    type="button"
-                    aria-expanded={props.expandedAccount === id ? "true" : "false"}
-                    onClick={(e) => {
-                      if (!e.detail || !suppressPointerClick) {
-                        props.onToggleAccount(id);
-                      }
-                    }}
-                    aria-keyshortcuts={props.canReorder ? "ArrowLeft ArrowRight" : undefined}
-                    onKeyDown={(e) => reorderByKey(e, id, index())}
-                    class="model-providers__segment-name"
-                    aria-description={plan() || undefined}
-                    title={
-                      preview()
-                        ? undefined
-                        : [props.identities.get(id), plan()].filter(Boolean).join(" · ")
-                    }
-                    data-movable={props.canReorder || undefined}
-                    data-grabbed={preview()?.source === index() || undefined}
-                    style={{ translate: translation(index()) }}
-                    onPointerDown={(e) => startDrag(e, index())}
-                  >
-                    <span class="settings-control__sr-label">
-                      {t("modelProviders.limits.detailsFor", {
-                        account: props.identities.get(id)!,
-                      })}
-                    </span>
-                    <span class="model-providers__account-name" aria-hidden="true">
-                      {props.identities.get(id)}
-                    </span>
-                    {props.status(id)}
-                  </button>
-                );
-              }}
-            </For>
-          </div>
-        </div>
+        <UsageTrack>
+          <For each={props.readings}>
+            {(read, index) => {
+              const id = () => read.account().profileId;
+              const plan = () => read.result().snapshot?.plan?.trim();
+              return (
+                <ColumnButton
+                  index={index()}
+                  activate={() => props.onToggleAccount(id())}
+                  aria-expanded={props.expandedAccount === id() ? "true" : "false"}
+                  class="model-providers__segment-name"
+                  aria-description={plan() || undefined}
+                  title={[read.name(), plan()].filter(Boolean).join(" · ")}
+                >
+                  <span class="settings-control__sr-label">
+                    {t("modelProviders.limits.detailsFor", {
+                      account: read.name(),
+                    })}
+                  </span>
+                  <span class="model-providers__account-name" aria-hidden="true">
+                    {read.name()}
+                  </span>
+                  {read.status()}
+                </ColumnButton>
+              );
+            }}
+          </For>
+        </UsageTrack>
         <For each={tracks()} keyed={(track) => track.label}>
           {(track) => (
-            <div class="model-providers__usage-window" role="group" aria-label={track().label}>
-              <span class="model-providers__usage-label">{track().label}</span>
-              <div class="model-providers__usage-track">
-                <For each={track().segments} keyed={(s) => s.id}>
-                  {(segment, index) => {
-                    const id = () => segment().id;
-                    return (
-                      <button
-                        type="button"
-                        class="model-providers__usage-segment"
-                        data-account-segment={id()}
-                        data-movable={props.canReorder || undefined}
-                        data-grabbed={preview()?.source === index() || undefined}
-                        style={{ translate: translation(index()) }}
-                        data-known={segment().percent !== undefined}
-                        data-tone={segment().tone}
-                        aria-label={segment().detail}
-                        title={preview() ? undefined : segment().detail}
-                        aria-keyshortcuts={props.canReorder ? "ArrowLeft ArrowRight" : undefined}
-                        aria-pressed={
-                          selected()?.id === id() && selected()?.label === track().label
-                            ? "true"
-                            : "false"
-                        }
-                        onClick={(e) => {
-                          if (e.detail && suppressPointerClick) {
-                            return;
-                          }
-                          select(
-                            selected()?.id === id() && selected()?.label === track().label
-                              ? undefined
-                              : { id: id(), label: track().label },
-                          );
-                        }}
-                        onKeyDown={(e) => reorderByKey(e, id(), index())}
-                        onPointerDown={(e) => startDrag(e, index())}
-                      >
-                        <span
-                          class="model-providers__segment-fill"
-                          aria-hidden="true"
-                          style={{ width: (segment().percent ?? 0) + "%" }}
-                        />
-                        <strong>
-                          {segment().percent === undefined ? "—" : segment().percent + "%"}
-                        </strong>
-                      </button>
-                    );
-                  }}
-                </For>
-              </div>
-            </div>
+            <UsageTrack label={track().label}>
+              <For each={track().segments} keyed={(s) => s.id}>
+                {(segment, index) => {
+                  const id = () => segment().id;
+                  const pressed = () =>
+                    selected()?.id === id() && selected()?.label === track().label;
+                  return (
+                    <ColumnButton
+                      index={index()}
+                      class="model-providers__usage-segment"
+                      data-account-segment={id()}
+                      data-known={segment().percent !== undefined}
+                      data-tone={segment().tone}
+                      aria-label={segment().detail}
+                      title={segment().detail}
+                      aria-pressed={pressed() ? "true" : "false"}
+                      activate={() =>
+                        select(pressed() ? undefined : { id: id(), label: track().label })
+                      }
+                    >
+                      <span
+                        class="model-providers__segment-fill"
+                        aria-hidden="true"
+                        style={{ width: (segment().percent ?? 0) + "%" }}
+                      />
+                      <strong>
+                        {segment().percent === undefined ? "—" : segment().percent + "%"}
+                      </strong>
+                    </ColumnButton>
+                  );
+                }}
+              </For>
+            </UsageTrack>
           )}
         </For>
-        <div
-          class="model-providers__usage-window"
-          role="group"
-          aria-label={t("modelProviders.limits.credits")}
-        >
-          <span class="model-providers__usage-label">{t("modelProviders.limits.credits")}</span>
-          <div class="model-providers__usage-track">
-            <For each={props.readings}>
-              {(read, index) => {
-                const credit = () => {
-                  const balance = accountCreditBalance(read.result().snapshot);
-                  return balance
-                    ? formatNumber(balance.amount, { maximumSignificantDigits: 21 })
-                    : undefined;
-                };
-                return (
-                  <span
-                    class="model-providers__credit"
-                    data-grabbed={preview()?.source === index() || undefined}
-                    style={{ translate: translation(index()) }}
-                  >
-                    <span class="settings-control__sr-label">
-                      {props.identities.get(read.account().profileId)}:{" "}
-                    </span>
-                    <span aria-hidden={credit() === undefined ? "true" : undefined}>
-                      {credit() ?? "—"}
-                    </span>
-                    <Show when={credit() === undefined}>
-                      <span class="settings-control__sr-label">
-                        {t(
-                          read.result().loading
-                            ? "common.loading"
-                            : "modelProviders.limits.notReported",
-                        )}
-                      </span>
-                    </Show>
+        <UsageTrack label={t("modelProviders.limits.credits")}>
+          <For each={props.readings}>
+            {(read, index) => {
+              const credit = createMemo(() => {
+                const balance = accountCreditBalance(read.result().snapshot);
+                return balance
+                  ? formatNumber(balance.amount, { maximumSignificantDigits: 21 })
+                  : undefined;
+              });
+              return (
+                <span
+                  class="model-providers__credit"
+                  data-grabbed={preview()?.source === index() || undefined}
+                  style={{ translate: translation(index()) }}
+                >
+                  <span class="settings-control__sr-label">
+                    {read.name()}:{" "}
+                    {credit() ??
+                      t(
+                        read.result().loading
+                          ? "common.loading"
+                          : "modelProviders.limits.notReported",
+                      )}
                   </span>
-                );
-              }}
-            </For>
-          </div>
-        </div>
+                  <span aria-hidden="true">{credit() ?? "—"}</span>
+                </span>
+              );
+            }}
+          </For>
+        </UsageTrack>
         <For each={props.readings}>
           {(read) => {
             const outcome = () => {
@@ -371,7 +322,7 @@ export function AccountUsageBars(props: {
               <Show when={outcome()}>
                 {(message) => (
                   <small role="status">
-                    {props.identities.get(read.account().profileId)}: {message()}
+                    {read.name()}: {message()}
                   </small>
                 )}
               </Show>

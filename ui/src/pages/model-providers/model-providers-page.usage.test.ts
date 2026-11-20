@@ -86,9 +86,18 @@ describe("ModelProvidersPage usage convergence", () => {
     await vi.waitFor(() =>
       expectContent(bars, ["Signed-in account: Offline", "Access token: Loading"]),
     );
+    // Opening the pending account adds credential actions, not a second copy of the grid outcome.
+    bars.querySelectorAll<HTMLButtonElement>(".model-providers__segment-name")[1]!.click();
+    const expanded = () =>
+      openai.querySelector('[data-profile-id="openai:two"] .model-providers__account-limits');
+    await waitForSolid(() => {
+      expect(expanded()).not.toBeNull();
+      expect(expanded()!.textContent).not.toContain("Loading");
+    });
     initial.reject(new Error("Timed out"));
     const retryHint = "Access token: Timed out · Refresh to try again.";
     await vi.waitFor(() => expectContent(bars, [retryHint]));
+    expect(expanded()!.textContent).not.toContain("Timed out");
     expect(segments()).toHaveLength(0);
     refresh();
     const expectLimits = (percent: number) => {
@@ -99,6 +108,8 @@ describe("ModelProvidersPage usage convergence", () => {
     slow.resolve();
     await vi.waitFor(() => expectLimits(90));
     expectAbsent(bars, "small[role=status]");
+    expect(expanded()).not.toBeNull();
+    expect(expanded()!.textContent).not.toMatch(/Timed out|Loading|90%/u);
     expect(accountRequests.slice(2)).toEqual([
       { agentId: "main", profileId: "openai:one" },
       { agentId: "main", profileId: "openai:two" },

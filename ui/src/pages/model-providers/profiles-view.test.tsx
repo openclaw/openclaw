@@ -506,21 +506,24 @@ it("moves a key across collapsed subscriptions and keeps credit and recovery det
   const onSignInAgain = vi.fn(),
     onRequestLogout = vi.fn(),
     onProfileOrderChange = vi.fn();
-  const client = createTestGatewayClient(async (_method, params) => ({
-    updatedAt: 1,
-    providers: [
-      {
-        provider: "openai",
-        displayName: "OpenAI",
-        windows: [],
-        plan: "Pro",
-        billing:
-          (params as { profileId: string }).profileId === failed.profileId
+  const client = createTestGatewayClient(async (_method, params) => {
+    const partial = (params as { profileId: string }).profileId === failed.profileId;
+    return {
+      updatedAt: 1,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [],
+          plan: "Pro",
+          error: partial ? "Partial reading" : undefined,
+          billing: partial
             ? [{ type: "balance", amount: 0, unit: "credits" }]
             : [{ type: "spend", amount: 42, unit: "credits" }],
-      },
-    ],
-  }));
+        },
+      ],
+    };
+  });
   const { container } = mount(
     orderedCard(
       { openai: profiles.map((p) => p.profileId) },
@@ -557,6 +560,7 @@ it("moves a key across collapsed subscriptions and keeps credit and recovery det
   name.click();
   flush();
   const row = rowFor(container, failed.profileId);
+  expectContent(container.querySelector("small[role=status]")!, ["Partial reading"]);
   expectAbsent(container, gripSelector);
   click(row, "[data-models-sign-in-again]");
   click(row, ".model-providers__profile-logout");
@@ -564,8 +568,7 @@ it("moves a key across collapsed subscriptions and keeps credit and recovery det
   expect(onRequestLogout).toHaveBeenCalledWith(
     expect.objectContaining({ target: { provider: "openai", profileIds: [failed.profileId] } }),
   );
-  expect(row.textContent).toContain("Pro");
-  expect(row.textContent).not.toContain("0 credits");
+  expectContent(row, ["Pro"], ["0 credits", "Sign-in expired", "Partial reading"]);
   expect(rowFor(container, healthy.profileId)).toBeNull();
 });
 

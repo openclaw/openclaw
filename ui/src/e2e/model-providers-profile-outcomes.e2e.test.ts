@@ -285,6 +285,30 @@ suite.define(() => {
     });
   });
 
+  it("moves the focused allowance left in a right-to-left chart", async () => {
+    await withPage(async ({ page }) => {
+      const { card, gateway, ids } = await openAccounts(page, true);
+      await card.evaluate((el) => el.setAttribute("dir", "rtl"));
+      const weekly = card.getByRole("group", { name: "Week", exact: true });
+      const work = weekly.getByRole("button", { name: /work\+team@example/ });
+      const studio = weekly.getByRole("button", { name: /studio@example/ });
+      const slot = (await layoutBox(studio)).x;
+      expect(slot).toBeLessThan((await layoutBox(work)).x);
+      await gateway.deferNext("models.authOrderSet");
+      await work.focus();
+      await page.keyboard.press("ArrowLeft");
+      const profileIds = [ids[0], ids[2], ids[1], ids[3]];
+      expect((await gateway.waitForRequest("models.authOrderSet")).params).toEqual({
+        agentId: "main",
+        provider: "openai",
+        profileIds,
+      });
+      await expect.poll(async () => (await layoutBox(work)).x).toBeCloseTo(slot, 0);
+      expect(await work.evaluate((el) => el === document.activeElement)).toBe(true);
+      await gateway.resolveDeferred("models.authOrderSet", { provider: "openai", profileIds });
+    });
+  });
+
   it("lifts an account, makes room during dragging, and saves its dropped priority", async () => {
     await withPage(async ({ page }) => {
       const { card, gateway, ids } = await openAccounts(page, false);

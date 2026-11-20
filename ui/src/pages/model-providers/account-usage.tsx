@@ -34,7 +34,8 @@ function AccountReading(props: { snapshot: ProviderUsageSnapshot; grouped?: bool
   }));
   const primary = createMemo(() => ({
     windows: props.grouped ? [] : props.snapshot.windows.filter((window) => !window.groupLabel),
-    error: props.snapshot.error,
+    // The comparison already reports failed and partial readings beside the affected account.
+    error: props.grouped ? undefined : props.snapshot.error,
     summary: props.snapshot.summary,
   }));
   return (
@@ -61,7 +62,7 @@ function AccountReading(props: { snapshot: ProviderUsageSnapshot; grouped?: bool
           <ProviderUsagePanel compact usage={details()} />
         </Show>
       </Show>
-      <Show when={!hasProviderUsageDetails(props.snapshot)}>
+      <Show when={!props.snapshot.plan && !hasProviderUsageDetails(props.snapshot)}>
         <span>{t("modelProviders.noStats")}</span>
       </Show>
     </>
@@ -115,18 +116,18 @@ export function AccountLimits(props: { read: AccountUsageRead; grouped?: boolean
   const result = () => props.read.result();
   return (
     <div class="model-providers__account-limits">
-      <Loading on={props.read.account()} fallback={<span>{t("common.loading")}</span>}>
-        <Show when={result().loading}>
-          <span>{t("common.loading")}</span>
-        </Show>
-        <Show when={result().error}>
-          {(error) => <span class="provider-usage__error">{error()}</span>}
-        </Show>
+      <Loading
+        on={props.read.account()}
+        fallback={props.grouped ? undefined : <span>{t("common.loading")}</span>}
+      >
         <Show
           when={result().snapshot}
           fallback={
-            <Show when={!result().error && !result().loading}>
-              <span>{t("modelProviders.noStats")}</span>
+            <Show when={!props.grouped || (!result().loading && result().error === undefined)}>
+              <span class={result().error ? "provider-usage__error" : undefined}>
+                {result().error ||
+                  t(result().loading ? "common.loading" : "modelProviders.noStats")}
+              </span>
             </Show>
           }
         >
