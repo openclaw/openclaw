@@ -500,16 +500,18 @@ describe("fresh trial ownership", () => {
       create: async () => ({
         prepare: async () => {},
         test: async (test) => {
-          await new Promise<void>((resolve) =>
-            abort.signal.addEventListener("abort", () => resolve(), { once: true }),
-          );
+          await new Promise<void>((resolve) => {
+            abort.signal.addEventListener("abort", () => resolve(), { once: true });
+          });
           return result(test);
         },
         measure: async () => {
           active++;
           maxActive = Math.max(maxActive, active);
           await Promise.resolve();
-          if (++calls === 4100) abort.abort();
+          if (++calls === 4100) {
+            abort.abort();
+          }
           active--;
           return { processes: 1, bytes: 1024, cpu: 0 };
         },
@@ -1343,7 +1345,9 @@ it.each([
       stderr.write(
         `OPENCLAW_SIMULATOR_TIMING phase=configure seconds=2.500 exit=${scenario === "simulator-timing-failure" ? 23 : 0}\n`,
       );
-      if (scenario === "simulator-timing-failure") return 23;
+      if (scenario === "simulator-timing-failure") {
+        return 23;
+      }
       stderr.write("OPENCLAW_SIMULATOR_TIMING phase=ready seconds=3.000 exit=0\n");
       stderr.write("OPENCLAW_SIMULATOR_TIMING phase=verify seconds=0.125 exit=0\n");
       stderr.write("private simulator output".repeat(1000));

@@ -32,8 +32,9 @@ test("accepts only bounded preparation timing fields, never surrounding tool out
     "OPENCLAW_SIMULATOR_TIMING phase=ready seconds=-1.000 exit=0",
     "OPENCLAW_SIMULATOR_TIMING phase=ready seconds=1.000 exit=256",
     "OPENCLAW_SIMULATOR_TIMING phase=ready seconds=1.000 exit=0 secret-token",
-  ])
+  ]) {
     expect(parseIOSSimulatorTiming(line)).toBeUndefined();
+  }
 });
 
 test("retains build task timings without exporting script names or raw build output", () => {
