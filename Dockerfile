@@ -475,6 +475,7 @@ ENV NODE_ENV=production
 # Security hardening: Run as non-root user
 # The node:24-trixie image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
+RUN apt-get update && apt-get install -y --no-install-recommends util-linux && rm -rf /var/lib/apt/lists/*
 USER node
 
 # Verify the shipped toolchain needs no privileged writes or first-run downloads.
@@ -496,5 +497,7 @@ RUN COREPACK_ENABLE_NETWORK=0 PNPM_CONFIG_OFFLINE=true pnpm --version
 #   - aliases: /health, /startup, and /ready
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD ["node", "dist/docker-healthcheck.js"]
-ENTRYPOINT ["tini", "-s", "--", "node", "/app/docker-entrypoint.mjs"]
+USER root
+COPY --chmod=0755 scripts/docker/railway-volume-entrypoint.sh /usr/local/bin/railway-volume-entrypoint
+ENTRYPOINT ["tini", "-s", "--", "/usr/local/bin/railway-volume-entrypoint", "node", "/app/docker-entrypoint.mjs"]
 CMD ["node", "openclaw.mjs", "gateway"]
