@@ -5,7 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { AgentToolGatewayRequestCaller } from "../../agents/tools/in-process-gateway.js";
 import { createSessionsSearchTool } from "../../agents/tools/sessions-search-tool.js";
 import {
@@ -26,6 +26,7 @@ import * as transcriptSearch from "../../config/sessions/session-transcript-sear
 import type { SessionTranscriptSearchParams } from "../../config/sessions/session-transcript-search.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  disposeSessionReadContexts,
   identifiedClient,
   initializeSessionReadContext,
   requestContext,
@@ -45,7 +46,7 @@ import { resolveDatabaseFamilyEngines } from "./registry.js";
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const prefix = `sessionsearch_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
-const directories = useAutoCleanupTempDirTracker(afterAll);
+const directories = createTempDirTracker();
 
 describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
   let root: string;
@@ -157,26 +158,36 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     };
   };
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(async () => {
+    try {
+      await disposeSessionReadContexts();
+      await cleanupSessionStateForTest({ stateDir: root });
+      directories.cleanup();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
 
   function installFixtureEnvironment() {
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
   }
 
-  // Vitest restores env stubs before each case; gateway reads must share the seeded store.
-  beforeEach(installFixtureEnvironment);
-
   beforeAll(async () => {
-    root = directories.make("session-search-postgres-");
-    installFixtureEnvironment();
-    suiteEnv = { ...process.env };
-    setRuntimeConfigSnapshot({});
     installDatabaseEngineSelection({
       effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
       postgres: { connection: connection!, schemaPrefix: prefix },
     });
     await client.connect();
+  });
+
+  // Each topology owns its registry; duplicate canonical keys cannot span physical stores.
+  // Rebind after Vitest restores env stubs so gateway reads share the seeded state owner.
+  beforeEach(async () => {
+    root = directories.make("session-search-postgres-");
+    installFixtureEnvironment();
+    suiteEnv = { ...process.env };
+    setRuntimeConfigSnapshot({});
     withEngineStoreAdmission(() => openOpenClawStateDatabase({ env: suiteEnv }));
     viewer = withEngineStoreAdmission(
       () => ensureProfileForEmail("postgres-recall@example.test").id,
@@ -206,7 +217,6 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
       return;
     }
     try {
-      await cleanupSessionStateForTest({ stateDir: root });
       await dropPostgresTestSchemas(client, prefix);
     } finally {
       await client.end();
