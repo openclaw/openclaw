@@ -38,6 +38,7 @@ import { registerGatewayCli } from "../gateway-cli/register.js";
 import { registerDaemonCli } from "./register.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { registerStatusConfigReadTests } from "./status.gather.config.test-support.js";
+import { registerStatusDatabaseRecoveryTests } from "./status.gather.database.test-support.js";
 import { registerStatusInstallRecordReadTests } from "./status.gather.install-records.test-support.js";
 import { gatherDaemonStatus } from "./status.gather.js";
 import { registerStatusLaunchdScanTests } from "./status.gather.launchd.test-support.js";
@@ -254,7 +255,8 @@ vi.mock("../../daemon/inspect.js", () => ({
   findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
 }));
 
-vi.mock("../../state/openclaw-database-preflight.js", () => ({
+vi.mock("../../state/openclaw-database-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-database-preflight.js")>()),
   OpenClawDatabaseSchemaPreflightError,
   preflightOpenClawDatabaseSchemas: (
     options: Parameters<typeof preflightOpenClawDatabaseSchemas>[0],
@@ -1163,27 +1165,10 @@ describe("gatherDaemonStatus", () => {
     expect(await fs.readFile(databasePath)).toEqual(before);
   });
 
-  it("reports an unreadable state database instead of a config read failure", async () => {
-    const stateDir = tempDirs.make("openclaw-status-unreadable-state-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = resolveOpenClawStateSqlitePath(env);
-    await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    await fs.writeFile(databasePath, "not a sqlite database ".repeat(256));
-    const before = await fs.readFile(databasePath);
-    await useRealSchemaPreflight(env);
-    const { program, writeJson, exit } = createStatusCommand();
-    await expect(
-      program
-        .parseAsync(["gateway", "status", "--deep", "--no-probe", "--json"], { from: "user" })
-        .then(() => undefined),
-    ).rejects.toThrow("status-exit");
-    const output = JSON.stringify(writeJson.mock.calls);
-    expect(output).toContain(`shared state database is unreadable at ${databasePath}`);
-    expect(output).toContain("restore this file from a verified backup");
-    expect(output).not.toContain("CONFIG_READ_FAILED");
-    expect(exit).toHaveBeenCalledWith(1);
-    expect(createConfigIOCalls).not.toHaveBeenCalled();
-    expect(await fs.readFile(databasePath)).toEqual(before);
+  registerStatusDatabaseRecoveryTests({
+    makeTempDir: (prefix) => tempDirs.make(prefix),
+    useRealSchemaPreflight,
+    createConfigIOCalls,
   });
 
   it("keeps readable shutdown history when a registered agent database has a newer schema", async () => {
