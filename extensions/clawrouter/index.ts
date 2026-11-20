@@ -50,6 +50,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
   buildClawRouterProviderConfig,
+  discoverClawRouterProviderCatalog,
   decisionCapabilities,
   CLAWROUTER_REASONING_EFFORT_LEVELS,
   normalizeClawRouterReasoningEfforts,
@@ -588,53 +589,7 @@ export default defineSingleProviderPluginEntry({
       },
       catalog: {
         order: "simple",
-        run: async (ctx) => {
-          const auth = ctx.resolveProviderAuth(PROVIDER_ID);
-          let discoveryApiKey = auth.discoveryApiKey;
-          if (!discoveryApiKey) {
-            try {
-              const { resolveApiKeyForProvider } =
-                await import("openclaw/plugin-sdk/provider-auth-runtime");
-              discoveryApiKey = (
-                await resolveApiKeyForProvider({
-                  provider: PROVIDER_ID,
-                  cfg: ctx.config,
-                  ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-                  ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
-                  ...(auth.profileId ? { profileId: auth.profileId, lockedProfile: true } : {}),
-                })
-              )?.apiKey;
-            } catch {
-              return null;
-            }
-          }
-          const apiKey = auth.apiKey ?? discoveryApiKey;
-          if (!apiKey || !discoveryApiKey) {
-            return null;
-          }
-          const provider = await buildClawRouterProviderConfig({
-            apiKey,
-            discoveryApiKey,
-            baseUrl: configuredBaseUrl(ctx.config),
-          });
-          const { listClawRouterBasetenDecisionModels } =
-            await import("./decision-baseten-offers.js");
-          const capabilityModels = await listClawRouterBasetenDecisionModels({
-            config: ctx.config,
-            resolveProviderApiKey: () => ({ apiKey, discoveryApiKey }),
-          });
-          return {
-            provider,
-            outcomes: [
-              {
-                provider: PROVIDER_ID,
-                ...(auth.profileId ? { profileId: auth.profileId } : {}),
-                status: "ready",
-                capabilityModels,
-              },
-            ],
-          };
-        },
+        run: discoverClawRouterProviderCatalog,
       },
       // This is protocol support, not a key grant. The decision executor checks the
       // selected credential's catalog before using its native route.

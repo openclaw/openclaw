@@ -12,6 +12,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../config/io.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { bindPluginMetadataSnapshotCache, createPluginCache } from "../plugins/plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -29,6 +30,7 @@ import { planOpenClawModelsJsonSourceWithInput } from "./models-config.core.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import * as modelsPlan from "./models-config.plan.js";
 import * as implicitCatalog from "./models-config.providers.implicit.js";
+import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 import * as catalogAuth from "./plugin-model-catalog-auth.js";
 import * as catalogReads from "./plugin-model-catalog-read.js";
 import {
@@ -174,6 +176,88 @@ function persistedFixture() {
 }
 
 describe("prepared catalog source composition", () => {
+  it("seeds cold typed account rows but excludes owned providers before static admission", async () => {
+    const { facts, generation } = persistedFixture();
+    const inference = {
+      chat: false,
+      decision: { protocol: "fixture", input: ["text" as const] },
+    };
+    generation.pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: pluginId,
+          providers: [providerId],
+          modelCatalog: {
+            providers: {
+              [providerId]: {
+                baseUrl: endpoint,
+                models: [{ id: "declared-decision", name: "Declared decision", inference }],
+              },
+            },
+          },
+        },
+      ],
+    });
+    facts.input.config.models!.providers![providerId]!.apiKey = "synthetic-account";
+    const auth = createProviderAuthResolver(
+      facts.env,
+      facts.authStore,
+      facts.input.config,
+    )(providerId);
+    const observed = {
+      provider: providerId,
+      id: "account-decision",
+      name: "Account decision",
+      baseUrl: endpoint,
+      inference,
+    };
+    const contents = JSON.stringify({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: { [providerId]: { baseUrl: endpoint, models: [] } },
+      capabilityModelObservations: {
+        sourceFingerprint: resolveInstalledManifestRegistryIndexFingerprint(
+          generation.pluginMetadataSnapshot.index,
+        ),
+        accounts: [
+          {
+            provider: providerId,
+            profileId: auth.profileId,
+            credentialFingerprint: catalogAuth.fingerprintPluginCatalogCredential(auth),
+            configuredBaseUrl: endpoint,
+            models: [observed],
+          },
+        ],
+      },
+    });
+    const database = new DatabaseSync(path.join(facts.input.agentDir, "openclaw-agent.sqlite"));
+    try {
+      database
+        .prepare("UPDATE cache_entries SET value_json = ? WHERE scope = ? AND key = ?")
+        .run(contents, "plugin-model-catalog-v1", pluginId);
+    } finally {
+      database.close();
+    }
+    const registries: PreparedConfiguredModelRegistries = new Map();
+    const cold = (await prepareBatch({ facts, generation }, { registries })).catalogs.get(
+      facts.input,
+    )!;
+    expect(cold.modelCatalog.entries).toContainEqual(observed);
+    const owned = (
+      await prepareBatch(
+        { facts, generation },
+        {
+          registries,
+          ownedCatalogProviders: new Map([[facts.input, [providerId.toUpperCase()]]]),
+        },
+      )
+    ).catalogs.get(facts.input)!;
+    for (const rows of [owned.modelCatalog.entries, owned.modelCatalog.routeVariants]) {
+      expect(rows.some(({ id }) => id === observed.id)).toBe(false);
+      expect(rows).toContainEqual(expect.objectContaining({ id: "declared-decision", inference }));
+    }
+    expect(owned.templateModelRegistry.find(providerId, observed.id)).toBeUndefined();
+  });
+
   it("leaves acquired provider inventory to its live owner while preserving authored and static rows", async () => {
     const { facts, generation } = persistedFixture();
     const registries: PreparedConfiguredModelRegistries = new Map();
