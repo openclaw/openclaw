@@ -13,11 +13,13 @@ import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import { getGatewayLocalUserIngress } from "../../local-user-ingress.js";
 import { gatewayRequest } from "../../request-frame.test-support.js";
 import { GatewayConnectionWork } from "../../server-connection-work.js";
-import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { GatewayClientRegistry } from "../client-registry.js";
 import { gatewayTestTextTransport } from "../connection-transport.test-support.js";
-import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
+import {
+  createGatewayWsTestLogger as createLogger,
+  createGatewayWsTestSocket,
+} from "../ws-connection.test-helpers.js";
 import { createOperatorWsClient } from "./authenticated-request-dispatch.test-support.js";
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
@@ -309,6 +311,7 @@ export function attachGatewayHarness(options: {
   const connectionWork = new GatewayConnectionWork();
   const logGateway = createLogger();
   const logWsControl = createLogger();
+  const testSocket = createGatewayWsTestSocket({ closeEmits: true });
   const attachment = createGatewayAttachmentCompletion(
     options.connId,
     () => logWsControl.warn.mock.calls,
@@ -319,6 +322,9 @@ export function attachGatewayHarness(options: {
     closed = true;
     attachment.closed(code, reason);
     close(code, reason);
+    if (!options.socket) {
+      testSocket.close(code, reason);
+    }
   };
   harnessCleanups.push(async () => {
     closeSocket();
@@ -335,20 +341,10 @@ export function attachGatewayHarness(options: {
     }
     cb?.();
   });
-  let onMessage: ((data: Buffer) => void) | undefined;
-  const socket =
-    options.socket ??
-    ({
-      readyState: 1,
-      _receiver: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES, _allowSynchronousEvents: false },
-      send: socketSend,
-      on: vi.fn((event: string, handler: (data: Buffer) => void) => {
-        if (event === "message") {
-          onMessage = handler;
-        }
-        return socket;
-      }),
-    } as unknown as WebSocket);
+  testSocket.send.mockImplementation((payload, options, callback) => {
+    socketSend(String(payload), typeof options === "function" ? options : callback);
+  });
+  const socket = options.socket ?? (testSocket as unknown as WebSocket);
   const send = vi.fn((frame: unknown) => {
     frames.push(frame);
     return { kind: "sent" } as const;
@@ -459,14 +455,14 @@ export function attachGatewayHarness(options: {
     logHealth: createLogger() as never,
     logWsControl: logWsControl as never,
   });
-  if (onMessage === undefined && !options.socket) {
+  if (!options.socket && testSocket.listenerCount("message") === 0) {
     throw new Error("expected websocket message handler");
   }
   const sendMessage = (data: string) => {
-    if (!onMessage) {
+    if (options.socket) {
       throw new Error("synthetic websocket message handler is unavailable for a real socket");
     }
-    onMessage(Buffer.from(data));
+    testSocket.emit("message", Buffer.from(data));
   };
   return {
     frames,
