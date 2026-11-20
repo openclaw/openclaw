@@ -24,7 +24,7 @@ export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
   "Context overflow: prompt too large for the model (precheck).";
 
 /** Local control flow for soft pressure; never a provider or overflow failure. */
-export const CONTEXT_MAINTENANCE_SIGNAL_TEXT =
+const CONTEXT_MAINTENANCE_SIGNAL_TEXT =
   "Context maintenance scheduled before the next model request.";
 
 export function contextPressureSignal(pressure: ContextPressure): Error {
