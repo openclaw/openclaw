@@ -18,7 +18,9 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
 } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import * as projectionWriter from "../../config/sessions/session-transcript-projection-writer.js";
 import {
+  isSessionTranscriptIndexReconcileRunning,
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
 } from "../../config/sessions/session-transcript-reconcile.js";
@@ -155,6 +157,66 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
       search: (params: Record<string, unknown>) =>
         callGateway<SessionsSearchResult>({ method: "sessions.search", params }),
     };
+  };
+  const traceRecallSearch = () => {
+    const batches: Array<{ keys: string[]; allowed: boolean[] }> = [];
+    const pages: Array<{
+      agentId?: string;
+      store: string;
+      query: string;
+      hits: string[];
+      indexing: boolean;
+    }> = [];
+    const readiness: Array<{
+      agentId?: string;
+      store: string;
+      running: boolean;
+      status?: boolean;
+      error?: string;
+    }> = [];
+    const originalStatus = projectionWriter.readSessionTranscriptIndexStatus;
+    vi.spyOn(projectionWriter, "readSessionTranscriptIndexStatus").mockImplementation(
+      async (...args) => {
+        const [options] = args;
+        const receipt = {
+          agentId: options.agentId,
+          store: options.path ? path.relative(root, options.path) : "default",
+          running: isSessionTranscriptIndexReconcileRunning(options),
+        };
+        try {
+          const status = await originalStatus(...args);
+          readiness.push({ ...receipt, status });
+          return status;
+        } catch (error) {
+          readiness.push({ ...receipt, error: error instanceof Error ? error.name : typeof error });
+          throw error;
+        }
+      },
+    );
+    const originalSearch = transcriptSearch.searchSessionTranscripts;
+    vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(
+      async (params, database, filter) => {
+        const result = await originalSearch(
+          params,
+          database,
+          filter &&
+            (async (keys) => {
+              const allowed = await filter(keys);
+              batches.push({ keys: [...keys], allowed });
+              return allowed;
+            }),
+        );
+        pages.push({
+          agentId: params.agentId,
+          store: params.storePath ? path.relative(root, params.storePath) : "default",
+          query: params.query,
+          hits: result.hits.map((hit) => hit.messageId),
+          indexing: result.indexing,
+        });
+        return result;
+      },
+    );
+    return { batches, pages, readiness };
   };
 
   afterEach(() => vi.restoreAllMocks());
@@ -398,21 +460,8 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
         owner: "foreign",
       });
       const transport = recallTransport(config);
-      const originalSearch = transcriptSearch.searchSessionTranscripts;
-      const batches: Array<{ keys: string[]; allowed: boolean[] }> = [];
-      vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(
-        (params, database, filter) =>
-          originalSearch(
-            params,
-            database,
-            filter &&
-              (async (keys) => {
-                const allowed = await filter(keys);
-                batches.push({ keys: [...keys], allowed });
-                return allowed;
-              }),
-          ),
-      );
+      const trace = traceRecallSearch();
+      const { batches } = trace;
       const recall = { requesterAgentId: "main", requesterSessionKey: "agent:main:requester" };
       for (const limit of [2, 1]) {
         batches.length = 0;
@@ -432,9 +481,6 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
           batches.flatMap(({ keys, allowed }) => keys.filter((_, index) => allowed[index])),
         ).toEqual(["agent:main:visible-new", "agent:main:visible-old"]);
       }
-      expect(await transport.search({ query: "deniedonly", limit: 1, recall })).toEqual({
-        results: [],
-      });
       batches.length = 0;
       const tool = createSessionsSearchTool({
         config,
@@ -452,6 +498,8 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
       expect(batches.length).toBeGreaterThan(1);
       expect(batches.every(({ keys }) => keys.length > 0 && keys.length <= 26)).toBe(true);
       expect(batches[0]!.allowed.every((allowed) => !allowed)).toBe(true);
+      const denied = await transport.search({ query: "deniedonly", limit: 1, recall });
+      expect(denied, JSON.stringify(trace)).toEqual({ results: [] });
     },
   );
 
@@ -469,8 +517,18 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
         text: "physicalglobal",
         now: Date.UTC(2026, 0, 1),
       });
+      const physical = await transcriptSearch.searchSessionTranscripts({
+        agentId,
+        env: suiteEnv,
+        query: "physicalglobal",
+      });
+      expect(
+        physical.hits.map((hit) => hit.messageId),
+        `physical store ${agentId}`,
+      ).toEqual([`${agentId}-global-hit`]);
     }
     const transport = recallTransport(config);
+    const trace = traceRecallSearch();
     for (const agentId of ["work", "main"]) {
       const result = await transport.search({
         query: "physicalglobal",
@@ -482,6 +540,7 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
           sessionId,
           messageId,
         })),
+        JSON.stringify(trace),
       ).toEqual([
         {
           sessionKey: "global",
