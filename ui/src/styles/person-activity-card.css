@@ -156,10 +156,6 @@
 
 .person-activity-card__session-name.hover-marquee {
   --hover-marquee-fade-width: 18px;
-
-  white-space: nowrap;
-  color: var(--text-strong);
-  text-overflow: clip;
 }
 
 @media (hover: none), (pointer: coarse), (prefers-reduced-motion: reduce) {

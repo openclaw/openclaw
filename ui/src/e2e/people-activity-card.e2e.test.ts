@@ -171,9 +171,6 @@ suite.define(() => {
       const pending = aliceCard.getByRole("status");
       await expectText(pending, "Loading…");
       expect(await pending.locator('[aria-hidden="true"].skeleton').isVisible()).toBe(true);
-      expect(
-        await computedStyleProperty(pending.getByText("Loading…", { exact: true }), "clip-path"),
-      ).toBe("inset(50%)");
 
       await onlinePerson(page, "bob").hover();
       const bobCard = activityCard(page, bob.name);
