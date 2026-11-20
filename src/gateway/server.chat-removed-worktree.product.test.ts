@@ -7,6 +7,7 @@ import { expect, it, vi } from "vitest";
 import * as sandbox from "../agents/sandbox/context.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createProductState, productModelConfig } from "./server.chat-product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -31,6 +32,7 @@ it("explains a removed active session worktree before preparing its sandbox", as
       cfg,
       configPath: state.configPath,
       token: "synthetic-removed-worktree",
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       mode: "backend",
       scopes: ["operator.admin", "operator.read", "operator.write"],
       onEvent(event) {

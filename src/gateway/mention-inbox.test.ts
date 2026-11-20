@@ -729,17 +729,15 @@ it.each([
   }, cfg);
 });
 
-it("keeps mention views and dismissal within the ID membership of a linked administrator", () =>
+it("keeps mention views and dismissal within the canonical profile role", () =>
   withInbox(
     async (f) => {
-      setUserProfileRole(f.bob.id, "admin");
-      invalidateOperatorRolePolicy(f.bob.id);
       f.bobClient.connect.scopes = ["operator.admin"];
       const principal = {
         kind: "member" as const,
         peerKey: "iroh:mention-reader",
         accountId: "mention-reader",
-        role: "restricted",
+        role: "admin",
       };
       setOpenClawIdTunnelPrincipalLookup(() => principal);
       onTestFinished(() => setOpenClawIdTunnelPrincipalLookup(undefined));
@@ -754,6 +752,8 @@ it("keeps mention views and dismissal within the ID membership of a linked admin
       await f.post();
       const localItems = await f.items(f.bobClient);
       expect(localItems).toEqual([expect.objectContaining({ excerpt: "@Bob review this change" })]);
+      setUserProfileRole(f.bob.id, "restricted");
+      invalidateOperatorRolePolicy(f.bob.id);
       expect(await f.items(member)).toEqual([]);
       expectMentionError(
         await f.call("users.mentionable", { sessionKey: SESSION_KEY }, member),
@@ -763,7 +763,6 @@ it("keeps mention views and dismissal within the ID membership of a linked admin
         ok: true,
         value: { items: [] },
       });
-      expect(await f.items(f.bobClient)).toEqual(localItems);
       // A member still receives mentions in its own conversations.
       const ownKey = "agent:main:dashboard:member-mention";
       const ownId = "member-mention-session";
@@ -777,6 +776,8 @@ it("keeps mention views and dismissal within the ID membership of a linked admin
       expect(await f.items(member)).toEqual([ownItem]);
       expect((await f.call("users.mentionable", { sessionKey: ownKey }, member)).ok).toBe(true);
       expect((await dismiss(f.inbox, member, [ownItem!.id])).ok).toBe(true);
+      setUserProfileRole(f.bob.id, "reader");
+      invalidateOperatorRolePolicy(f.bob.id);
       expect(await f.items(f.bobClient)).toEqual(localItems);
     },
     mentionRoles({

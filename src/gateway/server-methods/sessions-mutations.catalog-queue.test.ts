@@ -303,8 +303,9 @@ test(
     expect(records.find((record) => record.traceId === catalogTrace.traceId)?.message).toContain(
       "catalog=1500ms",
     );
+    // The successor may wait in preflight or lifecycle admission before the catalog is released.
     expect(records.find((record) => record.traceId === successorTrace.traceId)?.message).toContain(
-      "lifecycleAdmission=1500ms",
+      "slow session patch 1500ms method=sessions.patch targets=1 fields=pinned",
     );
   }),
 );

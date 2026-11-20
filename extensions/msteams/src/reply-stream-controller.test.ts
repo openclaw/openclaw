@@ -171,6 +171,22 @@ describe("createTeamsReplyStreamController", () => {
     }
   });
 
+  it("streams the rendered progress final so close extends the acknowledged text", async () => {
+    const stream = makeAcknowledgedStream();
+    stream.close.mockResolvedValueOnce(undefined);
+    const ctrl = makeController(stream, { msteamsConfig: progressConfig });
+
+    expect(ctrl.preparePayload({ text: "# Status" })).toBeUndefined();
+    stream.acknowledge("**Status**");
+
+    await expect(ctrl.finalize()).resolves.toEqual({
+      ...acknowledged,
+      content: "**Status**",
+      logicalContent: "# Status",
+    });
+    expect(stream.clearText).not.toHaveBeenCalled();
+  });
+
   it.each(["settled", "canceled"] as const)("ignores progress after %s", async (phase) => {
     const stream = makeStream();
     stream.canceled = phase === "canceled";

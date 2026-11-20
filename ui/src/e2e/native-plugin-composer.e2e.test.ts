@@ -31,6 +31,35 @@ const fixture = `export default { id: "composer-fixture", activate(host) {
     },
   });
   host.ui.registerAction({
+    id: "insert", label: "Insert rewrite", icon: "wandSparkles", placement: "composer",
+    resolve: ({ draft }) => ({ disabled: !draft?.trim() }),
+    async run({ composer }) {
+      const task = composer.startTask({ title: "Inserting" });
+      proof.outcomes.push(await task.propose(${JSON.stringify(PROPOSED)}, { title: "Fixture insert", insert: true }));
+    },
+  });
+  // Work that outlives the chat on screen: leaving retires the card, attach shows it again.
+  const resume = async (composer, startedAt) => {
+    const task = composer.startTask({ title: "Resuming", startedAt });
+    task.update({ steps: [{ label: "read notes.md", state: "running" }] });
+    await new Promise((resolve) => { proof.finishResume = () => (resolve(), true); task.signal.addEventListener("abort", resolve, { once: true }); });
+    if (task.signal.aborted) return;
+    proof.resumeStartedAt = undefined;
+    await task.propose(${JSON.stringify(PROPOSED)}, { title: "Fixture resume", insert: true });
+  };
+  host.ui.registerAction({
+    id: "resume", label: "Resumable rewrite", icon: "rocket", placement: "composer",
+    async run({ composer, sessionKey }) { proof.resumeIn = sessionKey; proof.resumeStartedAt = Date.now() - 60000; await resume(composer, proof.resumeStartedAt); },
+    async attach({ composer, sessionKey }) { if (proof.resumeStartedAt && proof.resumeIn === sessionKey) await resume(composer, proof.resumeStartedAt); },
+  });
+  host.ui.registerAction({
+    id: "send", label: "Rewrite and send", icon: "rocket", placement: "composer",
+    async run({ composer }) {
+      const task = composer.startTask({ title: "Sending" });
+      proof.outcomes.push(await task.propose(${JSON.stringify(PROPOSED)}, { title: "Fixture send", send: true }));
+    },
+  });
+  host.ui.registerAction({
     id: "replace", label: "Replace draft", icon: "pencil", placement: "composer",
     run({ composer }) { composer.setDraft("written by another action"); },
   });
@@ -114,6 +143,7 @@ type ComposerProofWindow = Window & {
     cancelled?: boolean;
     failSlow?: () => void;
     firstAborted?: boolean;
+    finishResume?: () => boolean;
   };
   openclawControlUiE2eGateway: { findRequests: (method: string) => unknown[] };
 };
@@ -269,6 +299,58 @@ suite.define(() => {
     });
   });
 
+  it("hides toolbar actions in the resting phone composer, like its other controls", async () => {
+    const phone = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true };
+    await suite.withPage(phone, async ({ page }) => {
+      const { textarea } = await open(page);
+      const action = page.getByRole("button", { name: "Rewrite", exact: true });
+      await textarea.fill("");
+      // An outside pointer action ends editing and selects the one-line layout.
+      await page.mouse.click(100, 80);
+      const shell = page.locator('.agent-chat__composer-shell[data-composer-resting="true"]');
+      await shell.waitFor();
+      // A shown action would fall to its own row under the one-line composer.
+      expect(await action.isVisible()).toBe(false);
+      await textarea.fill(DRAFT);
+      await expect.poll(() => action.isVisible()).toBe(true);
+    });
+  });
+
+  it("needs a draft, then inserts its result at once with an Undo receipt", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { textarea } = await open(page);
+      const action = page.getByRole("button", { name: "Insert rewrite", exact: true });
+      await textarea.fill("");
+      await expect.poll(() => action.isDisabled()).toBe(true);
+      await textarea.fill(DRAFT);
+      await expect.poll(() => action.isDisabled()).toBe(false);
+      await action.click();
+      await expect.poll(() => textarea.inputValue()).toBe(PROPOSED);
+      expect(await outcomes(page)).toEqual(["accepted"]);
+      expect(await page.getByRole("region", { name: "Fixture insert" }).count()).toBe(0);
+      await page.getByRole("button", { name: "Undo" }).click();
+      await expect.poll(() => textarea.inputValue()).toBe(DRAFT);
+      expect(await sendCount(page)).toBe(0);
+    });
+  });
+
+  it("sends an inserted result through the composer's own send", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { textarea } = await open(page);
+      await page.getByRole("button", { name: "Rewrite and send", exact: true }).click();
+      await expect.poll(() => sendCount(page)).toBe(1);
+      const sent = await page.evaluate(
+        () =>
+          (window as unknown as ComposerProofWindow).openclawControlUiE2eGateway.findRequests(
+            "chat.send",
+          )[0] as { params?: { message?: string } },
+      );
+      expect(sent.params?.message).toBe(PROPOSED);
+      await expect.poll(() => textarea.inputValue()).toBe("");
+      expect(await page.getByRole("button", { name: "Undo" }).count()).toBe(0);
+    });
+  });
+
   it("retires the Undo receipt when the draft changes outside the textarea", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const { textarea } = await open(page);
@@ -286,6 +368,38 @@ suite.define(() => {
       await expect.poll(() => textarea.inputValue()).toBe(PROPOSED);
       await page.waitForTimeout(300);
       expect(await page.getByRole("button", { name: "Undo" }).count()).toBe(0);
+    });
+  });
+
+  it("shows a chat's running task again when the user comes back", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { gateway } = await open(page);
+      await page.getByRole("button", { name: "Resumable rewrite", exact: true }).click();
+      const working = page.locator('.agent-chat__composer-task[data-state="working"]');
+      await working.getByText("Resuming").waitFor();
+      await gateway.setSessionsListResponse({
+        sessions: [
+          { key: sessionKey, kind: "direct", label: "First", updatedAt: 2 },
+          { key: otherSessionKey, kind: "direct", label: "Second", updatedAt: 1 },
+        ],
+      });
+      const go = (url: string) =>
+        page.evaluate((target) => {
+          history.pushState(null, "", target);
+          window.dispatchEvent(new PopStateEvent("popstate"));
+        }, url);
+      await go(controlUiSessionUrl(suite.server.baseUrl, otherSessionKey));
+      await expect.poll(() => working.count()).toBe(0);
+      await go(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await working.getByText("Resuming").waitFor();
+      // The clock continues from the original start, not from the return.
+      await working.getByText(/^1m 0\ds$/).waitFor();
+      await page.waitForFunction(() =>
+        (window as unknown as ComposerProofWindow).composerProof?.finishResume?.(),
+      );
+      // The other chat's pane stays mounted, hidden; the result lands in this chat's composer.
+      const shown = page.locator(".agent-chat__composer-combobox textarea:visible");
+      await expect.poll(() => shown.inputValue()).toBe(PROPOSED);
     });
   });
 

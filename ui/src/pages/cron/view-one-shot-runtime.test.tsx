@@ -21,7 +21,7 @@ it("notes a one-shot's runtime only while it differs from the configured occurre
   );
   const { container } = mountSolid(() => <CronView {...props()} />);
   await vi.dynamicImportSettled();
-  const note = '[data-test-id="cron-schedule-note"]';
+  const note = '[data-test-id="cron-schedule-runtime"]';
   await waitForSolid(() => expect(container.querySelector(note)).not.toBeNull());
   const summary = () => container.querySelector(note)?.textContent ?? null;
   const refresh = () => {
@@ -29,12 +29,26 @@ it("notes a one-shot's runtime only while it differs from the configured occurre
     flush();
   };
   expect(summary()).toBe(`Next activity at ${formatMs(next)}`);
+  expect(container.querySelector(`.cron-detail-header ${note}`)).not.toBeNull();
+  expect(container.querySelector(`.cron-prompt__tray ${note}`)).toBeNull();
   const input = container.querySelector<HTMLInputElement>("#cron-schedule-at")!;
   expect(input.value).toBe(formatDateTimeLocal(at));
   for (const [state, enabled, expected] of [
     [{ nextRunAtMs: next + 60_000 }, true, `Next activity at ${formatMs(next + 60_000)}`],
     [{ nextRunAtMs: next, runningAtMs: next }, true, "Running"],
     [{ nextRunAtMs: next }, false, "Paused"],
+    [
+      { autoDisabled: { reason: "consecutive-failures", atMs: next, consecutiveErrors: 10 } },
+      false,
+      "No further run is scheduled.",
+    ],
+    [
+      {
+        admissionDeferred: { reason: "Agent is busy", sinceMs: next, attempts: 2, retryAtMs: next },
+      },
+      true,
+      `Waiting: Agent is busy since ${formatMs(next)}`,
+    ],
     // The time field already says when it runs.
     [{ nextRunAtMs: Date.parse(at) }, true, null],
     [{}, true, "No next run scheduled"],

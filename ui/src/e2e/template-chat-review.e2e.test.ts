@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { TemplatesDraftsReviewResult } from "@openclaw/gateway-protocol";
-import { chromium } from "playwright";
+import { chromium, type Locator } from "playwright";
 import { expect, inject, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -116,21 +116,26 @@ it.skipIf(!available).each([true, false])(
         expect(await gateway.getRequests("templates.drafts.read")).toHaveLength(0);
         return;
       }
-      const card = inline.getByRole("region", { name: "Review your Template" });
+      const compact = inline.getByRole("region", { name: "Publish Template" });
+      await compact.getByRole("heading", { name: "Research Brief", exact: true }).waitFor();
+      expect(await page.getByRole("dialog").count()).toBe(0);
+      await compact.getByRole("button", { name: "Preview", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Preview Template" });
+      const card = dialog.getByRole("region", { name: "Review your Template" });
       await card.getByRole("heading", { name: "Research Brief", exact: true }).waitFor();
       expect(await page.getByText("Template ready for review", { exact: true }).count()).toBe(0);
       await card
         .locator(".template-creator__header")
         .getByText("Unpublished", { exact: true })
         .waitFor();
-      const capture = async (stage: string) => {
+      const capture = async (stage: string, target: Locator = card) => {
         if (!proof) {
           return;
         }
         const frame = await takeControlUiScreenshotFrame(
           page,
-          card,
-          [card.getByRole("heading", { level: 2 })],
+          target,
+          [target.getByRole("heading", { level: 2 })],
           {
             animations: "disabled",
           },
@@ -138,6 +143,9 @@ it.skipIf(!available).each([true, false])(
         await writeFile(path.join(proof, stage + ".png"), frame.png);
         await page.waitForTimeout(600);
       };
+      await dialog.evaluate((element) =>
+        Promise.all(element.getAnimations().map((animation) => animation.finished)),
+      );
       const bounds = await card.boundingBox();
       expect(bounds?.width).toBe(620);
       expect(bounds?.height).toBe(565);
@@ -147,7 +155,6 @@ it.skipIf(!available).each([true, false])(
           .locator(".template-creator__footer")
           .evaluate((footer) => getComputedStyle(footer).borderTopWidth),
       ).toBe("0px");
-      expect(await page.getByRole("dialog").count()).toBe(0);
       await capture("ready");
       for (const label of ["Workspace files", "Skills", "Plugins", "MCP servers", "Automations"]) {
         await card.getByRole("button", { name: new RegExp(label) }).click();
@@ -200,30 +207,24 @@ it.skipIf(!available).each([true, false])(
       }
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(0);
+      await page.clock.install();
       await gateway.setMethodDelay("templates.drafts.publish", "forever");
       await card.getByRole("button", { name: "Publish", exact: true }).click();
-      await card.getByRole("button", { name: "Publishing…", exact: true }).waitFor();
-      await capture("publishing");
+      await dialog.waitFor({ state: "hidden" });
+      await compact.getByRole("button", { name: "Publishing", exact: true }).waitFor();
+      await capture("publishing", compact);
       expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(1);
       await gateway.setMethodResponse("templates.drafts.review", {
         ...reviewed,
         publicationState: { status: "pending", publication },
       });
       await gateway.setMethodDelay("templates.drafts.publish", null);
-      const pending = card.locator(".template-creator__header [role=status]");
-      await card
-        .locator(".template-creator__header")
-        .getByText("Pending", { exact: true })
-        .waitFor();
-      await page.keyboard.press("Tab");
-      await pending.focus();
-      await page
-        .getByRole("tooltip")
-        .getByText("Awaiting security review", { exact: true })
-        .waitFor();
-      await capture("pending");
-      await pending.blur();
-      expect(await card.getByText("Published", { exact: true }).count()).toBe(0);
+      await compact.locator("header [role=status]").getByText("Pending", { exact: true }).waitFor();
+      expect(
+        await compact.getByRole("link", { name: "View submission" }).getAttribute("href"),
+      ).toBe(publication.url);
+      await capture("pending", compact);
+      expect(await compact.getByText("Published", { exact: true }).count()).toBe(0);
       await gateway.setMethodResponse("templates.drafts.review", {
         ...reviewed,
         publicationState: {
@@ -231,21 +232,25 @@ it.skipIf(!available).each([true, false])(
           publication: { ...publication, publicationStatus: "published" },
         },
       });
-      await card.getByText("Published", { exact: true }).waitFor({ timeout: 10_000 });
-      await capture("published");
-      expect(await card.getByRole("button", { name: "Copy link", exact: true }).count()).toBe(1);
-      expect(await card.locator(".template-creator__footer a").count()).toBe(0);
+      // Pending publications refresh through the owner's 30-second polling interval.
+      await page.clock.runFor(30_000);
+      await compact.getByText("Published", { exact: true }).waitFor({ timeout: 10_000 });
+      await capture("published", compact);
+      expect(await compact.getByRole("button", { name: "Copy link", exact: true }).count()).toBe(1);
+      expect(await compact.locator("footer a").count()).toBe(0);
       await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-      await card.getByRole("button", { name: "Copy link", exact: true }).click();
+      await compact.getByRole("button", { name: "Copy link", exact: true }).click();
       expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(publication.url);
-      await card.getByRole("button", { name: "Copied", exact: true }).waitFor();
+      await compact.getByRole("button", { name: "Copied", exact: true }).waitFor();
       expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await page.setViewportSize({ width: 400, height: 900 });
-      await card.scrollIntoViewIfNeeded();
-      expect((await card.boundingBox())!.width).toBeLessThanOrEqual(400);
-      expect((await card.boundingBox())!.height).toBe(565);
-      await capture("narrow");
+      await compact.scrollIntoViewIfNeeded();
+      const narrowBounds = (await compact.boundingBox())!;
+      expect(narrowBounds.width).toBeLessThanOrEqual(400);
+      expect(narrowBounds.x).toBeGreaterThanOrEqual(0);
+      expect(narrowBounds.x + narrowBounds.width).toBeLessThanOrEqual(400);
+      await capture("narrow", compact);
     } finally {
       await context.close();
       if (proof && video) {
@@ -329,7 +334,11 @@ it.skipIf(!available)(
       await waitForControlUiGatewayReady(page);
       const inline = page.locator('[data-plugin-inline-view="review-template-1"]');
       await inline.scrollIntoViewIfNeeded();
-      const card = inline.getByRole("region", { name: "Review your Template" });
+      const compact = inline.getByRole("region", { name: "Publish Template" });
+      await compact.getByRole("button", { name: "Preview", exact: true }).click();
+      const card = page
+        .getByRole("dialog", { name: "Preview Template" })
+        .getByRole("region", { name: "Review your Template" });
       const heading = card.getByRole("heading", { level: 2 });
       await heading.waitFor();
       await card.scrollIntoViewIfNeeded();

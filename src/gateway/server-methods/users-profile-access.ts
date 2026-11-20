@@ -4,11 +4,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import { ensureProfileIdForEmail } from "../../state/user-profile-email.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
+import { currentOwnerDevicePrincipal } from "../openclaw-id/tunnel-principal.js";
+import { operatorRoleSubject } from "../operator-role-enforcement.js";
 import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
-  resolveAdministratorMemberRolePolicy,
 } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -139,15 +139,15 @@ export async function prepareUserProfileAdministration(options: GatewayRequestHa
     lifetime.expectedProfileBinding?.assertCurrent();
     const cfg = context.getRuntimeConfig();
     const policy =
-      resolveAdministratorMemberRolePolicy(client, cfg) ??
-      (actor?.kind === "system"
+      actor?.kind === "system" || currentOwnerDevicePrincipal(client)
         ? undefined
         : resolveOperatorRolePolicyForAssignment(
             sharedOwner ? authenticatedProfileId : role?.profileId,
             role?.role ?? null,
             cfg,
             role?.githubLogin ?? null,
-          ));
+            operatorRoleSubject(role),
+          );
     if (policy && !policy.scopes.includes("operator.admin")) {
       throw new Error("Profile administration requires operator.admin");
     }
@@ -159,13 +159,14 @@ export async function prepareUserProfileAdministration(options: GatewayRequestHa
 export function resolveUserRoleAssignmentError(
   getConfig: () => OpenClawConfig,
   role: string | null,
+  subject?: import("../operator-role-enforcement.js").OperatorRoleSubject,
 ) {
   if (role === null) {
     return undefined;
   }
   const cfg = getConfig();
   const definitions = cfg.gateway?.roles?.definitions;
-  if (definitions && !isNamedOperatorRoleEnforcementEnabled(cfg)) {
+  if (definitions && cfg.gateway?.roles?.default === undefined && !subject?.openclawIdMember) {
     return "Named-role assignment requires gateway.roles.default to enable named-role enforcement.";
   }
   return definitions && Object.hasOwn(definitions, role)

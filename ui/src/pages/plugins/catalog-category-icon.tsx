@@ -1,6 +1,9 @@
 import type { JSX } from "@solidjs/web";
 import { Icon } from "../../components/solid/icon.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
+import { TemplateCategoryIcon } from "../../components/solid/template-category-icon.tsx";
+import type { PluginDiscoveryCategory } from "../../lib/plugins/index.ts";
+import { templateCategories } from "../../lib/template-categories.ts";
 
 function CategoryStrokeIcon(props: { children: JSX.Element }) {
   return <StrokeIcon> {props.children}</StrokeIcon>;
@@ -46,15 +49,7 @@ const CATEGORY_ICONS: Readonly<Record<string, () => JSX.Element>> = {
     </CategoryStrokeIcon>
   ),
   inbox: () => <Icon name="inbox" />,
-  "list-todo": () => (
-    <CategoryStrokeIcon>
-      <path d="M13 5h8" />
-      <path d="M13 12h8" />
-      <path d="M13 19h8" />
-      <path d="m3 17 2 2 4-4" />
-      <rect x="3" y="4" width="6" height="6" rx="1" />
-    </CategoryStrokeIcon>
-  ),
+  "list-todo": () => <Icon name="listTodo" />,
   "calendar-days": () => (
     <CategoryStrokeIcon>
       <path d="M8 2v3" />
@@ -103,7 +98,11 @@ const CATEGORY_ICONS: Readonly<Record<string, () => JSX.Element>> = {
   search: () => <Icon name="search" />,
 };
 
-export function categoryIcon(icon: string | undefined): JSX.Element {
-  const render = icon && Object.hasOwn(CATEGORY_ICONS, icon) && CATEGORY_ICONS[icon];
+export function categoryIcon({ slug, icon }: PluginDiscoveryCategory): JSX.Element {
+  const template = templateCategories.find(([category]) => category === slug);
+  if (template) {
+    return <TemplateCategoryIcon icon={template[2]} />;
+  }
+  const render = Object.hasOwn(CATEGORY_ICONS, icon) && CATEGORY_ICONS[icon];
   return render ? render() : <Icon name="box" />;
 }
