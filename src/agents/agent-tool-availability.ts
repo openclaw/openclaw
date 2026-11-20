@@ -24,6 +24,8 @@ const availabilityBindings = new WeakMap<
   {
     binding?: AgentToolAvailabilityBinding;
     executionDenied?: true;
+    /** Refused by the run allowlist or sender/group policy, which removed it from the list before. */
+    runPolicyDenied?: true;
   }
 >();
 
@@ -59,10 +61,18 @@ export function copyAgentToolAvailability<T extends object>(source: object, targ
 }
 
 /** Record an executor denial so later schema-only catalog projections cannot undo it. */
-export function markAgentToolExecutionUnavailable<T extends object>(tool: T): T {
+export function markAgentToolExecutionUnavailable<T extends object>(tool: T, runPolicy = false): T {
   const metadata = availabilityBindings.get(tool);
-  availabilityBindings.set(tool, { ...metadata, executionDenied: true });
+  availabilityBindings.set(tool, {
+    ...metadata,
+    executionDenied: true,
+    ...(runPolicy ? { runPolicyDenied: true as const } : {}),
+  });
   return tool;
+}
+
+export function isAgentToolRunPolicyDenied(tool: object): boolean {
+  return availabilityBindings.get(tool)?.runPolicyDenied === true;
 }
 
 /**
