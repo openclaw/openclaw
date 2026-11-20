@@ -95,6 +95,9 @@ it(
         VITEST: process.env.VITEST,
         OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        // Keep this synthetic loopback provider out of inherited external proxies.
+        NO_PROXY: [process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"].filter(Boolean).join(","),
+        no_proxy: [process.env.no_proxy, "127.0.0.1", "localhost", "::1"].filter(Boolean).join(","),
       },
     });
     await using cleanup = new AsyncDisposableStack();
@@ -428,16 +431,21 @@ it(
         if (scenario.revoke) {
           // The administrator may still inspect the canonical history; only the
           // revoked requester's publication stream is required to be silent.
-          // The delivery owner records its failed obligation without resuming revoked work.
-          expect(history.messages).toHaveLength((beforeHistory?.messages.length ?? 0) + 1);
-          expect(history.messages.at(-1)).toMatchObject({
-            role: "custom",
-            customType: "run-failed-before-reply",
-            display: true,
-            content: expect.stringContaining("child result couldn't be delivered"),
+          // The child input committed before revocation. Its consumed delivery stays
+          // successful even though the requester stopped before answering (#200249).
+          assert(scenario.childRunId);
+          expect(getSubagentRunByRunId(scenario.childRunId)?.delivery).toMatchObject({
+            status: "delivered",
+            requesterDelivery: { state: "consumed" },
           });
+          expect(beforeHistory?.messages.at(-1)).toMatchObject({
+            role: "assistant",
+            content: [{ type: "subagent_completion" }],
+            subagentCompletions: [{ runId: scenario.childRunId }],
+          });
+          // No replay or false delivery-failure notice may change the committed history.
           // Role changes refresh projected avatar URLs, not prior durable message content.
-          expect(transcriptContent(history.messages.slice(0, -1))).toEqual(
+          expect(transcriptContent(history.messages)).toEqual(
             transcriptContent(beforeHistory?.messages),
           );
           expect(
