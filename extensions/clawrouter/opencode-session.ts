@@ -5,7 +5,13 @@ import type { ModelRequestHeaders } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderResolveTransportTurnStateContext,
   ProviderRuntimeModel,
+  ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
+import {
+  mapAssistantMessageStream,
+  transformProviderStreamMessages,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import type { ClawRouterCapabilityOffer } from "./capability-offers.js";
@@ -131,6 +137,51 @@ function selectedOpenCode(model: ProviderRuntimeModel, sourceApi = model.api) {
     );
   }
   return provider;
+}
+
+// Resolve from catalog authority before dispatch strips metadata or rewrites IDs.
+function resolveOpenCodeProxyStreamFamily(model: ProviderRuntimeModel, sourceApi = model.api) {
+  const provider = selectedOpenCode(model, sourceApi);
+  if (provider === "opencode" && sourceApi === "openai-responses") {
+    return "opencode-responses";
+  }
+  if (
+    provider === "opencode-go" &&
+    sourceApi === "openai-completions" &&
+    model.id === "opencode-go/deepseek-v4-pro"
+  ) {
+    return "deepseek-v4-pro-thinking";
+  }
+  return undefined;
+}
+
+export function wrapOpenCodeProxyStream(
+  ctx: ProviderWrapStreamFnContext,
+  model: ProviderRuntimeModel,
+  underlying: StreamFn,
+): StreamFn {
+  const family = resolveOpenCodeProxyStreamFamily(model, ctx.sourceApi);
+  return family
+    ? (buildProviderStreamFamilyHooks(family).wrapStreamFn!({ ...ctx, streamFn: underlying }) ??
+        underlying)
+    : underlying;
+}
+
+export function restoreClawRouterResponseModel(
+  response: ReturnType<StreamFn>,
+  model: ProviderRuntimeModel,
+): ReturnType<StreamFn> {
+  // Upstream IDs belong on the wire; session state needs the resolvable catalog ID.
+  // Keep responseModel intact so genuine upstream reroutes remain observable.
+  return mapAssistantMessageStream(response, (output) =>
+    transformProviderStreamMessages(
+      output,
+      (message) => {
+        message.model = model.id;
+      },
+      { includeError: model.id.startsWith("opencode/") && model.api === "openai-responses" },
+    ),
+  );
 }
 
 function explicitSession(...carriers: Array<ModelRequestHeaders | undefined>) {

@@ -224,6 +224,53 @@ it("transforms checkpoints and final results while preserving sparse deltas", as
   expect((await stream.result()).usage.cacheTelemetry).toEqual({ state: "available" });
 });
 
+it.each([undefined, false, true])(
+  "opts into error transforms only when requested: %s",
+  async (includeError) => {
+    const error: AssistantMessage = {
+      role: "assistant",
+      api: "openai-completions",
+      provider: "test",
+      model: "upstream",
+      content: [],
+      usage: createZeroUsageFixture(),
+      stopReason: "error",
+      timestamp: 1,
+      errorMessage: "original failure",
+    };
+    const source = createAssistantMessageEventStream();
+    const event = { type: "error", reason: "error", error } as const;
+    source.push(event);
+    const originalIterator = source[Symbol.asyncIterator]();
+    const returned = { done: true, value: undefined } as const;
+    const returnIterator = vi.fn(async () => returned);
+    const throwIterator = vi.fn(async (reason: unknown) => {
+      throw reason;
+    });
+    originalIterator.return = returnIterator;
+    originalIterator.throw = throwIterator;
+    vi.spyOn(source, Symbol.asyncIterator).mockReturnValue(originalIterator);
+    const wrapped = transformMessages(
+      source,
+      (message) => {
+        message.model = "catalog";
+      },
+      includeError === undefined ? undefined : { includeError },
+    );
+    expect(wrapped).toBe(source);
+    const iterator = wrapped[Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toBe(event);
+    expect(event.error).toBe(error);
+    expect(error.model).toBe(includeError ? "catalog" : "upstream");
+    expect(error.errorMessage).toBe("original failure");
+    const reason = Object.freeze({ reason: "original cleanup" });
+    await expect(iterator.throw?.(reason)).rejects.toBe(reason);
+    expect(throwIterator).toHaveBeenCalledWith(reason);
+    expect(await iterator.return?.()).toBe(returned);
+    expect(returnIterator).toHaveBeenCalledOnce();
+  },
+);
+
 it("defaults tool_stream on when absent", () => {
   expect(toolStreamParams()).toEqual({ tool_stream: true });
   expect(toolStreamParams({ fastMode: true })).toEqual({

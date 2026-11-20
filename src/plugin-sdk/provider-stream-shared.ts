@@ -610,6 +610,7 @@ function promoteThinkingOnlyFinalOutputToText(message: AssistantMessage): void {
 export function transformProviderStreamMessages(
   stream: Awaited<ReturnType<StreamFn>>,
   transformMessage: (message: AssistantMessage) => void,
+  options?: { includeError?: boolean },
 ): Awaited<ReturnType<StreamFn>> {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
@@ -628,7 +629,11 @@ export function transformProviderStreamMessages(
           const event = result.value;
           if (event.type === "done") {
             transformMessage(event.message);
-          } else if (event.type !== "error" && event.partial) {
+          } else if (event.type === "error") {
+            if (options?.includeError) {
+              transformMessage(event.error);
+            }
+          } else if (event.partial) {
             transformMessage(event.partial);
           }
         }

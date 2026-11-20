@@ -3,91 +3,32 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicResponse } from "../../packages/ai/src/provider-transport-parity.test-support.js";
 import { createSseResponse } from "../../packages/ai/src/transports/anthropic-transport-stream.test-support.js";
 import {
+  argumentDelta,
   completedResponse,
+  outputItem,
+  wireCall,
   wireMessage,
 } from "../../packages/ai/src/transports/openai-stream-cases.test-support.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { streamSimple } from "../llm/stream.js";
+import { stream as streamRaw, streamSimple } from "../llm/stream.js";
 import type { Model, SimpleStreamOptions } from "../llm/types.js";
 import { registerSingleProviderPlugin } from "../plugin-sdk/plugin-test-runtime.js";
 import { clearLiveCatalogCacheForTests } from "../plugin-sdk/provider-catalog-live-runtime.js";
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { routes, type Route } from "./clawrouter-opencode-session.test-support.js";
 import { makeInMemorySessionManager } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { sanitizeSessionHistory } from "./embedded-agent-runner/replay-history.js";
-import type { AgentMessage } from "./runtime/index.js";
+import type { AgentMessage, StreamFn } from "./runtime/index.js";
 import { convertToLlm } from "./sessions/messages.js";
 import { completionChunk, completionContext } from "./simple-completion.test-support.js";
 import "./ai-transport-runtime-host.js";
 import { resolveTranscriptPolicy } from "./transcript-policy.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
-const routes = [
-  [
-    "opencode",
-    "minimax-m3",
-    "openai-completions",
-    "llm.chat",
-    "chat_completions",
-    "/chat/completions",
-    "openai.chat_completions",
-  ],
-  [
-    "opencode-go",
-    "deepseek-v4-pro",
-    "openai-completions",
-    "llm.chat",
-    "chat_completions",
-    "/chat/completions",
-    "openai.chat_completions",
-  ],
-  [
-    "opencode",
-    "gpt-5.6-sol",
-    "openai-responses",
-    "llm.responses",
-    "responses",
-    "/v1/responses",
-    "openai.responses",
-  ],
-  [
-    "opencode-go",
-    "gpt-5.6-luna",
-    "openai-responses",
-    "llm.responses",
-    "responses",
-    "/v1/responses",
-    "openai.responses",
-  ],
-  [
-    "opencode",
-    "claude-opus-5",
-    "anthropic-messages",
-    "llm.messages",
-    "messages",
-    "/v1/messages",
-    "anthropic.messages",
-  ],
-  [
-    "opencode-go",
-    "qwen3.8-max",
-    "anthropic-messages",
-    "llm.messages",
-    "messages",
-    "/v1/messages",
-    "anthropic.messages",
-  ],
-] as const;
-type Route = readonly [
-  (typeof routes)[number][0],
-  string,
-  (typeof routes)[number][2],
-  string,
-  string,
-  string,
-  string,
-];
+const rawStream: StreamFn = (model, context, options) => streamRaw(model, context, { ...options });
 
 function reply(route: Route) {
   if (route[2] === "openai-completions") {
@@ -135,6 +76,7 @@ async function fixture(
     offerPatch?: Record<string, unknown>;
     modelPatch?: Record<string, unknown>;
     routePatch?: Record<string, unknown>;
+    respond?: (request: Request) => Response | Promise<Response>;
   } = {},
 ) {
   const [upstreamProvider, upstream, api, capability, endpoint, path, format] = route;
@@ -200,7 +142,7 @@ async function fixture(
         { status: 403 },
       );
     }
-    return reply(route);
+    return options.respond ? options.respond(request) : reply(route);
   });
   const entry = await loadBundledPluginFacade<{
     default: Parameters<typeof registerSingleProviderPlugin>[0];
@@ -263,6 +205,340 @@ async function fixture(
 }
 
 describe("actual OpenCode proxy SDK session bridge", () => {
+  it.each([true, false])("restores Console Responses tools through native=%s", async (native) => {
+    await fixture(
+      routes[2],
+      async ({ model, plugin, requests, expectedUrl }) => {
+        for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
+          const stream = plugin[hook]!({
+            provider: "clawrouter",
+            modelId: model.id,
+            model,
+            streamFn: hook === "wrapStreamFn" ? rawStream : streamSimple,
+          })!;
+          const context: Parameters<typeof streamSimple>[1] = {
+            ...completionContext("Search"),
+            tools: ["web_search", "openclaw_web_search"].map((name) => ({
+              name,
+              description: "Synthetic search",
+              parameters: {
+                type: "object",
+                properties: {
+                  options: { type: "object", patternProperties: { "^.*$": { type: "string" } } },
+                },
+              },
+            })),
+          };
+          const result = await stream(model, context, {
+            apiKey: "synthetic-router-key",
+            cacheRetention: "none",
+          });
+          const events = [];
+          for await (const event of result) {
+            events.push(event);
+          }
+          const message = await result.result();
+          expect(message.content).toMatchObject([
+            { type: "toolCall", name: "web_search", arguments: { options: { region: "us" } } },
+          ]);
+          for (const event of events) {
+            if ("partial" in event && event.partial) {
+              for (const block of event.partial.content) {
+                if (block.type === "toolCall") {
+                  expect(block.name).toBe("web_search");
+                }
+              }
+            }
+            if (event.type === "toolcall_end") {
+              expect(event.toolCall).toMatchObject({
+                type: "toolCall",
+                name: "web_search",
+                arguments: { options: { region: "us" } },
+              });
+            }
+            if (event.type === "done") {
+              expect(event.message).toEqual(message);
+            }
+          }
+          expect(message.provider).toBe("clawrouter");
+          expect(message.model).toBe(model.id);
+          const request = requests.at(-1)!;
+          expect(request.url).toBe(expectedUrl);
+          expect(request.headers.get("authorization")).toBe("Bearer synthetic-router-key");
+          const body = await request.json();
+          expect(body.model).toBe(native ? routes[2][1] : model.id);
+          expect(body.tools).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                name: "openclaw_web_search_2",
+                parameters: expect.objectContaining({
+                  properties: expect.objectContaining({
+                    options: expect.objectContaining({ type: "array" }),
+                  }),
+                }),
+              }),
+              expect.objectContaining({ name: "openclaw_web_search" }),
+            ]),
+          );
+          const call = message.content[0];
+          if (call?.type !== "toolCall") {
+            throw new Error("Missing restored call");
+          }
+          context.messages.push(message, {
+            role: "toolResult",
+            toolCallId: call.id,
+            toolName: call.name,
+            content: [{ type: "text", text: "Synthetic result" }],
+            isError: false,
+            timestamp: 2,
+          });
+          const replay = await (
+            await stream(model, context, { apiKey: "synthetic-router-key", cacheRetention: "none" })
+          ).result();
+          expect(replay.content).toMatchObject([
+            { name: "web_search", arguments: { options: { region: "us" } } },
+          ]);
+          const replayBody = await requests.at(-1)!.json();
+          expect(replayBody.input).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                type: "function_call",
+                name: "openclaw_web_search_2",
+                arguments: JSON.stringify({ options: [{ key: "region", value: "us" }] }),
+              }),
+            ]),
+          );
+        }
+        expect(requests).toHaveLength(4);
+      },
+      {
+        native,
+        respond: () => {
+          const call = wireCall(
+            "proxy",
+            "openclaw_web_search_2",
+            JSON.stringify({ options: [{ key: "region", value: "us" }] }),
+          );
+          return createSseResponse([
+            outputItem("added", { ...call, arguments: "" }),
+            argumentDelta(call.id, call.arguments),
+            outputItem("done", call),
+            completedResponse("resp_proxy", [call]),
+          ]);
+        },
+      },
+    );
+  });
+
+  it.each([true, false])("applies Go pro thinking through native=%s", async (native) => {
+    await fixture(
+      routes[1],
+      async ({ model, plugin, requests, expectedUrl }) => {
+        const cases = [
+          { configured: "high", requested: "xhigh", effort: "max" },
+          { configured: "off", requested: "max", effort: "max" },
+          { configured: "off", requested: "low", effort: "high" },
+          { configured: "off", requested: "medium", effort: "high" },
+          { configured: "high", requested: "off", effort: undefined },
+          { configured: "high", requested: "none", effort: undefined },
+          { configured: "high", requested: undefined, effort: "high" },
+        ] as const;
+        for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
+          for (const item of cases) {
+            const stream = plugin[hook]!({
+              provider: "clawrouter",
+              modelId: model.id,
+              model,
+              streamFn: hook === "wrapStreamFn" ? rawStream : streamSimple,
+              thinkingLevel: item.configured,
+            })!;
+            const options: SimpleStreamOptions = {
+              apiKey: "synthetic-router-key",
+              onPayload: (payload) => ({
+                ...(payload as Record<string, unknown>),
+                messages: [
+                  {
+                    role: "assistant",
+                    content: "Prior answer",
+                    reasoning_content: "Prior reasoning",
+                  },
+                  { role: "assistant", content: "Prior answer without reasoning" },
+                  { role: "user", content: "Continue" },
+                ],
+              }),
+            };
+            // Exercise the shared policy's legacy runtime `none` spelling too.
+            if (item.requested !== undefined) {
+              Object.assign(options, { reasoning: item.requested });
+            }
+            const result = await (
+              await stream(model, completionContext("Think"), options)
+            ).result();
+            expect(result.stopReason, result.errorMessage).toBe("stop");
+            const request = requests.at(-1)!;
+            expect(request.url).toBe(expectedUrl);
+            expect(request.headers.get("authorization")).toBe("Bearer synthetic-router-key");
+            const body = await request.json();
+            expect(body).toMatchObject({
+              model: native ? routes[1][1] : model.id,
+              thinking: { type: item.effort ? "enabled" : "disabled" },
+            });
+            expect(body.reasoning_effort).toBe(item.effort);
+            expect(body.messages[0].reasoning_content).toBe(
+              item.effort ? "Prior reasoning" : undefined,
+            );
+            expect(body.messages[1].reasoning_content).toBe(item.effort ? "" : undefined);
+          }
+        }
+        expect(requests).toHaveLength(cases.length * 2);
+      },
+      { native },
+    );
+  });
+
+  it.each([routes[1], routes[2]])(
+    "rejects stale or foreign %s %s associations before transport",
+    async (...route) => {
+      await fixture(route, async ({ model, plugin, requests }) => {
+        const stream = plugin.wrapStreamFn!({
+          provider: "clawrouter",
+          modelId: model.id,
+          streamFn: rawStream,
+        })!;
+        for (const patch of [
+          { providerId: "foreign" },
+          { modelId: "stale-model" },
+          { upstream: "stale-upstream" },
+          { api: "anthropic-messages" },
+          { baseUrl: "https://foreign.example" },
+          { url: "https://foreign.example/responses" },
+          { routeKind: "unknown" },
+        ]) {
+          const invalid = structuredClone(model);
+          const metadata = invalid.params?.clawrouterRoute as { openCode: Record<string, unknown> };
+          Object.assign(metadata.openCode, patch);
+          expect(() =>
+            stream(invalid, completionContext("Denied"), { apiKey: "synthetic-router-key" }),
+          ).toThrow("qualified Chat, Responses or Messages route");
+        }
+        expect(requests).toHaveLength(0);
+      });
+    },
+  );
+
+  it("isolates concurrent Console aliases and restores terminal error views", async (test) => {
+    const releaseFirst = Promise.withResolvers<void>();
+    let requestIndex = 0;
+    await fixture(
+      routes[2],
+      async ({ model, plugin, requests }) => {
+        const stream = plugin.wrapStreamFn!({
+          provider: "clawrouter",
+          modelId: model.id,
+          streamFn: rawStream,
+        })!;
+        const run = async (name: string) => {
+          const output = await stream(
+            model,
+            {
+              ...completionContext("Independent request"),
+              tools: [
+                {
+                  name,
+                  description: "Synthetic tool",
+                  parameters: { type: "object", properties: {} },
+                },
+              ],
+            },
+            { apiKey: "synthetic-router-key" },
+          );
+          const events = [];
+          for await (const event of output) {
+            events.push(event);
+          }
+          return { events, message: await output.result() };
+        };
+        const pending = [run("web_search"), run("openclaw_web_search")] as const;
+        try {
+          const [first, second] = await withinTest(Promise.all(pending), test.signal);
+          expect(first.message.stopReason).toBe("error");
+          expect(first.message.errorMessage).toContain("synthetic rejection");
+          expect(first.message.content).toMatchObject([{ type: "toolCall", name: "web_search" }]);
+          const terminal = first.events.find((event) => event.type === "error");
+          expect(terminal).toMatchObject({ type: "error", error: first.message });
+          expect(second.message.content).toMatchObject([
+            { type: "toolCall", name: "openclaw_web_search" },
+          ]);
+          expect(requests).toHaveLength(2);
+        } finally {
+          releaseFirst.resolve();
+          await Promise.allSettled(pending);
+        }
+      },
+      {
+        native: true,
+        respond: async () => {
+          const first = requestIndex++ === 0;
+          if (first) {
+            await releaseFirst.promise;
+          } else {
+            releaseFirst.resolve();
+          }
+          const call = wireCall(first ? "first" : "second", "openclaw_web_search");
+          return createSseResponse([
+            outputItem("added", call),
+            outputItem("done", call),
+            first
+              ? {
+                  type: "response.failed",
+                  response: {
+                    id: "resp_first",
+                    status: "failed",
+                    error: { code: "invalid_prompt", message: "synthetic rejection" },
+                  },
+                }
+              : completedResponse("resp_second", [call]),
+          ]);
+        },
+      },
+    );
+  });
+
+  it("leaves Go flash Chat policy unqualified", async () => {
+    await fixture(
+      [
+        "opencode-go",
+        "deepseek-v4-flash",
+        "openai-completions",
+        "llm.chat",
+        "chat_completions",
+        "/chat/completions",
+        "openai.chat_completions",
+      ],
+      async ({ model, plugin, requests }) => {
+        const stream = plugin.wrapStreamFn!({
+          provider: "clawrouter",
+          modelId: model.id,
+          model,
+          streamFn: rawStream,
+          thinkingLevel: "high",
+        })!;
+        expect(
+          (
+            await (
+              await stream(model, completionContext("Unrelated"), {
+                apiKey: "synthetic-router-key",
+              })
+            ).result()
+          ).stopReason,
+        ).toBe("stop");
+        expect(requests).toHaveLength(1);
+        expect(await requests[0]!.json()).not.toHaveProperty("thinking");
+      },
+      { native: true },
+    );
+  });
+
   it.each([
     { providerPatch: { offers: [] } },
     { providerPatch: { allowed: false } },
