@@ -13,6 +13,7 @@ import {
   getCronJobsStoreRevision,
   noteCronJobsStoreCommit,
   loadCronJobsStoreWithConfigJobsByKey,
+  loadCronQuarantinedJobs,
   saveCronJobsStoreWithRevisionByKey,
   type QuarantinedCronConfigJob,
 } from "../store.js";
@@ -301,6 +302,20 @@ export async function ensureLoaded(
     version: 1,
     jobs,
   };
+  // Quarantined rows stay durably recoverable, so their authored ids remain owners of
+  // existing base sessions even though they never reach the runtime projection. A
+  // failed quarantine read propagates: the sweep then degrades to inventory-unavailable
+  // and never treats a recoverable job's base session as disposable.
+  const quarantinedJobIds = quarantinedConfigJobs
+    .map((entry) => entry.job?.id)
+    .filter((id): id is string => typeof id === "string");
+  const durable = await loadCronQuarantinedJobs(state.deps.storePath);
+  state.quarantinedJobIds = [
+    ...new Set([
+      ...quarantinedJobIds,
+      ...durable.map((entry) => entry.job?.id).filter((id): id is string => typeof id === "string"),
+    ]),
+  ];
   state.durableNextRunAtMsByJobId = durableNextRunAtMsByJobId;
   state.storeLoadedAtMs = loadNowMs;
   // A writer or load repair during the await leaves this snapshot conservatively stale.

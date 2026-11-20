@@ -17,7 +17,7 @@ import type { CronServiceDeps } from "./service/state.js";
 import { ensureLoaded } from "./service/store.js";
 import { resetReaperThrottle } from "./session-reaper.test-support.js";
 import * as cronStoreModule from "./store.js";
-import { loadCronStore, saveCronStore } from "./store.js";
+import { loadCronStore, saveCronQuarantinedJobs, saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const { createState, onTimer } = createSessionReaperTimerHarness();
@@ -267,8 +267,49 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       env: { OPENCLAW_STATE_DIR: resolveStateDir() },
       storePath: sessionStorePath,
       updatedBefore: baseNow - 24 * 3_600_000,
+      includeBaseCronCandidates: true,
     });
     expect(entries(sessionStorePath, "live")).toEqual([]);
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("preserves a quarantined mixed-case stored job's base session from retention cleanup", async () => {
+    await using context = await fixture([], {
+      resolveSessionStoreAgentIds: async () => ["main"],
+    });
+    const { state, sessionStorePath, storePath } = context;
+    state.deps.resolveSessionStorePath = () => sessionStorePath;
+    // A previously loaded malformed definition survives as a durable recovery row:
+    // it is still recoverable, so its base session must stay owned by the job.
+    await saveCronQuarantinedJobs({
+      storePath,
+      nowMs: baseNow,
+      entries: [
+        {
+          sourceIndex: 0,
+          reason: "invalid-state",
+          job: {
+            ...dueJob("DailyReport"),
+            enabled: false,
+            state: { ...dueJob("DailyReport").state, nextRunAtMs: "not-a-number" },
+          },
+        },
+      ],
+    });
+    const storedBaseKey = "agent:main:cron:dailyreport";
+    await replaceSessionEntry(
+      { agentId: "main", storePath: sessionStorePath, sessionKey: storedBaseKey },
+      { sessionId: "dailyreport-base", updatedAt: baseNow - 25 * 3_600_000 },
+    );
+    await onTimer(state);
+    await onTimer(state);
+    expect(context.readExpired).toHaveBeenCalledExactlyOnceWith({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: resolveStateDir() },
+      storePath: sessionStorePath,
+      updatedBefore: baseNow - 24 * 3_600_000,
+      includeBaseCronCandidates: true,
+    });
+    expect(entries(sessionStorePath).map((row) => row.sessionKey)).toEqual([storedBaseKey]);
   });
 });

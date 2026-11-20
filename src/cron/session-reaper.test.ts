@@ -560,4 +560,16 @@ describe("sweepCronRunSessions", () => {
     await expectSweep(now, 1);
     expect(readSessionEntries(storePath)).toEqual({ [hookBaseKey]: hookBase });
   });
+
+  it("canonicalizes inventory ids so a mixed-case stored job keeps its base session", async () => {
+    const storedBaseKey = "agent:main:cron:dailyreport";
+    const hookBaseKey = "agent:main:cron:hook-orphan";
+    const storedBase = expiredRun("dailyreport", { delivery: { kind: "none" } });
+    await seedSessionEntries(storePath, {
+      [storedBaseKey]: storedBase,
+      [hookBaseKey]: expiredRun("hook-orphan", { delivery: { kind: "none" } }),
+    });
+    await expectSweep(now, 1, true, { knownJobIds: new Set(["DailyReport"]) });
+    expect(readSessionEntries(storePath)).toEqual({ [storedBaseKey]: storedBase });
+  });
 });

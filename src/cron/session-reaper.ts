@@ -219,6 +219,13 @@ export async function sweepCronRunSessions(params: {
       return { swept: false, pruned: 0 };
     }
     const cutoff = now - retentionMs;
+    // Inventory ids arrive as authored (explicit job ids keep their case) while base
+    // session keys fold to lowercase through parseAgentSessionKey; compare in the
+    // key's canonical form or a mixed-case stored job would look jobless and lose
+    // its base session after retention expires.
+    const canonicalKnownJobIds = params.knownJobIds
+      ? new Set([...params.knownJobIds].map((id) => id.toLowerCase()))
+      : undefined;
     let pendingMediaSessionKeys: Set<string> | undefined;
     const removals: SessionEntryLifecycleRemoval[] = [];
     // Discovery validates the physical store in its reader worker and returns only full
@@ -250,9 +257,10 @@ export async function sweepCronRunSessions(params: {
     for (const { sessionKey, entry } of expiredEntries) {
       const baseJobId = parseCronBaseSessionJobId(sessionKey);
       if (baseJobId !== undefined) {
-        // Base rows serve stored jobs (cron.remove owns their cleanup) and transient
-        // hook runs. Prune only jobless ones, and only with readable job inventory.
-        if (!params.knownJobIds || params.knownJobIds.has(baseJobId)) {
+        // Base rows serve stored jobs, including quarantined-but-recoverable ones
+        // (cron.remove owns their cleanup), and transient hook runs. Prune only
+        // jobless ones, and only with readable job inventory.
+        if (!canonicalKnownJobIds || canonicalKnownJobIds.has(baseJobId)) {
           continue;
         }
       }
