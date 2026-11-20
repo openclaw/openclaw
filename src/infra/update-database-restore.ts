@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
@@ -10,6 +11,7 @@ import { drainAgentDatabaseResources } from "../state/openclaw-agent-db-resource
 import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
   getPublishFileExclusiveFailureDetails,
   publishFileExclusive,
@@ -17,6 +19,7 @@ import {
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { ignoreMissingPath } from "./errno.js";
+import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
@@ -25,6 +28,7 @@ import {
 } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import { prepareVerifiedSqliteFile } from "./sqlite-snapshot.js";
+import { resolvePathJournalPolicy } from "./sqlite-wal-filesystem.js";
 import {
   parseUpdateStateInspectionWorker,
   runUpdateStateInspectionWorker,
@@ -345,6 +349,53 @@ export async function restoreUpdateDatabaseBackup(params: {
           retainPreparedCopy = true;
           await output.publish();
           assertOwned();
+        }
+        // Snapshot images are single DELETE-journal files by design, so restored
+        // databases come back in rollback-journal mode. Re-establish the journal
+        // mode each path resolves to while the exclusion window still keeps every
+        // other holder out; leaving DELETE behind makes the next update's
+        // maintenance lease fail sqlite-busy against the updater's own readers and
+        // rolls the same failure forward on every retry. The client credential
+        // store is excluded: its exclusive custody design requires DELETE mode.
+        // A conversion failure fails the rollback loudly after all files have been
+        // attempted, naming the exact recovery (`PRAGMA journal_mode=WAL` while no
+        // process holds the files).
+        const credentialStorePath = resolvePathViaExistingAncestorSync(
+          resolveClientCredentialStorePath(params.env),
+        );
+        const journalModeFailures: string[] = [];
+        for (const entry of sources) {
+          assertOwned();
+          if (entry.path === credentialStorePath) {
+            continue;
+          }
+          if (resolvePathJournalPolicy(entry.path) !== "wal") {
+            continue;
+          }
+          try {
+            // sqlite-allow-raw -- one-shot offline journal-mode conversion; the
+            // exclusion window guarantees this process is the only holder.
+            const database = new DatabaseSync(entry.path);
+            try {
+              const row = database.prepare("PRAGMA journal_mode = WAL").get() as
+                | { journal_mode?: unknown }
+                | undefined;
+              if (String(row?.journal_mode).toLowerCase() !== "wal") {
+                journalModeFailures.push(
+                  `${entry.path}: journal_mode reported ${String(row?.journal_mode)}`,
+                );
+              }
+            } finally {
+              database.close();
+            }
+          } catch (error) {
+            journalModeFailures.push(`${entry.path}: ${formatErrorMessage(error)}`);
+          }
+        }
+        if (journalModeFailures.length > 0) {
+          throw new Error(
+            `Restored databases did not re-establish WAL journal mode; while no process holds them, run PRAGMA journal_mode=WAL on each: ${journalModeFailures.join("; ")}`,
+          );
         }
         restoreClientCredentials?.();
         assertOwned();

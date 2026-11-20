@@ -224,6 +224,29 @@ it("refuses restoration when its named live cohort pair is missing", async () =>
   });
 });
 
+it("restores databases back to the filesystem's WAL journal policy", async () => {
+  await withFixture(async (fixture) => {
+    await fixture.restore();
+    // Snapshot images are single DELETE-journal files by design; leaving them in
+    // rollback-journal mode makes the next update's maintenance lease fail
+    // sqlite-busy against the updater's own readers and loops every retry.
+    for (const owner of [fixture.shared, fixture.agent]) {
+      using restored = new DatabaseSync(owner.path, { readOnly: true });
+      expect(restored.prepare("PRAGMA journal_mode").get()).toEqual({
+        journal_mode: "wal",
+      });
+    }
+    // The client credential store's exclusive custody design requires DELETE mode;
+    // the WAL re-establishment must exclude it.
+    using credentials = new DatabaseSync(resolveClientCredentialStorePath(fixture.state.env), {
+      readOnly: true,
+    });
+    expect(credentials.prepare("PRAGMA journal_mode").get()).toEqual({
+      journal_mode: "delete",
+    });
+  });
+});
+
 it("captures and restores exact local daemon intent with its independent schema", async () => {
   await withOpenClawTestState(
     { layout: "split", prefix: "update-daemon-restore-", scenario: "minimal" },
