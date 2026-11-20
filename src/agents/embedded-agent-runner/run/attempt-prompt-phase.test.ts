@@ -190,19 +190,66 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     { name: "disabled", enabled: false, supportsStore: true, proxy: false, clientCompacts: true },
     { name: "no store", enabled: true, supportsStore: false, proxy: false, clientCompacts: true },
     { name: "proxy", enabled: true, supportsStore: true, proxy: true, clientCompacts: true },
+    {
+      name: "checkpoint defaults",
+      enabled: undefined,
+      supportsStore: true,
+      proxy: false,
+      clientCompacts: false,
+      seeded: true,
+    },
+    {
+      name: "checkpoint client summary",
+      enabled: false,
+      supportsStore: true,
+      proxy: false,
+      clientCompacts: true,
+      seeded: true,
+    },
   ])("preserves Responses threshold ownership ($name)", async (test) => {
     const fixture = createFixture({ pendingImageCount: 0 });
     const model = {
       ...testModel,
       provider: "openai",
       baseUrl: test.proxy ? "https://example.test/v1" : "https://api.openai.com/v1",
-      contextWindow: 1_000_000,
+      contextWindow: test.seeded ? 16_384 : 1_000_000,
+      maxTokens: test.seeded ? 1_024 : testModel.maxTokens,
       compat: { supportsStore: test.supportsStore },
     };
+    const seededManager = SessionManager.inMemory();
+    if (test.seeded) {
+      await seededManager.appendMessageAsync({
+        role: "user",
+        content: "Read the marker.",
+        timestamp: 1,
+      });
+      await seededManager.appendMessageAsync(
+        createAssistant(
+          model,
+          [{ type: "toolCall", id: "read-marker", name: "read", arguments: {} }],
+          "toolUse",
+        ),
+      );
+      await seededManager.appendMessageAsync({
+        role: "toolResult",
+        toolCallId: "read-marker",
+        toolName: "read",
+        content: [{ type: "text", text: "TOOL-MEMORY-1234 " + "source context ".repeat(1_000) }],
+        isError: false,
+        timestamp: 2,
+      });
+      // The live checkpoint fixture lowers its cap to saved total usage plus 1,024.
+      await seededManager.appendMessageAsync(createAssistant(model, "STORED", "stop", 15_359));
+    }
     const { session, settingsManager, sessionManager } = await createTestSession({
       model,
+      sessionManager: seededManager,
       settingsManager: SettingsManager.inMemory({
-        compaction: { enabled: true, reserveTokens: 20_000 },
+        compaction: {
+          enabled: true,
+          reserveTokens: test.seeded ? 4_096 : 20_000,
+          ...(test.seeded ? { keepRecentTokens: 1_024 } : {}),
+        },
         retry: { enabled: false },
       }),
     });
@@ -223,6 +270,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     runtime.transport.compactionReplayEnabled = true;
     runtime.transport.effectiveExtraParams = {
       responsesServerCompaction: test.enabled,
+      responsesCompactEndpoint: false,
       responsesCompactThreshold: 900_000,
     };
     Object.assign(fixture.input.attempt, {
@@ -245,9 +293,25 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       typeof import("./attempt-prompt-submit.js")
     >("./attempt-prompt-submit.js");
     mocks.submitPrompt.mockImplementation(submitEmbeddedAttemptPrompt);
-    streamMocks.streamSimple.mockImplementation((requestModel: Model) =>
-      createAssistantResultStream(createAssistant(requestModel, "Done.", "stop", 800_000)),
-    );
+    let checkpointBeforeResponse = false;
+    streamMocks.streamSimple.mockImplementation((requestModel: Model, requestContext: Context) => {
+      const summarizing = requestContext.systemPrompt?.includes("context summarization assistant");
+      if (!summarizing && test.seeded) {
+        checkpointBeforeResponse = sessionManager
+          .getBranch()
+          .some(
+            (entry) => entry.type === "compaction" && entry.summary.includes("TOOL-MEMORY-1234"),
+          );
+      }
+      return createAssistantResultStream(
+        createAssistant(
+          requestModel,
+          summarizing ? "The durable marker is TOOL-MEMORY-1234." : "Done.",
+          "stop",
+          test.seeded ? 100 : 800_000,
+        ),
+      );
+    });
 
     await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
 
@@ -255,7 +319,14 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(session.messages.filter((message) => message.role === "assistant")).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ stopReason: "error" })]),
     );
-    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    if (test.seeded) {
+      expect(checkpointBeforeResponse).toBe(test.clientCompacts);
+      expect(
+        sessionManager.getBranch().filter((entry) => entry.type === "compaction"),
+      ).toHaveLength(test.clientCompacts ? 1 : 0);
+    } else {
+      expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    }
     expect(clientCompactions > 0).toBe(test.clientCompacts);
   });
 

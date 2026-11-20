@@ -226,7 +226,12 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
             models: {
               [`openai/${MODEL_ID}`]: {
                 agentRuntime: { id: "openclaw" },
-                params: { transport: "sse" },
+                // This fixture proves client-written textual summaries, not provider checkpoints.
+                params: {
+                  transport: "sse",
+                  responsesServerCompaction: false,
+                  responsesCompactEndpoint: false,
+                },
               },
             },
           },
