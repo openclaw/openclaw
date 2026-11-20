@@ -1,0 +1,2 @@
+# Exact net test lines for persisted placement reopen: subscribe before background startup recovery, preserve all original end-to-end assertions.
+9
