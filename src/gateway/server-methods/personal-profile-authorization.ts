@@ -2,6 +2,7 @@ import { intersectOperatorScopes, roleScopesAllow } from "../../shared/operator-
 import { prepareUserProfileSelectionAuthority } from "../../state/user-channel-identity-operations.js";
 import { currentOwnerDevicePrincipal } from "../openclaw-id/tunnel-principal.js";
 import { hasCurrentGatewayOperatorAccess } from "../operator-access-policy.js";
+import { operatorRoleSubject } from "../operator-role-enforcement.js";
 import {
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForProfile,
@@ -24,7 +25,14 @@ type PersonalProfileScope =
 export function currentPersonalProfileClient(
   options: Request,
   scope: PersonalProfileScope,
-  owner?: string | { profileId: string; role: string | null; githubLogin?: string | null },
+  owner?:
+    | string
+    | {
+        profileId: string;
+        role: string | null;
+        githubLogin?: string | null;
+        openclawIdAccountIds?: readonly string[];
+      },
 ) {
   const { client, context } = options;
   if (
@@ -61,6 +69,7 @@ export function currentPersonalProfileClient(
             owner.role,
             cfg,
             owner.githubLogin ?? null,
+            operatorRoleSubject(owner),
           )
         : profileId
           ? resolveOperatorRolePolicyForProfile(profileId, cfg)

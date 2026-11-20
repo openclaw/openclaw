@@ -62,7 +62,7 @@ export function retainGatewayOperatorRunAuthority(
         }
       }),
     ];
-    if (source.openclawIdPrincipal?.kind === "owner") {
+    if (source.openclawIdPrincipal?.kind !== "member") {
       subscriptions.push(onOpenClawIdTunnelPrincipalsChanged(recheck));
     }
     let references = 1;

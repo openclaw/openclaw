@@ -5,18 +5,21 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { linkOpenClawIdUserProfile } from "../../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   type OpenClawIdTunnelPrincipal,
   setOpenClawIdTunnelPrincipalLookup,
+  setOpenClawIdMemberAccountLookup,
 } from "../openclaw-id/tunnel-principal.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { authorizeMessageActionSendAgent } from "./send-role-authorization.js";
 
 afterEach(() => {
   setOpenClawIdTunnelPrincipalLookup(undefined);
+  setOpenClawIdMemberAccountLookup(undefined);
   clearRuntimeConfigSnapshot();
 });
 
@@ -26,6 +29,8 @@ it.each([undefined, "operator"])(
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const profile = ensureProfileForEmail("send-member@example.test");
       setUserProfileRole(profile.id, "operator");
+      linkOpenClawIdUserProfile({ profileId: profile.id, accountId: "member", email: null }, {});
+      setOpenClawIdMemberAccountLookup((accountId) => accountId === "member");
       const role: GatewayOperatorRoleDefinition = {
         scopes: ["operator.write"],
         agents: [],
@@ -33,6 +38,7 @@ it.each([undefined, "operator"])(
       };
       const cfg: OpenClawConfig = {
         gateway: {
+          openclawId: { enabled: true },
           roles: {
             default: defaultRole,
             definitions: { operator: role },

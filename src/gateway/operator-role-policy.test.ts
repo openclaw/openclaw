@@ -24,6 +24,7 @@ import {
   prepareUserProfileCatalog,
   publishUserProfilesChange,
 } from "../state/user-profile-list.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import {
   linkEmail,
   setDisplayName,
@@ -36,6 +37,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveChannelOperatorAdminAuthority } from "./channel-operator-authority.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
+  setOpenClawIdMemberAccountLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
 import {
@@ -224,11 +226,7 @@ describe("operator role policy", () => {
       setUserProfileRole(person.id, "retired");
       invalidateOperatorRolePolicy(person.id);
       expectRole(person.id, cfg, roles.definitions.maintainer);
-      expectRole(person.id, roleConfig(false), {
-        agents: [],
-        scopes: [],
-        sessions: { others: "none" },
-      });
+      expectRole(person.id, roleConfig(false), undefined);
       roles.assignments.byGithubLogin = {};
       publishOperatorRoleConfigChange({});
       expectRole(person.id, cfg, guestRole);
@@ -697,26 +695,23 @@ describe("operator role policy", () => {
     }));
 });
 
-it("enforces explicit roles without a default and denies profiles with no role", () =>
+it("leaves nonmembers unchanged with an assigned role but no default", () =>
   inState(async () => {
     const cfg = roleConfig(false);
     const profile = ensureProfileForEmail("catalog@example.test");
     const catalog = await prepareUserProfileCatalog();
     try {
-      expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)?.scopes).toEqual([]);
-      expect(resolveOperatorRolePolicyForAssignment(profile.id, "guest", cfg, null)).toEqual(
-        guestRole,
-      );
+      expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toBeUndefined();
+      expect(
+        resolveOperatorRolePolicyForAssignment(profile.id, "guest", cfg, null),
+      ).toBeUndefined();
       expect(resolveOperatorRoleSelection(profile.id, "guest", cfg, null)).toEqual({
-        effectiveRole: "guest",
-        roleSource: "assigned",
+        roleSource: "default",
       });
-      expect(resolveOperatorRolePolicyForAssignment(undefined, "guest", cfg, null)?.scopes).toEqual(
-        [],
-      );
+      expect(resolveOperatorRolePolicyForAssignment(undefined, "guest", cfg, null)).toBeUndefined();
       expect(
         authorizeGatewaySessionCreation({ cfg, profileId: undefined, agentId: "private" }),
-      ).toMatchObject({ code: "FORBIDDEN" });
+      ).toBeUndefined();
     } finally {
       catalog.release();
     }
@@ -726,6 +721,9 @@ it("uses the profile role for members and leaves owner devices uncapped", () =>
   inState(async () => {
     const cfg = roleConfig(false);
     const profile = ensureProfileForEmail("member@example.test");
+    cfg.gateway!.openclawId = { enabled: true };
+    linkOpenClawIdUserProfile({ profileId: profile.id, accountId: "member", email: null }, {});
+    setOpenClawIdMemberAccountLookup((accountId) => accountId === "member");
     setUserProfileRole(profile.id, "guest");
     const catalog = await prepareUserProfileCatalog();
     try {
@@ -743,6 +741,7 @@ it("uses the profile role for members and leaves owner devices uncapped", () =>
     } finally {
       catalog.release();
       setOpenClawIdTunnelPrincipalLookup(undefined);
+      setOpenClawIdMemberAccountLookup(undefined);
     }
   }));
 
@@ -770,5 +769,6 @@ it("fails closed for members without a catalog without changing independent loca
     } finally {
       catalog.release();
       setOpenClawIdTunnelPrincipalLookup(undefined);
+      setOpenClawIdMemberAccountLookup(undefined);
     }
   }));

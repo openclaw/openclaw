@@ -87,7 +87,8 @@ export type RuntimeConfigExternalMutationResult<T> =
     }
   | {
       ok: false;
-      reason: "conflict" | "error" | "rejected" | "suspended" | "unavailable";
+      /** `deferred`: saved, and the Gateway applies it once a busy plugin reload finishes. */
+      reason: "conflict" | "deferred" | "error" | "rejected" | "suspended" | "unavailable";
       error: string;
       /** With `saveStatus`: whether the shared save status shows this failure. */
       reported?: boolean;
@@ -204,14 +205,25 @@ export async function executeConfigExternalMutation<T>(
       };
     }
     const outcome = configMutationFailure(state, error);
+    const deferred =
+      outcome.status !== "conflict" &&
+      error instanceof GatewayRequestError &&
+      isRecord(error.details) &&
+      isDeferredApplication(error.details);
+    if (deferred) {
+      // Saved but not applied: applied-revision polling retires the waiting status.
+      state.configNeedsApply = true;
+    }
     return {
       ok: false,
       reason:
         outcome.status === "conflict"
           ? "conflict"
-          : isDefinitiveConfigMutationRejection(error)
-            ? "rejected"
-            : "error",
+          : deferred
+            ? "deferred"
+            : isDefinitiveConfigMutationRejection(error)
+              ? "rejected"
+              : "error",
       error: outcome.message,
     };
   }
@@ -351,6 +363,10 @@ export type ConfigSubmission = ConfigSubmittedDraft & {
 };
 export type ConfigSubmissionObserver = (submission: ConfigSubmission) => void;
 
+function isDeferredApplication(details: Record<string, unknown>): boolean {
+  return isRecord(details.application) && details.application.status === "deferred";
+}
+
 function persistedConfigReceipt(error: unknown): { ack: ConfigWriteAck; deferred: boolean } | null {
   return error instanceof GatewayRequestError &&
     isGatewayProtocolResponseError(error) &&
@@ -361,8 +377,7 @@ function persistedConfigReceipt(error: unknown): { ack: ConfigWriteAck; deferred
     isConfigWriteAck(error.details.persistedConfig)
     ? {
         ack: error.details.persistedConfig,
-        deferred:
-          isRecord(error.details.application) && error.details.application.status === "deferred",
+        deferred: isDeferredApplication(error.details),
       }
     : null;
 }

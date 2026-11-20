@@ -16,6 +16,10 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import {
+  registerAgentRunDelegatedAuthorityClosedHandler,
+  type AgentRunDelegatedAuthority,
+} from "../../../../src/infra/agent-run-registry.js";
 import type { GatewaySchedulerClock } from "../../../../src/infra/gateway-scheduler.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { createGatewaySchedulerClock } from "../../../../src/test-utils/gateway-scheduler-clock.js";
@@ -55,6 +59,7 @@ const seams = vi.hoisted(() => ({
   clock: undefined as GatewaySchedulerClock | undefined,
   hold: undefined as { held: () => void; release: Promise<void> } | undefined,
   runsOutcomes: [] as RunsOutcome[],
+  readAuthority: undefined as AgentRunDelegatedAuthority | undefined,
   onRunsOutcome: undefined as ((outcome: RunsOutcome) => void) | undefined,
 }));
 vi.mock("../../../../src/infra/gateway-scheduler.js", async (importOriginal) => {
@@ -97,6 +102,8 @@ vi.mock("../../../../src/gateway/server-methods/cron-runs.js", async (importOrig
     cronRunsHandler: async (options: Parameters<typeof actual.cronRunsHandler>[0]) => {
       const params = options.params as { id?: string; jobId?: string };
       const outcome: RunsOutcome = { id: params.id ?? params.jobId };
+      const authority = options.client?.internal?.agentRuntimeIdentity?.delegatedAuthority;
+      seams.readAuthority = authority?.kind === "local" ? authority : undefined;
       try {
         return await actual.cronRunsHandler({
           ...options,
@@ -123,6 +130,7 @@ afterEach(() => {
   seams.clock = undefined;
   seams.hold = undefined;
   seams.runsOutcomes.length = 0;
+  seams.readAuthority = undefined;
   seams.onRunsOutcome = undefined;
   resetGatewayState();
 });
@@ -528,10 +536,28 @@ it(
         await observe(closingNoticeHeld.promise);
         const closed = createDeferred<RunsOutcome>();
         seams.onRunsOutcome = (outcome) => closed.resolve(outcome);
-        await live.client.request("chat.abort", { sessionKey: ownedSession });
+        const authority = seams.readAuthority;
+        assert(authority, "The held read must belong to the notice runtime");
+        const retired = createDeferred();
+        onTestFinished(
+          registerAgentRunDelegatedAuthorityClosedHandler((closedAuthority) => {
+            if (closedAuthority.claimId === authority.claimId) {
+              retired.resolve();
+            }
+          }),
+        );
+        expect(await live.client.request("chat.abort", { sessionKey: ownedSession })).toMatchObject(
+          {
+            aborted: true,
+            runIds: expect.arrayContaining([authority.operationalRunInstance.runId]),
+          },
+        );
+        // Stop acknowledges cancellation before the direct-host runtime retires its claim.
+        // Keep the admitted read held until that exact disclosure authority is gone.
+        await observe(retired.promise);
+        await observe(noticeReceipt(jobs.closing).settled);
         releaseHold();
         const closedOutcome = await observe(closed.promise);
-        await observe(noticeReceipt(jobs.closing).settled);
 
         nonOwner = await connectGatewayClient({
           url: "ws://127.0.0.1:" + live.port,

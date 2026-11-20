@@ -43,6 +43,19 @@ let resolver: OpenClawIdTunnelPrincipalResolver | undefined;
 let lookup: OpenClawIdTunnelPrincipalLookup | undefined;
 let prepareLookup: (() => Promise<void>) | undefined;
 let recordActivity: ((peerKey: string) => void) | undefined;
+let memberAccountLookup: ((accountId: string) => boolean) | undefined;
+
+/** The same resident membership owner serves socket and offline profile subjects. */
+export function setOpenClawIdMemberAccountLookup(
+  next: ((accountId: string) => boolean) | undefined,
+): void {
+  memberAccountLookup = next;
+}
+
+/** Stored provider links identify accounts; only current membership makes them members. */
+export function isOpenClawIdProfileMember(accountIds: readonly string[] | undefined): boolean {
+  return accountIds?.some((accountId) => memberAccountLookup?.(accountId) === true) ?? false;
+}
 const changes = new Set<() => void>();
 
 /** Notifies retained work after committed membership changes or a service lifecycle change. */

@@ -847,14 +847,9 @@ describe("Gateway message.action Slack download completion", () => {
     });
   });
 
+  // Runtime run-claim release is not a completion fence; turn and plugin retirement are.
   it.each([
     { name: "the provider result", phase: "result", revoke: "turn" },
-    {
-      name: "late image completion after run-claim release",
-      phase: "gateway-mirror",
-      revoke: "claim",
-      image: true,
-    },
     { name: "late completion after plugin disablement", phase: "gateway-mirror", revoke: "plugin" },
   ] satisfies Array<FixtureOptions & { name: string; phase: Phase }>)(
     "does not return or cache revoked download success at $name",

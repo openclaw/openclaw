@@ -16,8 +16,10 @@ paces the observed hourly usage against 80% of the daily limit divided by 24.
 It also retains 20% of the minute allowance. For a 2,400-start plan, those
 targets are 1,920 starts per day and 80 per hour.
 
-Unknown, exhausted or mismatched account state uses hybrid without allocating
-Boat jobs. The prepared-workspace test retains its original non-Boat placement.
+When no Boat starts are admitted, including unknown, exhausted or mismatched
+account state, CI uses the GitHub-hosted plan without allocating Boat or
+Blacksmith jobs. A positive allowance retains hybrid placement for overflow.
+The prepared-workspace test retains its original non-Boat placement.
 Each selected Boat row retains its memory class, CPU cap and store-only setup;
 other rows keep their hybrid placement and the complete test inventory.
 

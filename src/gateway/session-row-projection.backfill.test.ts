@@ -1,4 +1,5 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
@@ -8,6 +9,7 @@ import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteTranscriptReadScope,
@@ -47,6 +49,7 @@ import {
 } from "./session-row-projection.test-support.js";
 import { terminalAssistantMessage } from "./session-row-terminal-message.test-support.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
+import { applyGatewaySessionRowMode } from "./session-utils-display.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -56,6 +59,48 @@ type TranscriptMessage = Parameters<
 
 const cfg = { agents: { entries: { main: {} } } };
 const display = { includeDerivedTitles: true, includeLastMessage: true };
+
+it.for(["native", "worker"] as const)(
+  "publishes empty and saved history facts from the transcript owner (%s)",
+  async (writer, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot(cfg);
+      const target = { agentId: "main", sessionKey: "agent:main:empty", sessionId: "empty" };
+      const query = { agentId: target.agentId, key: target.sessionKey };
+      const entry = { sessionId: target.sessionId, updatedAt: 1 };
+      if (writer === "worker") {
+        await upsertSessionEntryCore(target, entry);
+      } else {
+        replaceSessionEntrySync(target, entry);
+      }
+      const empty = observeSessionRowBackfill([target.sessionKey]);
+      using foreground = holdForeground();
+      const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
+      using projection = await createTestProjection({ cfg });
+      await projection.ensureMaterialized();
+      projection.describe(query);
+      // An empty window is authoritative on the first read, not an optional enrichment.
+      expect(projection.snapshot(query).row?.hasMessages).toBe(false);
+      foreground();
+      await withinTest(empty, signal);
+      expect(backfill).not.toHaveBeenCalled();
+      expect(projection.snapshot(query).row?.hasMessages).toBe(false);
+      const saved = observeSessionRowBackfill([target.sessionKey], projection);
+      await appendTranscript(target, { role: "user", content: "First saved message" });
+      await projection.ensureMaterialized();
+      await withinTest(saved, signal);
+      expect(projection.snapshot(query).row?.hasMessages).toBe(true);
+      for (const mode of ["sidebar", "dashboard", "compact"] as const) {
+        const row = { ...expectDefined(projection.snapshot(query).row, "saved session row") };
+        applyGatewaySessionRowMode(row, mode);
+        expect(row.hasMessages).toBe(true);
+      }
+      replaceSessionEntrySync(target, { sessionId: "replacement-empty", updatedAt: 2 });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.hasMessages).toBe(false);
+    });
+  },
+);
 
 async function withStreamingProjection(
   run: (fixture: {

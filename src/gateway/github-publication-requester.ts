@@ -35,6 +35,7 @@ import {
   GatewayOperatorAccessDeniedError,
   resumeGatewayOperatorAccessGrant,
 } from "./operator-access-policy.js";
+import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
@@ -211,6 +212,7 @@ function prepareRequesterPolicy(
             profile.assignedRole,
             config,
             profile.githubLogin ?? null,
+            operatorRoleSubject(profile),
           )
         : undefined,
     );

@@ -22,6 +22,7 @@ import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { checkAuthenticatedHttpUserProfile } from "./http-auth-user-profile.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -40,18 +41,19 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 
 const pluginId = "staff-access";
 const grantId = "780a6c68-5d66-4df6-b4e8-dba6d24264a2";
-const member: OpenClawIdTunnelPrincipal = {
+const member = {
   kind: "member",
   peerKey: `iroh:${"ab".repeat(32)}`,
   accountId: "member-account",
   role: "member",
   authority: { clawId: "test-claw", rootPub: "test-root", listedSeq: 1 },
-};
+} satisfies OpenClawIdTunnelPrincipal;
 const source = { openclawIdPrincipal: member };
 const profile = {
   profileId: "member-profile",
   emails: ["member@example.test"],
   assignedRole: "staff",
+  openclawIdAccountIds: [member.accountId],
   githubLogin: "member-login",
 };
 const preparedProfile = { ...profile, role: profile.assignedRole, isCurrent: () => true };
@@ -64,12 +66,14 @@ afterEach(() => {
   }
   rollbackStagedPluginRegistry(previousRegistry);
   setOpenClawIdTunnelPrincipalLookup(undefined);
+  setOpenClawIdMemberAccountLookup(undefined);
   clearRuntimeConfigSnapshot();
 });
 
 function fixture(defaultRole = false) {
   const config: OpenClawConfig = {
     gateway: {
+      openclawId: { enabled: true },
       roles: {
         ...(defaultRole ? { default: "member" } : {}),
         assignments: { byGithubLogin: { "member-login": "member" } },
@@ -93,6 +97,7 @@ function fixture(defaultRole = false) {
   };
   setRuntimeConfigSnapshot(config);
   setOpenClawIdTunnelPrincipalLookup(() => member);
+  setOpenClawIdMemberAccountLookup((accountId) => accountId === member.accountId);
   const registry = createEmptyPluginRegistry();
   stageActivePluginRegistry(registry, null, "default");
   const controller = new AbortController();
@@ -118,10 +123,18 @@ function fixture(defaultRole = false) {
   return { config, authority, register };
 }
 
-it("requires the profile plugin for member and other sign-ins with a definitions-only catalog", () => {
+it("requires the profile plugin only for canonical members with a definitions-only catalog", () => {
   const { config } = fixture();
-  expect(hasGatewayOperatorAccessPolicies(config)).toBe(true);
-  expect(hasGatewayOperatorAccessPolicies(config, source)).toBe(true);
+  expect(hasGatewayOperatorAccessPolicies(config)).toBe(false);
+  expect(hasGatewayOperatorAccessPolicies(config, source)).toBe(false);
+  expect(hasGatewayOperatorAccessPolicies(config, preparedProfile)).toBe(true);
+  expect(
+    resolvePreparedGatewayOperatorAccessAuthority(
+      { ...preparedProfile, openclawIdAccountIds: [] },
+      config,
+      source,
+    ),
+  ).toBeNull();
   expect(() => resolvePreparedGatewayOperatorAccessAuthority(preparedProfile, config)).toThrow(
     "[access-cause=policy-unavailable]",
   );
@@ -175,11 +188,14 @@ it("retains the profile role when a transient policy failure is re-evaluated", (
   expect(() => access?.assertCurrent()).not.toThrow();
 });
 
-it("requires the profile plugin even when the membership label has no plugin", () => {
+it("requires the profile plugin with an explicit default for nonmembers and unbound membership labels", () => {
   const { config } = fixture(true);
-  expect(() => resolvePreparedGatewayOperatorAccessAuthority(preparedProfile, config)).toThrow(
-    "[access-cause=policy-unavailable]",
-  );
+  expect(() =>
+    resolvePreparedGatewayOperatorAccessAuthority(
+      { ...preparedProfile, openclawIdAccountIds: [] },
+      config,
+    ),
+  ).toThrow("[access-cause=policy-unavailable]");
   expect(() =>
     resolvePreparedGatewayOperatorAccessAuthority(preparedProfile, config, {
       openclawIdPrincipal: { ...member, role: "unbound" },

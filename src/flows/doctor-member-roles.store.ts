@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { operatorRoleSubject } from "../gateway/operator-role-enforcement.js";
 import { resolveOperatorRoleSelection } from "../gateway/operator-role-policy.js";
 import { prepareCorePluginStateReplacement } from "../plugin-state/plugin-state-store.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
@@ -73,6 +74,7 @@ export async function readDoctorMemberRoles(
       assigned,
       cfg,
       profile?.githubLogin ?? null,
+      operatorRoleSubject(profile),
     );
     members.set(accountId, selected.effectiveRole ?? assigned ?? "unassigned");
   }

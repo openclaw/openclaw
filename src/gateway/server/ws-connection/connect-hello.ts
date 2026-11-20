@@ -405,6 +405,12 @@ export async function sendGatewayHello(
       }
     }
     snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
+    if (
+      (deviceToken || bootstrapDeviceTokens.length > 0) &&
+      state.isDeviceTokenSubjectCurrent?.() === false
+    ) {
+      throw new Error("Profile membership changed before credential delivery");
+    }
     helloWriteStarted = true;
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {

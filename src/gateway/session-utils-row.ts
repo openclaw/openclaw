@@ -2,9 +2,8 @@ import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
-import { omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
+import { readAgentConfigEntry } from "../agents/agent-scope-config.js";
 import { countRunningBackgroundProcesses } from "../agents/bash-process-observation.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
@@ -118,6 +117,7 @@ export function readSessionRowInputs(params: {
   skipTranscriptUsageFallback?: boolean;
   transcriptUsage?: SessionTranscriptUsageSnapshot | null;
   lightweightListRow?: boolean;
+  hasMessages?: boolean;
   includeSwarmChildren?: boolean;
 }) {
   const { cfg, storePath, store, key, entry, agentId } = params;
@@ -183,7 +183,7 @@ export function readSessionRowInputs(params: {
     catalogEntry,
     selected: entry?.contextWindow,
   });
-  const modelContext = resolveModelContextTokenProjection({
+  const modelContext = (params.runtimeResolution?.context ?? resolveModelContextTokenProjection)({
     cfg,
     provider,
     model,
@@ -234,9 +234,12 @@ export function readSessionRowInputs(params: {
       displayName,
       derivedTitle: params.preparedTitle?.derivedTitle,
       lastMessagePreview: params.preparedTitle?.lastMessagePreview,
+      hasMessages: params.hasMessages,
       lastAssistantMessage: params.preparedTitle?.lastAssistantMessage,
       thinkingProjection,
-      agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
+      agentRuntime: (params.runtimeResolution?.placement ?? projectWorkerPlacementAgentRuntime)(
+        thinkingProjection.agentRuntime,
+      ),
       contextWindowProfile,
       fastModeState: resolveFastModeState({
         cfg,
@@ -392,7 +395,7 @@ export function materializeSessionRow(
       entry?.label ?? "",
     );
 
-  const row = omitUndefinedFields<GatewaySessionRow>({
+  const row: GatewaySessionRow = {
     key,
     sessionModelRevision: sessionModelRevision(entry, undefined, input.preparedRuntimeOwnership),
     // Only explicitly requested summaries may clear swarm state in event merges.
@@ -446,6 +449,7 @@ export function materializeSessionRow(
       : input.displayName,
     derivedTitle: input.derivedTitle,
     lastMessagePreview: input.lastMessagePreview,
+    hasMessages: input.hasMessages,
     lastAssistantMessage: input.lastAssistantMessage,
     channel,
     subject: entry?.subject,
@@ -500,7 +504,7 @@ export function materializeSessionRow(
     traceLevel: entry?.traceLevel,
     reasoningLevel: entry?.reasoningLevel,
     reasoningDefault:
-      resolveAgentConfig(cfg, input.agentId)?.reasoningDefault ??
+      readAgentConfigEntry(cfg, input.agentId)?.reasoningDefault ??
       cfg.agents?.defaults?.reasoningDefault,
     elevatedLevel: entry?.elevatedLevel,
     sendPolicy: entry?.sendPolicy,
@@ -547,7 +551,7 @@ export function materializeSessionRow(
     lastAccountId: deliveryFields.lastAccountId,
     lastThreadId: deliveryFields.lastThreadId,
     pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
-  });
+  };
   return Object.freeze({
     publicationIdentity: previous?.publicationIdentity ?? {},
     row: freezeSessionRow(row, previous?.row),
@@ -596,7 +600,7 @@ export function replaceSessionRowFacts(
   return Object.freeze({
     publicationIdentity: materialized.publicationIdentity,
     row: row
-      ? freezeSessionRow(omitUndefinedFields({ ...materialized.row, ...row }), materialized.row)
+      ? freezeSessionRow({ ...materialized.row, ...row }, materialized.row, Object.keys(row))
       : materialized.row,
     source: Object.freeze(nextSource),
   });

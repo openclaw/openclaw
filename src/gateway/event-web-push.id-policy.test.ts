@@ -4,12 +4,14 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BoundWebPushSubscription } from "../infra/push-web.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createEventWebPushDelivery } from "./event-web-push.js";
 import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -71,6 +73,7 @@ beforeEach(() => {
 afterEach(() => {
   setDeviceTokenBindingOwner(undefined);
   setOpenClawIdTunnelPrincipalLookup(undefined);
+  setOpenClawIdMemberAccountLookup(undefined);
 });
 
 describe("Web Push ID canonical profile policy", () => {
@@ -90,6 +93,17 @@ describe("Web Push ID canonical profile policy", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const creator = ensureProfileForEmail("push-creator@example.test");
         const recipient = ensureProfileForEmail("push-recipient@example.test");
+        linkOpenClawIdUserProfile(
+          { profileId: recipient.id, accountId: "account", email: null },
+          {},
+        );
+        setOpenClawIdMemberAccountLookup(
+          (accountId) =>
+            accountId === "account" &&
+            membership !== "removed" &&
+            membership !== "off" &&
+            membership !== "owner",
+        );
         setUserProfileRole(
           recipient.id,
           membership === "owner"
@@ -104,6 +118,7 @@ describe("Web Push ID canonical profile policy", () => {
         );
         const cfg: OpenClawConfig = {
           gateway: {
+            openclawId: { enabled: membership !== "off" },
             roles: {
               ...(membership === "definitions only"
                 ? {}

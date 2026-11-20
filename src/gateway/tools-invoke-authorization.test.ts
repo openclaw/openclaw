@@ -10,9 +10,13 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
+import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+} from "./openclaw-id/tunnel-principal.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -346,8 +350,14 @@ it.each([false, true])(
           accountId: "required-admin",
           role: "display-only",
         };
+        linkOpenClawIdUserProfile(
+          { profileId: profile.id, accountId: principal.accountId, email: null },
+          {},
+        );
+        setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
         runtime.cfg = {
           gateway: {
+            openclawId: { enabled: true },
             roles: {
               definitions: {
                 isolated: {
@@ -384,6 +394,7 @@ it.each([false, true])(
           expect(runtime.execute).not.toHaveBeenCalled();
         } finally {
           setOpenClawIdTunnelPrincipalLookup(undefined);
+          setOpenClawIdMemberAccountLookup(undefined);
         }
       },
     );

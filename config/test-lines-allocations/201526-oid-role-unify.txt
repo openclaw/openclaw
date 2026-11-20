@@ -5,7 +5,7 @@
 # CI fixtures now assign canonical roles instead of granting authority via ID labels.
 # Recovery and automation-creator transport fixtures prove canonical role ceilings
 # independently of opaque membership labels.
-# Owner pairing remains uncapped while definitions govern identified profiles.
+# Owner pairing remains uncapped while catalog-only policy governs linked members.
 # Owner certificate revocation and catalog-only MCP consent have distinct cutoffs;
 # canonical member roles retain sandbox, history and mention nondisclosure coverage.
 # Identified MCP callers cannot acquire owner grants without owner authority.
@@ -20,5 +20,13 @@
 # Explicit source revocation also cancels non-runtime producers and their native waiters.
 # Retained Goal role-loss coverage waits for actual provider cancellation before settlement.
 # Removal nondisclosure preserves both exact source-revoked and runtime-retired diagnostics.
-# Measured against the merged PR base: 2462 net test lines; 400 ordinary + 2062 allocated.
-2062
+# Member-only scope correction adds a real Gateway 6x4 transport/config matrix,
+# owner HTTP/push/device and empty-ceiling compatibility, canonical no-socket joins,
+# recovery and PR-audience membership cache fences, and disable-during-import latches.
+# Credential-race cases fence membership at token commit, registration and hello delivery.
+# Existing transport/recovery/sandbox fixtures now publish canonical active membership;
+# nonmember catalog-only fixtures preserve the base contract, and stream startup is covered.
+# Publication and scheduled-source fixtures own their canonical profile catalogs;
+# WebSocket admission fixtures emit real lifecycle events for prepared authority.
+# Measured against the pinned PR base: 3957 net test lines; 400 ordinary + 3557 allocated.
+3557

@@ -21,7 +21,7 @@ import { captureResidentUserProfileAccess } from "../state/user-profile-list.js"
 import type { UserProfileAccessFacts } from "../state/user-profiles.types.js";
 import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
+import { isOperatorRoleEnforcedFor, operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 
 export const GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE =
@@ -83,6 +83,8 @@ function currentAccessPolicies() {
 }
 
 type GatewayOperatorAccessSource = {
+  profileId?: string;
+  openclawIdAccountIds?: readonly string[];
   /** Attested connection or retained source; never inferred from profile identities. */
   openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
 };
@@ -92,9 +94,9 @@ export function hasGatewayOperatorAccessPolicies(
   _source: GatewayOperatorAccessSource = {},
 ): boolean {
   return (
-    usesGitHubRoleAssignments(config, null) ||
+    usesGitHubRoleAssignments(config, null, _source) ||
     currentAccessPolicies().length > 0 ||
-    (isNamedOperatorRoleEnforcementEnabled(config) &&
+    (isOperatorRoleEnforcedFor(config, operatorRoleSubject(_source)) &&
       Object.values(config.gateway?.roles?.definitions ?? {}).some(
         (role) => role.accessPolicyPlugin,
       ))
@@ -109,7 +111,7 @@ function usesGitHubRoleAssignments(
   const roles = config.gateway?.roles;
   return Boolean(
     roles &&
-    isNamedOperatorRoleEnforcementEnabled(config) &&
+    isOperatorRoleEnforcedFor(config, operatorRoleSubject(_source)) &&
     Object.keys(roles.assignments?.byGithubLogin ?? {}).length > 0 &&
     (!assignedRole || !Object.hasOwn(roles.definitions, assignedRole)),
   );
@@ -124,7 +126,13 @@ function resolveAccessPolicyRole(
 ) {
   return {
     assignedRole,
-    policy: resolveOperatorRolePolicyForAssignment(profileId, assignedRole, config, githubLogin),
+    policy: resolveOperatorRolePolicyForAssignment(
+      profileId,
+      assignedRole,
+      config,
+      githubLogin,
+      operatorRoleSubject(_source),
+    ),
   };
 }
 
@@ -144,16 +152,25 @@ function pluginProfile(
 export function resolveGatewayOperatorAccessAuthority(
   profileId: string,
   config: OpenClawConfig,
-  options: GatewayOperatorAccessSource & { requireLivePolicySet?: boolean } = {},
+  inputOptions: GatewayOperatorAccessSource & { requireLivePolicySet?: boolean } = {},
 ): GatewayOperatorAccessAuthority | null {
   if (profileId === GATEWAY_OWNER_PROFILE_ID) {
     return null;
   }
-  if (!options.requireLivePolicySet && !hasGatewayOperatorAccessPolicies(config, options)) {
+  if (
+    !inputOptions.requireLivePolicySet &&
+    !config.gateway?.openclawId?.enabled &&
+    !hasGatewayOperatorAccessPolicies(config, inputOptions)
+  ) {
     return null;
   }
   const resident = captureResidentUserProfileAccess(profileId);
   const profile = resident.readCurrentFacts();
+  const options = {
+    ...inputOptions,
+    profileId: profile.profileId,
+    openclawIdAccountIds: profile.openclawIdAccountIds,
+  };
   const emails = [...profile.emails];
   const githubAccountIds = [...(profile.githubAccountIds ?? [])];
   const usesGithubAssignments = usesGitHubRoleAssignments(config, profile.assignedRole, options);
@@ -161,6 +178,7 @@ export function resolveGatewayOperatorAccessAuthority(
   return resolvePreparedGatewayOperatorAccessAuthority(
     {
       profileId: profile.profileId,
+      openclawIdAccountIds: profile.openclawIdAccountIds,
       emails,
       githubAccountIds,
       role: profile.assignedRole,
@@ -180,7 +198,10 @@ export function resolveGatewayOperatorAccessAuthority(
             current.profileId !== profileId ||
             (usesGithubAssignments && current.githubLogin !== profile.githubLogin) ||
             emails.some((email) => !currentEmails.has(email)) ||
-            githubAccountIds.some((accountId) => !current.githubAccountIds?.includes(accountId))
+            githubAccountIds.some((accountId) => !current.githubAccountIds?.includes(accountId)) ||
+            (profile.openclawIdAccountIds ?? []).some(
+              (accountId) => !current.openclawIdAccountIds?.includes(accountId),
+            )
           ) {
             return false;
           }
@@ -199,17 +220,23 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
   profile: Readonly<{
     profileId: string;
     emails: readonly string[];
+    openclawIdAccountIds?: readonly string[];
     githubAccountIds?: readonly number[];
     githubLogin?: string | null;
     role: string | null;
     isCurrent: () => boolean;
   }>,
   config: OpenClawConfig,
-  options: GatewayOperatorAccessSource & { requireLivePolicySet?: boolean } = {},
+  inputOptions: GatewayOperatorAccessSource & { requireLivePolicySet?: boolean } = {},
 ): GatewayOperatorAccessAuthority | null {
   if (profile.profileId === GATEWAY_OWNER_PROFILE_ID) {
     return null;
   }
+  const options = {
+    ...inputOptions,
+    profileId: profile.profileId,
+    openclawIdAccountIds: profile.openclawIdAccountIds,
+  };
   const policies = currentAccessPolicies();
   if (
     !options.requireLivePolicySet &&
@@ -432,11 +459,16 @@ export function resumeGatewayOperatorAccessGrant(
   profile: UserProfileAccessFacts,
   config: OpenClawConfig,
   grant: GatewayAccessGrantRef | null,
-  options: GatewayOperatorAccessSource & { retained?: PluginGatewayAccessAuthority } = {},
+  inputOptions: GatewayOperatorAccessSource & { retained?: PluginGatewayAccessAuthority } = {},
 ): PluginGatewayAccessAuthority | undefined {
-  if (options.openclawIdPrincipal?.kind === "owner" && grant === null) {
+  if (inputOptions.openclawIdPrincipal?.kind === "owner" && grant === null) {
     return undefined;
   }
+  const options = {
+    ...inputOptions,
+    profileId: profile.profileId,
+    openclawIdAccountIds: profile.openclawIdAccountIds,
+  };
   const policies = currentAccessPolicies();
   const role = resolveAccessPolicyRole(
     profile.profileId,

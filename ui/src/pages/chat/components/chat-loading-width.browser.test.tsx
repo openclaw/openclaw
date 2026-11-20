@@ -37,8 +37,10 @@ it.each([
     vi.stubGlobal("cancelAnimationFrame", clock.cancel);
     const transcript = createChatTranscript(() => "loading-width");
     onTestFinished(() => transcript.dispose());
+    const selectedSession = { key: "agent:main:main", kind: "direct", hasMessages: true } as const;
     const [props, setProps] = createSignal(
       threadProps("loading-width", undefined, [], {
+        selectedSession,
         loading: true,
         routeLoadingSkeleton: true,
       }),
@@ -77,10 +79,10 @@ it.each([
     clock.flush(performance.now());
     flush();
     const loading = mobile ? bounds() : null;
-    setProps(threadProps("loading-width", undefined, [], { loading: true }));
+    setProps(threadProps("loading-width", undefined, [], { selectedSession, loading: true }));
     flush();
     const refreshLoading = mobile ? bounds() : null;
-    setProps(threadProps("loading-width"));
+    setProps(threadProps("loading-width", undefined, undefined, { selectedSession }));
     flush();
     transcript.update();
     await waitForSolid(() =>

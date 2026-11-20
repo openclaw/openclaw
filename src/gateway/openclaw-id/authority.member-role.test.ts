@@ -8,6 +8,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createOpenClawIdAuthority } from "./authority.js";
 import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import { linkedClaw, memoryStore, serviceFor } from "./openclaw-id.test-support.js";
 import { resolveOpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
@@ -69,6 +70,69 @@ it.each(["tunnel", "local_operator"] as const)(
       expect(effects.closeConnections).toHaveBeenCalledWith([`conn-${peer.slice(5, 9)}`]);
     } finally {
       await service.stop();
+    }
+  },
+);
+
+it.each(["initial load", "queued import"])(
+  "does not publish member-role initialization after ID disables during %s",
+  async (operation) => {
+    const base = memoryStore();
+    const claw = await linkedClaw(base);
+    const peer = formatIrohEndpointKey(new Uint8Array(32).fill(21));
+    expect(
+      await claw.authority.submit(
+        await claw.sign({
+          op: "add",
+          account_id: "member",
+          role: "operator",
+          peer_keys: [peer],
+          invite_id: null,
+        }),
+        "tunnel",
+      ),
+    ).toMatchObject({ ok: true });
+    const stored = (await base.read())!;
+    delete stored.member_profile_roles;
+    await base.write(stored);
+    const reached = createDeferredCore();
+    const resume = createDeferredCore();
+    let enabled = operation === "initial load";
+    let pause = true;
+    const owner = createOpenClawIdAuthority(
+      {
+        ...base,
+        async write(next, assertCurrent) {
+          if (pause && next.member_profile_roles?.member) {
+            reached.resolve();
+            await resume.promise;
+          }
+          await base.write(next, assertCurrent);
+        },
+      },
+      () => enabled,
+    );
+    try {
+      if (operation === "queued import") {
+        await owner.load();
+        enabled = true;
+      }
+      const pending =
+        operation === "initial load" ? owner.load() : owner.initializeMemberProfileRoles();
+      await reached.promise;
+      enabled = false;
+      const rejected = expect(pending).rejects.toThrow("member role import changed");
+      resume.resolve();
+      await rejected;
+      expect((await base.read())?.member_profile_roles).toBeUndefined();
+      expect((await owner.load())?.member_profile_roles).toBeUndefined();
+      enabled = true;
+      pause = false;
+      await owner.initializeMemberProfileRoles();
+      expect((await base.read())?.member_profile_roles).toEqual({ member: true });
+      expect(owner.current()?.member_profile_roles).toEqual({ member: true });
+    } finally {
+      resume.resolve();
     }
   },
 );

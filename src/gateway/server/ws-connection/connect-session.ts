@@ -38,6 +38,7 @@ import { serializeEventPayload } from "../../node-registry.js";
 import { resolveOpenClawIdOwnerProfile } from "../../openclaw-id/owner-account.js";
 import { openclawIdSubjectRolePolicy } from "../../openclaw-id/tunnel-principal.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
+import { operatorRoleSubject } from "../../operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../operator-role-policy.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
@@ -57,6 +58,7 @@ import {
   resolveEffectiveConnectionScopes,
   resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
+import { completeGatewayConnectDeviceTokens } from "./connect-device-tokens.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
 import {
@@ -269,6 +271,7 @@ export async function attachAuthenticatedGatewayConnect(
   }
   context.setConnectPhase?.("registration");
   const preparedProfile = profileAdmission.prepared;
+  await completeGatewayConnectDeviceTokens(state, preparedProfile?.authority);
   const authenticatedUserProfile =
     remoteIngressPrincipal?.authenticatedUserProfile ?? preparedProfile?.profile;
   // Identity-derived scopes must be capped only after their durable profile is known.
@@ -294,6 +297,7 @@ export async function attachAuthenticatedGatewayConnect(
             preparedProfile?.authority.role ?? null,
             context.configSnapshot,
             preparedProfile?.authority.githubLogin ?? null,
+            operatorRoleSubject(preparedProfile?.authority),
           ),
         )
       : undefined;
@@ -398,6 +402,7 @@ export async function attachAuthenticatedGatewayConnect(
   const controlUiAdmin = authenticatedControlUi && scopes.includes(ADMIN_SCOPE);
   const internal: NonNullable<GatewayWsClient["internal"]> = {
     ...(isLocalClient ? { isLocalClient: true as const } : {}),
+    ...(isLocalBackendClient ? { localBackendClient: true as const } : {}),
     ...(context.handler.ingressAttribution.kind === "openclaw-id-tunnel"
       ? { openclawIdPeerKey: context.handler.ingressAttribution.peerKey }
       : {}),

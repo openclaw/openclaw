@@ -56,7 +56,6 @@ export async function resolveSkillDispatchTools(params: {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir?: string;
-  authProfileStoreSource?: boolean;
   sessionEntry?: SessionEntry;
   sessionKey: string;
   workspaceDir: string;
@@ -183,7 +182,6 @@ export async function resolveSkillDispatchTools(params: {
     agentGroupSpace: params.sessionEntry?.space,
     agentMemberRoleIds: params.message.memberRoleIds,
     agentDir: params.agentDir,
-    authProfileStoreSource: params.authProfileStoreSource,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
     sessionConfigSource: "runtime",

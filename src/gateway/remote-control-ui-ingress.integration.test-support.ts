@@ -3,6 +3,7 @@ import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/devi
 import type { ConnectParams } from "../../packages/gateway-protocol/src/schema/frames.js";
 import type { SessionsFilesPreviewResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -10,6 +11,12 @@ import {
   signDevicePayload,
   type DeviceIdentity,
 } from "../infra/device-identity.js";
+import {
+  ensureCanonicalUserProfileForEmail,
+  linkCanonicalOpenClawIdUserProfile,
+} from "../state/user-profile-writes.js";
+import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
+import { setOpenClawIdMemberAccountLookup } from "./openclaw-id/tunnel-principal.js";
 export const TRUSTED_PROXY = {
   userHeader: "cf-access-authenticated-user-email",
   requiredHeaders: ["cf-access-jwt-assertion"],
@@ -185,4 +192,30 @@ export function heldReadBarrier() {
 }
 export function heldMutationBarrier(count: number) {
   return { ...heldReadBarrier(), remaining: count, unsettled: count, settled: createDeferred() };
+}
+
+/** Signed membership and its canonical profile join, independent of a live tunnel. */
+export async function prepareIngressMember(
+  config: OpenClawConfig,
+  configure: (config: OpenClawConfig) => Promise<void>,
+) {
+  const claw = await linkedClaw();
+  const profile = await ensureCanonicalUserProfileForEmail("id-member@ingress.example.test");
+  const peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(172));
+  const accountId = "ingress-id-member";
+  await linkCanonicalOpenClawIdUserProfile({ profileId: profile.id, accountId, email: null });
+  await configure({ ...config, gateway: { ...config.gateway, openclawId: { enabled: true } } });
+  setOpenClawIdMemberAccountLookup((id) =>
+    Boolean(claw.authority.current()?.authority?.members[id]),
+  );
+  return {
+    claw,
+    profile,
+    peerKey,
+    accountId,
+    release: async () => {
+      setOpenClawIdMemberAccountLookup(undefined);
+      await configure(config);
+    },
+  };
 }

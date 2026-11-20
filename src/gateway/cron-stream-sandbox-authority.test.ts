@@ -28,6 +28,7 @@ import { commitBackgroundResultToSession } from "../sessions/background-session-
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { linkCanonicalOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.js";
 import {
   linkCanonicalUserProfileEmail,
   setCanonicalUserProfileRole,
@@ -39,6 +40,7 @@ import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-supp
 import { migrateSharedOpenClawIdMemberSources } from "./openclaw-id/member-source-role-import-shared.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
+  setOpenClawIdMemberAccountLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
 import {
@@ -578,7 +580,7 @@ it.each(["grant revocation", "target replacement"] as const)(
   },
 );
 
-it.each(["member", "owner", "definition", "legacy member"] as const)(
+it.each(["member", "owner", "definition", "legacy member", "catalog member"] as const)(
   "restores a serialized OCID %s sandbox stream with its original peer dependency",
   async (scenario) => {
     const kind = scenario === "owner" ? "owner" : "member";
@@ -597,13 +599,22 @@ it.each(["member", "owner", "definition", "legacy member"] as const)(
       };
       fixture.target.operator!.openclawIdPrincipal = principal;
       if (kind === "member") {
+        await linkCanonicalOpenClawIdUserProfile({
+          profileId: fixture.profileId,
+          accountId: "stream-member",
+          email: null,
+        });
+        setOpenClawIdMemberAccountLookup(
+          (accountId) => principal?.kind === "member" && principal.accountId === accountId,
+        );
         await setCanonicalUserProfileRole(fixture.profileId, "operator");
         if (scenario !== "legacy member") {
           fixture.target.operator!.assignedRole = "operator";
         }
         fixture.config.gateway = {
+          openclawId: { enabled: true },
           roles: {
-            default: "reader",
+            ...(scenario === "catalog member" ? {} : { default: "reader" }),
             definitions: {
               ...MEMBER_ROLE_PRESETS,
               reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
@@ -678,6 +689,7 @@ it.each(["member", "owner", "definition", "legacy member"] as const)(
         expect(retained.assertCurrent).toThrow();
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
+        setOpenClawIdMemberAccountLookup(undefined);
       }
     });
   },
