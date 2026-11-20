@@ -127,8 +127,7 @@ export async function prepareSessionPermissionModeAuthorization(params: {
           !target ||
           target.agentId !== params.agentId ||
           target.canonicalKey !== params.sessionKey ||
-          target.storePath !== params.storePath ||
-          target.entry.sessionId !== existingEntry?.sessionId
+          target.storePath !== params.storePath
         ) {
           throw sessionMutationTargetChanged("permission change", params.sessionKey);
         }
