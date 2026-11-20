@@ -1,6 +1,6 @@
 import { createMemo, createSignal, For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import type { CronFieldKey, CronFormState } from "../../lib/cron/types.ts";
+import type { CronFieldKey } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { formSentenceFrequency } from "./schedule-sentence.ts";
 import { EventSourceFields } from "./view-event-source.tsx";

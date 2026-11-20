@@ -2,7 +2,6 @@ import { createMemo, For, Show } from "solid-js";
 import type { AgentSelectOption } from "../../components/agent-select-types.ts";
 import "../../components/agent-select-registration.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
-import { Icon } from "../../components/solid/icon.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
