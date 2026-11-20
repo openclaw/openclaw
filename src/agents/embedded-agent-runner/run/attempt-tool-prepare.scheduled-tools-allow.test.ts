@@ -593,3 +593,17 @@ it("builds a registration-denied tool for the owner's list and refuses it for th
   expect(guest.listed).toEqual(owner.listed);
   expect(guest.callable).not.toContain("progress_card");
 });
+
+it("narrows an isolated cron session to its allowlist and keeps a shared session's list fixed", async () => {
+  const isolated = await prepareTools({
+    ...scheduled,
+    runId: "iso",
+    sessionKey: "agent:main:cron:nightly:run:r1",
+  });
+  const shared = await prepareTools({ ...scheduled, runId: "shared" });
+  // One run per isolated session: nothing to share, so it sends main's narrowed list.
+  expect(isolated.listed).not.toContain("exec");
+  expect(isolated.listed).toEqual(isolated.callable);
+  expect(shared.listed).toContain("exec");
+  expect(shared.callable).toEqual(isolated.callable);
+});

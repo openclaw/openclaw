@@ -142,7 +142,11 @@ export function* assembleOpenClawCodingTools(
     ? [...TOOL_SEARCH_CONTROL_TOOL_NAMES]
     : [];
   // One listing per session: `message` is always offered; a scheduled allowlist gates calls.
-  const fixedListing = listsFixedToolSet(toolSearchConfig, toolSearchControlsEnabled)
+  const fixedListing = listsFixedToolSet(
+    toolSearchConfig,
+    toolSearchControlsEnabled,
+    options?.sessionKey,
+  )
     ? { profileAlsoAllow: ["message"], includeRuntimeToolPolicy: false }
     : undefined;
   const runtimeToolAllowlistIncludesMessage = expandToolGroups(
