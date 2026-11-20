@@ -106,7 +106,7 @@ COPY --from=workspace-deps /out/openclaw-required-platform-packages /tmp/opencla
 # ── Production dependencies ────────────────────────────────────
 FROM dependency-inputs AS production-deps
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
-RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+RUN \
     set -eu; set -- --filter . --filter ./ui --filter './packages/*'; \
     while IFS= read -r ext; do \
       set -- "$@" --filter "./${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext"; \
@@ -133,7 +133,7 @@ COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
 # Source asset preparation builds external plugins before runtime pruning.
 # Its build dependencies stay in this disposable stage; production remains filtered.
-RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+RUN \
     NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile \
       --config.supportedArchitectures.os=linux \
       --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
@@ -242,7 +242,7 @@ FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS installed-runtime-archive-input
 ARG OPENCLAW_INSTALLED_RUNTIME_SHA256
 WORKDIR /app
 COPY --from=openclaw_installed_runtime /installed-runtime.tgz /tmp/installed-runtime.tgz
-RUN --network=none test "${#OPENCLAW_INSTALLED_RUNTIME_SHA256}" -eq 64 && \
+RUN test "${#OPENCLAW_INSTALLED_RUNTIME_SHA256}" -eq 64 && \
     case "$OPENCLAW_INSTALLED_RUNTIME_SHA256" in *[!0-9a-f]*) exit 1;; esac && \
     printf "%s  /tmp/installed-runtime.tgz\n" "$OPENCLAW_INSTALLED_RUNTIME_SHA256" | sha256sum -c - && \
     tar -xzf /tmp/installed-runtime.tgz -C / && rm /tmp/installed-runtime.tgz
@@ -250,7 +250,7 @@ RUN --network=none test "${#OPENCLAW_INSTALLED_RUNTIME_SHA256}" -eq 64 && \
 FROM ${OPENCLAW_INSTALLED_RUNTIME_INPUT} AS installed-runtime-assets
 ARG OPENCLAW_EXTENSIONS
 COPY pnpm-lock.yaml docker-entrypoint.mjs /app/
-RUN --network=none cp -R .runtime-bootstrap/scripts/. scripts/ && \
+RUN cp -R .runtime-bootstrap/scripts/. scripts/ && \
     mkdir -p qa && \
     node .runtime-bootstrap/scripts/finalize-installed-runtime.mjs /app
 
@@ -288,8 +288,7 @@ WORKDIR /app
 # spawns `ssh` directly, and trixie-slim does not provide it.
 # Apply current Debian point-release security fixes even when the pinned base
 # digest predates them, without waiting for a base-digest refresh.
-RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -373,8 +372,7 @@ RUN install -d -m 0755 "$COREPACK_HOME" && \
 ARG OPENCLAW_IMAGE_APT_PACKAGES
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
 ENV PATH="/home/node/.local/bin:${PATH}"
-RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN \
     packages="${OPENCLAW_IMAGE_APT_PACKAGES:-$OPENCLAW_DOCKER_APT_PACKAGES}"; \
     if [ -n "$packages" ]; then \
       apt-get update && \
@@ -384,8 +382,7 @@ RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharin
 # Install additional Python packages needed by your plugins or skills.
 # Example: docker build --build-arg OPENCLAW_IMAGE_PIP_PACKAGES="requests humanize" .
 ARG OPENCLAW_IMAGE_PIP_PACKAGES=""
-RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN \
     if [ -n "$OPENCLAW_IMAGE_PIP_PACKAGES" ]; then \
       if ! python3 -m pip --version >/dev/null 2>&1; then \
         apt-get update && \
@@ -401,8 +398,7 @@ RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharin
 # Must run after node_modules COPY so playwright-core is available.
 ARG OPENCLAW_INSTALL_BROWSER=""
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
-RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN \
     set -eu; \
     case "$OPENCLAW_INSTALL_BROWSER" in \
       ""|0) exit 0 ;; \
@@ -422,8 +418,7 @@ RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharin
 # Required for agents.defaults.sandbox to function in Docker deployments.
 ARG OPENCLAW_INSTALL_DOCKER_CLI=""
 ARG OPENCLAW_DOCKER_GPG_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
-RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN \
     if [ -n "$OPENCLAW_INSTALL_DOCKER_CLI" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
