@@ -1,5 +1,6 @@
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatGuardianNotice, ChatItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import type { AutomationProjection } from "./chat-automation-projection-loader.ts";
 import type { ChatThreadDisplayProps } from "./chat-thread-display.ts";
 import type { ChatInputPlacementProps } from "./chat-thread-inputs.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
@@ -14,6 +15,7 @@ export type BuildChatItemsProps = ChatInputPlacementProps &
     locale?: string;
     messages: unknown[];
     toolMessages: unknown[];
+    projectAutomations?: AutomationProjection;
     guardianNotices?: ChatGuardianNotice[];
     streamSegments: ChatStreamSegment[];
     persistCommentary?: boolean;

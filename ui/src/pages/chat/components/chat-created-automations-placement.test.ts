@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { projectChatDisplayMessages } from "../../../../../src/gateway/chat-display-projection.js";
 import type {
   AutomationCreationPlan,
@@ -9,6 +9,7 @@ import { AutomationCreationCardBlock } from "../../../lib/chat/automation-creati
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
+import * as schedulerProjection from "../chat-automation-projection-loader.ts";
 import { createState } from "../chat-gateway.test-support.ts";
 import { handleChatGatewayEvent } from "../chat-gateway.ts";
 import { buildItems, makeMessage } from "../chat-thread.test-support.ts";
@@ -169,6 +170,7 @@ it("keeps a standalone plan in each originating turn even when provider call IDs
 
 it("keeps the actual assistant card mounted while a planned job fails", async () => {
   installTranscriptDomMocks();
+  const load = vi.spyOn(schedulerProjection, "loadAutomationProjection");
   const scheduled = liveTool("plan-call", "plan", { slots: plan.slots }, plan);
   const props = threadProps(
     "plan-progress",
@@ -178,7 +180,7 @@ it("keeps the actual assistant card mounted while a planned job fails", async ()
       runId: "setup",
       runWorking: true,
       runActive: true,
-      toolMessages: [scheduled],
+      toolMessages: [],
       showToolCalls: false,
     },
   );
@@ -187,7 +189,12 @@ it("keeps the actual assistant card mounted while a planned job fails", async ()
     render(null, container);
     transcript.dispose();
     resetTranscriptTestDom();
+    load.mockRestore();
   });
+  rerender();
+  await waitForSolid(() => expect(container.textContent).toContain("prompt"));
+  expect(load).not.toHaveBeenCalled();
+  props.toolMessages = [scheduled];
   rerender();
   const selector = ".chat-bubble .chat-created-automations";
   const card = await waitForSolid(() => {
@@ -195,6 +202,7 @@ it("keeps the actual assistant card mounted while a planned job fails", async ()
     expect(node).not.toBeNull();
     return node!;
   });
+  expect(load).toHaveBeenCalledOnce();
   const row = card.querySelector('[data-slot-id="a"]');
   expect(card.querySelectorAll(".chat-created-automations__switch-placeholder")).toHaveLength(2);
   props.toolMessages = [
