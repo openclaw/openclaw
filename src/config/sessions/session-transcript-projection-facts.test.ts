@@ -131,6 +131,38 @@ function fixture(initialEvents: TranscriptEvent[] = [user, assistant]) {
   return { database, scope, target, identity, write, append, hydrate, receipt, read, observe };
 }
 
+it("excludes saved system-prompt checkpoints from compaction pressure bytes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const checkpoint = {
+      type: "custom",
+      id: "sp",
+      parentId: "assistant",
+      customType: "openclaw.system-prompt",
+      data: { prefix: "x".repeat(150_000), routeKey: "route", historyId: "history" },
+    };
+    const f = fixture([user, assistant, checkpoint]);
+    const options = { includeByteSize: true, includeUsage: false } as const;
+    const read = (excludeSystemPromptCheckpoints: boolean) =>
+      readProjection(f.database, f.scope, (projection) =>
+        readSessionTranscriptAccountingFromProjection(projection, {
+          ...options,
+          excludeSystemPromptCheckpoints,
+        }),
+      );
+
+    const all = read(false);
+    const pressure = read(true);
+
+    expect(all).toMatchObject({ kind: "value", value: { eventCount: 3 } });
+    expect(pressure).toMatchObject({ kind: "value", value: { eventCount: 2 } });
+    const allBytes = all.kind === "value" ? all.value.byteSize : undefined;
+    const pressureBytes = pressure.kind === "value" ? pressure.value.byteSize : undefined;
+    expect(allBytes).toBeGreaterThan(150_000);
+    expect(pressureBytes).toBeGreaterThan(0);
+    expect(pressureBytes).toBeLessThan(10_000);
+  });
+});
+
 function withObservedSnapshot(
   f: ReturnType<typeof fixture>,
   run: (observed: ReturnType<ReturnType<typeof fixture>["observe"]>) => void,

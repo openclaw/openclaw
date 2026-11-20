@@ -6,6 +6,8 @@ export type SessionTranscriptAccountingOptions = {
   includeByteSize: boolean;
   includeTurnTaint?: boolean;
   includeUsage: boolean;
+  /** Compaction pressure ignores saved system-prompt checkpoints, which compaction cannot shrink. */
+  excludeSystemPromptCheckpoints?: boolean;
 };
 
 export type SessionTranscriptUsageSnapshot = {
