@@ -245,7 +245,12 @@ describe("qualified OpenCode replay and native thinking", () => {
                 await stream(model, completionContext("Continue"), {
                   apiKey: "synthetic-router-key",
                   cacheRetention: "none",
-                  onPayload: (payload) => ({ ...payload, ...structuredClone(controls) }),
+                  onPayload: (payload) => {
+                    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+                      throw new Error("Expected a request payload object");
+                    }
+                    return { ...payload, ...structuredClone(controls) };
+                  },
                 })
               ).result();
               expect(result.stopReason, result.errorMessage).toBe("stop");
