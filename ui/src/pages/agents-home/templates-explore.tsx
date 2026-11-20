@@ -15,9 +15,9 @@ import {
   CatalogDiscoverySearch,
   CatalogDiscoverySection,
 } from "../../components/solid/catalog-discovery.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
+import { TemplateCategoryIcon } from "../../components/solid/template-category-icon.tsx";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
@@ -302,7 +302,7 @@ export function TemplatesExplore(
                   <CatalogDiscoveryChip
                     active={view.category === slug}
                     onClick={() => selectCategory(slug)}
-                    icon={<Icon name={icon} />}
+                    icon={<TemplateCategoryIcon icon={icon} />}
                   >
                     {t(label)}
                   </CatalogDiscoveryChip>
