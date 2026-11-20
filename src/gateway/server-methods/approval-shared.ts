@@ -18,7 +18,10 @@ import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.
 import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareApprovalChannelCustody } from "../approval-channel-custody.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
-import { canResolveParticipationExecApproval } from "../exec-approval-participation.js";
+import {
+  canResolveParticipationExecApproval,
+  participationApprovalTurnActor,
+} from "../exec-approval-participation.js";
 import type { OperatorApprovalTerminalReason } from "../operator-approval-store.js";
 import type { OperatorApprovalStoreGuard } from "../operator-approval-store.types.js";
 import {
@@ -56,6 +59,7 @@ type RequestedApprovalEvent<
 > = {
   approvalKind?: TKind;
   id: string;
+  canDecide?: boolean;
   request: TPayload;
   createdAtMs: number;
   expiresAtMs: number;
@@ -135,10 +139,13 @@ export function buildRequestedApprovalEvent<
   record: ExecApprovalRecord<TPayload>,
   approvalKind?: TKind,
 ): RequestedApprovalEvent<TPayload, TKind> {
+  const turnActor = participationApprovalTurnActor(record);
   return {
     ...(approvalKind ? { approvalKind } : {}),
     id: record.id,
-    request: record.request,
+    // Participation delivery admits only the exact creator/admin, not ordinary reviewers.
+    ...(record.participation ? { canDecide: true } : {}),
+    request: turnActor ? { ...record.request, turnActor } : record.request,
     createdAtMs: record.createdAtMs,
     expiresAtMs: record.expiresAtMs,
   };

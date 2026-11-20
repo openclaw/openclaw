@@ -209,7 +209,14 @@ suite.define(() => {
         owner: creator,
         members: [{ identityId: "alice", addedBy: "morgan", addedAt: 1, access: "send" }],
         identities: [creator, participant],
-        permissions: [{ identityId: "alice", level: "send", options: ["read", "suggest", "send"] }],
+        permissions: [
+          {
+            identityId: "alice",
+            level: "send",
+            options: ["read", "suggest", "send"],
+            invitation: "member",
+          },
+        ],
         role: "owner",
         allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
       };

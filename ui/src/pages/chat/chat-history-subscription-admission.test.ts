@@ -130,3 +130,24 @@ it.each<[string, boolean]>([
     expect(state.chatSessionMessageSubscription).toBeNull();
   }
 });
+
+it("opts authenticated people into exact-bound approval replay without global reviewer scope", async () => {
+  const key = "agent:main:creator";
+  const state = makeChatHost({
+    sessionKey: key,
+    requestHandlers: {
+      "sessions.messages.subscribe": () => ({
+        key,
+        includeApprovals: true,
+        approvalReplay: { sessionKey: key, updatedAtMs: 1, approvals: [], truncated: false },
+      }),
+    },
+  });
+  onTestFinished(() => state.sessions.dispose());
+  state.hello = { ...state.hello!, auth: { role: "operator", scopes: ["operator.sessions.read"] } };
+  state.selfUser = { id: "creator", identity: { type: "profile", id: "creator" } };
+  await expect(syncSelectedSessionMessageSubscription(state)).resolves.toBe(true);
+  expect(requestCalls(state.request, "sessions.messages.subscribe")[0]?.[1]).toMatchObject({
+    includeApprovals: true,
+  });
+});

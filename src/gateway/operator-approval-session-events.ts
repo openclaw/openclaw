@@ -16,7 +16,11 @@ import type {
   ExecApprovalManager,
   OperatorApprovalLifecycleEvent,
 } from "./exec-approval-manager.js";
-import { canResolveParticipationExecApproval } from "./exec-approval-participation.js";
+import {
+  canObserveParticipationExecApproval,
+  canResolveParticipationExecApproval,
+  participationApprovalTurnActor,
+} from "./exec-approval-participation.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
   canAccessOperatorApproval,
@@ -125,6 +129,36 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       );
   };
 
+  const participantProjection = (record: OperatorApprovalRecord, sessionKey: string) => {
+    const manager = params.getLiveManager?.("exec");
+    const live = record.kind === "exec" ? manager?.getLiveSnapshot(record.id) : undefined;
+    if (
+      !live?.participation ||
+      resolveApprovalSourceStreamKey(live.participation.sessionKey, record.source.agentId) !==
+        sessionKey ||
+      !record.source.runId ||
+      manager?.runtimeEpoch !== record.runtimeEpoch
+    ) {
+      return undefined;
+    }
+    const canReceive = (client: GatewayClient | null) =>
+      params.isCurrent?.() !== false &&
+      params.getLiveManager?.("exec") === manager &&
+      manager.getLiveSnapshot(record.id) === live &&
+      canObserveParticipationExecApproval(live, client);
+    const event: Extract<SessionApprovalEvent, { phase: "participant" }> = {
+      phase: "participant",
+      sessionKey,
+      updatedAtMs: record.updatedAtMs,
+      approvalId: record.id,
+      runId: record.source.runId,
+      participantId: live.participation.participantProfileId,
+      status: record.status === "pending" ? "pending" : "terminal",
+      expiresAtMs: record.expiresAtMs,
+    };
+    return { event, canReceive };
+  };
+
   const authorizedRecipients = (
     sessionKey: string,
     canReceive: (client: GatewayClient) => boolean,
@@ -191,7 +225,15 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         data: { approval: { id: event.record.id, state: pending ? "pending" : "resolved" } },
       });
     }
-    const approval = projectOperatorApprovalSnapshot(event.record, controlUiBasePath);
+    const snapshot = projectOperatorApprovalSnapshot(event.record, controlUiBasePath);
+    const boundRecord = manager?.getLiveSnapshot(event.record.id);
+    const turnActor = participationApprovalTurnActor(boundRecord);
+    const approval = snapshot && {
+      ...snapshot,
+      ...(turnActor ? { turnActor } : {}),
+      // Full participation snapshots go only to the exact creator/admin recipient below.
+      ...(snapshot.status === "pending" && boundRecord?.participation ? { canDecide: true } : {}),
+    };
     if (!approval || event.record.audienceSessionKeys.length === 0) {
       return;
     }
@@ -206,6 +248,15 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         ? participationExecApprovalRecipient(manager, event.record.id)
         : undefined;
     for (const sessionKey of event.record.audienceSessionKeys) {
+      const participant = participantProjection(event.record, sessionKey);
+      if (participant) {
+        const recipients = authorizedRecipients(sessionKey, participant.canReceive);
+        if (recipients.size > 0) {
+          params.broadcastToConnIds("session.approval", participant.event, recipients, {
+            participationApprovalRecipient: participant.canReceive,
+          });
+        }
+      }
       const recipients = authorizedRecipients(sessionKey, canReceive);
       if (recipients.size === 0) {
         continue;
@@ -317,11 +368,12 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         ? (params.getLiveManager("exec")?.listLocalPendingRecords() ?? [])
             .filter(
               (record) =>
-                canResolveParticipationExecApproval(record, client) ??
-                canAccessOperatorApproval({
-                  client,
-                  binding: { reviewerDeviceIds: record.approvalReviewerDeviceIds },
-                }),
+                canObserveParticipationExecApproval(record, client) ||
+                (canResolveParticipationExecApproval(record, client) ??
+                  canAccessOperatorApproval({
+                    client,
+                    binding: { reviewerDeviceIds: record.approvalReviewerDeviceIds },
+                  })),
             )
             .map((record) => record.id)
             .toSorted()
@@ -411,17 +463,44 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         const recipients = new Map(
           prepared.records.map((record) => [record.id, approvalRecipient(record)]),
         );
-        const approvals = prepared.replay.approvals.filter((approval) =>
-          recipients.get(approval.id)?.(client),
-        );
+        const approvals = prepared.replay.approvals
+          .filter((approval) => recipients.get(approval.id)?.(client))
+          .map((approval) => {
+            const record =
+              approval.presentation.kind === "exec"
+                ? params.getLiveManager?.("exec")?.getLiveSnapshot(approval.id)
+                : undefined;
+            const turnActor = participationApprovalTurnActor(record);
+            return Object.assign(
+              {},
+              approval,
+              turnActor ? { turnActor } : {},
+              record?.participation
+                ? { canDecide: canResolveParticipationExecApproval(record, client) === true }
+                : {},
+            );
+          });
+        const participants = prepared.records.flatMap((record) => {
+          const projection = participantProjection(record, sessionKey);
+          return projection?.event.status === "pending" && projection.canReceive(client)
+            ? [projection]
+            : [];
+        });
         return {
-          replay: { ...prepared.replay, approvals },
+          replay: {
+            ...prepared.replay,
+            approvals,
+            ...(participants.length
+              ? { participantApprovals: participants.map(({ event }) => event) }
+              : {}),
+          },
           isCurrent: () => {
             assertCurrent();
             return (
               !released &&
               prepared.isCurrent() &&
-              approvals.every((approval) => recipients.get(approval.id)?.(client))
+              approvals.every((approval) => recipients.get(approval.id)?.(client)) &&
+              participants.every(({ canReceive }) => canReceive(client))
             );
           },
           release,

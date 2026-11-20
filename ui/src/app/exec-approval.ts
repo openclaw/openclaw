@@ -44,6 +44,8 @@ export function parseApprovalTurnActor(value: unknown): ApprovalTurnActor | unde
 export type ExecApprovalRequest = {
   id: string;
   kind: "exec" | "plugin" | "system-agent";
+  /** Exact recipient eligibility projected by the Gateway; never derived from turnActor. */
+  canDecide?: boolean;
   request: ExecApprovalRequestPayload;
   pluginTitle?: string;
   pluginDescription?: string | null;
@@ -57,6 +59,11 @@ export type ExecApprovalRequest = {
   createdAtMs: number;
   expiresAtMs: number;
 };
+
+/** Presentation only: resolve always rechecks the Gateway's exact approval binding. */
+export function canDecideApproval(approval: ExecApprovalRequest, canGrantApprovals: boolean) {
+  return approval.canDecide ?? canGrantApprovals;
+}
 
 export type ExecApprovalPromptState = {
   client: {
@@ -178,7 +185,13 @@ function parseApprovalRequested(
   if (!id || !createdAtMs || !expiresAtMs) {
     return null;
   }
-  const base = { id, kind, createdAtMs, expiresAtMs };
+  const base = {
+    id,
+    kind,
+    createdAtMs,
+    expiresAtMs,
+    ...(typeof payload.canDecide === "boolean" ? { canDecide: payload.canDecide } : {}),
+  };
   const turnActor = parseApprovalTurnActor(request.turnActor);
   const source = {
     agentId: readStringValue(request.agentId) ?? null,

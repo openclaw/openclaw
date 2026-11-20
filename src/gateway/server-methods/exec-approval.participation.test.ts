@@ -228,7 +228,13 @@ it.for(methods)(
 it("binds request approvals from registered host authority and canonical creation, never wire source or assigned owner", async (test) => {
   const fixture = await createPreparedTestApprovalManager(test);
   await fixture.run(() =>
-    withOpenClawTestState({ scenario: "minimal" }, async () => {
+    withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const participant = await ensureCanonicalUserProfileForEmail("participant@participate.test");
+      const expectedBinding = {
+        ...binding,
+        participantProfileId: participant.id,
+        participantLabel: participant.displayName || participant.id,
+      };
       setRuntimeConfigSnapshot({});
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
@@ -256,7 +262,7 @@ it("binds request approvals from registered host authority and canonical creatio
           { admittedRunContext },
           {
             ...attempt,
-            participationCeiling: { kind: "send", profileId: "participant", sessionKey },
+            participationCeiling: { kind: "send", profileId: participant.id, sessionKey },
           },
           undefined,
           async (prepared) => {
@@ -279,7 +285,7 @@ it("binds request approvals from registered host authority and canonical creatio
               );
               expect(capture.ceiling).toEqual({
                 kind: "send",
-                profileId: "participant",
+                profileId: participant.id,
                 sessionKey,
               });
               expect(() =>
@@ -288,7 +294,7 @@ it("binds request approvals from registered host authority and canonical creatio
                   delegatedAuthority: { ...identity.delegatedAuthority, claimId: "forged" },
                 }),
               ).toThrow();
-              expect(await prepareExecApprovalParticipation(identity, {})).toEqual(binding);
+              expect(await prepareExecApprovalParticipation(identity, {})).toEqual(expectedBinding);
               const handlers = createExecApprovalHandlers(fixture.manager);
               const context = {
                 ...createContext(),
@@ -329,7 +335,7 @@ it("binds request approvals from registered host authority and canonical creatio
                   (await fixture.manager.listPendingRecords())[0],
                   "requested record",
                 );
-                expect(record.participation).toEqual(runtime ? binding : undefined);
+                expect(record.participation).toEqual(runtime ? expectedBinding : undefined);
                 await fixture.manager.resolve(record.id, "deny", "cleanup");
                 await pending;
               };
