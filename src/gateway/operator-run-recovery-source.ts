@@ -6,6 +6,7 @@ import {
 import { captureOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
 import type { PreparedOperatorModelPolicy } from "../agents/operator-model-policy.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeDevicePublicKeyBase64Url } from "../infra/device-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import type { prepareUserProfileIdentity } from "../state/user-profile-list.js";
@@ -76,18 +77,38 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
   identity: Awaited<ReturnType<typeof prepareUserProfileIdentity>>;
   config: OpenClawConfig;
 }): Promise<
-  | { snapshot: OperatorRunRecoverySnapshot; unavailableReason?: undefined }
-  | { snapshot?: undefined; unavailableReason: OperatorRecoveryUnavailableReason }
+  { device?: AdmittedRunOperatorAuthority["device"] } & (
+    | { snapshot: OperatorRunRecoverySnapshot; unavailableReason?: undefined }
+    | { snapshot?: undefined; unavailableReason: OperatorRecoveryUnavailableReason }
+  )
 > {
   const { client, authority, identity } = params;
+  const sourceDevice = client.connect.device;
+  const tokenDevice = client.internal?.operatorDeviceTokenIdentity;
+  let device = tokenDevice ?? undefined;
+  if (sourceDevice && !device) {
+    try {
+      const paired = await loadPairedDevicePairingStoreRecordReadOnly(sourceDevice.id);
+      if (paired) {
+        device = { deviceId: sourceDevice.id, key: sha256Hex(paired.publicKey) };
+      }
+    } catch {
+      // Preserve attested runtime facts, but no durable source, while the store is unavailable.
+      const publicKey = normalizeDevicePublicKeyBase64Url(sourceDevice.publicKey);
+      return {
+        device: publicKey ? { deviceId: sourceDevice.id, key: sha256Hex(publicKey) } : undefined,
+        unavailableReason: "device-no-token",
+      };
+    }
+  }
   const remote = client.internal?.remoteIngressPrincipal;
   if (remote) {
     if (!remote.recoverySource) {
-      return { unavailableReason: "remote-ingress-no-source" };
+      return { device, unavailableReason: "remote-ingress-no-source" };
     }
     const modelPolicy = captureOperatorModelPolicySnapshot(params.modelPolicy);
     if (params.modelPolicy && !modelPolicy) {
-      return { unavailableReason: "model-policy" };
+      return { device, unavailableReason: "model-policy" };
     }
     const profile = identity.readCurrentProfile();
     const snapshot = normalizeGatewayOperatorRecoverySnapshot({
@@ -104,7 +125,7 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
       controlUiAdmin: false,
       localOperator: false,
     });
-    return snapshot ? { snapshot } : { unavailableReason: "decode-failed" };
+    return snapshot ? { device, snapshot } : { device, unavailableReason: "decode-failed" };
   }
   const ocid = authority.openclawIdPrincipal?.authority !== undefined;
   const authPolicy =
@@ -113,41 +134,33 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
       ? captureGatewayAuthPolicy(params.config, { role: "operator", authMethod: "trusted-proxy" })
       : undefined);
   if (!ocid && (!client.internal?.authenticatedOperator || client.internal.syntheticClient)) {
-    return { unavailableReason: "unauthenticated" };
+    return { device, unavailableReason: "unauthenticated" };
   }
   if (!authPolicy?.authMethod) {
-    return { unavailableReason: "no-auth-method" };
+    return { device, unavailableReason: "no-auth-method" };
   }
   if (authority.gatewayAccessGrant === undefined) {
-    return { unavailableReason: "no-grant" };
+    return { device, unavailableReason: "no-grant" };
   }
-  const sourceDevice = client.connect.device;
-  const tokenDevice = client.internal?.operatorDeviceTokenIdentity;
-  let device = tokenDevice ?? undefined;
   const tokenlessIdentity =
     !ocid &&
     tokenDevice == null &&
     (authPolicy.authMethod === "trusted-proxy" || authPolicy.authMethod === "tailscale");
   if (sourceDevice && tokenDevice === undefined && !tokenlessIdentity) {
-    return { unavailableReason: "device-no-token" };
+    return { device, unavailableReason: "device-no-token" };
   }
-  if (sourceDevice && tokenlessIdentity) {
-    const paired = await loadPairedDevicePairingStoreRecordReadOnly(sourceDevice.id);
-    if (!paired) {
-      return { unavailableReason: "device-no-token" };
-    }
-    // Ambient identity may not issue a token; the existing pairing still bounds later work.
-    device = { deviceId: sourceDevice.id, key: sha256Hex(paired.publicKey) };
+  if (sourceDevice && tokenlessIdentity && !device) {
+    return { unavailableReason: "device-no-token" };
   }
   const sharedGeneration = client.usesSharedGatewayAuth
     ? client.sharedGatewaySessionGeneration
     : undefined;
   if (client.usesSharedGatewayAuth && sharedGeneration === undefined) {
-    return { unavailableReason: "shared-auth-no-generation" };
+    return { device, unavailableReason: "shared-auth-no-generation" };
   }
   const modelPolicy = captureOperatorModelPolicySnapshot(params.modelPolicy);
   if (params.modelPolicy && !modelPolicy) {
-    return { unavailableReason: "model-policy" };
+    return { device, unavailableReason: "model-policy" };
   }
   const profile = identity.readCurrentProfile();
   const source = {
@@ -161,7 +174,7 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
     aliasBindingIds: identity.emailBindingIds,
     // Accepted work follows its grant, not unrelated handshake policy changes.
     sharedGeneration,
-    device,
+    device: tokenDevice ?? (tokenlessIdentity ? device : undefined),
     authPolicy: {
       ...authPolicy,
       generation: "",
@@ -174,5 +187,5 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
     sourceIngress: isBrowserOperatorUiClient(client.connect.client) ? "control-ui" : "internal",
   };
   const snapshot = normalizeGatewayOperatorRecoverySnapshot(source);
-  return snapshot ? { snapshot } : { unavailableReason: "decode-failed" };
+  return snapshot ? { device, snapshot } : { device, unavailableReason: "decode-failed" };
 }

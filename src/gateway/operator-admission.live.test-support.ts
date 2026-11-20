@@ -5,12 +5,8 @@ import { assert, expect, vi } from "vitest";
 import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import * as cronCreator from "../agents/cron-creator-authority-context.js";
+import { captureOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import * as cronRun from "../cron/run-admission.js";
-import type { CronStandingGrantAuthority } from "../cron/standing-grant-authority.types.js";
-import type { CronStoredJob } from "../cron/types.js";
-import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { publicKeyRawBase64UrlFromPem } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { removePairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
@@ -23,13 +19,7 @@ import {
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { createAgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
-import {
-  mintCronCreatorAuthorityGrant,
-  revokeCronCreatorAuthorityRunScope,
-} from "./cron-creator-authority-grant.js";
-import type { CronCreatorAuthorityRunScope } from "./cron-creator-authority-grant.types.js";
 import {
   checkGatewayHttpRequestAuth,
   resolveSharedSecretHttpOperatorScopes,
@@ -42,20 +32,21 @@ import {
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdTunnelPrincipalResolver,
 } from "./openclaw-id/tunnel-principal.js";
-import { ORIGIN } from "./operator-admission.credentials.test-support.js";
+import { PROXY_USER, WRITER, proxyHeaders } from "./operator-admission.credentials.test-support.js";
+import { runCronAdmissionCase } from "./operator-admission.cron.test-support.js";
+import * as admission from "./operator-admission.js";
 import type { AdmissionFixture } from "./operator-admission.table.test-support.js";
 import * as operatorRun from "./operator-run-authority.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
+import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
+import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import {
   captureOperatorToolGatewayContinuationContext,
   dispatchGatewayMethodInProcess,
 } from "./server-plugin-in-process-dispatch.js";
-import {
-  createSyntheticPluginRuntimeClient,
-  mergePluginRuntimeClientInternal,
-} from "./server-plugin-runtime-client.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
@@ -67,6 +58,8 @@ export type LiveAdmissionKind =
   | "plugin-in-process"
   | "recorded-person"
   | "recorded-system-turn"
+  | "live-device"
+  | "live-ingress"
   // These are separate run/receipt capabilities, not operator admission.
   | "cron-standing-grant"
   | "cron-management-grant"
@@ -80,7 +73,8 @@ type History = {
   };
 };
 type Producer = {
-  client: GatewayClient;
+  client?: GatewayClient;
+  send?: (params: Record<string, unknown>) => Promise<{ runId: string }>;
   authority?: AdmittedRunOperatorAuthority;
   hasCurrentClientAuthority?: () => boolean;
   predecessor?: { runId: string; completion: Promise<unknown> };
@@ -110,7 +104,52 @@ async function prepareLiveProducer(
     agents: [],
     sessions: { others: "none" },
   };
+  if (kind === "live-device") {
+    assert(
+      next.gateway.auth?.mode === "trusted-proxy",
+      "The live-device role-policy row belongs in the identified proxy pool",
+    );
+    // Valid live role policy, deliberately beyond the durable codec's 256-ref bound.
+    // Every denied pattern is unrelated to the fixture's actual provider.
+    next.gateway.roles.definitions.operator.modelPolicy = {
+      deny: Array.from({ length: 257 }, (_, index) => `unrelated-${index}/*`),
+    };
+  }
   await fixture.publish(next, c.signal);
+  if (kind === "live-device") {
+    const pending = await requestDevicePairing({
+      deviceId: c.identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(c.identity.publicKeyPem),
+      role: "operator",
+      scopes: WRITER,
+    });
+    await approveDevicePairing(pending.request.requestId, { callerScopes: ["operator.admin"] });
+    const operator = await fixture.connect(
+      {
+        deviceIdentity: c.identity,
+        clientName: GATEWAY_CLIENT_NAMES.TEST,
+        mode: GATEWAY_CLIENT_MODES.TEST,
+        scopes: WRITER,
+        edgeAuthHeaders: proxyHeaders(PROXY_USER),
+      },
+      c.signal,
+    );
+    const self = await operator.request<{ profile: { id: string } }>("users.self", {});
+    c.profileId = self.profile.id;
+    await setCanonicalUserProfileRole(c.profileId, "operator");
+    await replaceSessionEntry(c.target, {
+      sessionId: c.target.sessionId,
+      updatedAt: Date.now(),
+      createdActor: { type: "human", source: "profile", id: c.profileId },
+    });
+    return {
+      send: (params) => operator.request("chat.send", params),
+      revoke: async () => {
+        await removePairedDevice(c.identity.deviceId);
+      },
+      release: () => operator.stopAndWait(),
+    };
+  }
   await setCanonicalUserProfileRole(profile.id, "operator");
   await replaceSessionEntry(c.target, {
     sessionId: c.target.sessionId,
@@ -120,6 +159,42 @@ async function prepareLiveProducer(
   const revokeRole = async () => {
     await setCanonicalUserProfileRole(profile.id, "live-refused");
   };
+  if (kind === "live-ingress") {
+    const ownerConfig = structuredClone(fixture.config);
+    delete ownerConfig.gateway!.roles;
+    await fixture.publish(ownerConfig, c.signal);
+    const host = getGatewayControlUiIngressHost(fixture.kernel.resolvePluginGatewayContext);
+    assert(host, "The real Gateway must own ingress admission");
+    const factory = createGatewayControlUiIngressFactory({
+      pluginId: `live-admission-${c.id}`,
+      signal: c.service.signal,
+      assertCurrent: () => c.service.signal.throwIfAborted(),
+      host,
+    });
+    // No recovery registration: this is a real live-only consent, not a saved principal.
+    const binding = await factory.bindPrincipal({
+      audienceId: c.id,
+      principal: { kind: "owner" },
+      operatorScopeCeiling: WRITER,
+      signal: c.consent.signal,
+      assertCurrent: () => c.consent.signal.throwIfAborted(),
+    });
+    fixture.bindings.push(binding);
+    const self = await binding.request<{ profile: { id: string } }>("users.self", {});
+    c.profileId = self.profile.id;
+    await replaceSessionEntry(c.target, {
+      sessionId: c.target.sessionId,
+      updatedAt: Date.now(),
+      createdActor: { type: "human", source: "profile", id: c.profileId },
+    });
+    return {
+      send: (params) => binding.request("chat.send", params),
+      revoke: async () => {
+        c.consent.abort();
+      },
+      release: () => binding.close(),
+    };
+  }
   if (kind === "http-bearer" || kind === "http-ocid" || kind === "openai-compatible") {
     const req = new IncomingMessage(new Socket());
     req.method = "POST";
@@ -340,6 +415,22 @@ export async function runLiveAdmissionCase(
     return await runCronAdmissionCase(kind, scenario, fixture);
   }
   const producer = await prepareLiveProducer(kind, fixture);
+  const liveCredential = kind === "live-device" || kind === "live-ingress";
+  let liveStartDecisions = 0;
+  const decide = admission.decideOperatorAdmission;
+  const decisionObserver = vi
+    .spyOn(admission, "decideOperatorAdmission")
+    .mockImplementation((facts, prepared) => {
+      if (liveCredential && c.original) {
+        expect(facts.kind).toBe("live");
+        assert(facts.kind === "live");
+        expect(captureQueuedOperatorRecoverySource(facts.authority)?.kind).toBe("unavailable");
+        // The shared live fact check, not an obsolete invocation, owns this new start.
+        expect(() => facts.authority.assertCurrent()).not.toThrow();
+        liveStartDecisions++;
+      }
+      return decide(facts, prepared);
+    });
   try {
     if (producer.authority) {
       const source = captureQueuedOperatorRecoverySource(producer.authority);
@@ -368,57 +459,89 @@ export async function runLiveAdmissionCase(
         "Predecessor settled before reaching the provider",
       ),
     );
-    const scope = {
-      client: producer.client,
-      context,
-      resolveGatewayContext: context.resolveGatewayContext,
-      hasCurrentClientAuthority: producer.hasCurrentClientAuthority,
-      isWebchatConnect: () => false,
+    const sendParams = {
+      sessionKey: c.sessionKey,
+      message: c.queuedText,
+      deliver: false,
+      queueMode: "followup",
+      idempotencyKey: c.id,
     };
-    const send = () =>
-      dispatchGatewayRequestInProcess<{ runId: string }>(
-        "chat.send",
-        {
-          sessionKey: c.sessionKey,
-          message: c.queuedText,
-          deliver: false,
-          queueMode: "followup",
-          idempotencyKey: c.id,
-        },
-        {
-          client: producer.client,
-          context,
-          hasCurrentClientAuthority: producer.hasCurrentClientAuthority,
-        },
-      );
-    const accepted = await withPluginRuntimeGatewayRequestScope(scope, async () => {
-      if (kind !== "plugin-in-process") {
-        return await send();
+    const send = () => {
+      if (producer.send) {
+        return producer.send(sendParams);
       }
-      const continuation = await captureOperatorToolGatewayContinuationContext(
-        { agentId: "main", sessionKey: c.sessionKey },
-        { retainRequester: true },
-      );
-      assert(continuation?.operatorAuthority);
-      try {
-        // On the saved-only implementation this throws before input acceptance.
-        // Dispatch consumes the freshly admitted requester scope, not the old source.
-        return await continuation.runWithRequester(() =>
-          dispatchGatewayMethodInProcess<{ runId: string }>("chat.send", {
-            sessionKey: c.sessionKey,
-            message: c.queuedText,
-            deliver: false,
-            queueMode: "followup",
-            idempotencyKey: c.id,
-          }),
+      assert(producer.client);
+      return dispatchGatewayRequestInProcess<{ runId: string }>("chat.send", sendParams, {
+        client: producer.client,
+        context,
+        hasCurrentClientAuthority: producer.hasCurrentClientAuthority,
+      });
+    };
+    const accepted = producer.send
+      ? await send()
+      : await withPluginRuntimeGatewayRequestScope(
+          {
+            client: producer.client,
+            context,
+            resolveGatewayContext: context.resolveGatewayContext,
+            hasCurrentClientAuthority: producer.hasCurrentClientAuthority,
+            isWebchatConnect: () => false,
+          },
+          async () => {
+            if (kind !== "plugin-in-process") {
+              return await send();
+            }
+            const continuation = await captureOperatorToolGatewayContinuationContext(
+              { agentId: "main", sessionKey: c.sessionKey },
+              { retainRequester: true },
+            );
+            assert(continuation?.operatorAuthority);
+            try {
+              // Dispatch consumes the freshly admitted requester scope, not the old source.
+              return await continuation.runWithRequester(() =>
+                dispatchGatewayMethodInProcess<{ runId: string }>("chat.send", sendParams),
+              );
+            } finally {
+              continuation.release();
+            }
+          },
         );
-      } finally {
-        continuation.release();
-      }
-    });
     c.queuedRunId = accepted.runId;
     await c.wait(c.enqueued.promise);
     assert(c.original?.controllerInput, "Real chat acceptance must own its queue receipt");
+    if (liveCredential) {
+      const authority = c.original.operatorAuthority;
+      assert(authority, "The real transport must queue its actual operator authority");
+      expect(authority.recoverySnapshot).toBeUndefined();
+      expect(authority.signal?.aborted).not.toBe(true);
+      expect(authority.invocation).toBeUndefined();
+      expect(Object.isFrozen(authority)).toBe(true);
+      expect(captureQueuedOperatorRecoverySource(authority)).toEqual({
+        kind: "unavailable",
+        reason: kind === "live-device" ? "decode-failed" : "remote-ingress-no-source",
+      });
+      if (kind === "live-device") {
+        expect(authority.device).toEqual({
+          deviceId: c.identity.deviceId,
+          key: expect.any(String),
+        });
+        expect(Object.isFrozen(authority.device)).toBe(true);
+        expect(
+          captureOperatorModelPolicySnapshot(authority.modelPolicy)?.denied.wildcards,
+        ).toHaveLength(257);
+      } else {
+        expect(authority.ingress).toMatchObject({
+          bindingId: expect.any(String),
+          pluginId: `live-admission-${c.id}`,
+          audienceId: c.id,
+          principal: { kind: "owner" },
+          scopeCeiling: WRITER,
+        });
+        expect(Object.isFrozen(authority.ingress)).toBe(true);
+        expect(Object.isFrozen(authority.ingress?.principal)).toBe(true);
+        expect(Object.isFrozen(authority.ingress?.scopeCeiling)).toBe(true);
+      }
+    }
     if (scenario === "before-start") {
       await producer.revoke();
     }
@@ -458,229 +581,12 @@ export async function runLiveAdmissionCase(
       }
       expect(c.queuedCalls).toBe(1);
     }
+    if (liveCredential) {
+      expect(liveStartDecisions).toBeGreaterThan(0);
+    }
     expect(fixture.providerErrors).toEqual([]);
   } finally {
+    decisionObserver.mockRestore();
     await producer.release();
-  }
-}
-
-async function runCronAdmissionCase(
-  kind: "cron-standing-grant" | "cron-management-grant" | "cron-operator-source",
-  scenario: Scenario,
-  fixture: AdmissionFixture,
-) {
-  const c = fixture.current;
-  assert(c && fixture.kernel);
-  const context = fixture.kernel.gatewayRequestContext;
-  const pending = await requestDevicePairing({
-    deviceId: c.identity.deviceId,
-    publicKey: publicKeyRawBase64UrlFromPem(c.identity.publicKeyPem),
-    role: "operator",
-    scopes: ["operator.admin"],
-  });
-  await approveDevicePairing(pending.request.requestId, { callerScopes: ["operator.admin"] });
-  const auth = resolveGatewayAuthForConfig({ config: fixture.config });
-  const operator = await fixture.connect(
-    {
-      token: auth.token,
-      password: auth.password,
-      deviceIdentity: c.identity,
-      clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      origin: ORIGIN,
-      scopes: ["operator.admin"],
-    },
-    c.signal,
-  );
-  const self = await operator.request<{ profile: { id: string } }>("users.self", {});
-  c.profileId = self.profile.id;
-  await replaceSessionEntry(c.target, {
-    sessionId: c.target.sessionId,
-    updatedAt: Date.now(),
-    createdActor: { type: "human", source: "profile", id: c.profileId },
-  });
-  const admin = await fixture.admin(c.signal);
-  const creatorSessionKey = `${c.sessionKey}:creator`;
-  let creatorScope: CronCreatorAuthorityRunScope | undefined;
-  let standingAuthority: CronStandingGrantAuthority | undefined;
-  let job: CronStoredJob | undefined;
-  const create = cronCreator.createCronCreatorAuthorityCapability;
-  const creatorObserver = vi
-    .spyOn(cronCreator, "createCronCreatorAuthorityCapability")
-    .mockImplementation((...args) => {
-      const capability = create(...args);
-      if (capability?.managementEntitlement) {
-        creatorScope = capability;
-      }
-      return capability;
-    });
-  const prepare = cronRun.prepareCronRunAdmission;
-  const runObserver = vi.spyOn(cronRun, "prepareCronRunAdmission").mockImplementation((params) => {
-    const admitted = prepare(params);
-    if (params.jobId === job?.id) {
-      standingAuthority = admitted.standingGrantAuthority;
-    }
-    return admitted;
-  });
-  try {
-    const created = await operator.request<{ id: string }>("cron.add", {
-      name: `live admission ${c.id}`,
-      agentId: "main",
-      enabled: false,
-      schedule: { kind: "every", everyMs: 86_400_000 },
-      sessionTarget: `session:${c.sessionKey}`,
-      sessionKey: c.sessionKey,
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: c.queuedText },
-      delivery: { mode: "none" },
-    });
-    job = await context.cron.readJob(created.id);
-    assert(job, "cron.add must persist its actual job");
-    if (kind === "cron-operator-source") {
-      assert(job.operatorSource, "The real Control UI producer must retain its operator source");
-    }
-    let run: { runId: string };
-    if (kind === "cron-management-grant") {
-      const creator = await operator.request<{ runId: string }>("chat.send", {
-        sessionKey: creatorSessionKey,
-        message: "hold creator capability",
-        deliver: false,
-        idempotencyKey: randomUUID(),
-      });
-      await c.wait(c.firstReached.promise);
-      assert(
-        creatorScope?.managementEntitlement,
-        "A real Control UI turn must issue its management capability",
-      );
-      expect(creatorScope.runId).toBe(creator.runId);
-      const delegated = getAgentRunContext(creator.runId)?.delegatedAuthority;
-      assert(delegated, "Management must use the creator's actual admitted execution");
-      const grant = mintCronCreatorAuthorityGrant(creatorScope, undefined, undefined, {
-        method: "cron.run",
-        authority: delegated,
-      });
-      const identity = await createAgentRuntimeIdentity({
-        agentId: "main",
-        sessionKey: creatorSessionKey,
-        operationalRunInstance: delegated.operationalRunInstance,
-        approvalAuthority: delegated,
-        cronManagementGrant: grant,
-      });
-      assert(identity);
-      const client = mergePluginRuntimeClientInternal(
-        createSyntheticPluginRuntimeClient({ scopes: [] }),
-        { agentRuntimeIdentity: identity },
-      );
-      if (scenario === "before-start") {
-        revokeCronCreatorAuthorityRunScope(creatorScope);
-        await expect(
-          dispatchGatewayRequestInProcess(
-            "cron.run",
-            { id: job.id, mode: "force" },
-            { client, context },
-          ),
-        ).rejects.toThrow("missing scope:");
-        expect((await context.cron.readJob(job.id))?.payload).toEqual(job.payload);
-        expect(c.queuedCalls).toBe(0);
-        return;
-      }
-      run = await dispatchGatewayRequestInProcess<{ runId: string }>(
-        "cron.run",
-        { id: job.id, mode: "force" },
-        { client, context },
-      );
-    } else {
-      if (scenario === "before-start" && kind === "cron-operator-source") {
-        await removePairedDevice(c.identity.deviceId);
-      }
-      run = await admin.request<{ runId: string }>("cron.run", { id: job.id, mode: "force" });
-    }
-    const finished = context.cron.waitForManualRun(run.runId, 30_000, c.signal);
-    if (scenario === "before-start" && kind === "cron-operator-source") {
-      expect(await c.wait(finished)).toBe(true);
-      const history = await admin.request<{
-        entries: Array<{ status: string; error?: string; summary?: string }>;
-      }>("cron.runs", { id: job.id, runId: run.runId, limit: 1 });
-      expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ status: "error" });
-      expect(`${history.entries[0].error ?? ""} ${history.entries[0].summary ?? ""}`).toMatch(
-        /operator|authority|revok|grant/i,
-      );
-      expect((await context.cron.readJob(job.id))?.payload).toEqual(job.payload);
-      expect(c.queuedCalls).toBe(0);
-      return;
-    }
-    await c.wait(
-      awaitGateBeforeSettlement(
-        c.recoveredReached.promise,
-        finished,
-        "Cron occurrence settled before reaching the provider",
-      ),
-    );
-    assert(c.latestRunId);
-    const running = c.latestRunId;
-    if (kind === "cron-standing-grant") {
-      assert(standingAuthority, "A real scheduled occurrence must own its receipt capability");
-      const authority = standingAuthority;
-      expect(() => authority.assertCurrent()).not.toThrow();
-    }
-    if (scenario === "stop") {
-      expect(await admin.request("chat.abort", { sessionKey: c.sessionKey })).toMatchObject({
-        aborted: true,
-      });
-      expect(await c.wait(c.terminal(running).promise)).toBe("aborted");
-      c.releaseRecovered.resolve();
-    } else if (scenario === "before-start") {
-      // This is the receipt capability's next-use boundary, not operator
-      // admission. Its in-flight guards remain in LIFETIME_CHECK_CALLS until
-      // the later lifetime PR; removing a job must retire the receipt.
-      await admin.request("cron.remove", { id: job.id });
-      assert(standingAuthority);
-      const authority = standingAuthority;
-      expect(() => authority.assertCurrent()).toThrow();
-      c.releaseRecovered.resolve();
-    } else {
-      if (kind === "cron-management-grant") {
-        assert(creatorScope);
-        revokeCronCreatorAuthorityRunScope(creatorScope);
-      } else {
-        await removePairedDevice(c.identity.deviceId);
-      }
-      c.releaseRecovered.resolve();
-      expect(await c.wait(c.terminal(running).promise)).toBe("final");
-    }
-    expect(await c.wait(finished)).toBe(true);
-    if (kind === "cron-standing-grant" && scenario === "stop") {
-      assert(standingAuthority);
-      const authority = standingAuthority;
-      expect(() => authority.assertCurrent()).toThrow();
-    }
-    if (scenario !== "before-start") {
-      const history = await admin.request<{ entries: Array<{ status: string }> }>("cron.runs", {
-        id: job.id,
-        runId: run.runId,
-        limit: 1,
-      });
-      expect(history.entries).toHaveLength(1);
-      if (scenario === "after-start") {
-        expect(history.entries[0]).toMatchObject({ status: "ok" });
-      }
-    }
-    expect(fixture.providerErrors).toEqual([]);
-  } finally {
-    c.releaseFirst.resolve();
-    c.releaseRecovered.resolve();
-    try {
-      await admin.request("chat.abort", { sessionKey: creatorSessionKey });
-    } finally {
-      try {
-        if (job) {
-          await admin.request("cron.remove", { id: job.id });
-        }
-      } finally {
-        creatorObserver.mockRestore();
-        runObserver.mockRestore();
-      }
-    }
   }
 }

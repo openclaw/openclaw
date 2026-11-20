@@ -31,7 +31,6 @@ export type RestoredGatewayOperatorAuthority = {
 export async function restoreGatewayOperatorSource(params: {
   snapshot: OperatorRunRecoverySnapshot;
   source?: RestartRecoveryOperatorSource;
-  target?: { agentId: string; sessionKey: string };
   context: GatewayRequestContext;
   assertCurrent: () => void;
   prepareCurrent?: () => Promise<void>;
@@ -53,6 +52,7 @@ export async function restoreGatewayOperatorSource(params: {
 export async function restoreGatewayQueuedOperatorRecovery(params: {
   source: unknown;
   liveAuthority?: AdmittedRunOperatorAuthority;
+  operatorSource?: RestartRecoveryOperatorSource;
   context: GatewayRequestContext;
   assertCurrent: () => void;
 }): Promise<
@@ -69,7 +69,9 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
   const facts =
     captured.kind === "unavailable" && params.liveAuthority
       ? ({ kind: "live", authority: params.liveAuthority } as const)
-      : captured;
+      : captured.kind === "gateway" && params.operatorSource
+        ? { ...captured, source: params.operatorSource }
+        : captured;
   if (facts.kind === "unavailable") {
     throw new Error("Queued operator authority cannot be recovered; submit a new request.");
   }

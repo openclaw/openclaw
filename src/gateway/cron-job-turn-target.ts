@@ -43,7 +43,7 @@ export async function captureCronJobTurnTarget(params: {
   }
   const captured = job.operatorSource;
   return await capture({
-    operatorSource: source.snapshot,
+    operatorSource: source,
     ...(hasAutomationAdminDelegation(source.snapshot) &&
     operatorScopeSatisfied("operator.admin", source.snapshot.scopes)
       ? { ownerContinuation: true as const }

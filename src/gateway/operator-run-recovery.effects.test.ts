@@ -327,7 +327,6 @@ it.each(["device revocation", "email reassignment", "email restoration"] as cons
         await expect(
           restoreGatewayOperatorSource({
             snapshot: fixture.snapshot,
-            target: fixture.target,
             context: fixture.context,
             assertCurrent() {},
           }),

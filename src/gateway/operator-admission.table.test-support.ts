@@ -23,8 +23,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import type { GatewayIngressPrincipalBindingV1 } from "../plugins/gateway-ingress.types.js";
-import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import type { Deferred } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -51,6 +49,7 @@ import {
   ORIGIN,
   PROXY_USER,
   WRITER,
+  replayAdmissionInput,
   proxyHeaders,
   observeAdmissionFixture,
   prepareAdmissionOperator,
@@ -65,7 +64,6 @@ import {
   decodeQueuedOperatorRecoverySource,
   type OperatorRunRecoverySnapshot,
 } from "./operator-run-recovery-source.codec.js";
-import * as queuedInputs from "./queued-chat-inputs.js";
 import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
 import * as kernelModule from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
@@ -111,6 +109,12 @@ type Scenario =
   | "legacy-tailscale"
   | "legacy-tailscale-narrowed"
   | "narrowed-grant"
+  | "narrowed-token"
+  | "narrowed-ingress"
+  | "device-token-revoked"
+  | "device-role-unapproved"
+  | "generation-unavailable"
+  | "owner-disabled"
   | "widened-grant"
   | "narrowed-role"
   | "empty-after-role"
@@ -143,6 +147,7 @@ export class AdmissionCase {
   readonly deliveries: unknown[] = [];
   readonly terminals = new Map<string, Deferred<string>>();
   readonly observedRunScopes: string[][] = [];
+  ingressScopeCeiling = [...WRITER];
   readonly identity: DeviceIdentity;
   original?: FollowupRun;
   finalAdmissionError?: unknown;
@@ -359,6 +364,11 @@ export class AdmissionFixture {
         "fallback-proxy-policy",
         "legacy-tailscale-narrowed",
         "narrowed-grant",
+        "narrowed-token",
+        "narrowed-ingress",
+        "device-token-revoked",
+        "device-role-unapproved",
+        "owner-disabled",
         "widened-grant",
         "narrowed-role",
         "empty-after-role",
@@ -368,24 +378,11 @@ export class AdmissionFixture {
     ) {
       await revokeAdmissionSource(this, c);
     }
-    assert(this.kernel);
-    const context = this.kernel.gatewayRequestContext;
-    const deferred = await c.wait(
-      runWithGatewayIndependentRootWorkAdmission(
-        () =>
-          withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
-            queuedInputs.continueSessionQueuedInputs(context, c.target, {
-              signal: c.signal,
-              assertCurrent: () => c.signal.throwIfAborted(),
-            }),
-          ),
-        "test:accepted-input-drain",
-        c.signal,
-      ),
-    );
-    if (c.scenario === "owner-unavailable" || c.scenario === "pairing-unavailable") {
+    const deferred = await replayAdmissionInput(this, c, stored.origin_source_json);
+    if (
+      ["owner-unavailable", "pairing-unavailable", "generation-unavailable"].includes(c.scenario)
+    ) {
       assert(deferred, "An unavailable owner must defer, not refuse or consume accepted work");
-      expect(deferred.error).toBeInstanceOf(Error);
       const retained = (await readSessionQueuedInputPage(c.target)).rows.find(
         (row) => row.input_id === stored.input_id,
       );
@@ -506,6 +503,9 @@ export class AdmissionFixture {
           "legacy-method-disabled",
           "legacy-rotated",
           "empty-after-role",
+          "device-token-revoked",
+          "device-role-unapproved",
+          "owner-disabled",
         ].includes(scenario)
       ) {
         if (!restartSentinel) {
@@ -540,12 +540,16 @@ export class AdmissionFixture {
           if (scenario === "after-start") {
             await revokeAdmissionSource(this, c);
           }
-          if (["narrowed-grant", "narrowed-role", "legacy-tailscale-narrowed"].includes(scenario)) {
-            expect(c.observedRunScopes).not.toEqual([]);
-            for (const scopes of c.observedRunScopes) {
-              expect(scopes).toEqual(["operator.write"]);
-            }
-          } else if (scenario === "widened-grant") {
+          if (
+            [
+              "narrowed-grant",
+              "widened-grant",
+              "narrowed-role",
+              "narrowed-token",
+              "narrowed-ingress",
+              "legacy-tailscale-narrowed",
+            ].includes(scenario)
+          ) {
             expect(c.observedRunScopes).not.toEqual([]);
             for (const scopes of c.observedRunScopes) {
               expect(scopes.toSorted()).toEqual([...WRITER].toSorted());
@@ -553,7 +557,9 @@ export class AdmissionFixture {
           } else if (scenario === "legacy-tailscale") {
             expect(c.observedRunScopes).not.toEqual([]);
             for (const scopes of c.observedRunScopes) {
-              expect(scopes.toSorted()).toEqual([...WRITER, "operator.approvals"].toSorted());
+              expect(scopes.toSorted()).toEqual(
+                [...WRITER, "operator.approvals", "operator.pairing"].toSorted(),
+              );
             }
           }
           c.releaseRecovered.resolve();

@@ -72,10 +72,12 @@ const rows: Record<Kind, Row> = {
   "cron-standing-grant": { credential: "cron-standing-grant", ingress: "live" },
   "cron-management-grant": { credential: "cron-management-grant", ingress: "live" },
   "cron-operator-source": { credential: "cron-operator-source", ingress: "live" },
+  "live-device": { credential: "live-device", ingress: "live" },
+  "live-ingress": { credential: "live-ingress", ingress: "live" },
 };
 
 const modeFor = (row: Row): Mode =>
-  ["trusted-proxy", "proxy-device", "fallback"].includes(row.credential)
+  ["trusted-proxy", "proxy-device", "fallback", "live-device"].includes(row.credential)
     ? "trusted-proxy"
     : row.credential === "password"
       ? "password"
@@ -108,6 +110,12 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
   if (mode === "token") {
     it.for([
       ["ocid-owner", "owner-unavailable"],
+      ["ocid-owner", "owner-disabled"],
+      ["token:internal", "generation-unavailable"],
+      ["device-token:internal", "narrowed-token"],
+      ["principal", "narrowed-ingress"],
+      ["tailscale-device:internal", "device-token-revoked"],
+      ["tailscale-device:internal", "device-role-unapproved"],
       ["device-token:internal", "pairing-unavailable"],
       ["tailscale:internal", "legacy-tailscale"],
       ["tailscale:internal", "legacy-tailscale-narrowed"],

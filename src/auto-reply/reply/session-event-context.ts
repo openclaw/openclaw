@@ -305,7 +305,7 @@ export function buildSessionEventContext(params: {
     requesterOwner?.requester.kind === "channel"
       ? {
           channelId: requesterOwner.requester.requester.channel,
-          accountId: requesterOwner.requester.requester.accountId,
+          accountId: normalizeAccountId(requesterOwner.requester.requester.accountId),
           senderId: requesterOwner.requester.requester.senderId,
         }
       : undefined;
@@ -362,7 +362,7 @@ export function buildSessionEventContext(params: {
       const { authority, requester } = commandOwner;
       const channelPrincipal = {
         channelId: requester.channel,
-        accountId: requester.accountId,
+        accountId: normalizeAccountId(requester.accountId),
         senderId: requester.senderId,
       };
       // Target preparation admitted this native requester for this event.

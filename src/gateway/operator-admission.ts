@@ -108,8 +108,8 @@ function admissionError(error: unknown, facts: Facts): never {
   }
   if (
     isAbortError(error) &&
-    facts.kind === "gateway" &&
-    facts.snapshot.sourceIngress === "principal"
+    ((facts.kind === "gateway" && facts.snapshot.sourceIngress === "principal") ||
+      (facts.kind === "live" && facts.authority.ingress?.signal.aborted))
   ) {
     throw new GatewayOperatorRecoveryAuthorizationError(undefined, { cause: error });
   }
@@ -151,8 +151,9 @@ export async function prepareOperatorAdmission(
     if (principal) {
       await prepareOpenClawIdTunnelPrincipalLookup();
     }
-    const paired = gateway?.device
-      ? await loadPairedDevicePairingStoreRecordReadOnly(gateway.device.deviceId).catch(() => {
+    const device = gateway?.device ?? (facts.kind === "live" ? facts.authority.device : undefined);
+    const paired = device
+      ? await loadPairedDevicePairingStoreRecordReadOnly(device.deviceId).catch(() => {
           throw new GatewayOperatorAccessUnavailableError();
         })
       : undefined;
@@ -186,14 +187,21 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
   const snapshot = facts.kind === "live" ? facts.authority : facts.snapshot;
   const gateway = facts.kind === "gateway" ? facts.snapshot : undefined;
   const principal = live?.openclawIdPrincipal ?? gateway?.openclawIdPrincipal;
+  const device = gateway?.device ?? live?.device;
   try {
     if (live) {
       assertAdmittedRunOperatorAuthority(live);
       live.assertCurrent();
     }
     if (principal) {
+      if (config.gateway?.openclawId?.enabled === false) {
+        throw new GatewayOperatorRecoveryAuthorizationError();
+      }
       if (readOpenClawIdTunnelPrincipal(principal.peerKey) === null) {
-        throw new GatewayOperatorAccessUnavailableError();
+        if (config.gateway?.openclawId?.enabled) {
+          throw new GatewayOperatorAccessUnavailableError();
+        }
+        throw new GatewayOperatorRecoveryAuthorizationError();
       }
       if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
         throw new GatewayOperatorRecoveryAuthorizationError();
@@ -218,12 +226,19 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
       }
       scopes = intersectOperatorScopes(scopes, channel.operatorProfile.scopes);
     }
+    const source = gateway?.authPolicy;
+    // Browser origin is checked at connect; saved work follows its person's access,
+    // not the submitting browser (owner decision, 2026-11-20).
+    const policy =
+      !principal && (source || live?.verifiedIdentity)
+        ? resolveGatewayAuthPolicyGrant(
+            config,
+            source
+              ? { ...source, browserOrigin: undefined }
+              : { role: "operator", verifiedIdentity: live?.verifiedIdentity },
+          )
+        : undefined;
     if (gateway) {
-      const source = gateway.authPolicy;
-      const policy =
-        source && !principal
-          ? resolveGatewayAuthPolicyGrant(config, { ...source, browserOrigin: undefined })
-          : undefined;
       // Proxy policy generations do not describe either ambient identity or local fallback secrets.
       const sharedGeneration =
         !principal &&
@@ -255,55 +270,69 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
           refuse();
         }
       }
-      if (gateway.device) {
-        const tokenCurrent = isPairedDeviceTokenIdentityCurrent(
-          paired ?? null,
-          "operator",
-          gateway.device,
-          [],
-        );
-        const tokenlessIdentityCurrent =
-          !principal &&
-          (source?.authMethod === "trusted-proxy" || source?.authMethod === "tailscale") &&
-          paired &&
-          paired.deviceId === gateway.device.deviceId &&
-          gateway.device.key === sha256Hex(paired.publicKey) &&
-          listApprovedPairedDeviceRoles(paired).includes("operator") &&
-          !paired.tokens?.operator?.revokedAtMs;
-        if (!tokenCurrent && !tokenlessIdentityCurrent) {
-          refuse();
-        }
-        scopes = intersectOperatorScopes(scopes, [
-          ...(tokenCurrent
-            ? (paired?.tokens?.operator?.scopes ?? [])
-            : (paired?.approvedScopes ?? paired?.scopes ?? [])),
-          ...(policy?.grant ?? []),
-        ]);
-      } else if (source?.authMethod === "tailscale") {
-        // Older rows omitted tokenless device facts. An unchanged grant preserves their
-        // hidden device scopes; changed grants can only narrow until these rows age out.
-        if (
-          source.grantGeneration !== stableStringify(resolveGatewayAuthPolicyGrant(config, source))
-        ) {
-          scopes = intersectOperatorScopes(scopes, policy?.grant ?? []);
-        }
-      } else if (source?.authMethod === "trusted-proxy" && !principal) {
+    }
+    if (device) {
+      const tokenCurrent = isPairedDeviceTokenIdentityCurrent(
+        paired ?? null,
+        "operator",
+        device,
+        [],
+      );
+      const tokenlessIdentityCurrent =
+        (live !== undefined ||
+          (!principal &&
+            (source?.authMethod === "trusted-proxy" || source?.authMethod === "tailscale"))) &&
+        paired &&
+        paired.deviceId === device.deviceId &&
+        device.key === sha256Hex(paired.publicKey) &&
+        listApprovedPairedDeviceRoles(paired).includes("operator") &&
+        !paired.tokens?.operator?.revokedAtMs;
+      if (!tokenCurrent && !tokenlessIdentityCurrent) {
+        refuse();
+      }
+      scopes = intersectOperatorScopes(scopes, [
+        ...(tokenCurrent
+          ? (paired?.tokens?.operator?.scopes ?? [])
+          : (paired?.approvedScopes ?? paired?.scopes ?? [])),
+        ...(policy?.grant ?? []),
+      ]);
+    } else if (source?.authMethod === "tailscale") {
+      // Older rows omitted tokenless device facts. An unchanged grant preserves their
+      // hidden device scopes; changed grants can only narrow until these rows age out.
+      if (
+        source.grantGeneration !== stableStringify(resolveGatewayAuthPolicyGrant(config, source))
+      ) {
         scopes = intersectOperatorScopes(scopes, policy?.grant ?? []);
       }
-      if (gateway.sourceIngress === "principal") {
-        ingress?.assertCurrent();
-        scopes = intersectOperatorScopes(scopes, ingress?.scopes ?? []);
-        if (!principal && profile.profileId !== GATEWAY_OWNER_PROFILE_ID) {
-          const error = gatewayPersonPrincipalAuthError(
-            prepared.ingressAuth,
-            config,
-            profile.emails,
-            operatorRoleSubject(profile),
-          );
-          if (error) {
-            throw new GatewayOperatorRecoveryAuthorizationError(error);
-          }
-        }
+    } else if (source?.authMethod === "trusted-proxy" && !principal) {
+      scopes = intersectOperatorScopes(scopes, policy?.grant ?? []);
+    }
+    if (gateway?.sourceIngress === "principal") {
+      ingress?.assertCurrent();
+      scopes = intersectOperatorScopes(scopes, ingress?.scopes ?? []);
+    }
+    if (live?.ingress) {
+      const bound = live.ingress;
+      const profileId =
+        bound.principal.kind === "owner" ? GATEWAY_OWNER_PROFILE_ID : bound.principal.profileId;
+      if (bound.signal.aborted || profileId !== profile.profileId) {
+        throw new GatewayOperatorRecoveryAuthorizationError();
+      }
+      scopes = intersectOperatorScopes(scopes, bound.scopeCeiling);
+    }
+    if (
+      (gateway?.sourceIngress === "principal" || live?.ingress) &&
+      !principal &&
+      profile.profileId !== GATEWAY_OWNER_PROFILE_ID
+    ) {
+      const error = gatewayPersonPrincipalAuthError(
+        prepared.ingressAuth,
+        config,
+        profile.emails,
+        operatorRoleSubject(profile),
+      );
+      if (error) {
+        throw new GatewayOperatorRecoveryAuthorizationError(error);
       }
     }
     if (gateway || live) {
@@ -365,6 +394,9 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     const authority = createAdmittedRunOperatorAuthority({
       profileId: profile.profileId,
       openclawIdPrincipal: principal,
+      device,
+      verifiedIdentity: live?.verifiedIdentity ?? source?.verifiedIdentity,
+      ingress: live?.ingress,
       scopes,
       gatewayAccessGrant: grant,
       recoverySnapshot: gateway ?? live?.recoverySnapshot,

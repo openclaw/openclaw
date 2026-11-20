@@ -480,20 +480,33 @@ export async function prepareGatewayOperatorRunAuthority(
       gatewayAccessGrant: grant ? Object.freeze({ ...grant }) : grant,
       assertCurrent,
     };
-    const { snapshot: recoverySnapshot, unavailableReason: recoverySnapshotUnavailableReason } =
-      await captureGatewayOperatorRecoverySnapshot({
-        client,
-        authority: admission,
-        modelPolicy,
-        identity: preparedProfile,
-        config: getConfig(),
-      });
+    const {
+      snapshot: recoverySnapshot,
+      unavailableReason: recoverySnapshotUnavailableReason,
+      device,
+    } = await captureGatewayOperatorRecoverySnapshot({
+      client,
+      authority: admission,
+      modelPolicy,
+      identity: preparedProfile,
+      config: getConfig(),
+    });
     assertCurrent();
     assertAdmissionCurrent();
     const authority = createAdmittedRunOperatorAuthority({
       ...admission,
       recoverySnapshot,
       recoverySnapshotUnavailableReason,
+      device,
+      verifiedIdentity: client.authPolicy?.verifiedIdentity,
+      ingress: ingressPrincipal && {
+        bindingId: ingressPrincipal.bindingId,
+        pluginId: ingressPrincipal.pluginId,
+        audienceId: ingressPrincipal.audienceId,
+        principal: ingressPrincipal.principal,
+        signal: ingressPrincipal.signal,
+        scopeCeiling: ingressPrincipal.scopes,
+      },
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
       readCurrentRoleFacts: () => ({
         assignedRole: capturedProfile.assignedRole,

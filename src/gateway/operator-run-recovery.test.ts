@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -14,6 +14,7 @@ import {
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
+import * as pairingStore from "../infra/device-pairing-store-readonly.js";
 import { ensureDeviceToken, rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
@@ -225,7 +226,6 @@ describe("scheduled authenticated operator source", () => {
         using restored = {
           ...(await restoreGatewayOperatorSource({
             snapshot,
-            target: fixture.target,
             context: fixture.context,
             assertCurrent: () => {},
           })),
@@ -323,7 +323,6 @@ describe("scheduled authenticated operator source", () => {
           let current = true;
           const restore = restoreGatewayOperatorSource({
             snapshot,
-            target: fixture.target,
             context: fixture.context,
             assertCurrent: () => {
               if (!current) {
@@ -469,7 +468,6 @@ describe("scheduled authenticated operator source", () => {
       const { agentId, sessionKey, storePath } = fixture.target;
       const restored = await restoreGatewayOperatorSource({
         snapshot: fixture.snapshot,
-        target: { agentId, sessionKey },
         context: fixture.context,
         assertCurrent: () => {},
       });
@@ -512,6 +510,34 @@ describe("scheduled authenticated operator source", () => {
       await issueDeviceBootstrapToken({ baseDir: stateDir });
       expectCurrent(restored.authority);
     }));
+
+  it("keeps a tokenless live request when pairing evidence cannot be read for capture", () =>
+    withRecovery(
+      async (fixture) => {
+        const read = vi
+          .spyOn(pairingStore, "loadPairedDevicePairingStoreRecordReadOnly")
+          .mockRejectedValueOnce(new Error("synthetic pairing store unavailable"));
+        const caller = acceptedCaller(fixture);
+        try {
+          const admitted = expectDefined(await caller.capture(), "live operator");
+          try {
+            expect(admitted.authority.recoverySnapshot).toBeUndefined();
+            expect(admitted.authority.recoverySnapshotUnavailableReason).toBe("device-no-token");
+            expect(admitted.authority.device).toMatchObject({
+              deviceId: "recovery-device",
+              key: expect.any(String),
+            });
+            expectCurrent(admitted.authority);
+          } finally {
+            admitted.release();
+          }
+        } finally {
+          read.mockRestore();
+          caller.release();
+        }
+      },
+      { tokenlessDevice: true },
+    ));
 
   it("does not adopt an incidental paired token for tokenless trusted-proxy ingress", () =>
     withRecovery(
@@ -727,7 +753,6 @@ describe("scheduled authenticated operator source", () => {
           normalizeGatewayOperatorRecoverySnapshot(JSON.parse(serialized)),
           "persisted authenticated requester",
         ),
-        target: fixture.target,
         context: fixture.context,
         assertCurrent() {},
       });
@@ -913,7 +938,6 @@ it.each(["connection", "stop", "revocation"] as const)(
       const stop = new AbortController();
       const restored = await restoreGatewayOperatorSource({
         snapshot: fixture.snapshot,
-        target: fixture.target,
         context: fixture.context,
         // The new start owns cancellation; the old socket is not its authority.
         assertCurrent: () => stop.signal.throwIfAborted(),

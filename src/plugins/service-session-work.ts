@@ -276,7 +276,6 @@ export function createPluginServiceSessionWork(params: {
       try {
         restored = await restoreGatewayOperatorSource({
           snapshot: accepted.snapshot,
-          target: accepted.target,
           context: owner,
           assertCurrent: assertOwner,
           prepareCurrent: async () => {

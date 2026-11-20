@@ -29,7 +29,7 @@ import {
 import { sessionToolOverridesEqual } from "../../config/sessions/session-tool-overrides.js";
 import { checkRequesterOwner } from "../../cron/execution-context-admission.js";
 import type { ScheduledRequesterRef } from "../../cron/execution-context.js";
-import type { OperatorRunRecoverySnapshot } from "../../gateway/operator-run-recovery-source.codec.js";
+import type { RestartRecoveryOperatorSource } from "../../gateway/operator-run-recovery-source.codec.js";
 import {
   restoreGatewayOperatorSource,
   type RestoredGatewayOperatorAuthority,
@@ -68,7 +68,7 @@ const targetScopes = resolveGlobalSingleton(
       {
         env?: NodeJS.ProcessEnv;
         operatorAuthority?: AdmittedRunOperatorAuthority;
-        operatorSource?: OperatorRunRecoverySnapshot;
+        operatorSource?: RestartRecoveryOperatorSource;
         ownerContinuation?: true;
         hasOriginatingCaller?: true;
         /** The captured requester keys the authority, whose source label is shared by owners. */
@@ -124,7 +124,7 @@ export async function captureSessionEventTargetForHost(
     /** Original host-issued source; the producer owns its lifetime until enqueue. */
     operatorAuthority?: AdmittedRunOperatorAuthority;
     /** Deferred requester reference, admitted by the event's start owner. */
-    operatorSource?: OperatorRunRecoverySnapshot;
+    operatorSource?: RestartRecoveryOperatorSource;
     /** The producing turn held command-owner authority under `operatorAuthority`. */
     ownerContinuation?: true;
     /**
@@ -398,9 +398,9 @@ export async function prepareSessionEventTargetForHost(
         throw new GatewayOperatorAccessUnavailableError();
       }
       restored = await restoreGatewayOperatorSource({
-        snapshot: scope.operatorSource,
+        snapshot: scope.operatorSource.snapshot,
+        source: scope.operatorSource,
         context,
-        target: { agentId: target.agentId, sessionKey: target.sessionKey },
         assertCurrent: assertAcceptance,
       });
       scope.operatorAuthority = restored.authority;

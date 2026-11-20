@@ -392,7 +392,6 @@ it.each(["member", "owner"] as const)(
         setOpenClawIdTunnelPrincipalLookup(() => current);
         const restored = await restoreGatewayOperatorSource({
           snapshot,
-          target: fixture.target,
           context: fixture.context,
           assertCurrent: () => {},
         });

@@ -90,6 +90,15 @@ export function createAdmittedRunOperatorAuthority(
     openclawIdPrincipal: source.openclawIdPrincipal
       ? freezeJsonSnapshot(structuredClone(source.openclawIdPrincipal))
       : undefined,
+    device: source.device && Object.freeze({ ...source.device }),
+    verifiedIdentity: source.verifiedIdentity,
+    ingress:
+      source.ingress &&
+      Object.freeze({
+        ...source.ingress,
+        principal: Object.freeze({ ...source.ingress.principal }),
+        scopeCeiling: Object.freeze([...source.ingress.scopeCeiling]),
+      }),
     recoverySnapshot: source.recoverySnapshot
       ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
       : undefined,

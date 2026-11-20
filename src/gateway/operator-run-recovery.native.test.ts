@@ -71,7 +71,6 @@ describe("native UI operator recovery", () => {
       const restore = (controlUiAdmin: boolean) =>
         restoreGatewayOperatorSource({
           snapshot: { ...legacy, controlUiAdmin },
-          target: fixture.target,
           context: fixture.context,
           assertCurrent: () => {},
         });

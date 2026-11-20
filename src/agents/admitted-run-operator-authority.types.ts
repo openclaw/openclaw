@@ -1,5 +1,6 @@
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
+import type { RemoteIngressPrincipalIdentity } from "../gateway/server/client-identity-types.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
@@ -7,6 +8,15 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
   /** Original OCID device and listing; profile attribution never replaces this source. */
   openclawIdPrincipal?: import("../gateway/openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
+  /** Plain source evidence for another same-process start; never a lifetime check. */
+  device?: Readonly<{ deviceId: string; key: string }>;
+  verifiedIdentity?: string;
+  ingress?: Readonly<
+    RemoteIngressPrincipalIdentity & {
+      signal: AbortSignal;
+      scopeCeiling: readonly string[];
+    }
+  >;
   /** Host-captured original input; claim/occurrence owners revalidate it for continuations. */
   recoverySnapshot?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
   /** Diagnostic only; never participates in authority checks. */

@@ -1,3 +1,4 @@
+import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import { restoreGatewayQueuedOperatorRecovery } from "../../../gateway/operator-run-recovery.js";
 import {
@@ -163,10 +164,12 @@ export async function prepareFollowupRunOperatorAuthority(run: FollowupRun): Pro
     if (!context) {
       throw new GatewayOperatorAccessUnavailableError();
     }
+    const operatorSource = run.run.scheduledAutomation?.job.operatorSource;
     const restored = await restoreGatewayQueuedOperatorRecovery({
       context,
       source: captureQueuedOperatorRecoverySource(run.operatorAuthority),
       liveAuthority: run.operatorAuthority,
+      operatorSource: operatorSource && decodeGatewayOperatorRecoverySource(operatorSource.source),
       assertCurrent: () => {
         if (state.completed) {
           throw new Error("Input completed before source adoption");

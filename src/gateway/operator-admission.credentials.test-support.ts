@@ -18,10 +18,19 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { publicKeyRawBase64UrlFromPem } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
 import * as pairingStore from "../infra/device-pairing-store-readonly.js";
+import {
+  loadDevicePairingStoreState,
+  persistDevicePairingStoreState,
+  updatePairedDeviceInTransaction,
+} from "../infra/device-pairing-store.js";
 import { revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import { removePairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import * as tailscale from "../infra/tailscale.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   changeCanonicalUserChannelIdentity,
   publishCanonicalUserChannelPolicy,
@@ -44,6 +53,7 @@ import {
 } from "./openclaw-id/tunnel-principal.js";
 import * as admission from "./operator-admission.js";
 import type { AdmissionCase, AdmissionFixture } from "./operator-admission.table.test-support.js";
+import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import * as queuedInputs from "./queued-chat-inputs.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
@@ -73,6 +83,13 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
         return accepted;
       }
       assert(source, "Accepted input must carry real authority");
+      if (
+        ["narrowed-token", "narrowed-ingress", "narrowed-grant", "narrowed-role"].includes(
+          c.scenario,
+        )
+      ) {
+        expect([...source.scopes].toSorted()).toEqual([...WRITER, "operator.approvals"].toSorted());
+      }
       if (c.row.ingress === "channel") {
         expect(source.channelRecoverySource).toBeDefined();
       } else {
@@ -96,7 +113,7 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
             expect(snapshot.device).toBeDefined();
             if (c.scenario === "legacy-tailscale" || c.scenario === "legacy-tailscale-narrowed") {
               expect([...snapshot.scopes].toSorted()).toEqual(
-                [...WRITER, "operator.approvals"].toSorted(),
+                [...WRITER, "operator.approvals", "operator.pairing"].toSorted(),
               );
             }
           }
@@ -105,8 +122,7 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
               deviceId: c.identity.deviceId,
               key: sha256Hex(publicKeyRawBase64UrlFromPem(c.identity.publicKeyPem)),
             });
-            if (c.row.credential === "tailscale-device") {
-              // Requested/paired scopes contain write only; identity supplies read.
+            if (c.row.credential === "tailscale-device" && c.scenario !== "narrowed-grant") {
               expect([...snapshot.scopes].toSorted()).toEqual([...WRITER].toSorted());
             }
           }
@@ -203,6 +219,8 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
         c?.original &&
         [
           "narrowed-grant",
+          "narrowed-token",
+          "narrowed-ingress",
           "widened-grant",
           "narrowed-role",
           "legacy-tailscale",
@@ -271,6 +289,22 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
 
 export async function prepareAdmissionOperator(fixture: AdmissionFixture, c: AdmissionCase) {
   const credential = c.row.credential;
+  const legacyTailscale = ["legacy-tailscale", "legacy-tailscale-narrowed"].includes(c.scenario);
+  const initialScopes = [...WRITER];
+  if (
+    legacyTailscale ||
+    ["narrowed-token", "narrowed-ingress", "narrowed-grant", "narrowed-role"].includes(c.scenario)
+  ) {
+    initialScopes.push("operator.approvals");
+  }
+  if (legacyTailscale || ["narrowed-grant", "narrowed-role"].includes(c.scenario)) {
+    const next = structuredClone(fixture.config);
+    next.gateway!.auth!.identityScopes![PROXY_USER] = [
+      ...WRITER,
+      legacyTailscale ? "operator.pairing" : "operator.approvals",
+    ];
+    await fixture.publish(next, c.signal);
+  }
   if (credential === "principal") {
     const next = structuredClone(fixture.config);
     delete next.gateway!.roles;
@@ -284,28 +318,27 @@ export async function prepareAdmissionOperator(fixture: AdmissionFixture, c: Adm
       assertCurrent: () => c.service.signal.throwIfAborted(),
       host,
     });
+    c.ingressScopeCeiling = initialScopes;
     const principal = {
       audienceId: c.id,
       principal: { kind: "owner" as const },
-      operatorScopeCeiling: WRITER,
+      operatorScopeCeiling: c.ingressScopeCeiling,
       signal: c.consent.signal,
       assertCurrent: () => c.consent.signal.throwIfAborted(),
     };
     assert(factory.registerPrincipalRecovery);
     await factory.registerPrincipalRecovery(async () =>
-      c.consentCurrent ? { ...principal, recoveryId: c.id } : undefined,
+      c.consentCurrent
+        ? { ...principal, recoveryId: c.id, operatorScopeCeiling: c.ingressScopeCeiling }
+        : undefined,
     );
     const binding = await factory.bindPrincipal(principal);
     fixture.bindings.push(binding);
     return binding;
   }
   const device = credential !== "trusted-proxy";
-  const deviceScopes: OperatorScope[] =
-    credential === "tailscale-device"
-      ? ["operator.write"]
-      : c.scenario === "legacy-tailscale" || c.scenario === "legacy-tailscale-narrowed"
-        ? [...WRITER, "operator.approvals"]
-        : WRITER;
+  // Identity-only approvals must disappear when the identity grant narrows.
+  const deviceScopes = credential === "tailscale-device" ? WRITER : initialScopes;
   if (device) {
     const pending = await requestDevicePairing({
       deviceId: c.identity.deviceId,
@@ -321,7 +354,7 @@ export async function prepareAdmissionOperator(fixture: AdmissionFixture, c: Adm
       c.row.ingress === "control-ui" ? GATEWAY_CLIENT_NAMES.CONTROL_UI : GATEWAY_CLIENT_NAMES.TEST,
     mode: c.row.ingress === "control-ui" ? GATEWAY_CLIENT_MODES.WEBCHAT : GATEWAY_CLIENT_MODES.TEST,
     origin: c.row.ingress === "control-ui" ? ORIGIN : undefined,
-    scopes: deviceScopes,
+    scopes: legacyTailscale ? [...initialScopes, "operator.pairing"] : initialScopes,
   };
   const auth = fixture.config.gateway!.auth!;
   if (credential === "token" || credential === "device-token") {
@@ -424,6 +457,90 @@ export async function prepareNativeSend(fixture: AdmissionFixture, c: AdmissionC
 
 export async function revokeAdmissionSource(fixture: AdmissionFixture, c: AdmissionCase) {
   const next = structuredClone(fixture.config);
+  if (c.scenario === "narrowed-token") {
+    assert(c.row.credential === "device-token");
+    const before = await pairingStore.loadPairedDevicePairingStoreRecordReadOnly(
+      c.identity.deviceId,
+    );
+    assert(before);
+    const identity = c.original?.operatorAuthority?.recoverySnapshot?.device;
+    assert(identity);
+    expect(isPairedDeviceTokenIdentityCurrent(before, "operator", identity, [])).toBe(true);
+    updatePairedDeviceInTransaction(c.identity.deviceId, (device) => {
+      assert(device?.tokens?.operator);
+      return {
+        value: undefined,
+        patch: {
+          tokens: {
+            ...device.tokens,
+            operator: { ...device.tokens.operator, scopes: [...WRITER] },
+          },
+        },
+      };
+    });
+    const after = await pairingStore.loadPairedDevicePairingStoreRecordReadOnly(
+      c.identity.deviceId,
+    );
+    assert(after);
+    expect(isPairedDeviceTokenIdentityCurrent(after, "operator", identity, [])).toBe(true);
+    expect(after.tokens?.operator?.scopes).toEqual(WRITER);
+    return;
+  }
+  if (c.scenario === "narrowed-ingress") {
+    assert(c.row.credential === "principal");
+    c.ingressScopeCeiling = [...WRITER];
+    return;
+  }
+  if (c.scenario === "device-token-revoked" || c.scenario === "device-role-unapproved") {
+    assert(c.row.credential === "tailscale-device");
+    const before = await pairingStore.loadPairedDevicePairingStoreRecordReadOnly(
+      c.identity.deviceId,
+    );
+    assert(before?.tokens?.operator);
+    expect(c.original?.operatorAuthority?.recoverySnapshot?.device).toEqual({
+      deviceId: before.deviceId,
+      key: sha256Hex(before.publicKey),
+    });
+    if (c.scenario === "device-token-revoked") {
+      expect(
+        await revokeDeviceToken({
+          deviceId: c.identity.deviceId,
+          role: "operator",
+          callerScopes: ADMIN,
+        }),
+      ).toMatchObject({ ok: true, entry: { revokedAtMs: expect.any(Number) } });
+    } else {
+      // Change only approval, not the key, token, scopes or record's existence.
+      const state = loadDevicePairingStoreState();
+      const device = state.pairedByDeviceId[c.identity.deviceId];
+      assert(device);
+      device.role = "node";
+      device.roles = ["node"];
+      persistDevicePairingStoreState(state, undefined, "paired");
+    }
+    const after = await pairingStore.loadPairedDevicePairingStoreRecordReadOnly(
+      c.identity.deviceId,
+    );
+    assert(after);
+    expect(after.publicKey).toBe(before.publicKey);
+    expect(after.approvedScopes).toEqual(before.approvedScopes);
+    if (c.scenario === "device-token-revoked") {
+      expect(after.role).toBe(before.role);
+      expect(after.roles).toEqual(before.roles);
+      expect(after.tokens?.operator?.revokedAtMs).toEqual(expect.any(Number));
+    } else {
+      expect(after.tokens).toEqual(before.tokens);
+      expect(after.tokens?.operator?.revokedAtMs).toBeUndefined();
+    }
+    return;
+  }
+  if (c.scenario === "owner-disabled") {
+    assert(c.row.credential === "ocid-owner");
+    next.gateway!.openclawId = { ...next.gateway!.openclawId, enabled: false };
+    await fixture.publish(next, c.signal);
+    setOpenClawIdTunnelPrincipalLookup(undefined);
+    return;
+  }
   if (c.scenario === "pairing-unavailable") {
     assert(c.row.credential === "device-token");
     const read = vi
@@ -459,7 +576,7 @@ export async function revokeAdmissionSource(fixture: AdmissionFixture, c: Admiss
         c.row.credential === "tailscale-device",
     );
     next.gateway!.auth!.identityScopes![PROXY_USER] =
-      c.scenario === "widened-grant" ? [...WRITER, ...ADMIN] : ["operator.write"];
+      c.scenario === "widened-grant" ? [...WRITER, ...ADMIN] : [...WRITER];
     await fixture.publish(next, c.signal);
     return;
   }
@@ -469,7 +586,7 @@ export async function revokeAdmissionSource(fixture: AdmissionFixture, c: Admiss
     next.gateway!.roles!.definitions[role] = {
       sessions: { others: "write" },
       agents: "*",
-      scopes: c.scenario === "narrowed-role" ? ["operator.write"] : [],
+      scopes: c.scenario === "narrowed-role" ? [...WRITER] : [],
     };
     await fixture.publish(next, c.signal);
     await setCanonicalUserProfileRole(c.profileId, role);
@@ -477,6 +594,7 @@ export async function revokeAdmissionSource(fixture: AdmissionFixture, c: Admiss
   }
   if (c.scenario === "owner-unavailable") {
     assert(c.row.credential === "ocid-owner");
+    expect(fixture.config.gateway?.openclawId?.enabled).toBe(true);
     setOpenClawIdTunnelPrincipalLookup(undefined);
     return;
   }
@@ -539,4 +657,44 @@ export async function revokeAdmissionSource(fixture: AdmissionFixture, c: Admiss
       return;
   }
   await fixture.publish(next, c.signal);
+}
+
+export async function replayAdmissionInput(
+  fixture: AdmissionFixture,
+  c: AdmissionCase,
+  originSourceJson: string,
+) {
+  assert(fixture.kernel);
+  const context = fixture.kernel.gatewayRequestContext;
+  const generationState = context.sharedGatewaySessionGenerationState;
+  if (c.scenario === "generation-unavailable") {
+    const source = decodeQueuedOperatorRecoverySource(JSON.parse(originSourceJson));
+    assert(source.kind === "gateway");
+    expect(source.snapshot.sharedGeneration).toEqual(expect.any(String));
+    assert(generationState);
+    context.sharedGatewaySessionGenerationState = undefined;
+  }
+  try {
+    const deferred = await c.wait(
+      runWithGatewayIndependentRootWorkAdmission(
+        () =>
+          withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
+            queuedInputs.continueSessionQueuedInputs(context, c.target, {
+              signal: c.signal,
+              assertCurrent: () => c.signal.throwIfAborted(),
+            }),
+          ),
+        "test:accepted-input-drain",
+        c.signal,
+      ),
+    );
+    if (deferred) {
+      expect(deferred.error).toBeInstanceOf(GatewayOperatorAccessUnavailableError);
+    }
+    return deferred;
+  } finally {
+    if (c.scenario === "generation-unavailable") {
+      context.sharedGatewaySessionGenerationState = generationState;
+    }
+  }
 }

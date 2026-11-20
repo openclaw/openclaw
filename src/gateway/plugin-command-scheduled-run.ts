@@ -49,6 +49,7 @@ import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
@@ -281,6 +282,8 @@ export async function runPluginCommandScheduledTurn(params: {
       // retain the native operator lease without inheriting a closed occurrence callback.
       restored = await restoreGatewayQueuedOperatorRecovery({
         source: schedule.operatorSource,
+        operatorSource:
+          job.operatorSource && decodeGatewayOperatorRecoverySource(job.operatorSource.source),
         context,
         assertCurrent: () => {
           if (

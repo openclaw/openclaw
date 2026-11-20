@@ -335,6 +335,9 @@ export function createGatewayControlUiIngressFactory(params: {
             const display = projectUserProfileDisplay(row);
             return {
               bindingId,
+              pluginId,
+              audienceId: options.audienceId,
+              principal,
               ...(principal.kind === "delegated-person" ? { admission: principal.admission } : {}),
               ...(admission ? { openclawIdPrincipal: admission.principal } : {}),
               ...(recoverySource ? { recoverySource } : {}),
@@ -380,9 +383,6 @@ export function createGatewayControlUiIngressFactory(params: {
     const principalSignal = authority.signal;
     const resolvePrincipal = () => authority.resolve();
     const assertPrincipalCurrent = authority.assertCurrent;
-    const closeBinding = async () => {
-      authority.close();
-    };
     const requestPrincipal = async <T>(
       method: string,
       requestParams: Record<string, unknown>,
@@ -670,7 +670,7 @@ export function createGatewayControlUiIngressFactory(params: {
     const binding: GatewayIngressPrincipalBindingV1 = {
       request: requestPrincipal,
       openControlUi,
-      close: closeBinding,
+      close: async () => authority.close(),
     };
     try {
       host.admissionSignal.throwIfAborted();

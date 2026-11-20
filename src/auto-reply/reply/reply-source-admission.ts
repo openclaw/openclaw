@@ -264,7 +264,7 @@ export async function prepareReplyCommandOwnerAuthority(params: {
       config,
       nativeOwner ??
         ownerReference ?? {
-          channel: origin?.messageProvider,
+          channel: origin?.messageProvider ?? undefined,
           accountId: origin?.accountId ?? undefined,
           senderId: origin?.senderId ?? undefined,
           senderE164: origin?.senderE164 ?? undefined,

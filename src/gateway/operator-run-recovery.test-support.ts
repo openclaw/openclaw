@@ -214,7 +214,7 @@ export async function createOperatorRecoveryFixture(params: {
     retire: () => {
       current = false;
     },
-    restore: () => restoreGatewayOperatorSource({ snapshot, target, context, assertCurrent }),
+    restore: () => restoreGatewayOperatorSource({ snapshot, context, assertCurrent }),
   };
 }
 
