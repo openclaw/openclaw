@@ -174,18 +174,16 @@ describe("plugin lifecycle CLI transport", () => {
   it("rechecks Template availability after a pending plugin batch reload response", async () => {
     const reply = Promise.withResolvers<{ runtime: typeof runtimeReceipt }>();
     mocks.call.mockReturnValue(reply.promise);
-    let templatesEnabled: boolean | undefined;
+    const experimental: { templates?: boolean } = {};
     const commitGuard = vi.fn(() =>
-      assertTemplatesEnabled({
-        gateway: { controlUi: { experimental: { templates: templatesEnabled } } },
-      }),
+      assertTemplatesEnabled({ gateway: { controlUi: { experimental } } }),
     );
     const reload = await resolvePluginBatchReload();
     const result = reload!(targets, { commitGuard });
 
     expect(mocks.call).toHaveBeenCalledOnce();
     expect(commitGuard).not.toHaveBeenCalled();
-    templatesEnabled = false;
+    experimental.templates = false;
     reply.resolve({ runtime: runtimeReceipt });
 
     await expect(result).rejects.toBeInstanceOf(TemplatesDisabledError);
