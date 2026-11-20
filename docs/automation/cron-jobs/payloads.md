@@ -390,8 +390,9 @@ the content instead of overwriting another edit.
 Use a normal final reply for a visible result and `NO_REPLY` for silence.
 `record_result` accepts one outcome (`no_change`, `progress`, `done`, `blocked`,
 or `needs_attention`). `no_change` needs no summary; every other outcome requires
-a trimmed summary of 1–2000 characters. It records the result without sending a
-notification by itself. Structured results are retained in run history. After a
+a trimmed summary of 1–2000 characters. Repeating the accepted result returns it
+again; a different second result is rejected. It records the result without
+sending a notification by itself. Structured results are retained in run history. After a
 successful run, the last meaningful result is saved with the job and included as
 bounded context in its next prompt, even when the final reply is silent. Quiet
 checks and execution failures do not overwrite that result or append result
@@ -399,7 +400,8 @@ boilerplate to the conversation. This is not a delivery retry queue. `no_change`
 keeps runner delivery silent without hiding execution failures. A `progress`,
 `done`, `blocked`, or `needs_attention` summary is the run's authored outcome:
 an earlier tool failure the run moved past no longer adds a generic
-`⚠️ <tool> failed` notice to an otherwise silent run. The failure stays visible
+`⚠️ <tool> failed` notice to an otherwise silent run. The notice names the
+called tool, not the Tool Search dispatcher. The failure stays visible
 in the transcript and progress lane. A failed tool call counts as recovered
 once the same tool later succeeds. A call to a tool the run does not have never
 runs, so the next tool call that runs and succeeds recovers it. A run that only
