@@ -227,5 +227,6 @@ export function readPixVerseStatus(payload: unknown, id: string) {
   ) {
     throw new Error("ClawRouter PixVerse completed video URL is missing or malformed.");
   }
+  // SAFETY: completed statuses validate the URL above; the poller never consumes pending URLs.
   return { complete: result.status === 1, url: result.url as string | undefined };
 }
