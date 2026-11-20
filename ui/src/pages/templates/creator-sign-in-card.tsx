@@ -1,4 +1,6 @@
-import { Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
+import { copyToClipboard } from "../../lib/clipboard.ts";
+import { reserveExternalWindowForDeferredNavigation } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { TemplateCreator, TemplateSignInPresentation } from "./creator-publication.ts";
 import "../../styles/chat/clawhub-card.css";
@@ -10,10 +12,10 @@ export function TemplateCreatorSignInCard(props: {
   flow: TemplateCreator;
 }) {
   const pending = () => (props.state.status === "pending" ? props.state : null);
+  const [recovery, setRecovery] = createSignal<{ requestId: string; copied: boolean }>();
+  const manual = () => recovery()?.requestId === pending()?.requestId && recovery();
   const status = () => {
     switch (props.state.status) {
-      case "pending":
-        return "templatesDraft.signInWaiting";
       case "cancelled":
       case "denied":
         return "templatesDraft.signInCancelled";
@@ -25,6 +27,33 @@ export function TemplateCreatorSignInCard(props: {
         return "templatesDraft.signInExplanation";
     }
   };
+  async function activate(button: HTMLButtonElement) {
+    const request = pending();
+    if (!request) {
+      props.flow.startClawHubSignIn();
+      return;
+    }
+    const current = () => button.isConnected && pending()?.requestId === request.requestId;
+    // Both browser APIs need the click. Start copying before the tab takes focus,
+    // but don't navigate away from OpenClaw until the code is on the clipboard.
+    const copy = copyToClipboard(request.userCode, current);
+    let tab: Window | null = null;
+    let copied = false;
+    try {
+      tab = reserveExternalWindowForDeferredNavigation();
+      copied = await copy;
+      if (copied && current() && tab && !tab.closed) {
+        tab.location.replace(request.verificationUrl);
+        return;
+      }
+    } catch {
+      // Browser policy may refuse a new window or its navigation.
+    }
+    tab?.close();
+    if (current()) {
+      setRecovery({ requestId: request.requestId, copied });
+    }
+  }
   return (
     <openclaw-chat-clawhub-card>
       <div class="card chat-clawhub-card template-creator__sign-in">
@@ -36,24 +65,43 @@ export function TemplateCreatorSignInCard(props: {
             <strong class="card-title chat-clawhub-card__name">
               {t("templatesDraft.clawHub")}
             </strong>
-            <span class="chat-clawhub-card__status muted" role="status">
-              {t(status())}{" "}
-              <Show when={pending()}>{(request) => <code>{request().userCode}</code>}</Show>
+            <span
+              class="chat-clawhub-card__status muted"
+              role="status"
+              data-approval-code={pending() ? "" : undefined}
+            >
+              {pending()?.userCode ?? t(status())}
             </span>
+            <Show when={manual()}>
+              {(failure) => (
+                <span role="alert">
+                  {t(
+                    failure().copied
+                      ? "templatesDraft.signInManualOpen"
+                      : "templatesDraft.signInManualCopy",
+                  )}
+                </span>
+              )}
+            </Show>
           </span>
         </div>
         <div class="chat-clawhub-card__actions">
           <Show
-            when={pending()}
+            when={manual() && pending()}
             fallback={
               <button
                 type="button"
-                class="btn primary"
+                class="btn primary chat-clawhub-card__sign-in"
+                data-alternate-label={t(
+                  pending() ? "templatesDraft.signIn" : "templatesDraft.signInCopyOpen",
+                )}
                 disabled={props.state.status === "starting"}
                 aria-busy={props.state.status === "starting" ? "true" : undefined}
-                onClick={() => props.flow.startClawHubSignIn()}
+                onClick={(event) => void activate(event.currentTarget)}
               >
-                {t("templatesDraft.signIn")}
+                <span>
+                  {t(pending() ? "templatesDraft.signInCopyOpen" : "templatesDraft.signIn")}
+                </span>
               </button>
             }
           >

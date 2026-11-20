@@ -3,7 +3,6 @@ import type {
   TemplatesDraftsSignInResult,
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { reserveExternalWindowForDeferredNavigation } from "../../lib/open-external-url.ts";
 import type { TemplateReviewTarget, TemplateSignInPresentation } from "./creator-publication.ts";
 
 const METHOD = "templates.drafts.signIn";
@@ -95,29 +94,24 @@ export class TemplateCreatorSignIn {
     if (!this.state || this.state.status === "starting" || this.state.status === "pending") {
       return;
     }
-    const popup = reserveExternalWindowForDeferredNavigation();
     const version = ++this.version;
     this.state = { status: "starting" };
     this.changed();
     try {
       const result = await this.request(target, "start");
-      if (version !== this.version || result.status !== "pending") {
-        popup?.close();
-        if (version === this.version) {
-          this.apply(target, result);
-        }
+      if (version !== this.version) {
+        return;
+      }
+      if (result.status !== "pending") {
+        this.apply(target, result);
         return;
       }
       const url = URL.parse(result.verificationUrl);
       if (!url || !["https:", "http:"].includes(url.protocol)) {
         throw new Error("Invalid ClawHub approval URL");
       }
-      if (popup && !popup.closed) {
-        popup.location.replace(url.href);
-      }
       this.apply(target, { ...result, verificationUrl: url.href });
     } catch {
-      popup?.close();
       if (version === this.version) {
         this.apply(target, { status: "failed" });
       }
