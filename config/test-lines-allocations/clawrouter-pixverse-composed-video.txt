@@ -1,2 +1,2 @@
-# Bounded multipart/offer contracts, registered HTTP create/poll/cleanup, and terminal versus ordinary fallback require 634 net test lines.
-234
+# Bounded PixVerse transport/fallback contracts require 634 net test lines; chunk-boundary and routed-reader inventory controls add 50.
+284
