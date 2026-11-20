@@ -1,12 +1,19 @@
 // Settings in Urbit's %settings agent hot-reload without restarting the Gateway.
 import { asBoolean, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  TlonClubPolicySchema,
+  TlonClubRulesSchema,
+  type TlonClubPolicy,
+  type TlonClubRules,
+} from "./config-schema.js";
+import { TLON_CLUB_ID_RE } from "./targets.js";
 import type { UrbitSSEClient } from "./urbit/sse-client.js";
 
 export const TLON_PENDING_APPROVAL_LIMIT = 100;
 
 export type PendingApproval = {
   id: string;
-  type: "dm" | "channel" | "group";
+  type: "dm" | "channel" | "group" | "club";
   requestingShip: string;
   channelNest?: string;
   groupFlag?: string;
@@ -16,6 +23,8 @@ export type PendingApproval = {
    * unverified author claim, so approval replays must keep the club-scoped, non-owner identity.
    */
   clubId?: string;
+  /** Only new club requests may grant standing conversation access. */
+  clubMode?: "once" | "message";
   /**
    * Set when a DM request came from a verified 1:1 DM. DM requests stored before this marker
    * existed cannot be told apart from group DM claims, so their messages are never replayed.
@@ -36,6 +45,8 @@ export type PendingApproval = {
 export type TlonSettingsStore = {
   groupChannels?: string[];
   dmAllowlist?: string[];
+  clubPolicy?: TlonClubPolicy;
+  clubRules?: TlonClubRules;
   showModelSig?: boolean;
   autoAcceptDmInvites?: boolean;
   autoDiscoverChannels?: boolean;
@@ -100,6 +111,8 @@ function parseSettingsResponse(raw: unknown): TlonSettingsStore {
     dmAllowlist: Array.isArray(settings.dmAllowlist)
       ? filterStringEntries(settings.dmAllowlist)
       : undefined,
+    clubPolicy: TlonClubPolicySchema.safeParse(settings.clubPolicy).data,
+    clubRules: TlonClubRulesSchema.safeParse(parseJsonSetting(settings.clubRules)).data,
     autoDiscoverChannels: asBoolean(settings.autoDiscoverChannels),
     showModelSig: asBoolean(settings.showModelSig),
     autoAcceptDmInvites: asBoolean(settings.autoAcceptDmInvites),
@@ -136,7 +149,13 @@ function parsePendingApprovals(value: unknown): PendingApproval[] | undefined {
     const obj = item as Record<string, unknown>;
     return (
       typeof obj.id === "string" &&
-      (obj.type === "dm" || obj.type === "channel" || obj.type === "group") &&
+      (obj.type === "dm" ||
+        obj.type === "channel" ||
+        obj.type === "group" ||
+        (obj.type === "club" &&
+          typeof obj.clubId === "string" &&
+          TLON_CLUB_ID_RE.test(obj.clubId) &&
+          (obj.clubMode === "once" || obj.clubMode === "message"))) &&
       typeof obj.requestingShip === "string" &&
       typeof obj.timestamp === "number" &&
       (obj.clubId === undefined || typeof obj.clubId === "string") &&
@@ -150,7 +169,10 @@ function parseSettingsEvent(event: unknown): { key: string; value: unknown } | n
     return null;
   }
 
-  const evt = event as Record<string, unknown>;
+  const evt = (event as { "settings-event"?: Record<string, unknown> })["settings-event"];
+  if (!evt || typeof evt !== "object") {
+    return null;
+  }
 
   const operation = evt["put-entry"] ? "put-entry" : "del-entry";
   const entry = evt[operation] as Record<string, unknown> | undefined;
