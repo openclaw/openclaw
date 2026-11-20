@@ -23,7 +23,7 @@ function inputFixture() {
       killProcessTree: true,
       ...options,
     });
-  return { descriptor, run, digest: createHash("sha256").update(bytes).digest("hex") };
+  return { file, descriptor, run, digest: createHash("sha256").update(bytes).digest("hex") };
 }
 
 it("inherits binary file input before the caller closes its descriptor", async () => {
@@ -33,37 +33,44 @@ it("inherits binary file input before the caller closes its descriptor", async (
   expect(await running).toMatchObject({ code: 0, termination: "exit", stdout: digest, stderr: "" });
 });
 
-it("settles cancellation without closing the caller's file descriptor", async () => {
-  const { descriptor, digest, run } = inputFixture();
-  const controller = new AbortController();
-  let outputBytes = 0;
-  try {
-    const result = await run(`setInterval(()=>{},1000);${digestStdin}`, {
-      signal: controller.signal,
-      onOutputChunk: (chunk, stream) => {
-        outputBytes += stream === "stdout" ? chunk.length : 0;
-        if (outputBytes === digest.length) {
-          controller.abort();
-        }
-      },
-    });
-    expect(result).toMatchObject({
-      termination: "signal",
-      stdout: digest,
-      pid: expect.any(Number),
-    });
-    expect(isPidAlive(result.pid!)).toBe(false);
-    expect(fs.fstatSync(descriptor).isFile()).toBe(true);
-  } finally {
-    fs.closeSync(descriptor);
-  }
-});
+it.each(["descriptor", "path"])(
+  "settles %s input cancellation without closing the caller's descriptor",
+  async (mode) => {
+    const { file, descriptor, digest, run } = inputFixture();
+    const controller = new AbortController();
+    let outputBytes = 0;
+    try {
+      const result = await run(`setInterval(()=>{},1000);${digestStdin}`, {
+        ...(mode === "path" ? { inputFile: file, stdinFileDescriptor: undefined } : {}),
+        signal: controller.signal,
+        onOutputChunk: (chunk, stream) => {
+          outputBytes += stream === "stdout" ? chunk.length : 0;
+          if (outputBytes === digest.length) {
+            controller.abort();
+          }
+        },
+      });
+      expect(result).toMatchObject({
+        termination: "signal",
+        stdout: digest,
+        pid: expect.any(Number),
+      });
+      expect(isPidAlive(result.pid!)).toBe(false);
+      expect(fs.fstatSync(descriptor).isFile()).toBe(true);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  },
+);
 
 it.each<[CommandOptions, string]>([
   [{ stdinFileDescriptor: 0, input: "payload" }, "either input or stdinFileDescriptor"],
   [{ stdinFileDescriptor: 0, beforeInput: () => undefined }, "admission requires explicit input"],
   [{ stdinFileDescriptor: -1 }, "nonnegative integer"],
   [{ stdinFileDescriptor: 0.5 }, "nonnegative integer"],
+  [{ inputFile: "file", input: "payload" }, "cannot be combined"],
+  [{ inputFile: "file", stdinFileDescriptor: 0 }, "cannot be combined"],
+  [{ inputFile: "file", beforeInput: () => undefined }, "admission requires explicit input"],
 ])("rejects ambiguous or invalid file input before spawning: %j", async (options, message) => {
   const marker = path.join(temporary.make("openclaw-command-stdin-rejected-"), "spawned");
   await expect(

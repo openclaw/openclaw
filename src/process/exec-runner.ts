@@ -20,6 +20,7 @@ import {
   hasChildProcessExited,
   releaseChildProcessOutputAfterExit,
 } from "./child-process.js";
+import type { CommandOptions } from "./exec-command-options.js";
 import {
   appendCapturedOutput,
   appendPreservedOutputLines,
@@ -32,11 +33,7 @@ import {
   shouldTerminateOnOutput,
   type CapturedOutputBuffers,
   type CommandOutputCaptureMode,
-  type CommandOutputCaptureOption,
-  type CommandOutputErrorOption,
-  type CommandOutputLimitOption,
   type CommandOutputStream,
-  type PreserveOutputLine,
 } from "./exec-output.js";
 import {
   createInterruptedCommandOutcome,
@@ -57,51 +54,10 @@ import {
   waitForCommandSpawn,
 } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
-import type { ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { setProcessTimeout } from "./process-deadline.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 
 type CommandTerminationReason = SpawnResult["termination"] | "output-limit";
-
-export type CommandOptions = {
-  executionIntent?: ProcessExecutionIntent;
-  executionScopeKey?: string;
-  timeoutMs?: number;
-  cwd?: string;
-  input?: string | Uint8Array;
-  /** Borrow a caller-owned descriptor as stdin without buffering or piping its bytes. */
-  stdinFileDescriptor?: number;
-  /** Synchronous admission with the spawned PID and argv, before input is released. */
-  beforeInput?: (pid: number, argv?: readonly string[]) => void;
-  /** Prepare physical source facts after startup, before the final synchronous input grant. */
-  prepareInput?: (pid: number, argv?: readonly string[]) => Promise<void>;
-  baseEnv?: NodeJS.ProcessEnv;
-  env?: NodeJS.ProcessEnv;
-  /** Operation-owned output of resolveCommandEnv. */
-  preparedEnv?: NodeJS.ProcessEnv;
-  windowsVerbatimArguments?: boolean;
-  noOutputTimeoutMs?: number;
-  signal?: AbortSignal;
-  maxOutputBytes?: number | { stdout?: number; stderr?: number };
-  maxCombinedOutputBytes?: number;
-  outputCapture?: CommandOutputCaptureOption;
-  /** Observe raw output without owning child lifecycle. Return false to stop the command. */
-  onOutputChunk?: (chunk: Buffer, stream: CommandOutputStream) => boolean | void;
-  /** Accept a successful exit when only the selected diagnostic output stream failed. */
-  tolerateOutputError?: { stdout?: boolean; stderr?: boolean };
-  /** Terminate when the selected output stream emits an error. */
-  terminateOnOutputError?: CommandOutputErrorOption;
-  terminateOnOutputLimit?: CommandOutputLimitOption;
-  maxPreservedOutputLines?: number;
-  preserveOutputLine?: PreserveOutputLine;
-  killProcessTree?: boolean;
-  /** Join owned descendants even after a successful root exits. */
-  requireProcessTreeExtinction?: boolean;
-  /** Initial signal for direct-child and graceful process-group cancellation. */
-  killSignal?: NodeJS.Signals | number;
-  /** Grace between graceful termination and the force-kill fallback. */
-  killGraceMs?: number;
-};
 
 export async function runCommandWithTimeout(
   argv: string[],
@@ -163,6 +119,7 @@ async function runCommandWithOutputEncoding(
     timeoutMs,
     cwd,
     input,
+    inputFile,
     stdinFileDescriptor,
     baseEnv,
     env,
@@ -178,6 +135,9 @@ async function runCommandWithOutputEncoding(
     throw new Error("Process-tree extinction requires process-tree ownership");
   }
   const hasInput = input !== undefined;
+  if (inputFile !== undefined && (hasInput || stdinFileDescriptor !== undefined)) {
+    throw new Error("Command file input cannot be combined with input or stdinFileDescriptor");
+  }
   const guardedInput = options.beforeInput !== undefined || options.prepareInput !== undefined;
   if (stdinFileDescriptor !== undefined) {
     if (!Number.isInteger(stdinFileDescriptor) || stdinFileDescriptor < 0) {
@@ -264,10 +224,12 @@ async function runCommandWithOutputEncoding(
     forceKillAfterDelay: resolvedKillGraceMs,
     killSignal,
     ...(hasInput && !guardedInput ? { input } : {}),
+    inputFile,
     reject: false,
     stdio: [
       // SAFETY: Execa forwards arbitrary numeric descriptors to Node; its stdin type narrows them to fd 0.
-      (options.stdinFileDescriptor as 0 | undefined) ?? (hasInput ? "pipe" : "inherit"),
+      (options.stdinFileDescriptor as 0 | undefined) ??
+        (hasInput || inputFile !== undefined ? "pipe" : "inherit"),
       "pipe",
       "pipe",
     ],

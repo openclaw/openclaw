@@ -57,6 +57,7 @@ import { zstdCompress } from "node:zlib";
  * --expected-inline-builds 1 qualifies the baseline; the candidate requires zero.
  * Report idle/create/send work separately and total CPU/allocation with A/A controls.
  * --base-advance creates at A, pushes B to a local origin, runs the idle pass,
+ * with the Gateway's existing spawn broker active in both arms,
  * then measures first and warm creates at B. Run two A/A controls and five
  * interleaved A/B pairs with one sample per fresh synthetic clone. Acceptance:
  * first-create native copies 2 -> 1, correct B HEAD/contents, lower latency,
@@ -429,6 +430,17 @@ const projectOwnerSha256 = projectSelection
       .digest("hex")
   : undefined;
 const rows: unknown[] = [];
+const broker = values["base-advance"]
+  ? await (
+      await import("../../src/process/spawn-broker/context.js")
+    ).startGatewaySpawnBroker({
+      onReady() {},
+      onStartupFailure(message) {
+        throw new Error(message);
+      },
+    })
+  : undefined;
+assert(!values["base-advance"] || broker, "Base-advance proof requires the Gateway spawn broker");
 try {
   if (projectSelection) {
     // Fixture registration must not warm only the first measured state lookup.
@@ -549,9 +561,12 @@ try {
       const fields = readFileSync("/proc/self/stat", "utf8").split(") ")[1]!.split(" ");
       return (Number(fields[13]) + Number(fields[14])) * 10;
     };
-    // The isolated container cgroup also includes Podman builders after conmon reparents them.
+    // The isolated cgroup includes the live broker and Podman builders, not just reaped children.
+    const cgroupCpu =
+      process.platform === "linux" &&
+      statSync("/sys/fs/cgroup/cpu.stat", { throwIfNoEntry: false })?.isFile();
     const containerCpu = () =>
-      values["first-send-image"]
+      cgroupCpu
         ? Number(
             readFileSync("/sys/fs/cgroup/cpu.stat", "utf8").match(/^usage_usec (\d+)$/m)?.[1],
           ) / 1000
@@ -1050,6 +1065,7 @@ try {
   }
 } finally {
   await drainGlobalSingletonLifecycleState();
+  await broker?.close();
   diagnostics.unsubscribe(observe);
   hooks.deregister();
   Reflect.deleteProperty(globalThis, key);

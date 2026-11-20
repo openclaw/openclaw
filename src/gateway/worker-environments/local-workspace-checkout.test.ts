@@ -1,12 +1,17 @@
+import childProcess from "node:child_process";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as checkoutConfig from "../../agents/worktrees/checkout-git-config.js";
 import * as worktreeGit from "../../agents/worktrees/git.js";
 import * as execution from "../../process/exec.js";
+import { runWithSpawnBroker } from "../../process/spawn-broker/context.js";
+import { createSpawnBrokerHost } from "../../process/spawn-broker/host.js";
+import { supportsSpawnBrokerCommandTransport } from "../../process/spawn-broker/pipe.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
 import * as packOwner from "./workspace-git-base.js";
@@ -48,7 +53,29 @@ it("refreshes independent checkouts without replacing unchanged files or depende
     signal,
     assertCurrent: () => signal.throwIfAborted(),
   };
-  await prepareLocalWorkspaceCheckout(checkout);
+  const broker = supportsSpawnBrokerCommandTransport() ? createSpawnBrokerHost() : undefined;
+  if (broker) {
+    onTestFinished(() => broker.close());
+    await broker.ready();
+  }
+  const nativeSpawn = childProcess.spawn;
+  let inlinePackSpawns = 0;
+  const spawn = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+    if (Array.isArray(args[1]) && args[1].includes("index-pack")) {
+      inlinePackSpawns += 1;
+    }
+    return nativeSpawn(...args);
+  });
+  syncBuiltinESMExports();
+  onTestFinished(() => {
+    spawn.mockRestore();
+    syncBuiltinESMExports();
+  });
+  const prepare = (params: Parameters<typeof prepareLocalWorkspaceCheckout>[0]) =>
+    broker
+      ? runWithSpawnBroker(broker, () => prepareLocalWorkspaceCheckout(params))
+      : prepareLocalWorkspaceCheckout(params);
+  await prepare(checkout);
   const unchanged = await fs.stat(path.join(destination, "unchanged"));
   await fs.mkdir(path.join(destination, "node_modules"));
   await fs.writeFile(path.join(destination, "node_modules", "dependency"), "installed\n");
@@ -64,7 +91,7 @@ it("refreshes independent checkouts without replacing unchanged files or depende
     await git("add", ".");
     await git("commit", "--quiet", "-m", revision);
     const nextCommit = await git("rev-parse", "HEAD");
-    await prepareLocalWorkspaceCheckout({ ...checkout, baseCommit: nextCommit, retainedCommit });
+    await prepare({ ...checkout, baseCommit: nextCommit, retainedCommit });
     retainedCommit = nextCommit;
   }
   expect(await worktreeGit.requireGit(destination, ["rev-parse", "HEAD"])).toBe(retainedCommit);
@@ -85,6 +112,9 @@ it("refreshes independent checkouts without replacing unchanged files or depende
   expect(await fs.readFile(path.join(destination, "node_modules", "dependency"), "utf8")).toBe(
     "installed\n",
   );
+  if (broker) {
+    expect(inlinePackSpawns).toBe(0);
+  }
 });
 
 it.each([
@@ -302,22 +332,21 @@ it.for(["mkdir", "index-pack"] as const)(
       await fs.unlink(alias);
       await fs.symlink(replacement, alias, "dir");
     };
-    let pack: string | undefined;
     const preparePack = packOwner.prepareWorkerWorkspaceGitPack;
     vi.spyOn(packOwner, "prepareWorkerWorkspaceGitPack").mockImplementation(async (params) => {
-      pack = await preparePack(params);
+      const pack = await preparePack(params);
       if (phase === "mkdir") {
         await retarget();
       }
       return pack;
     });
-    const open = fs.open;
-    vi.spyOn(fs, "open").mockImplementation(async (filename, flags, mode) => {
-      const handle = await open(filename, flags, mode);
-      if (phase === "index-pack" && filename === pack) {
+    const requireGit = worktreeGit.requireGit;
+    vi.spyOn(worktreeGit, "requireGit").mockImplementation(async (cwd, args, options) => {
+      const result = await requireGit(cwd, args, options);
+      if (phase === "index-pack" && cwd === destination && args[0] === "init") {
         await retarget();
       }
-      return handle;
+      return result;
     });
     await expect(
       prepareLocalWorkspaceCheckout({

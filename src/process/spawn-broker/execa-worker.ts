@@ -137,7 +137,7 @@ export async function startBrokerExeca(
         ? getProcessInstanceStartTime(child.pid)
         : undefined;
     const stdio = [0, 1, 2].map((fd) => {
-      if (fd === 0 && options.input !== undefined) {
+      if (fd === 0 && (options.input !== undefined || options.inputFile !== undefined)) {
         return null;
       }
       if (fd > 0 && outputOption(options, fd === 1 ? 1 : 2) !== "pipe") {

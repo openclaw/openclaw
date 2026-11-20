@@ -193,36 +193,31 @@ export async function prepareLocalWorkspaceCheckout(
         "--object-format=" + (params.baseCommit.length === 40 ? "sha1" : "sha256"),
       ]);
     }
-    const input = await fs.open(pack, "r");
-    try {
-      await prepare();
-      current();
-      const result = await withGitProcessOperation(
-        "workspace.inventory",
-        () =>
-          runCommandWithTimeout(
-            idleIoPriorityArgv(
-              ["git", "-C", repo, "index-pack", "--stdin", "--fix-thin"],
-              params.idleIoPriority,
-            ),
-            {
-              stdinFileDescriptor: input.fd,
-              baseEnv: gitEnvironment(cleanEnv),
-              signal,
-              timeoutMs: 300_000,
-              maxOutputBytes: 4096,
-              terminateOnOutputLimit: true,
-              killProcessTree: true,
-              requireProcessTreeExtinction: true,
-            },
+    await prepare();
+    current();
+    const result = await withGitProcessOperation(
+      "workspace.inventory",
+      () =>
+        runCommandWithTimeout(
+          idleIoPriorityArgv(
+            ["git", "-C", repo, "index-pack", "--stdin", "--fix-thin"],
+            params.idleIoPriority,
           ),
-        "default",
-      );
-      if (result.code !== 0 || result.termination !== "exit") {
-        throw commandError("git index-pack", result);
-      }
-    } finally {
-      await input.close();
+          {
+            inputFile: pack,
+            baseEnv: gitEnvironment(cleanEnv),
+            signal,
+            timeoutMs: 300_000,
+            maxOutputBytes: 4096,
+            terminateOnOutputLimit: true,
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
+          },
+        ),
+      "default",
+    );
+    if (result.code !== 0 || result.termination !== "exit") {
+      throw commandError("git index-pack", result);
     }
     await prepare();
     current();

@@ -28,6 +28,7 @@ export type CommandSpawnOptions = Pick<
   | "windowsVerbatimArguments"
 > & {
   input?: string | Uint8Array;
+  inputFile?: string;
   stdin?: NativeInput;
   stdout?: NativeOutput;
   stderr?: NativeOutput;

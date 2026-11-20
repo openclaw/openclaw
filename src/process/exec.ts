@@ -27,7 +27,7 @@ import type { ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { setProcessTimeout } from "./process-deadline.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 export { runCommandWithTimeout, runUtf8CommandWithTimeout } from "./exec-runner.js";
-export type { CommandOptions } from "./exec-runner.js";
+export type { CommandOptions } from "./exec-command-options.js";
 export { isPlainCommandExitFailure, resolveProcessExitCode } from "./exec-result.js";
 export type { SpawnResult } from "./exec-result.js";
 export { resolveCommandEnv, shouldSpawnWithShell, spawnCommand } from "./exec-spawn.js";
