@@ -15,6 +15,8 @@ const cases = [
   ],
   [forcedExit, "forced-process-exit-violation.cjs", 6, [3, 4, 5, 6, 7, 9]],
   [forcedExit, "forced-process-exit-violation.mjs", 2, [2, 4]],
+  [forcedExit, "forced-process-escaped.ts", 5, [2, 4, 5, 6, 8]],
+  [forcedExit, "forced-process-uppercase.ts", 1, [1]],
   [forcedExit, "../forced-process-exit.test-support.cjs", 0],
   ["no-register-http-handler-call", "register-http-handler-violation.ts", 3],
   ["no-raw-window-open-call", "raw-window-open-violation.ts", 5],
@@ -60,6 +62,7 @@ it.each([
   const listeners = noForcedProcessExit.create({
     cwd: process.cwd(),
     physicalFilename: `${process.cwd()}/${file}`,
+    sourceCode: { text: "process.exit(1);", scopeManager: { scopes: [] } },
     report() {
       reported = true;
     },
