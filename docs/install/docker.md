@@ -217,7 +217,10 @@ TELEGRAM_BOT_TOKEN=<bot-token>
 
 Create the bind-mount sources as your user before the first run. On a rootful
 Docker Engine, missing sources are created as `root`, so the image's `node` user
-cannot write to them and onboarding fails with `EACCES`.
+cannot write to them and onboarding fails with `EACCES`. The image runs as UID
+1000; if your host user has a different UID, make these directories writable by
+UID 1000 as described in
+[Permissions and EACCES](/install/docker/compose-operations#permissions-and-eacces).
 
 ```bash
 mkdir -p ~/.openclaw/workspace ~/.openclaw-auth-profile-secrets
@@ -248,7 +251,10 @@ See [`openclaw channels`](/cli/channels) for credential-flag alternatives and ot
 
 Create the bind-mount sources as your user before the first run. On a rootful
 Docker Engine, missing sources are created as `root`, so the image's `node` user
-cannot write to them and onboarding fails with `EACCES`.
+cannot write to them and onboarding fails with `EACCES`. The image runs as UID
+1000; if your host user has a different UID, make these directories writable by
+UID 1000 as described in
+[Permissions and EACCES](/install/docker/compose-operations#permissions-and-eacces).
 
 ```bash
 mkdir -p ~/.openclaw/workspace ~/.openclaw-auth-profile-secrets
