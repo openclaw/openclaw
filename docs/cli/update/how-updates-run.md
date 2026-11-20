@@ -1591,10 +1591,10 @@ builds the target as a new release, switches the link, and arms a trial in
 `openclaw gateway run`, without `--help` or `--version`) counts as a start: after two failed
 starts the launcher switches the link back to the trial's previous release. With `--no-restart`,
 the new release stays pending and the next Gateway run selects it. A service that still starts the
-source checkout (the first update to releases) keeps starting it: the update leaves its
-definition unchanged and records an owed `service-definition` step that names
-`openclaw gateway install --force` and `openclaw gateway restart`. The trial ends once the Gateway
-on the new release is ready.
+source checkout (the first update to releases) gets a definition that starts the launcher, written
+without starting or restarting the Gateway, so its next start selects the release too. Only if that
+write fails does the update record an owed `service-definition` step. The trial ends once the
+Gateway on the new release is ready.
 
 The launcher knows only its own state directory. A Gateway run for another profile started
 through the same `openclaw` on PATH (`openclaw --profile work gateway`) also counts as a start of
