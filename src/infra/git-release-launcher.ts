@@ -3,12 +3,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ROOT_VALUE_FLAGS } from "../../cli-root-options.mjs";
 import { GATEWAY_RUN_VALUE_FLAGS } from "../../gateway-run-argv.mjs";
-import { WINDOWS_TASK_SUPERVISOR_CHILD_FLAG } from "../daemon/windows-task-supervisor-contract.js";
 import {
-  GIT_RELEASE_LAUNCHER,
-  GIT_RELEASE_START_COUNTED_ENV,
-  GIT_RELEASE_TRIAL,
-} from "./git-release-paths.js";
+  WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
+  WINDOWS_TASK_SUPERVISOR_FLAG,
+} from "../daemon/windows-task-supervisor-contract.js";
+import { GIT_RELEASE_LAUNCHER, GIT_RELEASE_TRIAL } from "./git-release-paths.js";
 
 export type GitReleaseTrial = {
   /** Link text of the release on trial. */
@@ -43,10 +42,12 @@ const prefix = path.dirname(fileURLToPath(import.meta.url));
 const slot = path.join(prefix, "openclaw");
 const trialFile = path.join(prefix, "releases", "${GIT_RELEASE_TRIAL}");
 // Only a Gateway run is a start: "openclaw gateway" or "openclaw gateway run", never another
-// "gateway" subcommand. The Windows task supervisor runs the selected release's code itself, so
-// its start counts (a release that fails to load crashes the supervisor, and Task Scheduler's
-// restart-on-failure starts it again); its first child is the same start and sets the marker
-// below, while its crash restarts count as starts of their own. An unknown value flag
+// "gateway" subcommand. The Windows task supervisor only starts the Gateway child, through this
+// launcher (it reads the global below), so only the child's starts count. During a trial the
+// supervisor runs the trial's previous release: a trial release that fails to load must not take
+// the supervisor down with it, since Task Scheduler does not restart a task whose action exits
+// with an error, and the supervisor's crash restarts of the child are what count the starts that
+// switch back. An unknown value flag
 // can make a start look like a subcommand; it is then not counted (accepted). The launcher knows
 // only its own state directory: a run for another profile through this install's PATH entry
 // ("openclaw --profile x gateway") counts as this install's start (accepted, Ayaan 2026-11-20).
@@ -72,8 +73,8 @@ const gatewayRun =
   !informational &&
   positionals[0] === "gateway" &&
   (positionals.length === 1 || (positionals.length === 2 && positionals[1] === "run"));
-const counts = gatewayRun && !process.env["${GIT_RELEASE_START_COUNTED_ENV}"];
-delete process.env["${GIT_RELEASE_START_COUNTED_ENV}"];
+const supervisor = process.argv.includes("${WINDOWS_TASK_SUPERVISOR_FLAG}");
+const counts = gatewayRun && !supervisor;
 globalThis[Symbol.for("openclaw.gitReleaseLauncher")] = fileURLToPath(import.meta.url);
 
 // Upgraded state keeps each replaced file as "<file>.pre-<generation>". Restore them
@@ -235,7 +236,12 @@ if (trial && counts) {
     writeTrial({ ...trial, attempts: trial.attempts + 1 });
   }
 }
-process.argv[1] = path.join(slot, "dist", gatewayRun ? "index.js" : "entry.js");
+// A supervisor on a live trial runs the fallback release; the trial's children run the target.
+const supervisorFallback =
+  supervisor && trial && linked(fs.readlinkSync(slot)) === linked(trial.target)
+    ? linked(trial.previous)
+    : undefined;
+process.argv[1] = path.join(supervisorFallback ?? slot, "dist", gatewayRun ? "index.js" : "entry.js");
 await import(pathToFileURL(process.argv[1]).href);
 `;
 

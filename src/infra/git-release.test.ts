@@ -11,7 +11,6 @@ import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { writeGitReleaseLauncher } from "./git-release-launcher.js";
 import {
-  GIT_RELEASE_START_COUNTED_ENV,
   GIT_RELEASE_TRIAL,
   gitReleaseSlot,
   resolveGitReleaseEntrypointForLauncher,
@@ -140,33 +139,28 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       );
     });
 
-    it("switches back when the Windows task supervisor itself cannot load the release", async () => {
+    it("keeps the Windows task supervisor on the fallback while its children try the release", async () => {
       const { prefix } = await setup();
-      const good = await release(prefix, "1.0.0", 'console.log("old");\n');
+      const good = await release(prefix, "1.0.0", 'console.log("old " + process.argv[1]);\n');
       await publishGitRelease({ prefix, releaseRoot: good, trial: true });
       await publishGitRelease({
         prefix,
         releaseRoot: await release(prefix, "2.0.0", 'throw new Error("boot");\n'),
         trial: true,
       });
-      // Task Scheduler restarts a failed task: each start loads the release in the supervisor.
-      const supervisor = () =>
-        spawnSync(
-          process.execPath,
-          [path.join(prefix, "openclaw-launcher.mjs"), "gateway", "--task-supervisor"],
-          { encoding: "utf8" },
-        );
-      expect(supervisor().status).not.toBe(0);
-      // The supervisor's first child is that same start and does not count again.
-      expect(
-        spawnSync(process.execPath, [path.join(prefix, "openclaw-launcher.mjs"), "gateway"], {
+      const launch = (...args: string[]) =>
+        spawnSync(process.execPath, [path.join(prefix, "openclaw-launcher.mjs"), ...args], {
           encoding: "utf8",
-          env: { ...process.env, [GIT_RELEASE_START_COUNTED_ENV]: "1" },
-        }).status,
-      ).not.toBe(0);
-      expect(supervisor().status).not.toBe(0);
-
-      expect(supervisor().stdout).toBe("old\n");
+        });
+      // Task Scheduler does not restart a task whose action exits with an error: a broken trial
+      // release must not take the supervisor down, and its starts do not count.
+      const supervisor = launch("gateway", "--task-supervisor");
+      expect(supervisor.status).toBe(0);
+      expect(supervisor.stdout).toContain(path.join(good, "dist", "index.js"));
+      // The supervisor's crash restarts of its child count, and the third switches back.
+      expect(launch("gateway", "--task-supervisor-child=70000").status).not.toBe(0);
+      expect(launch("gateway", "--task-supervisor-child=70000").status).not.toBe(0);
+      expect(launch("gateway", "--task-supervisor-child=70000").stdout).toContain("old");
     });
 
     it("switches back and restores upgraded state after two failed trial starts", async () => {
