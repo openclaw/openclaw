@@ -155,8 +155,8 @@ struct ChatViewModelOlderHistoryTests {
         #expect(await log.cursors == ["page-1"])
     }
 
-    @Test @MainActor
-    func `newest page that slid past loaded rows restarts paging from its own boundary`() async {
+    @Test(arguments: [true, false])
+    @MainActor func `newest page retains loaded history only when its window overlaps`(overlaps: Bool) async {
         let (log, model) = self.fixture(
             newest: [
                 historyPage(
@@ -166,13 +166,14 @@ struct ChatViewModelOlderHistoryTests {
                         historyRow("five", id: "m5", seq: 5),
                     ],
                     olderCursor: "page-1"),
-                // New rows pushed "three" out of the newest window; no cursor reaches it from "two".
                 historyPage(
-                    [
-                        historyRow("four", id: "m4", seq: 4),
-                        historyRow("five", id: "m5", seq: 5),
-                        historyRow("six", id: "m6", seq: 6),
-                    ],
+                    overlaps
+                        ? [
+                            historyRow("four", id: "m4", seq: 4),
+                            historyRow("five", id: "m5", seq: 5),
+                            historyRow("six", id: "m6", seq: 6),
+                        ]
+                        : [historyRow("seven", id: "m7", seq: 7)],
                     olderCursor: "page-3"),
             ],
             older: [
@@ -187,8 +188,9 @@ struct ChatViewModelOlderHistoryTests {
 
         #expect(await model.refreshHistoryAfterRun().applied)
 
-        #expect(Self.texts(model) == ["four", "five", "six"])
-        #expect(model.historyOlderCursor == "page-3")
+        let expected = overlaps ? ["one", "two", "three", "four", "five", "six"] : ["seven"]
+        #expect(Self.texts(model) == expected)
+        #expect(model.historyOlderCursor == (overlaps ? "page-0" : "page-3"))
         #expect(await log.cursors == ["page-1"])
     }
 

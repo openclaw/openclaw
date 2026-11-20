@@ -480,6 +480,13 @@
       }
     },
     {
+      "files": ["src/gateway/operator-run-recovery.test.ts"],
+      "rules": {
+        // Keep recovery-reason and legacy-refusal regressions with the existing authority fixtures.
+        "max-lines": ["error", { "max": 1046, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
       "files": ["src/agents/agent-command.live-model-switch.test.ts"],
       "rules": {
         // expectations updated for equal-primary saved selections keeping configured fallbacks; #185496

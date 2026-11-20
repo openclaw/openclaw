@@ -13,9 +13,9 @@ import type { GatewayIngressAttribution } from "../ingress-attribution.js";
 import { createOpenClawIdAuthority } from "./authority.js";
 import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import { linkedClaw } from "./openclaw-id.test-support.js";
+import { openClawIdRecoveryPrincipalSchema } from "./tunnel-principal-schema.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
-  openClawIdRecoveryPrincipalSchema,
   prepareOpenClawIdTunnelPrincipal,
   resolveOpenClawIdTunnelPrincipal,
   setOpenClawIdTunnelPrincipalLookup,

@@ -613,8 +613,7 @@ a.oc-menu-item[href] {
   .oc-menu-heading__action,
   .sidebar-session-menu-row,
   .sidebar-session-menu-switch,
-  .sidebar-session-sort-menu__item,
-  .usage-filter-option {
+  .sidebar-session-sort-menu__item {
     corner-shape: superellipse(1.5);
   }
 }

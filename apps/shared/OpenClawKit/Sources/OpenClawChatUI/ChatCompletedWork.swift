@@ -46,9 +46,9 @@ extension ChatTranscriptRow {
         guard !turns.isEmpty else { return rows }
 
         let (continuations, predecessors) = Self.continuationIndexes(in: turns)
-        let finalIndexes = turns.enumerated().map { index, turn in
-            continuations[index] == nil ? turn.lastIndex(where: { $0.workMessage?.isFinalReply == true }) : nil
-        }
+        let ownership = Self.completedWorkOwnership(
+            in: turns, continuations: continuations, predecessors: predecessors)
+        let finalIndexes = ownership.finalIndexes
         var terminalReplies = turns.enumerated().map { index, turn in
             finalIndexes[index].flatMap { turn[$0].workMessage }
         }
@@ -71,18 +71,27 @@ extension ChatTranscriptRow {
             }
         }
 
-        let folded = turns.enumerated().flatMap { index, turn -> [Self] in
-            guard !liveTurns.contains(index), terminalReplies[index] != nil else { return turn }
-            // A turn that handed off keeps its work in place: its closing line reports the
-            // whole request, not a rollup timed for one run (web chat-turn-presentation.ts:340-365).
-            if turn.contains(where: { $0.workMessage?.hasConfirmedHandoff == true }) { return turn }
-            return Self.foldingWork(
+        return turns.enumerated().flatMap { index, turn -> [Self] in
+            let isFenced = ownership.fenced[index]
+            // A handoff's closing line describes the whole request, not one run's work.
+            guard !liveTurns.contains(index), terminalReplies[index] != nil,
+                  !turn.contains(where: { $0.workMessage?.hasConfirmedHandoff == true })
+            else { return isFenced ? turn : Self.coalescingActivityRuns(turn) }
+            let continuationID = continuations[index].flatMap { turns[$0].first?.id }
+            if isFenced {
+                return Self.foldingNestedWork(
+                    in: turn,
+                    finalIndex: finalIndexes[index],
+                    runID: ownership.runIDs[index],
+                    continuationID: continuationID,
+                    runDurations: runDurations)
+            }
+            return Self.coalescingActivityRuns(Self.foldingWork(
                 in: turn,
                 finalIndex: finalIndexes[index],
-                continuationID: continuations[index].flatMap { turns[$0].first?.id },
-                runDurations: runDurations)
+                continuationID: continuationID,
+                runDurations: runDurations))
         }
-        return Self.coalescingActivityRuns(folded)
     }
 
     /// Tool-only rows that nothing visible separates become one disclosure; a lone call stays
@@ -163,29 +172,60 @@ extension ChatTranscriptRow {
                 }
             }
         }
-        var work: [(message: OpenClawChatMessage, cursor: Int)] = []
+        // Each visible answer bounds its own work. Keep later runs' tools below earlier answers.
+        var projected = Array(turn[..<start])
+        var lowerBound = start
+        for reply in earlierReplies.sorted() {
+            projected += Self.foldOutput(
+                in: turn,
+                range: lowerBound...reply,
+                finalIndex: reply,
+                continuationID: nil,
+                runDurations: runDurations)
+            lowerBound = reply + 1
+        }
+        projected += Self.foldOutput(
+            in: turn,
+            range: lowerBound...end,
+            finalIndex: finalIndex,
+            continuationID: continuationID,
+            runDurations: runDurations)
+        return projected + Array(turn[(end + 1)...])
+    }
+
+    private static func foldOutput(
+        in turn: [Self],
+        range: ClosedRange<Int>,
+        finalIndex: Int?,
+        continuationID: UUID?,
+        runDurations: [String: Double]) -> [Self]
+    {
+        var work: [OpenClawChatMessage] = []
         var answers: [(row: Self, cursor: Int)] = []
-        for cursor in start...end {
+        for cursor in range {
             guard let source = turn[cursor].workMessage else {
                 answers.append((turn[cursor], cursor))
                 continue
             }
             if source.role.lowercased() == "assistant", !source.hasWorkReplyContent,
-               !source.content.contains(where: \.isWorkContent) { continue }
+               !source.content.contains(where: \.isWorkContent)
+            {
+                continue
+            }
             // Only a later answer can put a failed result inside completed work (web :420-428).
             let canFold = (finalIndex.map { cursor < $0 } ?? true) ||
                 (!source.hasUnresolvedWork && !source.endsRunInFailure)
             // Launches stay visible beside the answers: a reader must always see which agents started.
-            if canFold, cursor != finalIndex, !earlierReplies.contains(cursor), source.foldsAsWork,
+            if canFold, cursor != finalIndex, source.foldsAsWork,
                !source.recordsSessionLaunch
             {
-                work.append((source, cursor))
+                work.append(source)
                 continue
             }
             // Answers keep their text; tools recorded inside an answer's envelope still fold.
             for part in source.workPresentationParts {
                 if canFold, part.isCollapsibleWork, !part.recordsSessionLaunch {
-                    work.append((part, cursor))
+                    work.append(part)
                 } else {
                     answers.append((Self.message(part), cursor))
                 }
@@ -195,25 +235,22 @@ extension ChatTranscriptRow {
         // results or reasoning, folded or kept on an unresolved row), so a turn of plain
         // replies (a greeting, an opening message) never folds.
         guard let last = work.last,
-              turn[start...end].contains(where: { $0.workMessage?.recordsWork == true })
-        else { return turn }
+              turn[range].contains(where: { $0.workMessage?.recordsWork == true })
+        else { return Array(turn[range]) }
         // History prepends change the first work row, but not the visible boundary
         // that follows it (including a continuing steer turn).
-        let anchor = answers.first?.row.id ?? continuationID ?? last.message.presentationID
-        let owner = Self.workOwnerRunID(
-            work: work,
-            answers: answers,
-            finalIndex: finalIndex,
-            replyRunID: replyRunID,
-            hasEarlierReplies: !earlierReplies.isEmpty,
-            turn: turn,
-            end: end)
-        return Array(turn[..<start]) +
-            [.completedWork(CompletedWork(
-                anchorID: anchor,
-                messages: work.map(\.message),
-                durationMilliseconds: owner.flatMap { runDurations[$0] }))] +
-            answers.map(\.row) + Array(turn[(end + 1)...])
+        let anchor = answers.first?.row.id ?? continuationID ?? last.presentationID
+        let owner: String? = finalIndex.flatMap { final in
+            guard let runID = turn[final].workMessage?.workRunID,
+                  answers.filter({ $0.cursor < final }).allSatisfy({ $0.row.workMessage?.workRunID == runID }),
+                  work.allSatisfy({ $0.belongsToWorkRun(runID, allowUnknown: true) })
+            else { return nil }
+            return runID
+        }
+        return [.completedWork(CompletedWork(
+            anchorID: anchor,
+            messages: work,
+            durationMilliseconds: owner.flatMap { runDurations[$0] }))] + answers.map(\.row)
     }
 
     /// Elapsed run time: the user input's timestamp to the latest `recordTimestampMs` among the
@@ -247,32 +284,157 @@ extension ChatTranscriptRow {
         return durations
     }
 
-    /// The reply run that owns folded work, or nil when it spans several runs' replies; mixed-run
-    /// work has no single elapsed duration (web chat-turn-presentation.ts:447-474).
-    private static func workOwnerRunID(
-        work: [(message: OpenClawChatMessage, cursor: Int)],
-        answers: [(row: Self, cursor: Int)],
+    /// Nested activity can share its owner's work without moving across visible foreign rows.
+    private static func foldingNestedWork(
+        in turn: [Self],
         finalIndex: Int?,
-        replyRunID: String?,
-        hasEarlierReplies: Bool,
-        turn: [Self],
-        end: Int) -> String?
+        runID: String?,
+        continuationID: UUID?,
+        runDurations: [String: Double]) -> [Self]
     {
-        guard let finalIndex, let replyRunID else { return nil }
-        guard hasEarlierReplies else {
-            // The answer owns the work only when the answers above it belong to its run.
-            let aboveAnswer = answers.filter { $0.cursor < finalIndex }
-            return aboveAnswer.allSatisfy { $0.row.workMessage?.workRunID == replyRunID } ? replyRunID : nil
+        var start = finalIndex ?? turn.count - 1
+        guard turn[start].isWorkOutput else { return turn }
+        while start > 0, turn[start - 1].isWorkOutput {
+            start -= 1
         }
-        // Earlier runs kept their replies. The first of them owns the work only when all of
-        // it is that run's; CLI rows without a run ID belong to the run that follows.
-        guard let firstRunID = answers.first?.row.workMessage?.workRunID else { return nil }
-        var workRunIDs = Set<String?>()
-        for entry in work {
-            workRunIDs.insert(entry.message.workRunID ?? turn[(entry.cursor + 1)..<(end + 1)]
-                .lazy.compactMap { $0.workMessage?.workRunID }.first)
+        let answeredOutput = turn.prefix(finalIndex.map { $0 + 1 } ?? turn.count)
+        let replyRuns = Set(answeredOutput.compactMap { row -> String? in
+            guard let message = row.workMessage, !message.isNestedToolActivity,
+                  message.hasWorkReplyContent else { return nil }
+            return message.workRunID
+        })
+        let end = Self.completedWorkEnd(
+            in: turn, after: finalIndex ?? turn.count - 1, runID: runID, replyRuns: replyRuns)
+        let parts = (start...end).flatMap { cursor -> [(row: Self, kind: ChatWorkPartKind)] in
+            let row = turn[cursor]
+            guard let source = row.workMessage else { return [(row, .visible)] }
+            guard source.belongsToWorkRun(runID, allowUnknown: !source.isNestedToolActivity),
+                  !source.recordsSessionLaunch else { return [(row, .visible)] }
+            if source.role.lowercased() == "assistant", !source.hasWorkReplyContent,
+               !source.content.contains(where: \.isWorkContent) { return [] }
+            let canFold = (finalIndex.map { cursor < $0 } ?? true) || !source.hasUnresolvedWork
+            return source.workPresentationParts.map { message in
+                let kind: ChatWorkPartKind = canFold && message.isCollapsibleWork ? .work : .visible
+                return (.message(message), kind)
+            }
         }
-        return workRunIDs == [firstRunID] ? firstRunID : nil
+        let chunks = ChatWorkChunks.project(parts, kind: { $0.kind })
+        // One interval can describe a single fold, never several separate work chunks.
+        let duration = chunks.lazy.filter(\.isWork).prefix(2).count == 1 && finalIndex != nil ?
+            runID.flatMap { runDurations[$0] } : nil
+        let projected = chunks.enumerated().flatMap { chunkIndex, chunk -> [Self] in
+            guard chunk.isWork else { return chunk.parts.map(\.row) }
+            let messages = chunk.parts.compactMap(\.row.workMessage)
+            guard let last = messages.last else { return [] }
+            // History prepends change the first work row, but not the visible
+            // boundary that follows it (including a continuing steer turn).
+            let anchor = chunks.dropFirst(chunkIndex + 1).first?.parts.first?.row.id ??
+                continuationID ?? last.presentationID
+            return [.completedWork(CompletedWork(
+                anchorID: anchor,
+                messages: messages,
+                durationMilliseconds: duration))]
+        }
+        return Array(turn[..<start]) + projected + Array(turn[(end + 1)...])
+    }
+
+    private static func completedWorkOwnership(
+        in turns: [[Self]],
+        continuations: [Int: Int],
+        predecessors: [Int: Int]) -> (fenced: [Bool], runIDs: [String?], finalIndexes: [Int?])
+    {
+        var fenced = turns.map { turn in
+            turn.contains { row in
+                if case let .completedWork(work) = row {
+                    return work.messages.contains(where: \.isNestedToolActivity)
+                }
+                return row.workMessage?.isNestedToolActivity == true
+            }
+        }
+        // Only nested activity and its explicit steer chain need the stricter owner.
+        // Other turns (including every non-iOS turn) retain the ordinary projection.
+        for index in turns.indices.reversed() {
+            if let next = continuations[index], fenced[next] { fenced[index] = true }
+        }
+        for index in turns.indices {
+            if let previous = predecessors[index], fenced[previous] { fenced[index] = true }
+        }
+        var earlierRuns = Set<String>()
+        var finalIndexes: [Int?] = []
+        let runIDs = turns.enumerated().map { index, turn -> String? in
+            let input = turn.first?.workMessage
+            let ordinaryReplies = turn.compactMap(\.workMessage).filter {
+                $0.role.lowercased() == "assistant" && !$0.isForwardedTurnBoundary && $0.hasWorkReplyContent
+            }
+            // Bounded history can omit the backing input. Local reply evidence resolves ownership, not a link.
+            let steerTarget: String? = input?.steerTargetRunID.flatMap { target in
+                guard input?.role.lowercased() == "user" else { return nil }
+                return predecessors[index] != nil || ordinaryReplies.contains { $0.workRunID == target } ? target : nil
+            }
+            let inputRunID = turn.first.flatMap { row -> String? in
+                guard row.startsTurn, let input = row.workMessage, !input.isNestedToolActivity else { return nil }
+                // A steer request key identifies the input, not the run consuming it.
+                if let explicitRunID = input.transcriptRunID, !explicitRunID.isEmpty { return explicitRunID }
+                return input.workRunID.map { steerTarget ?? $0 }
+            }
+            // Explicit reuse or steering may continue an earlier run; an untagged input cannot claim its late reply.
+            let acceptsReply = { (reply: OpenClawChatMessage) in
+                guard let replyRunID = reply.workRunID else { return true }
+                return replyRunID == inputRunID || replyRunID == steerTarget || !earlierRuns.contains(replyRunID)
+            }
+            let replies = ordinaryReplies.filter(acceptsReply)
+            let replyRuns = Set(replies.compactMap(\.workRunID))
+            defer {
+                if input?.role.lowercased() == "user" {
+                    let reliableInputRunID = inputRunID.flatMap { runID in
+                        input?.steerTargetRunID == nil || input?.transcriptRunID == runID || steerTarget == runID ?
+                            runID : nil
+                    }
+                    // Do not remember a last-final guess after conflicting replies, or an unsupported request key.
+                    if let resolved = reliableInputRunID ?? (replyRuns.count == 1 ? replyRuns.first : nil) {
+                        earlierRuns.insert(resolved)
+                    }
+                }
+            }
+            guard fenced[index] else {
+                finalIndexes.append(continuations[index] == nil ?
+                    turn.lastIndex(where: { $0.workMessage?.isFinalReply == true }) : nil)
+                return nil
+            }
+            let runID = inputRunID ?? replies.last(where: \.isCompletedReply)?.workRunID ??
+                (replyRuns.count == 1 ? replyRuns.first : nil)
+            finalIndexes.append(continuations[index] == nil ? turn.lastIndex(where: { row in
+                guard let reply = row.workMessage, reply.isCompletedReply else { return false }
+                return acceptsReply(reply) && reply.belongsToWorkRun(runID, allowUnknown: true)
+            }) : nil)
+            return runID
+        }
+        return (fenced, runIDs, finalIndexes)
+    }
+
+    private static func completedWorkEnd(
+        in turn: [Self], after index: Int, runID: String?, replyRuns: Set<String>) -> Int
+    {
+        var end = index
+        var cursor = index + 1
+        while cursor < turn.count, turn[cursor].isWorkOutput {
+            guard let next = turn[cursor].workMessage else { break }
+            if next.isNestedToolActivity {
+                guard next.belongsToWorkRun(runID, allowUnknown: false),
+                      cursor == end + 1 || !next.hasUnresolvedWork else { break }
+                end = cursor
+            } else if cursor == end + 1, next.belongsToWorkRun(runID, allowUnknown: true),
+                      next.workRunID.map({ replyRuns.contains($0) }) ?? true
+            {
+                end = cursor
+            } else {
+                // Commit this visible foreign-reply span only if it bridges to resolved local nested output.
+                guard next.isCompletedReply, !next.belongsToWorkRun(runID, allowUnknown: true),
+                      !next.content.contains(where: \.isWorkContent) else { break }
+            }
+            cursor += 1
+        }
+        return end
     }
 
     private static func continuationIndexes(in turns: [[Self]]) -> (next: [Int: Int], previous: [Int: Int]) {
@@ -311,11 +473,18 @@ extension ChatTranscriptRow {
     private var isWorkOutput: Bool {
         guard let message = self.workMessage else { return false }
         return !message.isForwardedTurnBoundary &&
-            ["assistant", "tool", "toolresult", "tool_result"].contains(message.role.lowercased())
+            (["assistant", "tool", "toolresult", "tool_result"].contains(message.role.lowercased()) ||
+                message.isNestedToolActivity)
     }
 }
 
 extension OpenClawChatMessage {
+    fileprivate func belongsToWorkRun(_ runID: String?, allowUnknown: Bool) -> Bool {
+        // Legacy ordinary history may omit ownership; two known owners must always match.
+        guard let sourceRunID = self.workRunID, let runID else { return allowUnknown }
+        return sourceRunID == runID
+    }
+
     /// The model stopped to call tools, so the run goes on: this row is a step, not where a reply ends.
     var stoppedForToolUse: Bool {
         ["tooluse", "tool_use", "tool_calls"].contains(self.stopReason?.lowercased() ?? "")
@@ -383,7 +552,7 @@ extension OpenClawChatMessage {
 
     fileprivate var isCollapsibleWork: Bool {
         !self.hasWorkReplyContent && !self.isForwardedTurnBoundary && !self.isRealtimeVoiceTranscript &&
-            (["tool", "toolresult", "tool_result"].contains(self.role.lowercased()) ||
+            (["tool", "toolresult", "tool_result"].contains(self.role.lowercased()) || self.isNestedToolActivity ||
                 (self.role.lowercased() == "assistant" && self.content.contains(where: \.isWorkContent)))
     }
 

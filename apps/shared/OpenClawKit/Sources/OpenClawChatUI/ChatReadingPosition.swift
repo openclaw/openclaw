@@ -11,6 +11,12 @@ enum ChatReadingRowKey: Hashable {
     /// A run's answer: the live cell while it streams, then the final answer row replacing it.
     /// Finalization is a delete plus an insert, so only this shared key keeps the reader on it.
     case answer(String)
+    case answerBlock(run: String, block: String)
+
+    var answerRun: String? {
+        if case let .answer(run) = self { return run }
+        return nil
+    }
 
     init(_ cell: ChatAssistantListCell) {
         if let runID = cell.group.runID {
@@ -61,6 +67,7 @@ struct ChatReadingGeometry: Equatable {
 struct ChatReadingRow: Equatable {
     var key: ChatReadingRowKey
     var frame: CGRect
+    var answerTop: CGFloat?
 }
 
 struct ChatReadingWrite: Equatable {
@@ -99,12 +106,14 @@ struct ChatReadingPolicy {
         var key: ChatReadingRowKey
         /// Row top in content coordinates.
         var top: CGFloat
+        var answerTop: CGFloat?
         /// Offset when `top` was measured: `top - offsetY` is the row's screen Y.
         var offsetY: CGFloat
 
         init(_ row: ChatReadingRow, offsetY: CGFloat) {
             self.key = row.key
             self.top = row.frame.minY
+            self.answerTop = row.answerTop
             self.offsetY = offsetY
         }
     }
@@ -247,8 +256,18 @@ struct ChatReadingPolicy {
         row: (ChatReadingRowKey) -> ChatReadingRow?,
         topRow: () -> ChatReadingRow?) -> ChatReadingWrite?
     {
-        guard let anchor, let current = row(anchor.key) else {
-            // The held row left the List (recycled, or replaced without a shared key).
+        guard let anchor else {
+            self.anchor = topRow().map { Anchor($0, offsetY: geometry.offsetY) }
+            return nil
+        }
+        guard let current = row(anchor.key) else {
+            if case let .answerBlock(run, _) = anchor.key {
+                // The block can be absent during replacement or change text. Keep the owning
+                // answer in place while waiting for a matching laid-out block.
+                guard let priorTop = anchor.answerTop, let answer = row(.answer(run)) else { return nil }
+                let target = answer.frame.minY - (priorTop - anchor.offsetY)
+                return Self.write(geometry.clamped(target), .anchor, from: geometry)
+            }
             self.anchor = topRow().map { Anchor($0, offsetY: geometry.offsetY) }
             return nil
         }
@@ -290,6 +309,7 @@ final class ChatReadingPosition {
     private var sentinel: Sentinel?
     private var observations: [NSKeyValueObservation] = []
     private var rows: [ChatReadingRowKey: WeakMarker] = [:]
+    private var blocks: [ObjectIdentifier: WeakMarker] = [:]
     private var reconciling = false
     private var prependSignpost = ChatScrollSignpostInterval("OlderPagePrepend")
 
@@ -355,6 +375,13 @@ final class ChatReadingPosition {
     // MARK: Rows
 
     func register(_ marker: Marker, key: ChatReadingRowKey) {
+        if case .answerBlock = key {
+            let changed = marker.key != key || self.blocks[ObjectIdentifier(marker)] == nil
+            marker.key = key
+            self.blocks[ObjectIdentifier(marker)] = WeakMarker(marker: marker)
+            if changed, self.policy.anchor?.key == key { self.sentinel?.setNeedsLayout() }
+            return
+        }
         if let old = marker.key, old != key, self.rows[old]?.marker === marker {
             self.rows[old] = nil
         }
@@ -363,13 +390,31 @@ final class ChatReadingPosition {
     }
 
     func unregister(_ marker: Marker) {
+        self.blocks.removeValue(forKey: ObjectIdentifier(marker))
         if let key = marker.key, self.rows[key]?.marker === marker {
             self.rows[key] = nil
         }
         marker.key = nil
     }
 
+    func isTurnRealized(_ id: UUID) -> Bool {
+        guard let collection = self.scroller else { return false }
+        return self.row(.cell(.row(id)), in: collection) != nil
+    }
+
     private func row(_ key: ChatReadingRowKey, in collection: UICollectionView) -> ChatReadingRow? {
+        if case let .answerBlock(run, oldBlock) = key {
+            let blocks = self.answerBlocks(run: run, in: collection)
+            let exact = blocks.filter { $0.key == key }
+            if !exact.isEmpty { return exact.count == 1 ? exact.first : nil }
+            // A short streaming block changes its key while its text prefix grows. The key
+            // starts with the block position, so this never adopts another block's prefix.
+            let extended = blocks.filter {
+                if case let .answerBlock(_, newBlock) = $0.key { return newBlock.hasPrefix(oldBlock) }
+                return false
+            }
+            return extended.count == 1 ? extended.first : nil
+        }
         guard let marker = self.rows[key]?.marker else { return nil }
         return Self.row(of: marker, key: key, in: collection)
     }
@@ -402,7 +447,31 @@ final class ChatReadingPosition {
             else { continue }
             if best.map({ row.frame.minY < $0.frame.minY }) ?? true { best = row }
         }
-        return best
+        guard let best, let run = best.key.answerRun, best.frame.minY < geometry.visibleMinY else { return best }
+        let visibleBlocks = self.answerBlocks(run: run, in: collection)
+        let counts = Dictionary(grouping: visibleBlocks, by: \.key)
+        return visibleBlocks.filter {
+            counts[$0.key]?.count == 1 &&
+                $0.frame.minY >= geometry.visibleMinY && $0.frame.minY < geometry.visibleMaxY
+        }.min { $0.frame.minY < $1.frame.minY } ?? best
+    }
+
+    private func answerBlocks(run: String, in collection: UICollectionView) -> [ChatReadingRow] {
+        guard let marker = self.rows[.answer(run)]?.marker,
+              let answer = Self.row(of: marker, key: .answer(run), in: collection) else { return [] }
+        return self.blocks.values.compactMap { entry in
+            guard let view = entry.marker,
+                  let key = view.key,
+                  case let .answerBlock(markerRun, _) = key,
+                  markerRun == run,
+                  let ownerRow = Self.row(of: view, key: key, in: collection),
+                  ownerRow.frame == answer.frame
+            else { return nil }
+            let frame = view.convert(view.bounds, to: collection)
+            guard !frame.isEmpty, frame.minY.isFinite, answer.frame.insetBy(dx: -1, dy: -1).contains(frame.origin)
+            else { return nil }
+            return ChatReadingRow(key: key, frame: frame, answerTop: answer.frame.minY)
+        }
     }
 
     // MARK: Scroller
@@ -557,5 +626,6 @@ struct ChatReadingRowMarker: UIViewRepresentable {
 
 extension EnvironmentValues {
     @Entry var openClawReadingPosition: ChatReadingPosition?
+    @Entry var openClawReadingAnswerRun: String?
 }
 #endif

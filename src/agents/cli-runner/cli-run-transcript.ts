@@ -55,7 +55,7 @@ import type { AgentMessage } from "../runtime/index.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
-import { cliAssistantItemId } from "./assistant-identity.js";
+import { cliAssistantItemId, cliInterimAssistantItemId } from "./assistant-identity.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
@@ -194,6 +194,9 @@ export async function persistCliAssistantTranscript(params: {
   yielded?: true;
   /** The native Claude row this message mirrors; the history merge joins them by it. */
   nativeIdentity?: { cliSessionId: string; externalId: string };
+  /** Held answers commit before the final run-owned row and retain their own retry identity. */
+  interim?: true;
+  interimReplies?: CliOutput["interimNativeReplies"];
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -210,7 +213,28 @@ export async function persistCliAssistantTranscript(params: {
   if (!runParams.persistAssistantTranscript || !runParams.sessionKey) {
     return { owned: false };
   }
-  const idempotencyKey = cliAssistantItemId(runParams.runId);
+  // Deduplicate the final answer by its transcript item key, not a session admission pin.
+  const finalNativeItem = params.nativeIdentity
+    ? cliInterimAssistantItemId(runParams.runId, params.nativeIdentity)
+    : undefined;
+  // Completed held answers are separate native rows; narration remains native-only.
+  for (const reply of params.interimReplies ?? []) {
+    if (cliInterimAssistantItemId(runParams.runId, reply) === finalNativeItem) {
+      continue;
+    }
+    await persistCliAssistantTranscript({
+      runParams,
+      text: reply.text,
+      modelId: params.modelId,
+      nativeIdentity: { cliSessionId: reply.cliSessionId, externalId: reply.externalId },
+      interim: true,
+      stopReason: "stop",
+    });
+  }
+  const idempotencyKey =
+    params.interim && params.nativeIdentity
+      ? cliInterimAssistantItemId(runParams.runId, params.nativeIdentity)
+      : cliAssistantItemId(runParams.runId);
   let committed = false;
   try {
     const result = await appendExactAssistantMessageToSessionTranscript({

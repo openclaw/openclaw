@@ -161,8 +161,8 @@ struct ChatToolActivityTests {
     /// `chat.history` delivers a catalog call twice: as a `dispatch_action` wrapper on the assistant
     /// message (no activity item once its child is shown) and as an `openclaw.nested-tool.v1` custom
     /// message carrying the inner call, its result and its own activity item. Web shows the inner
-    /// call; iOS must too, instead of an empty row.
-    @Test func `nested catalog call renders as its own visible row`() throws {
+    /// call; iOS must too. Other native clients leave the custom carrier uninterpreted.
+    @Test func `nested catalog carrier displays its inner call only on iOS`() throws {
         let json = """
         [
           {"role":"assistant","__openclaw":{"id":"m1","runId":"run-1"},"content":[
@@ -193,14 +193,17 @@ struct ChatToolActivityTests {
         let rows = messages.map { (message: $0, items: ChatToolActivity.items(message: $0)) }
 
         let visible = rows.flatMap(\.items).filter(\.isVisible)
+        #if os(iOS)
         #expect(visible.map(\.name) == ["exec", "sessions_create"])
         let nested = try #require(visible.last)
         #expect(nested.displayState == .finished)
         #expect(nested.activity?.preparedTitle == "New session")
         #expect(nested.resultText == "created")
-        // No message is left that would render as an empty cell.
-        #expect(rows.allSatisfy { $0.message.role.lowercased() != "custom" || !$0.items.isEmpty })
-        // Both rows stay in the wrapper's run, so one frame and one "Worked" fold hold them.
+        #expect(rows.allSatisfy { $0.message.role != "custom" || !$0.items.isEmpty })
+        #else
+        #expect(visible.map(\.name) == ["exec"])
+        #endif
+        // The carrier keeps the recorded run that owns the outer call.
         #expect(Set(messages.map(\.workRunID)) == ["run-1"])
     }
 

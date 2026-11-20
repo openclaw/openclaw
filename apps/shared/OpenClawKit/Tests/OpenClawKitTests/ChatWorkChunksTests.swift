@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
@@ -182,6 +183,26 @@ struct ChatWorkChunksTests {
         #expect(items[0].state == (failed ? .failed : .finished))
         #expect(items[0].resultText == nil)
         #expect(items[1].resultText == "Recorded outcome")
+    }
+
+    @Test(arguments: ["yielded", "waiting"])
+    func `split yield result stays visible until a handoff is confirmed`(status: String) {
+        let content: [OpenClawChatMessageContent] = [
+            .init(type: "toolCall", id: "yield", name: "sessions_yield", arguments: AnyCodable([String: String]())),
+            .init(type: "text", text: "Checking background work"),
+            .init(
+                type: "tool_result",
+                text: "Waiting for review",
+                id: "yield",
+                name: "sessions_yield",
+                details: AnyCodable(["status": status]),
+                isError: false),
+        ]
+        let source = OpenClawChatMessage(role: "assistant", content: content, timestamp: nil)
+        let results = source.workPresentationParts
+            .flatMap { ChatToolActivity.items(message: $0) }
+            .compactMap(\.resultText)
+        #expect(results == (status == "yielded" ? [] : ["Waiting for review"]))
     }
 
     @Test func `unfinished source cannot steal answer actions after splitting`() {

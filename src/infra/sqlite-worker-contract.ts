@@ -112,10 +112,16 @@ export type SqliteWorkerPreparedBackend<Operations extends SqliteWorkerOperation
     [SQLITE_WORKER_CLOSE_RECEIPT]?(): SqliteWorkerCloseReceipt | undefined;
   };
 
+export type SqliteWorkerExecuteOptions = {
+  signal?: AbortSignal;
+  /** Move producer-owned binary fields into the command input without serializing their bytes. */
+  transferredInput?: Record<string, Uint8Array<ArrayBuffer>>;
+};
+
 export type SqliteWorkerStore<Operations extends SqliteWorkerOperations> = {
   execute<Key extends keyof Operations>(
     command: { type: Key; input: Operations[Key]["input"] },
-    options?: { signal?: AbortSignal },
+    options?: SqliteWorkerExecuteOptions,
   ): Promise<Operations[Key]["output"]>;
   close(): Promise<void>;
 };
@@ -135,6 +141,7 @@ export type SqliteWorkerRequest = {
   stateDatabasePath?: string;
   databaseAdmissions?: SqliteDatabaseAdmissions;
   timing?: DiagnosticWorkerRequestFields["timing"];
+  transferredInput?: Record<string, Uint8Array<ArrayBuffer>>;
 } & (
   | {
       type: "open";

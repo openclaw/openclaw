@@ -1,8 +1,10 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   evaluateWorkflowCondition,
@@ -420,12 +422,119 @@ esac`,
       );
     }
     expect(curlCalls[0]).toContain("https://nodejs.org/dist/index.json");
+    expect(curlCalls[0]).not.toContain("--retry-all-errors");
+    expect(curlCalls[1]).toContain("--retry-all-errors");
+    expect(curlCalls[2]).toContain("--retry-all-errors");
     expect(curlCalls[1]).toContain("https://nodejs.org/dist/v24.22.1/node-v24.22.1-win-x64.zip");
     expect(curlCalls[2]).toContain(
       "https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-x64.tar.xz",
     );
     expect(existsSync(join(root, "node-v24.22.1-linux-x64.tar.xz"))).toBe(false);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "recovers the requested Node after an archive connection reset",
+    async () => {
+      const root = temps.make("openclaw-node-reset-");
+      const distribution = "node-v24.22.1-linux-x64";
+      writeFakeNode(join(root, distribution, "bin"), "24.22.1");
+      const packed = spawnSync("tar", ["-cJf", "-", "-C", root, distribution]);
+      expect(packed.status, packed.stderr.toString()).toBe(0);
+      const archive = packed.stdout;
+      let requests = 0;
+      const server = await reserveTestPortListener({
+        offsets: [0],
+        createListener: () =>
+          createServer((_request, response) => {
+            requests += 1;
+            if (requests === 1) {
+              response.writeHead(200, { "content-length": archive.length + 4096 });
+              response.write(archive.subarray(0, 32), () => response.socket?.resetAndDestroy());
+              return;
+            }
+            response.end(archive);
+          }),
+      });
+      try {
+        const activeBin = join(root, "active", "bin");
+        writeFakeNode(activeBin, "22.22.3");
+        const child = spawn(
+          "/bin/bash",
+          [
+            "-c",
+            [
+              "set -euo pipefail",
+              'source "$ENSURE_NODE_SCRIPT"',
+              // Rewrite only the transport endpoint; real curl owns retries and file replacement.
+              "curl() {",
+              "  local args=() arg",
+              '  for arg in "$@"; do',
+              '    [[ "$arg" != https://nodejs.org/dist/* ]] || arg="$ARCHIVE_URL"',
+              '    args+=("$arg")',
+              "  done",
+              '  command curl "${args[@]}"',
+              "}",
+              'openclaw_download_node "24.22.1"',
+              "node -p 'process.versions.node'",
+            ].join("\n"),
+          ],
+          {
+            detached: true,
+            stdio: ["ignore", "pipe", "pipe"],
+            env: {
+              PATH: `${activeBin}:/usr/bin:/bin`,
+              ENSURE_NODE_SCRIPT: ensureNodeScript,
+              ARCHIVE_URL: `http://127.0.0.1:${server.claim.port}/archive`,
+              NO_PROXY: "127.0.0.1",
+              RUNNER_TEMP: root,
+              RUNNER_TOOL_CACHE: join(root, "missing"),
+              OPENCLAW_CONTAINER_TOOL_CACHE: join(root, "missing"),
+              OPENCLAW_NODE_TOOLCHAIN_ROOT: join(root, "toolchain"),
+              GITHUB_PATH: join(root, "github-path"),
+            },
+          },
+        );
+        let output = "";
+        child.stdout.on("data", (chunk) => {
+          output += chunk;
+        });
+        child.stderr.on("data", (chunk) => {
+          output += chunk;
+        });
+        const killGroup = () => {
+          if (child.pid === undefined) {
+            return;
+          }
+          try {
+            process.kill(-child.pid, "SIGKILL");
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+              throw error;
+            }
+          }
+        };
+        const deadline = setTimeout(killGroup, 15_000);
+        try {
+          const status = await new Promise<number | null>((settle, reject) => {
+            child.once("error", reject);
+            child.once("close", settle);
+          });
+          expect(output).toMatch(/curl: \(56\)/);
+          expect(status, output).toBe(0);
+          expect(requests).toBe(2);
+          expect(output.trim().endsWith("24.22.1")).toBe(true);
+        } finally {
+          clearTimeout(deadline);
+          killGroup();
+        }
+      } finally {
+        server.listener.closeAllConnections();
+        await server.releaseListener();
+        await server.claim.release();
+      }
+    },
+    20_000,
+  );
 
   it("removes a partial POSIX archive after a timed-out download", () => {
     const root = temps.make("openclaw-ensure-node-");

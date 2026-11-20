@@ -592,9 +592,11 @@ it.runIf(pathExchange.supportsPathExchange())(
           publications: [],
         });
         expect(versions()).toEqual(["1.0.0", "2.0.0", null]);
-        // Admission and `openclaw update repair` leave it for its recovery owner.
+        // While its updater lives, admission refuses and settlement cannot claim the installation.
         expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow("incomplete");
-        await expect(settlePendingPackageActivation(f.packageRoot)).rejects.toThrow("incomplete");
+        await expect(settlePendingPackageActivation(f.packageRoot)).rejects.toThrow(
+          "Another update executor owns this installation",
+        );
         expect(versions()).toEqual(["1.0.0", "2.0.0", null]);
         if (!transaction) {
           throw new Error("Failed publication did not retain its package transaction.");

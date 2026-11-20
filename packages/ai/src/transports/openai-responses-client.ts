@@ -64,7 +64,6 @@ import {
 } from "./openai-responses-replay-internal.js";
 import { createResponsesRequestFetch } from "./openai-responses-request-fetch.js";
 import {
-  independentResponsesRequest,
   responsesRequestLifecycle,
   withResponsesRequestAcceptance,
 } from "./openai-responses-request-lifecycle.js";
@@ -135,7 +134,6 @@ function createResponsesTransportExecutor(config: {
 }): StreamFn {
   return (model, context, options) => {
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
-    const independent = independentResponsesRequest.has(options);
     const compactRequest = claimResponsesCompactRequest(responsesOptions);
     const v2Compaction =
       compactRequest?.mode === "v2"
@@ -156,9 +154,10 @@ function createResponsesTransportExecutor(config: {
           );
         }
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const websocketMode = independent
-          ? undefined
-          : resolveNativeOpenAIResponsesWebSocketMode(model, responsesOptions?.transport);
+        const websocketMode = resolveNativeOpenAIResponsesWebSocketMode(
+          model,
+          responsesOptions?.transport,
+        );
         const encodeBody = prepareModelRequestBody(
           websocketMode || compactRequest?.mode === "endpoint" ? undefined : options,
         );
@@ -237,9 +236,7 @@ function createResponsesTransportExecutor(config: {
             model,
             params as Record<string, unknown>,
           ) as typeof params;
-          params = v2Compaction
-            ? v2Compaction.sanitizeImages(params)
-            : sanitizeResponsesImagePayload(params);
+          params = sanitizeResponsesImagePayload(params);
           if (responsesOptions?.openclawCodeModeToolSurface === true) {
             const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
             const allowedHostedToolTypes = responsesOptions?.openclawCodeModeAllowedHostedToolTypes;
@@ -283,6 +280,7 @@ function createResponsesTransportExecutor(config: {
               replayMode,
               Boolean(v2Compaction),
               itemRecovery.applied,
+              compactRequest?.mode === "endpoint" && supportsNativeOpenAIResponsesEndpoint(model),
             ),
           );
         const buildItemConflictRequest = () => itemRecovery.retry(buildRequest);
@@ -310,7 +308,6 @@ function createResponsesTransportExecutor(config: {
         const httpContinuationEligible =
           config.httpContinuation &&
           !compactRequest &&
-          !independent &&
           !websocketMode &&
           !getAiTransportHost().requiresManagedTransport(model) &&
           (supportsNativeOpenAIResponsesEndpoint(model) ||
@@ -571,9 +568,7 @@ function createResponsesTransportExecutor(config: {
             // Keep the provider's terminal fact; the catch-side projection would overwrite it.
             throw new Error(output.errorMessage ?? "An unknown error occurred");
           }
-          // Independent side requests never update the parent's reasoning or context state.
-          const admitted =
-            !independent && (transport === "websocket" ? websocketBaseline : continuationBaseline);
+          const admitted = transport === "websocket" ? websocketBaseline : continuationBaseline;
           if (v2Compaction && compactRequest) {
             const compacted = v2Compaction.finish({
               terminal,

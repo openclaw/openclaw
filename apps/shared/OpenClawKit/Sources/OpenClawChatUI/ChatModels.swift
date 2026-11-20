@@ -534,6 +534,18 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public internal(set) var transcriptRunID: String?
     public var isTruncated = false
     public internal(set) var role: String
+    #if os(iOS)
+    private var decodedNestedToolActivity = false
+    #endif
+
+    var isNestedToolActivity: Bool {
+        #if os(iOS)
+        self.role == "custom" && self.decodedNestedToolActivity
+        #else
+        false
+        #endif
+    }
+
     public let phase: String?
     public internal(set) var turnBoundary: Bool?
     public let steerTargetRunID: String?
@@ -689,6 +701,10 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.role = try container.decode(String.self, forKey: .role)
+        let wireCustomType = try? container.decode(String.self, forKey: .customType)
+        #if os(iOS)
+        self.decodedNestedToolActivity = self.role == "custom" && wireCustomType == "openclaw.nested-tool.v1"
+        #endif
         self.timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
         let decodedOpenClaw = try container.decodeIfPresent(OpenClawMetadata.self, forKey: .openClaw)
         self.idempotencyKey = try decodedOpenClaw?.idempotencyKey ??
@@ -717,8 +733,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         self.senderSession = try? container.decode(AnyCodable.self, forKey: .senderSession)
         self.sourceMetadata = decodedOpenClaw
         self.phase = try container.decodeIfPresent(String.self, forKey: .phase)
-        self.customType = ChatPayloadDecoding.trimmedNonEmptyString(
-            try? container.decode(String.self, forKey: .customType))
+        self.customType = ChatPayloadDecoding.trimmedNonEmptyString(wireCustomType)
         self.isOwnerAborted = (try? container.nestedContainer(keyedBy: AbortKeys.self, forKey: .openclawAbort))
             .flatMap { try? $0.decode(Bool.self, forKey: .aborted) } == true
         self.activity = try? container.decodeIfPresent([OpenClawAgentActivityItem].self, forKey: .activity)
@@ -869,7 +884,11 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         try container.encodeIfPresent(self.runFailureNotice, forKey: .runFailureNotice)
         #endif
         try container.encodeIfPresent(self.isError, forKey: .isError)
-        try container.encodeIfPresent(self.customType, forKey: .customType)
+        if self.isNestedToolActivity {
+            try container.encode("openclaw.nested-tool.v1", forKey: .customType)
+        } else if self.role == "custom", self.customType == "run-failed-before-reply" {
+            try container.encodeIfPresent(self.customType, forKey: .customType)
+        }
         if self.isOwnerAborted {
             var abort = container.nestedContainer(keyedBy: AbortKeys.self, forKey: .openclawAbort)
             try abort.encode(true, forKey: .aborted)

@@ -225,13 +225,12 @@ describe("OpenAI-compatible operator run authority", () => {
           res.destroy();
           req.destroy();
           expect(() => authority.assertCurrent()).not.toThrow();
-          // Another device for the same account cannot replace this authenticated source.
+          // Replacing membership affects a new start, not this admitted child.
           membership.clear();
           const replacement = { ...principal, peerKey: `iroh:${"22".repeat(32)}` };
           membership.set(replacement.peerKey, replacement);
-          expect(() => authority.assertCurrent()).toThrow(
-            /OpenClaw ID membership authority changed/,
-          );
+          expect(() => authority.assertCurrent()).not.toThrow();
+          expect(() => authority.reauthorize?.()).toThrow();
         } finally {
           admission?.close();
           res.destroy();
@@ -293,7 +292,7 @@ describe("OpenAI-compatible operator run authority", () => {
   );
 
   it.each(["grant", "role", "host", "committed config"] as const)(
-    "rejects retained effects and late results after the original %s changes",
+    "settles against captured admission after the original %s changes",
     async (changed) => {
       await withOpenClawTestState({ label: "compat-run-currentness" }, async () => {
         const fixture = createOperatorRunFixture();
@@ -335,9 +334,17 @@ describe("OpenAI-compatible operator run authority", () => {
             expect(() => authority.assertCurrent()).not.toThrow();
             committed = restricted;
           }
-          expect(() => authority.assertCurrent()).toThrow();
           settlement.resolve(completedResult);
-          await expect(running).rejects.toThrow();
+          if (changed === "grant") {
+            expect(() => authority.assertCurrent()).toThrow();
+            await expect(running).rejects.toThrow();
+          } else {
+            expect(() => authority.assertCurrent()).not.toThrow();
+            await expect(running).resolves.toBe(completedResult);
+            if (changed !== "host") {
+              expect(() => authority.reauthorize?.()).toThrow();
+            }
+          }
         } finally {
           await close();
         }

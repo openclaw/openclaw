@@ -316,8 +316,18 @@ extension ChatToolActivityItem {
     /// hide; any other yield result stays visible (web chat-sessions-yield.ts:276-300).
     var isYieldContext: Bool {
         guard self.call.name == "sessions_yield" else { return false }
-        return self.isPending || self.isConfirmedHandoff || (!self.isError && self.isResultFragment) ||
-            (!self.isError && self.receiptText == nil && self.receiptDetails == nil)
+        if self.isPending || self.isConfirmedHandoff {
+            return true
+        }
+        guard !self.isError else { return false }
+        if self.isResultFragment, self.displayState == .finished,
+           ChatToolActivity.handoffReceipt(details: self.receiptDetails, text: self.receiptText)?["status"]?
+               .stringValue ==
+               "yielded"
+        {
+            return true
+        }
+        return self.receiptText == nil && self.receiptDetails == nil
     }
 
     private static func isDashboardSessionKey(_ key: String) -> Bool {
@@ -438,7 +448,7 @@ enum ChatToolActivity {
                 activityPrepared: message.activity != nil,
                 recordedExitCode: message.content.lazy.compactMap(\.exitCode).first)]
         }
-        guard message.role.lowercased() == "assistant" else { return [] }
+        guard message.role.lowercased() == "assistant" || message.isNestedToolActivity else { return [] }
         return self.items(
             calls: message.content.filter(\.isToolCall),
             results: message.content.filter(\.isToolResult),
@@ -931,6 +941,12 @@ struct ChatDiffStatChips: View {
 struct ChatToolActivityList: View {
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     let items: [ChatToolActivityItem]
+    private let isNestedToolActivity: Bool
+
+    init(items: [ChatToolActivityItem], isNestedToolActivity: Bool = false) {
+        self.items = items
+        self.isNestedToolActivity = isNestedToolActivity
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: self.isDesktopLayout ? 6 : 2) {
@@ -944,7 +960,7 @@ struct ChatToolActivityList: View {
             }
             let quiet = self.items.indices.filter { !self.items[$0].isVisible }
             if !quiet.isEmpty {
-                DisclosureGroup {
+                let disclosure = DisclosureGroup {
                     ForEach(quiet, id: \.self) { index in
                         ChatToolActivityRow(item: self.items[index]).equatable()
                     }
@@ -955,7 +971,10 @@ struct ChatToolActivityList: View {
                 }
                 .tint(.secondary)
                 #if os(iOS)
-                .disclosureGroupStyle(ChatInlineDisclosureStyle(chevron: .secondary))
+                disclosure.disclosureGroupStyle(ChatInlineDisclosureStyle(
+                    chevron: self.isNestedToolActivity ? .tint : .secondary))
+                #else
+                disclosure
                 #endif
             }
         }
@@ -985,7 +1004,7 @@ extension ChatToolActivityList {
     }
 }
 
-/// "Launched A and B": each named child opens its own session.
+/// A compact summary with an action for each child that can be opened.
 private struct ChatSessionLaunchGroupRow: View {
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     @Environment(\.colorScheme) private var colorScheme
@@ -994,13 +1013,45 @@ private struct ChatSessionLaunchGroupRow: View {
     let launches: [ChatSessionLaunch]
 
     var body: some View {
+        if let openChatSession, launches.contains(where: { $0.childKey != nil }),
+           launches.contains(where: { $0.label == nil }) || self.launches.dropFirst(2).contains(where: {
+               $0.childKey != nil
+           })
+        {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(self.launches.indices, id: \.self) { index in
+                        let launch = self.launches[index]
+                        if let key = launch.childKey {
+                            Button {
+                                openChatSession.open(key)
+                            } label: {
+                                Text(launch.label ?? String(format: String(localized: "Agent %@"), String(index + 1)))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Opens the subagent's session")
+                        }
+                    }
+                }
+            } label: {
+                self.summary(linksChildren: false)
+            }
+            #if os(iOS)
+            .disclosureGroupStyle(ChatInlineDisclosureStyle(chevron: .secondary))
+            #endif
+        } else {
+            self.summary(linksChildren: openChatSession != nil)
+        }
+    }
+
+    private func summary(linksChildren: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             Color.clear
                 .frame(width: 12, height: 12)
             Image(systemName: ChatToolIcon.symbol(for: "sessions_spawn", icon: "bot"))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Color.secondary)
-            Text(ChatSessionLaunch.title(self.launches, linksChildren: self.openChatSession != nil))
+            Text(ChatSessionLaunch.title(self.launches, linksChildren: linksChildren))
                 .font(OpenClawChatTypography.footnoteSemiBold)
                 .foregroundStyle(self.isDesktopLayout
                     ? OpenClawChatTheme.desktopText(in: self.colorScheme, contrast: self.colorSchemeContrast)

@@ -13,6 +13,7 @@ import {
   PICKED,
   WORKSPACE,
   LOCAL_GIT_WORKSPACE_RESPONSES,
+  captureProjectUiProof,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
@@ -211,8 +212,15 @@ suite.define(() => {
     await gateway.waitForRequest("projects.list");
     const message = page.locator(".new-session-page__message");
     await message.fill("Inspect the project and explain the next change.");
+    await gateway.setMethodDelay("projects.checkoutOptions", "forever");
     await selectProject(page, "Sample Project");
+    await gateway.waitForRequest("projects.checkoutOptions");
     const trigger = page.locator("#new-session-checkout-trigger");
+    await captureProjectUiProof(suite, page, "checkout-discovery-pending.png");
+    expect(await trigger.count()).toBe(0);
+    await gateway.setMethodDelay("projects.checkoutOptions", null);
+    await expectLabel(trigger, "New worktree");
+    await captureProjectUiProof(suite, page, "checkout-discovery-ready.png");
     await trigger.click();
     const checkout = page.locator(".oc-popover.new-session-page__checkout-popover");
     await expectAttribute(trigger, "data-worktree", "true");

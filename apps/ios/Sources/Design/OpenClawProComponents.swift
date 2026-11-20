@@ -194,18 +194,45 @@ struct OpenClawSidebarHeaderAction {
     let systemName: String
     let accessibilityLabel: OpenClawTextValue
     var accessibilityIdentifier: String?
+    /// The drawer's reveal control stays in its toolbar slot while the drawer covers it.
+    /// Only the button observes this presentation.
+    var drawerPresentation: RootSidebarPresentation?
     let action: () -> Void
+
+    /// Read only in the button to avoid rebuilding the destination or its toolbar.
+    var isShown: Bool {
+        self.drawerPresentation?.isPresented != true
+    }
+}
+
+/// Builds `content` for a destination that owns the sidebar reveal control.
+struct OpenClawSidebarRevealContent<Content: View>: View {
+    let action: OpenClawSidebarHeaderAction?
+    @ViewBuilder let content: (OpenClawSidebarHeaderAction) -> Content
+
+    var body: some View {
+        if let action = self.action {
+            self.content(action)
+        }
+    }
+}
+
+/// Keeps navigation bar visibility tied to the destination's header configuration.
+struct OpenClawSidebarRevealToolbarVisibility: ViewModifier {
+    let action: OpenClawSidebarHeaderAction?
+    let visibility: (_ hasRevealControl: Bool) -> Visibility
+
+    func body(content: Content) -> some View {
+        content.toolbar(self.visibility(self.action != nil), for: .navigationBar)
+    }
 }
 
 struct OpenClawSidebarControlButton: View {
     let action: OpenClawSidebarHeaderAction
-    /// True while the drawer covers the destination. Only this button reads it, so
-    /// hiding the reveal control never rebuilds the destination or its toolbar.
-    @Environment(\.openClawChatIsObscured) private var isCoveredByDrawer
 
     var body: some View {
         self.identified(self.button.buttonStyle(.plain))
-            .opacity(self.isCoveredByDrawer ? 0 : 1)
+            .opacity(self.action.isShown ? 1 : 0)
     }
 
     private var button: some View {

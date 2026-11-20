@@ -11,6 +11,7 @@ import {
   type SessionBindingRecord,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { stampAgentControls } from "openclaw/plugin-sdk/interactive-runtime";
 import { registerPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
 import { getActivePluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -458,6 +459,40 @@ describe("discord component interactions", () => {
         resolveDiscordComponentEntryWithPersistence({ id: entry.id, consume: false }),
       ).resolves.not.toBeNull();
     }
+  });
+
+  it("delivers marked legacy presentation controls as agent callback data", async () => {
+    // Core marks message-action controls; each block is rendered as its own message.
+    const register = async (block: Record<string, unknown>) => {
+      const { presentation } = stampAgentControls({ presentation: { blocks: [block] } });
+      const spec = buildDiscordPresentationComponents(
+        presentation as Parameters<typeof buildDiscordPresentationComponents>[0],
+      );
+      const rendered = spec ? buildDiscordComponentMessage({ spec }) : undefined;
+      const entry = rendered?.entries[0];
+      if (!rendered || !entry) {
+        throw new Error("Expected a legacy presentation registration");
+      }
+      await registerDiscordComponentEntries({ entries: rendered.entries, modals: rendered.modals });
+      return entry.id;
+    };
+    const buttonId = await register({
+      type: "buttons",
+      buttons: [{ label: "Pick", value: "/pick a" }],
+    });
+    await clickButton(createComponentContext(), createComponentButtonInteraction(), buttonId);
+    expect(lastDispatchCtx?.BodyForAgent).toBe("callback_data: /pick a");
+
+    const selectId = await register({
+      type: "select",
+      placeholder: "Size",
+      options: [{ label: "M", value: "size:m" }],
+    });
+    const fixture = createComponentSelectInteraction({ values: ["::size:m"] });
+    await createDiscordComponentStringSelect(createComponentContext()).run(fixture.interaction, {
+      cid: selectId,
+    } as ComponentData);
+    expect(lastDispatchCtx?.BodyForAgent).toBe("callback_data: size:m");
   });
 
   it("uses selected command action values for select fallback", async () => {

@@ -20,7 +20,6 @@ import { t } from "../lib/reactive/i18n.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { iconData, type IconName } from "./icon-data.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { SidebarAttention } from "./sidebar-attention.tsx";
@@ -43,13 +42,20 @@ export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
   readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;
-  renderPinnedSidebarSession(session: () => SidebarRecentSession): SolidJSX.Element;
   toggleSection(sectionId: string): void;
 };
 
 function readSidebarNativeGateway(host: AppSidebarRenderHost): NativeGateway | null {
   const snapshot = host.nativeGatewaySnapshot;
   return snapshot?.gateways.find((gateway) => gateway.id === snapshot.currentId) ?? null;
+}
+
+/**
+ * The saved collapse choice. The page decides whether a sidebar shows at all, so a page
+ * without one reads as collapsed; only this choice may expand or collapse the sidebar.
+ */
+export function sidebarCollapsedByChoice(host: AppSidebarRenderHost): boolean {
+  return host.navigationCollapsedByChoice ?? host.navigationCollapsed;
 }
 
 export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Element {
@@ -271,16 +277,16 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Elem
       <button
         type="button"
         class="sidebar-workspace-header__main"
-        ref={(element) => {
+        ref={(element: HTMLButtonElement) => {
           button = element;
           host.sidebarMenus.focusAgentRoster = focusHeader;
         }}
         aria-haspopup="menu"
         aria-expanded={menuOpen() ? "true" : "false"}
         aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
-        onPointerMove={(event) => {
-          host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
-        }}
+        onPointerMove={(event) =>
+          host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event)
+        }
         onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
         onPointerDown={(event: PointerEvent) => event.stopPropagation()}
         onClick={(event) => {
@@ -420,6 +426,24 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
   return (
     <div class="sidebar-footer-bar sidebar-footer-bar--one-action">
       <span class="sidebar-footer-actions">
+        {/* Search sits with the footer controls, above Home. */}
+        <openclaw-tooltip>
+          <span slot="content">
+            <ShortcutHint
+              label={t("chat.openCommandPalette")}
+              combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette}
+            />
+          </span>
+          <button
+            type="button"
+            class="sidebar-rail__button sidebar-brand__search sidebar-brand__desktop-control"
+            aria-label={t("chat.openCommandPalette")}
+            disabled={!host.onOpenPalette}
+            onClick={() => host.onOpenPalette?.()}
+          >
+            <Icon name="search" />
+          </button>
+        </openclaw-tooltip>
         <openclaw-tooltip>
           <span slot="content">
             <ShortcutHint
@@ -557,13 +581,15 @@ export function renderAppSidebarPluginTab(
       ? (icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
       : "plug";
   });
+  const active = () =>
+    host.activeRouteId === "plugin" && host.activePluginTabId === pluginTabKey(tab());
   const link = (
     <SidebarNavLink
       ref={triggerRef}
       href={`${location().pathname}${location().search}`}
-      icon={<Icon name={iconName()} />}
+      icon={<Icon name={iconName()} filled={active()} />}
       label={tab().label}
-      active={host.activeRouteId === "plugin" && host.activePluginTabId === pluginTabKey(tab())}
+      active={active()}
       onNavigate={() => host.onNavigate?.("plugin", location())}
     />
   );

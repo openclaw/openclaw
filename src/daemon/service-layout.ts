@@ -5,6 +5,7 @@ import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { consumeRootCommandOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { pathExists } from "../infra/fs-safe.js";
+import { resolveGitReleaseEntrypointForLauncher } from "../infra/git-release-paths.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
 import { realpathOrResolve } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -166,7 +167,8 @@ export function resolveServiceEntrypoint(
     return undefined;
   }
   if (path.isAbsolute(entrypoint) || path.win32.isAbsolute(entrypoint)) {
-    return entrypoint;
+    // The release launcher starts the release its link selects.
+    return resolveGitReleaseEntrypointForLauncher(entrypoint) ?? entrypoint;
   }
   // Service managers resolve relative commands against their configured
   // working directory; without an absolute base, ownership is ambiguous.

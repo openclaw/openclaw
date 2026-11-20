@@ -446,15 +446,20 @@ struct ChatCompletedWorkTests {
         // Automatic continuations resume the same request (web chat-turn-boundary.ts:88-102).
         #expect(rows.filter(\.startsTurn).count == 1)
         let collapsed = ChatTranscriptRow.collapseCompletedWork(rows, runWorking: false)
-        let visible = collapsed.compactMap { row -> String? in
-            guard case let .message(message) = row, message.role == "assistant" else { return nil }
-            return ChatMessageVisibleText.visibleText(in: message)
+        let projected = collapsed.dropFirst().map { row -> String? in
+            switch row {
+            case let .message(message): ChatMessageVisibleText.visibleText(in: message)
+            case let .completedWork(work): work.messages.flatMap {
+                    ChatToolActivity.items(message: $0).map(\.id)
+                }.joined(separator: ",")
+            case .systemNotice, .historyDivider: nil
+            }
         }
-        // Earlier runs keep their replies; their work, including narration, folds once above them.
-        #expect(visible == ["Both problems will be fixed here.", "I hit a snag.", "The PR is not merged yet."])
-        let work = Self.work(in: collapsed)
-        #expect(work.count == 1)
-        #expect(work.first?.messages.count == 4)
+        #expect(projected == [
+            "a1", "Both problems will be fixed here.",
+            "b1", "I hit a snag.",
+            "c1,c2", "The PR is not merged yet.",
+        ])
     }
 
     @Test func `adjacent tool rows of an unanswered turn share one activity log`() {

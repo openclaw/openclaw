@@ -358,17 +358,18 @@ it.each([
     expect(queueMessage).not.toHaveBeenCalled();
   } else {
     expect(queueMessage).toHaveBeenCalledOnce();
+    // A committed steer is the delivery; only an unconfirmed commit still depends on its owner.
     expect(result).toMatchObject(
-      change === "admission"
-        ? outcome === "accepted"
-          ? { delivered: true, path: "steered" }
-          : {
+      outcome === "accepted"
+        ? { delivered: true, path: "steered" }
+        : change === "admission"
+          ? {
               delivered: false,
               path: "steered",
               disposition: "ambiguous",
               error: "commit outcome unknown",
             }
-        : { delivered: false, reason: "source_owner_changed" },
+          : { delivered: false, reason: "source_owner_changed" },
     );
   }
   expectNoReplay(fixture, 0);

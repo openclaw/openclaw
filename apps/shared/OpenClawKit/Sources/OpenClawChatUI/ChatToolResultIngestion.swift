@@ -22,7 +22,7 @@ extension OpenClawChatMessage {
                 text: ChatMessageVisibleText.displayText(in: self, includeThinking: false),
                 details: self.details,
                 isError: self.isError)]
-        } else if self.role.lowercased() == "assistant" {
+        } else if self.role.lowercased() == "assistant" || self.isNestedToolActivity {
             let yieldCalls = Set(self.content.filter { $0.isToolCall && $0.name == "sessions_yield" }.compactMap(\.id))
             receipts = self.content.filter { block in
                 block.isToolResult && (block.name == "sessions_yield" || block.id.map(yieldCalls.contains) == true)
@@ -55,16 +55,9 @@ extension OpenClawChatMessage {
     }
 
     private var expandedMessages: [OpenClawChatMessage] {
-        // A custom message with tool blocks carries a nested call (`openclaw.nested-tool.v1`: the
-        // tool a `dispatch_action` wrapper ran, with its result and activity item). Web treats such
-        // messages as tool messages; present it as the assistant's call in the same run, so the
-        // inner tool gets its own row instead of an empty cell.
-        if self.role.lowercased() == "custom", self.content.contains(where: { $0.isToolCall || $0.isToolResult }) {
-            var carrier = self
-            carrier.role = "assistant"
-            return carrier.expandedMessages
-        }
-        if self.role.lowercased() == "assistant", self.content.contains(where: \.isToolResult) {
+        if self.role.lowercased() == "assistant" || self.isNestedToolActivity,
+           self.content.contains(where: \.isToolResult)
+        {
             var message = self
             message.content = self.content.map { block in
                 guard block.isToolResult, block.text == nil else { return block }

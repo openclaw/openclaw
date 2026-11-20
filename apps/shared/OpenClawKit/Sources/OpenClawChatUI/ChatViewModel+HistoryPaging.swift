@@ -118,20 +118,27 @@ extension OpenClawChatViewModel {
             pageIDs.contains(message.id) ||
                 Self.historySourceIdentity(for: message).map { pageSources.contains($0) } ?? false
         }
-        let retained = self.messages.filter { self.olderHistoryMessageIDs.contains($0.id) && !isOnPage($0) }
-        let retainedIDs = Set(retained.map(\.id))
-        if let lastKept = self.messages.lastIndex(where: { retainedIDs.contains($0.id) }) {
-            // An empty page is incomplete, not evidence of a gap.
-            let reachesKeptRows = page.isEmpty || self.messages.firstIndex(where: isOnPage)
-                .map { $0 <= lastKept + 1 } ?? false
-            if reachesKeptRows {
+        let loadedOlderIDs = self.olderHistoryMessageIDs
+        let retained = self.messages.filter { loadedOlderIDs.contains($0.id) && !isOnPage($0) }
+        if !retained.isEmpty {
+            let canonicalIDs = self.historyDeltaMessageIDs
+            let firstOverlap = self.messages.firstIndex { message in
+                (loadedOlderIDs.contains(message.id) || canonicalIDs.contains(message.id)) && isOnPage(message)
+            }
+            // The canonical rows before the overlap bridge the previously loaded history to the
+            // new page. Local and provisional rows still belong to the normal reconciliation path.
+            if page.isEmpty || firstOverlap != nil {
+                let bridge = self.messages.prefix(firstOverlap ?? 0)
+                    .filter { canonicalIDs.contains($0.id) && !loadedOlderIDs.contains($0.id) }
+                let retainedPrefix = retained + bridge
+                let retainedIDs = Set(retainedPrefix.map(\.id))
                 self.olderHistoryMessageIDs = retainedIDs
                 // Local-row retention may already have placed some of them; older rows lead the transcript.
-                nextMessages = retained + nextMessages.filter { !retainedIDs.contains($0.id) }
+                nextMessages = retainedPrefix + nextMessages.filter { !retainedIDs.contains($0.id) }
                 return
             }
-            // Rows between the kept pages and this page left the newest window and no cursor
-            // reaches them; restart paging from this page.
+            // A nonempty page without overlap leaves an unverified gap. Restart at its boundary.
+            let retainedIDs = Set(retained.map(\.id))
             self.resetOlderHistory()
             nextMessages.removeAll { retainedIDs.contains($0.id) }
         }

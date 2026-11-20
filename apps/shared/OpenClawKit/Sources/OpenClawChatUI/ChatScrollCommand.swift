@@ -188,6 +188,7 @@ struct ChatScrollCommand {
 struct ChatScrollCommandModifier: ViewModifier {
     @Binding var command: ChatScrollCommand
     let currentSessionTarget: @MainActor () -> OpenClawChatSessionTarget
+    var shouldNavigate: @MainActor (UUID) -> Bool = { _ in true }
 
     func body(content: Content) -> some View {
         self.proxyContent(content)
@@ -199,11 +200,17 @@ struct ChatScrollCommandModifier: ViewModifier {
                 guard let request else { return }
                 // Let the new rows lay out without retaining an ID-based scroll constraint.
                 DispatchQueue.main.async {
-                    guard let command = self.command.take(request, sessionTarget: self.currentSessionTarget()) else {
+                    guard let command = self.command.take(request, sessionTarget: self.currentSessionTarget()),
+                          self.shouldNavigate(command.targetID)
+                    else {
                         return
                     }
                     withTransaction(Transaction(animation: nil)) {
+                        #if os(iOS)
+                        proxy.scrollTo(ChatAssistantListCell.ID.row(command.targetID), anchor: command.anchor)
+                        #else
                         proxy.scrollTo(command.targetID, anchor: command.anchor)
+                        #endif
                     }
                 }
             }

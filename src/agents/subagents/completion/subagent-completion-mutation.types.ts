@@ -8,7 +8,6 @@ export type BlockSubagentCompletionRequest = {
   operatorAuthorityUnavailable?: true;
   enqueuedAt?: number;
   suspendedReason?: "expiry" | "permanent_failure";
-  storeReplaced?: true;
   lastDropReason?: NonNullable<SubagentRunRecord["delivery"]>["lastDropReason"];
   disposition?: NonNullable<SubagentRunRecord["delivery"]>["disposition"];
 };

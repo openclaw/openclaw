@@ -349,9 +349,12 @@ function sanitizeNumericMetadata(
     }
   }
   if (fields === USAGE_FIELDS) {
-    const state = readObjectRecord(record.usageReport)?.state;
-    if (state === "available" || state === "unavailable") {
-      projected.usageReport = { state };
+    // Availability markers: whether usage, and its cache split, were reported at all.
+    for (const key of ["usageReport", "cacheTelemetry"] as const) {
+      const state = readObjectRecord(record[key])?.state;
+      if (state === "available" || state === "unavailable") {
+        projected[key] = { state };
+      }
     }
     const cost = sanitizeNumericMetadata(record.cost, COST_FIELDS);
     if (cost) {

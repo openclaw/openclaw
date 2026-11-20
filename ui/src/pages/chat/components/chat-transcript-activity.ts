@@ -6,8 +6,10 @@ import { sumRunOutputTokens } from "../chat-progress.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { getChatItemsGeneration, type buildCachedChatItems } from "../chat-thread.ts";
 import { persistedSteerTargetRunId } from "../stream-causal-boundary.ts";
+import type { StreamGroupPart } from "./chat-message-stream-view.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
+import type { TranscriptDependencyItem } from "./chat-transcript-render-guard.ts";
 
 const workingIndicators = createTranscriptMemo<
   Extract<ChatItem, { kind: "reading-indicator" }> | undefined
@@ -93,5 +95,43 @@ export function projectTranscriptActivity(
     activityGroupKey: activityGroup?.key ?? null,
     runningActivityGroupKey: activityGroup?.running ? activityGroup.key : undefined,
     runOutputTokens,
+  };
+}
+
+/** Invalidate only the transcript rows that display changing run status. */
+export function createLiveStatusSignature(
+  workingUsageKey: string,
+  runDurations: ReadonlyMap<string, number>,
+  latestAssistantItemKey: string | null,
+  continuations: ReadonlyMap<string, readonly StreamGroupPart[]>,
+  searchFiltering: boolean,
+  swarmSignature: (key: string) => string | undefined,
+) {
+  return (item: TranscriptDependencyItem): string => {
+    if (item.kind === "reading-indicator") {
+      return workingUsageKey;
+    }
+    if (item.kind === "stream-run") {
+      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
+    }
+    if (item.kind !== "group" && item.kind !== "agent-run-frame") {
+      return "";
+    }
+    const duration = item.runId ? runDurations.get(item.runId) : undefined;
+    const statusKey = `${duration ?? ""}|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
+    if (item.kind === "agent-run-frame") {
+      const hasWorkingIndicator = item.parts.some(
+        (part) =>
+          part.kind === "stream-run" &&
+          part.parts.some((streamPart) => streamPart.kind === "reading-indicator"),
+      );
+      return `${hasWorkingIndicator ? workingUsageKey : ""}|${statusKey}|${swarmSignature(item.key) ?? ""}`;
+    }
+    const continuation = continuations.get(item.key);
+    // Continuation options already participate in the shared render context.
+    const continuationKey = continuation
+      ? `${continuation.map((part) => part.key).join(" ")}${workingUsageKey}`
+      : "";
+    return `${continuationKey}|${statusKey}|${searchFiltering ? "search-result" : ""}`;
   };
 }

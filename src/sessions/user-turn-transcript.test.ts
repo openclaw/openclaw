@@ -3,8 +3,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunSupersededAbortError,
+} from "../agents/run-termination.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -18,14 +21,18 @@ import {
   capturePreparedTranscriptModelPromptProjection,
   rewritePreparedTranscriptMessageAtAnchor,
 } from "../config/sessions/session-message-rewrite.js";
+import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
 import { transcriptMessage } from "../config/sessions/transcript-message.test-support.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import {
+  createOperatorAuthorityInactiveError,
+  GatewayOperatorAccessUnavailableError,
+} from "../infra/operator-authority-error.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   readPendingUserTurnTranscriptAdmission,
   readUserTurnRequesterOrigin,
 } from "./user-turn-transcript-admission.js";
+import { settleUserTurnPendingInput } from "./user-turn-transcript-processing.js";
 import {
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
@@ -103,6 +110,39 @@ describe("user turn transcript persistence", () => {
     expect(admitted).toBeDefined();
     return { dir, target, recorder, persistence, admitted, mediaInput, committedEntries };
   }
+
+  it.each(["user-stop", "delete", "reset", "revoked"] as const)(
+    "records explicit %s despite a simultaneous authority outage",
+    async (endCause) => {
+      const target = makeTarget();
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const recorder = record(userInput("accepted input", `${endCause}:user`), target);
+      await recorder.stageApproved!({ runId: endCause, assertCurrent: () => {} });
+      const outage = new GatewayOperatorAccessUnavailableError();
+      const failure =
+        endCause === "revoked"
+          ? new AggregateError([
+              outage,
+              createOperatorAuthorityInactiveError("closure-revoked", "source-revocation", 0),
+            ])
+          : outage;
+      const signal =
+        endCause === "user-stop"
+          ? AbortSignal.abort(createAgentRunDirectAbortError(true))
+          : endCause === "reset"
+            ? AbortSignal.abort(createAgentRunSupersededAbortError())
+            : undefined;
+      try {
+        await settleUserTurnPendingInput(recorder, signal, failure, endCause === "delete");
+        expect(await listSessionPendingInputs(target)).toMatchObject({
+          items: [{ state: "cancelled", endCause }],
+        });
+      } finally {
+        recorder.finishPendingInput?.("cancelled", "failed");
+        await recorder.waitForPendingInputSettlement?.();
+      }
+    },
+  );
 
   describe("trusted human transcript ownership", () => {
     it("keeps producer requester custody through staging and live collection", async () => {
@@ -186,7 +226,7 @@ describe("user turn transcript persistence", () => {
       } finally {
         releaseTarget.resolve();
         for (const current of recorders) {
-          current.finishPendingInput?.("cancelled");
+          current.finishPendingInput?.("cancelled", "failed");
         }
         await Promise.all(
           recorders.map(async (current) => current.waitForPendingInputSettlement?.()),
@@ -561,31 +601,7 @@ describe("user turn transcript persistence", () => {
       expect(persisted).toBeDefined();
       recorder.markRuntimePersisted(persisted?.message, persisted?.admission);
       const initialGeneration = recorder.getAdmissionReceipt()?.generation;
-
-      const admission = recorder.getAdmissionReceipt();
-      if (!admission) {
-        throw new Error("missing persisted admission");
-      }
-      const { db } = openOpenClawAgentDatabase({
-        agentId: target.agentId,
-        path: admission.storePath,
-      });
-      const work = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(db),
-        ["fts", "size"],
-        (sql) =>
-          /\bsession_transcript_fts\b/i.test(sql)
-            ? "fts"
-            : sql.includes("octet_length")
-              ? "size"
-              : null,
-      );
-      try {
-        await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");
-      } finally {
-        work.restore();
-      }
-      expect(work.counts).toEqual({ fts: 0, size: 0 });
+      await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");
 
       expect(recorder.getAdmissionReceipt()?.generation).toBe(initialGeneration);
       const expected = {

@@ -1,4 +1,6 @@
+import { channel } from "node:diagnostics_channel";
 import { expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   readSqliteDatabaseScopedWriteToken,
   readSqliteDatabaseWriteTokenForPath,
@@ -9,12 +11,15 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import * as workerStores from "../../state/openclaw-agent-worker-store.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState as withState } from "../../test-utils/openclaw-test-state.js";
 import { readRecentSessionTranscriptActiveEvents } from "./session-accessor.sqlite-active-events.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { updateSqliteTranscriptEventJsonInTransaction } from "./session-accessor.sqlite-transcript-rewrite.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { createSessionActorFactory } from "./session-actor-durable.js";
 import {
   restoreSessionColdTranscript,
   runSessionColdStorageMaintenance,
@@ -114,7 +119,7 @@ it("fills historical active facts exactly and resumes without rereading covered 
     expect(first.done).toBe(false);
     // Losing the process cursor starts an index-only coverage scan, not another payload fill.
     const openStore = workerStores.openOpenClawAgentSqliteWorkerStoreV2;
-    // Discovery during Gateway startup waits behind worker boot and IO before its reply lands.
+    // The first write can wait on worker boot and IO before its reply lands.
     let chargedMs = 27_000;
     const open = vi
       .spyOn(workerStores, "openOpenClawAgentSqliteWorkerStoreV2")
@@ -134,7 +139,8 @@ it("fills historical active facts exactly and resumes without rereading covered 
       log: { info() {}, warn() {} },
     });
     try {
-      // A contended discovery yields a bounded pause, not 20x its charge.
+      await resume.runBatch();
+      // A contended write yields a bounded pause, not 20x its charge.
       expect((await resume.runBatch()).delayMs).toBe(30_000);
       // A short native transaction still charges the writer's preparation/reply occupancy.
       expect((await resume.runBatch()).delayMs).toBeGreaterThanOrEqual(2_000);
@@ -190,28 +196,40 @@ it("probes covered windows without a writer and stops at the first uncovered row
     expect(probe(f.db(), cursor)).toMatchObject({ done: true, uncovered: false });
   }));
 
-it("restarts over covered sessions without write batches", ({ signal }) =>
+it("finishes covered probes without reserving the writer ahead of a queued actor append", ({
+  signal,
+}) =>
   withState({ label: "active-facts-restart", scenario: "minimal" }, async ({ env }) => {
     const f = fixture(env);
     for (const sessionId of ["covered-a", "covered-b", "covered-c"]) {
+      f.write((database) =>
+        writeSessionEntry(database, `agent:main:${sessionId}`, {
+          sessionId,
+          updatedAt: 1,
+        }),
+      );
       await replaceTranscriptEvents(
         { ...f.scope, sessionId, sessionKey: `agent:main:${sessionId}` },
         f.events,
       );
     }
-    const commands: string[] = [];
-    const openStore = workerStores.openOpenClawAgentSqliteWorkerStoreV2;
-    const open = vi
-      .spyOn(workerStores, "openOpenClawAgentSqliteWorkerStoreV2")
-      .mockImplementation(async (options, authority, publication) => {
-        const store = await openStore(options, authority, publication);
-        const execute = store.execute.bind(store);
-        store.execute = ((command, ...rest) => {
-          commands.push(command.type);
-          return execute(command, ...rest);
-        }) as typeof store.execute;
-        return store;
-      });
+    const reservations: unknown[] = [];
+    const diagnostic = channel("openclaw.agent-database.reservation");
+    const observe = (value: unknown) => reservations.push(value);
+    const assertCurrent = () => signal.throwIfAborted();
+    const authority = { assertCurrent, authorize: assertCurrent };
+    const actor = await createSessionActorFactory({
+      ...f.scope,
+      path: openOpenClawAgentDatabase(f.scope).path,
+    }).acquire(
+      { database: { kind: "file" }, sessionKey: "agent:main:covered-a" },
+      { assertCurrent, assertReadable: assertCurrent },
+    );
+    expect((await actor.read(authority)).entry?.sessionId).toBe("covered-a");
+    const entered = createDeferred();
+    const release = createDeferred();
+    let held: Promise<void> | undefined;
+    let append: ReturnType<typeof actor.appendTranscriptEvent> | undefined;
     const resume = createSessionTranscriptFactsBackfill({
       database: f.scope,
       assertCurrent: () => signal.throwIfAborted(),
@@ -219,16 +237,48 @@ it("restarts over covered sessions without write batches", ({ signal }) =>
       log: { info() {}, warn() {} },
     });
     try {
+      diagnostic.subscribe(observe);
+      expect((await resume.runBatch()).complete).toBe(false);
+      expect(reservations).toEqual([]);
+      held = runOpenClawAgentWorkerWrite(f.scope, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      await withinTest(entered.promise, signal);
+      append = actor.appendTranscriptEvent(
+        {
+          commandId: "foreground-append",
+          phaseId: "synthetic",
+          sessionId: "covered-a",
+          lifecycleRevision: null,
+          eventJson: JSON.stringify({
+            type: "model_change",
+            id: "foreground",
+            parentId: "entry-39",
+            timestamp: "2026-11-05T00:00:00.000Z",
+            provider: "synthetic",
+            modelId: "synthetic",
+          }),
+        },
+        authority,
+      );
       let result;
       do {
         signal.throwIfAborted();
-        result = await resume.runBatch();
+        result = await withinTest(resume.runBatch(), signal);
       } while (!result.complete);
+      expect(reservations).toEqual([]);
+      release.resolve();
+      await held;
+      const appended = await append;
+      expect(appended, JSON.stringify(appended)).toMatchObject({ kind: "committed" });
     } finally {
+      diagnostic.unsubscribe(observe);
+      release.resolve();
+      await Promise.allSettled([held, append]);
       await resume.close();
-      open.mockRestore();
+      await actor.release();
     }
-    expect(commands).toEqual(["discover", "probe", "probe", "probe"]);
   }));
 
 it("prioritizes recent active paths by size before larger inactive paths", () =>

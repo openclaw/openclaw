@@ -7,6 +7,7 @@ import XCTest
 /// The chat is TEST_RUNNER_PARITY_SESSION_LABEL (an existing chat opened through sidebar search,
 /// e.g. a long chat on the device), else TEST_RUNNER_PERF_SESSION_KEY (a session key the app opens
 /// at launch, e.g. the `ux-history-…` chat `pnpm ios:behavior` seeds and prints).
+/// Tests skip when neither session fixture is configured.
 /// TEST_RUNNER_PERF_FLINGS sets flings per direction per iteration (default 6).
 ///
 /// XCTest prints every metric as one line, `Test Case '-[… <test>]' measured [<metric>, <unit>]
@@ -107,9 +108,9 @@ final class ChatScrollPerformanceUITests: XCTestCase {
     private func openLongChat() throws -> (XCUIApplication, XCUIElement, String) {
         let label = self.env["PARITY_SESSION_LABEL"].flatMap { $0.isEmpty ? nil : $0 }
         let key = self.env["PERF_SESSION_KEY"].flatMap { $0.isEmpty ? nil : $0 }
-        let chat = try XCTUnwrap(
-            label ?? key,
-            "set TEST_RUNNER_PARITY_SESSION_LABEL or TEST_RUNNER_PERF_SESSION_KEY")
+        guard let chat = label ?? key else {
+            throw XCTSkip("set TEST_RUNNER_PARITY_SESSION_LABEL or TEST_RUNNER_PERF_SESSION_KEY")
+        }
         continueAfterFailure = false
         let app = XCUIApplication()
         if label == nil {

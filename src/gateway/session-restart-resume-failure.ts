@@ -1,3 +1,5 @@
+import { SUBAGENT_ENDED_REASON_ERROR } from "../agents/subagents/registry/subagent-lifecycle-events.js";
+import { completeSubagentRunWithRecovery } from "../agents/subagents/registry/subagent-registry.js";
 import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessageWithCode, readErrorName } from "../infra/errors.js";
@@ -39,6 +41,20 @@ export async function recordRestartYieldFailure(params: {
       data: { phase: "error", error, errorNotice: error },
     },
   });
+  signal.throwIfAborted();
+  await completeSubagentRunWithRecovery(
+    {
+      runId,
+      endedAt: entry.endedAt,
+      outcome: { status: "error", error },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      settleYielded: true,
+      // The exact session lifecycle above already owns the visible failure.
+      suppressSessionEffects: true,
+      triggerCleanup: true,
+    },
+    "restart-yield-source-unavailable",
+  );
 }
 
 /** Admission can fail before a reply owner exists to record its terminal outcome. */
@@ -52,6 +68,9 @@ export async function recordRestartResumeFailure(params: {
   log: { warn: (message: string) => void };
 }): Promise<void> {
   const { target, entry, runId, admissionStage, error, signal, log } = params;
+  const operatorSource = entry.resumeAfterRestart?.operatorSource;
+  const operatorRecoveryUnavailableReason =
+    operatorSource?.kind === "unavailable" ? operatorSource.reason : undefined;
   const diagnostic = truncateSessionRunError(
     sanitizeSessionRunError(
       `${readErrorName(error) ?? "Error"}: ${formatErrorMessageWithCode(error)}`,
@@ -61,7 +80,7 @@ export async function recordRestartResumeFailure(params: {
   log.warn(
     truncateSessionRunError(
       sanitizeSessionRunError(
-        `Skipped restart resume for ${target.sessionKey}: ${diagnostic} ${JSON.stringify({ sessionId: entry.sessionId, runId, admissionStage })}`,
+        `Skipped restart resume for ${target.sessionKey}: ${diagnostic} ${JSON.stringify({ sessionId: entry.sessionId, runId, admissionStage, operatorRecoveryUnavailableReason })}`,
       ),
       2048,
     ),

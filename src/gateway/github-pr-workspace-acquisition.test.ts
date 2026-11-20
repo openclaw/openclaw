@@ -8,12 +8,26 @@ import { describe, expect, it, vi } from "vitest";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 import * as sourceIntegration from "./github-publication-base-refresh.js";
+import * as publicationTransport from "./github-publication-git-transport.js";
 import {
   commandResult,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
 import * as checkout from "./worker-environments/local-workspace-checkout.js";
 import * as workspaceWorker from "./worker-environments/workspace-manifest-worker.js";
+
+const pauseLog = vi.hoisted(() => vi.fn<(message: string) => void>());
+// mock-isolation: Observe the unpause record while retaining real workspace owners.
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (name: string) => ({
+      ...actual.createSubsystemLogger(name),
+      ...(name === "sandbox/quiescence" ? { info: pauseLog } : {}),
+    }),
+  };
+});
 
 describe("PR source acquisition", () => {
   installGitHubPublicationTestHarness({
@@ -28,6 +42,47 @@ describe("PR source acquisition", () => {
       const f = await fixture({ empty, fork: true });
       const runtime = await bindFixtureRuntime(f);
       using _ = runtime.projection;
+      pauseLog.mockClear();
+      const now = performance.now.bind(performance);
+      let pauseDelay = 0;
+      using clock = vi.spyOn(performance, "now");
+      clock.mockImplementation(() => now() + pauseDelay);
+      const capture = publicationTransport.captureSettledGitHubPublicationWorkspaceSnapshot;
+      let initialSnapshot = true;
+      using captureSpy = vi.spyOn(
+        publicationTransport,
+        "captureSettledGitHubPublicationWorkspaceSnapshot",
+      );
+      captureSpy.mockImplementation(async (...args) => {
+        if (initialSnapshot) {
+          expect(
+            runtime.isPaused(),
+            "Canonical pristine staging must leave the guest running",
+          ).toBe(false);
+          initialSnapshot = false;
+        }
+        const result = await capture(...args);
+        if (runtime.isPaused()) {
+          pauseDelay += 1_200;
+        }
+        return result;
+      });
+      const manifest = workspaceWorker.captureWorkspaceManifestDocument;
+      const capturedRoots = new Set<string>();
+      using manifestSpy = vi.spyOn(workspaceWorker, "captureWorkspaceManifestDocument");
+      manifestSpy.mockImplementation(async (params) => {
+        if (!capturedRoots.has(params.root)) {
+          capturedRoots.add(params.root);
+          expect(runtime.isPaused(), "Only the guest pristine manifest needs a frozen view").toBe(
+            params.root === f.projection,
+          );
+        }
+        const result = await manifest(params);
+        if (params.root === f.projection && runtime.isPaused()) {
+          pauseDelay += 1_200;
+        }
+        return result;
+      });
       const prepareCheckout = checkout.prepareLocalWorkspaceCheckout;
       using checkoutSpy = vi.spyOn(checkout, "prepareLocalWorkspaceCheckout");
       checkoutSpy.mockImplementation(async (params) => {
@@ -88,6 +143,13 @@ describe("PR source acquisition", () => {
         headCommit: head,
         review: { mode: "local", base: f.commonAncestor },
       });
+      expect(capturedRoots).toContain(f.cwd);
+      expect(capturedRoots).toContain(f.projection);
+      const pauses = pauseLog.mock.calls
+        .map(([line]) => line)
+        .filter((line) => line.startsWith("Local workspace unpause:"));
+      expect(pauseDelay).toBeGreaterThan(0);
+      expect(pauses.some((line) => /"operation.pristine":\d+/u.test(line))).toBe(true);
       expect(cleanupPaused.length).toBeGreaterThan(0);
       expect(cleanupPaused, "Accepted result cleanup must leave the guest running").not.toContain(
         true,
@@ -138,6 +200,44 @@ describe("PR source acquisition", () => {
       "concurrent guest work\n",
     );
   });
+
+  it.each([false, true])(
+    "preserves guest edits during canonical pristine capture (staged-only=%s)",
+    async (stagedOnly) => {
+      const f = await fixture({ fork: true });
+      const guestShell = f.sandbox.backend!.runShellCommand.bind(f.sandbox.backend);
+      const runtime = await bindFixtureRuntime(f);
+      using _ = runtime.projection;
+      const original = await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8");
+      const capture = workspaceWorker.captureWorkspaceManifestDocument;
+      let edited = false;
+      using captureSpy = vi.spyOn(workspaceWorker, "captureWorkspaceManifestDocument");
+      captureSpy.mockImplementation(async (params) => {
+        const result = await capture(params);
+        if (params.root === f.cwd && !edited) {
+          expect(runtime.isPaused()).toBe(false);
+          edited = true;
+          await fs.writeFile(path.join(f.projection, "artifact.txt"), "concurrent guest work\n");
+          if (stagedOnly) {
+            // An already-running guest process does not acquire another host lease.
+            expect((await guestShell({ script: "git add -- artifact.txt" })).code).toBe(0);
+            await fs.writeFile(path.join(f.projection, "artifact.txt"), original);
+          }
+        }
+        return result;
+      });
+      await expect(f.invoke()).rejects.toThrow("existing dirty, untracked, or unpublished work");
+      expect(edited).toBe(true);
+      expect(runtime.isPaused()).toBe(false);
+      expect(
+        stagedOnly
+          ? await f.guestGit("show", ":artifact.txt")
+          : await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8"),
+      ).toBe(stagedOnly ? "concurrent guest work" : "concurrent guest work\n");
+      expect(await fs.readFile(path.join(f.cwd, "artifact.txt"), "utf8")).toBe(original);
+      expect(f.readSession().worktree?.githubPullRequest).toBeUndefined();
+    },
+  );
 
   it.each(["download", "verification"])(
     "preserves guest index edits made during PR source %s",
@@ -192,6 +292,37 @@ describe("PR source acquisition", () => {
       expect(f.externalWrites).toEqual([]);
     },
   );
+
+  it("rejects a canonical checkpoint accepted after pristine preparation", async () => {
+    const f = await fixture({ fork: true });
+    const runtime = await bindFixtureRuntime(f);
+    using _ = runtime.projection;
+    const integrate = sourceIntegration.integrateManagedWorkspaceSource;
+    using integration = vi.spyOn(sourceIntegration, "integrateManagedWorkspaceSource");
+    integration.mockImplementation((params) => {
+      const source = params.source!;
+      return integrate({
+        ...params,
+        source: {
+          ...source,
+          verify: async () => {
+            await source.verify();
+            // Empty directories leave Git HEAD, index and status unchanged.
+            await fs.mkdir(path.join(f.projection, "accepted-directory"));
+            await runtime.projection.checkpoint();
+            await fs.rmdir(path.join(f.projection, "accepted-directory"));
+          },
+        },
+      });
+    });
+    await expect(f.invoke()).rejects.toThrow("workspace changed during source preparation");
+    expect((await fs.stat(path.join(f.cwd, "accepted-directory"))).isDirectory()).toBe(true);
+    await expect(fs.stat(path.join(f.projection, "accepted-directory"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(f.readSession().worktree?.githubPullRequest).toBeUndefined();
+    expect(runtime.isPaused()).toBe(false);
+  });
 
   it.each(["known", "retained", "unrelated", "inaccessible"] as const)(
     "avoids a cold fork fetch only for an accessible matching project (%s)",

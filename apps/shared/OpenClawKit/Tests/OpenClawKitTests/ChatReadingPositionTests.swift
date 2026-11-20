@@ -199,16 +199,24 @@ struct ChatReadingPositionTests {
 
     // MARK: Finalization
 
-    @Test func `finalization keeps the answer where the reader left it`() {
+    @Test(arguments: [false, true])
+    func `finalization keeps the answer where the reader left it`(holdsParagraph: Bool) {
         var policy = ChatReadingPolicy()
-        // Reading inside the live answer: its top is 100 pt above the viewport.
-        policy.readerSettled(
-            Self.geometry(offset: 1000, content: 3000),
-            topRow: Self.row(.answer("run"), y: 900, height: 1500))
-        // Settled tool rows collapsed into one Worked row above; the final row replaced the live cell.
-        let final = Self.row(.answer("run"), y: 500, height: 1520)
-        #expect(Self.layout(&policy, Self.geometry(offset: 1000, content: 2620), rows: [final]) ==
-            ChatReadingWrite(y: 600, reason: .anchor))
+        let key: ChatReadingRowKey = holdsParagraph ? .answerBlock(run: "run", block: "paragraph") : .answer("run")
+        let before = Self.geometry(offset: 1000, content: 3000)
+        var original = Self.row(key, y: holdsParagraph ? 1100 : 900)
+        if holdsParagraph { original.answerTop = 900 }
+        policy.readerSettled(before, topRow: original)
+        // Tool rows settled above the answer. During the live/final swap the block may be absent.
+        let finalGeometry = Self.geometry(offset: 1000, content: 2620)
+        if holdsParagraph {
+            let answer = Self.row(.answer("run"), y: 500)
+            #expect(Self.layout(&policy, finalGeometry, rows: [answer]) == ChatReadingWrite(y: 600, reason: .anchor))
+        }
+        // A paragraph above the one being read wraps one more line (20 pt) in the final answer.
+        let final = Self.row(key, y: holdsParagraph ? 720 : 500)
+        #expect(Self.layout(&policy, finalGeometry, rows: [final]) ==
+            ChatReadingWrite(y: holdsParagraph ? 620 : 600, reason: .anchor))
     }
 
     @Test func `rows changing during the reader's fling are left to List`() {

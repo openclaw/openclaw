@@ -484,8 +484,15 @@ extension OpenClawChatView {
                 self.jumpToLatestButton
             }
         }
-        #if !os(iOS)
-        .modifier(ChatScrollCommandModifier(command: self.$scrollCommand) { self.viewModel.currentSessionTarget })
+        #if os(iOS)
+        .modifier(ChatScrollCommandModifier(
+                command: self.$scrollCommand,
+                currentSessionTarget: { self.viewModel.currentSessionTarget },
+                shouldNavigate: { !self.scroll.readingPosition.isTurnRealized($0) }))
+        #else
+            .modifier(ChatScrollCommandModifier(
+                command: self.$scrollCommand,
+                currentSessionTarget: { self.viewModel.currentSessionTarget }))
         #endif
         // Ensure the message list claims vertical space on the first layout pass.
         .frame(maxHeight: .infinity, alignment: .top)
@@ -526,6 +533,7 @@ extension OpenClawChatView {
                 self.scroll.followTarget = .latest
             } else if let turnID = self.latestVisibleTurnStartID {
                 self.scroll.followTarget = .turn(turnID)
+                self.moveScrollPosition(to: turnID, anchor: Layout.newTurnAnchor)
             }
         }
         #endif
@@ -673,6 +681,7 @@ extension OpenClawChatView {
             .padding(.top, cell.joinsAbove ? 0 : Layout.messageSpacing / 2)
             .padding(.bottom, cell.joinsBelow ? 0 : Layout.messageSpacing / 2)
             .background(ChatReadingRowMarker(key: ChatReadingRowKey(cell), owner: self.scroll.readingPosition))
+            .environment(\.openClawReadingAnswerRun, ChatReadingRowKey(cell).answerRun)
         }
         #else
         self.groupRows(shownGroups, transcript: transcript)
@@ -1374,7 +1383,6 @@ extension OpenClawChatView {
         }
     }
 
-    #if !os(iOS)
     private func moveScrollPosition(
         to id: UUID,
         anchor: UnitPoint = .bottom)
@@ -1387,6 +1395,7 @@ extension OpenClawChatView {
             sessionTarget: self.viewModel.currentSessionTarget)
     }
 
+    #if !os(iOS)
     private func revealSearchMessage(_ messageID: UUID) {
         self.scroll.followTarget = nil
         self.scroll.hasNewerContentBelow = true

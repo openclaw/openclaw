@@ -804,6 +804,7 @@ private struct ChatToolbarStatusPopover<Status: View>: ViewModifier {
 extension ChatProTab: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.headerSidebarAction?.systemName == rhs.headerSidebarAction?.systemName &&
-            lhs.headerSidebarAction?.accessibilityIdentifier == rhs.headerSidebarAction?.accessibilityIdentifier
+            lhs.headerSidebarAction?.accessibilityIdentifier == rhs.headerSidebarAction?.accessibilityIdentifier &&
+            lhs.headerSidebarAction?.drawerPresentation === rhs.headerSidebarAction?.drawerPresentation
     }
 }
