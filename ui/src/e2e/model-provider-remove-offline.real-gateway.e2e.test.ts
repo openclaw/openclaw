@@ -113,7 +113,8 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         const fixture = await expandProvider(page, "fixture");
         await capture("after-reload.png", fixture);
-        expect(await card.count()).toBe(0);
+        // Connection readiness precedes the catalog's pending-provider reconciliation.
+        await expect.poll(() => card.count(), { timeout: 20_000 }).toBe(0);
         const after = await persistedConfig();
         expect(after.models?.providers).toEqual(siblings);
         expect(after.agents?.defaults?.model).toBe("fixture/current");
