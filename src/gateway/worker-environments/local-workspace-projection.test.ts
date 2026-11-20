@@ -327,7 +327,7 @@ it.each([false, true])("settles command checkpoints (parent disposed: %s)", asyn
 });
 
 it.each(["operator", "gateway"] as const)(
-  "rejects canonical checkpoint writes after original %s authority ends",
+  "settles admitted checkpoints until original %s authority closes",
   async (authority) => {
     const { proveStoppedSandboxAuthority } =
       await import("./local-workspace-cancellation.test-support.js");
@@ -335,7 +335,7 @@ it.each(["operator", "gateway"] as const)(
   },
 );
 
-it("denies guest filesystem writes after role revocation and a late involvement receipt", async ({
+it("keeps admitted guest writes after role change but fences source cancellation across a late receipt", async ({
   signal,
 }) => {
   const { proveStoppedSandboxAuthority } =

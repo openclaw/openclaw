@@ -356,3 +356,33 @@ it("shows a rejected import and retries the latest connection's clicked target",
   await vi.waitFor(() => expect(f.context.navigate).toHaveBeenCalledOnce());
   expect(f.request).toHaveBeenCalledWith("templates.drafts.create", { agentId: "reviewer" });
 });
+
+it("retries a failed share as the same request, and only on its original connection", async () => {
+  const f = await fixture();
+  f.request.mockRejectedValueOnce(new Error("gateway busy"));
+  const { shareAgentAsTemplate } = await import("./creator-owner.ts");
+  await shareAgentAsTemplate(f.context, "research");
+  expect(f.context.navigate).not.toHaveBeenCalled();
+  expect(toast).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ severity: "error", message: "gateway busy" }),
+  );
+  const retry = toast.mock.calls[0]?.[0].onAction;
+  retry?.();
+  await vi.waitFor(() => expect(f.context.navigate).toHaveBeenCalledOnce());
+  const send = [
+    "chat.send",
+    expect.objectContaining({
+      sessionKey: "agent:research:main",
+      message: "Create a shareable template of yourself",
+      idempotencyKey: expect.any(String),
+    }),
+  ];
+  expect(f.request.mock.calls).toEqual([send, send]);
+  expect(f.request.mock.calls[1]).toEqual(f.request.mock.calls[0]);
+
+  f.connect();
+  retry?.();
+  await Promise.resolve();
+  expect(f.request).toHaveBeenCalledTimes(2);
+  expect(f.context.navigate).toHaveBeenCalledOnce();
+});

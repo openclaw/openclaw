@@ -197,7 +197,7 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
       catalogMode,
       existing?.provenance === "configured" ? existing : undefined,
     );
-    owner.onPluginGenerationRetired = context.onPluginGenerationRetired.bind(context, owner);
+    owner.onPluginGenerationRetired = context.onPluginGenerationRetired.bind(undefined, owner);
     owner.catalogInventory = inventories.get(
       ownerKey({ ...input, runtimePluginSelections: undefined }),
     );
@@ -223,6 +223,30 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
   });
 }
 
+// Published callbacks outlive replacement work. Their scope must not retain its predecessor
+// claims or remote catalog; only registration custody changes when the transaction commits.
+function createCatalogReplacementCallbacks(
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  signal: AbortSignal,
+  recover: (owner: PreparedModelRuntimeOwner) => void,
+) {
+  const staged = new Map<string, PreparedModelRuntimeOwner>();
+  const state = { committed: false };
+  return {
+    staged,
+    state,
+    isPublicationCurrent: () => state.committed || !signal.aborted,
+    isOwnerRegistered: (key: string, owner: PreparedModelRuntimeOwner) =>
+      (state.committed ? owners : staged).get(key) === owner,
+    onPluginGenerationRetired: (owner: PreparedModelRuntimeOwner) => {
+      // Unpublished loan retirement is checked at commit; published owners use normal recovery.
+      if (state.committed) {
+        recover(owner);
+      }
+    },
+  };
+}
+
 /** Builds privately; only the final serialized commit replaces request-visible owners. */
 async function publishPreparedModelRuntimeCatalogReplacement(
   host: PreparedModelRuntimeCatalogPublicationHost,
@@ -240,17 +264,18 @@ async function publishPreparedModelRuntimeCatalogReplacement(
   }
   const signal = host.getCancellationSignal();
   const buildTimeoutMs = host.getBuildTimeoutMs();
-  const staged = new Map<string, PreparedModelRuntimeOwner>();
-  let committed = false;
+  const publication = createCatalogReplacementCallbacks(
+    host.owners,
+    signal,
+    host.onPluginGenerationRetired,
+  );
   const candidates = claims.map(({ input, generation }) => {
     const candidate = prepareModelRuntimeOwner(input, "configured", "static");
     candidate.generation = generation;
-    // Unpublished loan retirement is checked at commit; published owners use normal recovery.
-    candidate.onPluginGenerationRetired = () => {
-      if (committed) {
-        host.onPluginGenerationRetired(candidate);
-      }
-    };
+    candidate.onPluginGenerationRetired = publication.onPluginGenerationRetired.bind(
+      undefined,
+      candidate,
+    );
     return candidate;
   });
   const retireCandidates = () => {
@@ -263,19 +288,34 @@ async function publishPreparedModelRuntimeCatalogReplacement(
   try {
     await publishPreparedModelRuntimeOwnerBatch({
       ownersToPublish: candidates,
-      owners: staged,
+      owners: publication.staged,
       agentBuildCompletions: host.agentBuildCompletions,
       buildTimeoutMs,
       registerEntriesAfterBuildStart: true,
       acquisitionSignal: signal,
-      isPublicationCurrent: () => committed || !signal.aborted,
-      isOwnerRegistered: (key, owner) => (committed ? host.owners : staged).get(key) === owner,
+      isPublicationCurrent: publication.isPublicationCurrent,
+      isOwnerRegistered: publication.isOwnerRegistered,
     });
     // Pricing preparation takes no signal; cancellation, shutdown and a stalled read must not
     // leave adoption pending, so it shares the owner build deadline.
-    const pricingSignal = AbortSignal.any([signal, AbortSignal.timeout(buildTimeoutMs)]);
-    for (const config of new Set(candidates.map((owner) => owner.input.config))) {
-      await racePromiseWithAbortSignal(prepareModelPricingContext(config), pricingSignal);
+    // AbortSignal.timeout cannot be cancelled and its timer retains this catalog's async scope.
+    // Own the deadline so settled pricing releases that scope before the timeout would fire.
+    const pricingDeadline = new AbortController();
+    const pricingTimer = setTimeout(
+      () =>
+        pricingDeadline.abort(
+          new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+        ),
+      buildTimeoutMs,
+    );
+    pricingTimer.unref();
+    try {
+      const pricingSignal = AbortSignal.any([signal, pricingDeadline.signal]);
+      for (const config of new Set(candidates.map((owner) => owner.input.config))) {
+        await racePromiseWithAbortSignal(() => prepareModelPricingContext(config), pricingSignal);
+      }
+    } finally {
+      clearTimeout(pricingTimer);
     }
     // Readers keep the committed generation until each candidate has discovered its own rows.
     // A failed discovery publishes the candidate's static rows, never the previous catalog's.
@@ -330,7 +370,7 @@ async function publishPreparedModelRuntimeCatalogReplacement(
       for (const owner of candidates) {
         host.owners.set(ownerKey(owner.input), owner);
       }
-      committed = true;
+      publication.state.committed = true;
       signal.removeEventListener("abort", retireCandidates);
       // Existing leases retain their pair; other owners must rebuild before new admission.
       for (const owner of host.owners.values()) {
@@ -344,12 +384,12 @@ async function publishPreparedModelRuntimeCatalogReplacement(
         retirePreparedModelRuntimeGeneration(owner);
         releasePreparedPluginPublication(owner);
       }
-      staged.clear();
+      publication.staged.clear();
     });
     return true;
   } finally {
     signal.removeEventListener("abort", retireCandidates);
-    if (!committed) {
+    if (!publication.state.committed) {
       retireCandidates();
       await Promise.all(
         candidates.map(async (owner) => {

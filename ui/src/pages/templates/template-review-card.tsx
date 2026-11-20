@@ -26,7 +26,7 @@ type Kind = TemplateDraftReviewItem["kind"];
 type ReviewEntry = TemplateDraftReviewItem & { fileIcon?: IconName; contentUnavailable?: boolean };
 const sections: Array<{ kind: Kind; key: string; icon: IconName }> = [
   { kind: "file", key: "workspaceFiles", icon: "fileText" },
-  { kind: "skill", key: "skills", icon: "book" },
+  { kind: "skill", key: "skills", icon: "sparkles" },
   { kind: "plugin", key: "plugins", icon: "plug" },
   { kind: "mcp", key: "mcpServers", icon: "server" },
   { kind: "automation", key: "automations", icon: "clock" },

@@ -1549,10 +1549,6 @@ div.shell.shell--onboarding {
 .sidebar-session-group-actions[aria-expanded="true"] {
   color: var(--text);
   opacity: 1;
-
-  &:not(.sidebar-new-session) {
-    background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
-  }
 }
 
 /* Trailing header actions sit edge to edge like row actions, not the 8px header gap.
@@ -2374,15 +2370,43 @@ div.shell.shell--onboarding {
   background: var(--danger);
 }
 
-/* Customize section: the hub's pages. */
+/* Customize section: the hub's pages, then shortcuts to installed plugins. */
 .sidebar-customize {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-/* The people list's heading matches the Sessions group headings, without a toggle. */
-.sidebar-online__heading {
+/* Plugin artwork keeps its own color; the line icons above dim instead. */
+.sidebar-customize__plugins .nav-item__icon {
+  opacity: 1;
+}
+
+.sidebar-customize__plugin-icon {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--muted-strong);
+}
+
+.sidebar-customize__plugin-icon--fallback {
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.sidebar-customize__plugin-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Noninteractive headings use the same inset and height as Sessions group controls. */
+.sidebar-section-heading {
   display: flex;
   align-items: center;
   min-height: 30px;

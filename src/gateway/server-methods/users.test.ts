@@ -494,10 +494,14 @@ it.each(["guest", null])("sets role %s and invalidates policy before responding"
   );
   expect(respond).toHaveBeenCalledWith(true, { profile: assignedProfile });
   expect(validateUsersSetRoleResult(respond.mock.calls[0]?.[1])).toBe(true);
-  expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, role, {
-    assertCurrent: expect.any(Function),
-    onCommitted: expect.any(Function),
-  });
+  expect(setUserProfileRole).toHaveBeenCalledWith(
+    profile.id,
+    role,
+    expect.objectContaining({
+      assertCurrent: expect.any(Function),
+      onCommitted: expect.any(Function),
+    }),
+  );
   for (const publish of [invalidateOperatorRolePolicy, ...(role ? [disconnect] : [])]) {
     // A role assignment is role-only: linked owner devices keep their certificate authority.
     expect(publish).toHaveBeenCalledWith(profile.id, { roleOnly: true });

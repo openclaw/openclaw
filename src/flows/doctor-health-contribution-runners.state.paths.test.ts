@@ -33,7 +33,9 @@ vi.mock("node:path", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:path")>();
   return { ...actual, default: actual.win32 };
 });
+// mock-isolation: Keep shared-state handles outside the in-memory Windows path fixture.
 vi.mock("../state/openclaw-state-db.js", () => ({
+  closeOpenClawStateDatabase: vi.fn(),
   runOpenClawStateWriteTransaction: <T>(operation: (database: OpenClawStateDatabase) => T): T => {
     const database = fixture.database;
     if (!database) {
