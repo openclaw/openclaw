@@ -100,6 +100,7 @@ export async function readOwnerLinkStatus(params: {
             defined: true;
             sessions: typeof definition.sessions.others;
             maxInvitedAccess?: typeof definition.sessions.maxInvitedAccess;
+            invitedPermission?: typeof definition.sessions.invitedPermission;
             requiresSandbox: boolean;
             sandbox: typeof sandbox;
             admin: boolean;
@@ -113,6 +114,7 @@ export async function readOwnerLinkStatus(params: {
           };
           if (definition.sessions.maxInvitedAccess !== undefined) {
             role.maxInvitedAccess = definition.sessions.maxInvitedAccess;
+            role.invitedPermission = definition.sessions.invitedPermission ?? "workspace";
           }
           return role;
         }),

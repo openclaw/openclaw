@@ -198,6 +198,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           cfg: defaults?.config,
           agentId,
           reviewer: resolveExecReviewerDefaults({ defaults, agentId }),
+          participation: defaults?.participation,
           signal,
         };
         autoReviewer = async (input) => {

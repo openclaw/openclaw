@@ -3,12 +3,20 @@ const en = {
   administrator: "Administrator access",
   noAdministrator: "No administrator access",
   invitedAccess: "Only sessions they’re invited to · Can be invited up to {level}",
+  invitedPermission: "Participant permission: {mode}",
+  permissions: {
+    "read-only": "Read only",
+    guarded: "Guarded",
+    workspace: "Workspace",
+    full: "Full",
+  },
   invitationLevels: {
     read: "Read",
     suggest: "Suggest",
     send: "Send",
   },
   sessions: {
+    invited: "Only sessions they’re invited to",
     none: "No access to other people's sessions",
     view: "Read other people's sessions",
     suggest: "Read and suggest changes to other people's sessions",

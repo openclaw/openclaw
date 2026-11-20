@@ -428,9 +428,7 @@ export function renderChatPaneComposerControls(params: {
           : selectedSession?.invitedAccess === "send" &&
               selectedSession.sharingRole !== "owner" &&
               selectedSession.sharingRole !== "admin"
-            ? selectedSession.permissionMode === "read-only"
-              ? "read-only"
-              : "guarded"
+            ? selectedSession.invitedPermission
             : selectedSession?.permissionMode,
       pending: permissionPending,
       onSelect: async (permissionMode) => {

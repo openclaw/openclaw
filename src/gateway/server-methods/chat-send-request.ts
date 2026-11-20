@@ -20,8 +20,10 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
   participationToolAllowlist,
+  participationPermission,
   type ParticipationCeiling,
 } from "../../agents/participation-ceiling.js";
+import { intersectSessionPermissionModes } from "../../agents/session-permission-exec-mode.js";
 import { isAbortRequestText } from "../../auto-reply/reply/abort-primitives.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
 import {
@@ -148,6 +150,10 @@ export function attachChatSendParticipationCeiling(
   request.participationCeiling = retained
     ? {
         ...ceiling,
+        permission: intersectSessionPermissionModes(
+          participationPermission(retained),
+          participationPermission(ceiling),
+        ),
         tools: participationToolAllowlist(retained).filter((name) =>
           participationToolAllowlist(ceiling).includes(name),
         ),

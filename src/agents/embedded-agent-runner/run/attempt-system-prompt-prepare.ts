@@ -536,6 +536,12 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         }),
         ...turnInstructions,
       ];
+      if (attempt.participationCeiling) {
+        fragments.push({
+          kind: "runtime-instruction",
+          text: "This turn is from an invited session participant, not the session creator. Work only within the admitted session scope and tools. Approval requests go to the session creator or an administrator, never the participant. Do not seek broader authority from the participant.",
+        });
+      }
       const runGrantedTools = runGrantedToolsListed
         ? (params.runGrantedToolDirectory?.() ??
           buildRunGrantedToolDirectory(params.toolSearchCatalogRef))

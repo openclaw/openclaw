@@ -60,6 +60,7 @@ use this definition under `gateway.roles.definitions`:
     sessions: {
       others: "invited",
       maxInvitedAccess: "send",
+      invitedPermission: "read-only",
       invitedTools: [
         "read",
         "ls",
@@ -80,6 +81,14 @@ Assign the role, then grant **Participate** on the intended session. The role
 ceiling alone does not grant membership. The session must use Gateway-local
 OpenClaw execution; native/CLI runtimes and remote workers cannot enforce this
 participant ceiling.
+
+`invitedPermission` sets the participant's permission ceiling: `read-only`,
+`guarded`, `workspace` (the default), or `full`. The effective mode is the lower
+of that ceiling and the session's mode; ordinary model/tool and host policy can
+narrow it further. Workspace mode uses the configured command reviewer. Any
+human approval goes only to the session creator or an administrator, never the
+participant. File tools stay inside the session root even in full mode. This is
+not an OS sandbox for shell commands; use sandbox isolation for untrusted code.
 
 `invitedTools` replaces the default list. Omit it for the standard file, shell,
 web, and tool-discovery tools, use `[]` for no tools, or explicitly add core names

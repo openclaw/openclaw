@@ -379,3 +379,18 @@ test("validates invited tools as exact core names only with an invitation ceilin
     OpenClawSchema.safeParse(config({ others: "invited", invitedTools: ["read"] })).success,
   ).toBe(false);
 });
+
+test("validates invited permission only on invited-session roles", () => {
+  for (const invitedPermission of ["read-only", "guarded", "workspace", "full"]) {
+    for (const others of ["none", "invited", "view", "suggest", "write"]) {
+      const cfg = {
+        gateway: {
+          roles: {
+            definitions: { guest: { ...validRole, sessions: { others, invitedPermission } } },
+          },
+        },
+      };
+      expect(OpenClawSchema.safeParse(cfg).success).toBe(others === "invited");
+    }
+  }
+});

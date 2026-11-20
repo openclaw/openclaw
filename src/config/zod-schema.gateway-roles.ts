@@ -41,6 +41,7 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       /** Maximum access to another person's sessions without explicit membership. */
       others: z.enum(["none", "invited", "view", "suggest", "write"]),
       maxInvitedAccess: z.enum(["read", "suggest", "send"]).optional(),
+      invitedPermission: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
       invitedTools: z
         .array(
           z
@@ -56,6 +57,13 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
         .transform(uniqueValues)
         .optional(),
     })
+    .refine(
+      (sessions) => sessions.invitedPermission === undefined || sessions.others === "invited",
+      {
+        message: 'invitedPermission requires sessions.others to be "invited"',
+        path: ["invitedPermission"],
+      },
+    )
     .refine(
       (sessions) => sessions.maxInvitedAccess === undefined || sessions.others === "invited",
       {

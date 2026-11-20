@@ -65,6 +65,11 @@ it("projects and invalidates recipient-local invited access without contaminatin
     };
     const before = await read();
     expect(before.map((row) => row?.invitedAccess)).toEqual([undefined, "read", "send"]);
+    expect(before.map((row) => row?.invitedPermission)).toEqual([
+      undefined,
+      undefined,
+      "workspace",
+    ]);
     expect(before.map((row) => row?.sharingRole)).toEqual(["owner", "member", "member"]);
     await setSessionMemberAccess(scope, {
       identityId: sender.id,

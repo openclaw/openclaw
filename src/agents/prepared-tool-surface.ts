@@ -4,6 +4,7 @@ import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
 import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
+import { participationPermission } from "./participation-ceiling.js";
 import { resolveSessionPermissionCoreToolPolicy } from "./session-permission-exec-mode.js";
 import { resolveToolFsConfig } from "./tool-fs-policy.js";
 
@@ -37,7 +38,10 @@ export function prepareCoreToolPolicy(
     (sessionPolicy?.workspaceOnly ??
       resolveToolFsConfig({ cfg: options.config, agentId: options.agentId }).workspaceOnly ===
         true);
-  const readOnly = sessionPolicy?.readOnly ?? false;
+  const readOnly =
+    sessionPolicy?.readOnly === true ||
+    (options.participationCeiling !== undefined &&
+      participationPermission(options.participationCeiling) === "read-only");
   const patch = execConfig.applyPatch;
   const applyPatchContainmentSource: ApplyPatchContainmentSource =
     options.participationCeiling || options.requireWorkspaceOnly

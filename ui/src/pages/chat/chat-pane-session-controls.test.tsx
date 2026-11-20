@@ -894,3 +894,35 @@ describe("chat pane model controls", () => {
     expect(state.chatRunId).toBeNull();
   });
 });
+
+it.each(["read-only", "guarded", "workspace", "full"] as const)(
+  "shows the admitted participant permission %s instead of the owner's mode",
+  (invitedPermission) => {
+    const key = "agent:main:participant-permission";
+    const selectedSession: GatewaySessionRow = {
+      key,
+      kind: "direct" as const,
+      permissionMode: "full" as const,
+      invitedAccess: "send" as const,
+      invitedPermission,
+      sharingRole: "member" as const,
+    };
+    const state = makeChatHost({
+      sessionKey: key,
+      chatModelSwitchPromises: {},
+      sessionsResult: {
+        ...createSessionsListResult({ defaultsModel: null, defaultsProvider: null }),
+        sessions: [selectedSession],
+      },
+    }) as unknown as ChatPageHost;
+    expect(renderControls(state).permissionPicker).toMatchObject({
+      mode: invitedPermission,
+      participant: true,
+    });
+    selectedSession.sharingRole = "owner";
+    expect(renderControls(state).permissionPicker).toMatchObject({
+      mode: "full",
+      participant: false,
+    });
+  },
+);

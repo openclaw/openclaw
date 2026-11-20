@@ -271,6 +271,7 @@ export function* assembleOpenClawCodingTools(
               config: options?.exec?.config ?? options?.config,
               preparedRunEnvironment: options?.exec?.preparedRunEnvironment,
               reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
+              participation: options?.participationCeiling !== undefined,
               reviewTranscript: options?.exec?.reviewTranscript,
               trigger: options?.trigger,
               node: options?.exec?.node ?? execConfig.node,

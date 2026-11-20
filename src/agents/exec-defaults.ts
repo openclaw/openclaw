@@ -16,17 +16,19 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModeFromPolicy,
   resolveExecModePolicy,
+  resolveExecPolicyForMode,
 } from "../infra/exec-approvals.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
 import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-target.js";
-import { PARTICIPATION_EXEC_CEILING, type ParticipationCeiling } from "./participation-ceiling.js";
+import { participationPermission, type ParticipationCeiling } from "./participation-ceiling.js";
 import {
   resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
 } from "./sandbox/runtime-status.js";
 import {
   applyExecModeCeiling,
+  resolveSessionPermissionExecMode,
   resolveSessionPermissionExecPolicy,
 } from "./session-permission-exec-mode.js";
 
@@ -209,13 +211,19 @@ export function prepareExecDefaults(
         ? maxAsk(modePolicy.ask, approvalDefaults.ask)
         : modePolicy.ask;
     const capped = params.participationCeiling
-      ? applyExecModeCeiling({ ...modePolicy, security, ask }, PARTICIPATION_EXEC_CEILING)
+      ? applyExecModeCeiling(
+          { ...modePolicy, security, ask },
+          resolveSessionPermissionExecMode({
+            mode: participationPermission(params.participationCeiling),
+          }),
+        )
       : { ...modePolicy, security, ask };
     security = capped.security ?? security;
     ask = capped.ask ?? ask;
+    const cappedModePolicy = capped.mode ? resolveExecPolicyForMode(capped.mode) : undefined;
     const mode =
-      security === modePolicy.security && ask === modePolicy.ask
-        ? (capped.mode ?? resolveExecModeFromPolicy({ security, ask }))
+      capped.mode && cappedModePolicy?.security === security && cappedModePolicy.ask === ask
+        ? capped.mode
         : resolveExecModeFromPolicy({ security, ask });
     return {
       host: resolved.configuredTarget,
