@@ -72,7 +72,10 @@ const retained = root + '.retained';
 const inventory = fs.readdirSync(root, { recursive: true, withFileTypes: true })
   .filter(entry => entry.isFile()).map(entry => path.join(entry.parentPath, entry.name));
 fs.cpSync(root, retained, { recursive: true });
-owner.retainUpdateRuntimeImports([{ sourceRoot: root, destinationRoot: retained }], inventory);
+owner.retainUpdateRuntimeImports(
+  [{ sourceRoot: root, destinationRoot: retained }],
+  inventory.map(sourcePath => ({ sourcePath, identityPath: sourcePath })),
+);
 const replacement = JSON.stringify({ tables: [], catalogs: {} });
 for (const file of files) {
   if (fs.statSync(file).isDirectory()) {

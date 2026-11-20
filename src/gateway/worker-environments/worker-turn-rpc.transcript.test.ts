@@ -13,6 +13,7 @@ import { runExclusiveSqliteSessionWrite } from "../../config/sessions/session-ac
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { SqliteWorkerOperations } from "../../infra/sqlite-worker-contract.js";
+import type { AssistantHistoryMessage } from "../../llm/types.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentWorkerStore from "../../state/openclaw-agent-worker-store.js";
@@ -100,7 +101,7 @@ it.each(["replaced", "preparation"] as const)(
       }
     });
     const claimOps = createPlacementTurnClaimFixtureOps(support.testState.stateDb);
-    const prepare = (message: ReturnType<typeof makeAgentAssistantMessage>) => {
+    const prepare = <T extends AssistantHistoryMessage>(message: T): T => {
       claimOps.releaseTurn(claim);
       return message;
     };

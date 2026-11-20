@@ -976,6 +976,7 @@ src/infra/current-machine-identity.ts
 src/infra/dedupe.ts
 src/infra/deep-merge.ts
 src/infra/deferred-plugin-migrations.contract.ts
+src/infra/deferred-plugin-migrations.kernel.ts
 src/infra/deferred-plugin-migrations.ts
 src/infra/deferred-plugin-session-transcript-read.worker.ts
 src/infra/delivery-queue-cache.ts

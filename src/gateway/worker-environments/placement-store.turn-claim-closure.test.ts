@@ -18,6 +18,7 @@ import {
 import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
+import type { AssistantHistoryMessage } from "../../llm/types.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -629,12 +630,18 @@ it.each(["root admission", "wrong generation"] as const)(
       credentialExpiresAtMs: Date.now() + 60_000,
     });
     const text = "Prepared\nMEDIA:./owned.png\nMEDIA:./unowned.png";
-    const prepare = vi.fn(
-      (message: ReturnType<typeof makeAgentAssistantMessage>, sourceText: string | undefined) => {
+    const preparation = {
+      prepare<T extends AssistantHistoryMessage>(
+        this: void,
+        message: T,
+        sourceText: string | undefined,
+      ): T {
         expect(sourceText).toBe(text);
         return applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./owned.png"] });
       },
-    );
+    };
+    vi.spyOn(preparation, "prepare");
+    const prepare = preparation.prepare;
     const admission =
       scenario === "root admission" ? tryBeginGatewayRootWorkAdmission() : undefined;
     const target = { ...SESSION, storePath: path.join(root, "sessions.json") };
