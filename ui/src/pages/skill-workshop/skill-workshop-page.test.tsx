@@ -82,12 +82,18 @@ const button = (page: HTMLElement, name: string, pressed?: boolean) =>
   queryByRole<HTMLButtonElement>(page, "button", { name, pressed });
 const title = (page: HTMLElement) => text(page, ".sw-detail h1");
 const summary = (page: HTMLElement) => text(page, ".plugin-catalog-detail__summary");
-/** The start page lists skills; a row opens that skill's page. */
+/** Learned skills lists every skill; a row opens that skill's page. */
 async function openSkill(page: HTMLElement, name: string) {
+  const view = await waitForSolid(() => {
+    const match = queryByRole<HTMLButtonElement>(page, "button", { name: /^Learned skills/ });
+    expect(match).not.toBeNull();
+    return match!;
+  });
+  view.click();
   const row = await waitForSolid(() => {
-    const match = Array.from(page.querySelectorAll<HTMLButtonElement>(".sw-row__main")).find(
-      (entry) => entry.querySelector(".sw-row__name")?.textContent === name,
-    );
+    const match = Array.from(
+      page.querySelectorAll<HTMLButtonElement>(".sw-grid .sw-row__main"),
+    ).find((entry) => entry.querySelector(".sw-row__name")?.textContent === name);
     expect(match).toBeDefined();
     return match!;
   });
@@ -191,7 +197,7 @@ it.each(["config", "library"])("retries %s only on request", async (source) => {
     await openLearning(page);
     await waitForSolid(() => expect(button(page, "Auto", true)).not.toBeNull());
   } else {
-    await waitText(page, skill.description);
+    await waitText(page, change.summary);
   }
   expect(page.textContent).not.toContain("Read unavailable");
   expect(read).toHaveBeenCalledTimes(2);
@@ -204,10 +210,9 @@ it.each([
 ] as const)("gates undo: $reason", async ({ versionId, scopes, action }) => {
   const request = gateway({}, [{ ...change, versionId, action }]);
   const page = await mount(request, { ...mutationAccess, scopes: [...scopes] });
+  // History opens first; each row is a change and carries its Undo when it can run.
   await waitText(page, change.summary);
-  // Undo is managed on the skill's own page, never on the list row.
-  expect(button(page, "Undo")).toBeNull();
-  await openSkill(page, SKILL);
+  expect(button(page, "History", true)).not.toBeNull();
   if (action === "restore") {
     await click(page, "Undo");
     await waitForSolid(() =>
@@ -216,6 +221,91 @@ it.each([
   } else {
     expect(button(page, "Undo")).toBeNull();
   }
+  // Learned skills rows never offer Undo; it is managed on History and the skill's page.
+  await click(page, /^Learned skills/);
+  await waitForSolid(() => expect(page.querySelector(".sw-grid .sw-row")).not.toBeNull());
+  expect(button(page, "Undo")).toBeNull();
+});
+
+it.each([
+  {
+    opens: "Drafts 1",
+    drafts: [{ id: "d-1", skillName: SKILL, createdAtMs: 1 }],
+    changes: [change],
+  },
+  { opens: "History", drafts: [], changes: [change] },
+  { opens: "Learned skills 1", drafts: [], changes: [] },
+])("opens on $opens: the view that needs the person", async ({ opens, drafts, changes }) => {
+  const page = await mount(gateway({ list: { ...list, drafts }, read: skillRead }, changes));
+  await waitForSolid(() => expect(button(page, opens, true)).not.toBeNull());
+});
+
+it("groups History by day, newest first", async () => {
+  const day = 24 * 60 * 60_000;
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const at = (name: string, createdAtMs: number) => ({
+    ...change,
+    id: `change-${name}`,
+    skillName: name,
+    createdAtMs,
+  });
+  const names = ["fresh-skill", "week-skill", "old-skill"];
+  const request = gateway(
+    {
+      list: { ...list, skills: names.map((name) => ({ ...skill, name })) },
+      read: skillRead,
+    },
+    [
+      at("fresh-skill", start.getTime()),
+      at("week-skill", start.getTime() - 2 * day),
+      at("old-skill", start.getTime() - 20 * day),
+    ],
+  );
+  const page = await mount(request);
+  await waitForSolid(() =>
+    expect(
+      Array.from(page.querySelectorAll(".sw-group__title"), (heading) => heading.textContent),
+    ).toEqual(["Today", "This week", "Earlier"]),
+  );
+  expect(
+    Array.from(page.querySelectorAll(".sw-row--history .sw-row__name"), (name) => name.textContent),
+  ).toEqual(names);
+});
+
+it("searches the loaded skills by name and description", async () => {
+  const request = gateway(
+    {
+      list: {
+        ...list,
+        skills: [skill, { ...skill, name: "release-notes", description: "Group entries" }],
+      },
+      read: skillRead,
+    },
+    [],
+  );
+  const context = createContext(request);
+  const page = await mount(context);
+  const search = await waitForSolid(() => {
+    const input = page.querySelector<HTMLInputElement>('input[type="search"]');
+    expect(input).not.toBeNull();
+    return input!;
+  });
+  const rows = () =>
+    Array.from(page.querySelectorAll(".sw-grid .sw-row__name"), (name) => name.textContent);
+  const type = (value: string) => {
+    search.value = value;
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  type("reconciling");
+  await waitForSolid(() => expect(rows()).toEqual([SKILL]));
+  type("RELEASE");
+  await waitForSolid(() => expect(rows()).toEqual(["release-notes"]));
+  type("nothing-like-this");
+  await waitText(page, "No skills match your search.");
+  context.agentSelection.set("scout");
+  await waitForSolid(() => expect(rows().toSorted()).toEqual([SKILL, "release-notes"].toSorted()));
+  expect(page.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("");
 });
 
 describe("without the skill-workshop plugin", () => {
@@ -486,7 +576,8 @@ it("reviews a draft as a diff against the live skill, applies it, and follows th
     expect(button(page, "Apply")).toBeNull();
   });
   getByRole<HTMLAnchorElement>(page, "link", { name: "Skill workshop" }).click();
-  await waitForSolid(() => expect(button(page, "Active 1", true)).not.toBeNull());
+  // Back on the start page the queue stays open, now empty.
+  await waitForSolid(() => expect(button(page, "Drafts 0", true)).not.toBeNull());
 });
 
 it("keeps unchanged draft instructions neutral while support files still need review", async () => {
@@ -582,13 +673,18 @@ it("shows the list for a page link whose skill is gone", async () => {
   expect(context.replace).toHaveBeenCalledWith("skill-workshop", { search: "" });
 });
 
-it("returns to the list when Back revisits a discarded draft", async () => {
-  const draft = draftFor(SKILL);
-  let drafts = [draft];
+it("keeps inline Apply in Drafts and rejects a discarded draft in history", async () => {
+  const discarded = draftFor(SKILL);
+  const applied = { ...discarded, id: "another-draft", summary: "another draft", createdAtMs: 2 };
+  let drafts = [discarded, applied];
   const context = createContext(
     gateway({
       list: () => ({ ...list, drafts }),
       read: skillRead,
+      applyDraft: () => {
+        drafts = [discarded];
+        return { changes: [] };
+      },
       discardDraft: () => {
         drafts = [];
         return { changes: [] };
@@ -597,17 +693,34 @@ it("returns to the list when Back revisits a discarded draft", async () => {
     draftAccess,
   );
   const page = await mount(context);
-  await click(page, "Drafts 1");
+  await waitForSolid(() => {
+    const row = Array.from(page.querySelectorAll<HTMLElement>(".sw-row--draft")).find((entry) =>
+      entry.textContent?.includes(applied.summary),
+    );
+    expect(row).toBeDefined();
+    return getByRole<HTMLButtonElement>(row!, "button", { name: "Apply" });
+  }).then((apply) => apply.click());
+  await waitForSolid(() => expect(button(page, "Drafts 1", true)).not.toBeNull());
+  expect(context.router.getState().location.search).toBe("");
   await click(page, "Open draft");
-  await waitForSolid(() => expect(summary(page)).toBe(draft.summary));
+  await waitForSolid(() => expect(summary(page)).toBe(discarded.summary));
   const draftSearch = context.router.getState().location.search;
   getByRole<HTMLAnchorElement>(page, "link", { name: "Skill workshop" }).click();
   await click(page, "Discard");
   await waitForSolid(() => expect(button(page, "Drafts 0", true)).not.toBeNull());
-  await click(page, "Active 1");
+  await openSkill(page, SKILL);
+  getByRole<HTMLAnchorElement>(page, "link", { name: "Skill workshop" }).click();
 
   context.navigate("skill-workshop", { search: draftSearch });
 
   await waitForSolid(() => expect(context.router.getState().location.search).toBe(""));
+  expect(page.querySelector(".sw-detail")).toBeNull();
+});
+
+it("opens the default view when an Auto-mode draft link is missing", async () => {
+  const context = createContext(gateway({ read: skillRead }), { search: "?draft=missing-draft" });
+  const page = await mount(context);
+  await waitForSolid(() => expect(button(page, "History", true)).not.toBeNull());
+  expect(context.router.getState().location.search).toBe("");
   expect(page.querySelector(".sw-detail")).toBeNull();
 });

@@ -431,7 +431,7 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
     expect(waited).toHaveBeenCalledWith("plugin.approval.waitDecision");
   });
 
-  it("rejects the write at its source guard when the lineage is removed after dispatch", async () => {
+  it("finishes an admitted write when the lineage is removed after dispatch", async () => {
     const grant = await prepareCompletion("lineage-removed-in-tool");
     // Another mutation of the same file holds its queue, so the authorized write waits
     // inside the tool, after dispatch authorization and before its own I/O.
@@ -448,15 +448,8 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
     await holder;
     const response = await pending;
 
-    expect(await response.json()).toMatchObject({
-      result: {
-        isError: true,
-        content: [
-          { text: expect.stringContaining("tool invocation authority is no longer active") },
-        ],
-      },
-    });
-    expect(await grant.written()).toBeUndefined();
+    expect(await response.json()).toMatchObject({ result: { isError: false } });
+    expect(await grant.written()).toBe("lineage-removed-in-tool");
   });
 
   it("rejects a grant whose child lineage belongs to another requester", async () => {

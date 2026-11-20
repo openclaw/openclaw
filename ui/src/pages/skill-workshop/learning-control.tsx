@@ -9,7 +9,7 @@ import type { WorkshopView } from "./view-shared.tsx";
 
 const MODES: readonly SkillWorkshopMode[] = ["off", "propose", "auto"];
 
-/** The learning state reads at the top right; the gear holds the mode and the learning session. */
+/** The learning state reads as one sentence at the top right; the gear holds the mode and the learning session. */
 export function LearningControl(props: { view: WorkshopView }) {
   const menuId = `sw-learning-${createUniqueId()}`;
   const learningTitle = () => {
@@ -29,8 +29,7 @@ export function LearningControl(props: { view: WorkshopView }) {
               ]}
               aria-hidden="true"
             />
-            {t("skillWorkshop.mode.label")}
-            <span class="sw-learning__mode">{t(`skillWorkshop.mode.${mode()}`)}</span>
+            {t(`skillWorkshop.mode.${mode()}State`)}
           </span>
         )}
       </Show>

@@ -1856,7 +1856,8 @@
   --plugin-row-tone: color-mix(in srgb, var(--text) 4%, transparent);
 }
 
-.plugin-catalog-results--rows .plugin-catalog-search input.settings-input {
+.plugin-catalog-results--rows .plugin-catalog-search input.settings-input,
+.plugin-catalog-results--rows .plugin-catalog-search input.oc-input {
   border-radius: var(--composer-radius);
   background: var(--card);
   font-size: var(--control-ui-text-md);

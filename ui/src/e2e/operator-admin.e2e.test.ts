@@ -233,6 +233,10 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
+      await page
+        .locator(".skill-discovery")
+        .getByRole("button", { name: "Installed", exact: true })
+        .click();
       const skillCard = page.locator(".skill-discovery .plugin-catalog-card", {
         hasText: "Deploy Helper",
       });
@@ -300,6 +304,10 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
+      await page
+        .locator(".skill-discovery")
+        .getByRole("button", { name: "Installed", exact: true })
+        .click();
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
       const install = page
         .locator("openclaw-modal-dialog", { hasText: "Deploy Helper" })
