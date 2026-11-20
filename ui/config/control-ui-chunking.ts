@@ -428,6 +428,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/skills-grouping.ts":
     case "ui/src/lib/skills/index.ts":
     case "ui/src/i18n/locales/en-skill-library.ts":
+    case "ui/src/i18n/locales/en-skills-browser.ts":
     case "ui/src/pages/skills/skill-status.tsx":
       // Skills and Agents already load this presentation and its shared dependencies together.
       return "skills-shared";
