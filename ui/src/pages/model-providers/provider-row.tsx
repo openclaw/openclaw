@@ -546,7 +546,7 @@ export function ProviderRow(props: ProviderRowProps) {
         ({ profileId, type }) =>
           type !== "api_key" &&
           (profileProviderIds[profileId] ?? id) === "openai" &&
-          (!usage.authProfileId || usage.authProfileId === profileId),
+          (usage.authProfileId === profileId || (!usage.authProfileId && !usage.error)),
       )
     );
   });

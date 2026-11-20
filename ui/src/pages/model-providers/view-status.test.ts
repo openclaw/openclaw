@@ -135,6 +135,20 @@ it("uses the scoped quota once for a single login, retaining the collapsed summa
   );
   expect(text(container.querySelector(".provider-row__limits-pane"))).toContain("$25.00");
   expect(text(summary)).toContain("Admin API");
+  const error = "Admin API key required";
+  mount(
+    {
+      ...view,
+      cards: [
+        card({
+          profiles,
+          usage: { provider: "openai", displayName: "OpenAI", windows: [], error },
+        }),
+      ],
+    },
+    container,
+  );
+  expect(text(container.querySelector(".provider-row__limits-pane"))).toContain(error);
   expect(text(container.querySelector(".model-providers__account-limits"))).toContain("55% left");
 });
 
