@@ -401,18 +401,34 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     });
   });
 
-  // Fail-closed tool policy: only a non-empty named allowlist is expressible
-  // on the CLI surface. Every other embedded tool state keeps the passthrough
-  // so no closed state silently widens.
+  // Fail-closed tool policy: only a named allowlist is expressible on the CLI surface. Every
+  // other embedded tool state keeps the passthrough so no closed state silently widens.
   it.each([
     ["a mixed wildcard allowlist", { toolsAllow: ["memory_search", "*"] }],
-    ["a deny-all allowlist", { toolsAllow: [] }],
     ["no allowlist", { toolsAllow: undefined }],
     ["disableTools", { disableTools: true }],
     ["a raw model run", { modelRun: true }],
+    ["a plugin tool grant", { runtimePluginToolGrant: { pluginId: "p", toolNames: ["p_note"] } }],
+    ["a caller output cap", { streamParams: { maxTokens: 512 } }],
   ] as const)("refuses dispatch for %s", async (_label, overrides) => {
     expect(await runDispatch(overrides as Partial<CliDispatchParams>)).toBeUndefined();
     expect(runCliAgent).not.toHaveBeenCalled();
+  });
+
+  // A session fork lists every session tool for its cache and executes only its own; on a
+  // subscription CLI only those reach the CLI, from the fork's in-memory conversation.
+  it("runs a session fork on the subscription CLI with only the fork's tools", async () => {
+    const sessionManager = SessionManager.inMemory("/tmp/recall/workspace");
+    await runDispatch({
+      sessionFile: undefined,
+      sessionManager,
+      toolsAllow: undefined,
+      toolExecutionAllow: ["read", "ls"],
+    });
+    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+      sessionFile: `in-memory:${sessionManager.getSessionId()}`,
+      cliToolAvailability: { native: [], openClaw: ["read", "ls"] },
+    });
   });
 
   it("settles execution-start work before dispatching the CLI run", async () => {

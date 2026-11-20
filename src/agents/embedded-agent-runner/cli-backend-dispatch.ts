@@ -29,21 +29,35 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
   if (params.sourceReplyDeliveryMode === "message_tool_only") {
     return undefined;
   }
-  // The CLI runner needs the caller-owned transcript path; runs without one
-  // stay on the passthrough where session targets are resolved internally.
-  const sessionFile = params.sessionFile?.trim();
+  // The CLI runner needs the caller-owned transcript path or the caller's in-memory session;
+  // runs without either stay on the passthrough where session targets are resolved internally.
+  const sessionFile =
+    params.sessionFile?.trim() ||
+    (params.sessionManager ? `in-memory:${params.sessionManager.getSessionId()}` : undefined);
   if (!sessionFile) {
     return undefined;
   }
-  // The CLI bridge supports only a non-empty named allowlist bounded by its loopback grant.
+  // The CLI bridge supports only a named allowlist bounded by its loopback grant.
   // Other policies stay on the embedded path so dispatch cannot widen tool access (#57326).
-  if (params.disableTools || params.modelRun) {
+  // A plugin's own tools and a caller output cap do not reach a CLI process either.
+  if (
+    params.disableTools ||
+    params.modelRun ||
+    params.runtimePluginToolGrant?.toolNames.length ||
+    params.streamParams?.maxTokens !== undefined
+  ) {
     return undefined;
   }
-  if (!params.toolsAllow || params.toolsAllow.length === 0) {
+  // Only tools that may execute reach the CLI: a session fork lists every session tool but runs
+  // only its own. An empty list is a tool-free run.
+  const allowed =
+    params.toolExecutionAllow?.filter(
+      (tool) => !params.toolsAllow || params.toolsAllow.includes(tool),
+    ) ?? params.toolsAllow;
+  if (!allowed) {
     return undefined;
   }
-  const names = params.toolsAllow.map(normalizeToolPolicyName);
+  const names = allowed.map(normalizeToolPolicyName);
   if (names.some((name) => !name || name.includes("*"))) {
     return undefined;
   }
@@ -53,6 +67,27 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
     return undefined;
   }
   const { runCliAgent } = await import("../cli-runner.runtime.js");
+  const { cliBackendAcceptsAuthProfileForwarding, resolveCliExecutionAuthProfileId } =
+    await import("../cli-execution-auth.js");
+  // A fresh CLI session uses the account order new CLI sessions use, so an OpenClaw-held
+  // subscription login reaches the CLI as it does for the session's own turns.
+  const { config, agentDir } = params;
+  const authProfileId =
+    config &&
+    agentDir &&
+    cliBackendAcceptsAuthProfileForwarding({
+      provider: eligibility.provider,
+      config,
+      agentId: params.agentId,
+    })
+      ? await resolveCliExecutionAuthProfileId({
+          cliExecutionProvider: eligibility.provider,
+          authProfileProvider: params.provider ?? eligibility.provider,
+          config,
+          agentDir,
+          selected: { authProfileId: params.authProfileId },
+        })
+      : params.authProfileId;
   const admittedRunContext = await resolvePreparedRunAdmission({
     runId: params.runId,
     runtimeKind: "embedded",
@@ -166,7 +201,7 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
       ...(params.requestedRouteResolution === "resolved" && params.provider && params.model
         ? { requesterModel: { provider: params.provider, model: params.model } }
         : {}),
-      authProfileId: params.authProfileId,
+      authProfileId,
       modelHasVision: params.modelHasVision,
       contextWindow: params.contextWindow,
       thinkLevel: params.thinkLevel,
