@@ -40,6 +40,7 @@ vi.mock("../infra/sqlite-transaction.js", () => ({
   runSqliteDeferredTransactionSync: (_db: unknown, run: () => unknown) => run(),
   runSqliteReadSnapshotSync: (_db: unknown, run: () => unknown) => run(),
 }));
+// mock-isolation: Synthetic state and ports classify outcomes without a live admission service.
 vi.mock("../infra/sqlite-write-admission.js", () => ({
   retainSqliteWriteAdmissionService: () => () => {},
 }));

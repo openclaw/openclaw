@@ -143,7 +143,9 @@ it.skipIf(!connection)(
         const last = await append(0, 1);
         const other = await append(1, 1);
         expect(first.ok && last.ok && other.ok).toBe(true);
-        if (!first.ok || !last.ok || !other.ok) throw new Error("Synthetic mirror append failed");
+        if (!first.ok || !last.ok || !other.ok) {
+          throw new Error("Synthetic mirror append failed");
+        }
         expect(first.anchor).toBeDefined();
         expect(last.anchor).toBeDefined();
         const replay = await append(0, 1);
@@ -230,12 +232,14 @@ it.skipIf(!connection)(
         expect(global.indexing).not.toBe(true);
         expect(global.results.every((hit) => Number.isFinite(hit.score))).toBe(true);
         expect(
-          global.results.map((hit) => [hit.sessionKey, hit.sessionId, hit.messageId]).sort(),
+          global.results
+            .map((hit) => [hit.sessionKey, hit.sessionId, hit.messageId])
+            .toSorted(([a], [b]) => String(a).localeCompare(String(b))),
         ).toEqual(
           [
             [keys[0], sessions[0]!.sessionId, last.messageId],
             [keys[1], sessions[1]!.sessionId, other.messageId],
-          ].sort(),
+          ].toSorted(([a], [b]) => String(a).localeCompare(String(b))),
         );
         const injected = await api.request<{ ok: true; messageId: string }>("chat.inject", {
           sessionKey: keys[0],

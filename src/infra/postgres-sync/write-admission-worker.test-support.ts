@@ -10,7 +10,9 @@ import {
 import { settleSqliteWorkerOperationContext } from "../sqlite-worker-operation-settlement.js";
 import { PostgresSyncConnection } from "./connection.js";
 
-if (!parentPort) throw new Error("Write admission test requires a worker");
+if (!parentPort) {
+  throw new Error("Write admission test requires a worker");
+}
 const port = parentPort;
 const input = workerData;
 const [message] = await once(port, "message");
@@ -29,7 +31,9 @@ try {
         admit(stage) {
           if (stage === "commit") {
             port.postMessage({ event: "commit-ready", pid });
-            while (Atomics.load(gate, 0) === 0) Atomics.wait(gate, 0, 0);
+            while (Atomics.load(gate, 0) === 0) {
+              Atomics.wait(gate, 0, 0);
+            }
           }
           requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
         },

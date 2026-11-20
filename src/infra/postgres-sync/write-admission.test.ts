@@ -23,13 +23,19 @@ function fixture(options: { lock?: number; statement?: number; transaction?: num
       ? []
       : [{ name: "transaction_timeout", setting: String(options.transaction) }]),
   ]);
-  vi.spyOn(db, "prepare").mockReturnValue(settings);
+  const prepare = vi.spyOn(db, "prepare").mockReturnValue(settings);
   const exec = vi.spyOn(db, "exec").mockImplementation((sql) => {
-    if (sql.startsWith("BEGIN")) db.isTransaction = true;
-    if (sql === "ROLLBACK" || sql === "COMMIT") db.isTransaction = false;
+    if (sql.startsWith("BEGIN")) {
+      db.isTransaction = true;
+    }
+    if (sql === "ROLLBACK" || sql === "COMMIT") {
+      db.isTransaction = false;
+    }
     if (sql.includes("pg_advisory_xact_lock")) {
       attempts++;
-      if (nativeFailure) throw nativeFailure;
+      if (nativeFailure) {
+        throw nativeFailure;
+      }
       if (busy) {
         now++;
         throw lockError;
@@ -43,6 +49,7 @@ function fixture(options: { lock?: number; statement?: number; transaction?: num
   harness.cleanups.push(retainSqliteWriteAdmissionService([path], service));
   return {
     db,
+    prepare,
     exec,
     service,
     lockError,
@@ -77,9 +84,15 @@ it.each(["callback", "closed", "transaction"] as const)(
   (mode) => {
     const f = fixture();
     f.service.mockImplementation(() => {
-      if (mode === "callback") throw new Error("service refusal");
-      if (mode === "closed") f.db.isOpen = false;
-      if (mode === "transaction") f.db.isTransaction = true;
+      if (mode === "callback") {
+        throw new Error("service refusal");
+      }
+      if (mode === "closed") {
+        f.db.isOpen = false;
+      }
+      if (mode === "transaction") {
+        f.db.isTransaction = true;
+      }
     });
     const body = vi.fn();
     expect(() => f.db.runTransaction(body)).toThrow(
@@ -106,7 +119,9 @@ it("never services or retries a failed rollback", () => {
   const failure = new Error("rollback failed");
   const native = f.exec.getMockImplementation()!;
   f.exec.mockImplementation((sql) => {
-    if (sql === "ROLLBACK") throw failure;
+    if (sql === "ROLLBACK") {
+      throw failure;
+    }
     native(sql);
   });
   vi.spyOn(f.db, "close").mockImplementation(() => {
@@ -137,12 +152,17 @@ it.each([
     failure = error;
   }
   expect(failure).toBeInstanceOf(Error);
-  if (options.code) expect(failure).toMatchObject({ code: options.code });
-  else
+  if (options.code) {
+    expect(failure).toMatchObject({ code: options.code });
+  } else {
     expect(failure).toMatchObject({ message: expect.stringContaining("bridge request deadline") });
-  if (options.code === "55P03") expect(failure).toBe(f.lockError);
-  if (options.code === "57014")
+  }
+  if (options.code === "55P03") {
+    expect(failure).toBe(f.lockError);
+  }
+  if (options.code === "57014") {
     expect(failure).toMatchObject({ name: "PostgresQueryCanceledError" });
+  }
   expect(f.db.isOpen).toBe(options.code !== "25P04");
   expect(f.attempts()).toBe(1);
   expect(body).not.toHaveBeenCalled();
@@ -156,7 +176,7 @@ it.each(["readOnly", "nested", "reserved"] as const)(
     const body = vi.fn();
     f.db.runTransaction(body, undefined, mode === "readOnly", mode === "reserved");
     expect(body).toHaveBeenCalledOnce();
-    expect(f.db.prepare).not.toHaveBeenCalled();
+    expect(f.prepare).not.toHaveBeenCalled();
     expect(f.service).not.toHaveBeenCalled();
     expect(f.attempts()).toBe(0);
   },
@@ -173,8 +193,9 @@ it.each(["begin", "lock", "restore"] as const)(
         (phase === "begin" && sql.startsWith("BEGIN")) ||
         (phase === "lock" && sql.includes("pg_advisory_xact_lock")) ||
         (phase === "restore" && sql === "SET LOCAL lock_timeout = '100ms'")
-      )
+      ) {
         f.elapse(100);
+      }
     });
     const body = vi.fn();
     expect(() => f.db.runTransaction(body)).toThrow();

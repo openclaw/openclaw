@@ -35,21 +35,24 @@ it.skipIf(!connection).for([false, true])(
     const hasTransactionTimeout =
       (await client.query("SELECT 1 FROM pg_settings WHERE name = 'transaction_timeout'"))
         .rowCount === 1;
-    if (expireBody && !hasTransactionTimeout) skip("PostgreSQL 17 transaction_timeout required");
+    if (expireBody && !hasTransactionTimeout) {
+      skip("PostgreSQL 17 transaction_timeout required");
+    }
     const cleanups: Array<() => void | Promise<unknown>> = [];
     let cleanupPromise: Promise<void> | undefined;
     const cleanup = () =>
       (cleanupPromise ??= (async () => {
         const failures: unknown[] = [];
-        for (const close of cleanups.reverse()) {
+        for (const close of cleanups.toReversed()) {
           try {
             await bounded(Promise.resolve().then(close));
           } catch (error) {
             failures.push(error);
           }
         }
-        if (failures.length)
+        if (failures.length) {
           throw new AggregateError(failures, "Write admission fixture cleanup failed");
+        }
       })());
     harness.onClose(cleanup);
     try {
@@ -69,10 +72,11 @@ it.skipIf(!connection).for([false, true])(
       );
       cleanups.push(() => withEngineStoreAdmission(() => contender.close()));
       const transactionTimeout = expireBody ? 400 : 10000;
-      if (hasTransactionTimeout)
+      if (hasTransactionTimeout) {
         withEngineStoreAdmission(() =>
           contender.exec(`SET transaction_timeout = '${transactionTimeout}ms'`),
         );
+      }
       const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
       cleanups.push(() => admission.finish());
       const gate = new Int32Array(new SharedArrayBuffer(4));
@@ -81,8 +85,9 @@ it.skipIf(!connection).for([false, true])(
         expect(contender.isTransaction).toBe(false);
         expect(contender.isOpen).toBe(true);
         // Spend part of the logical transaction budget while the holder awaits this host.
-        if (expireBody && serviceCalls === 0)
+        if (expireBody && serviceCalls === 0) {
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
+        }
         serviceCalls++;
         admission.service();
       });
@@ -113,7 +118,9 @@ it.skipIf(!connection).for([false, true])(
       const ready = new Promise<void>((resolve, reject) => {
         worker.on("error", reject);
         worker.on("message", (message) => {
-          if (message.event === "commit-ready") resolve();
+          if (message.event === "commit-ready") {
+            resolve();
+          }
         });
       });
       worker.postMessage({ admission: admission.port }, [admission.port]);
@@ -127,12 +134,15 @@ it.skipIf(!connection).for([false, true])(
             bodyCalls++;
             expect(serviceCalls).toBeGreaterThan(0);
             expect(contender.prepare("SHOW lock_timeout").get()).toEqual({ lock_timeout: "1s" });
-            if (hasTransactionTimeout)
+            if (hasTransactionTimeout) {
               expect(contender.prepare("SHOW transaction_timeout").get()).toEqual({
                 transaction_timeout: expireBody ? "400ms" : "10s",
               });
+            }
             contender.prepare("INSERT INTO events VALUES (?)").run("host");
-            if (expireBody) contender.exec("SELECT pg_sleep(0.3)");
+            if (expireBody) {
+              contender.exec("SELECT pg_sleep(0.3)");
+            }
           }),
         );
       if (expireBody) {
@@ -141,10 +151,11 @@ it.skipIf(!connection).for([false, true])(
       } else {
         write();
         expect(contender.isOpen).toBe(true);
-        if (hasTransactionTimeout)
+        if (hasTransactionTimeout) {
           expect(
             withEngineStoreAdmission(() => contender.prepare("SHOW transaction_timeout").get()),
           ).toEqual({ transaction_timeout: "10s" });
+        }
       }
       expect(bodyCalls).toBe(1);
       expect(await bounded(exited)).toEqual([0]);

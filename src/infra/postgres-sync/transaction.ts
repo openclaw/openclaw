@@ -46,7 +46,7 @@ function beginPostgresWrite(db: PostgresSqlConnection): void {
     { name: "bridge request deadline", ms: POSTGRES_REQUEST_TIMEOUT_MS },
   ].reduce((first, next) => (first.ms <= next.ms ? first : next));
   const deadline = started + budget.ms;
-  let lastLockError: unknown;
+  let lastLockError: Error | undefined;
   const assertBudget = () => {
     if (performance.now() < deadline) {
       return;
