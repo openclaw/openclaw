@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { zstdCompressSync } from "node:zlib";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit, requireGitBuffer } from "../../agents/worktrees/git.js";
@@ -141,7 +142,11 @@ it.skipIf(process.platform === "win32")(
         root,
         baseCommit,
         buildCacheInputs,
-        previous: { ...previous, changedPaths },
+        previous: {
+          compressed: zstdCompressSync(Buffer.from(previous.rawManifest)),
+          manifestRef: previous.manifestRef,
+          changedPaths,
+        },
       });
       expect(captured, `round ${round}`).toEqual(await fullCapture());
       expect(captured.manifestRef).toBe(`sha256:${sha256(captured.rawManifest)}`);

@@ -94,13 +94,14 @@ export async function executeWorkspaceManifestComputation(
   switch (command.type) {
     case "workspace.manifest.template": {
       const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
-      const input = decodeManifestValue(command);
+      const input = command.input;
       const previous = input.previous;
       const entries = new Map(
         previous
-          ? parseWorkerWorkspaceManifest(previous.rawManifest, previous.manifestRef).entries.map(
-              (entry) => [entry.path, entry] as const,
-            )
+          ? parseWorkerWorkspaceManifest(
+              zstdDecompressSync(previous.compressed).toString("utf8"),
+              previous.manifestRef,
+            ).entries.map((entry) => [entry.path, entry] as const)
           : [],
       );
       const changed = new Set(previous?.changedPaths);

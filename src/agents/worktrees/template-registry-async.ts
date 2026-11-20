@@ -219,14 +219,9 @@ function invalidateTemplateManifest(id: string): void {
   }
 }
 
-export async function readTemplateManifest(record: WorktreeTemplateRecord, policyKey: string) {
+export function readCompressedTemplateManifest(record: WorktreeTemplateRecord, policyKey: string) {
   const cached = templateManifests.get(templateManifestKey(record, policyKey));
-  return (
-    cached && {
-      rawManifest: (await decompressManifest(cached.compressed)).toString("utf8"),
-      manifestRef: cached.manifestRef,
-    }
-  );
+  return cached && { compressed: cached.compressed, manifestRef: cached.manifestRef };
 }
 
 /** Callers retain the immutable generation until capture settles, excluding retirement. */
@@ -251,10 +246,14 @@ export async function prepareTemplateManifest(
   }
   signal?.throwIfAborted();
   const prepared = (async () => {
-    const cached = await readTemplateManifest(record, policyKey);
-    signal?.throwIfAborted();
+    const cached = readCompressedTemplateManifest(record, policyKey);
     if (cached) {
-      return cached;
+      const rawManifest = (await decompressManifest(cached.compressed)).toString("utf8");
+      signal?.throwIfAborted();
+      return {
+        rawManifest,
+        manifestRef: cached.manifestRef,
+      };
     }
     const manifest = await capture();
     const compressed = await compressManifest(Buffer.from(manifest.rawManifest));

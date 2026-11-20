@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -38,6 +39,16 @@ const owner = { pid: 1, host: "synthetic-remote-owner", startedAt: null };
 const retain = (input: Parameters<typeof registry.retainTemplateReaderAsync>[1]) =>
   registry.retainTemplateReaderAsync(env, input, guard);
 const retire = () => retain({ id: template.id, key: "retire", owner, unpublish: true });
+
+function cachedManifest(record: WorktreeTemplateRecord, policy: string) {
+  const cached = registry.readCompressedTemplateManifest(record, policy);
+  return (
+    cached && {
+      rawManifest: zstdDecompressSync(cached.compressed).toString("utf8"),
+      manifestRef: cached.manifestRef,
+    }
+  );
+}
 
 function worker(databasePath?: string, revokeAtCommit = false) {
   const location = { env, path: databasePath };
@@ -209,12 +220,11 @@ it("reads absent templates without writer queueing and recovers on the first mut
 it("shares captures by generation, commit and policy, and forgets retired manifests", async () => {
   const document = { rawManifest: '{"entries":[]}', manifestRef: "sha256:synthetic" };
   const capture = vi.fn(async () => document);
-  const cached = (record = template, policy = "source-v1") =>
-    registry.readTemplateManifest(record, policy);
+  const cached = (record = template, policy = "source-v1") => cachedManifest(record, policy);
   const prepare = (record = template, policy = "source-v1") =>
     registry.prepareTemplateManifest(record, policy, capture);
   await reserve();
-  expect(await cached()).toBeUndefined();
+  expect(cached()).toBeUndefined();
   expect(await Promise.all([prepare(), prepare()])).toEqual([document, document]);
   for (const mismatch of [
     { id: "other" },
@@ -222,21 +232,21 @@ it("shares captures by generation, commit and policy, and forgets retired manife
     { createdAt: 11 },
     { sourceCommit: "b".repeat(40) },
   ]) {
-    expect(await cached({ ...template, ...mismatch })).toBeUndefined();
+    expect(cached({ ...template, ...mismatch })).toBeUndefined();
   }
-  expect(await cached(template, "other")).toBeUndefined();
+  expect(cached(template, "other")).toBeUndefined();
   await prepare(template, "other");
   await prepare();
   expect(capture).toHaveBeenCalledTimes(2);
-  expect(await cached()).toEqual(document);
+  expect(cached()).toEqual(document);
   await ready(template.id, 20);
   await retire();
-  expect(await cached()).toBeUndefined();
-  expect(await cached(template, "other")).toBeUndefined();
+  expect(cached()).toBeUndefined();
+  expect(cached(template, "other")).toBeUndefined();
   await release("retire");
   await prepare();
   await remove(template.id);
-  expect(await cached()).toBeUndefined();
+  expect(cached()).toBeUndefined();
   await expect(
     registry.prepareTemplateManifest(template, "source-v1", async () => {
       throw new Error("capture failed");
@@ -289,11 +299,11 @@ it("evicts the least recently used compressed manifest when the byte budget fill
   for (const record of records.slice(0, 2)) {
     await registry.prepareTemplateManifest(record, "policy", async () => document);
   }
-  expect(await registry.readTemplateManifest(records[0]!, "policy")).toEqual(document);
+  expect(cachedManifest(records[0]!, "policy")).toEqual(document);
   await registry.prepareTemplateManifest(records[2]!, "policy", async () => document);
-  expect(await registry.readTemplateManifest(records[1]!, "policy")).toBeUndefined();
-  expect(await registry.readTemplateManifest(records[0]!, "policy")).toEqual(document);
-  expect(await registry.readTemplateManifest(records[2]!, "policy")).toEqual(document);
+  expect(cachedManifest(records[1]!, "policy")).toBeUndefined();
+  expect(cachedManifest(records[0]!, "policy")).toEqual(document);
+  expect(cachedManifest(records[2]!, "policy")).toEqual(document);
   for (const record of records) {
     await remove(record.id);
   }
@@ -356,7 +366,7 @@ it("rolls back ready publication when custody is revoked at worker commit", asyn
     ),
   ).rejects.toThrow("allocation lease lost");
   expect(await read()).toEqual(published());
-  expect(await registry.readTemplateManifest(template, "policy")).toEqual(document);
+  expect(cachedManifest(template, "policy")).toEqual(document);
   expect(await registry.readTemplateAsync(env, staged.cacheKey)).toEqual(staged);
   expect(
     await registry.markTemplateReadyAsync(env, staged.id, 30, guard, {
@@ -365,7 +375,7 @@ it("rolls back ready publication when custody is revoked at worker commit", asyn
     }),
   ).toBe(true);
   expect(await read()).toEqual({ ...published(staged, 30), cacheKey: template.cacheKey });
-  expect(await registry.readTemplateManifest(template, "policy")).toBeUndefined();
+  expect(cachedManifest(template, "policy")).toBeUndefined();
   expect(await registry.readTemplateAsync(env, staged.cacheKey)).toBeUndefined();
   expect(await registry.readTemplateAsync(env, `retired:${template.id}`)).toEqual({
     ...template,

@@ -270,11 +270,17 @@ export async function captureInitialLocalWorkspaceManifest(params: WorkspaceCapt
 
 /** Only the template owner supplies a previous generation after validating immutable source. */
 export async function captureTemplateWorkspaceManifest(
-  input: WorkspaceManifestValueInputs["workspace.manifest.template"],
+  input: WorkspaceManifestComputationOperations["workspace.manifest.template"]["input"],
   signal?: AbortSignal,
   idleIoPriority?: boolean,
 ) {
-  return await computeValue("workspace.manifest.template", input, signal, idleIoPriority);
+  // Keep the retained inventory compressed until the worker consumes it.
+  return await computeWorkspaceManifest(
+    { type: "workspace.manifest.template", input },
+    signal,
+    undefined,
+    idleIoPriority,
+  );
 }
 
 export async function captureWorkspaceManifestReference(params: WorkspaceCaptureArguments) {

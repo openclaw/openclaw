@@ -21,7 +21,7 @@ import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { prepareWorktreeTemplate } from "../../agents/worktrees/template-cache.js";
 import {
-  readTemplateManifest,
+  readCompressedTemplateManifest,
   prepareTemplateManifest,
 } from "../../agents/worktrees/template-registry-async.js";
 import type { WorktreeTemplateRecord } from "../../agents/worktrees/template-registry.js";
@@ -198,7 +198,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
           previousGeneration &&
           changedPaths &&
           !changedPaths.some((entry) => path.posix.basename(entry) === ".gitattributes") &&
-          (await readTemplateManifest(previousGeneration, policyKey));
+          readCompressedTemplateManifest(previousGeneration, policyKey);
         return await timeWorktreePreparationPhase("snapshot", () =>
           captureTemplateWorkspaceManifest(
             {
