@@ -343,6 +343,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
         onBack={props.onBack}
         icon={
           <PluginArtTile
+            neutralFallback
             registerIcon={props.registerIcon}
             slug={plugin().id}
             name={plugin().name}

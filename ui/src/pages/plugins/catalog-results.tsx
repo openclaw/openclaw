@@ -91,6 +91,7 @@ function CatalogIcon(props: {
   );
   return (
     <PluginArtTile
+      neutralFallback
       registerIcon={props.state.registerIcon}
       slug={props.plugin.local.pluginId ?? props.plugin.id}
       name={props.plugin.catalog.name}

@@ -2840,3 +2840,25 @@
     padding-block: 6px;
   }
 }
+
+/* Plugins without an icon: the same quiet tile as a skill without one, holding the plug glyph. */
+.plugin-catalog-results--rows .plugins-tile--fallback.plugins-tile--neutral,
+.plugin-catalog-detail--rail
+  .plugin-catalog-detail__icon
+  > .plugins-tile--fallback.plugins-tile--neutral {
+  background: var(--card);
+  color: var(--muted-strong);
+  text-shadow: none;
+}
+
+.plugin-catalog-results--rows .plugins-tile--neutral svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.6px;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__icon > .plugins-tile--neutral svg {
+  width: 26px;
+  height: 26px;
+  stroke-width: 1.5px;
+}

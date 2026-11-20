@@ -103,6 +103,7 @@ function CatalogDetailContent(props: {
       onBack={props.state.onBack}
       icon={
         <PluginArtTile
+          neutralFallback
           registerIcon={props.state.registerIcon}
           slug={plugin().id}
           name={plugin().catalog.name}
