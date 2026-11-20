@@ -75,6 +75,7 @@ function assertSandboxed(sandbox: string): string {
 // fails. Older releases are searched: chunk names are hashed and export aliases
 // minified, but function declarations keep source names (also in whitespace-minified
 // chunks, since 2026.11.10-beta.1). Find the chunk that declares and exports one.
+// Remove the search once every tagged release ships the stable entries.
 const chunks = fs
   .readdirSync(dist)
   .filter((file) => file.endsWith(".mjs"))
