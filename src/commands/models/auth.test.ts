@@ -600,20 +600,57 @@ it("does not promote a login profile when protected storage rejects", async () =
   expectNoCalls(mocks.promoteAuthProfileInOrder, mocks.updateConfig, mocks.callGateway);
 });
 
-it("forwards --yes as overwriteExisting to the provider login method", async () => {
+it("replaces the saved Copilot credential when --yes re-runs login over an existing profile", async () => {
   useProvider("github-copilot", "GitHub Copilot");
+  const existing = tokenProfile("github-copilot:github", "github-copilot", "synthetic-old-token");
+  const replacement = tokenProfile(
+    "github-copilot:github",
+    "github-copilot",
+    "synthetic-new-token",
+  );
+  mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+    version: 1,
+    profiles: { "github-copilot:github": existing.credential },
+  });
+  // Model the Copilot reuse decision at the provider boundary: --yes skips the
+  // "re-run login?" confirmation and runs the device flow, while without it the
+  // confirmation default retains the stored credential.
+  runProviderAuth.mockImplementation(async (ctx) => {
+    const stored =
+      ctx.existingProfiles?.find((profile) => profile.profileId === existing.profileId) ?? existing;
+    return { profiles: [ctx.opts?.overwriteExisting ? replacement : stored] };
+  });
 
   await loginCommand({ provider: "github-copilot", yes: true });
 
-  expect(runProviderAuth.mock.calls[0]?.[0].opts).toEqual({ overwriteExisting: true });
+  expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledWith(
+    expect.objectContaining({ profiles: [replacement] }),
+  );
 });
 
-it("leaves provider login opts unset without --yes", async () => {
+it("keeps the saved Copilot credential when re-login runs without --yes", async () => {
   useProvider("github-copilot", "GitHub Copilot");
+  const existing = tokenProfile("github-copilot:github", "github-copilot", "synthetic-old-token");
+  const replacement = tokenProfile(
+    "github-copilot:github",
+    "github-copilot",
+    "synthetic-new-token",
+  );
+  mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+    version: 1,
+    profiles: { "github-copilot:github": existing.credential },
+  });
+  runProviderAuth.mockImplementation(async (ctx) => {
+    const stored =
+      ctx.existingProfiles?.find((profile) => profile.profileId === existing.profileId) ?? existing;
+    return { profiles: [ctx.opts?.overwriteExisting ? replacement : stored] };
+  });
 
   await loginCommand({ provider: "github-copilot" });
 
-  expect(runProviderAuth.mock.calls[0]?.[0].opts).toBeUndefined();
+  expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledWith(
+    expect.objectContaining({ profiles: [existing] }),
+  );
 });
 
 it.each([
