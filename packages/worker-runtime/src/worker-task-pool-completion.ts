@@ -1,6 +1,7 @@
 import { channel as createDiagnosticsChannel } from "node:diagnostics_channel";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { WorkerComputePermit } from "./worker-task-capacity.js";
+import { workerTaskRetirementError, workerTaskUnavailableError } from "./worker-task-error.js";
 import { joinOwnedWorkerTasks } from "./worker-task-pool-owned.js";
 import type { Task, WorkerTaskPoolDispatch } from "./worker-task-pool.types.js";
 
@@ -49,39 +50,80 @@ export function createWorkerTaskCompletion<Input, Output>(
   completion: WorkerTaskCompletion<Input, Output>,
   error?: Error,
   value?: Output,
-): () => void {
+): { complete: () => void; resolveFailure?: () => Error } {
+  const slot = task.slot;
+  const native = slot?.native;
+  const channelFailure = native?.taskChannelFailure;
+  // Task-port loss precedes the supervisor's error/exit on a separate channel.
+  // Retire normally, but choose the caller's failure only after the native join.
+  const resolveFailure =
+    slot &&
+    native &&
+    channelFailure &&
+    error &&
+    (error === channelFailure || error.cause === channelFailure)
+      ? () => {
+          const failure = native.terminalFailure;
+          if (failure) {
+            return workerTaskUnavailableError(slot, String(failure), failure, task);
+          }
+          return native.executionStopped
+            ? workerTaskUnavailableError(
+                slot,
+                `${channelFailure.message}; worker exited with code ${native.executionExitCode}`,
+                channelFailure,
+                task,
+              )
+            : error;
+        }
+      : undefined;
+  if (task.owner && resolveFailure) {
+    task.owner.onCloseError = (failure) =>
+      task.reject(workerTaskRetirementError(resolveFailure(), failure));
+  }
   const preparation = task.owner ? undefined : task.preparation;
   let settlementError: Error | undefined;
   const complete = () => {
     if (!task.owner && !preparation) {
       completion.releaseAdmission(task);
     }
-    return completeWorkerTask(task, completion, error, value, settlementError);
+    const failure = resolveFailure?.() ?? error;
+    try {
+      return completeWorkerTask(task, completion, failure, value, settlementError);
+    } finally {
+      if (task.owner && resolveFailure) {
+        task.reject(failure);
+      }
+    }
   };
   if (!preparation) {
-    return complete;
+    return { complete, resolveFailure };
   }
   const cleanup = Promise.withResolvers<void>();
   completion.preparationCleanups.set(task, cleanup.promise);
   // A failed callback stays admission-bounded until close observes its outcome.
   void cleanup.promise.catch(() => undefined);
-  return () => {
-    // The native receipt precedes the result even while preparation retains input.
-    settlementError = task.runInContext(() => notifyExecutionSettled(task));
-    if (error) {
-      task.reject(error);
-    }
-    void preparation.promise
-      .then(() => {
-        const failure = complete();
-        if (failure) {
-          throw failure;
-        }
-        completion.preparationCleanups.delete(task);
-        completion.releaseAdmission(task);
-        cleanup.resolve();
-      })
-      .catch(cleanup.reject);
+  return {
+    resolveFailure,
+    complete: () => {
+      // Report retirement and reject independently of the input factory.
+      // Preparation cleanup below still owns input and admission.
+      settlementError = task.runInContext(() => notifyExecutionSettled(task));
+      if (error) {
+        task.reject(resolveFailure?.() ?? error);
+      }
+      void preparation.promise
+        .then(() => {
+          const failure = complete();
+          if (failure) {
+            throw failure;
+          }
+          completion.preparationCleanups.delete(task);
+          completion.releaseAdmission(task);
+          cleanup.resolve();
+        })
+        .catch(cleanup.reject);
+    },
   };
 }
 

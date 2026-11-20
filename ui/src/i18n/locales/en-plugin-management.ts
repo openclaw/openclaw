@@ -480,6 +480,7 @@ const enPluginManagement = {
     detailType: "Type",
     detailSecurity: "Security audit",
     detailSecurityAudit: "View security audit",
+    detailSecurityInfo: "ClawHub checks each release for vulnerabilities and agentic risk.",
     detailNoReadme: "This plugin does not include a README.",
     detailNoSkills: "This plugin does not declare any skills.",
     detailNoConfiguration: "This plugin does not declare any configuration fields.",

@@ -180,14 +180,14 @@ export type CreateGatewaySessionParams = {
   worktree?: boolean;
   fork?: boolean;
   forkFrom?: "last-completed";
-  /** Live requester capability for an agent's current-transcript fork; never a wire parameter. */
-  activeParentFork?: { requesterSessionKey: string; assertCurrent: () => void };
-  /** Live spawn-owned selection; public model inputs remain raw. */
-  preparedModelSelection?: { ref: ModelRef; assertCurrent: () => void };
-  /** Effective host-prepared spawn mode, bound to the live requester until commit. */
+  /** Trusted requester for an agent's current-transcript fork; never a wire parameter. */
+  activeParentFork?: { requesterSessionKey: string; assertCurrent?: () => void };
+  /** Trusted spawn-owned selection; public model inputs remain raw. */
+  preparedModelSelection?: { ref: ModelRef; assertCurrent?: () => void };
+  /** Effective host-prepared spawn mode, retaining any caller assertion until commit. */
   preparedPermissionSelection?: {
     mode: NonNullable<SessionEntry["permissionMode"]>;
-    assertCurrent: () => void;
+    assertCurrent?: () => void;
   };
   /**
    * Controls whether a distinct child terminates its parent. Omission preserves

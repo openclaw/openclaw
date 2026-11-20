@@ -456,9 +456,9 @@ export class ManagedWorktreeService {
       configuredRoot: this.getConfig?.().worktreeRoot,
       repository,
       gitInventory: params.gitInventory,
-      owner: params,
       suppliedName,
       suggestedName: params.suggestedName ?? inferredName,
+      worktreeId: publication.id,
     });
     await params.retainSources([destination.worktreePath]);
     const createdAt = Date.now();
@@ -882,7 +882,7 @@ export class ManagedWorktreeService {
         progress,
         policy: params,
         expiresBefore: now - IDLE_GC_MS,
-        classifyOwner: classification.readOwnerState,
+        ownerCensus: classification,
         signal: params.signal,
         assertCurrent,
         remove: (input) => this.remove({ ...input, retryPreserved: params.retryDeferred }),

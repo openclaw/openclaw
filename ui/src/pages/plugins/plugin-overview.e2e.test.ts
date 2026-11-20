@@ -515,6 +515,9 @@ describeControlUiE2e("Plugin overview", () => {
       "Tools",
       "MCP server",
     ]);
+    const skills = page.locator(".plugin-skills-section");
+    expect(await skills.textContent()).toContain("Calendar planning");
+    expect(await skills.textContent()).not.toMatch(/ClawHub|Version/);
     await page.getByRole("button", { name: /calendar_search/ }).click();
     await page.getByRole("dialog", { name: "calendar_search" }).waitFor();
     const preview = page.locator(".plugin-tool-preview");

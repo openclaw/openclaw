@@ -12,15 +12,10 @@ import {
   buildOpenAICodexLiveProviderConfig,
 } from "./test-support/live-catalog.test-support.js";
 
-// mock-isolation: these tests spy on global fetch for the model list; the npm Codex
-// version read is covered by openai-codex-discovery.test.ts.
-vi.mock("./codex-client-version.js", async (importOriginal) => {
-  const { BUNDLED_CODEX_VERSION } = await import("./test-support/codex-version.test-support.js");
-  return {
-    ...(await importOriginal<typeof import("./codex-client-version.js")>()),
-    resolveOpenAICodexClientVersion: async () => BUNDLED_CODEX_VERSION,
-  };
-});
+// mock-isolation: Registry lookup behavior is covered by openai-codex-discovery.test.ts.
+vi.mock("./codex-client-version.js", () => ({
+  resolveOpenAICodexClientVersion: async () => "0.169.0",
+}));
 
 const catalogContext = {
   config: { auth: { profiles: {} } },

@@ -56,7 +56,14 @@ export function memoryStore() {
           id: previous?.id ?? `profile:${input.accountId}`,
           displayName: previous?.displayName ?? input.name ?? null,
           email: input.email ?? previous?.email ?? null,
+          effectiveRole: previous?.effectiveRole,
         });
+      },
+      setRole: async (accountId: string, role: string, onlyIfUnassigned: boolean) => {
+        const profile = profiles.get(accountId);
+        if (profile && (!onlyIfUnassigned || !profile.effectiveRole)) {
+          profile.effectiveRole = role;
+        }
       },
       read: async (accountIds: readonly string[]) =>
         Object.fromEntries(

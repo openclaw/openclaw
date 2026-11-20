@@ -116,34 +116,34 @@ export type SessionActorPendingFinalDelivery = NonNullable<SessionEntry["pending
   deliveries: NonNullable<NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"]>;
 };
 
+/** Input turns can select current lifecycle inside the owner; other mutations need a guard. */
+type SessionActorInputTurn =
+  | { turn: SessionTurnPlan; expectedState?: SessionTranscriptTurnExpectedState }
+  | { turn?: never; expectedState: SessionTranscriptTurnExpectedState };
+
 export type SessionActorPhaseInputs = {
   acceptInput: {
-    expectedState: SessionTranscriptTurnExpectedState;
     lifecycle: SessionTranscriptTurnLifecyclePatch;
-  } & (
-    | {
-        pending: Extract<PendingInputMutation, { kind: "stage" }>;
-        /** Admission and adoption may share a durable point only before an intervening effect. */
-        turn?: SessionTurnPlan;
-        /** A retry adopts canonical pending/transcript identity instead of appending twice. */
-        append?: SessionActorAppend;
-      }
-    | {
-        /** Transcript custody before ACK does not require a queued-input row. */
-        pending?: never;
-        turn: SessionTurnPlan;
-        append?: never;
-      }
-  );
+  } & SessionActorInputTurn &
+    (
+      | {
+          pending: Extract<PendingInputMutation, { kind: "stage" }>;
+          /** A retry adopts canonical pending/transcript identity instead of appending twice. */
+          append?: SessionActorAppend;
+        }
+      | {
+          /** Transcript custody before ACK does not require a queued-input row. */
+          pending?: never;
+          turn: SessionTurnPlan;
+          append?: never;
+        }
+    );
   adoptRun: {
     sessionId: string;
-    expectedState: SessionTranscriptTurnExpectedState;
     lifecycle: SessionTranscriptTurnLifecyclePatch;
     /** Explicit writer adoption; omission preserves the existing lifecycle-only command. */
     runId?: string;
-    /** Consume accepted input and adopt its lifecycle at the same durable point. */
-    turn?: SessionTurnPlan;
-  };
+  } & SessionActorInputTurn;
   appendToolResult:
     | { turn: SessionTurnPlan; append?: never }
     | { append: SessionActorAppend; turn?: never };

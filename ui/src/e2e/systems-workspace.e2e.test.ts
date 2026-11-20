@@ -188,7 +188,7 @@ suite.define(() => {
           );
           await writeFile(`${proofDir}/${name}.png`, frame.png);
         };
-        const navigate = async (path: string) => {
+        const navigate = async (path: "activity" | "systems") => {
           await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
           if (path === "activity") {
             // Activity heads the Users section; on a phone People only opens its list.
@@ -198,6 +198,9 @@ suite.define(() => {
           }
           await page.locator("[data-rail-more]").click();
           await page.locator(`.sidebar-pages-menu a[href$="/${path}"]`).click();
+          await waitForControlUiRoute(page, { routeId: path });
+          // Systems opens in the phone drawer; dismiss it to measure the page itself.
+          await page.keyboard.press("Escape");
         };
         await page.goto(suite.server.baseUrl + "systems");
         await page

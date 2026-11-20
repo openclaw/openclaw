@@ -112,8 +112,10 @@ describe("steering input custody", () => {
             ).map((phase) => `chat.send.detail.${phase}`),
           ),
         );
-        expect(names).toContain("chat.send.detail.session.actor.command.queue");
-        expect(names).toContain("chat.send.detail.session.actor.command.execute");
+        if (active) {
+          expect(names).toContain("chat.send.detail.session.actor.command.queue");
+          expect(names).toContain("chat.send.detail.session.actor.command.execute");
+        }
       } finally {
         stop();
         setDiagnosticsEnabledForProcess(previous);

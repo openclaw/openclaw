@@ -50,7 +50,7 @@ afterEach(() => {
 });
 
 it.each(["allowed", "revoked", "replaced"] as const)(
-  "admits a delayed ACP result only under current parent custody: %s",
+  "admits delayed ACP results under current custody and records refused returns: %s",
   async (boundary) => {
     await withOpenClawTestState(
       { scenario: "minimal", prepareProfileCatalog: true },

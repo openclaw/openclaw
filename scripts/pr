@@ -289,7 +289,7 @@ pr_read_current_workflow_request "$@" || {
 pr_batch_wrapper_git() {
   node --input-type=module - "$GIT_EXEC" "$@" <<'EOF_WRAPPER_GIT'
 import { spawnSync } from "node:child_process";
-import { fstatSync, lstatSync, readFileSync, readSync, realpathSync } from "node:fs";
+import { fstatSync, lstatSync, readFileSync, readSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 const [binary, operation, repository, revision, ...paths] = process.argv.slice(2);
@@ -692,7 +692,7 @@ try {
       const [head, anchor] = rows.slice(index * 2, index * 2 + 2);
       return !oid.test(head) || !oid.test(anchor) || head !== anchor;
     }).join("\n"));
-  } else if (operation === "verify") {
+  } else if (operation === "verify" || operation === "bootstrap-verify") {
     const [directory, ...components] = paths;
     const listing = git(repository, ["ls-tree", "-r", "-z", "--full-tree", revision, "--", ...components]);
     const text = listing.toString("utf8");
@@ -724,6 +724,18 @@ try {
       expected.push(hash);
     }
     if (components.some(path => !names.has(path) && !directories.has(path))) throw new Error("Incomplete anchor components");
+    if (operation === "bootstrap-verify") {
+      const visit = (parent, prefix = "") => {
+        for (const entry of readdirSync(parent, { withFileTypes: true })) {
+          const name = prefix + entry.name;
+          if (entry.isDirectory() && directories.has(name)) visit(join(parent, entry.name), name + "/");
+          else if (!entry.isFile() || !names.has(name) && name !== "source.json") {
+            throw new Error("Unexpected bootstrap entry");
+          }
+        }
+      };
+      visit(directory);
+    }
     // Git's stdin path quoting uses C/octal escapes, not JSON's Unicode escapes.
     const input = [...names].map(path => '"' + join(directory, path).replace(/[\x00-\x1f\x7f\\"]/g, char =>
       char === "\\" || char === '"' ? "\\" + char : "\\" + char.charCodeAt(0).toString(8).padStart(3, "0"),
@@ -937,6 +949,22 @@ pr_prepare_bootstrap() {
     printf '%s' "$record" > "$pr_bootstrap_root/source.json" || return 1
     chmod 400 "$pr_bootstrap_root/source.json" || return 1
     pr_bootstrap_revision="$revision"
+  elif [ ! -e "$pr_bootstrap_root/scripts/pr-lib/export-tree.py" ] &&
+    [ ! -L "$pr_bootstrap_root/scripts/pr-lib/export-tree.py" ]; then
+    # Older parents supplied the complete bootstrap except its new exporter.
+    # Preserve every existing byte; only this authenticated trust-root expansion
+    # may be added before the current child verifies the complete closure.
+    selection=$(pr_batch_wrapper_git bootstrap-source "$canonical_repo_root" \
+      "$pr_bootstrap_root/source.json" "${2:-${PR_WORKFLOW_SOURCE_REVISION:-}}") || return 1
+    IFS=$'\t' read -r revision record <<< "$selection"
+    [ -z "$pr_bootstrap_revision" ] || [ "$revision" = "$pr_bootstrap_revision" ] || return 1
+    pr_batch_wrapper_git bootstrap-owner "$canonical_repo_root" "$anchor" "$$" || return 1
+    pr_batch_wrapper_git bootstrap-verify "$canonical_repo_root" "$revision" \
+      "$pr_bootstrap_root" "${pr_bootstrap_components[@]}" || return 1
+    pr_batch_wrapper_git verify "$canonical_repo_root" "$revision" "$script_parent_dir/.." \
+      scripts/pr-lib/export-tree.py || return 1
+    python3 -I -B "$script_parent_dir/pr-lib/export-tree.py" "$GIT_EXEC" "$canonical_repo_root" \
+      "$revision" "$pr_bootstrap_root" scripts/pr-lib/export-tree.py || return 1
   fi
   pr_verify_bootstrap || {
     echo "Bootstrap helper qualification failed; retaining $anchor." >&2

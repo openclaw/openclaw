@@ -34,7 +34,6 @@ import { readPendingWorktrees } from "./pending-slots.js";
 import * as registry from "./registry.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { createWithWorktreeAllocation } from "./service-preparation.js";
-import * as preparation from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -90,49 +89,26 @@ describe("managed worktree pending slots", () => {
     return waiting.promise;
   }
 
-  it("retries an inferred name published by another owner after destination planning", async ({
-    signal,
-  }) => {
-    const planned = createDeferred();
-    const release = createDeferred();
-    const prepare = preparation.prepareWorktreeDestination;
-    vi.spyOn(preparation, "prepareWorktreeDestination").mockImplementation(async (params) => {
-      const destination = await prepare(params);
-      if (params.owner.ownerId === "second" && destination.name === "release-planning") {
-        planned.resolve();
-        await withinTest(release.promise, signal);
-      }
-      return destination;
-    });
-    const second = service.create({
-      repoRoot,
-      suggestedName: "release-planning",
-      ownerKind: "session",
-      ownerId: "second",
-      signal,
-    });
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(planned.promise, second, "Second destination was not planned"),
-        signal,
-      );
-      const first = await service.create({
+  it("gives concurrent owners with the same title distinct names", async ({ signal }) => {
+    const create = (ownerId: string) =>
+      service.create({
         repoRoot,
         suggestedName: "release-planning",
         ownerKind: "session",
-        ownerId: "first",
+        ownerId,
         signal,
       });
-      expect(first.name).toBe("release-planning");
-      expect(await readPendingWorktrees(env)).toEqual([]);
-      release.resolve();
-      expect(await second).toMatchObject({ name: "release-planning-2", ownerId: "second" });
-      expect(await service.listRegistryRecords()).toHaveLength(2);
-      expect(await readPendingWorktrees(env)).toEqual([]);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([second]);
-    }
+
+    const [first, second] = await withinTest(
+      Promise.all([create("first"), create("second")]),
+      signal,
+    );
+
+    expect(first.name).toMatch(/^release-planning-[0-9a-f]{6}$/);
+    expect(second.name).toMatch(/^release-planning-[0-9a-f]{6}$/);
+    expect(first.name).not.toBe(second.name);
+    expect(await service.listRegistryRecords()).toHaveLength(2);
+    expect(await readPendingWorktrees(env)).toEqual([]);
   });
 
   async function holdLease(scope: string, key: string) {
@@ -902,7 +878,7 @@ describe("managed worktree pending slots", () => {
         release.resolve();
         await expect(withinTest(crashed, signal)).rejects.toThrow(failure.message);
         const replacement = await withinTest(retry, signal);
-        expect(replacement.name).toBe("crashed-2");
+        expect(replacement.name).toMatch(/^crashed-[0-9a-f]{6}$/);
         expect(await fs.readFile(path.join(replacement.path, "README.md"), "utf8")).toBe("base\n");
         expect(await fs.readFile(path.join(record.path, "partial.txt"), "utf8")).toBe(
           "uncertain native output\n",
