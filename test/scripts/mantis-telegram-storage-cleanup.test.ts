@@ -128,6 +128,7 @@ beforeEach(() => {
     Object.defineProperty(process, name, { configurable: true, value: () => 1000 });
   }
   vi.stubEnv("MANTIS_PODMAN_ROOT", fixture.root);
+  vi.stubEnv("CONTAINERS_STORAGE_CONF", undefined);
 });
 afterEach(() => {
   process.argv = originalArgv;
@@ -191,6 +192,17 @@ describe("interrupted mounted storage initialization", () => {
     );
     expectNoEffects("podman info");
   });
+  it.each(["", "/other/storage.conf"])(
+    "rejects the rootless storage override before inspecting Podman (%s)",
+    async (override) => {
+      fixture.mode = "ready";
+      process.argv = [process.execPath, "fixture"];
+      const storage = await loadStorage();
+      vi.stubEnv("CONTAINERS_STORAGE_CONF", override);
+      expect(() => storage.assertPodmanProofStorage()).toThrow("Unset CONTAINERS_STORAGE_CONF");
+      expectNoEffects("podman info");
+    },
+  );
   it("cleans up ready storage when Podman omits the rootless network field", async () => {
     fixture.mode = "ready";
     fixture.networkCommand = undefined;
