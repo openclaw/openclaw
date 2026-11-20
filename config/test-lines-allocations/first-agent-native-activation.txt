@@ -4,6 +4,7 @@
 # models.authLogin entrypoints. Existing installs, CLI activation and configured primaries
 # must stay unprovisioned, and the read-only handoff target must fail open (unknown agent,
 # unreadable config, utility-only) at the real Gateway boundary. Browser coverage keeps the
-# unsent, focused starter handoff and the ordinary-chat fallback.
-# Measured net test growth over main: 473; allocation covers the 73-line excess.
-73
+# unsent, focused starter handoff and the ordinary-chat fallback. Optional check-in and
+# post-publication bookkeeping failures must not fail an applied setup.
+# Measured net test growth over main: 478; allocation covers the 78-line excess.
+78
