@@ -71,6 +71,8 @@ function check(result: Result, details: object, includes: string[] = [], exclude
     expect(text(result)).not.toContain(value);
   }
 }
+const manualCollectionFollowUp =
+  "Automatic completion wake is unavailable after ending this turn. If the task needs this result, use poll with a timeout to collect it before ending the turn, unless another continuation is already arranged.";
 const tick = () => vi.advanceTimersByTimeAsync(250);
 function onExit(session: ProcessSession) {
   const remove = vi.fn(() => true);
@@ -201,11 +203,11 @@ test("sorts by start time then registration order across terminal transitions", 
     expect(result.details).toMatchObject({
       sessions: expected.map((sessionId) => ({ sessionId })),
     });
-    expect(
-      text(result)
-        .split("\n")
-        .map((line) => line.split(" ")[0]),
-    ).toEqual(expected);
+    const [rows = "", ...followUp] = text(result).split("\n\n");
+    expect(rows.split("\n").map((line) => line.split(" ")[0])).toEqual(expected);
+    expect(followUp).toEqual(
+      sessions.some((session) => !session.exited) ? [manualCollectionFollowUp] : [],
+    );
   };
   for (const session of sessions) {
     await expectOrder();
@@ -294,9 +296,15 @@ test("capped stream output stays ordered, compact, and frozen through terminal d
   const omitted =
     "[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]\n\n";
   appendChunks();
-  expect(text(await call("log"))).toBe(discarded + "oe".repeat(1_500));
+  expect(text(await call("log"))).toBe(
+    discarded + "oe".repeat(1_500) + "\n\n" + manualCollectionFollowUp,
+  );
   expect(text(await poll(30_000))).toBe(
-    discarded + omitted + "oe".repeat(1_000) + "\n\nProcess still running.",
+    discarded +
+      omitted +
+      "oe".repeat(1_000) +
+      "\n\nProcess still running.\n\n" +
+      manualCollectionFollowUp,
   );
   expect(text(await poll())).not.toContain("earlier output is omitted");
   appendChunks();

@@ -88,7 +88,7 @@ describe("tool descriptions", () => {
     );
     expect(execTool.description).not.toContain("use cron instead");
     expect(processTool.description).not.toContain("scheduled follow-ups");
-    expect(execTool.description).toContain("otherwise process confirms completion");
+    expect(execTool.description).toContain("otherwise process poll collects the result");
     expect(processTool.description).toContain("completion without auto-wake");
     expect(processTool.description).toContain("write, send-keys, submit, paste, kill");
   });
