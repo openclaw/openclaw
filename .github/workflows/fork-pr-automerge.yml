@@ -114,7 +114,7 @@ jobs:
             fi
 
             # A review approval is required in addition to CI checks.
-            approvals="$(gh api "repos/${REPO}/pulls/${pr}/reviews?per_page=100" --jq '[.[] | select(.state == "APPROVED")] | length')"
+            approvals="$(gh api "repos/${REPO}/pulls/${pr}/reviews?per_page=100" | jq --arg sha "$sha" '[.[] | select(.state == "APPROVED" and .commit_id == $sha)] | length')"
             if [ "${approvals}" -lt 1 ]; then
               echo "- **#${pr}** ${title} — held: requires at least one approval." >> "$GITHUB_STEP_SUMMARY"
               held=$((held + 1)); continue
