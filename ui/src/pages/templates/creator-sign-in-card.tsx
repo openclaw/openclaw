@@ -91,16 +91,16 @@ export function TemplateCreatorSignInCard(props: {
             fallback={
               <button
                 type="button"
-                class="btn primary chat-clawhub-card__sign-in"
-                data-alternate-label={t(
-                  pending() ? "templatesDraft.signIn" : "templatesDraft.signInCopyOpen",
-                )}
+                class="btn primary chat-clawhub-card__sign-in state-stack"
                 disabled={props.state.status === "starting"}
                 aria-busy={props.state.status === "starting" ? "true" : undefined}
                 onClick={(event) => void activate(event.currentTarget)}
               >
-                <span>
-                  {t(pending() ? "templatesDraft.signInCopyOpen" : "templatesDraft.signIn")}
+                <span aria-hidden={pending() ? "true" : undefined}>
+                  {t("templatesDraft.signIn")}
+                </span>
+                <span aria-hidden={pending() ? undefined : "true"}>
+                  {t("templatesDraft.signInCopyOpen")}
                 </span>
               </button>
             }

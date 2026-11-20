@@ -8,6 +8,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { projectAssistantDisplayContent } from "../../../../src/shared/assistant-display-content.js";
 import { resolveAssistantMessagePhase } from "../../../../src/shared/chat-message-content.js";
 import { t } from "../../i18n/index.ts";
+import { rememberLiveAutomationInjection } from "../../lib/chat/automation-creation-card.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
@@ -222,6 +223,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         (message) => readSessionMessageIdentity(message)?.id === injectedMessageId,
       )
     ) {
+      rememberLiveAutomationInjection(normalizedFinalMessage);
       reduceChatSessionProjection(state, {
         type: "messagePersisted",
         message: normalizedFinalMessage,

@@ -2,9 +2,12 @@ import { operatorScopeSatisfied } from "../../../../src/shared/operator-scope-co
 import type { CronJob } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
-import { profileDirectory } from "../../lib/profile-directory.ts";
+import { profileDirectory } from "../profile-directory.ts";
 
-export function canManageCronJob(gateway: ApplicationContext["gateway"], job: CronJob): boolean {
+export function canManageCronJob(
+  gateway: ApplicationContext["gateway"],
+  job: Pick<CronJob, "ownerProfileId">,
+): boolean {
   const snapshot = gateway.snapshot;
   if (readGatewayOperatorAccess(snapshot).canAdmin) {
     return true;
