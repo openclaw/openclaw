@@ -1095,6 +1095,8 @@ export const zh_CN = {
     channelsPrimer: {
       approveWith: "批准配对：{command}",
       docs: "文档：{link}",
+      credentialStorage:
+        "直接输入受支持的凭据会将其保存到共享密钥库。Gateway 运行时，从 CLI 执行此操作需要本地 Gateway 管理员权限。如果没有该权限，请在频道支持的情况下使用现有的密钥引用，或先停止 Gateway 再输入凭据。",
       inboundSafety: "入站 DM 安全默认使用配对：未知发送者会先获得配对码。",
       multiUserDm:
         '多用户 DM 请隔离会话：{command}（多账号频道也可用 "per-account-channel-peer"）。',

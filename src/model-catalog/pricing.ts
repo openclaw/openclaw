@@ -9,7 +9,7 @@ import {
 } from "../agents/model-ref-shared.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
+import { createInstalledPluginEnabledPredicate } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
@@ -86,11 +86,10 @@ function activeManifestRegistry(
   if (config.plugins?.enabled === false) {
     return { plugins: [], diagnostics: [] };
   }
+  const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, config);
   return {
     diagnostics: snapshot.manifestRegistry.diagnostics,
-    plugins: snapshot.manifestRegistry.plugins.filter((plugin) =>
-      isInstalledPluginEnabled(snapshot.index, plugin.id, config),
-    ),
+    plugins: snapshot.manifestRegistry.plugins.filter((plugin) => isEnabled(plugin.id)),
   };
 }
 

@@ -549,8 +549,8 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
     // A live inventory owns retention across account changes; saved rows only seed cold owners.
     const excludeGeneratedProviderIds = params.ownedCatalogProviders?.get(facts.input) ?? [];
     const { contents: modelsJsonContents } = await captureModelsJsonSource(facts.input.agentDir);
-    // Signed-in providers browse known manifest rows until their account listing publishes. Scope
-    // by current credentials: config reloads (API-key sign-in rewrites auth.profiles) leave
+    // Signed-in providers whose manifest is their list browse it at once. Scope by current
+    // credentials: config reloads (API-key sign-in rewrites auth.profiles) leave
     // credential-only providers out of facts.providerIds.
     const staticProviderConfigs = {
       ...loadManifestModelProviderConfigs({
