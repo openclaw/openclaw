@@ -2,7 +2,6 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import type { AgentJobTerminalSnapshot } from "../../../../src/gateway/agent-turn/types.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { runQaGatewayTestFixture } from "../../../helpers/qa-gateway-test-lifetime.js";
@@ -142,9 +141,10 @@ it.skipIf(process.platform === "win32")(
             deliver: false,
             idempotencyKey: runId,
           });
-          let result: AgentJobTerminalSnapshot;
+          // agent.wait reports queue admission as "pending" before the terminal result.
+          let result: { status: string };
           do {
-            result = await operator!.request<AgentJobTerminalSnapshot>(
+            result = await operator!.request<{ status: string }>(
               "agent.wait",
               { runId, timeoutMs: PROOF_TIMEOUT_MS },
               { timeoutMs: PROOF_TIMEOUT_MS + 5000 },
