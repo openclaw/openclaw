@@ -48,7 +48,7 @@ export const EXEC_NO_OUTPUT_PLACEHOLDER = "(no output)";
 // Keep launch and later process observations consistent without naming an aliased tool.
 export const EXEC_MANUAL_COLLECTION_FOLLOW_UP =
   "Automatic completion wake is unavailable after ending this turn. If the task needs this result, use poll with a timeout to collect it before ending the turn, unless another continuation is already arranged.";
-export const MAX_EXEC_YIELD_MS = 120_000;
+const MAX_EXEC_YIELD_MS = 120_000;
 const BACKGROUND_EXEC_FOLLOW_UP =
   "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) to control it. New output while it runs does not start another turn. Ending the turn does not stop it; use process kill when it is no longer needed. This is not a saved, restartable automation.";
 /** One waiting recipe for every surface that tells the agent how to wait. */
@@ -75,7 +75,7 @@ export function hasExitWake(session: ExitWakeFacts): boolean {
 }
 
 /** Exit-wake fact plus the condition for ending the turn, or undefined when the exit starts no turn. */
-export function describeExitWake(session: ExitWakeFacts): string | undefined {
+function describeExitWake(session: ExitWakeFacts): string | undefined {
   return hasExitWake(session)
     ? "Its exit wakes this conversation with the result, silent success included. If only waiting remains, end this turn"
     : undefined;
