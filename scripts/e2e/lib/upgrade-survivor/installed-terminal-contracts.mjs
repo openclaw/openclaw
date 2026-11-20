@@ -287,8 +287,13 @@ export function readInstalledTerminalMetadata(root, identity) {
   };
 }
 
-/** Host-only: the established packaging parser supplies edges, never a new resolver. */
-export async function prepareInstalledTerminalApplication(root, identity) {
+/** Host-only collection against explicit contracts; fixed application admission stays below. */
+export async function collectInstalledTerminalApplication(
+  root,
+  identity,
+  contracts,
+  schemaDigests,
+) {
   const { collectPackageDistImports } = await import("../../../lib/package-dist-imports.mjs");
   let bytesRead = 0;
   const sources = new Map();
@@ -312,8 +317,32 @@ export async function prepareInstalledTerminalApplication(root, identity) {
     sources.set(relative, source);
     return source;
   };
+  const packageJsons = new Map();
+  const packageScopes = new Set();
+  const scopesFor = (file) => {
+    assert(!path.posix.isAbsolute(file) && !file.split("/").includes(".."));
+    // Match Node's nearest package scope, including an absent type. Reading only
+    // the root manifest can misclassify a verified nested CommonJS package.
+    let directory = path.posix.dirname(file);
+    while (true) {
+      const relative = path.posix.join(directory, "package.json");
+      if (!packageScopes.has(relative)) {
+        const stat = fs.lstatSync(path.resolve(root, relative), { throwIfNoEntry: false });
+        if (stat) {
+          packageJsons.set(relative, read(relative));
+        } else {
+          assert(!identity.files[relative], "Application package scope disappeared");
+        }
+        packageScopes.add(relative);
+      }
+      if (directory === ".") {
+        return packageJsons;
+      }
+      directory = path.posix.dirname(directory);
+    }
+  };
   const roles = {};
-  for (const [role, contract] of Object.entries(applications)) {
+  for (const [role, contract] of Object.entries(contracts)) {
     assert.equal(identity.files[contract.entry]?.sha256, contract.entrySha256);
     const pending = [contract.entry, ...Object.keys(contract.additionalRoots ?? {})];
     for (const [file, sha256] of Object.entries(contract.additionalRoots ?? {})) {
@@ -333,7 +362,7 @@ export async function prepareInstalledTerminalApplication(root, identity) {
       const observedCalls = new Set();
       collectPackageDistImports({
         files: [file],
-        packageJsons: new Map([["package.json", read("package.json")]]),
+        packageJsons: scopesFor(file),
         readText: read,
         onImportOccurrence(occurrence) {
           const eager = ["static-import", "static-export"].includes(occurrence.kind);
@@ -360,11 +389,16 @@ export async function prepareInstalledTerminalApplication(root, identity) {
     assert.equal(digest(JSON.stringify(files)), contract.sha256, `Unreviewed ${role} closure`);
     roles[role] = { sha256: contract.sha256, files };
   }
-  const assets = Object.entries(schemas).map(([name, sha256]) => {
+  const assets = Object.entries(schemaDigests).map(([name, sha256]) => {
     const relative = `dist/assets/sqlite-schema/sqlite-${name}-catalogs.json`;
     read(relative);
     assert.equal(identity.files[relative].sha256, sha256);
     return [relative, identity.files[relative].size, sha256];
   });
   return { roles, assets, metadata: readInstalledTerminalMetadata(root, identity) };
+}
+
+/** Admit only the reviewed emitted application and its complete selected closures. */
+export async function prepareInstalledTerminalApplication(root, identity) {
+  return collectInstalledTerminalApplication(root, identity, applications, schemas);
 }

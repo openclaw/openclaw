@@ -8,6 +8,7 @@ import { capturePackageTree } from "../../scripts/e2e/lib/upgrade-survivor/insta
 import {
   assertInstalledTerminalApplication,
   assertInstalledTerminalDependencyTree,
+  collectInstalledTerminalApplication,
   prepareInstalledTerminalApplication,
   readInstalledTerminalDependencyTree,
   readInstalledTerminalMetadata,
@@ -18,8 +19,9 @@ import {
   inspectInstalledTerminalDependencyNodes,
   type InstalledTerminalDependencyReference,
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-dependencies.mjs";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { writeJson } from "./upgrade-survivor-shard.test-support.js";
+import { runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -141,6 +143,42 @@ it("binds the fixed historical allowed closure independently of diagnostic overr
   );
 });
 
+it("binds the current CLI's complete reference including reviewed and source-locked alternatives", () => {
+  const output = path.join(dirs.make("installed-current-reference-"), "reference.json");
+  const result = runProcess(
+    resolveTestNodeExecPath(),
+    ["scripts/e2e/lib/upgrade-survivor/installed-terminal-reference.mts", "current", output],
+    { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: process.cwd() },
+    10_000,
+  );
+  expect(result.status, result.stderr).toBe(0);
+  const report = JSON.parse(fs.readFileSync(output, "utf8"));
+  const encoded = stableStringify(report.reference);
+  expect(report.sha256).toBe(hash(Buffer.from(encoded)));
+  const reference = readInstalledTerminalReference("current", encoded);
+  expect(reference.packages).toMatchObject({
+    "brace-expansion@5.0.13": {
+      resolution: {
+        integrity:
+          "sha512-Vh3dmFbc4wZeox7M9I/0L9GfFd83Su4+yCck/OF9Gi/P/dAHn0RT7X4K9R7gMNMhDck3DvhR6QXsnQdjjgwNvQ==",
+      },
+    },
+    "@acemir/cssom@0.9.33": {
+      resolution: {
+        integrity:
+          "sha512-52IMmrBsIsDZLp/KFM+KmaMLJ8GTj113K+iFGFCoOjstZSZbsAxMJE8KYtwao7bz1LsEG810ts1m5wvkVEqPlg==",
+      },
+    },
+  });
+  for (const key of ["brace-expansion@5.0.12", "@acemir/cssom@0.9.32"]) {
+    expect(reference.packages[key]?.resolution.integrity).toMatch(/^sha512-/u);
+  }
+  for (const relative of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]) {
+    const bytes = fs.readFileSync(relative);
+    expect(report.inputs[relative]).toEqual({ bytes: bytes.length, sha256: hash(bytes) });
+  }
+});
+
 function applicationRootsFixture() {
   const roots: Array<[string, number, string]> = [
     [
@@ -183,6 +221,7 @@ it("rejects a freshly self-certified or omitted application closure", () => {
   // Valid root identities do not let a caller certify an empty or partial closure.
   for (const files of [[], fixture.prepared.roles["sqlite-session"].files.slice(0, 1)]) {
     fixture.prepared.roles["sqlite-session"].files = files;
+    fixture.prepared.roles["sqlite-session"].sha256 = hash(Buffer.from(JSON.stringify(files)));
     expect(() => assertInstalledTerminalApplication(fixture.identity, fixture.prepared)).toThrow(
       "Unreviewed sqlite-session closure",
     );
@@ -203,6 +242,68 @@ it.each(["missing", "changed"])("refuses a %s manifest-launched worker root", as
   await expect(
     prepareInstalledTerminalApplication(dirs.make("installed-contract-roots-"), fixture.identity),
   ).rejects.toThrow("Additional application root changed");
+});
+
+it("traverses the additional worker's real static closure under its verified package scope", async () => {
+  const root = path.join(fs.realpathSync(dirs.make("installed-contract-closure-")), "prefix/app");
+  const sources: Record<string, string> = {
+    "package.json": JSON.stringify({
+      name: "openclaw",
+      version: "1.0.0",
+      type: "module",
+      openclaw: { schemaVersions: { state: 40, agent: 42 } },
+    }),
+    "dist/build-info.json": JSON.stringify({ version: "1.0.0", commit: "1".repeat(40) }),
+    "dist/infra/entry.js": "export {};\n",
+    "dist/logging/logger-file.worker.js":
+      "import { write } from './writer.js'; export { write };\n",
+    "dist/logging/writer.js": "export const write = () => {};\n",
+  };
+  const files: Record<string, { size: number; sha256: string }> = {};
+  const put = (relative: string, source: string) => {
+    fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
+    fs.writeFileSync(path.join(root, relative), source);
+    files[relative] = { size: Buffer.byteLength(source), sha256: hash(Buffer.from(source)) };
+  };
+  for (const [relative, source] of Object.entries(sources)) put(relative, source);
+  const identity = {
+    version: "1.0.0",
+    buildInfo: JSON.parse(sources["dist/build-info.json"]!),
+    files,
+  };
+  const selected = [
+    "dist/infra/entry.js",
+    "dist/logging/logger-file.worker.js",
+    "dist/logging/writer.js",
+  ];
+  const expectedFiles = selected.map((file) => [file, files[file]!.size, files[file]!.sha256]);
+  const contract = {
+    entry: selected[0]!,
+    entrySha256: files[selected[0]!]!.sha256,
+    additionalRoots: { [selected[1]!]: files[selected[1]!]!.sha256 },
+    dynamic: {},
+    sha256: hash(Buffer.from(JSON.stringify(expectedFiles))),
+  };
+  const collect = () =>
+    collectInstalledTerminalApplication(root, identity, { fixture: contract }, {});
+  expect((await collect()).roles.fixture?.files).toEqual(expectedFiles);
+  // Fixture contracts exercise the same physical traversal; the public admission
+  // still rejects them because its production roots and digests are fixed.
+  await expect(prepareInstalledTerminalApplication(root, identity)).rejects.toThrow();
+  fs.unlinkSync(path.join(root, selected[2]!));
+  await expect(collect()).rejects.toThrow();
+  put(selected[2]!, sources[selected[2]!]! + "export const changed = true;\n");
+  await expect(collect()).rejects.toThrow("Unreviewed fixture closure");
+  put(selected[2]!, sources[selected[2]!]!);
+  expect((await collect()).roles.fixture?.files).toEqual(expectedFiles);
+  put("dist/logging/package.json", JSON.stringify({ type: "commonjs" }));
+  await expect(collect()).rejects.toThrow(SyntaxError);
+  for (const manifest of [{ type: "module" }, {}]) {
+    put("dist/logging/package.json", JSON.stringify(manifest));
+    expect((await collect()).roles.fixture?.files).toEqual(expectedFiles);
+  }
+  fs.writeFileSync(path.join(root, "dist/logging/package.json"), '{"type":"commonjs"}');
+  await expect(collect()).rejects.toThrow();
 });
 
 it("binds finite initialization metadata and refuses foreign, changed or oversized candidates", () => {
