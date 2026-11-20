@@ -66,13 +66,8 @@ if (command === "node" && args[0] === "-e") {
   assert(fs.existsSync(path.join(env.CAPTURE_DIR, "gateway.ready")));
   event("http-health");
 } else {
-  assert.deepEqual(args.slice(0, 1), ["-q"]);
-  assert.equal(args.length, 3);
-  const catalog = args[1] === "catalogRefresh:";
-  assert.deepEqual(args.slice(1), catalog ? ["catalogRefresh:", "src/config/zod-schema.core.ts"] :
-    ["heartbeat:", "src/config/zod-schema.agent-defaults.ts"]);
-  event(catalog ? "catalog-probe" : "heartbeat-probe");
-  process.exit(Number(env[catalog ? "CATALOG_RG_STATUS" : "HEARTBEAT_RG_STATUS"]));
+  // Minimal performance runners do not provide ripgrep.
+  process.exit(127);
 }
 `;
   for (const command of ["node", "cp", "curl", "rg"]) {
@@ -91,6 +86,16 @@ if (command === "node" && args[0] === "-e") {
     const readCapture = (file: string) => readFileSync(join(captureDir, file), "utf8");
     mkdirSync(captureDir, { recursive: true });
     mkdirSync(sourcePerfDir);
+    const schemaDir = join(fixtureRoot, "src/config");
+    mkdirSync(schemaDir, { recursive: true });
+    writeFileSync(
+      join(schemaDir, "zod-schema.core.ts"),
+      expectsCatalogRefresh ? "catalogRefresh: schema" : "models: schema",
+    );
+    writeFileSync(
+      join(schemaDir, "zod-schema.agent-defaults.ts"),
+      expectsHeartbeat ? "heartbeat: schema" : "agents: schema",
+    );
     const isolatedEnv = { ...process.env };
     const ambientKeys = (
       "OPENCLAW_SKIP_CRON OPENCLAW_SKIP_CHANNELS OPENCLAW_GATEWAY_TOKEN " +
@@ -108,8 +113,6 @@ if (command === "node" && args[0] === "-e") {
       GITHUB_WORKSPACE: "/fixture/workspace",
       PERFORMANCE_HELPER_DIR: "/fixture/helpers",
       REAL_NODE: process.execPath,
-      CATALOG_RG_STATUS: expectsCatalogRefresh ? "0" : "1",
-      HEARTBEAT_RG_STATUS: expectsHeartbeat ? "0" : "1",
       SOURCE_PERF_DIR: sourcePerfDir,
       source_runs: "2",
     });
@@ -127,8 +130,6 @@ if (command === "node" && args[0] === "-e") {
     expect(result.status, result.stderr).toBe(0);
 
     expect(readFileSync(eventsFile, "utf8").trim().split("\n")).toEqual([
-      "catalog-probe",
-      "heartbeat-probe",
       "gateway-run",
       "http-health",
       "gateway-health",
