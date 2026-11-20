@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import {
-  addSession,
   appendOutput,
   deleteSession,
   getFinishedSession,
@@ -9,6 +8,7 @@ import {
   prepareSessionPoll,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+import { addSessionForTests } from "./bash-process-registry.test-support.js";
 import { chunkString } from "./bash-tools.shared.js";
 
 const MIB = 1024 * 1024;
@@ -19,7 +19,7 @@ function retain(index: number) {
     maxOutputChars: 1_000,
     backgrounded: true,
   });
-  addSession(session);
+  addSessionForTests(session);
   const donor = Buffer.alloc(2 * MIB, 0x41 + index).toString("utf8");
   switch (index % 4) {
     case 0:
@@ -89,7 +89,7 @@ assert.equal(unicode.aggregated, "🦞\ud800z");
 assert.equal(prepareSessionPoll(unicode, undefined).output, "🦞\ud800z");
 
 const sparse = createProcessSessionFixture({ id: "sparse", maxOutputChars: 4_000 });
-addSession(sparse);
+addSessionForTests(sparse);
 const churn = "x".repeat(Buffer.poolSize / 2 - 8);
 const references = Array.from({ length: 32 }, () => {
   // Separate callbacks with unrelated allocation, as happens for sparse process output.

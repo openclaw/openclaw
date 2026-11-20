@@ -12,10 +12,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import {
-  addSession,
   appendOutput,
   deleteSession,
-  createProcessSession,
+  registerProcessSession,
   markExited,
   prepareSessionPoll,
   type ProcessSession,
@@ -153,8 +152,9 @@ function tails(samples: number[]) {
 }
 
 async function runTurn(bytes: number, intervalMs: number) {
-  const session: ProcessSession = createProcessSession({
+  const session: ProcessSession = registerProcessSession({
     id: `output-measure-${nextId++}`,
+    scopeKey: "agent:main:output-measure",
     command: "synthetic build output",
     cleanupMs: 60_000,
     startedAt: Date.now(),
@@ -169,7 +169,6 @@ async function runTurn(bytes: number, intervalMs: number) {
     backgrounded: !values.updates,
     cursorKeyMode: "normal",
   });
-  addSession(session);
   const sanitize = createSanitizer();
   const childSource = `
     const { once } = require('node:events');

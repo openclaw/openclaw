@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -708,9 +709,18 @@ it.skipIf(process.platform === "win32").each(["signal-denied", "identity-unavail
         ).toMatchObject({ status: "running" });
       }
       const realKill = process.kill.bind(process);
+      // Chat end signals the group the survivor runs in; deny that too.
+      const group = -Number(
+        execFileSync("ps", ["-o", "pgid=", "-p", String(pid)], { encoding: "utf8" }),
+      );
       // Signals to this process are denied, as for a process that changed user.
       const denied = vi.spyOn(process, "kill").mockImplementation((target, signal) => {
-        if (failure === "signal-denied" && target === pid && signal !== 0 && signal !== undefined) {
+        if (
+          failure === "signal-denied" &&
+          (target === pid || target === group) &&
+          signal !== 0 &&
+          signal !== undefined
+        ) {
           throw Object.assign(new Error("denied"), { code: "EPERM" });
         }
         return realKill(target, signal);

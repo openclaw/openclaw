@@ -38,6 +38,7 @@ let command: string;
 
 function launch(overrides: Partial<Parameters<typeof runExecProcess>[0]> = {}) {
   return runExecProcess({
+    scopeKey: "test-scope",
     command,
     workdir: root,
     env: {

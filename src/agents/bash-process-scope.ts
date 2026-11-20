@@ -1,19 +1,41 @@
 import type { PreparedSessionSourceAuthority } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { resolveSessionAgentId } from "./agent-scope-config.js";
 
-/** Resolve the process-tool isolation key for exec/process session state. */
+/** The chat that owns exec processes: the session, else the agent's session-less scope. */
 export function resolveProcessToolScopeKey(params: {
   scopeKey?: string;
   sessionKey?: string;
   sessionId?: string;
-  agentId?: string;
-}): string | undefined {
-  const scopeKey = params.scopeKey?.trim() || params.sessionKey?.trim() || params.sessionId?.trim();
-  if (scopeKey) {
-    return scopeKey;
-  }
-  const agentId = params.agentId?.trim();
-  return agentId ? `agent:${agentId}` : undefined;
+  agentId: string;
+}): string {
+  return (
+    params.scopeKey?.trim() ||
+    params.sessionKey?.trim() ||
+    params.sessionId?.trim() ||
+    `agent:${params.agentId.trim()}`
+  );
+}
+
+/** An exec tool's processes belong to its chat; a session-less tool's to the session's agent. */
+export function resolveExecToolScopeKey(
+  defaults:
+    | {
+        scopeKey?: string;
+        sessionKey?: string;
+        sessionId?: string;
+        agentId?: string;
+        config?: OpenClawConfig;
+      }
+    | undefined,
+): string {
+  return resolveProcessToolScopeKey({
+    ...defaults,
+    agentId:
+      defaults?.agentId ??
+      resolveSessionAgentId({ config: defaults?.config, sessionKey: defaults?.sessionKey }),
+  });
 }
 
 /** Resolve ancestor visibility only when needed, retaining its live authority. */

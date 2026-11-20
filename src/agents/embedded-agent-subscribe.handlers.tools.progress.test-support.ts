@@ -6,8 +6,9 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { peekAdjustedParamsForToolCall } from "./agent-tools.before-tool-call.state.js";
-import { addSession, deleteSession, markExited } from "./bash-process-registry.js";
+import { deleteSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+import { addSessionForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import type { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
@@ -136,7 +137,7 @@ export function registerToolChannelProgressTests({
       const emitted: CapturedAgentEvent[] = [];
       const unsubscribe = registerAgentEventListener((event) => emitted.push(event));
       const session = createProcessSessionFixture({ id: "progress-poll", backgrounded: true });
-      addSession(session);
+      addSessionForTests(session);
       try {
         for (const status of ["running", "completed"] as const) {
           if (status === "completed") {
@@ -192,7 +193,7 @@ export function registerToolChannelProgressTests({
         id: `poll-${failure}`,
         backgrounded: true,
       });
-      addSession(session);
+      addSessionForTests(session);
       markExited(
         session,
         failure === "nonzero" ? 1 : 0,

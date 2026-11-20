@@ -37,6 +37,7 @@ export async function startDeferredNotifyRun(params: {
     maxOutput: 1000,
     pendingMaxOutput: 1000,
     notifyOnExit: true,
+    scopeKey: params.sessionKey,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     notifyDeliveryContext: params.notifyDeliveryContext,

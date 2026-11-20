@@ -4,7 +4,6 @@ import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
   acknowledgeNotifyOnExit,
-  addSession,
   appendOutput,
   clearFinishedSessionsForScopes,
   deleteSession,
@@ -20,7 +19,10 @@ import {
   tail,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import {
+  addSessionForTests,
+  resetProcessRegistryForTests,
+} from "./bash-process-registry.test-support.js";
 import { createSessionSlug } from "./session-slug.js";
 
 const drainSession = (session: ProcessSession) => prepareSessionPoll(session, undefined);
@@ -59,7 +61,7 @@ function makeSession(
     backgrounded: true,
     ...params,
   });
-  addSession(session);
+  addSessionForTests(session);
   return session;
 }
 

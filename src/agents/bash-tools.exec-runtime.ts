@@ -43,10 +43,9 @@ import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { createProcessSessionId } from "./bash-process-id.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
-  addSession,
   appendOutput,
-  createProcessSession,
   markCancellationRequested,
+  registerProcessSession,
   resolveProcessCleanupMs,
   waitForExecSession,
 } from "./bash-process-registry.js";
@@ -233,7 +232,7 @@ export async function runExecProcess({
   sessionsYieldAvailable?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   requestOwners?: readonly ExecRequestOwner[];
-  scopeKey?: string;
+  scopeKey: string;
   sessionKey?: string;
   agentId?: string;
   /** Start-time routing policy for detached exec system events. */
@@ -284,39 +283,40 @@ export async function runExecProcess({
     OPENCLAW_SHELL: "exec",
   };
 
-  const session: ProcessSession = createProcessSession(
-    withExecRequestOwners(
-      {
-        id: sessionId,
-        command: opts.command,
-        scopeKey: opts.scopeKey,
-        sessionKey: opts.sessionKey,
-        sandboxContainerName: opts.sandbox?.containerName,
-        cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
-        agentId: opts.agentId,
-        eventRouting: opts.eventRouting,
-        notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
-        notifyOnExit: opts.notifyOnExit,
-        notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
-        exitNotified: false,
-        startedAt,
-        cwd: opts.workdir,
-        maxOutputChars: opts.maxOutput,
-        pendingMaxOutputChars: opts.pendingMaxOutput,
-        totalOutputChars: 0,
-        pendingStdoutChars: 0,
-        pendingStderrChars: 0,
-        pendingOutputDropped: false,
-        exited: false,
-        truncated: false,
-        backgrounded: false,
-        ...(opts.independentService ? { independentService: true as const } : {}),
-        cursorKeyMode: opts.usePty ? "unknown" : "normal",
-      },
-      opts.requestOwners,
+  const session: ProcessSession = withoutGatewayToolCallerIdentity(() =>
+    registerProcessSession(
+      withExecRequestOwners(
+        {
+          id: sessionId,
+          command: opts.command,
+          scopeKey: opts.scopeKey,
+          sessionKey: opts.sessionKey,
+          sandboxContainerName: opts.sandbox?.containerName,
+          cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
+          agentId: opts.agentId,
+          eventRouting: opts.eventRouting,
+          notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
+          notifyOnExit: opts.notifyOnExit,
+          notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
+          exitNotified: false,
+          startedAt,
+          cwd: opts.workdir,
+          maxOutputChars: opts.maxOutput,
+          pendingMaxOutputChars: opts.pendingMaxOutput,
+          totalOutputChars: 0,
+          pendingStdoutChars: 0,
+          pendingStderrChars: 0,
+          pendingOutputDropped: false,
+          exited: false,
+          truncated: false,
+          backgrounded: false,
+          ...(opts.independentService ? { independentService: true as const } : {}),
+          cursorKeyMode: opts.usePty ? "unknown" : "normal",
+        },
+        opts.requestOwners,
+      ),
     ),
   );
-  withoutGatewayToolCallerIdentity(() => addSession(session));
   if (opts.requestOwners?.length) {
     retainExecRequestProcess(opts.requestOwners, waitForExecSession(session));
   }

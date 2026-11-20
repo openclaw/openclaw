@@ -10,9 +10,15 @@ import {
 } from "./subagents/spawn/subagent-capabilities.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
+/** The wake facts of a restored process, prepared before or after it is registered. */
+export type AdoptedProcessNotification = Pick<
+  ProcessSession,
+  "agentId" | "sessionKey" | "notifyOnExit" | "notifySessionTarget" | "cancellationRequested"
+>;
+
 /** Restart completions are fresh host input, never restored requester continuations. */
 export async function prepareAdoptedDurableProcessNotification(
-  session: ProcessSession,
+  session: AdoptedProcessNotification,
 ): Promise<void> {
   session.notifySessionTarget = undefined;
   const { agentId, sessionKey } = session;

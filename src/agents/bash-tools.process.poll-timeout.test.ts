@@ -3,7 +3,6 @@ import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/int
 import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {
-  addSession,
   appendOutput,
   deleteSession,
   getActiveBackgroundExecSessionCount,
@@ -14,7 +13,10 @@ import {
   type ProcessSession,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import {
+  addSessionForTests,
+  resetProcessRegistryForTests,
+} from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { isToolResultError } from "./tool-result-error.js";
 
@@ -41,7 +43,7 @@ function harness(overrides: Partial<ProcessSession> = {}) {
     ...overrides,
   });
   Object.assign(session, overrides);
-  addSession(session);
+  addSessionForTests(session);
   const tool = createProcessTool();
   const call = (action: string, extra: Record<string, unknown> = {}, signal?: AbortSignal) =>
     tool.execute(action, { action, sessionId: session.id, ...extra }, signal);

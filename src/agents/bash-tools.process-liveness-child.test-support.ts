@@ -10,6 +10,7 @@ const command =
   'setTimeout(() => { require("node:fs").writeFileSync("result.txt", "background-complete"); }, 80)';
 const run = await runExecProcess({
   command: "one-shot poll liveness",
+  scopeKey: "poll-liveness",
   workdir: workspace,
   env: {},
   sandbox: {

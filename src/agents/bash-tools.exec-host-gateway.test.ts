@@ -235,7 +235,6 @@ describe("processGatewayAllowlist", () => {
   beforeEach(() => {
     resetGatewayWorkAdmission();
     resetDiagnosticEventsForTest();
-    pendingResultMock.mockReset();
     allowlistMock.mockReset();
     mockAllowlist({
       allowlistSatisfied: true,
@@ -268,7 +267,7 @@ describe("processGatewayAllowlist", () => {
     markBackgroundedMock.mockReset();
     followupMock.mockReset();
     inlineEvalMock.mockReset().mockReturnValue(null);
-    pendingResultMock.mockReturnValue({
+    pendingResultMock.mockReset().mockReturnValue({
       details: { status: "approval-pending" },
       content: [],
     });
@@ -305,6 +304,7 @@ describe("processGatewayAllowlist", () => {
     overrides: Partial<GatewayAllowlistParams> & Pick<GatewayAllowlistParams, "command">,
   ) {
     return processGatewayAllowlist({
+      scopeKey: "test-scope",
       workdir: process.cwd(),
       env: process.env as Record<string, string>,
       pty: false,

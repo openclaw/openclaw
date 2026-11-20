@@ -2,14 +2,16 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
-  addSession,
   appendOutput,
   deleteSession,
   markBackgrounded,
   markExited,
 } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
+import {
+  addSessionForTests,
+  resetProcessRegistryForTests,
+} from "../agents/bash-process-registry.test-support.js";
 import * as utilityCompletion from "../agents/utility-completion.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -61,7 +63,7 @@ it("coalesces background process changes without invalidating session rows and s
     const process = createProcessSessionFixture({ id: "build" });
     process.scopeKey = "agent:main:process-owner";
     process.agentId = "main";
-    addSession(process);
+    addSessionForTests(process);
     appendOutput(process, "stdout", "Starting");
     await vi.advanceTimersByTimeAsync(5_000);
     expect(params.broadcast).not.toHaveBeenCalled();
@@ -84,7 +86,7 @@ it("coalesces background process changes without invalidating session rows and s
     const later = createProcessSessionFixture({ id: "later-build", backgrounded: true });
     later.scopeKey = process.scopeKey;
     later.agentId = "main";
-    addSession(later);
+    addSessionForTests(later);
     unsubs.lifecycleUnsub();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(params.broadcast).toHaveBeenCalledTimes(3);

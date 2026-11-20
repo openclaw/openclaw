@@ -21,13 +21,15 @@ import {
   createDurableProcessStore,
   type DurableProcessRecord,
 } from "./bash-durable-process-store.js";
-import { prepareAdoptedDurableProcessNotification } from "./bash-process-durable-notify.js";
+import {
+  type AdoptedProcessNotification,
+  prepareAdoptedDurableProcessNotification,
+} from "./bash-process-durable-notify.js";
 import { launchdDurableSupervisor } from "./bash-process-launchd.js";
 import {
-  addSession,
   appendOutput,
-  createProcessSession,
   listExecSessionsForCancellation,
+  registerProcessSession,
   setDurableProcessObserver,
   setExitWakeRecorder,
   type ProcessSession,
@@ -129,13 +131,25 @@ const ordinaryExitWakeRecorder = {
   },
 };
 
-/** Report a wake-armed ordinary process the last Gateway lost; never adopt or rerun it. */
-async function settleLostOrdinaryProcess(
+/** Notification facts are prepared before registration, so a listed process is never half-built. */
+function restoredNotification(
   record: DurableProcessRecord,
-  crashWindows: GatewayRestartResumeWindows | undefined,
-) {
-  const session = createProcessSession({
+  notifyOnExit: boolean | undefined,
+): AdoptedProcessNotification {
+  return {
+    agentId: record.agentId,
+    sessionKey: record.sessionKey,
+    notifyOnExit,
+    cancellationRequested: record.cancellationRequested,
+  };
+}
+
+function restoredSession(record: DurableProcessRecord, notification: AdoptedProcessNotification) {
+  return {
     ...record,
+    ...notification,
+    // Rows from before the scope was required name only their session.
+    scopeKey: record.scopeKey ?? record.sessionKey,
     totalOutputChars: 0,
     pendingStdoutChars: 0,
     pendingStderrChars: 0,
@@ -143,13 +157,26 @@ async function settleLostOrdinaryProcess(
     exited: false,
     truncated: false,
     backgrounded: true,
-    cursorKeyMode: "normal",
-  });
-  const startedAt = new Date(record.startedAt).toISOString();
+    cursorKeyMode: "normal" as const,
+  };
+}
+
+/** Report a wake-armed ordinary process the last Gateway lost; never adopt or rerun it. */
+async function settleLostOrdinaryProcess(
+  record: DurableProcessRecord,
+  crashWindows: GatewayRestartResumeWindows | undefined,
+) {
   // The boot owner records each unclean Gateway lifetime; outside one, shutdown stopped it.
   const crashed = crashWindows?.[record.agentId]?.some(
     (window) => record.startedAt >= window.startedAt && record.startedAt < window.endedAt,
   );
+  // After a crash, agent database preparation finishes after the listener binds.
+  await waitForAgentDatabasePreparation(record.agentId);
+  // Eligibility and authority are rechecked against the current session, as for durable outcomes.
+  const notification = restoredNotification(record, record.notifyOnExit);
+  await prepareAdoptedDurableProcessNotification(notification);
+  const session = registerProcessSession(restoredSession(record, notification));
+  const startedAt = new Date(record.startedAt).toISOString();
   // Measured: shutdown stops Gateway-host commands, and Linux stops them when the Gateway
   // dies; a killed macOS Gateway can leave one running, and a sandbox's fate is unobserved.
   const stopped = !record.sandboxed && (!crashed || process.platform === "linux");
@@ -161,13 +188,8 @@ async function settleLostOrdinaryProcess(
       : `The Gateway ${crashed ? "restarted unexpectedly" : "restarted"} while this background command (started ${startedAt}) was running. It may still be running, but its result will not wake this conversation. Check its output and side effects before running it again.\n`,
   );
   session.finalizing = true;
-  // After a crash, agent database preparation finishes after the listener binds.
-  await waitForAgentDatabasePreparation(record.agentId);
-  // Eligibility and authority are rechecked against the current session, as for durable outcomes.
-  await prepareAdoptedDurableProcessNotification(session);
   // The registry's exit hook deletes the row once the notice settles.
   ordinaryRecords.set(session, record);
-  addSession(session);
   await settleExecProcessExit({
     session,
     outcome: buildExecExitOutcome({
@@ -236,25 +258,18 @@ export async function initializeDurableProcesses(
       await forgetLog(record.logPath);
       continue;
     }
-    const session = createProcessSession({
-      ...record,
-      totalOutputChars: 0,
-      pendingStdoutChars: 0,
-      pendingStderrChars: 0,
-      pendingOutputDropped: false,
-      exited: false,
-      truncated: false,
-      backgrounded: true,
-      cursorKeyMode: "normal",
-    });
     // Prepare the wake at adoption so poll and process lists report it; exit prepares it again.
+    const notification = restoredNotification(
+      record,
+      record.notifyOnExit && !record.notificationSettled,
+    );
+    await prepareAdoptedDurableProcessNotification(notification);
+    const session = registerProcessSession(restoredSession(record, notification));
     const prepareNotification = () => {
       session.notifyOnExit = record.notifyOnExit && !record.notificationSettled;
       return prepareAdoptedDurableProcessNotification(session);
     };
-    await prepareNotification();
     const run = bind(session, record, current);
-    addSession(session);
     void run
       .wait()
       .then(async (exit) => {

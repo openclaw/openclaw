@@ -1,13 +1,13 @@
 import { vi } from "vitest";
 import { resetAdjustedParamsByToolCallIdForTests } from "../../../agents/agent-tools.before-tool-call.state.js";
 import {
-  addSession,
   appendOutput,
   deleteSession,
   markExited,
   recordNotifyOnExitRemoval,
 } from "../../../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../../../agents/bash-process-registry.test-helpers.js";
+import { addSessionForTests } from "../../../agents/bash-process-registry.test-support.js";
 import { createExecTool } from "../../../agents/bash-tools.exec-run.js";
 import { createRunExit } from "../../../agents/bash-tools.exec-runtime.test-support.js";
 import { createProcessTool } from "../../../agents/bash-tools.process.js";
@@ -58,7 +58,7 @@ export function createProcessPollDeliveryContract(sessionId: string) {
   const session = createProcessSessionFixture({ id: sessionId, backgrounded: true });
   session.scopeKey = sessionKey;
   session.sessionKey = sessionKey;
-  addSession(session);
+  addSessionForTests(session);
   appendOutput(session, "stdout", "completed output");
   markExited(session, 0, null, "completed");
   enqueueSystemEventWithReceipt("unrelated event", { sessionKey, contextKey: "other" });

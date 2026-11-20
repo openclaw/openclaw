@@ -54,7 +54,8 @@ try {
   for (let sample = -1; sample < 5; sample++) {
     for (const { name, registry } of sample % 2 ? arms.toReversed() : arms) {
       const sessions = Array.from({ length: 21 }, (_, index) => {
-        const session = registry.createProcessSession({
+        // Both arms must expose registerProcessSession (any revision after it was introduced).
+        return registry.registerProcessSession({
           id: `process-${index}`,
           command: "synthetic output writer",
           scopeKey: `agent:main:synthetic-session-${index}`,
@@ -72,8 +73,6 @@ try {
           backgrounded: true,
           cursorKeyMode: "unknown",
         });
-        registry.addSession(session);
-        return session;
       });
       const unsubscribe = registry.onBackgroundProcessesChanged(() => {});
       try {

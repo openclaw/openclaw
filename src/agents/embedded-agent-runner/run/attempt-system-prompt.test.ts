@@ -27,8 +27,9 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { expectText } from "../../../test-utils/text-assertions.js";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
-import { addSession, deleteSession } from "../../bash-process-registry.js";
+import { deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
+import { addSessionForTests } from "../../bash-process-registry.test-support.js";
 import * as referencePaths from "../../docs-path.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
 import * as runtimePrompt from "../../runtime-prompt.js";
@@ -609,8 +610,8 @@ describe("buildAttemptSystemPrompt", () => {
       sandboxSessionKey: other.scopeKey,
     };
     const idle = await preparePermissionPrompt({ session });
-    addSession(owned);
-    addSession(other);
+    addSessionForTests(owned);
+    addSessionForTests(other);
     try {
       const { prepared } = await preparePermissionPrompt({ session });
       expect(prepared.systemPromptText).toBe(idle.prepared.systemPromptText);

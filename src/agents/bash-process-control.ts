@@ -43,9 +43,9 @@ export function registerOneShotExecScopeCleanup(
         registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
       }
     | undefined,
-  scopeKey: string | undefined,
+  scopeKey: string,
 ): void {
-  if (!options?.oneShotCliRun || !scopeKey || !options.registerRunCleanup) {
+  if (!options?.oneShotCliRun || !options.registerRunCleanup) {
     return;
   }
   const supervisor = getProcessSupervisor();
@@ -143,7 +143,8 @@ async function drainExecSessions(
         markCancellationRequested(session);
         if (session.adopted) {
           // Adopted processes have no run to join; the stop outcome is the confirmation.
-          adoptedStops.push(session.adopted.stop());
+          // Chat end takes its group too: children it forked after adoption.
+          adoptedStops.push(session.adopted.stop({ group: true }));
         } else if (session.durable) {
           session.durable.cancel(assertCurrent);
         } else {
@@ -197,7 +198,6 @@ export async function stopSessionExecProcesses(
   await drainExecSessions(
     listExecSessionsForCancellation().filter(
       (session) =>
-        session.scopeKey !== undefined &&
         keys.has(session.scopeKey) &&
         session.startedAt <= startedBy &&
         !session.durable &&

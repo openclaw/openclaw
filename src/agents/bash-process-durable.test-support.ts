@@ -41,13 +41,15 @@ import {
   getSession,
   getFinishedSession,
   getActiveBackgroundExecSessionCount,
-  createProcessSession,
   markBackgrounded,
   type ProcessSession,
   setExitWakeRecorder,
   waitForExecSession,
 } from "./bash-process-registry.js";
-import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import {
+  buildProcessSessionForTests,
+  resetProcessRegistryForTests,
+} from "./bash-process-registry.test-support.js";
 import { systemdDurableSupervisor } from "./bash-process-systemd.js";
 import { hasExitWake } from "./bash-tools.exec-output.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -368,7 +370,7 @@ void it("records a downtime exit and queues one unattributed session completion"
 void it("recovers a memory-limit completion before its notification settles", async () => {
   await scenario(async (state) => {
     await initializeDurableProcesses();
-    const session = createProcessSession({
+    const session = buildProcessSessionForTests({
       id: "memory-limit-recovery",
       command: "printf worker",
       agentId: "main",
@@ -453,11 +455,12 @@ void it("reports each wake-armed ordinary command a restart lost, once, with wha
       const stopped = await ordinary("sleep 30");
       // The Gateway cannot see inside a sandbox container; incognito state never reaches storage.
       const unobserved = (id: string, key: string, sandboxContainerName?: string) => {
-        const session = createProcessSession({
+        const session = buildProcessSessionForTests({
           id,
           command: "sleep 30",
           agentId: "main",
           sessionKey: key,
+          scopeKey: key,
           sandboxContainerName,
           startedAt: Date.now(),
           cleanupMs: 60_000,

@@ -22,13 +22,13 @@ import {
 import type { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
-  addSession,
   appendOutput,
   deleteSession,
   markExited,
   recordNotifyOnExitRemoval,
 } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { addSessionForTests } from "../agents/bash-process-registry.test-support.js";
 import { createProcessTool } from "../agents/bash-tools.process.js";
 import { filterToolsByPolicy } from "../agents/tool-policy-match.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -419,7 +419,7 @@ describe("MCP terminal process result delivery", () => {
     const session = createProcessSessionFixture({ id: processId, backgrounded: true });
     session.scopeKey = sessionKey;
     session.sessionKey = sessionKey;
-    addSession(session);
+    addSessionForTests(session);
     appendOutput(session, "stdout", "completed output");
     markExited(session, 0, null, "completed");
     enqueueSystemEventWithReceipt("unrelated event", { sessionKey, contextKey: "other" });

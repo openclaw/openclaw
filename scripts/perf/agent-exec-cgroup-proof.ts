@@ -171,6 +171,7 @@ try {
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   await runWithSpawnBroker(broker, async () => {
     const exec = await runExecProcess({
+      scopeKey: "test-scope",
       command: `${quote(process.execPath)} -e ${quote(code)}`,
       workdir: process.env.OPENCLAW_STATE_DIR!,
       env: Object.fromEntries(

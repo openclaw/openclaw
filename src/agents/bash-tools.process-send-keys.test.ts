@@ -1,9 +1,11 @@
 import { Writable } from "node:stream";
 import { afterEach, expect, test } from "vitest";
 import { createManagedChildStdin } from "../process/supervisor/adapters/child-stdin.js";
-import { addSession } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import {
+  addSessionForTests,
+  resetProcessRegistryForTests,
+} from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
 afterEach(() => resetProcessRegistryForTests());
@@ -33,7 +35,7 @@ test.each([
       backgrounded: true,
     });
     session.stdin = stdin;
-    addSession(session);
+    addSessionForTests(session);
     const result = await createProcessTool().execute("input-bytes", {
       action: "send-keys",
       sessionId: session.id,

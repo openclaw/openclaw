@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionEventTarget } from "../auto-reply/reply/session-event-contract.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import type { StopOutcome } from "../process/supervisor/released-processes.js";
 import type {
   ManagedRunStdin,
   ProcessRunActivity,
@@ -149,7 +150,8 @@ type PendingPollDelivery = {
 export interface ProcessSession {
   id: string;
   command: string;
-  scopeKey?: string;
+  /** The chat that owns this process; its end (reset, delete, archive, task end) stops it. */
+  scopeKey: string;
   sessionKey?: string;
   /** Runtime selected by the sandbox owner, including detached command cleanup. */
   sandboxContainerName?: string;
@@ -229,18 +231,20 @@ export interface ProcessSession {
   backgrounded: boolean;
   /** Explicit `background: true` service. */
   independentService?: true;
-  /** A process a completed command left running, tracked by identity instead of a run. */
+  /** A process a completed command left running, tracked by identity; chat end stops its group. */
   adopted?: {
-    stop: () => Promise<{ status: "stopped" } | { status: "uncertain"; reason: string }>;
+    stop: (options?: { group?: boolean }) => Promise<StopOutcome>;
   };
   /** PTY cursor key mode: unknown until a PTY reports smkx/rmkx. */
   cursorKeyMode: "unknown" | "normal" | "application";
 }
 
-/** Creates one output owner; string views are materialized only by readers. */
-export function createProcessSession(
-  params: Omit<ProcessSession, "output" | "aggregated" | "tail" | "pendingOutput">,
-): ProcessSession {
+type ProcessSessionParams = Omit<
+  ProcessSession,
+  "output" | "aggregated" | "tail" | "pendingOutput"
+>;
+
+function buildProcessSession(params: ProcessSessionParams): ProcessSession {
   const output = new ProcessOutput();
   return {
     ...params,
@@ -307,15 +311,14 @@ export function onBackgroundProcessesChanged(listener: (target: ProcessChange) =
 }
 
 function queueProcessChange(session: ProcessSession) {
-  const sessionKey = session.scopeKey ?? session.sessionKey;
-  if (!sessionKey || changeListeners.size === 0) {
+  if (changeListeners.size === 0) {
     return;
   }
-  const agents = pendingChanges.get(sessionKey);
+  const agents = pendingChanges.get(session.scopeKey);
   if (agents) {
     agents.add(session.agentId);
   } else {
-    pendingChanges.set(sessionKey, new Set([session.agentId]));
+    pendingChanges.set(session.scopeKey, new Set([session.agentId]));
   }
   // Bound chatty output to the former five-second polling cadence. Later writes
   // never postpone the signal, and no command text or output crosses this bus.
@@ -338,8 +341,16 @@ export function isProcessSessionIdTaken(id: string): boolean {
   return runningSessions.has(id) || finishedSessions.has(id) || activeExecSessions.has(id);
 }
 
-/** Adds a running session; retention starts only after background completion. */
-export function addSession(session: ProcessSession) {
+/**
+ * The only way to track a process: it is created and registered under its owning chat
+ * at once, so no process exists without a chat. Retention starts after background completion.
+ * String output views are materialized only by readers.
+ */
+export function registerProcessSession(params: ProcessSessionParams): ProcessSession {
+  return trackProcessSession(buildProcessSession(params));
+}
+
+function trackProcessSession(session: ProcessSession): ProcessSession {
   processSessionStartOrders.set(session, nextProcessSessionStartOrder++);
   processInstanceIds.set(session, randomUUID());
   runningSessions.set(session.id, session);
@@ -350,6 +361,7 @@ export function addSession(session: ProcessSession) {
   if (session.durable) {
     scheduleSweeper();
   }
+  return session;
 }
 
 /** Sorts registered process records newest-first, including same-millisecond starts. */
@@ -418,7 +430,7 @@ export function clearFinishedSessionsForScopes(scopeKeys: Iterable<string>): voi
     return;
   }
   for (const [id, session] of finishedSessions) {
-    if (session.scopeKey && retiredScopes.has(session.scopeKey)) {
+    if (retiredScopes.has(session.scopeKey)) {
       deleteFinishedSession(id);
     }
   }
@@ -792,7 +804,13 @@ function resetProcessRegistryForTests() {
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.bashProcessRegistryTestApi")] =
-    { resetProcessRegistryForTests };
+    // Fixtures build a record, adjust it, then track it; production registers through one factory.
+    {
+      resetProcessRegistryForTests,
+      buildProcessSession,
+      trackProcessSession,
+      listExecSessionsForCancellation,
+    };
 }
 
 function scheduleSweeper() {

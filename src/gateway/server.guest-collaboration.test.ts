@@ -5,8 +5,9 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import { addSession, appendOutput, deleteSession } from "../agents/bash-process-registry.js";
+import { appendOutput, deleteSession } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { addSessionForTests } from "../agents/bash-process-registry.test-support.js";
 import { withInvitedGuestGateway } from "./guest-session-access.test-support.js";
 import { QuestionManager } from "./question-manager.js";
 import * as authorization from "./session-sharing-authorization-async.js";
@@ -115,7 +116,7 @@ it("rechecks invited question, process and companion access at their final respo
       process.scopeKey = key;
       process.agentId = "main";
       process.processActivity = { resultSettled: false, lastOutputAtMs: process.startedAt };
-      addSession(process);
+      addSessionForTests(process);
       appendOutput(process, "stdout", "invited process output");
       cleanup.use({ [Symbol.dispose]: () => deleteSession(process.id) });
       const processes = () =>

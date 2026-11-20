@@ -1,14 +1,12 @@
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  addSession,
-  appendOutput,
-  markExited,
-  prepareSessionPoll,
-} from "../agents/bash-process-registry.js";
+import { appendOutput, markExited, prepareSessionPoll } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
+import {
+  addSessionForTests,
+  resetProcessRegistryForTests,
+} from "../agents/bash-process-registry.test-support.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import type { WorkerProcessOperation } from "./worker-process-observation.js";
 import { parseWorkerProcessMessage, type WorkerProcessMessage } from "./worker-process-protocol.js";
@@ -44,7 +42,7 @@ it.each([true, false])(
         scopeKey: `worker:${ownerSession}`,
         agentId: descriptor.assignment.agentId,
       });
-      addSession(process);
+      addSessionForTests(process);
       return process;
     };
     const record = processFixture("retained-build");

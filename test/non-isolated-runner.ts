@@ -45,6 +45,7 @@ import {
   settleSqliteTestAgentCloses,
   sqliteTestSingletonPublications,
 } from "./sqlite-test-lifecycle.ts";
+import { stopLeakedSubagentProcesses } from "./subagent-process-census.ts";
 
 type EvaluatedModuleNode = ViteEvaluatedModuleNode & {
   mockedExports?: unknown;
@@ -640,6 +641,8 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     ] as const) {
       clean(phase, run);
     }
+    // A hidden subagent whose task ended holds no process; a test that leaks one fails here.
+    clean("ended subagent processes", stopLeakedSubagentProcesses);
     if (
       !(await drain("subagent registry", async () => {
         const api = (globalThis as Record<PropertyKey, unknown>)[SUBAGENT_REGISTRY_TEST_API] as

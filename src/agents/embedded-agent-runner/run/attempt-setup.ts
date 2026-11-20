@@ -383,6 +383,7 @@ export function installEmbeddedAttemptContextGuards(input: {
           workspaceDir: input.effectiveWorkspace,
           cwd: input.effectiveCwd,
           agentDir: input.agentDir,
+          activeAgentId: input.sessionAgentId,
           tokenBudget: attempt.contextTokenBudget,
           promptCache:
             input.getPromptCache() ??

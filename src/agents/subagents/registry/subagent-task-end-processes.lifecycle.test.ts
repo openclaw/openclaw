@@ -1,7 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -72,16 +72,18 @@ function failure(data: Record<string, unknown>) {
   };
 }
 
-/** The child's three styles of leftover work: a hand-off, a service and a survivor. */
-async function startChildProcesses(childKey: string): Promise<number[]> {
+/** The child's styles of leftover work: a hand-off, a service, a survivor and its later child. */
+async function startChildProcesses(childKey: string, unmarked = false): Promise<number[]> {
   const pidOf = (text: string | undefined) => Number(/PID=(\d+)/.exec(text ?? "")?.[1]);
   return withEnvAsync(
     {
-      OPENCLAW_SERVICE_MARKER: "task-end-test",
+      // Unmarked: an unmanaged macOS Gateway, which has no service marker.
+      OPENCLAW_SERVICE_MARKER: unmarked ? undefined : "task-end-test",
       OPENCLAW_EXEC_SHELL_SNAPSHOT: "0",
       SHELL: "/bin/sh",
     },
     async () => {
+      const cwd = mkdtempSync(path.join(os.tmpdir(), "task-end-exec-"));
       const exec = createExecTool({
         host: "gateway",
         mode: "full",
@@ -89,7 +91,7 @@ async function startChildProcesses(childKey: string): Promise<number[]> {
         allowBackground: true,
         notifyOnExit: false,
         scopeKey: childKey,
-        cwd: mkdtempSync(path.join(os.tmpdir(), "task-end-exec-")),
+        cwd,
       });
       const ids: string[] = [];
       for (const args of [
@@ -101,12 +103,18 @@ async function startChildProcesses(childKey: string): Promise<number[]> {
       await vi.waitFor(() =>
         expect(ids.map((id) => pidOf(getSession(id)?.aggregated))).not.toContain(Number.NaN),
       );
+      // The survivor forks its child after the command returned and it was adopted.
       const left = await exec.execute("left", {
-        command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
+        command: `sh -c 'sleep 1; sleep 60 & echo PID=$! > late.pid; wait' >/dev/null 2>&1 & echo PID=$!`,
+      });
+      const late = path.join(cwd, "late.pid");
+      await vi.waitFor(() => expect(readFileSync(late, "utf8")).toMatch(/PID=\d+/), {
+        timeout: 10_000,
       });
       return [
         ...ids.map((id) => pidOf(getSession(id)?.aggregated)),
         pidOf((left.details as { aggregated: string }).aggregated),
+        pidOf(readFileSync(late, "utf8")),
       ];
     },
   );
@@ -117,6 +125,7 @@ const liveInScope = (childKey: string) =>
 
 type EndCause = {
   cause: string;
+  unmarked?: true;
   keeps?: boolean;
   spawnMode?: "session";
   end: (runId: string, childKey: string) => unknown;
@@ -126,6 +135,11 @@ type EndCause = {
 it.each<EndCause>([
   {
     cause: "complete",
+    end: (runId: string, key: string) => lifecycle(runId, key, { phase: "end" }),
+  },
+  {
+    cause: "complete without a service marker",
+    unmarked: true,
     end: (runId: string, key: string) => lifecycle(runId, key, { phase: "end" }),
   },
   { cause: "error", end: failure({ phase: "error", error: "400 scripted model failure" }) },
@@ -165,7 +179,7 @@ it.each<EndCause>([
   },
 ])(
   "subagent task end: $cause",
-  async ({ cause, end, keeps, spawnMode }) => {
+  async ({ cause, end, keeps, spawnMode, unmarked }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -186,7 +200,7 @@ it.each<EndCause>([
       expectsCompletionMessage: false,
       ...(spawnMode ? { spawnMode } : {}),
     });
-    const pids = await startChildProcesses(childKey);
+    const pids = await startChildProcesses(childKey, unmarked);
     try {
       expect(pids.every(isPidAlive)).toBe(true);
       await end(runId, childKey);
@@ -196,7 +210,11 @@ it.each<EndCause>([
       await fixture.settle();
       if (keeps) {
         expect(pids.filter(isPidAlive)).toEqual(pids);
-        expect(liveInScope(childKey)).toHaveLength(3);
+        // The service, the hand-off and the survivor stay tracked (the survivor's own short-lived
+        // children may be tracked too, until the reaper sees them exit).
+        expect(liveInScope(childKey).map(({ pid }) => pid)).toEqual(
+          expect.arrayContaining(pids.slice(0, 3)),
+        );
       } else {
         expect(pids.filter(isPidAlive)).toEqual([]);
         expect(liveInScope(childKey)).toEqual([]);

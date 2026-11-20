@@ -1,14 +1,16 @@
 // Covers atomic refuse-only suspension preparation, renewal, and release.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  addSession,
   deleteSession,
   getActiveBackgroundExecSessionCount,
   markBackgrounded,
   markExited,
 } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
+import {
+  addSessionForTests,
+  resetProcessRegistryForTests,
+} from "../agents/bash-process-registry.test-support.js";
 import {
   getGatewaySuspendAdmissionPhase,
   isGatewayWorkAdmissionClosed,
@@ -225,7 +227,7 @@ describe("gateway suspend coordinator", () => {
       id: "private-background-session",
       command: "private command",
     });
-    addSession(session);
+    addSessionForTests(session);
     markBackgrounded(session);
     deleteSession(session.id);
 

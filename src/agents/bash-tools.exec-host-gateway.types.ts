@@ -20,7 +20,7 @@ export type ProcessGatewayAllowlistParams = ExecHostCommandParams & {
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   runId?: string;
   onApprovalReview?: (review: ExecToolApprovalReview) => void;
-  scopeKey?: string;
+  scopeKey: string;
   approvalFollowupText?: string;
   approvalFollowup?: ExecApprovalFollowupFactory;
   maxOutput: number;

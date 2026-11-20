@@ -21,9 +21,12 @@ import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { addSession, markExited, type ProcessSession } from "./bash-process-registry.js";
+import { markExited, type ProcessSession } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import {
+  addSessionForTests,
+  resetProcessRegistryForTests,
+} from "./bash-process-registry.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { settleRequesterRun } from "./requester-run-settlement.js";
 import * as persistence from "./subagents/registry/subagent-registry-persistence.js";
@@ -178,7 +181,7 @@ function backgroundProcess(sessionKey: string, scopeKey = sessionKey) {
   const process = createProcessSessionFixture({ id: "watch-ci", backgrounded: true });
   process.sessionKey = sessionKey;
   process.scopeKey = scopeKey;
-  addSession(process);
+  addSessionForTests(process);
   return process;
 }
 
