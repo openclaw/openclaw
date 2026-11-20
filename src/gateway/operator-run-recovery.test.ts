@@ -571,39 +571,56 @@ describe("scheduled authenticated operator source", () => {
       await issueDeviceBootstrapToken({ baseDir: stateDir });
       expectCurrent(restored.authority);
     }));
-  it("keeps an admitted tokenless continuation after revocation and refuses the next start", () =>
-    withRecovery(
-      async (fixture) => {
-        const caller = acceptedCaller(fixture);
-        const captured = expectDefined(await caller.capture(), "accepted source");
-        expectDefined(fixture.client.internal, "authenticated client").operatorRunAuthority =
-          captured.authority;
-        const continuation = expectDefined(
-          await captureGatewayOperatorContinuation({
-            client: fixture.client,
-            context: fixture.context,
-          }),
-          "detached continuation",
-        );
-        try {
-          expect(continuation.authority.recoverySnapshot?.device).toBeUndefined();
-          caller.release();
-          captured.release();
-          expect(continuation.authority.assertCurrent).not.toThrow();
-          invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
-          expect(continuation.authority.assertCurrent).not.toThrow();
-          await expect(
-            captureGatewayOperatorContinuation({
+  it.each(["allowed", "revoked"] as const)(
+    "admits a retained tokenless continuation after its origin ended unless revoked (%s)",
+    (change) =>
+      withRecovery(
+        async (fixture) => {
+          const connection = new AbortController();
+          Object.assign(fixture.client, { connectionSignal: connection.signal });
+          const caller = acceptedCaller(fixture);
+          const captured = expectDefined(await caller.capture(), "accepted source");
+          expectDefined(fixture.client.internal, "authenticated client").operatorRunAuthority =
+            captured.authority;
+          const continuation = expectDefined(
+            await captureGatewayOperatorContinuation({
               client: fixture.client,
               context: fixture.context,
             }),
-          ).rejects.toThrow();
-        } finally {
-          continuation.release();
-        }
-      },
-      { tokenlessDevice: true },
-    ));
+            "detached continuation",
+          );
+          const releaseRetained = expectDefined(continuation.authority.retain, "retain")();
+          try {
+            expect(continuation.authority.recoverySnapshot?.device).toBeUndefined();
+            // The original request, its closure and its connection all end before replay.
+            continuation.release();
+            captured.release();
+            caller.release();
+            connection.abort(new Error("Original socket closed"));
+            const replay = expectDefined(continuation.authority.reauthorize, "replay admission");
+            if (change === "allowed") {
+              expect(replay).not.toThrow();
+            } else {
+              fixture.context.invalidateClientsForDevice?.("recovery-device", {
+                role: "operator",
+              });
+              // Admitted work finishes; a replay starts through the same admission as new work.
+              expect(continuation.authority.assertCurrent).not.toThrow();
+              expect(replay).toThrow();
+              await expect(
+                captureGatewayOperatorContinuation({
+                  client: fixture.client,
+                  context: fixture.context,
+                }),
+              ).rejects.toThrow();
+            }
+          } finally {
+            releaseRetained();
+          }
+        },
+        { tokenlessDevice: true },
+      ),
+  );
 
   it("does not adopt an incidental paired token for tokenless trusted-proxy ingress", () =>
     withRecovery(
