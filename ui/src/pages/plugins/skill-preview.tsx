@@ -3,8 +3,6 @@ import type {
   PluginsSkillsReadParams,
   PluginsSkillsReadResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
-import { stripFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
-import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import "../../components/modal-dialog.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -30,7 +28,7 @@ type SkillRequest =
 
 type SkillDocument =
   | { status: "loading" }
-  | { status: "ready"; content: string }
+  | { status: "ready"; html: string }
   | { status: "error"; message: string; retryable: boolean };
 
 type SkillPreviewIdentity = { description?: string; publisher?: string };
@@ -91,7 +89,11 @@ function createPluginPreviewOwner(
             selected = { ...request, version: result.version };
           }
           if (entry?.status === "ready" && entry.content !== undefined) {
-            skill = { status: "ready", content: entry.content };
+            const { renderPluginSkillDocument } = await import("./skill-preview-document.ts");
+            if (active !== pending || !gateway.isCurrent(connection)) {
+              return;
+            }
+            skill = { status: "ready", html: renderPluginSkillDocument(entry.content) };
           } else {
             const tooLarge = entry?.status === "too-large";
             skill = {
@@ -257,16 +259,7 @@ export function PluginSkillPreview(props: {
                 </Show>
                 <Show when={document()}>
                   {(ready) => (
-                    <SanitizedHtml
-                      tag="article"
-                      class="sidebar-markdown"
-                      html={toSanitizedMarkdownHtml(stripFrontmatterBlock(ready().content), {
-                        mode: "document",
-                        remoteImages: false,
-                        codeBlockChrome: "none",
-                        relativeLinks: false,
-                      })}
-                    />
+                    <SanitizedHtml tag="article" class="sidebar-markdown" html={ready().html} />
                   )}
                 </Show>
               </div>
