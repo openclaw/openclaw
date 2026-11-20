@@ -7,6 +7,7 @@ import { parseBunCliLauncher, renderBunCliLauncher } from "../../scripts/lib/bun
 import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { hasErrnoCode } from "./errors.js";
 import { isPathInside } from "./path-guards.js";
+import { createRuntimePathLookup } from "./path-root-index.js";
 import {
   hasInnerExpansion,
   joinLeadingExpansion,
@@ -14,7 +15,6 @@ import {
   rewriteShellLauncher,
   splitLeadingExpansion,
 } from "./update-launcher-shell.js";
-import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 
 export type RuntimeRelocation = {
   sourceRoot: string;

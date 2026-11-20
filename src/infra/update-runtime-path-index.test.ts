@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isPathInside } from "./path-guards.js";
-import { createRuntimePathLookup } from "./update-runtime-path-index.js";
+import { createRuntimePathLookup } from "./path-root-index.js";
 import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
 
 afterEach(() => vi.unstubAllGlobals());

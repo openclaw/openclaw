@@ -272,6 +272,75 @@ it("reads shared skill roots once per scan while retaining workspace entries and
   }
 });
 
+it("retains ordered watches for overlapping roots, generated aliases, and nested external targets", async () => {
+  const root = temporary.make("skills-scan-watch-roots-");
+  const workspace = path.join(root, "skills");
+  const overlap = path.join(workspace, "group");
+  const alias = path.join(root, "workspace-alias");
+  const external = path.join(root, "external");
+  const parent = path.join(external, "parent");
+  const child = path.join(parent, "child");
+  const generated = path.join(root, "generated");
+  const execution = path.join(root, "execution");
+  await write(overlap, "local", "Overlapping local root");
+  await writeSkill({ dir: parent, name: "parent", description: "External parent" });
+  await writeSkill({ dir: child, name: "child", description: "Nested external target" });
+  await write(path.join(execution, "skills"), "execution", "Execution workspace");
+  await fs.mkdir(generated);
+  for (const [target, link] of [
+    [workspace, alias],
+    [parent, path.join(workspace, "parent")],
+    [child, path.join(workspace, "child")],
+    [parent, path.join(generated, "generated-parent")],
+  ] as const) {
+    await fs.symlink(target, link, "junction");
+  }
+  const input = request(root, {
+    kind: "selected",
+    request: {
+      sourcePlan: {
+        workspaceDir: root,
+        roots: [
+          { dir: workspace, source: "openclaw-workspace", tier: "workspace" },
+          { dir: overlap, source: "openclaw-workspace", tier: "workspace" },
+          { dir: alias, source: "openclaw-workspace", tier: "workspace" },
+          { dir: workspace, source: "openclaw-workspace", tier: "workspace" },
+        ],
+        managedSkillsDir: workspace,
+        allowSymlinkTargets: [external],
+        pluginSkillsDir: generated,
+        pluginSkillRoots: [{ dir: parent, rejectHardlinks: true }],
+      },
+      limits: resolveSkillDiscoveryLimits(),
+      additionalBins: [],
+      executionWorkspaceDir: execution,
+    },
+  });
+  const [result] = await scan([input]);
+  // The alias admits local skills, but its unrelated hop cannot re-enter external roots.
+  expect(result!.sources.entries.map(({ skill }) => skill.name)).toEqual([
+    "parent",
+    "child",
+    "local",
+    "parent",
+    "local",
+    "local",
+    "child",
+    "local",
+    "parent",
+  ]);
+  expect(result!.sources.executionEntries.map(({ skill }) => skill.name)).toEqual(["execution"]);
+  expect(result!.watchDirectories).toEqual([
+    workspace,
+    overlap,
+    alias,
+    path.join(execution, ".agents", "skills"),
+    path.join(execution, "skills"),
+    await fs.realpath(parent),
+    await fs.realpath(child),
+  ]);
+});
+
 it("keeps shared-root file limits and hardlink policies separate within a scan", async () => {
   const root = temporary.make("skills-scan-root-policy-");
   const sharedDir = path.join(root, "shared");

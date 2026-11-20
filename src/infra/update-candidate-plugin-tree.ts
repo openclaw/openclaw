@@ -9,6 +9,7 @@ import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
 import { hasNodeErrorCode, isPathInside, isPathStrictlyInside } from "./path-guards.js";
+import { createRuntimePathLookup } from "./path-root-index.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { selectUpdateCandidatePluginFileAssets } from "./update-candidate-plugin-file-assets.js";
 import {
@@ -31,7 +32,6 @@ import type {
   UpdateCandidatePluginEntry,
   UpdateCandidatePluginTreePlan,
 } from "./update-candidate-plugin-tree-schema.js";
-import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import {
   readRuntimeModulesManifest,
   relocateRuntimeSymlink,

@@ -1229,6 +1229,7 @@ src/infra/path-case.ts
 src/infra/path-containment.ts
 src/infra/path-existence.ts
 src/infra/path-guards.ts
+src/infra/path-root-index.ts
 src/infra/plain-object.ts
 src/infra/ports-lsof.ts
 src/infra/ports-netstat.ts
@@ -1509,7 +1510,6 @@ src/infra/update-run-step.ts
 src/infra/update-run-timeouts.ts
 src/infra/update-run-verification.ts
 src/infra/update-run-write.ts
-src/infra/update-runtime-path-index.ts
 src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
 src/infra/update-state-inspection-protocol.ts

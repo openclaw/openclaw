@@ -2,7 +2,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { isPathInside } from "../infra/path-guards.js";
-import { createRuntimePathLookup } from "../infra/update-runtime-path-index.js";
+import { createRuntimePathLookup } from "../infra/path-root-index.js";
 import { collectBundledPluginPublicSurfaceArtifacts } from "./bundled-plugin-scan.js";
 import { isPluginControlUiAssetPath } from "./control-ui-assets.js";
 import { loadPluginManifest } from "./manifest.js";

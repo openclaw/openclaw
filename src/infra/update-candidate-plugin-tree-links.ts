@@ -5,6 +5,7 @@ import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { hashFileMutationSnapshotSync, sameFileMutationMetadata } from "./file-descriptor.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { createRuntimePathLookup } from "./path-root-index.js";
 import {
   captureUpdateCandidatePluginCodeLink,
   type UpdateCandidatePluginCodeLink,
@@ -14,7 +15,6 @@ import type {
   UpdateCandidatePluginEntry,
   UpdateCandidatePluginTreePlan,
 } from "./update-candidate-plugin-tree-schema.js";
-import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
 
 type MaterializablePlan = Omit<UpdateCandidatePluginTreePlan, "bytes" | "entries">;

@@ -212,6 +212,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/command-capture-pool-retention.ts|typescript/unbound-method|2",
         // The diagnostics probe restores Session.post and invokes it with its live receiver.
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
+        // Node MessagePort has no Window target-origin parameter.
+        "scripts/perf/discovery-worker-idle-measure.mjs|unicorn/require-post-message-target-origin|1",
         // The heap probe forwards saved SQLite methods with their original native receivers.
         "scripts/perf/doctor-transcript-heap-probe.cjs|typescript/unbound-method|3",
         // Node BroadcastChannel.postMessage has no target-origin parameter.

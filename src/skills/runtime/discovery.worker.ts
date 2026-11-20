@@ -9,7 +9,7 @@ import {
 } from "../../agents/sandbox/fs-paths.js";
 import { assertSandboxStateOwnerPathCurrent } from "../../agents/sandbox/state-owner-path.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { isPathInside } from "../../infra/path-guards.js";
+import { createRuntimePathLookup } from "../../infra/path-root-index.js";
 import { applyProcessEnvKeys } from "../../infra/process-env.js";
 import { withWorkerFsSafeNativeMode } from "../../infra/worker-fs-safe.js";
 import { workerMutationAssertion } from "../../infra/worker-mutation-authority.js";
@@ -312,13 +312,14 @@ const runTask: WorkerTaskHandler<SkillsDiscoveryOutput, SkillsDiscoveryInput> = 
           : []),
       ]);
       const physicalRoots = [...watchDirectories].map((directory) => tryRealpath(directory));
+      // Only initial roots cover entries; added external watches must not hide nested targets.
+      const physicalRootFor = createRuntimePathLookup(
+        physicalRoots.flatMap((directory) => (directory ? [[directory, directory] as const] : [])),
+      );
       // Workspace entries retain configured paths; watch their admitted physical targets.
       for (const { skill } of [...sources.entries, ...sources.executionEntries]) {
         const target = tryRealpath(skill.baseDir);
-        if (
-          target &&
-          !physicalRoots.some((directory) => directory && isPathInside(directory, target))
-        ) {
+        if (target && !physicalRootFor(target)) {
           watchDirectories.add(target);
         }
       }

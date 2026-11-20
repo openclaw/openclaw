@@ -1,10 +1,10 @@
 import path from "node:path";
 import { isPathInside } from "./path-guards.js";
+import { createRuntimePathLookup } from "./path-root-index.js";
 import type {
   UpdateCandidatePluginEntry,
   UpdateCandidatePluginTreePlan,
 } from "./update-candidate-plugin-tree-schema.js";
-import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import { resolveRuntimeFileRelocator } from "./update-runtime-relocation.js";
 
 // Path suffixes and mode bound this projection, not file contents. Recognized
