@@ -1,4 +1,4 @@
-import { isFailoverError, readDirectErrorCode } from "../agents/failover/error.js";
+import { isFailoverError, isTimeoutError, readDirectErrorCode } from "../agents/failover/error.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -67,6 +67,10 @@ export function reportSessionObserverDegradation(
         ]
       : []),
   ].join(" ");
+  const timedOut = failure ? failure.reason === "timeout" : isTimeoutError(error);
+  const guidance = timedOut
+    ? "The last assessment timed out. The chat continues without assessments for this run."
+    : "To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.";
   const notice = {
     runId: state.runId,
     sessionKey: state.sessionKey,
@@ -74,7 +78,7 @@ export function reportSessionObserverDegradation(
     stream: "notice",
     data: {
       phase: "warning",
-      message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly.${details ? ` ${details}` : ""} To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.`,
+      message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly.${details ? ` ${details}` : ""} ${guidance}`,
     },
   };
   const utility = readUtilityModelSetting(cfg, state.agentId);
@@ -129,7 +133,8 @@ export function createSessionObserverCompletion(params: {
     const controller = new AbortController();
     state.activeController = controller;
     const timeout = setTimeout(
-      () => controller.abort(),
+      () =>
+        controller.abort(new DOMException("Session observer model call timed out", "TimeoutError")),
       resolveObserverDeadlineMs(params.getConfig(), state.agentId),
     );
     const ownedWork = new AsyncWorkScope();
@@ -180,7 +185,7 @@ export function createSessionObserverCompletion(params: {
       return await racePromiseWithAbortSignal(
         ownedWork.track(execute),
         controller.signal,
-        () => new Error("session observer model call timed out or was cancelled"),
+        (signal) => signal.reason,
       );
     } finally {
       clearTimeout(timeout);
