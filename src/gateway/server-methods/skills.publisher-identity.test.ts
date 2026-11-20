@@ -7,6 +7,7 @@ import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillsDetailResultSchema } from "../../../packages/gateway-protocol/src/schema/skill-detail.js";
 import { SkillsSearchResultSchema } from "../../../packages/gateway-protocol/src/schema/skills-search.js";
+import { respondJson } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { resolveClawHubCatalogIconUrl } from "../../plugins/catalog-icon-registry.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
@@ -135,32 +136,19 @@ it("preserves ranked identities and their optional categories from the trending 
   onTestFinished,
 }) => {
   const reads: string[] = [];
+  const external = `skills-sh:acme/tools/${SLUG}`;
+  const categories = ["communication", "productivity"];
+  const item = { slug: SLUG, displayName: "Email" };
+  const items = [
+    { ...item, source: "skills-sh", install: { kind: "skills-sh", reference: external } },
+    { ...item, source: "clawhub", publisher: { handle: "acme" }, categories },
+  ];
   const fixture = await reserveTestPortListener({
     offsets: [0],
     createListener: () =>
       createServer((req, res) => {
         reads.push(`${req.method} ${req.url}`);
-        res.setHeader("Content-Type", "application/json");
-        res.end(
-          JSON.stringify({
-            items: [
-              {
-                slug: SLUG,
-                displayName: "External email",
-                source: "skills-sh",
-                install: { kind: "skills-sh", reference: `skills-sh:acme/tools/${SLUG}` },
-              },
-              {
-                slug: SLUG,
-                displayName: "Native email",
-                source: "clawhub",
-                publisher: { handle: "acme" },
-                categories: ["communication", "productivity"],
-              },
-            ],
-            nextCursor: "next:page",
-          }),
-        );
+        respondJson(res, { items, nextCursor: "next:page" });
       }),
   });
   onTestFinished(async () => {
@@ -182,23 +170,14 @@ it("preserves ranked identities and their optional categories from the trending 
     nextCursor: "next:page",
     results: [
       {
-        slug: SLUG,
-        displayName: "External email",
+        ...item,
         registry,
         score: 0,
-        installRef: `skills-sh:acme/tools/${SLUG}`,
+        installRef: external,
         installOnly: true,
         trustState: "not-scanned-by-clawhub",
       },
-      {
-        slug: SLUG,
-        displayName: "Native email",
-        registry,
-        score: 0,
-        ownerHandle: "acme",
-        installRef: `@acme/${SLUG}`,
-        categories: ["communication", "productivity"],
-      },
+      { ...item, registry, score: 0, ownerHandle: "acme", installRef: `@acme/${SLUG}`, categories },
     ],
   });
   expect(Value.Check(SkillsSearchResultSchema, response)).toBe(true);

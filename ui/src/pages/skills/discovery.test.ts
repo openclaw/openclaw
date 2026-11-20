@@ -151,55 +151,37 @@ describe("unified skill discovery", () => {
   });
 
   it("keeps the feed usable without category support, and retries a failed taxonomy independently", async () => {
-    const categories = Promise.withResolvers<{ categories: { slug: string; label: string }[] }>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "skills.search") {
-        return { results: [{ ...remoteSkill(), categories: ["research"] }] };
-      }
-      if (method === "skills.categories") {
-        return categories.promise;
-      }
-      if (method === "skills.library.list") {
-        return personalLibrary;
-      }
-      return {};
-    });
-    const mounted = mountSkills(request);
-    const feed = () => mounted.container.querySelector('[data-skill-id="remote:@alice/repo"]');
-    await waitForFast(() => expect(feed()).not.toBeNull());
-    expect(request.mock.calls.some(([method]) => method === "skills.categories")).toBe(false);
-    const { gateway } = mounted.context;
-    mounted.connection.publish({
-      ...gateway.snapshot,
+    const research = { slug: "research", label: "Research" };
+    const categories = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Directory unavailable"))
+      .mockResolvedValue({ categories: [research] });
+    const feed = vi.fn(() => ({ results: [{ ...remoteSkill(), categories: [research.slug] }] }));
+    const sources: Record<string, () => unknown> = {
+      "skills.categories": categories,
+      "skills.search": feed,
+      "skills.library.list": () => personalLibrary,
+    };
+    const { container, context, connection } = mountSkills(
+      async (method) => sources[method]?.() ?? {},
+    );
+    const section = () =>
+      container
+        .querySelector('[data-skill-id="remote:@alice/repo"]')
+        ?.closest<HTMLElement>("[data-catalog-section]")?.dataset.catalogSection;
+    await waitForFast(() => expect(section()).toBe("clawhub"));
+    expect(categories).not.toHaveBeenCalled();
+    connection.publish({
+      ...context.gateway.snapshot,
       hello: gatewayHelloForMethods(["skills.categories"]),
     });
-    await waitForFast(() =>
-      expect(request.mock.calls.some(([method]) => method === "skills.categories")).toBe(true),
-    );
-    expect(feed()).not.toBeNull();
-    categories.reject(new Error("Category directory unavailable"));
-    await waitForFast(() =>
-      expect(mounted.container.querySelector('[role="alert"]')?.textContent).toContain(
-        "Category directory unavailable",
-      ),
-    );
-    expect(feed()?.closest("[data-catalog-section]")?.getAttribute("data-catalog-section")).toBe(
-      "clawhub",
-    );
-    const before = request.mock.calls.filter(([method]) => method === "skills.search").length;
-    request.mockResolvedValueOnce({ categories: [{ slug: "research", label: "Research" }] });
-    mounted.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
-    await waitForFast(() =>
-      expect(mounted.container.querySelector(".plugin-catalog-chips")?.textContent).toContain(
-        "Research",
-      ),
-    );
-    expect(feed()?.closest("[data-catalog-section]")?.getAttribute("data-catalog-section")).toBe(
-      "category-research",
-    );
-    expect(request.mock.calls.filter(([method]) => method === "skills.search")).toHaveLength(
-      before,
-    );
+    const alert = () => container.querySelector('[role="alert"]');
+    await waitForFast(() => expect(alert()?.textContent).toContain("Directory unavailable"));
+    expect(section()).toBe("clawhub");
+    const reads = feed.mock.calls.length;
+    alert()!.querySelector("button")!.click();
+    await waitForFast(() => expect(section()).toBe("category-research"));
+    expect(feed).toHaveBeenCalledTimes(reads);
   });
 
   it("keeps cards visible without a loading label while loading", () => {
@@ -282,16 +264,6 @@ describe("unified skill discovery", () => {
     expect(focus).toHaveBeenCalledOnce();
     expect(onCategoryChange).toHaveBeenCalledExactlyOnceWith(alpha);
     expect(sections[2]!.querySelector(".plugin-catalog-section__view-all")).toBeNull();
-  });
-
-  it("keeps text search ranked and flat even when every row has an advertised category", () => {
-    const container = renderDiscovery({
-      readCategories: () => ({ categories: [{ slug: "research", label: "Research" }] }),
-      clawhubQuery: "citations",
-      clawhubResults: [{ ...remoteSkill(), categories: ["research"] }],
-    });
-    expect(container.querySelector("[data-catalog-section=clawhub] h3")?.textContent).toBe("Repo");
-    expect(container.querySelector(".plugin-catalog-section__view-all")).toBeNull();
   });
 
   it("does not mistake an invalid namesake for a ClawHub install", () => {

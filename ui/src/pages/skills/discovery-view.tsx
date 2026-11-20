@@ -9,12 +9,12 @@ import {
 } from "../../components/solid/catalog-discovery.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { registryCategoryIcon } from "../../components/solid/registry-category-icon.tsx";
 import { SettingsEmpty, SettingsGroup } from "../../components/solid/settings-ui.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
-import { registryCategoryIcon } from "../plugins/catalog-category-icon.tsx";
 import { PluginCatalogGrid } from "../plugins/catalog-grid.tsx";
 import { renderCatalogGridSkeleton } from "../plugins/catalog-skeleton.tsx";
 import { PluginCardSummary, renderPluginOfficialBadge } from "../plugins/plugin-card.tsx";
