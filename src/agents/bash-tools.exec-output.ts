@@ -207,7 +207,7 @@ export function selectExecCompletionContent(
   const lines = value.split(/\r?\n/);
   let lastLine: string | undefined;
   for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const candidate = lines[i].trim();
+    const candidate = lines[i]?.trim();
     if (candidate) {
       lastLine = candidate;
       break;
