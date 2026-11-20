@@ -13,7 +13,8 @@ vi.mock("../../plugins/providers.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/providers.runtime.js")>()),
   resolvePluginProvidersCore,
 }));
-vi.mock("./auth-refresh.js", () => ({
+vi.mock("./auth-refresh.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-refresh.js")>()),
   refreshProviderAuthAfterLogin: async () => "refreshed",
   refreshRunningGatewayAuthState: async () => "gateway-unreachable",
 }));
