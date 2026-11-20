@@ -34,10 +34,19 @@ export const OperatorScopeSchema = z.enum([
 ]);
 
 export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
-  sessions: z.strictObject({
-    /** Maximum access to another person's sessions without explicit membership. */
-    others: z.enum(["none", "invited", "view", "suggest", "write"]),
-  }),
+  sessions: z
+    .strictObject({
+      /** Maximum access to another person's sessions without explicit membership. */
+      others: z.enum(["none", "invited", "view", "suggest", "write"]),
+      maxInvitedAccess: z.enum(["read", "suggest", "send"]).optional(),
+    })
+    .refine(
+      (sessions) => sessions.maxInvitedAccess === undefined || sessions.others === "invited",
+      {
+        message: 'maxInvitedAccess requires sessions.others to be "invited"',
+        path: ["maxInvitedAccess"],
+      },
+    ),
   /** Require sandbox isolation for newly created sessions, or inherit agent policy by default. */
   sandbox: z.enum(["inherit", "required"]).optional(),
   /** Agent IDs available for session creation and runs, or all agents when set to "*". */

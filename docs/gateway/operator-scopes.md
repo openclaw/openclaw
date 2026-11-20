@@ -422,6 +422,13 @@ with role-wide `view`, `suggest`, or `write` access, even if they are also membe
 Existing scope checks still apply: `full` and `sandboxMode` changes require
 `operator.admin`. See [Session permission modes](/gateway/permission-modes).
 
+The opt-in Participate policy adds `sessions.maxInvitedAccess` (`"read"`,
+`"suggest"`, or `"send"`) only to roles with `sessions.others: "invited"`.
+Its per-session resolver uses the lower of the stored invitation level and this
+ceiling, treating an unspecified invitation level as `"read"`. Omitting the field
+preserves existing membership behavior. This foundation defines the policy and
+storage contract; request admission must consume it before deploying ceiling roles.
+
 To enable invitation-only discovery, set the guest role's `sessions.others` to
 `"invited"` after upgrading. Existing role definitions keep their current behavior.
 Assign the intended profiles to that role, then reconnect them. The creator or an

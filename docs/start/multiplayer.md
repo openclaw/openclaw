@@ -48,6 +48,25 @@ A gateway is one trust domain. Everyone who can message a tool-enabled agent sha
 
 If you need to serve mutually untrusted people or organizations, run one gateway per tenant instead, ideally on separate OS users or hosts: [Security trust model](/gateway/security/trust-model).
 
+### Participate collaborator policy
+
+The Participate foundation defines an opt-in invitation ceiling. A collaborator
+role can use this definition under `gateway.roles.definitions`:
+
+```json5
+{
+  collaborator: {
+    sessions: { others: "invited", maxInvitedAccess: "send" },
+    scopes: ["operator.sessions.read"],
+    agents: ["main"],
+  },
+}
+```
+
+The ceiling limits explicit per-session grants; it does not itself grant send
+scopes. Request-admission integration is required before deploying this role.
+See [operator scopes](/gateway/operator-scopes#named-operator-roles).
+
 ## Before you begin
 
 - A host for the Gateway that stays on: a small VPS, an office Mac, or any [supported install target](/install).

@@ -325,3 +325,23 @@ test("requires a default for GitHub role assignments, including an empty mapping
     );
   }
 });
+
+test.each(["read", "suggest", "send"] as const)(
+  "accepts the opt-in invited ceiling %s only on invited roles",
+  (maxInvitedAccess) => {
+    const definition = { ...validRole, sessions: { others: "invited", maxInvitedAccess } };
+    expect(
+      validated(rolesConfig({ definitions: { guest: definition } })).gateway?.roles?.definitions
+        .guest?.sessions,
+    ).toEqual(definition.sessions);
+    for (const others of ["none", "view", "suggest", "write"]) {
+      expect(
+        OpenClawSchema.safeParse(
+          rolesConfig({
+            definitions: { guest: { ...definition, sessions: { others, maxInvitedAccess } } },
+          }),
+        ).success,
+      ).toBe(false);
+    }
+  },
+);

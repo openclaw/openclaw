@@ -99,6 +99,9 @@ export async function readOwnerLinkStatus(params: {
             name,
             defined: true as const,
             sessions: definition.sessions.others,
+            ...(definition.sessions.maxInvitedAccess !== undefined
+              ? { maxInvitedAccess: definition.sessions.maxInvitedAccess }
+              : {}),
             requiresSandbox,
             sandbox,
             admin: definition.scopes.includes("operator.admin"),
