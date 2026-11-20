@@ -427,7 +427,8 @@ export async function executePreparedReplyRun(
     });
   }
   const followupRun = {
-    ...(groupParticipation ? { groupParticipation } : {}),
+    createChannelCronAuthority,
+    ...(groupParticipation && !hasInboundAudio(sessionCtx) ? { groupParticipation } : {}),
     prompt: queuedBody,
     readAdmissionConfig,
     sourceTurnId: resolveReplySourceTurnId({

@@ -111,7 +111,7 @@ it("drains the complete parked image turn after active steering rejects it", asy
           runFollowup: q.runFollowup,
         }),
       ),
-    ).resolves.toBe("followup");
+    ).resolves.toBe("handled");
     expect(reject).toHaveBeenCalledOnce();
     operation.complete();
     await q.done.promise;

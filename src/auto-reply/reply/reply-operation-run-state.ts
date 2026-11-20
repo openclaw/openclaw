@@ -5,7 +5,6 @@ import type {
   ReplyOperationRunState,
   ReplyPreRunRejectionCode,
 } from "../../sessions/session-controller.contracts.js";
-import { captureSessionControllerSourceSettlement } from "../../sessions/session-controller.mailbox-source.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 export type {
@@ -86,10 +85,6 @@ export function recordReplyFollowupAdmission(
   if (!state) {
     return;
   }
-  const input = params.followupRun.controllerInput;
-  state.followupSourceSettlement = input
-    ? captureSessionControllerSourceSettlement(input)
-    : undefined;
   state.admission = {
     status: "accepted",
     mode: "followup",

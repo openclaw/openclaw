@@ -52,7 +52,6 @@ import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
-import { resolveGroupParticipationCandidate } from "./group-participation.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
   completeFollowupRunLifecycle,
@@ -314,10 +313,8 @@ export async function runReplyAgent(
         touchActiveSessionEntry,
         typingSignals,
       });
-      if (result !== "followup") {
-        typing.cleanup();
-      }
-      return result === "handled" || result === "followup" ? undefined : result;
+      typing.cleanup();
+      return result === "handled" ? undefined : result;
     }
 
   recordGroupParticipationInput(providedReplyOperation, followupRun, "initial");
@@ -510,16 +507,10 @@ export async function runReplyAgent(
       }
       const queuedBehindActiveRun = (await isRunActive?.()) === true;
       await touchActiveSessionEntry();
-      if (
-        queuedBehindActiveRun &&
-        !resolveGroupParticipationCandidate({
-          run: followupRun,
-          sessionKey: sessionKey ?? followupRun.run.sessionKey,
-          storePath,
-          sessionEntry: activeSessionEntry,
-        })
-      ) {
+      if (queuedBehindActiveRun) {
         await typingSignals.signalToolStart();
+      } else {
+        typing.cleanup();
       }
       return undefined;
     }

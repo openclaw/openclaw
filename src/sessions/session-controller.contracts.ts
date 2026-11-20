@@ -724,8 +724,6 @@ export type ReplyOperationRunState = {
   /** The source delivery owner can keep spawned completion turns private. */
   sessionEventDelivery?: false;
   admission?: ReplyOperationAdmissionSnapshot;
-  /** Exact queued source receipt; buffered ingress keeps typing until it settles. */
-  followupSourceSettlement?: Promise<void>;
   /** Latest queue-owned disposition; original acceptance still records custody. */
   followupQueueDisposition?: FollowupQueueDisposition;
   /** The Gateway accepted this question answer or rejected its values before commitment. */

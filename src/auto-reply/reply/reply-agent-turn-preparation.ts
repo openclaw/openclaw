@@ -466,6 +466,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
       const preflightEntry = session.current();
       let participation: Awaited<ReturnType<typeof prepareGroupParticipation>> = undefined;
       try {
+        await params.signalRunStart?.();
         participation = await prepareGroupParticipation({
           run: turn.queued,
           operation,
@@ -478,15 +479,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
           queuedFollowupAdmitted = false;
           releaseSourceAdmission = undefined;
           return { kind: "observed", configured, turn } as const;
-        }
-        if (
-          participation?.reply &&
-          turn.sendPolicy === "allow" &&
-          params.defaults.typingMode !== "never"
-        ) {
-          await params.defaults.typing.startTypingLoop();
-        } else {
-          await params.signalRunStart?.();
         }
         const resolvedVerboseLevel =
           normalizeVerboseLevel(
