@@ -27,6 +27,7 @@ export function readInstalledTerminalMetadata(
   version: string;
   build: Record<string, unknown>;
   files: Record<string, string | null>;
+  schemaVersions: { state: number; agent: number };
 };
 export function prepareInstalledTerminalApplication(
   root: string,
