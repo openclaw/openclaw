@@ -328,7 +328,12 @@ describe("chat session sharing menu", () => {
           identities: [human("alice", "Alice"), human("other", "Other")],
           members: [{ identityId: "alice", addedBy: "owner", addedAt: 1, access: "send" }],
           permissions: [
-            { identityId: "alice", level: "send", options: ["read", "suggest", "send"] },
+            {
+              identityId: "alice",
+              level: "send",
+              options: ["read", "suggest", "send"],
+              invitation: "member",
+            },
             { identityId: "other", level: "read", options: ["read", "send"] },
           ],
         }),
@@ -769,4 +774,39 @@ describe("chat session sharing menu", () => {
     expect(error?.getAttribute("role")).toBe("alert");
     expect(root.textContent).toContain("Session access");
   });
+});
+
+it("distinguishes uninvited ceiling people from legacy memberships without stored access", async () => {
+  const onMemberAccessChange = vi.fn();
+  const onMemberChange = vi.fn();
+  const props = renderSharing({
+    session: sharingSession({ visibility: "read-only" }),
+    onMemberAccessChange,
+    onMemberChange,
+    state: sharingState({
+      identities: [human("legacy", "Legacy"), human("uninvited", "Uninvited")],
+      members: [{ identityId: "legacy", addedBy: "owner", addedAt: 1 }],
+      permissions: [
+        {
+          identityId: "legacy",
+          level: "read",
+          options: ["read", "suggest", "send"],
+          invitation: "member",
+        },
+        {
+          identityId: "uninvited",
+          level: "read",
+          options: ["read", "suggest", "send"],
+          invitation: "available",
+        },
+      ],
+    }),
+  });
+  const root = await mount(props);
+  expect(item(root, "permission:uninvited")).toBeNull();
+  item(root, "permission:legacy")!.click();
+  await waitForSolid(() => expect(item(root, "permission:suggest:legacy")).not.toBeNull());
+  item(root, "permission:suggest:legacy")!.click();
+  expect(onMemberAccessChange).toHaveBeenCalledExactlyOnceWith("legacy", "suggest");
+  expect(onMemberChange).not.toHaveBeenCalled();
 });

@@ -2,6 +2,7 @@ import { Value } from "typebox/value";
 import { expect, it, vi } from "vitest";
 import { SessionMembersListEvidenceResultSchema } from "../../../packages/gateway-protocol/src/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -90,6 +91,12 @@ it("manages bounded invitation levels without granting send members session mana
     expect(
       (await call("session.members.add", { identityId: ordinary.id, access: "read" }))[0]?.[0],
     ).toBe(false);
+    expect((await evidence()).permissions).toContainEqual({
+      identityId: guest.id,
+      level: "read",
+      options: ["read", "suggest", "send"],
+      invitation: "available",
+    });
     expect((await call("session.members.add", { identityId: guest.id }))[0]?.[0]).toBe(true);
     for (const access of ["read", "suggest", "send"] as const) {
       if (access !== "read") {
@@ -103,6 +110,7 @@ it("manages bounded invitation levels without granting send members session mana
         identityId: guest.id,
         level: access,
         options: ["read", "suggest", "send"],
+        invitation: "member",
       });
       expect((await authorize("chat.send", { sessionKey })) === null).toBe(access === "send");
     }
@@ -131,7 +139,16 @@ it("manages bounded invitation levels without granting send members session mana
       identityId: guest.id,
       level: "send",
       options: ["read", "suggest", "send"],
+      invitation: "member",
     });
+    await call("session.visibility.set", { visibility: "draft" });
+    expect((await evidence()).permissions).toContainEqual({
+      identityId: guest.id,
+      level: "send",
+      options: ["read", "suggest", "send"],
+      invitation: "member",
+    });
+    await call("session.visibility.set", { visibility: "shared" });
     cfg.gateway!.roles!.definitions.guest!.sessions.maxInvitedAccess = "suggest";
     setRuntimeConfigSnapshot(cfg);
     expect(
@@ -148,9 +165,20 @@ it("manages bounded invitation levels without granting send members session mana
       identityId: guest.id,
       level: "read",
       options: ["read", "suggest"],
+      invitation: "member",
     });
     expect((await call("session.members.remove", { identityId: guest.id }))[0]?.[0]).toBe(true);
     expect((await evidence()).members).toEqual([]);
+    await addSessionMember(
+      { agentId: "main", sessionKey },
+      { identityId: guest.id, addedBy: owner.id, addedAt: Date.now() },
+    );
+    expect((await evidence()).permissions).toContainEqual({
+      identityId: guest.id,
+      level: "read",
+      options: ["read", "suggest"],
+      invitation: "member",
+    });
     const events = broadcast.mock.calls
       .filter(([name]) => name === "session.sharing")
       .map(([, event]) => event);
@@ -159,5 +187,9 @@ it("manages bounded invitation levels without granting send members session mana
         .filter((event) => event.action === "member-access-changed")
         .map((event) => event.access),
     ).toEqual(["suggest", "send", "read"]);
+    expect(
+      events.find((event) => event.action === "member-added" && event.identityId === guest.id)
+        ?.access,
+    ).toBe("read");
     expect(events.at(-1)?.action).toBe("member-removed");
   }));

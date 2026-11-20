@@ -318,7 +318,12 @@ it("keeps invited level changes separate from membership and warns before loweri
     { identityId: "member", addedBy: "owner", addedAt: 1, access: "send" },
   ];
   initial.state!.result!.permissions = [
-    { identityId: "member", level: "send", options: ["read", "suggest", "send"] },
+    {
+      identityId: "member",
+      level: "send",
+      options: ["read", "suggest", "send"],
+      invitation: "member",
+    },
   ];
   const view = sharingFixture(initial);
   const permission = view.person("send");

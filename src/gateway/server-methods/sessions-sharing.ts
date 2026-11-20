@@ -355,6 +355,7 @@ function createSessionMemberMutationHandler(
         };
         let now: number;
         let actor: SharingActorFacts;
+        let grantedAccess: SessionMemberAddParams["access"];
         if (addActor) {
           now = Date.now();
           actor = addActor;
@@ -394,6 +395,7 @@ function createSessionMemberMutationHandler(
           if (!added.inserted) {
             return;
           }
+          grantedAccess = grant.value;
         } else {
           const removed = await removeSessionMember(
             scope,
@@ -424,6 +426,7 @@ function createSessionMemberMutationHandler(
           actor,
           event: {
             action: "member-added",
+            ...(grantedAccess ? { access: grantedAccess } : {}),
             sessionKey: current.canonicalKey,
             agentId: current.agentId,
             identityId: params.identityId,

@@ -14,6 +14,21 @@ it("validates per-recipient mention grants while preserving legacy recipient eli
   });
   return withMentionInbox(async (f) => {
     setUserProfileRole(f.bob.id, "guest");
+    expect(
+      await f.call("users.mentionable", { sessionKey: SESSION_KEY }, f.aliceClient),
+    ).toMatchObject({
+      ok: true,
+      payload: {
+        users: expect.arrayContaining([
+          expect.objectContaining({
+            profileId: f.bob.id,
+            displayName: "Bob",
+            online: true,
+            inviteAccessOptions: ["read", "suggest"],
+          }),
+        ]),
+      },
+    });
     const scope = { agentId: "main", sessionKey: SESSION_KEY };
     const target = { ...scope, entry: loadSessionEntry(scope)! };
     const prepare = (
