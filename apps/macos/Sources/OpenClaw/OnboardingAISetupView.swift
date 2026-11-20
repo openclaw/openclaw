@@ -20,60 +20,6 @@ enum OnboardingProviderAuthLink {
     }
 }
 
-private struct OnboardingRecommendedInstallCard: View {
-    let install: OnboardingAISetupModel.RecommendedInstall
-    @State private var hovered = false
-
-    var body: some View {
-        Group {
-            if let website = OnboardingProviderAuthLink.safeURL(self.install.website) {
-                Link(destination: website) { self.content }
-                    .buttonStyle(.plain)
-                    .environment(\.openURL, AppActivation.shared.openURLAction)
-            } else {
-                self.content
-            }
-        }
-        .onHover { self.hovered = $0 }
-        .animation(.easeOut(duration: 0.12), value: self.hovered)
-    }
-
-    private var content: some View {
-        HStack(alignment: .top, spacing: 10) {
-            OnboardingProviderArtwork(
-                icon: self.install.icon,
-                brandCandidates: [self.install.brandId, self.install.id],
-                fallbackSymbol: "arrow.down.circle")
-            VStack(alignment: .leading, spacing: 2) {
-                Text(self.install.label)
-                    .font(.callout.weight(.semibold))
-                Text(self.install.hint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                if let host = OnboardingProviderAuthLink.displayHost(self.install.website) {
-                    Text(host)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            Spacer(minLength: 0)
-            Image(systemName: "arrow.up.right")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.tertiary)
-                .padding(.top, 2)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.primary.opacity(self.hovered ? 0.085 : 0.05)))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
-    }
-}
-
 struct OnboardingSurface: View {
     let cornerRadius: CGFloat
 
@@ -99,6 +45,9 @@ struct OnboardingAISetupView: View {
     var returnToGatewayAuthentication: () -> Void
     var retryConfiguredGatewayProbe: (OnboardingAISetupModel.SetupIntent) -> Void
     @State private var manualEntryRequest = 0
+    @State private var connectionPath: OnboardingAIConnectionPath = .choice
+    @State private var showLocalAlternatives = false
+    @State private var showKeyEntry = false
 
     static func gatewayAuthCard(for issue: RemoteGatewayAuthIssue) -> GatewayAuthCard {
         GatewayAuthCard(
@@ -191,22 +140,17 @@ struct OnboardingAISetupView: View {
 
     @ViewBuilder
     private var resultsView: some View {
-        if !self.model.candidates.isEmpty {
-            VStack(spacing: 8) {
-                ForEach(self.model.candidates) { candidate in
-                    self.candidateRow(candidate)
-                }
-            }
-        } else if self.model.detectError == nil,
-                  self.model.configuredGatewayAuthIssue == nil
+        if self.model.configuredGatewayAuthIssue == nil,
+           !self.model.configuredGatewayProbeUnavailable
         {
-            // A failed detect must not claim "nothing found" — the error card
-            // below owns that state and the claim would be unproven.
-            self.noCandidatesIntro
-        }
-
-        if !self.model.unavailableCandidates.isEmpty {
-            self.unavailableCandidatesSection
+            switch self.connectionPath {
+            case .choice:
+                self.connectionChoices
+            case .account:
+                self.accountChoices
+            case .localModel:
+                self.localModelChoices
+            }
         }
 
         if let authIssue = model.configuredGatewayAuthIssue {
@@ -247,44 +191,160 @@ struct OnboardingAISetupView: View {
                 self.model.retryFromScratch()
             }
         }
+    }
 
-        if self.model.providerCatalogLoaded {
-            self.providerPrepareSection
-            self.providerAuthSection
-            self.manualSection
+    private var connectionChoices: some View {
+        VStack(spacing: 16) {
+            OnboardingAIPathChoice(
+                title: "Connect an AI account",
+                subtitle: "Use an AI account, such as ChatGPT, or connect with an API key.",
+                symbol: "person.crop.circle")
+            {
+                self.connectionPath = .account
+            }
+            OnboardingAIPathChoice(
+                title: "Use a local model",
+                subtitle: "Run a model on a computer you control, without an AI subscription.",
+                symbol: "laptopcomputer")
+            {
+                self.connectionPath = .localModel
+            }
+            Text("A local model runs on the computer running OpenClaw or at the model address you choose. " +
+                "That may be another computer, not this Mac. You can change this later.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.top, 8)
+        }
+        .padding(.vertical, 24)
+        .frame(maxWidth: 560)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var backToChoices: some View {
+        Button {
+            self.connectionPath = .choice
+        } label: {
+            Label("Back", systemImage: "chevron.left")
+        }
+        .buttonStyle(.plain)
+        .disabled(self.model.isBusy || self.model.activeAuthOption != nil)
+        .padding(.bottom, 8)
+    }
+
+    private var accountChoices: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            self.backToChoices
+            ForEach(self.model.candidates.filter { !OnboardingAIConnectionPath.isModelService($0.modelRef) }) {
+                self.candidateRow($0)
+            }
+            if !self.model.unavailableCandidates.isEmpty {
+                self.unavailableCandidatesSection
+            }
+            if self.model.providerCatalogLoaded {
+                if self.model.detectError == nil, self.model.providerCatalogError == nil,
+                   self.model.candidates.allSatisfy({ OnboardingAIConnectionPath.isModelService($0.modelRef) }),
+                   self.accountAuthOptions.isEmpty, self.model.manualProviders.isEmpty
+                {
+                    OnboardingErrorCard(
+                        title: "No account connections are available",
+                        message: "The check completed, but no supported account sign-ins " +
+                            "or API-key options are available. " +
+                            "Enable an account integration on the computer running OpenClaw, then check again, " +
+                            "or go back to use a local model.",
+                        docsSlug: "concepts/model-providers",
+                        retryTitle: "Refresh account options",
+                        retry: { self.model.retryFromScratch() })
+                }
+                self.providerAuthSection
+                if self.showKeyEntry {
+                    self.manualSection
+                }
+            }
+            Button("Check again") { self.model.retryFromScratch() }
+                .disabled(self.model.isBusy)
         }
     }
 
-    private var noCandidatesIntro: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("No usable AI access found on this Gateway")
-                .font(.headline)
-            Text(self.model.recommendedInstalls.isEmpty
-                ? "Connect a provider below with an API key or token, then check again."
-                : "Install one of these tools, then check again. You can also connect a provider below.")
-                .font(.subheadline)
+    private var localCandidates: [OnboardingAISetupModel.Candidate] {
+        self.model.candidates.filter { OnboardingAIConnectionPath.isModelService($0.modelRef) }
+    }
+
+    private var managedLocalOption: OnboardingAISetupModel.PrepareOption? {
+        self.model.managedLocalSetupOption
+    }
+
+    private var managedLocalInstallOption: OnboardingAISetupModel.AuthOption? {
+        self.model.authOptions.first { $0.id == "llama-cpp" }
+    }
+
+    private var localModelChoices: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            self.backToChoices
+            Text(self.localCandidates.isEmpty ? "Set up a local model." : "We found a model service.")
+                .font(.title2.weight(.semibold))
+            Text("Use a model you already run, or set one up on the computer running OpenClaw. " +
+                "Existing services may run on another computer.")
+                .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if !self.model.recommendedInstalls.isEmpty {
-                Text("Recommended installs")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 230), spacing: 10)],
-                    spacing: 10)
-                {
-                    ForEach(self.model.recommendedInstalls) { install in
-                        OnboardingRecommendedInstallCard(install: install)
+            ForEach(self.localCandidates) { self.candidateRow($0) }
+            if !self.model.unavailableCandidates.isEmpty {
+                self.unavailableCandidatesSection
+            }
+
+            if self.model.providerCatalogLoaded {
+                if self.localCandidates.isEmpty {
+                    self.managedLocalSetup
+                } else {
+                    DisclosureGroup("Set up a different model") { self.managedLocalSetup }
+                }
+                DisclosureGroup("Other model services and advanced settings", isExpanded: self.$showLocalAlternatives) {
+                    self.providerPrepareSection
+                    ForEach(self.model.authOptions.filter {
+                        OnboardingAIConnectionPath.isModelService("\($0.brandId ?? $0.id)/model") &&
+                            $0.id != "llama-cpp"
+                    }) { self.providerAuthRow($0) }
+                    ForEach(self.model.authOptions.filter { $0.kind == "custom" }) {
+                        self.providerAuthRow($0)
                     }
                 }
+                .font(.callout)
+                Button("Check again") { self.model.retryFromScratch() }
+                    .disabled(self.model.isBusy)
             }
-            Button("Check again") {
-                self.model.retryFromScratch()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
         }
-        .padding(.vertical, 4)
+    }
+
+    private var managedLocalSetup: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Find a model that fits")
+                .font(.headline)
+            Text("OpenClaw checks that computer’s hardware and storage, then recommends a model. " +
+                "You’ll see the model and download size before confirming any model download.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let option = self.managedLocalOption {
+                Button("Find a model") { self.model.startProviderPrepare(option) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(self.model.isBusy)
+            } else if let option = self.managedLocalInstallOption {
+                Button("Set up local models…") { self.model.startProviderWizard(option, kind: .auth) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(self.model.isBusy)
+            } else {
+                Text("Guided model setup isn’t available on this connection. " +
+                    "Choose another model service below, or enable the llama.cpp provider plugin and check again.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Text("Local models may be slower or less capable than online models.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 12)
     }
 
     private var unavailableCandidatesSection: some View {
@@ -320,7 +380,8 @@ struct OnboardingAISetupView: View {
                     OnboardingProviderArtwork(
                         icon: candidate.icon,
                         brandCandidates: [candidate.brandId, candidate.kind],
-                        fallbackSymbol: Self.symbol(for: candidate.kind))
+                        fallbackSymbol: OnboardingAIConnectionPath.isModelService(candidate.modelRef)
+                            ? "laptopcomputer" : Self.symbol(for: candidate.kind))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(candidate.label)
                             .font(.callout.weight(.semibold))
@@ -339,6 +400,11 @@ struct OnboardingAISetupView: View {
                     Spacer(minLength: 0)
                     if candidate.modelTarget == .utility, status == .untried {
                         Text("Use for setup")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    if OnboardingAIConnectionPath.isModelService(candidate.modelRef), status == .untried {
+                        Text("Use this model")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(Color.accentColor)
                     }
@@ -435,7 +501,7 @@ struct OnboardingAISetupView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Set up a local model")
                     .font(.headline)
-                Text("Connect a local model service, or prepare a model on this Gateway.")
+                Text("Connect a model service, or set up a model on the computer running OpenClaw.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ForEach(self.model.prepareOptions) { option in
@@ -457,9 +523,15 @@ struct OnboardingAISetupView: View {
         }
     }
 
+    private var accountAuthOptions: [OnboardingAISetupModel.AuthOption] {
+        self.model.authOptions.filter {
+            !OnboardingAIConnectionPath.isModelService("\($0.brandId ?? $0.id)/model")
+        }
+    }
+
     @ViewBuilder
     private var providerAuthSection: some View {
-        if !self.model.authOptions.isEmpty || !self.model.manualProviders.isEmpty {
+        if !self.accountAuthOptions.isEmpty || !self.model.manualProviders.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 if self.model.nativeSessionCatalogPreferenceRequired,
                    !self.model.nativeSessionCatalogs.isEmpty
@@ -481,17 +553,17 @@ struct OnboardingAISetupView: View {
                     .toggleStyle(.checkbox)
                     .padding(.bottom, 6)
                 }
-                Text("Connect an AI provider")
+                Text("Connect an AI account")
                     .font(.headline)
                 // Localization: the sign-in/API-key flow belongs to the selected provider, not OpenClaw.
                 Text(
-                    "Choose any supported provider. OpenClaw asks before installing a provider plugin, " +
-                        "then continues into its own sign-in or API-key flow and verifies a real reply.")
+                    "Use existing access above, sign in below, or connect with an API key.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                let featured = self.model.authOptions.filter(\.featured)
-                let more = self.model.authOptions.filter { !$0.featured }
+                let accountOptions = self.accountAuthOptions
+                let featured = accountOptions.filter { $0.featured || $0.id == "openai-token-sharing" }
+                let more = accountOptions.filter { !$0.featured && $0.id != "openai-token-sharing" }
                 ForEach(featured) { option in
                     self.providerAuthRow(option)
                 }
@@ -524,10 +596,11 @@ struct OnboardingAISetupView: View {
             hint: Text("Connect with an API key or token"),
             fallbackSymbol: "key.fill",
             actionLabel: Text("Connect"),
-            selected: self.model.showManualEntry)
+            selected: self.showKeyEntry)
         {
             withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
                 self.model.showManualEntry = true
+                self.showKeyEntry = true
                 // The form can already exist below the viewport; every tap must reveal it.
                 self.manualEntryRequest += 1
             }

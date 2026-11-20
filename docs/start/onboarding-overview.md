@@ -8,9 +8,9 @@ sidebarTitle: "Onboarding Overview"
 ---
 
 OpenClaw supports onboarding from the terminal, the macOS app, and the Linux
-desktop companion. Every path establishes inference first. On macOS, a fresh
-Gateway automatically picks available AI access and verifies a real completion
-before configuring the remaining setup. An existing configured model is kept.
+desktop companion. On macOS, choose where OpenClaw runs, then explicitly choose
+an AI account or a local model when AI setup is needed. A real completion verifies
+the selected connection before the remaining setup. Existing configured access is kept.
 The terminal flow also offers the full classic wizard for detailed setup.
 
 ## Which path should I use?
@@ -18,10 +18,10 @@ The terminal flow also offers the full classic wizard for detailed setup.
 |                | CLI onboarding                         | macOS app onboarding                                | Linux app onboarding                      |
 | -------------- | -------------------------------------- | --------------------------------------------------- | ----------------------------------------- |
 | **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS                                               | Linux                                     |
-| **Interface**  | Terminal or guided setup               | Automatic first run with guided fallback            | Native desktop setup                      |
+| **Interface**  | Terminal or guided setup               | Native hosting and AI connection choices            | Native desktop setup                      |
 | **Gateway**    | Local or remote                        | Local, direct remote, or SSH                        | Local, direct remote, or SSH              |
 | **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup                           | Linux desktop, visual setup               |
-| **Automation** | `--non-interactive` for scripts        | Automatic for fresh local installs                  | Manual only                               |
+| **Automation** | `--non-interactive` for scripts        | Explicit hosting and AI choices                     | Manual only                               |
 | **Start**      | `openclaw onboard`                     | [Download the macOS app](/platforms/macos#download) | [Install the Linux app](/platforms/linux) |
 
 Most users should start with **CLI onboarding** — it works everywhere and gives
@@ -76,21 +76,27 @@ CLI command docs: [`openclaw onboard`](/cli/onboard)
 
 ## macOS app onboarding
 
-[Download the macOS app](/platforms/macos#download), then open it. On a fresh
-install with no existing connection or configuration, a progress window shows the
-app preparing its local runtime, starting its own Gateway, and opening guided
-onboarding in the dashboard. **Set up manually** opens native setup instead.
-It does not automatically connect to a discovered Gateway. Existing local and
-remote setups keep their connection and native onboarding behavior.
+Open the macOS app and choose where OpenClaw will run. The native hosting choice
+comes before setup; joining an OpenClaw ID claw keeps its existing setup flow.
+For native AI setup, **Get OpenClaw thinking.** offers two paths:
 
-The dashboard shows **Connecting your AI…** while automatic setup runs, then a
-summary of the selected provider, model, and Gateway. You can select another
-available provider, use a different Gateway, or review device permissions. If
-sign-in is needed, choose **Sign in with ChatGPT** and follow the inline steps.
-If automatic setup is unavailable, the summary explains the failed attempts and
-offers native AI setup in the Mac app, or `openclaw onboard` in a browser.
+- **Connect an AI account**: reuse existing access, sign in (for example with
+  ChatGPT where supported), or use an API key. All supported account sign-ins,
+  custom connections, and key-based choices remain available. **Check again**
+  refreshes the list after signing in outside the app.
+- **Use a local model**: use an existing model service or review a managed setup
+  recommendation before approving downloads. The model runs on the computer
+  running OpenClaw or at the selected service address, not necessarily this Mac.
 
-Automatic setup keeps an existing configured model. Otherwise it tries usable
+Discovery does not choose an account or download a model. Setup checks the
+selected connection before handing off to dashboard onboarding. If discovery
+succeeds but no account options are available, the account path explains how to
+enable an integration or return to local setup. Failed discovery is reported
+separately with a retry action.
+
+### Dashboard automatic AI setup
+
+Dashboard automatic setup keeps an existing configured model. Otherwise it tries usable
 connections in this order:
 
 1. Saved OpenClaw auth profiles.

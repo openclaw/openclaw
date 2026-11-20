@@ -9,6 +9,7 @@ import OpenClawChatUI
 import OpenClawDiscovery
 @testable import OpenClawKit
 import OpenClawProtocol
+import QuartzCore
 import SwiftUI
 import Testing
 
@@ -853,7 +854,7 @@ private func pressOnboardingEntryButton(_ title: String, in root: NSView) async 
         guard visited.insert(ObjectIdentifier(element)).inserted else { return }
         let text = [element.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: element)]
             .compactMap(\.self)
-        if element.accessibilityRole?() == .button,
+        if [.button, .disclosureTriangle].contains(element.accessibilityRole?()),
            element.isAccessibilityEnabled?() == true,
            text.contains(where: { $0 == title || (title == "API Keys" && $0.contains(title)) })
         {
@@ -931,15 +932,38 @@ private func inspectAISetupSheet(
     _ model: OnboardingAISetupModel,
     colorScheme: ColorScheme = .light
 ) async -> (labels: [String], actions: [String: Bool], size: NSSize) {
-    let snapshot = await inspectAISetupSurface(OnboardingAISetupSheet(model: model), colorScheme: colorScheme)
+    let state = model.authError != nil ? "error" : String(describing: model.providerAuthCancellation)
+    let captureName = "wizard-\(model.providerWizardKind.map { String(describing: $0) } ?? "none")-" +
+        "\(model.authStep?.id ?? "starting")-\(state)-\(colorScheme == .dark ? "dark" : "light")"
+    let snapshot = await inspectAISetupSurface(
+        OnboardingAISetupSheet(model: model), colorScheme: colorScheme, captureName: captureName)
     #expect(snapshot.actions["Cancel"] != nil)
     return snapshot
+}
+
+/// AX observes state before SwiftUI has committed its display transaction.
+/// Use the next AppKit turn, not a sleep, before recording the rendered state.
+@MainActor
+private func flushAISetupRendering(_ view: NSView) async {
+    await withCheckedContinuation { continuation in
+        RunLoop.main.perform(inModes: [.common]) {
+            MainActor.assumeIsolated {
+                view.layoutSubtreeIfNeeded()
+                CATransaction.flush()
+                continuation.resume()
+            }
+        }
+    }
+    view.needsDisplay = true
+    view.displayIfNeeded()
+    CATransaction.flush()
 }
 
 @MainActor
 private func inspectAISetupSurface(
     _ content: some View,
-    colorScheme: ColorScheme = .light
+    colorScheme: ColorScheme = .light,
+    captureName: String? = nil
 ) async -> (labels: [String], actions: [String: Bool], size: NSSize) {
     // Self-process AX enumerates all windows; keep this fixture isolated through teardown.
     await TestIsolation.withIsolatedState {
@@ -947,10 +971,12 @@ private func inspectAISetupSurface(
         var appeared = false
         let hosting = NSHostingView(rootView: content
             .environment(\.colorScheme, colorScheme)
+            .background(Color(nsColor: .windowBackgroundColor))
             .onAppear { appeared = true })
         hosting.frame = NSRect(x: 0, y: 0, width: 500, height: 500)
         // Keep the sheet mounted through the AX request and detach it before closing.
         let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
         window.isReleasedWhenClosed = false
         window.contentView = hosting
         defer {
@@ -971,6 +997,22 @@ private func inspectAISetupSurface(
             Issue.record(error)
             snapshot = ([], [:])
         }
+        if let captureName,
+           let directory = ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_CAPTURE_DIR"]
+        {
+            do {
+                await flushAISetupRendering(hosting)
+                let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                let png = try #require(bitmap.representation(using: .png, properties: [:]))
+                let name = captureName.replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "-", options: .regularExpression)
+                let root = URL(fileURLWithPath: directory, isDirectory: true)
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                try png.write(to: root.appendingPathComponent("\(name).png"))
+            } catch {
+                Issue.record(error)
+            }
+        }
         return (snapshot.labels, snapshot.actions, hosting.fittingSize)
     }
 }
@@ -978,6 +1020,249 @@ private func inspectAISetupSurface(
 @Suite(.serialized, .testWaitLimit)
 @MainActor
 struct OnboardingAISetupTests {
+    @Test(arguments: ["empty", "local-only", "normal", "discovery-failed"])
+    func `account path explains available options and discovery failures`(catalog: String) async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "AccountEmptyState"))
+        let harness = try AISetupHarness(
+            url: #require(URL(string: "ws://example.invalid")),
+            handler: { _, request, _ in
+                guard request.method == "openclaw.setup.detect" else {
+                    Issue.record("Account navigation unexpectedly requested \(request.method)")
+                    return unavailableGatewayResponse(id: request.id)
+                }
+                if catalog == "discovery-failed" {
+                    return unavailableGatewayResponse(id: request.id)
+                }
+                let original = detectedSetupResponse(id: request.id)
+                var envelope = try #require(JSONSerialization.jsonObject(with: original) as? [String: Any])
+                var payload = try #require(envelope["payload"] as? [String: Any])
+                payload["candidates"] = []
+                payload["manualProviders"] = catalog == "normal" ? [[
+                    "id": "openai", "label": "OpenAI", "hint": "API key",
+                ]] : []
+                payload["authOptions"] = catalog == "empty" ? [] : [[
+                    "id": catalog == "local-only" ? "ollama" : "openai-token-sharing",
+                    "brandId": catalog == "local-only" ? "ollama" : "openai",
+                    "label": catalog == "local-only" ? "Ollama" : "Sign in with ChatGPT (Beta)",
+                    "kind": "oauth", "featured": true,
+                ]]
+                envelope["payload"] = payload
+                return try JSONSerialization.data(withJSONObject: envelope)
+            })
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        let view = harness.view(state: state, defaults: defaults, routeIdentityProvider: { "local" })
+        do {
+            await view.aiSetup.detectConnections()
+            _ = AppKitTestSupport.application
+            let hosting = NSHostingView(rootView: view.aiSetupPage(contentHeight: 600))
+            hosting.frame = NSRect(x: 0, y: 0, width: 630, height: 600)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            defer {
+                window.orderOut(nil)
+                window.contentView = nil
+                window.close()
+            }
+            window.orderFront(nil)
+            try await pressOnboardingEntryButton("Connect an AI account", in: hosting)
+            try await TestWait.state("account options rendered") {
+                let current = try await inspectAISetupAccessibility(hosting)
+                if catalog == "normal" {
+                    return current.labels.contains { $0.contains("Sign in with ChatGPT (Beta)") }
+                }
+                if catalog == "discovery-failed" {
+                    return current.actions["Try again"] == true && current.actions["Back"] == true
+                }
+                return current.labels.contains("No account connections are available")
+            }
+            let snapshot = try await inspectAISetupAccessibility(hosting)
+            #expect(snapshot.actions["Back"] == true)
+            #expect(snapshot.actions["Check again"] == true)
+            if catalog == "normal" {
+                #expect(snapshot.labels.contains { $0.contains("Sign in with ChatGPT (Beta)") })
+                #expect(snapshot.actions.contains { $0.key.contains("API Keys") && $0.value })
+            } else if catalog == "discovery-failed" {
+                #expect(snapshot.actions["Try again"] == true)
+            } else {
+                #expect(snapshot.labels.contains("No account connections are available"))
+                #expect(!snapshot.labels.contains("Ollama"))
+            }
+            #expect(snapshot.labels.contains("No account connections are available") ==
+                (catalog == "empty" || catalog == "local-only"))
+            let recoveryAction = catalog == "empty" || catalog == "local-only"
+                ? "Refresh account options" : "Check again"
+            #expect(snapshot.actions[recoveryAction] == true)
+            try await pressOnboardingEntryButton(recoveryAction, in: hosting)
+            try await TestWait.state("explicit account rediscovery") {
+                await harness.recorder.snapshot().methods.filter { $0 == "openclaw.setup.detect" }.count == 2
+            }
+            view.aiSetup.resetForGatewayChange(clearPendingHandoff: false)
+            await harness.gateway.shutdown()
+        } catch {
+            view.aiSetup.resetForGatewayChange(clearPendingHandoff: false)
+            await harness.gateway.shutdown()
+            throw error
+        }
+    }
+
+    @Test(arguments: [false, true], [ColorScheme.light, .dark])
+    func `two path onboarding keeps discovery passive and local setup reachable`(
+        hasLocalModel: Bool,
+        colorScheme: ColorScheme) async throws
+    {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "ThinkingOnboarding"))
+        let harness = try AISetupHarness(
+            url: #require(URL(string: "ws://example.invalid")),
+            handler: { _, request, recorder in
+                guard request.method == "openclaw.setup.detect" else {
+                    Issue.record("Navigation unexpectedly requested \(request.method)")
+                    return unavailableGatewayResponse(id: request.id)
+                }
+                let original = detectedSetupResponse(
+                    id: request.id, kind: "provider-auto:llama-cpp", credentials: true,
+                    modelRef: "llama-cpp/fixture-model")
+                var envelope = try #require(JSONSerialization.jsonObject(with: original) as? [String: Any])
+                var payload = try #require(envelope["payload"] as? [String: Any])
+                if !hasLocalModel {
+                    payload["candidates"] = []
+                }
+                let detections = await recorder.snapshot().methods.filter { $0 == "openclaw.setup.detect" }.count
+                if detections > 1 {
+                    var candidates = payload["candidates"] as? [[String: Any]] ?? []
+                    candidates.append([
+                        "kind": "claude-cli", "label": "New CLI login", "detail": "fixture refreshed login",
+                        "modelRef": "claude-cli/fixture-model", "recommended": false, "credentials": true,
+                    ])
+                    payload["candidates"] = candidates
+                }
+                payload["authOptions"] = [[
+                    "id": "openai-token-sharing", "brandId": "openai",
+                    "label": "Sign in with ChatGPT (Beta)", "kind": "oauth", "featured": false,
+                ]]
+                envelope["payload"] = payload
+                return try JSONSerialization.data(withJSONObject: envelope)
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: ["openclaw.setup.prepare.start"]))
+            })
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        let view = harness.view(state: state, defaults: defaults, routeIdentityProvider: { "local" })
+        defer { view.aiSetup.resetForGatewayChange(clearPendingHandoff: false) }
+        do {
+            await view.aiSetup.detectConnections()
+            #expect(view.aiSetup.phase == .ready)
+            // The explicit setup action must survive the passive list's deduplication.
+            #expect(view.aiSetup.managedLocalSetupOption?.id == "llama-cpp")
+            if hasLocalModel {
+                #expect(!view.aiSetup.prepareOptions.contains { $0.id == "llama-cpp" })
+            }
+
+            _ = AppKitTestSupport.application
+            let hosting = NSHostingView(rootView: view.aiSetupPage(contentHeight: 600)
+                .environment(\.colorScheme, colorScheme)
+                .transaction {
+                    $0.animation = nil
+                    $0.disablesAnimations = true
+                }
+                .background(Color(nsColor: .windowBackgroundColor)))
+            hosting.frame = NSRect(x: 0, y: 0, width: 630, height: 600)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            defer {
+                window.orderOut(nil)
+                window.contentView = nil
+                window.close()
+            }
+            window.orderFront(nil)
+            hosting.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+
+            func capture(_ name: String) async throws {
+                guard let directory = ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_CAPTURE_DIR"] else { return }
+                await flushAISetupRendering(hosting)
+                let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                let png = try #require(bitmap.representation(using: .png, properties: [:]))
+                let root = URL(fileURLWithPath: directory, isDirectory: true)
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                try png.write(to: root.appendingPathComponent("\(name)-\(hasLocalModel ? "found" : "fresh")-\(colorScheme == .dark ? "dark" : "light").png"))
+            }
+
+            var snapshot = try await inspectAISetupAccessibility(hosting)
+            #expect(snapshot.labels.contains("Get OpenClaw thinking."))
+            #expect(snapshot.actions["Connect an AI account"] == true)
+            #expect(snapshot.actions["Use a local model"] == true)
+            #expect(!snapshot.actions.keys.contains { $0.contains("API Keys") })
+            #expect(!snapshot.labels.contains { $0.contains("Sign in with ChatGPT (Beta)") })
+
+            try await capture("choices")
+
+            try await pressOnboardingEntryButton("Use a local model", in: hosting)
+            try await TestWait.state("local setup page") {
+                try await inspectAISetupAccessibility(hosting).labels.contains(
+                    hasLocalModel ? "We found a model service." : "Set up a local model.")
+            }
+            snapshot = try await inspectAISetupAccessibility(hosting)
+            if !hasLocalModel {
+                #expect(snapshot.actions["Find a model"] == true)
+            }
+            #expect(!snapshot.actions.keys.contains { $0.contains("API Keys") })
+            try await capture("local")
+
+            if hasLocalModel {
+                try await pressOnboardingEntryButton("Set up a different model", in: hosting)
+                try await TestWait.state("explicit managed setup after discovery") {
+                    try await inspectAISetupAccessibility(hosting).actions["Find a model"] == true
+                }
+                try await capture("local-different-model")
+            }
+            try await pressOnboardingEntryButton("Other model services and advanced settings", in: hosting)
+            try await TestWait.state("advanced model services") {
+                try await inspectAISetupAccessibility(hosting).labels.contains { $0.contains("Ollama") }
+            }
+            try await capture("local-advanced")
+            try await pressOnboardingEntryButton("Back", in: hosting)
+            try await TestWait.state("connection choices restored") {
+                try await inspectAISetupAccessibility(hosting).actions["Connect an AI account"] == true
+            }
+            try await pressOnboardingEntryButton("Connect an AI account", in: hosting)
+            try await TestWait.state("account page") {
+                try await inspectAISetupAccessibility(hosting).labels.contains { $0.contains("Sign in with ChatGPT (Beta)") }
+            }
+            snapshot = try await inspectAISetupAccessibility(hosting)
+            #expect(snapshot.actions.contains { $0.key.contains("API Keys") && $0.value })
+            #expect(!snapshot.labels.contains("API key or token"))
+            try await capture("account")
+            try await pressOnboardingEntryButton("API Keys", in: hosting)
+            try await TestWait.state("explicit key entry") {
+                try await inspectAISetupAccessibility(hosting).labels.contains("Connect with an API key or token")
+            }
+            try await capture("account-api-key-entry")
+            #expect(await harness.recorder.snapshot().methods == ["openclaw.setup.detect"])
+            try await pressOnboardingEntryButton("Check again", in: hosting)
+            try await TestWait.state("externally signed-in account appears after explicit refresh") {
+                try await inspectAISetupAccessibility(hosting).labels.contains { $0.contains("New CLI login") }
+            }
+            #expect(await harness.recorder.snapshot().methods == ["openclaw.setup.detect", "openclaw.setup.detect"])
+            try await capture("account-refreshed")
+
+        } catch {
+            await harness.gateway.shutdown()
+            throw error
+        }
+        await harness.gateway.shutdown()
+    }
+
     @Test func `detection never activates the first candidate`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingReadOnlyDetectionTests"))
         let recorder = AISetupRequestRecorder()
@@ -3465,6 +3750,10 @@ struct OnboardingAISetupTests {
                     #expect(events.persistenceCalls == 3)
                 } else {
                     try await harness.recorder.waitForMethod("openclaw.setup.detect")
+                    try await TestWait.state("manual AI setup paths") {
+                        try await inspectAISetupAccessibility(hosting).actions["Connect an AI account"] == true
+                    }
+                    try await pressOnboardingEntryButton("Connect an AI account", in: hosting)
                     try await TestWait.state("manual AI setup controls") {
                         let ax = try await inspectAISetupAccessibility(hosting)
                         return ax.actions["Next"] == false &&
@@ -6385,6 +6674,12 @@ struct OnboardingAISetupTests {
 
                 hosting.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
+                try await pressOnboardingEntryButton("Connect an AI account", in: hosting)
+                try await TestWait.state("recovered account controls") {
+                    try await inspectAISetupAccessibility(hosting).actions.contains {
+                        $0.key.contains("API Keys") && $0.value
+                    }
+                }
                 let surface = try await inspectAISetupAccessibility(hosting)
                 #expect(surface.actions.contains { $0.key.contains("Test AI") && $0.value })
                 #expect(surface.actions.contains { $0.key.contains("API Keys") && $0.value })
