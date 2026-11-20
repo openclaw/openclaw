@@ -20,7 +20,8 @@ export async function resolveRecordedPublicationBaseBranch(params: {
   const { cwd, baseRef, defaultBranch } = params;
   const asRecorded = () => parseGitHubPublicationBaseBranch(baseRef, defaultBranch);
   const name = baseRef.trim();
-  if (!/^[0-9a-f]{4,63}$/iu.test(name)) {
+  // A full commit ID already selects the default branch.
+  if (!/^[0-9a-f]{4,63}$/iu.test(name) || name.length === 40) {
     return asRecorded();
   }
   // Git resolves a bare name to a local branch before an abbreviated object ID.
@@ -42,7 +43,7 @@ export async function resolveRecordedPublicationBaseBranch(params: {
   return (await params.remoteBranchExists(name)) === false ? defaultBranch : asRecorded();
 }
 
-/** Reads whether `branch` exists on GitHub; a lookup failure other than 404 stays unknown. */
+/** Reads whether `branch` exists on GitHub; any lookup failure other than HTTP 404 stays unknown. */
 export function gitHubBranchPresence(params: {
   repository: string;
   host: string;
@@ -64,6 +65,7 @@ export function gitHubBranchPresence(params: {
     if (result.code === 0) {
       return result.stdout.toString("utf8").trim() === `refs/heads/${branch}` ? true : undefined;
     }
-    return /\b404\b|Not Found/u.test(result.stderr.toString("utf8")) ? false : undefined;
+    // gh reports a failed API status as "<message> (HTTP <status>)".
+    return /\(HTTP 404\)/u.test(result.stderr.toString("utf8")) ? false : undefined;
   };
 }
