@@ -501,7 +501,12 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
-  test("retains prepared metadata through browser profile writes without notifying clients", async () => {
+  test.each([
+    { browser: { profiles: { temporary: { cdpPort: 18801, color: "#123456" } } } },
+    { browser: { headless: true } },
+    { ui: { prefs: { sidebarEntries: ["sessions"] } } },
+    { logging: { level: "debug" as const } },
+  ])("retains prepared metadata through presentation writes: %j", async (change) => {
     const onChanged = vi.fn();
     const harness = createChatMetadataHarness(undefined, { onChanged });
     await harness.refresh();
@@ -510,7 +515,7 @@ describe("gateway chat metadata runtime", () => {
 
     harness.setConfig({
       agents: { entries: { main: {} } },
-      browser: { profiles: { temporary: { cdpPort: 18801, color: "#123456" } } },
+      ...change,
     });
     await harness.refresh();
     const second = await harness.read();

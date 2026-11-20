@@ -1,7 +1,8 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { configPathAffectsConversation } from "../../../src/config/read-dependencies.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 
-/** Browser profile lifecycle does not change conversation, identity or model facts. */
+/** Config editors refresh every revision; conversations follow their readers' dependencies. */
 export function isConversationConfigChange(
   event: Pick<GatewayEventFrame, "event" | "payload">,
 ): boolean {
@@ -11,12 +12,6 @@ export function isConversationConfigChange(
   const paths = asNullableRecord(event.payload)?.changedPaths;
   return (
     !Array.isArray(paths) ||
-    paths.some(
-      (path: unknown) =>
-        typeof path !== "string" ||
-        (path !== "browser.profiles" &&
-          !path.startsWith("browser.profiles.") &&
-          path !== "meta.lastTouchedVersion"),
-    )
+    paths.some((path: unknown) => typeof path !== "string" || configPathAffectsConversation(path))
   );
 }

@@ -3,12 +3,12 @@
  * Seed with team-shape-fixture.ts; never accepts a live URL or operator state.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/config-reload-scope-herd.ts \
  *   --state-dir <synthetic-fixture> --output <new.json> --clients 14
- * --baseline-dir loads the three original owners into the same source graph.
+ * --baseline-dir loads the original server and UI owners into the same source graph.
  * Run A/A then interleaved baseline/candidate processes, at least five pairs.
  * --allocations and --cpu-profile are separate diagnostic runs. Counts include
  * simulated subscriptions; explicit models.list probes are reported separately.
- * --controls-only warms every burst kind, then measures duplicate no-op/model
- * controls for A/A comparison. Start each process below 8 one-minute load.
+ * Every process warms each burst kind before timing. --controls-only measures
+ * duplicate no-op/model controls for A/A. Start below 8 one-minute load.
  */
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -19,7 +19,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { SessionRowChange } from "../../src/sessions/session-row-changes.js";
-import { isConversationConfigChange } from "../../ui/src/lib/config-change.ts";
 import { modelCatalogEventInvalidation } from "../../ui/src/lib/model-catalog-cache.ts";
 import { getFreePort } from "../lib/gateway-bench-probes.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
@@ -38,9 +37,7 @@ const { values } = parseArgs({
 });
 assert(values["state-dir"] && values.output);
 const startLoad = loadavg();
-if (values["controls-only"]) {
-  assert(startLoad[0]! < 8, "Control arm must start below 8 one-minute load");
-}
+assert(startLoad[0]! < 8, "Arm must start below 8 one-minute load");
 const root = path.resolve(values["state-dir"]);
 const fixture = JSON.parse(readFileSync(path.join(root, "team-shape-summary.json"), "utf8"));
 const count = Number(values.clients);
@@ -48,13 +45,16 @@ assert(Number.isSafeInteger(count) && count > 0 && count <= 64);
 const replaced = [
   "src/config/runtime-snapshot-value-fact.ts",
   "src/config/runtime-session-changes.ts",
-  "src/gateway/server-reload-managed.ts",
+  "src/config/resolution-facts.ts",
+  "ui/src/lib/config-change.ts",
 ].map((file) =>
   registerPerfOwnerReplacement(
     new URL(`../../${file}`, import.meta.url).href,
     values["baseline-dir"] ? path.join(values["baseline-dir"], file) : undefined,
   ),
 );
+// Register before importing the subscriber: both arms must exercise their own UI predicate.
+const { isConversationConfigChange } = await import("../../ui/src/lib/config-change.ts");
 const configPath = path.join(root, "openclaw.json");
 process.env = createGatewayBenchEnv(path.join(root, "home"), configPath, {
   startupTrace: true,
@@ -71,7 +71,8 @@ const port = await getFreePort();
 const token = "synthetic-config-reload-proof";
 const config: OpenClawConfig = JSON.parse(readFileSync(configPath, "utf8"));
 const logPath = path.join(root, "reload-scope-gateway.log");
-config.logging = { ...config.logging, file: logPath };
+config.logging = { ...config.logging, file: logPath, level: "info" };
+config.ui = { ...config.ui, prefs: { ...config.ui?.prefs, chatShowToolCalls: true } };
 writeFileSync(logPath, "");
 config.gateway = {
   ...config.gateway,
@@ -286,6 +287,8 @@ try {
     ["model", { agents: { defaults: { model: { primary: "fixture/second" } } } }],
     ["create", { browser: { profiles: { temporary: { cdpPort: 18801 } } } }],
     ["remove", { browser: { profiles: { temporary: null } } }],
+    ["ui-prefs", { ui: { prefs: { chatShowToolCalls: false } } }],
+    ["logging", { logging: { level: "debug" } }],
   ] as const;
   async function runBurst(label: string, patch: unknown, record = true) {
     await drain();
@@ -359,16 +362,16 @@ try {
     };
   }
   const resetModel = { agents: { defaults: { model: { primary: "fixture/first" } } } };
-  if (values["controls-only"]) {
-    // Exercise the real callbacks and all read/write worker classes before timing.
-    for (const [label, patch] of bursts) {
-      await runBurst(label, patch, false);
-    }
-    await runBurst("model-reset", resetModel, false);
+  // Exercise the real callbacks and all read/write worker classes before timing.
+  for (const [label, patch] of bursts) {
+    await runBurst(label, patch, false);
   }
+  await runBurst("model-reset", resetModel, false);
+  await runBurst("ui-reset", { ui: { prefs: { chatShowToolCalls: true } } }, false);
+  await runBurst("logging-reset", { logging: { level: "info" } }, false);
   const measuredStartLoad = loadavg();
+  assert(measuredStartLoad[0]! < 8, "Warmed arm must start below 8 one-minute load");
   if (values["controls-only"]) {
-    assert(measuredStartLoad[0]! < 8, "Warmed control arm must start below 8 one-minute load");
     for (const [label, patch] of bursts.slice(0, 3)) {
       results.push(await runBurst(label, patch));
     }
@@ -394,7 +397,7 @@ try {
         load: loadavg(),
         startLoad,
         measuredStartLoad,
-        warmedControls: values["controls-only"] === true,
+        warmedControls: true,
         clients: count,
         distinctSessions: new Set(sessionKeys.values()).size,
         fixture,
