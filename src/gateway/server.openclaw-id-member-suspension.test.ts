@@ -143,6 +143,13 @@ async function runScenario(cutOff: CutOff, signal: AbortSignal) {
       if (pending.includes("MAKE_CRON")) {
         writeToolCall(response, "dispatch_action", {
           id: AUTOMATIONS_TOOL_NAME,
+          args: { action: "plan", names: ["Member job"] },
+        });
+        return;
+      }
+      if (JSON.stringify(input[lastOutput])?.includes("automation_creation_plan")) {
+        writeToolCall(response, "dispatch_action", {
+          id: AUTOMATIONS_TOOL_NAME,
           args: {
             action: "add",
             job: {

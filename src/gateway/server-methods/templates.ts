@@ -49,7 +49,10 @@ export const templatesHandlers: GatewayRequestHandlers = {
     async ({ params, respond, context }) => {
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
       if (params.overview && !params.query?.trim() && !params.category && !params.featured) {
-        const overview = await readClawHubTemplatesOverview({ limit: params.limit ?? 8 });
+        const overview = await readClawHubTemplatesOverview({
+          limit: params.limit ?? 8,
+          includeCategoryEntries: params.includeCategoryEntries,
+        });
         assertTemplatesLabsEnabled(context.getRuntimeConfig());
         respond(true, { entries: [], ...(overview ? { overview } : {}) });
         return;

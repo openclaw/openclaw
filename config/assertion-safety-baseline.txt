@@ -2211,7 +2211,7 @@ src/talk/consult-question.ts	2
 src/talk/exact-speech-protocol.ts	1
 src/talk/provider-internal.ts	2
 src/talk/turn-context-tracker.ts	2
-src/templates/cron.ts	9
+src/templates/cron.ts	2
 src/templates/mcp.ts	1
 src/templates/project-build.ts	3
 src/templates/project.ts	2
@@ -2304,7 +2304,7 @@ ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-panel-upload.ts	2
 ui/src/components/terminal/terminal-pending-actions.ts	1
 ui/src/i18n/lib/translate.ts	1
-ui/src/lib/agents/display.ts	5
+ui/src/lib/agents/display.ts	4
 ui/src/lib/board/gateway-provider.ts	2
 ui/src/lib/board/widget-bridge.ts	2
 ui/src/lib/board/widget-sandbox-host.ts	1
