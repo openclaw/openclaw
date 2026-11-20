@@ -145,11 +145,17 @@ export function PluginSkillPreview(props: {
         const close = () => props.preview.close();
         return (
           <openclaw-modal-dialog
-            class="plugin-skill-dialog"
             label={state().request.skillName}
+            style={{ "--openclaw-modal-width": "680px" }}
             onModal-cancel={close}
           >
-            <div class="oc-dialog plugin-skill-dialog__frame">
+            <div
+              class="oc-dialog"
+              style={{
+                height: "min(660px, 82dvh, var(--openclaw-modal-height-limit))",
+                "overflow-wrap": "anywhere",
+              }}
+            >
               <DialogHeader title={state().request.skillName} onClose={close} />
               <div
                 class="oc-dialog__body plugin-skill-dialog__body"

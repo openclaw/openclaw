@@ -1,20 +1,3 @@
 .plugin-skills-section .settings-row__desc {
   overflow-wrap: anywhere;
 }
-
-.plugin-skill-dialog {
-  --openclaw-modal-width: 680px;
-}
-
-.plugin-skill-dialog__frame {
-  height: min(660px, 82dvh, var(--openclaw-modal-height-limit));
-}
-
-.plugin-skill-dialog__frame .oc-dialog__title,
-.plugin-skill-dialog__body .sidebar-markdown {
-  overflow-wrap: anywhere;
-}
-
-.plugin-skill-dialog__body pre {
-  overflow-wrap: normal;
-}
