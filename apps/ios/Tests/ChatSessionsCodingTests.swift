@@ -397,8 +397,7 @@ struct ChatSessionsCodingTests {
         #expect(items.map(\.id) == ["outer", "nested-call"])
         #expect(items.map(\.resultText) == ["Checked", "Nested success output"])
         #expect(items.allSatisfy { !$0.isPending && $0.displayState == .finished })
-        #expect(ChatCompletedWorkSummary.label(work: work, expanded: true) ==
-            "Worked · 2 tool calls · 1 command · 1 read")
+        #expect(ChatCompletedWorkSummary.activityHeadline(work.messages) == "Ran commands, read files")
         #expect(ChatTranscriptRow.collapseCompletedWork(raw, runWorking: true) == raw)
         #expect(ChatTranscriptRow.collapseCompletedWork(
             raw, runWorking: false, activeRunIDs: ["nested-run"]) == raw)

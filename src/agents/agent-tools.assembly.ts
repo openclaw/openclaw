@@ -438,6 +438,9 @@ export function* assembleOpenClawCodingTools(
           ringZeroTools,
           yield {
             ...pluginToolOptions,
+            // The planning receipt belongs to a user conversation, not to scheduler or SDK calls.
+            requireCronCreationPlan:
+              options?.trigger === "user" && Boolean(options.sessionKey) && !options.jobId,
             cronSandboxContext: sandbox,
             sessionPortalTarget,
             sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,
