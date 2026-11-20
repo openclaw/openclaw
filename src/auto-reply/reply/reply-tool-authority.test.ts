@@ -5,7 +5,7 @@ import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import type { GatewayAccessGrantRef } from "../../plugins/gateway-access-policy.types.js";
@@ -329,7 +329,7 @@ it.each([
           },
         );
         cleanups.push(caller.release);
-        const owner = await captureGatewayOperatorRunAuthority({
+        const owner = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority: caller.isCurrent,

@@ -27,7 +27,7 @@ import {
   invalidateGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { disconnectStaleSharedGatewayAuthClients } from "../server-shared-auth-generation.js";
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
@@ -183,7 +183,7 @@ describe("gateway agent caller authority custody", () => {
                         visible: true,
                       });
                       await expect(
-                        captureGatewayOperatorRunAuthority({
+                        prepareGatewayOperatorRunAuthority({
                           client,
                           context,
                           hasCurrentClientAuthority: caller.isCurrent,

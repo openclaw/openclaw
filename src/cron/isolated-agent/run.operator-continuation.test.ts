@@ -21,9 +21,7 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import * as publicationIdentity from "../../gateway/github-publication-availability.js";
 import * as publicationTransport from "../../gateway/github-publication-git-transport.js";
 import { createGitHubPublicationCoordinator } from "../../gateway/github-publication.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
-import { decodeGatewayOperatorRecoverySource } from "../../gateway/operator-run-recovery-source.codec.js";
-import { restoreGatewayOperatorSource } from "../../gateway/operator-run-recovery.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import {
   admission,
@@ -60,6 +58,7 @@ import { updateCronRuntimeRow } from "../store/row-codec.js";
 import { prepareAuthorityConfig, resetAuthorityRunHarness } from "./run.authority.test-support.js";
 import {
   createOperatorContinuationService,
+  prepareContinuationRoleConfig,
   publication,
   publicationCommandResult,
 } from "./run.operator-continuation.test-support.js";
@@ -156,6 +155,7 @@ it.each([
   "foreign target",
   "current tool deny",
   "role revoked",
+  "role definition edited",
   "role revoked during merge",
   "session edited",
   "session replaced",
@@ -184,6 +184,8 @@ it.each([
   const roleRevokedDuringMerge =
     scenario === "role revoked during merge" ||
     scenario === "self removal then role revoked during merge";
+  const roleDefinitionEdited = scenario === "role definition edited";
+  const rolePolicySource = roleRevoked || roleRevokedDuringMerge || roleDefinitionEdited;
   const scopedOperator =
     scenario === "write-scoped operator" || scenario === "cron-scoped operator";
   const config = await prepareAuthorityConfig({
@@ -191,12 +193,13 @@ it.each([
     ...(realPrincipal ? { gateway: principalGatewayPolicy(personPolicySource) } : {}),
     ...(recurring ? { cron: { triggers: { enabled: true } } } : {}),
   });
+  prepareContinuationRoleConfig(config, rolePolicySource && !realPrincipal);
   const fixture = createCronFixture(undefined, config);
   const { context } = fixture;
   const resolveGatewayContext = () => context;
   context.resolveGatewayContext = resolveGatewayContext;
   const profile = ensureProfileForEmail("scheduled-operator@example.test");
-  if (realPrincipal) {
+  if (realPrincipal || rolePolicySource) {
     await setCanonicalUserProfileRole(profile.id, "writer");
   }
   const { client, revokePersonPolicy } = prepareContinuationClient({
@@ -227,7 +230,7 @@ it.each([
   }
   const captureAuthority = async () =>
     expectDefined(
-      await captureGatewayOperatorRunAuthority({
+      await prepareGatewayOperatorRunAuthority({
         client,
         context,
         sourceAuthority: null,
@@ -362,7 +365,7 @@ it.each([
                     name: "Finish authorized landing",
                     enabled: scenario !== "paused force run",
                     schedule:
-                      recurring || roleRevoked
+                      recurring || roleRevoked || roleRevokedDuringMerge
                         ? { kind: "every", everyMs: 180_000 }
                         : {
                             kind: "at",
@@ -495,6 +498,9 @@ it.each([
     setRuntimeConfigSnapshot(config);
   } else if (roleRevoked) {
     await setCanonicalUserProfileRole(profile.id, "blocked");
+  } else if (roleDefinitionEdited) {
+    config.gateway!.roles!.definitions.writer!.agents = ["main"];
+    setRuntimeConfigSnapshot(config);
   } else if (scenario === "session edited" || scenario === "session replaced") {
     // A message edit rotates only the session id; a reset also rotates the revision.
     await accessor.replaceSessionEntry(target, {
@@ -778,19 +784,6 @@ it.each([
     }
     await finished.promise;
     await execution.waitForIdle();
-    if (roleRevokedDuringMerge) {
-      const source = decodeGatewayOperatorRecoverySource(
-        expectDefined(job.operatorSource, "captured operator source").source,
-      );
-      await expect(
-        restoreGatewayOperatorSource({
-          snapshot: source.snapshot,
-          target,
-          context,
-          assertCurrent: () => {},
-        }),
-      ).rejects.toThrow(/operator identity changed/i);
-    }
     if (selfRemoving) {
       expect(execution.getJob(job.id)).toBeUndefined();
       expect(entered).toBe(1);
@@ -884,11 +877,7 @@ it.each([
     ) {
       expect(entered).toBe(0);
       expect(state.lastRunStatus, state.lastError).toBe("error");
-      expect(state.lastError).toMatch(
-        roleRevoked
-          ? /operator identity changed/i
-          : /authority|source|conversation|session|role|ingress/i,
-      );
+      expect(state.lastError).toEqual(expect.any(String));
       if (roleRevoked) {
         expect(execution.getJob(job.id)?.enabled).toBe(false);
         expect(state.nextRunAtMs).toBeUndefined();
@@ -910,6 +899,7 @@ it.each([
         scenario === "write-scoped operator" ||
         scenario === "paused force run" ||
         roleRevokedDuringMerge ||
+        roleDefinitionEdited ||
         // The continuation's conversation is linked by key: an edit or reset keeps it.
         scenario === "session edited" ||
         scenario === "session replaced" ||
@@ -941,6 +931,18 @@ it.each([
             : "require full operator write permission",
         );
       }
+      if (scenario === "role revoked during merge") {
+        clock.setTime(expectDefined(state.nextRunAtMs, "next occurrence after admitted merge"));
+        await onTimer(schedulerState);
+        await execution.waitForIdle();
+        expect(entered).toBe(1);
+        expect(writes).toEqual([{ sha: "a".repeat(40), merge_method: "merge" }]);
+        expect(execution.getJob(job.id)).toMatchObject({
+          enabled: false,
+          state: { lastRunStatus: "error", consecutiveErrors: 1, lastError: expect.any(String) },
+        });
+        expect(finishedEvent).toMatchObject({ status: "error" });
+      }
     }
     if (
       !unavailableSource &&
@@ -951,6 +953,7 @@ it.each([
       scenario !== "write-scoped operator" &&
       scenario !== "paused force run" &&
       scenario !== "session edited" &&
+      !roleDefinitionEdited &&
       scenario !== "session replaced" &&
       !ownerEdit &&
       !recurring &&

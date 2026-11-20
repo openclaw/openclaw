@@ -1,4 +1,11 @@
-import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
+import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
+import { restoreGatewayQueuedOperatorRecovery } from "../../../gateway/operator-run-recovery.js";
+import {
+  GatewayOperatorAccessUnavailableError,
+  isOperatorAuthorityUnavailable,
+} from "../../../infra/operator-authority-error.js";
+import { GatewayDispatchUnavailableError } from "../../../infra/restart-recovery-errors.js";
+import { getInProcessGatewayRequestContext } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { completeSessionControllerSourceLifecycle } from "../../../sessions/session-controller.mailbox-source.js";
 import {
@@ -142,6 +149,55 @@ export function retireFollowupRunCancellation(run: FollowupRun): void {
   state.cancellationRetired = true;
   run.turnAdoptionLifecycle?.onCancellationRetired?.();
 }
+/** Restore a selected queued requester before execution preparation captures its caps. */
+export async function prepareFollowupRunOperatorAuthority(run: FollowupRun): Promise<void> {
+  const state = run.controllerClaim?.custody ?? run.controllerInput?.custody;
+  if (!state?.enqueued || state.adopted || !run.operatorAuthority) {
+    return;
+  }
+  if (state.completed) {
+    throw new Error("Input completed before source adoption");
+  }
+  try {
+    const context = getInProcessGatewayRequestContext();
+    if (!context) {
+      throw new GatewayOperatorAccessUnavailableError();
+    }
+    const restored = await restoreGatewayQueuedOperatorRecovery({
+      context,
+      source: captureQueuedOperatorRecoverySource(run.operatorAuthority),
+      assertCurrent: () => {
+        if (state.completed) {
+          throw new Error("Input completed before source adoption");
+        }
+      },
+    });
+    const release = state.releaseAuthority;
+    run.operatorAuthority = restored.authority;
+    state.releaseAuthority = restored.release;
+    release?.();
+    state.failure = undefined;
+  } catch (error) {
+    state.failure = error;
+    const input = run.controllerInput;
+    if (
+      input &&
+      !isOperatorAuthorityUnavailable(error) &&
+      !(error instanceof GatewayDispatchUnavailableError && error.retryable)
+    ) {
+      const recorder = run.userTurnTranscriptRecorder;
+      try {
+        recorder?.markBlocked();
+        recorder?.finishPendingInput?.("cancelled", "policy-refused");
+        await recorder?.waitForPendingInputSettlement?.();
+      } finally {
+        retireSessionControllerInput(input);
+      }
+    }
+    throw error;
+  }
+}
+
 export async function admitFollowupRunLifecycle(
   run: FollowupRun | FollowupLifecycleSource,
 ): Promise<void> {
@@ -157,25 +213,6 @@ export async function admitFollowupRunLifecycle(
     throw new Error("Input completed before source adoption");
   }
   const admission = Promise.resolve().then(async () => {
-    if (state.enqueued) {
-      try {
-        run.operatorAuthority?.reauthorize?.();
-      } catch (error) {
-        const input = run.controllerInput;
-        if (input && !isOperatorAuthorityUnavailable(error)) {
-          state.failure = error;
-          const recorder = run.userTurnTranscriptRecorder;
-          try {
-            recorder?.markBlocked();
-            recorder?.finishPendingInput?.("cancelled", "policy-refused");
-            await recorder?.waitForPendingInputSettlement?.();
-          } finally {
-            retireSessionControllerInput(input);
-          }
-        }
-        throw error;
-      }
-    }
     await run.turnAdoptionLifecycle?.onAdopted();
     // A successful custody callback commits before the post-await authority check.
     state.adopted = true;

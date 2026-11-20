@@ -133,9 +133,6 @@ export async function retainAgentTurnOperatorRun({
         })?.delivery.returnedResult);
     try {
       retained = await retainGatewayOperatorRun({ ...operator, invocationAuthority });
-      if (returnedResult) {
-        retained.authority?.reauthorize?.();
-      }
     } catch (error) {
       if (
         returnedResult &&

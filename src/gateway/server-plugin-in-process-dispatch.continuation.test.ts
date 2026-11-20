@@ -223,7 +223,7 @@ describe("typed in-process agent continuation authorization", () => {
     async (closed) => {
       const { client, context, run } = createOperatorScope("preparing-continuation");
       context.resolveGatewayContext = () => context;
-      const source = await operatorCapture.captureGatewayOperatorRunAuthority({ client, context });
+      const source = await operatorCapture.prepareGatewayOperatorRunAuthority({ client, context });
       assert(source, "Expected operator source");
       client.internal = { operatorRunAuthority: source.authority };
       const entered = createDeferredCore();
@@ -233,12 +233,12 @@ describe("typed in-process agent continuation authorization", () => {
       let settled:
         | Promise<Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>>
         | undefined;
-      const capture = operatorCapture.captureGatewayOperatorRunAuthority;
+      const capture = operatorCapture.prepareGatewayOperatorRunAuthority;
       try {
         await run(() =>
           withOperatorToolGatewayAuthority({ scopes: ["operator.write"] }, async () => {
             using _ = vi
-              .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
+              .spyOn(operatorCapture, "prepareGatewayOperatorRunAuthority")
               .mockImplementationOnce(async (...args) => {
                 const captured = await capture(...args);
                 entered.resolve();
@@ -365,7 +365,7 @@ describe("typed in-process agent continuation authorization", () => {
           undefined,
           { isCurrent: () => true, subscribe: () => () => {} },
         );
-        const operator = await operatorCapture.captureGatewayOperatorRunAuthority({
+        const operator = await operatorCapture.prepareGatewayOperatorRunAuthority({
           client: owner,
           context,
           hasCurrentClientAuthority: source.isCurrent,
@@ -399,10 +399,6 @@ describe("typed in-process agent continuation authorization", () => {
             expect(principal.authenticatedUserProfile?.profileId).toBe(
               owner.authenticatedUserProfile!.profileId,
             );
-            if (request.idempotencyKey !== "target-followup" && boundary === "device revoked") {
-              // This mock observes dispatch; real returned-turn admission is covered by ACP custody.
-              expect(principal.internal?.operatorRunAuthority?.reauthorize).toThrow();
-            }
             io.emitAcceptance([
               true,
               { runId: request.idempotencyKey, status: "accepted" },
@@ -581,7 +577,7 @@ describe("typed in-process agent continuation authorization", () => {
         await import("../agents/subagents/announce/subagent-announce-completion-delivery.js");
       const { client: owner, context, run } = createOperatorScope("settle-owner");
       const sourceSignal = new AbortController();
-      const source = await operatorCapture.captureGatewayOperatorRunAuthority({
+      const source = await operatorCapture.prepareGatewayOperatorRunAuthority({
         client: owner,
         context,
         sourceAuthority: {

@@ -292,13 +292,13 @@ export async function proveStoppedSandboxAuthority(
       const context = server.createContext();
       context.getRuntimeConfig = () => config;
       const source = new AbortController();
-      const captured = await auth.captureGatewayOperatorRunAuthority({
+      const captured = await auth.prepareGatewayOperatorRunAuthority({
         client: server.createOperatorClient({
           profileId: profile.id,
           scopes: guestInvolvement ? guestScopes : ["operator.write"],
         }),
         context,
-        sourceAuthority: {
+        invocationAuthority: {
           assertCurrent: () => source.signal.throwIfAborted(),
           signal: source.signal,
         },
@@ -377,7 +377,6 @@ export async function proveStoppedSandboxAuthority(
           await expectSource(owner.worktree.path, "accepted guest edit\n");
 
           expect(captured.authority.assertCurrent).not.toThrow();
-          expect(captured.authority.reauthorize).not.toThrow();
           await sandbox.fsBridge.writeFile({
             filePath: "source.txt",
             data: "admitted guest edit\n",
@@ -480,7 +479,6 @@ export async function proveStoppedSandboxAuthority(
                 onCommitted: roles.invalidateOperatorRolePolicy,
               });
               expect(captured.authority.assertCurrent).not.toThrow();
-              expect(captured.authority.reauthorize).toThrow(/operator role changed/);
             } else {
               source.abort(new Error("operator source execution authority cancelled"));
             }
@@ -562,7 +560,6 @@ export async function proveStoppedSandboxAuthority(
             onCommitted: roles.invalidateOperatorRolePolicy,
           });
           expect(captured.authority.assertCurrent).not.toThrow();
-          expect(captured.authority.reauthorize).toThrow(/operator role changed/);
           await finish(backend, pending.finalizeToken);
           await expectSource(owner.worktree.path, "revoked guest edit\n");
           await writeSource(sandbox.workspaceDir, "cancelled guest edit\n");

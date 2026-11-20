@@ -48,6 +48,16 @@ export function createCronCompletionDeliveryFence(params: {
     }
   };
   return {
+    standingGrantAuthority: {
+      context,
+      handle,
+      assertCurrent: () => {
+        assertCurrent();
+        if (activeJobMarker?.jobRemoved) {
+          throw new CronRunReceiptRevisionError(handle.receiptId, "cron execution source removed");
+        }
+      },
+    },
     assertCurrent,
     async beforeAttempt() {
       assertCurrent();

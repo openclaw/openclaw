@@ -3,6 +3,8 @@ import { appendCurrentInboundContext } from "../../../agents/embedded-agent-runn
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { compareChannelAdmissionParticipants } from "../../../channels/message-access/admission-evidence.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
+import { GatewayDispatchUnavailableError } from "../../../infra/restart-recovery-errors.js";
 import { PluginInstanceUnavailableError } from "../../../plugins/plugin-instance-error.js";
 import {
   getGatewayRestartDrainSignal,
@@ -325,13 +327,15 @@ async function executeClaim(
     }
     waitForFreshKick =
       claim.retryBeforeExecution === true &&
-      error instanceof AgentDatabaseExecutionAdmissionClosedError;
+      (error instanceof AgentDatabaseExecutionAdmissionClosedError ||
+        isOperatorAuthorityUnavailable(error) ||
+        (error instanceof GatewayDispatchUnavailableError && error.retryable));
     defaultRuntime.error?.("mailbox execution failed for " + queue.key + ": " + String(error));
   } finally {
     // Only a producer receipt retries within this mailbox. An escaped runner error
     // instead abandons unadopted lifecycle-backed input for durable ingress replay.
     const preparationRefused = claim.retryBeforeExecution === true;
-    if (preparationRefused && !pluginUnavailable) {
+    if (preparationRefused && !pluginUnavailable && !waitForFreshKick) {
       // Every retry yields so failed preparation cannot starve reload or cancellation.
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 250).unref?.();

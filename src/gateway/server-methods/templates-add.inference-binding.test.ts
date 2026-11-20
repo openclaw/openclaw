@@ -512,7 +512,6 @@ it.each(["ocid", "paired device"])(
             }
             expect(restored.authority.assertCurrent).not.toThrow();
             expect(restored.authority.signal?.aborted).toBe(false);
-            expect(restored.authority.reauthorize).toThrow();
             await expect(restore()).rejects.toThrow();
             expect(restored.authority.assertCurrent).not.toThrow();
             expect(restored.authority.signal?.aborted).toBe(false);

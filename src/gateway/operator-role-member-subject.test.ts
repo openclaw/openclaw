@@ -148,9 +148,18 @@ for (const initiallyMember of [true, false]) {
         } else {
           expect(recovered.authority.rolePolicy).toBeUndefined();
           member = true;
-          expect(recovered.authority.reauthorize).toThrow(
-            "Restart recovery operator source policy changed",
-          );
+          expect(recovered.authority.rolePolicy).toBeUndefined();
+          const next = await fixture.restore();
+          try {
+            expect(next.authority.rolePolicy).toMatchObject({
+              sessionAccessCap: "none",
+              sandboxRequired: true,
+              agents: ["main"],
+            });
+            expect(next.authority.readCurrentRoleFacts?.().policy).toEqual(role);
+          } finally {
+            next.release();
+          }
         }
       } finally {
         recovered.release();

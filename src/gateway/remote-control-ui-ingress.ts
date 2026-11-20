@@ -28,7 +28,7 @@ import { openclawIdSubjectRolePolicy } from "./openclaw-id/tunnel-principal.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { resolveRemoteControlUiHttpRoute } from "./remote-control-ui-http-routing.js";
 import type { GatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
@@ -433,7 +433,7 @@ export function createGatewayControlUiIngressFactory(params: {
         preparedSessionProfile: principalSnapshot.preparedSessionProfile,
         internal,
       };
-      const captured = await captureGatewayOperatorRunAuthority({
+      const captured = await prepareGatewayOperatorRunAuthority({
         client,
         context,
         hasCurrentClientAuthority,

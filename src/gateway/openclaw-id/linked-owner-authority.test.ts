@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSkillLibraryActorFromProfile } from "../../skills/library/store.js";
-import { resumeGatewayOperatorAccessGrant } from "../operator-access-policy.js";
 import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { currentPersonalProfileClient } from "../server-methods/personal-profile-authorization.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
@@ -71,14 +70,6 @@ describe("linked owner device authority", () => {
     expect(() => resolveOperatorRolePolicy(dispatchClient(OWNER), cfg)).toThrow(
       "OpenClaw ID membership authority changed",
     );
-  });
-
-  it("resumes a linked owner's grantless work without the person's access policy", () => {
-    const profile = { profileId: "person", emails: [], assignedRole: null };
-    expect(
-      resumeGatewayOperatorAccessGrant(profile, cfg, null, { openclawIdPrincipal: OWNER }),
-    ).toBeUndefined();
-    expect(() => resumeGatewayOperatorAccessGrant(profile, cfg, null)).toThrow();
   });
 
   it("lifts the skill-library role ceiling only for the owner device's own profile", () => {

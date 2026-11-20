@@ -11,7 +11,6 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { assertBoundGatewayAccessDecision } from "../plugins/gateway-access-policy-registration.js";
 import type {
-  GatewayAccessGrantRef,
   PluginGatewayAccessAuthority,
   PluginGatewayAccessPolicy,
 } from "../plugins/gateway-access-policy.types.js";
@@ -447,103 +446,6 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
       ? invalidate(error.accessCause)
       : unavailablePolicy(error);
   }
-}
-
-/**
- * Recheck current facts, returning the original grant's live authority for retained work.
- * `options.openclawIdPrincipal` is the run's OpenClaw ID principal. A linked owner device
- * was admitted as the owner, outside its person's access policies, and resumes the same way;
- * the caller checks that its principal is current.
- */
-export function resumeGatewayOperatorAccessGrant(
-  profile: UserProfileAccessFacts,
-  config: OpenClawConfig,
-  grant: GatewayAccessGrantRef | null,
-  inputOptions: GatewayOperatorAccessSource & { retained?: PluginGatewayAccessAuthority } = {},
-): PluginGatewayAccessAuthority | undefined {
-  if (inputOptions.openclawIdPrincipal?.kind === "owner" && grant === null) {
-    return undefined;
-  }
-  const options = {
-    ...inputOptions,
-    profileId: profile.profileId,
-    openclawIdAccountIds: profile.openclawIdAccountIds,
-  };
-  const policies = currentAccessPolicies();
-  const role = resolveAccessPolicyRole(
-    profile.profileId,
-    profile.assignedRole,
-    config,
-    profile.githubLogin ?? null,
-    options,
-  );
-  const requiredPlugin = role.policy?.accessPolicyPlugin;
-  if (requiredPlugin && requiredPlugin !== grant?.pluginId) {
-    // A newly required policy cannot replace the original request's recorded basis.
-    throw new GatewayOperatorAccessDeniedError("policy-set-changed");
-  }
-  let policyProfile: ReturnType<typeof pluginProfile> | undefined;
-  let resumed: PluginGatewayAccessAuthority | undefined;
-  if (grant) {
-    const policy = policies.find(({ pluginId }) => pluginId === grant.pluginId)?.policy;
-    if (!policy?.resume) {
-      throw new GatewayOperatorAccessUnavailableError();
-    }
-    let authority: PluginGatewayAccessAuthority | undefined;
-    try {
-      // The admitted authority owns live grant checks; resuming again creates a second owner.
-      authority =
-        options.retained ??
-        policy.resume({
-          config,
-          profile: (policyProfile ??= pluginProfile(profile, role.assignedRole)),
-          grantId: grant.grantId,
-          requiredByRole: requiredPlugin === grant.pluginId,
-        });
-    } catch {
-      // Startup and unavailable observations are not evidence that a grant ended.
-      throw new GatewayOperatorAccessUnavailableError();
-    }
-    if (!authority || authority.grantId !== grant.grantId) {
-      throw new GatewayOperatorAccessDeniedError("grant-revoked");
-    }
-    resumed = authority;
-  }
-  for (const { pluginId, policy } of policies) {
-    if (pluginId === grant?.pluginId) {
-      continue;
-    }
-    let authority: PluginGatewayAccessAuthority | undefined;
-    try {
-      authority = policy.authorize({
-        config,
-        profile: (policyProfile ??= pluginProfile(profile, role.assignedRole)),
-        requiredByRole: requiredPlugin === pluginId,
-      });
-    } catch {
-      throw new GatewayOperatorAccessUnavailableError();
-    }
-    if (authority) {
-      // A newly applicable policy needs a fresh request bound to that dependency.
-      throw new GatewayOperatorAccessDeniedError("policy-set-changed");
-    }
-  }
-  if (resumed?.signal.aborted) {
-    throw new GatewayOperatorAccessDeniedError("grant-revoked");
-  }
-  try {
-    resumed?.assertCurrent();
-  } catch (error) {
-    if (resumed?.signal.aborted || error instanceof GatewayOperatorAccessDeniedError) {
-      throw new GatewayOperatorAccessDeniedError("grant-revoked");
-    }
-    // Re-evaluate a failed retained assertion once; an unavailable check cannot end its grant.
-    if (options.retained) {
-      resumeGatewayOperatorAccessGrant(profile, config, grant, { ...options, retained: undefined });
-    }
-    throw new GatewayOperatorAccessUnavailableError();
-  }
-  return resumed;
 }
 
 export function hasCurrentGatewayOperatorAccess(

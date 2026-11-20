@@ -16,7 +16,6 @@ import { composeSessionSourceAssertion } from "../config/sessions/session-source
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { captureCronJobSourceAuthority } from "../cron/active-jobs.js";
 import type { CronInferenceBinding } from "../cron/inference-binding.js";
 import {
   acquireCronInferenceAuthorization,
@@ -36,6 +35,7 @@ import type { CronServiceDeps } from "../cron/service/state.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { isAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { getPluginInstanceCodeIdentity } from "../plugins/plugin-code-identity.js";
 import { pluginCommandSupportsChannel } from "../plugins/plugin-command-metadata.js";
 import { listRegisteredPluginCommands } from "../plugins/plugin-command-registry.js";
@@ -187,15 +187,8 @@ export async function runPluginCommandScheduledTurn(params: {
     const binding = resolvePluginCommandScheduleBinding(job, schedule);
     const context = params.resolveGatewayContext?.();
     const registry = params.resolvePluginRegistry?.();
-    const assertOccurrence = captureCronJobSourceAuthority(job.id);
     const fence = request.deliveryAttemptFence;
-    if (
-      !context ||
-      !registry ||
-      !assertOccurrence ||
-      !fence ||
-      params.agentId !== schedule.parent.agentId
-    ) {
+    if (!context || !registry || !fence || params.agentId !== schedule.parent.agentId) {
       throw new Error(
         "Scheduled plugin command requires its live Gateway occurrence and plugin registry.",
       );
@@ -212,14 +205,12 @@ export async function runPluginCommandScheduledTurn(params: {
         throw new Error("Scheduled plugin command occurrence closed.");
       }
       request.abortSignal?.throwIfAborted();
-      assertOccurrence();
       fence.assertCurrent();
       const current: CronStoredJob | undefined = context.cron.getJob(job.id);
       if (
         params.resolveGatewayContext?.() !== context ||
         context.resolveGatewayContext?.() !== context ||
         params.resolvePluginRegistry?.() !== registry ||
-        getConfig() !== configAtAdmission ||
         !current ||
         resolveCronRequesterExecutionRevision(current) !== revision ||
         !isDeepStrictEqual(current.pluginCommand, schedule) ||
@@ -598,10 +589,12 @@ export async function runPluginCommandScheduledTurn(params: {
       error: formatErrorMessage(error),
       ...(turnSignal?.aborted || params.request.abortSignal?.aborted || isAbortError(error)
         ? { errorClassification: { kind: "aborted" as const } }
-        : error instanceof PluginCommandScheduleInstanceReplacedError
-          ? // Settlement retires the schedule on this first refusal.
-            { errorClassification: { kind: "permanent" as const } }
-          : {}),
+        : isOperatorAuthorityUnavailable(error)
+          ? { errorClassification: { kind: "reason" as const, reason: "server_error" as const } }
+          : error instanceof PluginCommandScheduleInstanceReplacedError
+            ? // Settlement retires the schedule on this first refusal.
+              { errorClassification: { kind: "permanent" as const } }
+            : {}),
       executionStarted,
       delivered: false,
       deliveryAttempted: false,

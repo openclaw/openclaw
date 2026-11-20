@@ -14,7 +14,7 @@ import {
   sessionToolsStorePath,
   seedSessionToolsEntry,
 } from "./local-request-context.session-tools.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import * as sessionRowProjection from "./session-row-projection.js";
 import { roleClient } from "./session-sharing.test-utils.js";
 
@@ -92,7 +92,7 @@ async function withNotification(
     const context = sessionToolsContext();
     const source = new AbortController();
     const captured = expectDefined(
-      await captureGatewayOperatorRunAuthority({
+      await prepareGatewayOperatorRunAuthority({
         client,
         context,
         sourceAuthority: {

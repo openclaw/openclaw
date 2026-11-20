@@ -16,7 +16,7 @@ import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -168,7 +168,7 @@ describe("registered plugin SDK scope attenuation", () => {
       const sourceController = new AbortController();
       const current = () => true;
       const source = expectDefined(
-        await captureGatewayOperatorRunAuthority({
+        await prepareGatewayOperatorRunAuthority({
           client: identified,
           context,
           hasCurrentClientAuthority: current,
@@ -257,7 +257,7 @@ describe("registered plugin SDK scope attenuation", () => {
         }
 
         const recaptured = expectDefined(
-          await captureGatewayOperatorRunAuthority({
+          await prepareGatewayOperatorRunAuthority({
             client: { ...client, connect: { ...client.connect, scopes: ["operator.admin"] } },
             context,
           }),
@@ -383,7 +383,7 @@ describe("native tool scope provenance", () => {
     });
     const captured = testCase.system
       ? undefined
-      : await captureGatewayOperatorRunAuthority({ client: sourceClient, context });
+      : await prepareGatewayOperatorRunAuthority({ client: sourceClient, context });
     const client: GatewayClient = testCase.system
       ? createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" } })
       : { ...sourceClient, internal: { operatorRunAuthority: captured?.authority } };

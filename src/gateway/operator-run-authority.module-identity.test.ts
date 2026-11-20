@@ -10,7 +10,7 @@ const reloadedIssuer = await import("../agents/admitted-run-context.js");
 
 function inherit(authority: AdmittedRunOperatorAuthority, scopes: string[]) {
   const connect = createOperatorClient({ profileId: "module-owner", scopes }).connect;
-  return consumer.captureGatewayOperatorRunAuthority({
+  return consumer.prepareGatewayOperatorRunAuthority({
     client: { connect, internal: { operatorRunAuthority: authority } },
     context: { getRuntimeConfig: () => ({}) },
   });

@@ -39,7 +39,7 @@ import {
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { retainGatewayOperatorRun } from "./operator-run-cancellation.js";
 import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
 import { pairedOperator, recoveryFixture } from "./operator-run-recovery.test-support.js";
@@ -308,7 +308,6 @@ describe("operator access cancellation", () => {
           expect(retained.authority!.assertCurrent).not.toThrow();
           expect(request.authority.signal?.aborted).toBe(false);
           expect(request.authority.assertCurrent).not.toThrow();
-          expect(request.authority.reauthorize).toThrow();
           await expect(origin.restore()).rejects.toThrow();
         } finally {
           request.release();
@@ -341,7 +340,7 @@ describe("operator access cancellation", () => {
         scopes: ["operator.write"],
       });
       const request = expectDefined(
-        await captureGatewayOperatorRunAuthority({ client, context: f.context }),
+        await prepareGatewayOperatorRunAuthority({ client, context: f.context }),
         "admitted plugin request",
       );
       try {

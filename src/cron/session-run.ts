@@ -8,6 +8,7 @@ import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-load
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 /** Scheduled shared-session turns use the ordinary reply admission and delivery owners. */
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { prepareAutomationSystemEvents } from "../infra/system-events.js";
@@ -111,14 +112,17 @@ export async function runCronSessionTurn(
           deliveryAttemptFence: params.deliveryAttemptFence,
         });
       } catch (error) {
-        if (!(error instanceof GatewayDispatchUnavailableError) || !error.retryable) {
+        if (
+          !isOperatorAuthorityUnavailable(error) &&
+          (!(error instanceof GatewayDispatchUnavailableError) || !error.retryable)
+        ) {
           throw error;
         }
         // No session event has been admitted. Preserve the typed transient
         // outcome so the existing retry policy rearms this same one-shot.
         return {
           status: "error",
-          error: error.message,
+          error: error instanceof Error ? error.message : String(error),
           errorClassification: { kind: "reason", reason: "server_error" },
           executionStarted: false,
         };

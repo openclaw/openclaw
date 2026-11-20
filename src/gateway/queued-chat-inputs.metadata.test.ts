@@ -299,8 +299,8 @@ it("retries relinquished startup input after a post-staging authority outage exa
   expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
 });
 
-it.each(["missing source", "different sender", "revoked device"] as const)(
-  "cancels queued input with %s despite the sender's local administrator role",
+it.each(["allowed", "missing source", "different sender", "revoked device"] as const)(
+  "readmits queued input through its original requester source: %s",
   async (change) => {
     const created = await createFixture();
     await using fixture = created.fixture;
@@ -341,7 +341,10 @@ it.each(["missing source", "different sender", "revoked device"] as const)(
     }
     await continueSessionQueuedInputs(fixture.context, retained.target, retained);
     await fixture.finishDispatch();
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(change === "allowed" ? 1 : 0);
+    if (change === "allowed") {
+      return;
+    }
     expect((await listSessionPendingInputs(fixture.scope)).items).toMatchObject([
       {
         id: inputId,
@@ -436,10 +439,8 @@ it("readmits accepted delivery, reply, and runtime intent with the sender's curr
   setUserProfileRole(profile.id, "writer");
   await continueSessionQueuedInputs(fixture.context, retained.target, retained);
   await fixture.finishDispatch();
-  expect(dispatched).toHaveLength(1);
-  expect((await listSessionPendingInputs(fixture.scope)).items).toMatchObject([
-    { id: demoted.inputId, state: "cancelled", endCause: "revoked" },
-  ]);
+  expect(dispatched).toHaveLength(2);
+  expect(dispatched[1]?.replyOptions?.operatorAuthority?.scopes).toEqual(["operator.write"]);
 });
 
 it("publishes a retained human mention once as its freshly admitted queued principal", async () => {

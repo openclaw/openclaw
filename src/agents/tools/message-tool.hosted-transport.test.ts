@@ -208,7 +208,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
   const run = { agentId: "ops", runId, sessionId };
   const policy = { version: 1, mode: "trusted" } as const;
   // Only runtime config changes here; canonical job revocation has its own owner tests.
-  const marker = cron.markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+  const marker = cron.markCronJobActive(jobId);
   const entered = createDeferred<OpenClawConfig>();
   const release = createDeferred();
   let promptAdmission: ReturnType<typeof prepareCronRunAdmission> | undefined;
@@ -242,7 +242,10 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
     promptAdmission = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
       prepareCronRunAdmission({
         scheduledExecution: TEST_SCHEDULED_EXECUTION,
-        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+        deliveryAttemptFence: {
+          beforeAttempt: async () => {},
+          assertCurrent: () => source.signal.throwIfAborted(),
+        },
         cfg: configA,
         ...run,
         sessionKey,

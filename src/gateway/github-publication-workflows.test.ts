@@ -25,7 +25,7 @@ import {
   guestScopes,
 } from "./github-publication-requester.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -195,7 +195,7 @@ it.each([
     };
     let result: unknown;
     if (route !== "rpc") {
-      const original = await captureGatewayOperatorRunAuthority({ client, context });
+      const original = await prepareGatewayOperatorRunAuthority({ client, context });
       if (!system) {
         assert(original, "Expected original operator authority");
       }

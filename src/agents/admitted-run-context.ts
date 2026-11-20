@@ -108,7 +108,6 @@ export function createAdmittedRunOperatorAuthority(
     invocation: source.invocation,
     signal,
     retain: source.retain,
-    reauthorize: source.reauthorize,
     onModelPolicyChanged: source.onModelPolicyChanged,
     get modelPolicy() {
       return source.modelPolicy;
@@ -638,7 +637,6 @@ export function prepareAgentRunAdmission(params: {
       admitted ??= runWithSessionSourceScope(
         assertSourceCurrent,
         async () => {
-          operatorAuthority?.reauthorize?.();
           assertSourceCurrent?.();
           const facts = executionIdentitySpawnAdmission({
             operation: "attach",

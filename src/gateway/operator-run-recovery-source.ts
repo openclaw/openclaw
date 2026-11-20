@@ -31,7 +31,6 @@ export function captureQueuedOperatorRecoverySource(
     return undefined;
   }
   assertAdmittedRunOperatorAuthority(authority);
-  authority.assertCurrent();
   let captured: QueuedOperatorRecoverySource;
   if (authority.recoverySnapshot) {
     const snapshot = authority.recoverySnapshot;
@@ -87,8 +86,6 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
     if (!remote.recoverySource) {
       return { unavailableReason: "remote-ingress-no-source" };
     }
-    remote.assertCurrent();
-    authority.assertCurrent();
     const modelPolicy = captureOperatorModelPolicySnapshot(params.modelPolicy);
     if (params.modelPolicy && !modelPolicy) {
       return { unavailableReason: "model-policy" };
@@ -136,7 +133,6 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
   if (authority.gatewayAccessGrant === undefined) {
     return { unavailableReason: "no-grant" };
   }
-  authority.assertCurrent();
   const device = client.internal?.operatorDeviceTokenIdentity ?? undefined;
   if (client.connect.device && client.internal?.operatorDeviceTokenIdentity === undefined) {
     return { unavailableReason: "device-no-token" };

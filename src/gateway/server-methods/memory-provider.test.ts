@@ -25,7 +25,7 @@ vi.mock("../../state/user-profile-list.js", () => ({
   hasMultipleResidentSessionSharingIdentities: () => false,
 }));
 vi.mock("../operator-run-authority.js", () => ({
-  captureGatewayOperatorRunAuthority: mocks.capture,
+  prepareGatewayOperatorRunAuthority: mocks.capture,
 }));
 
 import { memorySearchHandlers } from "./memory-search.js";

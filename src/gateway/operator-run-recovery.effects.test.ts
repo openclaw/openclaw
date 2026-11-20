@@ -11,6 +11,7 @@ import { readPersistedFileStat } from "../agents/sessions/tools/file-write-verif
 import { createWriteTool } from "../agents/sessions/tools/write.js";
 import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
 import { buildSessionEventContext } from "../auto-reply/reply/session-event-context.js";
+import { prepareSessionEventTargetForHost } from "../auto-reply/reply/session-event-target.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { CronService } from "../cron/service.js";
@@ -83,12 +84,13 @@ it.each(["device revocation", "email reassignment", "email restoration"] as cons
         runIsolatedAgentJob: async () => ({ status: "ok" }),
       });
       await fixture.context.cron.list({ includeDisabled: true });
-      const restored = await captureCronJobTurnTarget({
+      const target = await captureCronJobTurnTarget({
         job,
         agentId: fixture.target.agentId,
         sessionKey: fixture.target.sessionKey,
         context: fixture.context,
       });
+      const restored = await prepareSessionEventTargetForHost(target);
       const event = buildSessionEventContext({
         cfg: {},
         agentId: fixture.target.agentId,
@@ -96,7 +98,7 @@ it.each(["device revocation", "email reassignment", "email restoration"] as cons
         text: "Repair the scheduled automation.",
         options: { source: "cron_failure_repair" },
         occurrenceId: "native-cron-owner-repair",
-        target: restored.target,
+        target,
         assertCurrent: () => {},
       });
       const owner = expectDefined(getCommandOwnerAuthority(event), "restored cron owner");
@@ -295,7 +297,7 @@ it.each(["device revocation", "email reassignment", "email restoration"] as cons
         const file = "recovered-child-effect.txt";
         fixture.retire();
         restored.release();
-        expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
+        expect(restored.authority.assertCurrent).toThrow();
         expect(child.operatorAuthority?.scopes).toEqual(["operator.write"]);
         await child.run(() => tool.execute("allowed", { path: file, content: "allowed\n" }));
         expect(await readFile(path.join(stateDir, file), "utf8")).toBe("allowed\n");

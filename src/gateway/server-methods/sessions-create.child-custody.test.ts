@@ -49,7 +49,7 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail, syncGitHubIdentity } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { withOperatorToolGatewayAuthority } from "../server-plugin-in-process-dispatch.js";
 import {
@@ -220,7 +220,7 @@ async function createHostedChildFixture({
     );
   const captured = system
     ? undefined
-    : await captureGatewayOperatorRunAuthority({
+    : await prepareGatewayOperatorRunAuthority({
         client: identifiedClient(profile.id),
         context,
         sourceAuthority: { assertCurrent: guard("source", "original operator source revoked") },

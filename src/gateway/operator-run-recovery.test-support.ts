@@ -14,7 +14,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -85,6 +85,21 @@ export async function createOperatorRecoveryFixture(params: {
   openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
 }) {
   let config = params.config;
+  const trustedProxyUser =
+    params.trustedProxyUser ??
+    (params.tokenlessDevice && !params.openclawIdPrincipal ? "fixture-proxy-operator" : undefined);
+  if (trustedProxyUser && !config.gateway?.auth) {
+    config = {
+      ...config,
+      gateway: {
+        ...config.gateway,
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: { userHeader: "x-fixture-user", allowUsers: [trustedProxyUser] },
+        },
+      },
+    };
+  }
   const context = params.context;
   context.getRuntimeConfig = () => config;
   // Production contexts resolve their owning Gateway; detached work restores against it.
@@ -113,7 +128,7 @@ export async function createOperatorRecoveryFixture(params: {
       params.tokenlessDevice || params.openclawIdPrincipal || params.trustedProxyUser
         ? "trusted-proxy"
         : "token",
-    verifiedIdentity: params.trustedProxyUser,
+    verifiedIdentity: trustedProxyUser,
   });
   if (params.sharedGeneration !== undefined) {
     client.usesSharedGatewayAuth = true;
@@ -148,7 +163,7 @@ export async function createOperatorRecoveryFixture(params: {
         );
   }
   const captured = expectDefined(
-    await captureGatewayOperatorRunAuthority({
+    await prepareGatewayOperatorRunAuthority({
       client: expectDefined(captureAgentTurnPrincipal(client), "fresh typed operator principal"),
       context,
       sourceAuthority: params.gatewayAccessGrant

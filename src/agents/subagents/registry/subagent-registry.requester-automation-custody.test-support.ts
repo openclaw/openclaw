@@ -69,7 +69,7 @@ export function registerRequesterAutomationCustodyTests({
         });
         const revoked = new AbortController();
         const source = expectDefined(
-          await operatorCapture.captureGatewayOperatorRunAuthority({
+          await operatorCapture.prepareGatewayOperatorRunAuthority({
             client,
             context,
             sourceAuthority: {

@@ -47,7 +47,7 @@ import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodRegistry,
 } from "./methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { sessionCreateHandlers } from "./server-methods/sessions-create.js";
@@ -167,7 +167,7 @@ async function createHostedCreation(
   const captured =
     source === "operator"
       ? expectDefined(
-          await captureGatewayOperatorRunAuthority({
+          await prepareGatewayOperatorRunAuthority({
             client,
             context,
             sourceAuthority: {

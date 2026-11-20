@@ -37,7 +37,7 @@ import {
   retainGatewayDeviceRevocation,
 } from "../../device-revocation.js";
 import { publishOperatorRoleConfigChange } from "../../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
 import { createRemoteControlUiIngressTestContext } from "../../remote-control-ui.test-support.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
 import { readGatewayRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
@@ -54,8 +54,8 @@ import {
   requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 
-type Capture = NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>;
-type CaptureOptions = Parameters<typeof captureGatewayOperatorRunAuthority>[0];
+type Capture = NonNullable<Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>>;
+type CaptureOptions = Parameters<typeof prepareGatewayOperatorRunAuthority>[0];
 function createGeneration(current?: string) {
   return new SharedGatewaySessionGenerationState({ current, required: null });
 }
@@ -90,7 +90,7 @@ function createCaptureFixture(params: {
     const current = params.requireGuard
       ? expectDefined(options.hasCurrentClientAuthority, "WS caller guard")
       : options.hasCurrentClientAuthority;
-    const captured = await captureGatewayOperatorRunAuthority({
+    const captured = await prepareGatewayOperatorRunAuthority({
       client: options.client,
       context,
       hasCurrentClientAuthority: current,

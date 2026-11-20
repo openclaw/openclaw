@@ -1,5 +1,6 @@
 import { ownsStreamSource } from "../cron/stream-schedule.js";
 import type { CronStoredJob } from "../cron/types.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import type { RestoredGatewayOperatorAuthority } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
@@ -37,7 +38,6 @@ export async function prepareCronStreamSourceAuthority(params: {
   };
   const release = () => {
     active = false;
-    restored?.authority.signal?.removeEventListener("abort", onRevoked);
     restored?.release();
     restored = undefined;
   };
@@ -61,16 +61,13 @@ export async function prepareCronStreamSourceAuthority(params: {
     };
     const { restoreGatewayOperatorSource } = await import("./operator-run-recovery.js");
     restored = await restoreGatewayOperatorSource({ snapshot, context, assertCurrent });
-    // The recovery owner publishes profile, app-grant, credential and device revocation here.
-    restored.authority.signal?.addEventListener("abort", onRevoked, { once: true });
-    restored.authority.assertCurrent();
     return {
       isCurrent: () => {
         try {
           if (!restored) {
             return false;
           }
-          restored.authority.assertCurrent();
+          assertCurrent();
           return true;
         } catch {
           onRevoked();
@@ -79,8 +76,11 @@ export async function prepareCronStreamSourceAuthority(params: {
       },
       release,
     };
-  } catch {
+  } catch (error) {
     release();
+    if (isOperatorAuthorityUnavailable(error)) {
+      throw error;
+    }
     onRevoked();
     return undefined;
   }

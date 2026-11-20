@@ -4,7 +4,7 @@ import {
   GatewayOperatorRecoveryAuthorizationError,
 } from "../infra/restart-recovery-errors.js";
 import type { GatewayIngressPrincipalRecovery } from "../plugins/gateway-ingress.types.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { prepareGatewayIngressPrincipalAdmission } from "./remote-ingress-principal-admission.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
@@ -109,12 +109,7 @@ export async function restoreIngressPrincipalRecovery(
     if (
       grant.audienceId !== source.audienceId ||
       (source.recoveryId !== undefined && grant.recoveryId !== source.recoveryId) ||
-      currentProfile !== profileId ||
-      !roleScopesAllow({
-        role: "operator",
-        requestedScopes: scopes,
-        allowedScopes: grant.operatorScopeCeiling,
-      })
+      currentProfile !== profileId
     ) {
       throw new GatewayOperatorRecoveryAuthorizationError(
         "The original ingress grant identity or scope ceiling changed.",
@@ -125,6 +120,7 @@ export async function restoreIngressPrincipalRecovery(
     assertCurrent();
     return {
       assertCurrent,
+      scopes: intersectOperatorScopes(scopes, grant.operatorScopeCeiling),
       signal: AbortSignal.any([
         owner.signal,
         grant.signal,

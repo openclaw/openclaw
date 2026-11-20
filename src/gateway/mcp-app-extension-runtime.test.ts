@@ -64,7 +64,7 @@ vi.mock("./mcp-app-host-files.js", () => ({ resolveMcpAppRequesterId: () => "ali
 // mock-isolation: Approval delivery is external to the runtime owner's authority checks.
 vi.mock("./mcp-app-tool-approval.js", () => ({ requestMcpAppToolApproval: mocks.approval }));
 vi.mock("./operator-run-authority.js", () => ({
-  captureGatewayOperatorRunAuthority: mocks.source,
+  prepareGatewayOperatorRunAuthority: mocks.source,
 }));
 vi.mock("./session-resource-tool-policy.js", () => ({ resolveSessionResourceToolPolicy: vi.fn() }));
 vi.mock("./session-row-projection-access.js", () => ({

@@ -19,7 +19,7 @@ import { listSessionPendingInputs } from "../config/sessions/session-accessor.pe
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import {
@@ -65,7 +65,7 @@ it("rejects retained agent and independent-creation input after acceptance", asy
   const transcript = sessionAccessor.loadTranscriptEventsSync(scope);
   const client = createOperatorClient({ profileName: randomUUID(), scopes: ["operator.admin"] });
   const operator = expectDefined(
-    await captureGatewayOperatorRunAuthority({ client, context }),
+    await prepareGatewayOperatorRunAuthority({ client, context }),
     "creation operator",
   );
   const prepareParent = (creation = false) => {

@@ -22,8 +22,7 @@ import {
   operatorSessionCap,
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { retainGatewayOperatorRunAuthority } from "./operator-run-cancellation.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { usesOwnRunQuestionAccess } from "./question-access.js";
 import {
   QuestionManagerError,
@@ -339,8 +338,7 @@ export async function withPreparedQuestionSessions<T>(
 
 /** Own the question's live source independently of optional session disclosure access. */
 export async function prepareQuestionProducer(options: GatewayRequestHandlerOptions) {
-  const captured = await captureGatewayOperatorRunAuthority(options);
-  return captured && retainGatewayOperatorRunAuthority(captured);
+  return await prepareGatewayOperatorRunAuthority(options);
 }
 
 /** Bind the handler-owned producer to the exact admitted row before transferring disclosure access. */

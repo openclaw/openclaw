@@ -19,10 +19,7 @@ export type ScheduledExecutionContext = ScheduledExecutionFacts &
   Readonly<{
     /** Throws when the parent incarnation or the admitted run is no longer current. */
     assertCurrent: () => void;
-    /**
-     * Set when a requester holds owner authority for this run. Throws once the
-     * requester stops passing its owner check, so owner-only tools refuse mid-run.
-     */
+    /** Owner-only effects retain the same occurrence and run lifetime fence. */
     assertOwnerCurrent?: () => void;
   }>;
 

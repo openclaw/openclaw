@@ -8,7 +8,7 @@ import type { WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { environmentsHandlers } from "../server-methods/environments.js";
 import { dispatchGatewayMethodInProcess } from "../server-plugin-in-process-dispatch.js";
 import {
@@ -283,7 +283,7 @@ describe("on-demand prepared worker admission", () => {
       });
       const controller = new AbortController();
       const source = expectDefined(
-        await captureGatewayOperatorRunAuthority({
+        await prepareGatewayOperatorRunAuthority({
           client,
           context,
           sourceAuthority: {

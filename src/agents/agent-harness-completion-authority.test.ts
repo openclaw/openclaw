@@ -4,7 +4,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
-import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
 import {
   createContext,
   createOperatorClient,
@@ -195,7 +195,7 @@ it.each(["release", "revoke", "gateway-close"] as const)(
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { context, resolver, client, scope, capture } = operatorFixture("completion-owner");
       const revoked = new AbortController();
-      const source = (await captureGatewayOperatorRunAuthority({
+      const source = (await prepareGatewayOperatorRunAuthority({
         client,
         context,
         sourceAuthority: {

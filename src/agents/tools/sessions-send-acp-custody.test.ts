@@ -12,7 +12,7 @@ import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "../../gateway/device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
@@ -155,7 +155,7 @@ it.each(["allowed", "revoked", "replaced"] as const)(
           undefined,
           { isCurrent: () => true, subscribe: () => () => {} },
         );
-        const source = await captureGatewayOperatorRunAuthority({
+        const source = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority: device.isCurrent,

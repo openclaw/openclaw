@@ -59,7 +59,7 @@ import {
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { gatewayRequest } from "../request-frame.test-support.js";
 import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import {
@@ -292,7 +292,7 @@ describe("steering input custody", () => {
           );
         }
       }
-      let captured: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      let captured: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
       let operation = fixture.activeRun;
       let ownerClaim: SessionControllerMailboxClaim | undefined;
       let ownerContext: CurrentInboundPromptContext | undefined;
@@ -351,7 +351,7 @@ describe("steering input custody", () => {
             });
           });
         }
-        captured = await captureGatewayOperatorRunAuthority({
+        captured = await prepareGatewayOperatorRunAuthority({
           client: originalClient,
           context: fixture.context,
         });
@@ -428,7 +428,7 @@ describe("steering input custody", () => {
         );
         const requesterPrincipalKey = operation.requesterPrincipalKey;
         if (sharedSecretOwner) {
-          const incoming = await captureGatewayOperatorRunAuthority({
+          const incoming = await prepareGatewayOperatorRunAuthority({
             client: reconnectedClient,
             context: fixture.context,
           });

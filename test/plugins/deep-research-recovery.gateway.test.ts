@@ -22,7 +22,7 @@ import {
   createGatewayMethodRegistry,
   createCoreGatewayMethodDescriptors,
 } from "../../src/gateway/methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "../../src/gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../src/gateway/operator-run-authority.js";
 import { createDirectChatContext } from "../../src/gateway/server-chat.agent-events.test-helpers.js";
 import { toolsInvokeHandlers } from "../../src/gateway/server-methods/tools-invoke.js";
 import { createOperatorClient } from "../../src/gateway/server-plugin-in-process-dispatch.test-support.js";
@@ -166,7 +166,7 @@ it.each([
       context.resolveGatewayContext = () => context;
       const sdkResources = new LegacyPluginSdkResourceHost();
       bindLegacyPluginSdkResourceHost(context.resolveGatewayContext, sdkResources);
-      const captured = await captureGatewayOperatorRunAuthority({
+      const captured = await prepareGatewayOperatorRunAuthority({
         client,
         context,
         sourceAuthority: null,
@@ -201,7 +201,7 @@ it.each([
           role: "operator",
           authMethod: "token",
         });
-        const otherCaptured = await captureGatewayOperatorRunAuthority({
+        const otherCaptured = await prepareGatewayOperatorRunAuthority({
           client: otherClient,
           context,
           sourceAuthority: null,

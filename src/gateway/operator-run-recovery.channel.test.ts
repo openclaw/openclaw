@@ -21,7 +21,7 @@ import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-sou
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 
 it.each(["unlink", "reassign"] as const)(
-  "recovers a persisted channel member and fences final I/O after %s",
+  "lets an admitted persisted channel member finish after %s and refuses the next start",
   (change) =>
     withAdminIngress(async ({ admins, context, gateway, retire, cfg, state }) => {
       const member = expectDefined(admins[0], "linked member");
@@ -105,7 +105,7 @@ it.each(["unlink", "reassign"] as const)(
         expect(await readFile(path.join(state.stateDir, file), "utf8")).toBe("allowed\n");
         // Hold inside the real tool after admission, then revoke without a caller abort signal.
         pauseWrite = true;
-        pendingWrite = tool.execute("revoked", { path: file, content: "forbidden\n" });
+        pendingWrite = tool.execute("admitted", { path: file, content: "finished\n" });
         void pendingWrite.catch(beforeWrite.reject);
         await beforeWrite.promise;
         await changeCanonicalUserChannelIdentity("unlink", member.profile.id, member.identity);
@@ -114,10 +114,10 @@ it.each(["unlink", "reassign"] as const)(
           await changeCanonicalUserChannelIdentity("link", other.profile.id, member.identity);
         }
         releaseWrite.resolve();
-        await expect(pendingWrite).rejects.toThrow("tool invocation authority is no longer active");
-        expect(writes).toBe(1);
-        expect(await readFile(path.join(state.stateDir, file), "utf8")).toBe("allowed\n");
-        await expect(restore()).rejects.toThrow("Queued channel operator authority changed");
+        await expect(pendingWrite).resolves.toBeDefined();
+        expect(writes).toBe(2);
+        expect(await readFile(path.join(state.stateDir, file), "utf8")).toBe("finished\n");
+        await expect(restore()).rejects.toThrow();
       } finally {
         releaseWrite.resolve();
         await pendingWrite?.catch(() => undefined);

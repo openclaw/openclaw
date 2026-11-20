@@ -29,7 +29,7 @@ import { captureGatewayAuthPolicy } from "../gateway/auth-policy.js";
 import { invalidateGatewayDeviceRevocation } from "../gateway/device-revocation.js";
 import { NodeRegistry } from "../gateway/node-registry.js";
 import { createAdminMemberRoleConfig } from "../gateway/operator-role.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
 import { pairedOperator, persistDevices } from "../gateway/operator-run-recovery.test-support.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import { cronHandlers } from "../gateway/server-methods/cron.js";
@@ -339,7 +339,7 @@ export async function createFixture(
   const original =
     profile && !direct
       ? expectDefined(
-          await captureGatewayOperatorRunAuthority({
+          await prepareGatewayOperatorRunAuthority({
             client,
             context: creator.context,
             sourceAuthority: null,

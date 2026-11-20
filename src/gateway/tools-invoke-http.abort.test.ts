@@ -413,7 +413,7 @@ describe("POST /tools/invoke request cancellation", () => {
         resolveGatewayContext = () => context;
         context.resolveGatewayContext = resolveGatewayContext;
         // Replace only the test transport attribution; authentication and scope decisions are real.
-        lifecycle.authorize.mockImplementationOnce(async ({ req, res }) => {
+        lifecycle.authorize.mockImplementation(async ({ req, res }) => {
           markGatewayIngressTransport(req, {
             kind: "openclaw-id-tunnel",
             peerKey: principal.peerKey,
@@ -464,7 +464,10 @@ describe("POST /tools/invoke request cancellation", () => {
         expect(() => authority?.assertCurrent()).not.toThrow();
         membership.delete(principal.peerKey);
         expect(() => authority?.assertCurrent()).not.toThrow();
-        expect(() => authority?.reauthorize?.()).toThrow();
+        const next = await invokeAbortProbe();
+        expect(next.status).toBe(401);
+        await next.arrayBuffer();
+        expect(lifecycle.execute).toHaveBeenCalledOnce();
         admission?.close();
         expect(() => authority?.assertCurrent()).toThrow(/no longer active/);
       } finally {

@@ -34,7 +34,7 @@ import {
   sessionToolsTranscript,
   seedSessionToolsEntry,
 } from "./local-request-context.session-tools.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import * as operatorContinuation from "./server-plugin-in-process-dispatch.js";
@@ -97,7 +97,7 @@ describe("sessions_send steering custody", () => {
         }
         const context = sessionToolsContext();
         const captured = expectDefined(
-          await captureGatewayOperatorRunAuthority({ client, context }),
+          await prepareGatewayOperatorRunAuthority({ client, context }),
           "session writer authority",
         );
         try {

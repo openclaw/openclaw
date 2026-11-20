@@ -47,7 +47,7 @@ export async function retainedOperatorFixture(
 ) {
   const fixture = operatorFixture(profileName, false, context, resolveGatewayContext);
   const source = expectDefined(
-    await operatorCapture.captureGatewayOperatorRunAuthority(fixture),
+    await operatorCapture.prepareGatewayOperatorRunAuthority(fixture),
     "operator registration source",
   );
   fixture.client.internal = { operatorRunAuthority: source.authority };
@@ -140,7 +140,7 @@ export function registerCompletedFollowupAuthorityTests({
           (revokeOriginal ? original.revoked : followup.revoked).abort(
             new Error("operator revoked"),
           );
-          expect(completionSource(revokeOriginal ? retained : successor)).toBeUndefined();
+          expect(() => completionSource(revokeOriginal ? retained : successor)).toThrow();
           expect(completionSource(revokeOriginal ? successor : retained)).toBe(
             revokeOriginal ? followup.authority.source : original.authority.source,
           );

@@ -667,10 +667,10 @@ describe("registered completion source custody", () => {
         const entered = createDeferredCore();
         const resume = createDeferredCore();
         let active = true;
-        const capture = operatorCapture.captureGatewayOperatorRunAuthority;
-        let captured: Awaited<ReturnType<typeof capture>>;
+        const capture = operatorCapture.prepareGatewayOperatorRunAuthority;
+        let captured: operatorCapture.PreparedGatewayOperatorRunAuthority | undefined;
         const held = vi
-          .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
+          .spyOn(operatorCapture, "prepareGatewayOperatorRunAuthority")
           .mockImplementationOnce(async (...args) => {
             captured = await capture(...args);
             entered.resolve();

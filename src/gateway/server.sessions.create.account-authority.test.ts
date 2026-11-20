@@ -16,7 +16,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { ModelAccountConnectAuthorityError } from "./model-account-connect-errors.js";
 import { createModelAccountConnectService } from "./model-account-connect.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
@@ -211,7 +211,7 @@ async function createFixture(
   await initializeSessionReadContext(context);
   if (origin === "agent") {
     const captured = expectDefined(
-      await captureGatewayOperatorRunAuthority({ client: { ...client }, context }),
+      await prepareGatewayOperatorRunAuthority({ client: { ...client }, context }),
       "admitted operator authority",
     );
     onTestFinished(captured.release);
@@ -541,7 +541,6 @@ test("ordinary tool defaults keep admitted role policy without main-thread SQL",
       sql.expectIdle();
       fixture.role.scopes = ["operator.read"];
       expect(action.assertCurrent).not.toThrow();
-      expect(fixture.client.internal?.operatorRunAuthority?.reauthorize).toThrow();
       fixture.role.scopes = ["operator.write"];
       expect(action.assertCurrent).not.toThrow();
     } finally {

@@ -9,7 +9,7 @@ import {
 import { holdStateRead } from "../../state/github-publication-fixtures.test-support.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import * as inProcess from "../server-in-process-dispatch.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -44,7 +44,7 @@ async function ownerSource(f: ReadFixture) {
   });
   f.client.internal = { authenticatedOperator: true, operatorRoleActor: { kind: "system" } };
   const lifetime = new AbortController();
-  const captured = await captureGatewayOperatorRunAuthority({
+  const captured = await prepareGatewayOperatorRunAuthority({
     client: f.client,
     context: f.context,
     sourceAuthority: {

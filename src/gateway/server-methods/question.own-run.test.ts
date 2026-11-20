@@ -26,7 +26,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
@@ -114,7 +114,7 @@ async function createOwnRunFixture() {
   await upsertSessionEntryCore(sessionScope, entry);
   const browser = questionPeer(profile, "original-browser");
   const sourceController = new AbortController();
-  const captured = await captureGatewayOperatorRunAuthority({
+  const captured = await prepareGatewayOperatorRunAuthority({
     client: browser.client,
     context: { getRuntimeConfig: () => cfg },
     sourceAuthority: {
@@ -525,7 +525,6 @@ describe("own-run question admission", () => {
       invalidateOperatorRolePolicy(f.profile.id);
       expect(f.source.authority.signal?.aborted).toBe(false);
       expect(f.source.authority.assertCurrent).not.toThrow();
-      expect(f.source.authority.reauthorize).toThrow("Your operator role changed");
       expect(observation.sessionAccess?.assertSourceCurrent).not.toThrow();
       expect(observation.record.status).toBe("pending");
       await expect(
@@ -560,7 +559,7 @@ describe("own-run question admission", () => {
           connect: { ...f.browser.client.connect, scopes: ["operator.admin"] },
         };
         const grant = new AbortController();
-        const admitted = await captureGatewayOperatorRunAuthority({
+        const admitted = await prepareGatewayOperatorRunAuthority({
           client,
           context: { getRuntimeConfig: () => f.cfg },
           sourceAuthority:

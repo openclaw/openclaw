@@ -18,7 +18,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
@@ -132,7 +132,7 @@ async function fixture(state: OpenClawTestState) {
       assertCurrent: () => sourceController.signal.throwIfAborted(),
     },
   };
-  const source = await captureGatewayOperatorRunAuthority({
+  const source = await prepareGatewayOperatorRunAuthority({
     client: owner,
     context: { getRuntimeConfig: () => cfg },
   });
@@ -401,7 +401,7 @@ it.each(["closed claim", "absent", "incognito", "disallowed agent"] as const)(
           "Your operator role changed",
         );
         expect(manager.observe("admitted-before-policy-change")).toBeNull();
-        const fresh = await captureGatewayOperatorRunAuthority({
+        const fresh = await prepareGatewayOperatorRunAuthority({
           client: f.owner,
           context: { getRuntimeConfig: () => f.cfg },
         });

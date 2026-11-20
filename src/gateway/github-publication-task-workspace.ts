@@ -17,7 +17,7 @@ import {
 } from "./github-publication-requester.js";
 import type { PublicationSessionRead } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { resolveRequesterProject } from "./project-access.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createGatewaySession } from "./session-create-service.js";
@@ -212,7 +212,7 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     return { agentId: parent.agentId, sessionKey: existing.canonicalKey };
   }
   const checkoutCommit = await requireGit(source, ["rev-parse", "HEAD"], gitOptions);
-  const captured = await captureGatewayOperatorRunAuthority(options);
+  const captured = await prepareGatewayOperatorRunAuthority(options);
   using _ = { [Symbol.dispose]: () => captured?.release() };
   assertPreparationCurrent();
   const actor = requester.snapshot.actor;

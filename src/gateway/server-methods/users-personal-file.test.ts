@@ -25,7 +25,7 @@ import type {
 } from "../../state/user-profiles.types.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient } from "./client-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -393,7 +393,7 @@ describe("personal USER.md self-service", () => {
           ...(kind === "shared-secret" ? { operatorRoleActor: { kind: "system" as const } } : {}),
         },
       };
-      const preparation = captureGatewayOperatorRunAuthority({
+      const preparation = prepareGatewayOperatorRunAuthority({
         client: ingress,
         context: identity.gatewayContextResolver(),
         hasCurrentClientAuthority: () => true,
@@ -495,7 +495,7 @@ describe("personal USER.md self-service", () => {
         ingress.invalidated = true;
       }
       expect(
-        await captureGatewayOperatorRunAuthority({
+        await prepareGatewayOperatorRunAuthority({
           client: ingress,
           context: identity.gatewayContextResolver(),
         }),

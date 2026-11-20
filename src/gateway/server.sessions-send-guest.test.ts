@@ -23,7 +23,7 @@ import * as pendingInputs from "../config/sessions/session-accessor.pending-inpu
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { getLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
@@ -122,7 +122,7 @@ async function withFollowup(
   };
   const source = new AbortController();
   const captured = expectDefined(
-    await captureGatewayOperatorRunAuthority({
+    await prepareGatewayOperatorRunAuthority({
       client,
       context,
       sourceAuthority: {

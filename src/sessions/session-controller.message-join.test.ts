@@ -29,7 +29,10 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureGatewayAuthPolicy } from "../gateway/auth-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
+import {
+  prepareGatewayOperatorRunAuthority,
+  type PreparedGatewayOperatorRunAuthority,
+} from "../gateway/operator-run-authority.js";
 import type { GatewayClient } from "../gateway/server-methods/client-types.js";
 import {
   dispatchProfile,
@@ -315,7 +318,7 @@ it.each<[string, Outcome, JoinCase?]>([
         assertCurrent: assertSource,
       });
       const sharedRevocation = new AbortController();
-      let sharedCapture: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      let sharedCapture: PreparedGatewayOperatorRunAuthority | undefined;
       if (c.sharedOwner && !c.sharedOwner.webSource) {
         ensureGatewayOwnerProfile(null);
         const client: GatewayClient = {
@@ -331,7 +334,7 @@ it.each<[string, Outcome, JoinCase?]>([
           authPolicy: captureGatewayAuthPolicy(cfg, { role: "operator", authMethod: "token" }),
           internal: { authenticatedOperator: true, operatorRoleActor: { kind: "system" } },
         };
-        sharedCapture = await captureGatewayOperatorRunAuthority({
+        sharedCapture = await prepareGatewayOperatorRunAuthority({
           client,
           context: { getRuntimeConfig: () => cfg },
           sourceAuthority: {

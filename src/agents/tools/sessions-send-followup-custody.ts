@@ -8,7 +8,6 @@ import { captureOperatorToolGatewayContinuationContext } from "../../gateway/ser
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { assertionSucceeds } from "../../shared/assertion.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
@@ -47,9 +46,7 @@ export async function prepareSessionsSendFollowup(params: {
     throw new Error("Followup completion requires in-process caller custody.");
   }
   const facts: Awaited<ReturnType<typeof prepareSessionMutationFacts>>[] = [];
-  const revoked = new AbortController();
-  const signal = AbortSignal.any([captured.signal, revoked.signal]);
-  let stopAccessWatch: (() => void) | undefined;
+  const signal = captured.signal;
   let released = false;
   let observationReleased = false;
   let authorityReleased = true;
@@ -59,7 +56,6 @@ export async function prepareSessionsSendFollowup(params: {
       return;
     }
     released = true;
-    stopAccessWatch?.();
     for (const read of facts) {
       read.release();
     }
@@ -102,23 +98,31 @@ export async function prepareSessionsSendFollowup(params: {
       assertInvocation?.();
       captured.assertCurrent();
     }
+    const admittedTargets = facts.map((read) => read.readCurrent(cfg).target.entry);
     const assertCurrent = () => {
       signal.throwIfAborted();
       if (released) {
         throw new Error("Followup completion custody was released.");
       }
       captured.assertCurrent();
-      if (profile && !profile.isCurrent()) {
-        throw new FollowupAccessChangedError("Followup requester identity changed.");
-      }
-      const currentConfig = getRuntimeConfig();
       // The prepared reader owns canonical routing, physical store and incarnation fencing.
+      for (const [index, read] of facts.entries()) {
+        const currentFacts = read.readCurrent(getRuntimeConfig());
+        const current = currentFacts.target;
+        if (
+          !current?.entry ||
+          current.entry.archivedAt !== undefined ||
+          current.entry.sessionId !== admittedTargets[index]?.sessionId ||
+          current.entry.lifecycleRevision !== admittedTargets[index]?.lifecycleRevision
+        ) {
+          throw new FollowupAccessChangedError("Followup conversation changed.");
+        }
+      }
+    };
+    const admitTargets = () => {
+      const currentConfig = getRuntimeConfig();
       for (const read of facts) {
         const currentFacts = read.readCurrent(currentConfig);
-        const current = currentFacts.target;
-        if (!current?.entry || current.entry.archivedAt !== undefined) {
-          throw new FollowupAccessChangedError("Followup conversation was archived.");
-        }
         const denied = authorizePreparedSessionMutation(
           {
             cfg: currentConfig,
@@ -146,26 +150,8 @@ export async function prepareSessionsSendFollowup(params: {
         }
       }
     };
+    admitTargets();
     assertCurrent();
-    const watchedKeys = new Set(
-      facts.flatMap((read) => {
-        const target = read.readCurrent(cfg).target;
-        return [target.canonicalKey, target.storeKey, ...target.storeKeys];
-      }),
-    );
-    stopAccessWatch = sessionChanges.subscribe((change) => {
-      if ("sessionKey" in change && !watchedKeys.has(change.sessionKey)) {
-        return;
-      }
-      try {
-        assertCurrent();
-      } catch (error) {
-        // Pending metadata remains fenced. A committed denial is irreversible for this capture.
-        if (error instanceof FollowupAccessChangedError) {
-          revoked.abort(error);
-        }
-      }
-    });
     const requesterSessionId = facts[0]!.readCurrent(getRuntimeConfig()).target.entry.sessionId;
     if (params.requesterTurnRunId && params.withRequesterAuthority) {
       const requesterTurnRunId = params.requesterTurnRunId;

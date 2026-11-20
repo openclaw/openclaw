@@ -18,7 +18,7 @@ import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicy,
 } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { readPluginSessionWorkAuthority } from "./plugin-session-work-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -223,7 +223,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
       denied();
     }
   };
-  const captured = await captureGatewayOperatorRunAuthority({
+  const captured = await prepareGatewayOperatorRunAuthority({
     client,
     context: params.context,
     hasCurrentClientAuthority: params.hasCurrentClientAuthority,

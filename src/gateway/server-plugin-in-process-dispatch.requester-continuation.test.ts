@@ -30,7 +30,7 @@ import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "./device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
   captureOperatorToolGatewayContinuationContext,
   withOperatorToolGatewayAuthority,
@@ -60,7 +60,7 @@ describe("accepted steering queue custody", () => {
           undefined,
           { isCurrent: () => true, subscribe: () => () => {} },
         );
-        const source = await captureGatewayOperatorRunAuthority({
+        const source = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority: device.isCurrent,
@@ -127,7 +127,6 @@ describe("accepted steering queue custody", () => {
                               "operator",
                             );
                             assertCurrent();
-                            expect(source.authority.reauthorize).toThrow();
                           }
                           if (boundary !== "rejected") {
                             lifecycle.onQueueAccepted?.(true);
@@ -192,7 +191,7 @@ describe("retained requester continuation", () => {
           undefined,
           { isCurrent: () => true, subscribe: () => () => {} },
         );
-        const source = await captureGatewayOperatorRunAuthority({
+        const source = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority: device.isCurrent,
@@ -254,7 +253,7 @@ describe("retained requester continuation", () => {
           device.release();
           // Ordinary cleanup never reacquires a tool caller.
           expect(captured.run(() => getGatewayToolCallerIdentity())).toBeUndefined();
-          const retained = await captured.runWithRequester(async () => {
+          await captured.runWithRequester(async () => {
             const caller = getGatewayToolCallerIdentity();
             expect(caller?.agentId).toBe("main");
             expect(caller?.sessionKey).toBe("agent:main:requester");
@@ -265,7 +264,6 @@ describe("retained requester continuation", () => {
             expect(caller?.sessionEventToolsAllow).toBeUndefined();
             const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
             expect(selection.requesterOrigin).toEqual(hasOrigin ? requesterOrigin : undefined);
-            expect(selection.operatorAuthority).toBe(captured?.operatorAuthority);
             selection.assertCurrent();
             return selection;
           });
@@ -277,16 +275,8 @@ describe("retained requester continuation", () => {
             gatewayCurrent = false;
           }
           const effect = vi.fn(async () => {});
-          if (boundary === "device revoked") {
-            expect(retained.assertCurrent).not.toThrow();
-            expect(captured.operatorAuthority?.reauthorize).toThrow();
-            await captured.runWithRequester(effect);
-            expect(effect).toHaveBeenCalledOnce();
-          } else {
-            expect(retained.assertCurrent).toThrow();
-            await expect((async () => captured?.runWithRequester(effect))()).rejects.toThrow();
-            expect(effect).not.toHaveBeenCalled();
-          }
+          await expect(captured.runWithRequester(effect)).rejects.toThrow();
+          expect(effect).not.toHaveBeenCalled();
           expect(getGatewayToolCallerIdentity()).toBeUndefined();
         } finally {
           captured?.release();
@@ -328,12 +318,12 @@ describe("retained requester continuation", () => {
         undefined,
         { isCurrent: () => true, subscribe: () => () => {} },
       );
-      const aliceSource = await captureGatewayOperatorRunAuthority({
+      const aliceSource = await prepareGatewayOperatorRunAuthority({
         client: alice,
         context,
         hasCurrentClientAuthority: aliceDevice.isCurrent,
       });
-      const bobSource = await captureGatewayOperatorRunAuthority({
+      const bobSource = await prepareGatewayOperatorRunAuthority({
         client: bob,
         context,
         hasCurrentClientAuthority: bobDevice.isCurrent,
@@ -434,10 +424,9 @@ describe("retained requester continuation", () => {
           const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
           expect(selection.requesterOrigin).toEqual(selectedBobOrigin);
           expect(selection.requesterOrigin).not.toEqual(aliceOrigin);
-          expect(selection.operatorAuthority).toBe(captured?.operatorAuthority);
           expect(selection.operatorAuthority?.scopes).toEqual(["operator.read", "operator.write"]);
           const client = getPluginRuntimeGatewayRequestScope()?.client;
-          expect(client?.internal?.operatorRunAuthority).toBe(captured?.operatorAuthority);
+          expect(client?.internal?.operatorRunAuthority).toBe(selection.operatorAuthority);
           expect(client?.connect.scopes).toEqual(["operator.read", "operator.write"]);
           selection.assertCurrent();
           await expect(
@@ -448,11 +437,9 @@ describe("retained requester continuation", () => {
           return selection;
         });
         invalidateGatewayDeviceRevocation(context, "selected-bob-device", "operator");
-        expect(retained.assertCurrent).not.toThrow();
-        expect(captured.operatorAuthority?.reauthorize).toThrow();
         const effect = vi.fn(async () => {});
-        await captured.runWithRequester(effect);
-        expect(effect).toHaveBeenCalledOnce();
+        await expect(captured.runWithRequester(effect)).rejects.toThrow();
+        expect(effect).not.toHaveBeenCalled();
         captured.release();
         expect(retained.assertCurrent).toThrow();
         expect(getGatewayToolCallerIdentity()).toBeUndefined();

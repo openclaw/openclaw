@@ -31,6 +31,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
+import { isOperatorAuthorityUnavailable } from "../../infra/operator-authority-error.js";
 import { GatewayDispatchUnavailableError } from "../../infra/restart-recovery-errors.js";
 import {
   logMessageDispatchCompleted,
@@ -424,21 +425,24 @@ async function runCronIsolatedAgentTurnInTrace(
               const { executeCronRun } = await cronExecutorRuntimeLoader.load();
               let operator: Awaited<ReturnType<typeof restoreCronOperatorSource>>;
               try {
-                operator = params.job.operatorSource
-                  ? await (
-                      await cronOperatorSourceLoader.load()
-                    ).restoreCronOperatorSource({
-                      job: params.job,
-                      target: {
-                        agentId: prepared.context.agentId,
-                        sessionKey: prepared.context.runSessionKey,
-                      },
-                      signal: abortSignal,
-                      deliveryAttemptFence: params.deliveryAttemptFence,
-                    })
-                  : undefined;
+                operator =
+                  params.job.operatorSource &&
+                  (await (
+                    await cronOperatorSourceLoader.load()
+                  ).restoreCronOperatorSource({
+                    job: params.job,
+                    target: {
+                      agentId: prepared.context.agentId,
+                      sessionKey: prepared.context.runSessionKey,
+                    },
+                    signal: abortSignal,
+                    deliveryAttemptFence: params.deliveryAttemptFence,
+                  }));
               } catch (error) {
-                if (!(error instanceof GatewayDispatchUnavailableError) || !error.retryable) {
+                if (
+                  !isOperatorAuthorityUnavailable(error) &&
+                  (!(error instanceof GatewayDispatchUnavailableError) || !error.retryable)
+                ) {
                   throw error;
                 }
                 // Source recovery precedes model/tool admission. Keep its typed
@@ -453,51 +457,50 @@ async function runCronIsolatedAgentTurnInTrace(
               if (operator) {
                 operatorLease.defer(operator.release);
               }
-              const executionParams: Parameters<typeof executeCronRun>[0] = {
-                ...prepared.context,
-                operatorAuthority: operator?.authority,
-                occurrence: params.occurrence,
-                runId,
-                cfg: params.cfg,
-                job: params.job,
-                trigger: params.trigger,
-                deliveryAttemptFence: params.deliveryAttemptFence,
-                lane: params.lane,
-                agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
-                persistRunContinuationSession: prepared.context.runContinuationSession?.sync,
-                recordScheduledMemoryParent:
-                  prepared.context.runContinuationSession?.recordScheduledMemoryParent,
-                abortSignal,
-                lifecycle: {
-                  ...lifecycle,
-                  capture: (phase, resultOrError, extraData) =>
-                    lifecycle.capture(phase, resultOrError, {
-                      ...extraData,
-                      ...resolveUnstartedTerminalMetadata(),
-                    }),
-                },
-                onPromptAdmission: (admission) => {
-                  promptAdmission?.close();
-                  promptAdmission = admission;
-                },
-                onExecutionStarted: notifyExecutionStarted,
-                onExecutionPhase: notifyExecutionPhase,
-                onLaneWait: params.onLaneWait,
-                onPromptCompleted: (runs) => {
-                  completedPromptRuns = runs;
-                },
-                abortReason,
-                isAborted,
-                immutableThinkLevel: prepared.context.thinkingSelection.immutableThinkLevel,
-                thinkingCatalog: prepared.context.thinkingSelection.catalog,
-                loadThinkingCatalog: prepared.context.thinkingSelection.loadThinkingCatalog,
-                executionIdentity: params.executionIdentity,
-                admissionSource: params.admissionSource,
-              };
+              const executeAdmittedCronRun = () =>
+                executeCronRun({
+                  ...prepared.context,
+                  operatorAuthority: operator?.authority,
+                  occurrence: params.occurrence,
+                  runId,
+                  cfg: params.cfg,
+                  job: params.job,
+                  trigger: params.trigger,
+                  deliveryAttemptFence: params.deliveryAttemptFence,
+                  lane: params.lane,
+                  agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
+                  persistRunContinuationSession: prepared.context.runContinuationSession?.sync,
+                  recordScheduledMemoryParent:
+                    prepared.context.runContinuationSession?.recordScheduledMemoryParent,
+                  abortSignal,
+                  lifecycle: {
+                    ...lifecycle,
+                    capture: (phase, resultOrError, extraData) =>
+                      lifecycle.capture(phase, resultOrError, {
+                        ...extraData,
+                        ...resolveUnstartedTerminalMetadata(),
+                      }),
+                  },
+                  onPromptAdmission: (admission) => {
+                    promptAdmission?.close();
+                    promptAdmission = admission;
+                  },
+                  onExecutionStarted: notifyExecutionStarted,
+                  onExecutionPhase: notifyExecutionPhase,
+                  onLaneWait: params.onLaneWait,
+                  onPromptCompleted: (runs) => {
+                    completedPromptRuns = runs;
+                  },
+                  abortReason,
+                  isAborted,
+                  immutableThinkLevel: prepared.context.thinkingSelection.immutableThinkLevel,
+                  thinkingCatalog: prepared.context.thinkingSelection.catalog,
+                  loadThinkingCatalog: prepared.context.thinkingSelection.loadThinkingCatalog,
+                  executionIdentity: params.executionIdentity,
+                  admissionSource: params.admissionSource,
+                });
               const execution = await prepared.context.sessionPreparationEffect.run(() =>
-                withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>
-                  executeCronRun(executionParams),
-                ),
+                withAgentRunLifecycleGeneration(runLifecycleGeneration, executeAdmittedCronRun),
               );
               // Publish the execution fact captured before bookkeeping; cron persistence
               // and delivery retain their separate workflow outcome.
