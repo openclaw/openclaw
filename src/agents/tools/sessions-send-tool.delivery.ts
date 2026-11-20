@@ -54,7 +54,7 @@ import type { AgentStepSession } from "./sessions-send-tool.types.js";
 // Bind at dispatch: child followup custody installs its context after tool construction.
 export const callSessionsSendGateway: AgentToolGatewayRequestCaller = async <T>(
   request: Parameters<AgentToolGatewayRequestCaller>[0],
-): Promise<T> => await bindAgentToolGatewayRequest({ revalidateOnCompletion: false })<T>(request);
+): Promise<T> => await bindAgentToolGatewayRequest({ forwardAbortSignal: false })<T>(request);
 
 export function buildSessionsSendAgentParams(params: {
   message: string;

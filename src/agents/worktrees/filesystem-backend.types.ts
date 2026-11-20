@@ -2,6 +2,7 @@ import type { SessionSourceAssertion } from "../../config/sessions/session-sourc
 import type { WorktreeWorkerAuthority } from "./types.js";
 
 export type WorktreeFilesystemOptions = {
+  idleIoPriority?: boolean;
   signal?: AbortSignal;
   commitGuard: SessionSourceAssertion;
   workerAuthority?: WorktreeWorkerAuthority;

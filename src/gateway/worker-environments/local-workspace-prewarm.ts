@@ -17,6 +17,12 @@ export async function prewarmLocalWorkspaceTemplates(params: {
   if (config.worktreeAcceleration === false) {
     return;
   }
+  const { prewarmRecentManagedTemplates } =
+    await import("../../agents/worktrees/template-prewarm.js");
+  const managedBases = await prewarmRecentManagedTemplates(params);
+  if (await params.shouldDefer?.()) {
+    return;
+  }
   const { signal } = params;
   const commitGuard = () => {
     signal.throwIfAborted();
@@ -91,12 +97,15 @@ export async function prewarmLocalWorkspaceTemplates(params: {
               (guard) =>
                 withWorktreeSources(env, async (retainRepository) => {
                   await retainRepository({ ...guard, repository });
-                  const base = await resolveWorktreeBase(
-                    repository.repoRoot,
-                    undefined,
-                    signal,
-                    guard.commitGuard,
-                  );
+                  const managedCommit = managedBases.get(repository.repoRoot);
+                  const base = managedCommit
+                    ? { commit: managedCommit }
+                    : await resolveWorktreeBase(
+                        repository.repoRoot,
+                        undefined,
+                        signal,
+                        guard.commitGuard,
+                      );
                   const templateRoot = candidate.worktreeRoot;
                   const superseded = new AbortController();
                   using _ = observeWorktreeBase((repoRoot, commit) => {
