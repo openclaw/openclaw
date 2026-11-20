@@ -365,6 +365,39 @@ it("sets up a local model from the card, as on the Mac", async () => {
   text(page).toContain("You’re all set!");
 });
 
+it("activates the prepared Ollama model when discovery omits it", async () => {
+  const modelRef = "ollama/qwen3:0.6b";
+  const request = setupRequest(
+    () => ({
+      ...detection([codex]),
+      prepareOptions: [
+        { id: "ollama", brandId: "ollama", label: "Ollama", actionLabel: "Choose connection" },
+      ],
+    }),
+    {
+      "openclaw.setup.prepare.start": () => ({
+        done: true,
+        status: "done",
+        preparedModelRef: modelRef,
+      }),
+      "openclaw.setup.activate.start": () => activated(modelRef),
+    },
+  );
+  const { page } = await mountSetup(request);
+  await openAiStep(page);
+  await click(page, "Run a model locally");
+  await click(page, "OllamaChoose connection");
+  await waitForFast(() =>
+    expectRpc(
+      request,
+      "activate.start",
+      expect.objectContaining({ kind: "provider-auto:ollama", modelRef }),
+    ),
+  );
+  await settled(page, () => page.store.autoSetup.ready);
+  text(page).toContain("You’re all set!");
+});
+
 it("connects an API key from the card's own form", async () => {
   const request = setupRequest(undefined, {
     "openclaw.setup.activate.start": () => activated("openai/gpt-5.5"),

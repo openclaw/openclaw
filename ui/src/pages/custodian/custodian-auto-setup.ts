@@ -6,6 +6,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import { candidateActivation, preparedModelActivation } from "../model-setup/prepare-options.ts";
 import { activationTargetId, initialWizardValue } from "../model-setup/state.ts";
 import {
   ModelSetupWizardRunner,
@@ -17,7 +18,12 @@ export type SetupCandidate = SetupDetection["candidates"][number];
 export type SetupAuthOption = NonNullable<SetupDetection["authOptions"]>[number];
 export type SetupPrepareOption = NonNullable<SetupDetection["prepareOptions"]>[number];
 export type SetupManualProvider = SetupDetection["manualProviders"][number];
-type SetupAttempt = { key: string; progress?: string; signIn?: true };
+type SetupAttempt = {
+  key: string;
+  progress?: string;
+  signIn?: true;
+  prepareOption?: SetupPrepareOption;
+};
 export type SetupStep = "welcome" | "where" | "ai";
 /** One short sentence for the card; the Gateway's own text stays behind Show details. */
 export type SetupFailure = { title: string; summary: string; detail?: string };
@@ -235,13 +241,9 @@ export class CustodianAutoSetup {
     }
   }
 
-  activate(
-    candidate: Pick<SetupCandidate, "kind" | "label" | "modelRef" | "modelTarget">,
-  ): Promise<void> {
+  activate(candidate: Pick<SetupCandidate, "kind" | "modelRef" | "modelTarget">): Promise<void> {
     const params = {
-      kind: candidate.kind,
-      modelRef: candidate.modelRef,
-      ...(candidate.modelTarget ? { modelTarget: candidate.modelTarget } : {}),
+      ...candidateActivation(candidate),
       // Like automatic setup: reuse the Codex login instead of a second sign-in.
       ...(candidate.kind === "codex-cli" ? { shareCodexLogin: true as const } : {}),
       ...this.catalogPreference(),
@@ -281,7 +283,7 @@ export class CustodianAutoSetup {
 
   prepare(option: SetupPrepareOption): Promise<void> {
     const progress = t("custodian.autoSetup.preparing");
-    return this.begin({ key: option.id, progress }, () =>
+    return this.begin({ key: option.id, progress, prepareOption: option }, () =>
       this.wizard.start(option.id, "openclaw.setup.prepare.start"),
     );
   }
@@ -298,15 +300,14 @@ export class CustodianAutoSetup {
       this.changed();
       return;
     }
-    // A prepared local model, or a sign-in saved without switching the model: detect
-    // again so the new connection is listed, and test the prepared model right away.
-    await this.retry();
-    const prepared = this.detection?.candidates.find(
-      (candidate) => candidate.modelRef === completion.preparedModelRef,
-    );
-    if (prepared) {
-      await this.activate(prepared);
+    const prepareOption = this.attempt?.prepareOption;
+    if (prepareOption && completion.preparedModelRef) {
+      // Discovery lists loaded models. The wizard returns the exact model the user prepared.
+      await this.activate(preparedModelActivation(prepareOption, completion.preparedModelRef));
+      return;
     }
+    // A sign-in can complete without switching models. Refresh the available choices.
+    await this.retry();
   }
 
   /** The choice being worked on, while the Gateway runs it. */
