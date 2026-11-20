@@ -1210,14 +1210,21 @@ local provider fixtures; they do not qualify live Boat provisioning.
 
 ### Catalog account-identity duplicate layer
 
-At `ccc83c79dbeaaaedfb56ae981e3f1b99c86bd5c3`, the metadata-handoff suite repeats
-four account-identity cases already owned by the scoped-refresh suite under the
-same prepared-runtime harness. The credential and selected-profile table and
-post-startup credential case have identical bodies; the scoped-refresh endpoint
-row preserves both the changed-provider exclusion and unrelated-provider
-retention assertions. Keep the scoped-refresh cases and remove the duplicate
-block with its private helpers and unused imports after baseline qualification.
-Baseline, keeper mutation controls and removal checks are pending.
+At `ccc83c79dbeaaaedfb56ae981e3f1b99c86bd5c3`, removed the metadata-handoff
+suite's copied account-identity block, private helpers and unused imports:
+three declarations / four expanded cases, 201 test lines. Production and shared
+support are unchanged. The scoped-refresh suite retains the identical credential,
+selected-profile and post-startup cases; its endpoint row retains both the
+changed-provider exclusion and unrelated-provider inclusion. Independent review
+found equivalent harness setup and no assertion transfer needed.
+
+The baseline passes 31 cases and the candidate passes all 27 remaining cases
+across both files. Separate endpoint, credential and selected-profile guard
+mutations fail their keeper assertions; all temporary source bytes were restored.
+A reload-auth predicate mutation survives: the post-startup case checks the final
+reload result, not immediate retention before background reacquisition. Both
+copies share that limitation; no stronger timing coverage is claimed. Targeted
+agents-other typecheck, lint, formatting and all three line-count ratchets pass.
 
 ## Pending qualification and proof repairs
 
