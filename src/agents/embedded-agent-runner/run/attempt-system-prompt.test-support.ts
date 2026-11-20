@@ -11,6 +11,7 @@ export function createEmptyPromptBootstrap(): Parameters<
     contextFiles: [],
     bootstrapInjectionStats: [],
     shouldRecordCompletedBootstrapTurn: false,
+    workspaceContextWithheld: false,
     workspaceNotes: [],
   };
 }

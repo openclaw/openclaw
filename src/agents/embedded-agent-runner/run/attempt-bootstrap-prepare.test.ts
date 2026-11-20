@@ -99,6 +99,8 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
       expect(result).toMatchObject({
         bootstrapMode,
         shouldRecordCompletedBootstrapTurn: completion,
+        // No completion marker exists yet, so nothing is withheld as already delivered.
+        workspaceContextWithheld: false,
         // Pending setup must not add a commit policy to ordinary workspace edits.
         workspaceNotes: [],
       });
@@ -145,6 +147,7 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
       expect(result).toMatchObject({
         ...noInjection,
         bootstrapMode: "limited",
+        workspaceContextWithheld: true,
       });
     });
   });
