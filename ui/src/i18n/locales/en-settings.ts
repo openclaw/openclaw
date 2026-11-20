@@ -1111,7 +1111,7 @@ const enSettings = {
       activated: "Account verified and selected for this agent's default model.",
       selectionChanged:
         "The selected model or account changed. Close this dialog and choose again.",
-      finishing: "Your account is being saved. Wait for the result.",
+      finishing: registerModelProviderAuthEnglish.catalog.modelProviders.login.finishing,
       sessionExpired:
         "This sign-in session ended. Close this dialog and refresh Models to check the result.",
     },
