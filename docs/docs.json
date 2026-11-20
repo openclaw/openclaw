@@ -1694,6 +1694,7 @@
                   "concepts/storage-locations",
                   "concepts/oauth",
                   "start/bootstrapping",
+                  "concepts/agent-profiles",
                   "concepts/experimental-features"
                 ]
               },

@@ -94,15 +94,13 @@ describe("resolveAgentConfig", () => {
     });
   });
 
-  it("merges experimental flags from defaults with per-agent overrides", () => {
+  it("preserves an explicit per-agent profile selector", () => {
     const cfg = agentConfig({
-      defaults: { experimental: { localModelLean: true } },
-      entries: { main: { experimental: { localModelLean: false } } },
+      defaults: { agentProfileId: "openclaw/base" },
+      entries: { main: { agentProfileId: "openclaw/small" } },
     });
 
-    expect(resolveAgentConfig(cfg, "main")?.experimental).toEqual({
-      localModelLean: false,
-    });
+    expect(resolveAgentConfig(cfg, "main")?.agentProfileId).toBe("openclaw/small");
   });
 
   it.each([

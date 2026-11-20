@@ -2467,6 +2467,7 @@
     "@trycua/cua-driver": "0.37.0",
     "@types/pg": "8.23.1",
     "acorn": "8.19.0",
+    "agentprofiles": "0.1.0",
     "chalk": "6.0.1",
     "chrome-devtools-mcp": "1.12.0",
     "clawpdf": "0.3.2",

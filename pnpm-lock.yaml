@@ -317,6 +317,9 @@ importers:
       acorn:
         specifier: 8.19.0
         version: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
+      agentprofiles:
+        specifier: 0.1.0
+        version: 0.1.0
       chalk:
         specifier: 6.0.1
         version: 6.0.1
@@ -7382,6 +7385,10 @@ packages:
   agentkeepalive@4.6.0:
     resolution: {integrity: sha512-kja8j7PjmncONqaTsB8fQ+wE2mSU2DJ9D4XKoJ5PFWIdRMa6SLSN1ff4mOr4jCbfRSsxR4keIiySJU0N9T5hIQ==}
     engines: {node: '>= 8.0.0'}
+
+  agentprofiles@0.1.0:
+    resolution: {integrity: sha512-LZL/r31wtkR8vGaNtP56BRzqa8bBO5eDTfmjqYnbwbXpTK0GLu5w53NTWvMW7BofLgTdMpM4bw6QPI2cSFJAng==}
+    engines: {node: '>=20'}
 
   ajv-formats@3.0.1:
     resolution: {integrity: sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ==}
@@ -15401,6 +15408,11 @@ snapshots:
     dependencies:
       humanize-ms: 1.2.1
     optional: true
+
+  agentprofiles@0.1.0:
+    dependencies:
+      ajv: 8.20.0
+      yaml: 2.9.1
 
   ajv-formats@3.0.1(ajv@8.20.0):
     optionalDependencies:

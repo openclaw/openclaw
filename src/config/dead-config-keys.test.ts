@@ -61,6 +61,7 @@ describe("dead config keys", () => {
     "agents.defaults.agentRuntime",
     "agents.defaults.cliBackends",
     "messages.suppressToolErrors",
+    "agents.defaults.experimental.localModelLean",
     "agents.entries.test.groupChat.visibleReplies",
     "agents.defaults.envelopeTimestamp",
     "agents.defaults.envelopeElapsed",

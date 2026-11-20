@@ -729,10 +729,9 @@ new snapshot.
 
 ## Local model lean mode
 
-Lean mode is an advanced troubleshooting override, configured outside Labs.
-Its existing `experimental.localModelLean` keys remain supported. See
-[Local model lean mode](/gateway/local-models#local-model-lean-mode) for capability
-restrictions, config examples, and recovery guidance.
+Lean mode is retired. Select the `openclaw/small` [Agent Profile](/concepts/agent-profiles)
+instead; `openclaw doctor --fix` migrates the old `experimental.localModelLean` keys. See
+[Compact tool surface for small local models](/gateway/local-models#compact-tool-surface-for-small-local-models).
 
 - <a id="why-these-tools" />[Why these tools](/gateway/local-models#why-these-tools)
 - <a id="when-to-turn-it-on" />[When to turn it on](/gateway/local-models#when-to-turn-it-on)
@@ -745,5 +744,6 @@ An experimental feature should say so plainly in docs and in the config path its
 
 ## Related
 
+- [Agent Profiles](/concepts/agent-profiles)
 - [Features](/concepts/features)
 - [Release channels](/install/development-channels)
