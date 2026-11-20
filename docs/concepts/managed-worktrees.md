@@ -932,7 +932,10 @@ or 8 MiB of apparent file bytes. An individual larger file occupies its own batc
 file sizes do not measure physical space reclaimed from shared extents. Between
 batches, the existing host pressure probe checks sustained I/O stalls and current
 or recent slow btrfs commits. Deletion waits in five-second intervals while that
-signal persists, even when PSI is low. Background deletion has a separate
+signal persists, even when PSI is low. On Linux, deletion also checks the retired
+root's btrfs metadata reservation counter: it pauses at 40 GiB and resumes below
+20 GiB, allowing delayed-reference work to drain even when commits remain fast.
+Missing or inaccessible counters leave ordinary pacing in place. Background deletion has a separate
 30-minute timeout, including pressure waits. Pacing bounds unlink bursts, but does not
 guarantee the latency of a filesystem transaction shared with other writers.
 
