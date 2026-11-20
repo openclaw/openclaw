@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, expect, it } from "vitest";
 import {
   readInstalledTerminalDependencyTree,
@@ -12,6 +12,7 @@ import {
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-contracts.mjs";
 import {
   assertInstalledTerminalOutput,
+  buildInstalledTerminalSummary,
   captureInstalledTerminalProcessAbsence,
   installedTerminalDescendants,
   type InstalledTerminalProcessAbsence,
@@ -20,6 +21,8 @@ import {
   readInstalledTerminalEvents,
   readInstalledTerminalHasher,
   readInstalledTerminalHeartbeat,
+  restoreInstalledTerminalLauncher,
+  summarizeInstalledTerminalLaunches,
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-observer.mjs";
 import { readWorkerCellPackageIdentity } from "../../scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs";
 import { execNodeEvalSync, resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -1615,6 +1618,200 @@ it("bounds suppressed Worker callbacks by actual enclosing native teardown", () 
     );
     expect(() => readInstalledTerminalEvents(f.spec.directory)).toThrow("no unique native exit");
   }
+});
+
+it("exports compact launch summaries with exact raw references and unchanged bounds", () => {
+  const rows: Record<string, unknown>[] = [
+    { event: "startup", pid: 100, thread: 0, sequence: 0, time: "1" },
+  ];
+  for (let childThread = 1; childThread <= 20; childThread++) {
+    rows.push({
+      event: "thread",
+      pid: 100,
+      thread: 0,
+      sequence: rows.length,
+      childThread,
+      time: String(childThread * 2),
+      entry: "file:///fixture/heartbeat.js",
+      packageHeartbeat: { source: "retained helper body\n".repeat(1800), sha256: "a".repeat(64) },
+      coverage: { role: "state-lease-heartbeat", reason: "settled-before-handoff" },
+    });
+    rows.push({
+      event: "thread-exit",
+      pid: 100,
+      thread: 0,
+      sequence: rows.length,
+      childThread,
+      code: 0,
+      time: String(childThread * 2 + 1),
+    });
+  }
+  rows.push({
+    event: "spawn",
+    pid: 100,
+    thread: 0,
+    sequence: rows.length,
+    spawnId: 0,
+    child: 200,
+    time: "50",
+    packageEntry: { source: "exact probe" },
+    coverage: { role: "node-runtime-probe", reason: "settled-before-handoff" },
+  });
+  for (const event of ["spawn-exit", "spawn-close"]) {
+    rows.push({
+      event,
+      pid: 100,
+      thread: 0,
+      sequence: rows.length,
+      spawnId: 0,
+      child: 200,
+      code: 0,
+      signal: null,
+      time: "60",
+    });
+  }
+  rows.push({ event: "handoff", pid: 100, thread: 0, sequence: rows.length, time: "100" });
+  assert(rows[1]);
+  rows[1].lifetimeBound = { sourceKind: "process-native-exit", ownExitCode: null, time: "80" };
+  const raw = rows.map(({ coverage: _coverage, lifetimeBound: _bound, ...event }) => event);
+  assert(raw[1]);
+  const projection = summarizeInstalledTerminalLaunches(rows);
+  expect(projection.workersWithoutPreload).toHaveLength(20);
+  expect(projection.workersWithoutPreload[0]).toMatchObject({
+    pid: 100,
+    creatorThread: 0,
+    thread: 1,
+    exitCode: 0,
+    joinedBeforeHandoff: true,
+    coverage: rows[1].coverage,
+    evidence: {
+      source: "100-0.jsonl",
+      sequence: 1,
+      event: "thread",
+      sha256: createHash("sha256").update(JSON.stringify(raw[1])).digest("hex"),
+    },
+  });
+  expect(projection.processesWithoutPreload[0]).toMatchObject({
+    pid: 200,
+    creatorPid: 100,
+    creatorThread: 0,
+    spawnId: 0,
+    nativeSettlement: [expect.any(Object), expect.any(Object)],
+  });
+  expect(projection.workerLifetimeBounds[0]?.bound).toEqual(rows[1].lifetimeBound);
+  expect(Buffer.byteLength(JSON.stringify(rows))).toBeGreaterThan(512 * 1024);
+  const summary = { status: "passed", cells: [{ name: "healthy", ...projection }] };
+  const bundle = (events = raw, lifecycle = raw) => {
+    const artifacts = new Map([
+      [
+        "healthy-observer.jsonl.gz",
+        gzipSync(events.map((event) => JSON.stringify(event)).join("\n") + "\n"),
+      ],
+      [
+        "healthy-lifetimes.jsonl.gz",
+        gzipSync(
+          JSON.stringify({ name: "100-0.jsonl", recordsComplete: true, events: lifecycle }) +
+            "\n" +
+            JSON.stringify({
+              status: "complete",
+              omittedFiles: 0,
+            }) +
+            "\n",
+        ),
+      ],
+    ]);
+    const manifest = {
+      status: "complete",
+      omissions: [],
+      files: [...artifacts].map(([name, bytes]) => ({
+        name,
+        bytes: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      })),
+    };
+    const bytes = Buffer.from(JSON.stringify(manifest));
+    const read = (name: string) => {
+      const value = artifacts.get(name);
+      assert(value);
+      return value;
+    };
+    return { artifacts, manifest, bytes, read };
+  };
+  const evidence = bundle();
+  const original = [...evidence.artifacts].map(([name, bytes]) => [name, Buffer.from(bytes)]);
+  const result = buildInstalledTerminalSummary(summary, evidence.bytes, evidence.read);
+  expect(Buffer.byteLength(JSON.stringify(result, null, 2))).toBeLessThan(32 * 1024);
+  expect(result.evidence).toEqual({
+    manifest: "manifest.json",
+    bytes: evidence.bytes.length,
+    sha256: createHash("sha256").update(evidence.bytes).digest("hex"),
+  });
+  expect([...evidence.artifacts]).toEqual(original);
+  const lifecycleOnly = bundle(raw.filter((event) => event.sequence !== 1));
+  expect(() =>
+    buildInstalledTerminalSummary(summary, lifecycleOnly.bytes, lifecycleOnly.read),
+  ).not.toThrow();
+
+  for (const [field, value] of [
+    ["source", "999-0.jsonl"],
+    ["sequence", 999],
+    ["event", "spawn"],
+    ["sha256", "0".repeat(64)],
+  ] as const) {
+    const changed = structuredClone(summary);
+    const reference = changed.cells[0]?.workersWithoutPreload[0]?.evidence;
+    assert(reference && typeof reference === "object");
+    Object.assign(reference, { [field]: value });
+    expect(
+      () => buildInstalledTerminalSummary(changed, evidence.bytes, evidence.read),
+      field,
+    ).toThrow();
+  }
+  expect(() =>
+    buildInstalledTerminalSummary(
+      { ...summary, cells: [{ ...summary.cells[0], name: "late-failure" }] },
+      evidence.bytes,
+      evidence.read,
+    ),
+  ).toThrow("Missing summary evidence");
+  const missing = bundle(
+    raw.filter((event) => event.sequence !== 1),
+    raw.filter((event) => event.sequence !== 1),
+  );
+  expect(() => buildInstalledTerminalSummary(summary, missing.bytes, missing.read)).toThrow(
+    "Missing summary event",
+  );
+  const duplicate = bundle([...raw, raw[1]]);
+  expect(() => buildInstalledTerminalSummary(summary, duplicate.bytes, duplicate.read)).toThrow(
+    "Duplicate summary event",
+  );
+  const changed = structuredClone(raw);
+  assert(changed[1]);
+  changed[1].packageHeartbeat = { source: "changed helper", sha256: "a".repeat(64) };
+  const conflicting = bundle(raw, changed);
+  expect(() => buildInstalledTerminalSummary(summary, conflicting.bytes, conflicting.read)).toThrow(
+    "Conflicting summary event",
+  );
+  const tampered = bundle(changed, changed);
+  expect(() => buildInstalledTerminalSummary(summary, tampered.bytes, tampered.read)).toThrow(
+    "Changed summary event digest",
+  );
+  assert(evidence.manifest.files[0]);
+  evidence.manifest.files[0].sha256 = "0".repeat(64);
+  expect(() =>
+    buildInstalledTerminalSummary(
+      summary,
+      Buffer.from(JSON.stringify(evidence.manifest)),
+      evidence.read,
+    ),
+  ).toThrow("Changed summary evidence");
+  expect(() =>
+    buildInstalledTerminalSummary(
+      { ...summary, unrelated: "x".repeat(512 * 1024) },
+      evidence.bytes,
+      evidence.read,
+    ),
+  ).toThrow("Terminal summary exceeds 512 KiB");
 });
 
 it("exports complete command and isolate bytes with a bounded artifact census", () => {
@@ -3580,6 +3777,231 @@ it.each(["installed", "published"] as const)(
     }
   },
 );
+
+it.each([
+  [true, 39, 39],
+  [false, 39, 39],
+  [true, 38, 39],
+  [true, 39, 38],
+] as const)(
+  "changes only the launcher after a drained successful worker: success=%s header=%s metadata=%s",
+  (successful, headerVersion, metadataVersion) => {
+    const f = fixture();
+    const admitted = successful && headerVersion === 39 && metadataVersion === 39;
+    const worker = path.join(f.root, "update-migrated-finalize.worker.mjs");
+    const parent = path.join(f.root, "parent.cjs");
+    fs.writeFileSync(
+      worker,
+      `
+    import fs from 'node:fs';
+    if (process.argv[2]) { process.stdin.resume(); } else {
+    let input = ''; for await (const chunk of process.stdin) input += chunk;
+    const request = JSON.parse(input);
+    const response = { result: { root: request.params.result.root, runId: 'run', status: ${JSON.stringify(successful ? "ok" : "error")} }, terminalRunId: 'run', exitCode: ${successful ? 0 : 1} };
+    fs.writeFileSync(request.resultPath, JSON.stringify(response));
+    process.stdout.write(JSON.stringify(response.result));
+    }
+  `,
+    );
+    fs.writeFileSync(
+      parent,
+      `
+    const assert = require('node:assert/strict');
+    const fs = require('node:fs'); const fsp = require('node:fs/promises');
+    const { DatabaseSync } = require('node:sqlite');
+    const { spawn } = require('node:child_process'); const { once } = require('node:events');
+    const spec = ${JSON.stringify(f.spec)};
+    fs.mkdirSync(require('node:path').dirname(spec.bin)); fs.symlinkSync('../entry.mjs', spec.bin);
+    const identity = file => { const s = fs.lstatSync(file, { bigint: true }); return s.dev + ':' + s.ino; };
+    const original = identity(spec.bin);
+    const state = new DatabaseSync(spec.stateDatabase);
+    state.exec("CREATE TABLE update_runs(run_id TEXT, status TEXT, phase TEXT); INSERT INTO update_runs VALUES('run','succeeded','finished')"); state.close();
+    const agent = new DatabaseSync(spec.agentDatabase);
+    agent.exec("PRAGMA user_version=${headerVersion}; CREATE TABLE schema_meta(meta_key TEXT,schema_version INTEGER); INSERT INTO schema_meta VALUES('primary',${metadataVersion}); CREATE TABLE cache_entries(scope TEXT,key TEXT,value_json TEXT)");
+    agent.prepare('INSERT INTO cache_entries VALUES(?,?,?)').run('installed-terminal','retained','"preserve-me"'); agent.close();
+    const journal = new DatabaseSync(spec.journal);
+    journal.exec('CREATE TABLE package_activation(slot INTEGER,phase TEXT,descriptor_json TEXT,publications_json TEXT)');
+    journal.prepare('INSERT INTO package_activation VALUES(1,?,?,?)').run('publication-complete', JSON.stringify({authority:{installKey:spec.root},binDir:require('node:path').dirname(spec.bin)}), JSON.stringify([{name:'openclaw',identity:original}])); journal.close();
+    (async () => {
+      for (const mode of ['--check','--doctor','--post-core','--settle-plugin-cohort','--commit-plugin-cohort']) {
+        const probe = spawn(process.execPath, [${JSON.stringify(worker)}, mode], { stdio: ['pipe','ignore','ignore'] });
+        const exited = once(probe, 'close'); probe.stdin.end('{}'); assert.equal((await exited)[0], 0);
+      }
+      const resultPath = spec.root + '/result.json';
+      const child = spawn(process.execPath, [${JSON.stringify(worker)}], { stdio: ['pipe','pipe','pipe'] });
+      child.stdout.resume(); child.stderr.resume();
+      const closed = once(child, 'close');
+      const request = JSON.stringify({ resultPath, params: { opts:{run:{runId:'run'}},rollbackBlockedReason:'state-migrated-no-rollback',schemaVersions:[{path:spec.stateDatabase,userVersion:39},{path:spec.agentDatabase,userVersion:25,contentVersion:25}],result:{root:spec.root} } });
+      child.stdin.write(request.slice(0, 10)); child.stdin.end(request.slice(10));
+      assert.equal((await closed)[0], 0);
+      assert.equal(JSON.parse(await fsp.readFile(resultPath, 'utf8')).result.status, ${JSON.stringify(successful ? "ok" : "error")});
+      ${admitted ? "assert.notEqual(identity(spec.bin), original); assert.equal(identity(spec.escrow), original); assert.equal(fs.readlinkSync(spec.bin), fs.readlinkSync(spec.escrow));" : "assert.equal(identity(spec.bin), original); assert(!fs.existsSync(spec.escrow));"}
+      ${
+        admitted
+          ? `
+      // More unrelated completed pairs than the recorder event budget must not
+      // crowd out the canonical-store proof or change the actual native calls.
+      for (let i=0;i<4200;i++) { const db=new DatabaseSync(spec.journal); db.close(); }
+      const alias=spec.root+'/agent-alias.sqlite'; fs.linkSync(spec.agentDatabase,alias);
+      const deferred=new DatabaseSync(require('node:url').pathToFileURL(alias),{open:false}); deferred.open(); deferred.close();
+      const nested=new DatabaseSync(spec.journal,{get open(){process.stdout.write('nested-event'); return true;}}); nested.close();
+      const changed=spec.root+'/changed.sqlite'; fs.writeFileSync(changed,'');
+      const raced=new DatabaseSync(changed,{get open(){fs.unlinkSync(changed); fs.linkSync(spec.agentDatabase,changed); return true;}}); raced.close();
+      `
+          : ""
+      }
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `,
+    );
+    const result = runProcess(node, [parent], f.env, 10_000);
+    expect(result.status, result.stderr).toBe(0);
+    const rows = f.records();
+    const closed = rows.findIndex((row) => row.event === "worker-closed");
+    expect(closed).toBeGreaterThanOrEqual(0);
+    if (admitted) {
+      const passed = rows.findIndex((row) => row.event === "candidate-success");
+      const intent = rows.findIndex((row) => row.event === "launcher-intent");
+      const replaced = rows.findIndex((row) => row.event === "launcher-replaced");
+      expect(passed).toBeGreaterThan(closed);
+      expect(intent).toBeGreaterThan(passed);
+      expect(replaced).toBeGreaterThan(intent);
+      const handoff = rows.find((row) => row.event === "handoff")!;
+      const lateJournal = rows.filter(
+        (row) =>
+          row.event === "sqlite-construct" &&
+          row.location === f.spec.journal &&
+          BigInt(String(row.time)) > BigInt(String(handoff.time)),
+      );
+      expect(lateJournal).toHaveLength(1); // Reentrant stdout keeps its ordinary pair.
+      expect(
+        rows.find(
+          (row) =>
+            row.event === "sqlite-open" && row.location === path.join(f.root, "agent-alias.sqlite"),
+        ),
+      ).toMatchObject({ opened: true });
+      expect(
+        rows.find(
+          (row) =>
+            row.event === "sqlite-construct" &&
+            row.location === path.join(f.root, "changed.sqlite"),
+        ),
+      ).toMatchObject({ opened: true });
+      expect(() => readInstalledTerminalEvents(f.spec.directory)).not.toThrow();
+      // Event corruption cannot erase an independently acknowledged fault.
+      const parentLog = fs.readdirSync(f.spec.directory).find((name) => name.endsWith("-0.jsonl"));
+      expect(parentLog).toBeDefined();
+      fs.appendFileSync(path.join(f.spec.directory, parentLog!), "{truncated");
+      expect(() => readInstalledTerminalEvents(f.spec.directory)).toThrow("truncated");
+      expect(restoreInstalledTerminalLauncher(f.spec).status).toBe("restored");
+      expect(fs.existsSync(f.spec.escrow)).toBe(false);
+    } else {
+      if (successful) {
+        const failure = JSON.parse(
+          fs.readFileSync(path.join(f.spec.directory, "observer-failed.json"), "utf8"),
+        );
+        expect(failure).toMatchObject({
+          status: "unqualified",
+          event: "candidate-response",
+          error: expect.stringContaining("38 !== 39"),
+        });
+      }
+      expect(() => readInstalledTerminalEvents(f.spec.directory)).toThrow(
+        "coverage is unqualified",
+      );
+      expect(
+        rows.some((row) => row.event === "candidate-success" || row.event === "launcher-intent"),
+      ).toBe(false);
+    }
+  },
+);
+
+it.each([false, true])(
+  "requires matched native operations when a worker is terminated: %s",
+  (inflight) => {
+    const f = fixture();
+    const script = path.join(f.root, "terminate.cjs");
+    const workerPath = path.join(f.root, "terminate-worker.cjs");
+    const source = `
+    const {parentPort} = require('node:worker_threads');
+    ${inflight ? "new (require('node:sqlite').DatabaseSync)(':memory:', {get open(){parentPort.postMessage('ready'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0); return true;}});" : "const db = new (require('node:sqlite').DatabaseSync)(':memory:'); db.close(); parentPort.postMessage('ready');"}
+    setInterval(()=>{}, 1000);
+  `;
+    // Packaged native workers use a file entry. Classic CJS eval bypasses
+    // Node's ESM --import preload and cannot exercise this observer boundary.
+    fs.writeFileSync(workerPath, source);
+    fs.writeFileSync(
+      script,
+      `
+    const {Worker} = require('node:worker_threads');
+    const worker = new Worker(${JSON.stringify(workerPath)}, {execArgv:[]});
+    worker.once('message', () => worker.terminate());
+  `,
+    );
+    const result = runProcess(node, [script], f.env, 10_000);
+    expect(result.status, result.stderr).toBe(0);
+    const rows = f.records();
+    const threads = rows.filter((row) => row.event === "thread");
+    expect(threads).toHaveLength(1);
+    const thread = threads[0];
+    assert(thread, "Missing Worker creation event");
+    expect(rows.filter((row) => row.event === "startup")).toHaveLength(2);
+    expect(
+      rows.find(
+        (row) =>
+          row.event === "startup" && row.pid === thread.pid && row.thread === thread.childThread,
+      ),
+    ).toMatchObject({ entry: workerPath });
+    if (inflight) {
+      expect(() => readInstalledTerminalEvents(f.spec.directory)).toThrow(
+        "observation interrupted",
+      );
+    } else {
+      expect(() => readInstalledTerminalEvents(f.spec.directory)).not.toThrow();
+      // Native termination can omit a process exit record. Its joined thread
+      // must still fail proof if only the per-isolate failure receipt survived.
+      expect(fs.existsSync(path.join(f.spec.directory, "observer-failed.json"))).toBe(false);
+      assert(typeof thread.pid === "number");
+      assert(typeof thread.childThread === "number");
+      writeJson(path.join(f.spec.directory, `${thread.pid}-${thread.childThread}.failure.json`), {
+        status: "unqualified",
+        pid: thread.pid,
+        thread: thread.childThread,
+        error: "Observer sink failed before the shared marker was written",
+      });
+      expect(() => readInstalledTerminalEvents(f.spec.directory)).toThrow(
+        "coverage is unqualified",
+      );
+    }
+  },
+);
+
+it("holds an unknown replacement and restores only a recorded or absent replacement", () => {
+  const f = fixture();
+  fs.mkdirSync(path.dirname(f.spec.bin));
+  fs.symlinkSync("../entry.mjs", f.spec.bin);
+  const identity = (file: string) => {
+    const stat = fs.lstatSync(file, { bigint: true });
+    return `${stat.dev}:${stat.ino}`;
+  };
+  const intent = {
+    bin: f.spec.bin,
+    escrow: f.spec.escrow,
+    identity: identity(f.spec.bin),
+    link: "../entry.mjs",
+    row: {},
+  };
+  writeJson(path.join(f.spec.directory, "launcher-intent.json"), intent);
+  fs.renameSync(f.spec.bin, f.spec.escrow);
+  fs.symlinkSync(intent.link, f.spec.bin);
+  expect(() => restoreInstalledTerminalLauncher(f.spec)).toThrow(
+    "Unacknowledged replacement retained",
+  );
+  expect(identity(f.spec.escrow)).toBe(intent.identity);
+  // Simulate the acknowledged boundary immediately after rename, before symlink.
+  fs.unlinkSync(f.spec.bin);
+  expect(restoreInstalledTerminalLauncher(f.spec).status).toBe("restored");
+  expect(identity(f.spec.bin)).toBe(intent.identity);
+});
 
 it("admits only the bound builtin hasher with a joined native thread", () => {
   const f = fixture();
