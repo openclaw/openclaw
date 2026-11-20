@@ -33,7 +33,7 @@ import {
   isCodexThreadClosingError,
   isCodexThreadReadMissingError,
 } from "./rpc-error.js";
-import type { CodexAppServerThreadBinding } from "./session-binding.js";
+import { threadStartBindingMutation, type CodexAppServerThreadBinding } from "./session-binding.js";
 import { getCurrentSharedClientEntry } from "./shared-client-lifecycle.js";
 import { buildContextEngineBinding } from "./thread-context-engine.js";
 import {
@@ -44,6 +44,7 @@ import {
   CodexThreadBindingConflictError,
   CodexThreadClientReplacementError,
   CodexThreadStartRequestError,
+  type CodexRetainedThreadRefusalReason,
 } from "./thread-lifecycle-errors.js";
 import {
   buildCodexThreadBindingPolicy,
@@ -69,11 +70,12 @@ import {
 } from "./thread-restricted-resume.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 import { hasCodexAppServerSiblingRouteWork } from "./turn-router.js";
+import { codexWorkerBindingProvenance } from "./worker-loss-recovery.js";
 
 export type CodexResumeThreadContext = CodexThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
   requireRestrictedThreadConfigFingerprint?: boolean;
-  stageBindingReplacement: (operation: string) => void;
+  stageBindingReplacement: (operation: string, reason?: CodexRetainedThreadRefusalReason) => void;
   prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
   buildLoadedPluginThreadConfig?: (
     binding: CodexAppServerThreadBinding,
@@ -187,7 +189,10 @@ export async function resumeExistingCodexThread(
       context.buildResumeParams(promptBinding, authProfileId, resumeConfig),
     );
     if (!isRestrictedThreadConfigCompatible(params, context, resumeParams, authProfileId)) {
-      stageBindingReplacement("rotating changed restricted thread configuration");
+      stageBindingReplacement(
+        "rotating changed restricted thread configuration",
+        "restricted resume configuration",
+      );
       return undefined;
     }
     const requestModelProvider =
@@ -302,6 +307,7 @@ export async function resumeExistingCodexThread(
     policyOutcome = "acknowledged";
     assertHandoffCurrent();
     const resumePatch = {
+      ...codexWorkerBindingProvenance(params.nativeWorkerPlacement, resumeBinding),
       // Resume moves native subscription ownership to this physical client.
       // Keeping its previous client id disables warm reuse after every restart.
       clientId: params.client.getInstanceId(),
@@ -457,7 +463,7 @@ export async function resumeExistingCodexThread(
       // Error normalization drops custom fields; retain the failed RPC at the recovery boundary.
       rpcMethod: error instanceof CodexAppServerRpcError ? error.method : undefined,
     });
-    stageBindingReplacement("rotating a stale thread binding");
+    stageBindingReplacement("rotating a stale thread binding", "native resume failed");
   } finally {
     disposeConfiguration?.();
   }
@@ -615,6 +621,7 @@ export async function startFreshCodexThread(
   const baseInstructions = context.resolveOpenClawBaseInstructions();
   const startedBinding: CodexAppServerThreadBinding = {
     threadId: response.thread.id,
+    ...codexWorkerBindingProvenance(params.nativeWorkerPlacement, replacementPredecessor),
     ...(clientId ? { clientId } : {}),
     cwd: params.cwd,
     ...(rolloutPath ? { rolloutPath } : {}),
@@ -663,13 +670,11 @@ export async function startFreshCodexThread(
       committed = await lifecycleTiming.measure("thread-start-write-binding", () =>
         params.bindingStore.mutate(
           bindingIdentity,
-          replacementPredecessor
-            ? {
-                kind: "replace-thread",
-                expectedThreadId: replacementPredecessor.threadId,
-                binding: nextBinding,
-              }
-            : { kind: "set", if: { kind: "absent" }, binding: nextBinding },
+          threadStartBindingMutation(
+            nextBinding,
+            replacementPredecessor,
+            params.nativeWorkerPlacement?.recovery !== undefined,
+          ),
           assertCurrent,
           params.authority,
         ),

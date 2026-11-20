@@ -1,3 +1,4 @@
+import type { NativeWorkerLossRecovery } from "../../agents/harness/native-session/worker-placement.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import type { WorkerSessionPlacementState } from "./placement-state.js";
@@ -112,6 +113,8 @@ type PlacementRecordBase<TurnClaim extends PersistedTurnClaim | null> =
     createdAtMs: number;
     updatedAtMs: number;
     stateChangedAtMs: number;
+    /** Provider-confirmed physical predecessor; never inferred from failure diagnostics. */
+    confirmedLossRecovery?: NativeWorkerLossRecovery;
     /** Process-local UI projection; deliberately absent from SQLite. */
     workspaceResultConflict?: WorkerWorkspaceResultConflict;
   };

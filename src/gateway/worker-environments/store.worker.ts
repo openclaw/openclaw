@@ -54,7 +54,7 @@ function mutation<Name extends Method, Result>(
           execute(input, { db, store, now, touch: (id) => touched.add(id.trim()) }),
         );
         const facts = readWorkerEnvironmentFacts(db, [...touched]);
-        if (name === "refreshBootstrapReceipt") {
+        if (name === "refreshBootstrapReceipt" || name === "requestDestroy") {
           const sessionIds = facts.environments.flatMap((environment) =>
             environment.state === "attached" ? environment.attachedSessionIds : [],
           );

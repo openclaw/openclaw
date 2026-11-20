@@ -540,6 +540,12 @@ describe("codex plugin", () => {
       {
         bindingStore: expect.any(Object),
         pluginConfig: config,
+        pluginProvenance: {
+          source: "test",
+          runtimeSource: undefined,
+          rootDir: undefined,
+          version: undefined,
+        },
         runtime,
         runtimeModelId: undefined,
         nativeHookRelay: { enabled: true },

@@ -132,6 +132,13 @@ function startWorkerPlacementDispatch(
     }
   }
   // The local predecessor keeps its claim until the dispatch barrier drains it.
+  // A failed spare never owned native state. Preserve the original loss through
+  // startup fallback, but an unrelated dispatch cannot borrow another predecessor.
+  const recovery =
+    current.executionMode === executionMode &&
+    (expected || (current.state === "failed" && current.activeOwnerEpoch === null))
+      ? current.confirmedLossRecovery
+      : undefined;
   const result = executeSqliteQuerySync(
     db,
     query(db)
@@ -148,6 +155,7 @@ function startWorkerPlacementDispatch(
         last_transcript_ack_cursor: null,
         last_live_event_ack_cursor: null,
         recovery_error: null,
+        confirmed_loss_recovery_json: recovery ? JSON.stringify(recovery) : null,
         terminal_reason: null,
         terminal_at_ms: null,
         updated_at_ms: nowMs,

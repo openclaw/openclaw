@@ -215,6 +215,7 @@ it.each(["api-key", "subscription", "native-command"] as const)(
       placementNodeId: "worker-node",
       placementEnvironmentId: "worker-environment",
       placementSessionId: params.sessionId,
+      sessionKey: params.sessionKey!,
       placementOwnerEpoch: 1,
     };
     params.sandbox = sandbox;

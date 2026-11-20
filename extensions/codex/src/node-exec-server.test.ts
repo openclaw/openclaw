@@ -13,7 +13,9 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
+import { createCodexNodeAppServerInvokePolicy } from "./node-app-server.js";
 import {
+  parseCodexNodePlacementWorkspace,
   createCodexNodeExecServerCommand,
   createCodexNodeExecServerInvokePolicy,
 } from "./node-exec-server.js";
@@ -776,4 +778,40 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
     );
     await pendingNodeProof;
   });
+});
+
+it("retains existing-native-state requirements through worker invocation and node decoding", async () => {
+  const placement = {
+    cwd: path.resolve("/fixture/workspace"),
+    environmentId: "retained-environment",
+    sessionId: "retained-session",
+    sessionKey: "agent:main:retained",
+    ownerEpoch: 7,
+    retainedSession: true,
+    requireExistingNativeState: true,
+  };
+  const invoke = vi.fn<
+    NonNullable<OpenClawPluginNodeInvokePolicyContext["invokeNodeWithSessionFull"]>
+  >(async ({ createParams }) => {
+    const forwarded = createParams();
+    if (!isRecord(forwarded)) {
+      throw new Error("Expected worker invocation parameters");
+    }
+    expect(parseCodexNodePlacementWorkspace(forwarded.placement)).toMatchObject({
+      retainedSession: true,
+      requireExistingNativeState: true,
+      environmentId: "retained-environment",
+      sessionId: "retained-session",
+      ownerEpoch: 7,
+    });
+    return { ok: true as const, payload: { accepted: true } };
+  });
+  const result = await createCodexNodeAppServerInvokePolicy().handle(
+    policyContext(
+      { authorization: "session-full", placement },
+      { invokeNodeWithSessionFull: invoke },
+    ),
+  );
+  expect(result).toMatchObject({ ok: true });
+  expect(invoke).toHaveBeenCalledOnce();
 });

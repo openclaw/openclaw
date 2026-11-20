@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  closeCodexStartupClientBestEffort,
   CodexAppServerUnsafeSubscriptionError,
 } from "./attempt-client-cleanup.js";
 import { unsubscribeCodexAppServerLiveThread } from "./client-runtime.js";
@@ -31,8 +32,19 @@ import {
   CodexThreadBindingConflictError,
   CodexThreadStartRequestError,
 } from "./thread-lifecycle-errors.js";
+import {
+  buildCodexThreadBindingPolicy,
+  buildCodexThreadRequestConfig,
+  prepareCodexThreadFinalConfigPatch,
+  publishCodexThreadInferenceBinding,
+  type prepareCodexThreadLifecyclePreflight,
+  type CodexThreadRequestContext,
+} from "./thread-lifecycle-preflight.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
-import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
+import type {
+  CodexAppServerThreadLifecycleBinding,
+  CodexStartOrResumeThreadParams,
+} from "./thread-lifecycle-types.js";
 import {
   buildDeveloperInstructions,
   resolveCodexOpenClawBaseInstructions,
@@ -560,4 +572,96 @@ async function recoverPendingSupervisionArtifacts(
     );
   }
   return next;
+}
+
+/** Prepare the native supervision branch with the same final configuration and binding policy. */
+export async function preparePendingCodexSupervisionBranch(
+  params: CodexStartOrResumeThreadParams,
+  {
+    bindingIdentity,
+    authority,
+    pendingBinding,
+    requestContext,
+    preflight,
+    clientId,
+  }: {
+    bindingIdentity: CodexAppServerBindingIdentity;
+    authority: CodexBindingAuthority;
+    pendingBinding: CodexAppServerThreadBinding & {
+      pendingSupervisionBranch: CodexAppServerPendingSupervisionBranch;
+    };
+    requestContext: CodexThreadRequestContext;
+    preflight: Awaited<ReturnType<typeof prepareCodexThreadLifecyclePreflight>>;
+    clientId: string | undefined;
+  },
+): Promise<CodexAppServerThreadLifecycleBinding> {
+  const {
+    lifecycleTiming,
+    hostSystemAgentActive,
+    restrictedToolSurface,
+    restrictedToolSurfaceInheritedMcpServerNames,
+    webSearchThreadConfigFingerprint,
+  } = preflight;
+  const pluginThreadConfig = params.pluginThreadConfig?.enabled
+    ? await lifecycleTiming.measure("plugin-config-build", () => params.pluginThreadConfig?.build())
+    : undefined;
+  const finalConfigPatch = await prepareCodexThreadFinalConfigPatch(
+    params,
+    requestContext.nativeModelInputTools,
+  );
+  const config = lifecycleTiming.measureSync("merge-thread-config", () =>
+    buildCodexThreadRequestConfig(
+      params,
+      preflight,
+      pluginThreadConfig?.configPatch,
+      finalConfigPatch.configPatch,
+    ),
+  );
+  return publishCodexThreadInferenceBinding(
+    params,
+    await materializePendingSupervisionBranch({
+      ...params,
+      abandonClient:
+        params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)),
+      bindingIdentity,
+      authority,
+      binding: pendingBinding,
+      attempt: params.params,
+      config,
+      hostSystemAgentActive,
+      restrictedToolSurface,
+      restrictedToolSurfaceInheritedMcpServerNames,
+      provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
+      throwIfAborted: () => {
+        params.assertCurrent?.();
+        requestContext.assertInferenceConfig(config);
+      },
+      lifecycleTiming,
+      normalizeBindingModelProvider: requestContext.normalizeBindingModelProvider,
+      bindingPatch: {
+        cwd: params.cwd,
+        ...(clientId ? { clientId } : {}),
+        // Supervised threads stay on the native user-home connection. Never
+        // persist an outer OpenClaw auth profile onto that private ownership.
+        authProfileId: undefined,
+        agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
+        preserveNativeModel: true,
+        ...buildCodexThreadBindingPolicy(params, preflight),
+        webSearchThreadConfigFingerprint,
+        mcpServersFingerprint:
+          params.mcpServersFingerprintEvaluated === true
+            ? params.mcpServersFingerprint
+            : pendingBinding.mcpServersFingerprint,
+        nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
+        appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+          params.appServer,
+          params.params.agentDir,
+        ),
+        pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
+        pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
+        pluginAppPolicyContext: pluginThreadConfig?.policyContext,
+        conversationSourceTransferComplete: true,
+      },
+    }),
+  );
 }

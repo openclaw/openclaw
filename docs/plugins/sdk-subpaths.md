@@ -200,6 +200,10 @@ readers use it without loading session storage, artifact cleanup, or archive
 compression. Filename parsing shares a pure grammar with the artifact helpers.
 Existing memory session facades retain these exports for installed plugin compatibility.
 
+The private-local `plugin-sdk/agent-harness-session-contracts` facade lets official
+harness plugins decode canonical native placement facts without loading session
+stores or execution owners during registration. It is not a typed public SDK entrypoint.
+
 The private-local `plugin-sdk/github-worker-runtime` prepares the Gateway-owned
 GitHub execution grant for official worker adapters, including acknowledged
 refresh and teardown. It is not a typed public SDK entrypoint.

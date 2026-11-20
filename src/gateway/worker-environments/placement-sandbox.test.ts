@@ -101,6 +101,15 @@ it.each([
       placementEnvironmentId: environmentId,
       placementSessionId: "session-1",
       placementOwnerEpoch: 7,
+      nativeWorkerPlacement: {
+        owner: {
+          agentId: "main",
+          sessionKey: placement.sessionKey,
+          sessionId: "session-1",
+          environmentId,
+          ownerEpoch: 7,
+        },
+      },
       backendId: "node",
       runtimeId: "remote-exec:worker:environment-1:7:11",
       workspaceDir: "/local/managed-worktree",
@@ -110,6 +119,37 @@ it.each([
     expect(resolveSshIdentity).not.toHaveBeenCalled();
   },
 );
+
+it("projects retained native ownership without inventing confirmed-loss recovery", async () => {
+  const environment = {
+    ...nodeEnvironment(),
+    sharedHost: false,
+    retention: {
+      policy: {
+        version: 1 as const,
+        ownerBinding: "retained-session-owner",
+        computeWindowSeconds: 600,
+      },
+      runtimeReady: true,
+      operation: null,
+      observation: null,
+    },
+  };
+
+  const sandbox = await sandboxFor({ get: () => environment });
+
+  expect(sandbox.placementRetainedSession).toBe(true);
+  expect(sandbox.nativeWorkerPlacement).toEqual({
+    owner: {
+      agentId: "main",
+      sessionKey: remoteExecPlacement().sessionKey,
+      sessionId: "session-1",
+      environmentId,
+      ownerEpoch: 7,
+      retentionOwnerBinding: "retained-session-owner",
+    },
+  });
+});
 
 it.each([
   { label: "POSIX root", workspaceDir: "/" },

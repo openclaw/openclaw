@@ -281,6 +281,12 @@ export default definePluginEntry({
       );
     }
     const agentHarnessOptions = {
+      pluginProvenance: {
+        source: api.source,
+        runtimeSource: api.runtimeSource,
+        rootDir: api.rootDir,
+        version: api.version,
+      },
       pluginConfig: registrationConfig,
       bindingStore,
       sessionCatalogControlFactory,

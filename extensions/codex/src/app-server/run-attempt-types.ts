@@ -6,7 +6,15 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
 
+export type CodexPluginProvenance = {
+  source: string;
+  runtimeSource?: string;
+  rootDir?: string;
+  version?: string;
+};
+
 export type CodexRunAttemptOptions = {
+  pluginProvenance?: CodexPluginProvenance;
   bindingStore: CodexAppServerBindingStore;
   runtime?: PluginRuntime;
   pluginConfig?: unknown;

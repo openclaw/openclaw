@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+/** SQLite-backed Codex app-server thread bindings. */
 import {
   AgentHarnessSessionSupersededError,
   embeddedAgentLog,
@@ -26,10 +28,8 @@ import {
   CODEX_APP_SERVER_BINDING_LEASE,
   PHYSICAL_SESSION_RETIRE_TTL_MS,
 } from "./session-binding-meta.js";
-import {
-  mutateNativeSubagentBinding,
-  type CodexNativeSubagentBindingMutation,
-} from "./session-binding-native-mutations.js";
+import type { CodexAppServerBindingMutation } from "./session-binding-mutations.types.js";
+import { mutateNativeSubagentBinding } from "./session-binding-native-mutations.js";
 import {
   readCurrentNativePendingAssignments,
   preserveNativePendingAssignments,
@@ -50,7 +50,6 @@ import {
   validateBindingForWrite,
   type CodexBindingStateStore,
   type CodexAppServerBindingIdentity,
-  type CodexAppServerPendingSupervisionBranch,
   type CodexAppServerThreadBinding,
   type StoredCodexAppServerBinding,
 } from "./session-binding-record.js";
@@ -86,44 +85,21 @@ export {
   CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
 } from "./session-binding-meta.js";
 
-type CodexAppServerBindingMutation =
-  | CodexNativeSubagentBindingMutation
-  | {
-      kind: "set";
-      binding: CodexAppServerThreadBinding;
-      if?: { kind: "absent" };
-    }
-  | {
-      kind: "patch";
-      threadId: string;
-      clientId?: string;
-      patch: Partial<Omit<CodexAppServerThreadBinding, "threadId">>;
-    }
-  | {
-      kind: "replace-thread";
-      expectedThreadId: string;
-      binding: CodexAppServerThreadBinding;
-    }
-  | {
-      kind: "patch-pending-supervision-branch";
-      expected: CodexAppServerPendingSupervisionBranch;
-      pending: CodexAppServerPendingSupervisionBranch;
-    }
-  | {
-      kind: "commit-pending-supervision-branch";
-      expected: CodexAppServerPendingSupervisionBranch;
-      threadId: string;
-      patch: Partial<Omit<CodexAppServerThreadBinding, "threadId" | "pendingSupervisionBranch">>;
-    }
-  | {
-      kind: "reclaim-generation";
-      expectedPreviousSessionId: string;
-    }
-  | {
-      kind: "clear";
-      threadId?: string;
-      clientId?: string;
-    };
+/** Commit fresh threads against the exact predecessor required by their preparation owner. */
+export function threadStartBindingMutation(
+  binding: CodexAppServerThreadBinding,
+  predecessor: CodexAppServerThreadBinding | undefined,
+  requireExactPredecessor: boolean,
+): CodexAppServerBindingMutation {
+  return predecessor
+    ? {
+        kind: "replace-thread",
+        expectedThreadId: predecessor.threadId,
+        ...(requireExactPredecessor ? { expectedBinding: predecessor } : {}),
+        binding,
+      }
+    : { kind: "set", if: { kind: "absent" }, binding };
+}
 
 export type CodexSessionGenerationRetirementResult = "applied" | "absent" | "conflict";
 
@@ -534,6 +510,8 @@ export function createCodexAppServerBindingStore(
             const replacesExpectedOrdinaryOwner =
               mutation.kind === "replace-thread" &&
               active?.binding.threadId === mutation.expectedThreadId &&
+              (mutation.expectedBinding === undefined ||
+                isDeepStrictEqual(active.binding, mutation.expectedBinding)) &&
               active.binding.connectionScope !== "supervision" &&
               mutation.binding.connectionScope !== "supervision" &&
               mutation.binding.threadId !== mutation.expectedThreadId;

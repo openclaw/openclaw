@@ -86,6 +86,8 @@ export type WorkerEnvironmentMutationMethods = {
     environmentId: string;
     state: WorkerEnvironmentState;
     terminalState?: WorkerEnvironmentTeardownTerminalState;
+    /** Only an unexpected provider `destroyed` observation can supply this fact. */
+    confirmedLoss?: { status: "destroyed"; ownerEpoch: number; leaseId: string };
     assertCurrent?: () => void;
     lastError?: string;
   }): WorkerEnvironmentRecord;

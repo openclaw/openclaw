@@ -12,6 +12,7 @@ import type {
   WorkerEnvironmentIntentInput,
   WorkerEnvironmentRecord,
 } from "./environment-record.js";
+import { recordConfirmedWorkerLossInDatabase } from "./placement-loss-recovery.worker.js";
 import {
   createPreparedEnvironmentStoreOps,
   workerEnvironmentPreparationColumns,
@@ -374,10 +375,20 @@ export function createWorkerEnvironmentStoreKernel(
       if (current.state !== input.state) {
         throw new Error(`Worker environment ${environmentId} changed before destroy request`);
       }
+      if (
+        input.confirmedLoss &&
+        (current.ownerEpoch !== input.confirmedLoss.ownerEpoch ||
+          current.leaseId !== input.confirmedLoss.leaseId)
+      ) {
+        throw new Error(`Worker environment ${environmentId} changed before loss confirmation`);
+      }
       if (current.destroyRequestedAtMs !== null) {
         return current;
       }
       const requestedAtMs = now();
+      if (input.confirmedLoss && current.state !== "destroying") {
+        recordConfirmedWorkerLossInDatabase(db, current, requestedAtMs);
+      }
       const terminalState = input.terminalState ?? "destroyed";
       return updateWorkerEnvironmentRecord(db, environmentId, input.state, {
         updated_at_ms: requestedAtMs,

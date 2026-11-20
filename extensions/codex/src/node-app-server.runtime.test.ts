@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { withTempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -12,6 +14,7 @@ import {
   sendNativeResponse,
 } from "./app-server/thread-native.test-support.js";
 import { buildCodexRuntimeThreadConfig } from "./app-server/thread-requests.js";
+import * as processRegistration from "./app-server/transport-process-registration.js";
 import { deriveCodexWorkerConfigurationVersion } from "./node-app-server-command.js";
 import { createCodexNodeAppServerCommand } from "./node-app-server.js";
 import * as nodeExecRuntime from "./node-exec-server.runtime.js";
@@ -23,6 +26,130 @@ afterEach(() => {
 });
 
 describe("Codex worker model process", () => {
+  it.for([false, true])(
+    "holds startup diagnostics until framed readiness, including registration failure=%s",
+    async (registrationFails, { signal }) => {
+      await withTempWorkspace(
+        { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "codex-worker-startup-" },
+        async ({ dir }) => {
+          const root = await fs.realpath(dir);
+          const state = path.join(root, "state");
+          const configDir = path.join(state, "codex-runtime");
+          const sessionId = "startup-order";
+          const rules = path.join(
+            root,
+            ".openclaw-worker",
+            "codex",
+            createHash("sha256").update(sessionId).digest("hex"),
+            "rules",
+          );
+          await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
+          await fs.mkdir(rules, { recursive: true });
+          // The pinned native binary reports malformed rules on stderr before initialize.
+          await fs.writeFile(path.join(rules, "startup.rules"), "not valid starlark !!!");
+          const helperPath = path.join(configDir, "autodev-token.mjs");
+          const config = `model = "codex-test-model"\nmodel_provider = "autodev"\n[model_providers.autodev]\nname = "AutoDev"\nbase_url = "http://127.0.0.1:1/v1"\nwire_api = "responses"\nrequires_openai_auth = false\nsupports_websockets = false\n[model_providers.autodev.auth]\ncommand = "node"\nargs = [${JSON.stringify(helperPath)}]\n`;
+          const helper = "process.stdout.write('synthetic-worker-bearer\\n')\n";
+          const version = deriveCodexWorkerConfigurationVersion(config, helperPath, helper);
+          await fs.writeFile(path.join(configDir, "config.toml"), config, { mode: 0o600 });
+          await fs.writeFile(helperPath, helper, { mode: 0o600 });
+          await fs.writeFile(path.join(configDir, "version"), version, { mode: 0o600 });
+          vi.stubEnv("OPENCLAW_STATE_DIR", state);
+          setManagedCodexPluginRoot(fileURLToPath(new URL("../", import.meta.url)));
+          const prepareRegistration = processRegistration.prepareCodexAppServerProcessRegistration;
+          const startupLine = Promise.withResolvers<string>();
+          vi.spyOn(
+            processRegistration,
+            "prepareCodexAppServerProcessRegistration",
+          ).mockImplementationOnce(async () => {
+            const register = await prepareRegistration();
+            return async (child) => {
+              const lines = createInterface({ input: child.stderr });
+              const firstLine = once(lines, "line", { signal });
+              const registered = register(child);
+              void registered.catch(() => {});
+              try {
+                const [line] = await firstLine;
+                startupLine.resolve(String(line));
+                await registered;
+                if (registrationFails) {
+                  throw new Error("Synthetic process registration failure");
+                }
+              } finally {
+                lines.close();
+              }
+            };
+          });
+          const controller = new AbortController();
+          const wire: string[] = [];
+          const diagnostic = Promise.withResolvers<unknown>();
+          const release = vi.fn();
+          const command = createCodexNodeAppServerCommand();
+          const running = command.handle(
+            JSON.stringify({
+              authorization: "session-full",
+              placement: {
+                cwd: root,
+                environmentId: "startup-environment",
+                sessionId,
+                ownerEpoch: 1,
+                sessionKey: "agent:main:startup-order",
+              },
+            }),
+            {
+              emitChunk: async () => {},
+              onInput: () => {},
+              signal: AbortSignal.any([controller.signal, signal]),
+              frames: {
+                send: async (frame) => {
+                  wire.push("data");
+                  diagnostic.resolve(JSON.parse(Buffer.from(frame).toString("utf8")));
+                },
+                onMessage: () => {
+                  // The node host queues its ready frame at this registration boundary.
+                  wire.push("ready");
+                  return () => {};
+                },
+              },
+            },
+            {
+              sessionKey: "agent:main:startup-order",
+              sendNodeEvent: async () => undefined,
+              prepareExecAuthorization: () => () => {},
+              acquireManagedWorkspaceAsync: async () => ({
+                workspaceDir: root,
+                homeDir: root,
+                release,
+              }),
+            },
+          );
+          void running.catch(() => {});
+          try {
+            await expect(Promise.race([startupLine.promise, running])).resolves.toEqual(
+              expect.stringContaining('"level":"ERROR"'),
+            );
+            if (registrationFails) {
+              await expect(running).rejects.toThrow("Synthetic process registration failure");
+              expect(wire).toEqual([]);
+            } else {
+              await expect(Promise.race([diagnostic.promise, running])).resolves.toMatchObject({
+                method: "openclaw/workerDiagnostic",
+                params: { event: "native_stderr", level: "ERROR" },
+              });
+              expect(wire.slice(0, 2)).toEqual(["ready", "data"]);
+            }
+          } finally {
+            controller.abort();
+            await expect(running).rejects.toThrow();
+            await command.onDisconnect?.();
+          }
+          expect(release).toHaveBeenCalledOnce();
+          expect(command.hasActiveWork?.()).toBe(false);
+        },
+      );
+    },
+  );
+
   it("gates native resource readiness, resumes exact state, and retains failed-cleanup custody", async ({
     signal,
     onTestFinished,
@@ -86,8 +213,10 @@ describe("Codex worker model process", () => {
         vi.stubEnv("OPENCLAW_STATE_DIR", state);
         setManagedCodexPluginRoot(fileURLToPath(new URL("../", import.meta.url)));
         const runExecServer = nodeExecRuntime.runCodexNodeExecServer;
+        let cleanupFailureInjected = false;
         vi.spyOn(nodeExecRuntime, "runCodexNodeExecServer").mockImplementationOnce(
           async (params) => {
+            cleanupFailureInjected = true;
             let failCleanup = true;
             const stop = async () => {
               if (failCleanup) {
@@ -122,8 +251,19 @@ describe("Codex worker model process", () => {
         await fs.writeFile(helperPath, originalHelper);
         await fs.writeFile(path.join(configDir, "version"), version);
         await command.prepare?.({ config: {}, env: process.env });
+        // An interrupted preflight can create this home before any native thread exists.
+        await fs.mkdir(
+          path.join(
+            root,
+            ".openclaw-worker",
+            "codex",
+            createHash("sha256").update("worker-session").digest("hex"),
+          ),
+          { recursive: true, mode: 0o700 },
+        );
         const placement = {
           cwd: workspaceDir,
+          retainedSession: true,
           environmentId: "worker-environment",
           sessionId: "worker-session",
           ownerEpoch: 1,
@@ -136,7 +276,8 @@ describe("Codex worker model process", () => {
             waitNotification: (method: string) => Promise<unknown>,
           ) => Promise<T>,
         ): Promise<T> => {
-          const exerciseCleanupFailure = connections++ === 0;
+          const retainedReconnect = connections++ > 0;
+          const exerciseCleanupFailure = !retainedReconnect;
           const controller = new AbortController();
           const replies = new EventEmitter();
           let receiver: ((message: Uint8Array) => void | Promise<void>) | undefined;
@@ -147,7 +288,10 @@ describe("Codex worker model process", () => {
           const release = vi.fn();
           const running = command.handle(
             JSON.stringify({
-              placement,
+              placement: {
+                ...placement,
+                ...(retainedReconnect ? { requireExistingNativeState: true } : {}),
+              },
               authorization: "session-full",
               resourcePreparationRequired: true,
             }),
@@ -201,7 +345,7 @@ describe("Codex worker model process", () => {
           } finally {
             controller.abort(new Error("test complete"));
             await expect(running).rejects.toThrow();
-            if (exerciseCleanupFailure) {
+            if (exerciseCleanupFailure && cleanupFailureInjected) {
               try {
                 expect(release).not.toHaveBeenCalled();
                 expect(command.hasActiveWork?.()).toBe(true);
@@ -229,6 +373,7 @@ describe("Codex worker model process", () => {
             model: "codex-test-model",
             config: buildCodexRuntimeThreadConfig(undefined),
           })) as { result: { thread: { id: string } } };
+          expect(started).toMatchObject({ result: { thread: { id: expect.any(String) } } });
           expect(initialized).toMatchObject({
             result: {
               codexHome: expect.stringContaining(path.join(root, ".openclaw-worker", "codex")),
@@ -281,6 +426,12 @@ describe("Codex worker model process", () => {
         await runConnection(async (request, notify, waitNotification) => {
           await request(1, "initialize", buildCodexAppServerInitializeParams());
           await notify("initialized");
+          await expect(request(99, "thread/start", {})).resolves.toMatchObject({
+            error: {
+              code: -32001,
+              message: expect.stringContaining("start a separate conversation"),
+            },
+          });
           await expect(request(2, "thread/resume", { threadId })).resolves.toMatchObject({
             result: { thread: { id: threadId } },
           });
@@ -305,6 +456,16 @@ describe("Codex worker model process", () => {
             params: { threadId, turn: { status: "completed" } },
           });
         });
+        const nativeHome = path.join(
+          root,
+          ".openclaw-worker",
+          "codex",
+          createHash("sha256").update("worker-session").digest("hex"),
+        );
+        await fs.rename(nativeHome, `${nativeHome}.retained`);
+        await expect(runConnection(async () => undefined)).rejects.toThrow(
+          "start a separate conversation",
+        );
       },
     );
   }, 45_000);

@@ -10,7 +10,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resumeThread } from "../command-handler-bindings.js";
 import { createCodexCommandHost } from "../command-host.test-support.js";
@@ -42,7 +41,6 @@ import {
   threadStartResult,
 } from "./run-attempt-test-harness.js";
 import {
-  createCodexTestBindingStore,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   testCodexAppServerBindingStore,
@@ -62,6 +60,10 @@ import {
   createUnobservedThreadClient,
   registerThreadPolicyRefreshTests,
 } from "./thread-lifecycle-policy-refresh.test-support.js";
+import {
+  registerRecoveredGenerationBindingTest,
+  registerThreadRecoveryBindingTests,
+} from "./thread-lifecycle-recovery.test-support.js";
 import { registerRequiredRootThreadPolicyTests } from "./thread-lifecycle-rooted.test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import { registerThreadWebSearchBindingTests } from "./thread-lifecycle-web-search.test-support.js";
@@ -609,71 +611,22 @@ async function createLeasedLifecycleWireClient(
 }
 
 describe("Codex app-server thread lifecycle bindings", () => {
+  registerThreadRecoveryBindingTests({
+    createParams,
+    createPaths,
+    startOrResumeThread,
+    writeCodexAppServerBinding,
+  });
   registerRequiredRootThreadPolicyTests({
     createParams,
     createPaths,
     createThreadLifecycleAppServerOptions,
     startOrResumeThread,
   });
-  it("rejects a host-only rotation after recovering the predecessor before the lifecycle lease", async () => {
-    const workspaceDir = path.join(tempDir, "recovered-workspace");
-    const params = createParams(path.join(tempDir, "recovered.jsonl"), workspaceDir);
-    const current = {
-      kind: "session" as const,
-      agentId: "main",
-      sessionKey: params.sessionKey!,
-      sessionId: params.sessionId,
-    };
-    const previous = { ...current, sessionId: "before-compaction" };
-    const scope = {
-      agentId: current.agentId,
-      sessionKey: current.sessionKey,
-      storePath: path.join(tempDir, "admitted", "sessions.json"),
-    };
-    params.sessionTarget = { ...scope, sessionId: current.sessionId };
-    await upsertSessionEntry({ ...scope, entry: { sessionId: previous.sessionId, updatedAt: 1 } });
-    await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
-    const native = threadStartResult("recovered-native-thread");
-    const fixture = await createAgentLifecycleHarness({
-      respond: createLifecycleRequest(async (method) => {
-        if (method === "thread/resume") {
-          return native;
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
-    });
-    fixture.seed(native, { loaded: true, subscribed: false });
-    const bindingStore = createCodexTestBindingStore();
-    const binding = {
-      threadId: native.thread.id,
-      cwd: workspaceDir,
-      preserveNativeModel: true as const,
-      model: native.model,
-      modelProvider: native.modelProvider,
-      webSearchThreadConfigFingerprint: DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
-    };
-    await bindingStore.mutate(previous, { kind: "set", binding });
-    const withLease = bindingStore.withLease.bind(bindingStore);
-    vi.spyOn(bindingStore, "withLease").mockImplementationOnce(async (identity, run) => {
-      expect(bindingStore.read(current)).toEqual(binding);
-      await patchSessionEntry({ ...scope, update: () => ({ sessionId: "next-compaction" }) });
-      return withLease(identity, run);
-    });
-
-    await expect(
-      startOrResumeThreadImpl({
-        client: fixture.client,
-        params,
-        cwd: workspaceDir,
-        dynamicTools: [],
-        appServer: createThreadLifecycleAppServerOptions(),
-        userMcpServersEnabled: false,
-        signal: new AbortController().signal,
-        bindingStore,
-      }),
-    ).rejects.toThrow("Codex session generation is no longer current");
-    expect(fixture.request.mock.calls.some(([method]) => method === "thread/resume")).toBe(false);
-    expect(bindingStore.read(current)).toEqual(binding);
+  registerRecoveredGenerationBindingTest({
+    createParams,
+    createThreadLifecycleAppServerOptions,
+    webSearchFingerprint: DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
   });
 
   it("resumes unloaded A with current policy while B stays active and catalog leases come and go", async () => {

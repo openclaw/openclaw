@@ -8,8 +8,8 @@ import {
   type WindowsSpawnInvocation,
 } from "openclaw/plugin-sdk/windows-spawn";
 import { appendCodexGitConfigParameters } from "./config-utils.js";
-import type { CodexAppServerStartOptions } from "./config.js";
-import { normalizeCodexAppServerArgs } from "./launch-args.js";
+import type { CodexAppServerStartOptions, CodexAppServerRuntimeOptions } from "./config.js";
+import { isCodexAppServerProxyLaunch, normalizeCodexAppServerArgs } from "./launch-args.js";
 import { resolveManagedCodexNativeCommand } from "./managed-binary.js";
 import { observeManagedCodexLauncherFailure } from "./managed-launcher-failure.js";
 import { getCodexAppServerSpawnFailure, recordCodexAppServerSpawnFailure } from "./spawn-error.js";
@@ -217,4 +217,57 @@ export async function createStdioTransport(
       recordCodexAppServerSpawnFailure(error, invocation.command, launchKey)
     );
   }
+}
+
+/** Project host tool lookup only onto an OpenClaw-owned local stdio process. */
+export function prepareCodexAppServerProcessEnvironment<T extends CodexAppServerRuntimeOptions>(
+  appServer: T,
+  {
+    remote,
+    preparedEnvironment,
+    baseShellEnvironment,
+  }: {
+    remote: boolean;
+    preparedEnvironment?: ReturnType<
+      NonNullable<EmbeddedRunAttemptParamsV2["hostCapabilities"]["preparedEnvironment"]>
+    >;
+    baseShellEnvironment: Record<string, string> | undefined;
+  },
+) {
+  // Resolve placement before projecting host PATH; socket peers and remote workspaces
+  // own their tool lookup even when their control connection runs on this machine.
+  const ownedLocalProcess =
+    !remote &&
+    appServer.start.transport === "stdio" &&
+    !isCodexAppServerProxyLaunch(appServer.start.args) &&
+    !appServer.remoteWorkspaceRoot;
+  const localToolEnv = ownedLocalProcess ? preparedEnvironment?.localToolEnv : undefined;
+  const shellGitConfigParameters = ownedLocalProcess
+    ? preparedEnvironment?.localGitConfigParameters
+    : undefined;
+  const hasLocalToolEnv = localToolEnv && Object.keys(localToolEnv).length > 0;
+  const shellPathPrepend = hasLocalToolEnv ? preparedEnvironment?.localToolPathPrepend : undefined;
+  const shellEnvironment = hasLocalToolEnv
+    ? { ...baseShellEnvironment, ...localToolEnv }
+    : baseShellEnvironment;
+  // Tool lookup must not reject native login requests. Codex owns profile and
+  // snapshot startup; only the identity restrictions above disable login.
+  const prepared = shellEnvironment
+    ? {
+        ...appServer,
+        start: { ...appServer.start, env: { ...appServer.start.env, ...shellEnvironment } },
+      }
+    : appServer;
+  const preparedAppServer = shellGitConfigParameters
+    ? {
+        ...prepared,
+        start: withCodexAppServerGitConfig(prepared.start, shellGitConfigParameters),
+      }
+    : prepared;
+  return {
+    appServer: preparedAppServer,
+    shellEnvironment,
+    shellPathPrepend,
+    shellGitConfigParameters,
+  };
 }
