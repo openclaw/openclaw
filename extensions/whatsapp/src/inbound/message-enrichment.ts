@@ -58,6 +58,7 @@ export async function enrichWhatsAppInboundMessage(params: {
   msg: WAMessage;
   sock: WASocket;
   mediaMaxMb?: number;
+  authDir?: string;
 }) {
   const { msg, sock } = params;
   const messageProjection = projectWhatsAppInboundMessage(msg.message ?? undefined);
@@ -75,7 +76,7 @@ export async function enrichWhatsAppInboundMessage(params: {
   }
   body = body ?? "";
   const commandBody = body;
-  const replyContext = describeReplyContext(messageProjection);
+  const replyContext = describeReplyContext(messageProjection, { authDir: params.authDir });
 
   let mediaPath: string | undefined;
   let mediaType = mediaKind
