@@ -5,22 +5,24 @@ import type { MediaAttachment } from "./types.js";
 
 describe("media-understanding selectAttachments guards", () => {
   it("returns no selections when incoming media is not an array", () => {
-    const media: unknown = { malformed: true };
+    const media = { malformed: true };
     expect(
       selectAttachments({
         capability: "audio",
-        attachments: normalizeAttachments(media as Parameters<typeof normalizeAttachments>[0]),
+        // @ts-expect-error Exercise malformed non-array media at the runtime boundary.
+        attachments: normalizeAttachments(media),
         policy: { prefer: "url" },
       }),
     ).toStrictEqual({ selected: [], droppedAttachmentIndexes: [] });
   });
 
   it("returns no selections for malformed incoming media entries", () => {
-    const media: unknown = [null, { path: 123 }, { url: true }, { contentType: { nope: true } }];
+    const media = [null, { path: 123 }, { url: true }, { contentType: { nope: true } }];
     expect(
       selectAttachments({
         capability: "audio",
-        attachments: normalizeAttachments(media as Parameters<typeof normalizeAttachments>[0]),
+        // @ts-expect-error Exercise malformed media entries at the runtime boundary.
+        attachments: normalizeAttachments(media),
         policy: { prefer: "path" },
       }),
     ).toStrictEqual({ selected: [], droppedAttachmentIndexes: [] });
