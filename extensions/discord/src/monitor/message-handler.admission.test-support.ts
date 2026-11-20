@@ -65,7 +65,11 @@ export async function prepareDiscordQueuedAdmission(params: {
     sessionKey: params.sessionKey,
     nativeChannelId: message.channelId,
     messageId: params.messageId,
-    inboundEventKind: "user_request",
+    inboundEventKind: preflight.inboundEventKind,
   });
-  return { ingress, counts: () => ({ policyReads, restCalls: restCalls.mock.calls.length }) };
+  return {
+    ingress,
+    inboundEventKind: preflight.inboundEventKind,
+    counts: () => ({ policyReads, restCalls: restCalls.mock.calls.length }),
+  };
 }

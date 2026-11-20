@@ -79,7 +79,8 @@ profile uses only the source fallback, or keeps the raw ID if none is available.
 ## Renewing queued ingress access
 
 Use `childSessionPublication: { assertCurrent, prepare }` to renew source
-authorization once when an ingress turn starts, including after a queue wait.
+authorization once when an ingress turn starts, including queued user requests
+and room events.
 Despite the field's name, omitting `audience` permits ordinary run admission
 without granting public child sessions. `prepare` reacquires current channel
 policy and returns `null` when access was removed. The host drops the request
@@ -90,10 +91,11 @@ channel access throughout the run.
 
 ## Opted-in public child sessions
 
-The same ingress intent additionally grants child publication when it supplies
-`audience: "public"`. Supply that audience only after explicit operator opt-in
-and provider-native proof that the entire supplied context is public. Missing
-or unknown audience metadata never grants publication. For public publication,
+The same ingress intent additionally grants child publication for a
+`user_request` when it supplies `audience: "public"`. Supply that audience only
+after explicit operator opt-in and provider-native proof that the entire
+supplied context is public. Missing or unknown audience metadata never grants
+publication. For public publication,
 `assertCurrent` synchronously rechecks account policy and the live ingress
 owner; never derive this field from message text, stored permalinks, or model
 arguments. The ordinary decision-only resolver does not grant authority.

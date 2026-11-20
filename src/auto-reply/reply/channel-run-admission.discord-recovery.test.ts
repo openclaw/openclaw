@@ -2,6 +2,7 @@ import { assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../../channels/inbound-event/host-context-builder.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import {
   copyChildSessionPublication,
   readChildSessionPublication,
@@ -24,6 +25,7 @@ import {
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
 const { state, terminalEvents } = await setupExecutionSuite();
 // Load after the execution fixture registers its provider and lifecycle module mocks.
@@ -38,6 +40,7 @@ const discord = await loadBundledPluginFacade<{
       thread?: boolean;
     }) => Promise<{
       ingress: ResolvedChannelMessageIngress;
+      inboundEventKind: InboundEventKind;
       counts: () => { policyReads: number; restCalls: number };
     }>;
   }>;
@@ -46,12 +49,22 @@ const discord = await loadBundledPluginFacade<{
 it("renews queued and immediate Discord access without native refetches", async () => {
   const { prepareDiscordQueuedAdmission } = await discord.loadDiscordQueuedAdmissionFixture();
   await withOpenClawTestState({ label: "discord-queued-admission" }, async () => {
-    for (const scenario of ["immediate", "queued-allowed", "queued-revoked"]) {
+    for (const scenario of [
+      "immediate",
+      "queued-allowed",
+      "queued-revoked",
+      "room-allowed",
+      "room-revoked",
+    ]) {
       const queued = scenario !== "immediate";
-      const revoke = scenario === "queued-revoked";
+      const revoke = scenario.endsWith("revoked");
+      const roomEvent = scenario.startsWith("room-");
       const sessionKey = `agent:main:discord:channel:${scenario}`;
       const messageId = revoke ? "500000000000000005" : "400000000000000004";
       const cfg: OpenClawConfig = {
+        messages: {
+          groupChat: { unmentionedInbound: roomEvent ? "room_event" : "user_request" },
+        },
         channels: {
           discord: {
             groupPolicy: "allowlist",
@@ -78,13 +91,18 @@ it("renews queued and immediate Discord access without native refetches", async 
       };
       const ingress = createHostChannelIngressRuntime(owner);
       const runtime = { channel: { inbound: { ingress } } } as unknown as PluginRuntime;
-      const { ingress: channelIngress, counts } = await prepareDiscordQueuedAdmission({
+      const {
+        ingress: channelIngress,
+        inboundEventKind,
+        counts,
+      } = await prepareDiscordQueuedAdmission({
         runtime,
         cfg,
         sessionKey,
         messageId,
         thread: !queued,
       });
+      expect(inboundEventKind).toBe(roomEvent ? "room_event" : "user_request");
       const context = await createHostChannelInboundEventContextBuilder(
         buildChannelInboundEventContext,
         owner,
@@ -98,9 +116,10 @@ it("renews queued and immediate Discord access without native refetches", async 
         conversation: { kind: "channel", id: "200000000000000002" },
         route: { agentId: "main", routeSessionKey: sessionKey },
         reply: { to: "channel:200000000000000002", nativeChannelId: "200000000000000002" },
-        message: { body: "queued request", rawBody: "queued request" },
+        message: { body: "queued request", rawBody: "queued request", inboundEventKind },
       });
       const followup = createFollowupRun({ config: cfg, sessionKey });
+      followup.currentInboundEventKind = inboundEventKind;
       copyChildSessionPublication(context, followup.run);
       const beforeAdmission = counts();
       const model = vi.fn();
@@ -171,14 +190,17 @@ it("renews queued and immediate Discord access without native refetches", async 
         const result = await pending;
         if (result.outcome.kind === "rejected") {
           dispatcher.sendFinalReply(result.outcome.payload);
-        } else if (result.outcome.kind === "settled") {
+        } else if (
+          result.outcome.kind === "settled" &&
+          resolveSourceReplyDeliveryMode({ cfg: currentConfig, ctx: context }) === "automatic"
+        ) {
           for (const payload of result.outcome.result.payloads ?? []) {
             dispatcher.sendFinalReply(payload);
           }
         }
         await dispatcher.waitForIdle();
         expect(model).toHaveBeenCalledTimes(revoke ? 0 : 1);
-        expect(deliver).toHaveBeenCalledTimes(revoke ? 0 : 1);
+        expect(deliver).toHaveBeenCalledTimes(revoke || roomEvent ? 0 : 1);
         expect(deliverPrepared).not.toHaveBeenCalled();
         if (!queued) {
           expect(beforeAdmission.restCalls).toBeGreaterThan(0);

@@ -92,7 +92,7 @@ export function createHostChannelInboundEventContextBuilder<
           }
           // Publication remains single-source; ordinary ingress can renew without a public audience.
           const publication = batch.length === 1 ? batch[0]?.childSessionPublication : undefined;
-          if (publication && binding.inboundEventKind === "user_request") {
+          if (publication) {
             const gateway = owner.resolveGatewayContext?.();
             const ownerIsCurrent = () =>
               owner.isLive() && Boolean(gateway) && owner.resolveGatewayContext?.() === gateway;
@@ -124,7 +124,7 @@ export function createHostChannelInboundEventContextBuilder<
                     };
                   }
                 : undefined,
-              publication.audience === "public",
+              publication.audience === "public" && binding.inboundEventKind === "user_request",
             );
           }
           const principal = batch.at(-1)?.verifiedPrincipal;
