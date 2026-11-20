@@ -41,6 +41,15 @@
   --card: #161920;
   --card-foreground: #f0f0f2;
   --card-highlight: rgba(255, 255, 255, 0.04);
+
+  /* One Template avatar palette for both color schemes and all built-in themes. */
+  --template-avatar-clay: #b0635b;
+  --template-avatar-iris: #896da4;
+  --template-avatar-teal: #458378;
+  --template-avatar-ochre: #9c6f3e;
+  --template-avatar-sage: #63805c;
+  --template-avatar-denim: #6078aa;
+
   --popover: #191c24;
   --popover-foreground: #f0f0f2;
   --chat-send-bg: var(--primary);
