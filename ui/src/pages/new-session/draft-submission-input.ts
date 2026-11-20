@@ -64,7 +64,12 @@ export function prepareDraftSubmission(
   const message = startup?.params.message ?? (pendingPlacement ? pending.message : submitted.text);
   const mentions = (
     startup ? startup.params.mentions : pendingPlacement ? pending.mentions : submitted.mentions
-  )?.map(({ profileId, start, end }) => ({ profileId, start, end }));
+  )?.map(({ profileId, start, end, access }) => ({
+    profileId,
+    start,
+    end,
+    ...(access ? { access } : {}),
+  }));
   const attachments = body.attachments.filter((item) => !item.selectionAnnotation);
   if (!startup && !pendingPlacement) {
     const error = attachmentBatchRejection(attachments, context.gateway.snapshot.hello?.policy);

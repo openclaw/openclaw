@@ -515,6 +515,7 @@ export async function handleSendChat(
   const mentionOffset = quotedMessage.length - userMessage.length;
   const effectiveMentions = submitted.mentions?.map((mention) => ({
     profileId: mention.profileId,
+    ...(mention.access ? { access: mention.access } : {}),
     start: mention.start + mentionOffset,
     end: mention.end + mentionOffset,
   }));

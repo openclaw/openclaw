@@ -50,6 +50,7 @@ export function composerFixture(
   initial = "",
   initialMentions: readonly HumanMention[] = [],
   submitDisabledReason?: string,
+  inviteAccessAvailable = false,
 ) {
   vi.useFakeTimers();
   onTestFinished(installChatComposerPickerDismissal(document));
@@ -68,7 +69,11 @@ export function composerFixture(
     client,
     phase: "connected",
     hello: gatewayHelloForMethods(
-      ["sessions.create", "users.mentionable"],
+      [
+        "sessions.create",
+        "users.mentionable",
+        ...(inviteAccessAvailable ? ["session.members.setAccess"] : []),
+      ],
       ["operator.sessions.write"],
     ),
     selfUser: { id: "sender-one", identity: { type: "profile", id: "sender-one" } },
@@ -121,7 +126,7 @@ export function composerFixture(
         getMentions: () => mentions,
         mentionDirectory: unsupported
           ? undefined
-          : { client, ownerKey, params: { sessionKey: "agent:main:chat" } },
+          : { client, ownerKey, inviteAccessAvailable, params: { sessionKey: "agent:main:chat" } },
         mentionsUnsupported: unsupported,
         onDraftChange: onInput,
         onSlashCommand: slashCommand,

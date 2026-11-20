@@ -370,3 +370,34 @@ it("blocks unsupported sends until editing removes the selected mention binding"
   view.key("Enter");
   expect(view.send).toHaveBeenCalledWith({ draft: "Alex", mentions: [] });
 });
+
+it.each(["chat", "new-session"] as const)(
+  "%s defaults ceiling invitations to read and preserves a selected level",
+  async (kind) => {
+    const view = composerFixture(kind, "", [], undefined, true);
+    view.request.mockResolvedValue({
+      users: [{ ...peter, inviteAccessOptions: ["read", "suggest"] }],
+      truncated: false,
+    });
+    await view.search("@Peter");
+    view.key("Enter");
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.value().mentions).toEqual([
+      { profileId: peter.profileId, start: 0, end: 18, access: "read" },
+    ]);
+    expect(view.container.textContent).toContain("Invite Peter Steinberger to this session as");
+    view.query<HTMLButtonElement>(".chat-invite-access button")!.click();
+    await vi.dynamicImportSettled();
+    const options = Array.from(
+      view.container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+    );
+    expect(options.map((option) => option.textContent?.trim())).toEqual([
+      "Can read",
+      "Can suggest",
+    ]);
+    options[1]!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.value().mentions[0]?.access).toBe("suggest");
+  },
+);
