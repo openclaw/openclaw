@@ -39,24 +39,20 @@ export function resolveLoginConnectionResult(params: {
       : undefined;
   // "openclaw" is the built-in runtime (isDefaultAgentRuntimeId covers the
   // auto/default sentinels, not this id); staging it would only pin noise.
-  const stagedAgentKey = resolveConsentAgentKey(params.config, params.agentId);
-  const stagedRuntimePatch =
+  const staged =
     stagedAgentRuntimeId &&
     stagedAgentRuntimeId !== "openclaw" &&
     !isDefaultAgentRuntimeId(stagedAgentRuntimeId) &&
     stagedDefaultModel
       ? {
-          agents: {
-            entries: {
-              [stagedAgentKey]: {
-                models: {
-                  [stagedDefaultModel]: { agentRuntime: { id: stagedAgentRuntimeId } },
-                },
-              },
-            },
-          },
+          agentKey: resolveConsentAgentKey(params.config, params.agentId),
+          model: stagedDefaultModel,
+          runtimeId: stagedAgentRuntimeId,
         }
       : undefined;
+  const stagedRuntimePatch = staged
+    ? { agents: { entries: withStagedModelRuntime(undefined, staged) } }
+    : undefined;
   // Harness-owned logins reached the credential-only persistence path without
   // declaring credential-only semantics, so (like guided setup) keep only the
   // login's own plugin and runtime enablement entries from their patch.
@@ -116,30 +112,43 @@ export function resolveLoginConnectionResult(params: {
             }
           : {}),
       }
-    : stagedRuntimePatch
+    : staged
       ? {
           ...params.result,
           configPatch: {
             ...params.result.configPatch,
             agents: {
               ...params.result.configPatch?.agents,
-              entries: Object.fromEntries(
-                Object.entries({
-                  ...params.result.configPatch?.agents?.entries,
-                  ...stagedRuntimePatch.agents.entries,
-                }).map(([agentKey, agentEntry]) => {
-                  const stagedModels = stagedRuntimePatch.agents.entries[stagedAgentKey]?.models;
-                  return [
-                    agentKey,
-                    agentKey === stagedAgentKey && stagedModels
-                      ? { ...agentEntry, models: { ...agentEntry?.models, ...stagedModels } }
-                      : agentEntry,
-                  ];
-                }),
-              ),
+              entries: withStagedModelRuntime(params.result.configPatch?.agents?.entries, staged),
             },
           },
         }
       : params.result;
   return { connectionResult, stagesRuntimePolicy: stagedRuntimePatch !== undefined };
+}
+
+type AgentEntries = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
+
+/**
+ * Adds the staged runtime to one model entry. The provider's own settings for
+ * that agent and model (aliases, parameters, sibling models) stay as they are.
+ */
+function withStagedModelRuntime(
+  entries: AgentEntries | undefined,
+  staged: { agentKey: string; model: string; runtimeId: string },
+): AgentEntries {
+  const agentEntry = entries?.[staged.agentKey];
+  return {
+    ...entries,
+    [staged.agentKey]: {
+      ...agentEntry,
+      models: {
+        ...agentEntry?.models,
+        [staged.model]: {
+          ...agentEntry?.models?.[staged.model],
+          agentRuntime: { id: staged.runtimeId },
+        },
+      },
+    },
+  };
 }

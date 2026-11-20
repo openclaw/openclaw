@@ -49,6 +49,35 @@ export function registerModelsAuthRuntimeStagingTests(fixture: {
     });
   });
 
+  it("keeps the provider's own agent model settings when the CLI path stages its runtime", async () => {
+    fixture.setProviderAuthResult({
+      profiles: [],
+      defaultModel: "openai/gpt-5.5",
+      agentRuntimeId: "codex",
+      configPatch: {
+        agents: {
+          entries: {
+            main: {
+              models: {
+                "openai/gpt-5.5": { alias: "gpt", params: { temperature: 0.2 } },
+                "openai/gpt-5.5-mini": { alias: "mini" },
+              },
+            },
+          },
+        },
+      },
+    });
+    await loginFlow({});
+    expect(fixture.getConfig().agents?.entries?.main?.models).toEqual({
+      "openai/gpt-5.5": {
+        alias: "gpt",
+        params: { temperature: 0.2 },
+        agentRuntime: { id: "codex" },
+      },
+      "openai/gpt-5.5-mini": { alias: "mini" },
+    });
+  });
+
   it("does not let a login stage a runtime policy for another provider's model", async () => {
     fixture.setProviderAuthResult({
       profiles: [],
