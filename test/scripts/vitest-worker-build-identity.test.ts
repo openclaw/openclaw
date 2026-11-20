@@ -55,6 +55,7 @@ it("inherits current host identity on cold compilation and real cache restoratio
       commit: "a".repeat(40),
       builtAt: "2026-11-01T00:00:00.000Z",
       buildId: "host-first",
+      capabilities: ["continuation-turn-start-fence"],
     };
     const secondHost = {
       ...firstHost,

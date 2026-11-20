@@ -20,6 +20,9 @@ export function resolveVitestWorkerBuildInfo(
   try {
     const value = asNullableRecord(JSON.parse(contents));
     const normalized = normalizeControlUiBuildInfo(value);
+    // Continuation (karmaterminal): declared capabilities are host identity too; a host
+    // without a list declares none.
+    const capabilities: unknown = value?.capabilities ?? [];
     if (
       !value ||
       !Object.hasOwn(value, "version") ||
@@ -29,7 +32,9 @@ export function resolveVitestWorkerBuildInfo(
       typeof value.builtAt !== "string" ||
       typeof value.buildId !== "string" ||
       !value.buildId ||
-      value.buildId !== normalized.buildId
+      value.buildId !== normalized.buildId ||
+      !Array.isArray(capabilities) ||
+      !capabilities.every((capability): capability is string => typeof capability === "string")
     ) {
       throw new Error("Invalid build metadata");
     }
@@ -41,6 +46,7 @@ export function resolveVitestWorkerBuildInfo(
       commit: normalized.commit,
       builtAt: value.builtAt,
       buildId: value.buildId,
+      capabilities,
     };
   } catch {
     throw new Error("Invalid host dist/build-info.json for compiled test workers");

@@ -10,6 +10,7 @@ const host = {
   commit: "a".repeat(40),
   builtAt: "2026-11-01T00:00:00.000Z",
   buildId: "host-build",
+  capabilities: ["continuation-turn-start-fence"],
 };
 const overrides = {
   GIT_COMMIT: "b".repeat(40),
@@ -42,6 +43,7 @@ it("keeps source-only build synthesis when host metadata is absent", async ({ on
       commit: overrides.GIT_COMMIT,
       builtAt: overrides.OPENCLAW_BUILD_TIMESTAMP,
       buildId: overrides.OPENCLAW_CONTROL_UI_BUILD_ID,
+      capabilities: ["continuation-turn-start-fence"],
     });
   });
 });
@@ -56,6 +58,7 @@ it.for([
   JSON.stringify({ ...host, buildId: "invalid id" }),
   JSON.stringify({ ...host, version: undefined }),
   JSON.stringify({ ...host, commit: undefined }),
+  JSON.stringify({ ...host, capabilities: "continuation-turn-start-fence" }),
 ])(
   "rejects malformed host metadata instead of minting another identity: %s",
   async (contents, { onTestFinished }) => {
