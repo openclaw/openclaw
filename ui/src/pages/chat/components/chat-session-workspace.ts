@@ -11,13 +11,11 @@ import { patchSettings } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
-import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
 import { showToast } from "../../../lib/toast.ts";
-import type { FileLinkStatRequest } from "./chat-file-link-availability.ts";
 import { isManagedOutgoingMediaSource } from "./chat-message-attachment-availability.ts";
 import type { WorkspaceFileSearchTarget } from "./chat-message-media-actions.ts";
 import { resolveSessionWorkspaceDiff } from "./chat-session-workspace-diff.ts";
@@ -69,6 +67,7 @@ async function readWorkspaceContent<T>(
 ): Promise<T | null> {
   const client = state.client;
   const {
+    checkFileLinkAvailability,
     downloadSessionFile,
     loadSessionWorkspaceArtifactContent,
     loadSessionWorkspaceFileContent,
@@ -76,6 +75,7 @@ async function readWorkspaceContent<T>(
   // Loading code cannot transfer an admitted preview to a replacement connection or checkout.
   return state.connected && state.client === client && isCurrentSessionWorkspace(state, workspace)
     ? read({
+        checkFileLinkAvailability,
         downloadSessionFile,
         loadSessionWorkspaceArtifactContent,
         loadSessionWorkspaceFileContent,
@@ -201,21 +201,15 @@ export function openSessionWorkspaceFile(
   });
 }
 
-/** Asks the Gateway which transcript file links `openSessionWorkspaceFile` would open. */
-export function statSessionWorkspaceFileLinks(
+/** Turns settled transcript file links that `openSessionWorkspaceFile` cannot open into text. */
+export function checkSessionWorkspaceFileLinks(
   state: SessionWorkspaceHost,
-  request: FileLinkStatRequest,
+  links: HTMLAnchorElement[],
 ) {
-  if (isGatewayMethodAdvertised(state, "sessions.files.stat") !== true) {
-    return Promise.resolve(null);
-  }
   const workspace = getSessionWorkspace(state);
-  // Matches openFile's owner resolution for a link without a containing document.
-  const sessionKey = request.sessionKey ?? workspace.sessionKey;
-  const agentId = request.sessionKey
-    ? parseAgentSessionKey(request.sessionKey)?.agentId
-    : workspace.agentId;
-  return state.sessions.statFiles(sessionKey, request.files, { agentId });
+  void readWorkspaceContent(state, workspace, (runtime) =>
+    runtime.checkFileLinkAvailability(state, workspace, links),
+  );
 }
 
 /** Resolve a chat reference without moving the original attachment's history ownership. */

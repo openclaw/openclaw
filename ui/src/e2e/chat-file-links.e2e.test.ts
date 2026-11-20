@@ -311,7 +311,6 @@ suite.define(() => {
       const local = "src/file.ts";
       const gateway = await installMockGateway(page, {
         workspace: "/workspace",
-        featureMethods: [...defaultControlUiFeatureMethods, "sessions.files.stat"],
         historyMessages: [
           chatMessage("assistant", `Run \`${remote}\`, then edit \`${local}\`.`, { timestamp: 1 }),
         ],
@@ -327,19 +326,17 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const remoteLink = page.locator(`.chat-thread a[data-file-path="${remote}"]`);
+      const remoteText = page.locator(`.chat-thread span[data-file-path="${remote}"]`);
       const localLink = page.locator(`.chat-thread a[data-file-path="${local}"]`);
-      await polledAttribute(remoteLink, "data-file-unavailable").toBe("");
-      expect(await localLink.getAttribute("data-file-unavailable")).toBeNull();
+      await remoteText.waitFor({ state: "visible" });
+      await polledCount(page.locator(`.chat-thread a[data-file-path="${remote}"]`)).toBe(0);
       const [stat] = await gateway.getRequests("sessions.files.stat");
       expect(stat?.params).toMatchObject({
         sessionKey,
         files: [{ path: remote }, { path: local }],
       });
-      expect(await remoteLink.getAttribute("role")).toBeNull();
-      expect(await remoteLink.evaluate((anchor) => getComputedStyle(anchor).cursor)).toBe("auto");
 
-      await remoteLink.click();
+      await remoteText.click();
       await localLink.click();
       await gateway.waitForRequest("sessions.files.get");
       await page.locator(".sidebar-file-view").waitFor({ state: "visible" });

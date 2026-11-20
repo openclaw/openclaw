@@ -104,18 +104,13 @@ export type MarkdownFileLinkTarget = {
   documentRelative?: boolean;
 };
 
-/** Set on a file link the Gateway confirmed it cannot open; the link renders as plain text. */
-export const MARKDOWN_FILE_LINK_UNAVAILABLE_ATTR = "data-file-unavailable";
-
 export function markdownFileLinkFromEvent(event: Event): MarkdownFileLinkTarget | null {
   const target = event.target;
   if (!(target instanceof Element)) {
     return null;
   }
   const link = target.closest<HTMLAnchorElement>("a[data-file-path]");
-  return link && !link.hasAttribute(MARKDOWN_FILE_LINK_UNAVAILABLE_ATTR)
-    ? markdownFileLinkFromAnchor(link)
-    : null;
+  return link && markdownFileLinkFromAnchor(link);
 }
 
 export function markdownFileLinkFromAnchor(link: HTMLAnchorElement): MarkdownFileLinkTarget | null {

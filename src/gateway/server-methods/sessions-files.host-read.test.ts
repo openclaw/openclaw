@@ -270,7 +270,9 @@ it("stats only the references a preview would open", async () => {
       ["src/readme.md", "file"],
     ].map(([filePath, status]) => ({ path: filePath, status })),
   });
-  for (const file of full.files.filter((entry) => entry.path.includes("/"))) {
+  for (const file of (full.files as { path: string; status: string }[]).filter((entry) =>
+    entry.path.includes("/"),
+  )) {
     const preview = await fixture.files.request("get", file.path);
     expect(preview[0]?.ok).toBe(file.status === "file");
   }

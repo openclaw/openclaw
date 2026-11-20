@@ -262,6 +262,80 @@ function resolveSessionFileCandidates(params: {
   });
 }
 
+/**
+ * Runs Files searches over one ordered workspace walk. Each search stops, incomplete, where it
+ * would alone: before its next entry once it holds MAX_SEARCH_ENTRIES matches or the walk has
+ * visited MAX_SEARCH_VISITED_ENTRIES. Results keep the order of `searches`.
+ */
+export async function searchWorkspaceEntries(
+  readRoot: string | WorkspaceRoot,
+  searches: readonly string[],
+  relevance?: ReadonlyMap<string, SessionFileRelevance>,
+  assertCurrent?: () => void,
+) {
+  // Normalize comparison text only; on-disk filenames stay original.
+  const results = searches.map((search) => ({
+    query: foldSearchCase(search).normalize("NFC"),
+    entries: [] as SessionFileBrowserEntry[],
+    truncated: false,
+    open: true,
+  }));
+  let visited = 0;
+  const shouldStop = () => {
+    let open = false;
+    for (const result of results) {
+      if (
+        result.open &&
+        (result.entries.length >= MAX_SEARCH_ENTRIES || visited >= MAX_SEARCH_VISITED_ENTRIES)
+      ) {
+        result.open = false;
+        result.truncated = true;
+      }
+      open ||= result.open;
+    }
+    return !open;
+  };
+  const visit = async (dir: string): Promise<void> => {
+    if (shouldStop()) {
+      return;
+    }
+    const dirents = await listWorkspacePath(readRoot, dir, assertCurrent);
+    if (!dirents) {
+      return;
+    }
+    for (const dirent of sortDirents(dirents)) {
+      if (shouldStop()) {
+        return;
+      }
+      visited += 1;
+      const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
+      const folded = foldSearchCase(browserPath).normalize("NFC");
+      for (const result of results) {
+        if (result.open && folded.includes(result.query)) {
+          const entry = toWorkspaceBrowserEntry(browserPath, dirent, relevance);
+          if (entry) {
+            result.entries.push(entry);
+          }
+        }
+      }
+      if (dirent.isDirectory) {
+        if (SEARCH_INCOMPLETE_DIRS.has(dirent.name)) {
+          // The public result only has a boolean completeness signal. A skipped
+          // directory can contain another filename match, so searches that saw
+          // one must not be presented as workspace-wide unique.
+          for (const result of results) {
+            result.truncated ||= result.open;
+          }
+        } else if (!SEARCH_IGNORED_DIRS.has(dirent.name)) {
+          await visit(browserPath);
+        }
+      }
+    }
+  };
+  await visit("");
+  return results.map(({ entries, truncated }) => ({ entries, truncated }));
+}
+
 export async function listSessionWorkspaceFiles(
   params: LoadedSessionFiles & {
     path?: string;
@@ -307,51 +381,9 @@ export async function listSessionWorkspaceFiles(
     const relevance = buildSessionRelevanceMap(workspaceFiles, root, fileRoot);
     const readRoot = workspaceRoot ?? root;
     if (search) {
-      const entries: SessionFileBrowserEntry[] = [];
-      // Normalize comparison text only; on-disk filenames stay original.
-      const query = foldSearchCase(search).normalize("NFC");
-      let visitedEntries = 0;
-      let truncated = false;
-      const shouldStop = (): boolean => {
-        if (entries.length >= MAX_SEARCH_ENTRIES || visitedEntries >= MAX_SEARCH_VISITED_ENTRIES) {
-          truncated = true;
-          return true;
-        }
-        return false;
-      };
-      const visit = async (dir: string): Promise<void> => {
-        if (shouldStop()) {
-          return;
-        }
-        const dirents = await listWorkspacePath(readRoot, dir, assertCurrent);
-        if (!dirents) {
-          return;
-        }
-        for (const dirent of sortDirents(dirents)) {
-          if (shouldStop()) {
-            return;
-          }
-          visitedEntries += 1;
-          const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
-          if (foldSearchCase(browserPath).normalize("NFC").includes(query)) {
-            const entry = toWorkspaceBrowserEntry(browserPath, dirent, relevance);
-            if (entry) {
-              entries.push(entry);
-            }
-          }
-          if (dirent.isDirectory) {
-            if (SEARCH_INCOMPLETE_DIRS.has(dirent.name)) {
-              // The public result only has a boolean completeness signal. A skipped
-              // directory can contain another filename match, so searches that saw
-              // one must not be presented as workspace-wide unique.
-              truncated = true;
-            } else if (!SEARCH_IGNORED_DIRS.has(dirent.name)) {
-              await visit(browserPath);
-            }
-          }
-        }
-      };
-      await visit("");
+      const { entries, truncated } = (
+        await searchWorkspaceEntries(readRoot, [search], relevance, assertCurrent)
+      )[0]!;
       return {
         path: "",
         search,
@@ -396,109 +428,6 @@ export async function listSessionWorkspaceFiles(
     files: files.filter((file) => file !== undefined),
     ...(browser ? { browser } : {}),
   };
-}
-
-/**
- * Maps each bare filename whose Files search would list exactly one file of that name in a
- * complete result to that file's browser path, which is the Control UI's bare-name reader fallback. One ordered walk serves
- * every name; each name stops where its own `listSessionWorkspaceFiles` search would.
- */
-export async function findUniqueWorkspaceFileNames(
-  params: LoadedSessionFiles & { names: readonly string[]; assertCurrent?: () => void },
-): Promise<Map<string, string>> {
-  const unique = new Map<string, string>();
-  const root = params.root;
-  const queries = [...new Set(params.names)].flatMap((name) => {
-    const search = normalizeOptionalString(name);
-    return search
-      ? [
-          {
-            name,
-            query: foldSearchCase(search).normalize("NFC"),
-            matches: 0,
-            exact: 0,
-            match: "",
-            open: true,
-          },
-        ]
-      : [];
-  });
-  if (!root || queries.length === 0) {
-    return unique;
-  }
-  const workspaceRoot = await openWorkspaceRoot(params.readRoot ?? root);
-  const readRoot = workspaceRoot ?? root;
-  let visited = 0;
-  let openQueries = queries.length;
-  const close = (query: (typeof queries)[number], complete: boolean) => {
-    query.open = false;
-    openQueries -= 1;
-    if (complete && query.exact === 1) {
-      unique.set(query.name, query.match);
-    }
-  };
-  // A search stops, incomplete, before its next entry once it holds MAX_SEARCH_ENTRIES
-  // matches or the walk has visited MAX_SEARCH_VISITED_ENTRIES.
-  const shouldStop = () => {
-    for (const query of queries) {
-      if (
-        query.open &&
-        (query.matches >= MAX_SEARCH_ENTRIES || visited >= MAX_SEARCH_VISITED_ENTRIES)
-      ) {
-        close(query, false);
-      }
-    }
-    return openQueries === 0;
-  };
-  const visit = async (dir: string): Promise<void> => {
-    if (shouldStop()) {
-      return;
-    }
-    const dirents = await listWorkspacePath(readRoot, dir, params.assertCurrent);
-    if (!dirents) {
-      return;
-    }
-    for (const dirent of sortDirents(dirents)) {
-      if (shouldStop()) {
-        return;
-      }
-      visited += 1;
-      const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
-      if (dirent.isFile || dirent.isDirectory) {
-        const folded = foldSearchCase(browserPath).normalize("NFC");
-        for (const query of queries) {
-          if (query.open && folded.includes(query.query)) {
-            query.matches += 1;
-            if (dirent.isFile && dirent.name === query.name) {
-              query.exact += 1;
-              query.match = browserPath;
-            }
-          }
-        }
-      }
-      if (dirent.isDirectory) {
-        if (SEARCH_INCOMPLETE_DIRS.has(dirent.name)) {
-          // A skipped directory makes every still-running search incomplete.
-          for (const query of queries) {
-            if (query.open) {
-              close(query, false);
-            }
-          }
-          return;
-        }
-        if (!SEARCH_IGNORED_DIRS.has(dirent.name)) {
-          await visit(browserPath);
-        }
-      }
-    }
-  };
-  await visit("");
-  for (const query of queries) {
-    if (query.open) {
-      close(query, true);
-    }
-  }
-  return unique;
 }
 
 export async function getSessionWorkspaceFile(

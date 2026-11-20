@@ -471,6 +471,8 @@ export function buildAgentSystemPrompt(params: {
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
       ? sanitizedSandboxContainerWorkspace
       : sanitizedWorkspaceDir;
+  // Reply file paths (#202534): repo-relative paths in a reply opened from the session
+  // workspace instead of the repository, so chat file links showed "session file not found".
   const workspaceGuidance =
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
       ? `File tools use host workspace ${sanitizedWorkspaceDir}.${hasExec ? ` exec uses container ${sanitizedSandboxContainerWorkspace} or relative workdir paths; never host paths. Prefer relative paths for both.` : ""} Reply file paths: relative ones resolve from the working directory; write others as absolute paths.`

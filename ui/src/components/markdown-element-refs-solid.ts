@@ -54,11 +54,12 @@ export function linkReaderPrefetchRef(
 
 export function markdownBlocksRef(
   presented: () => PresentationValue,
+  onFileLinks?: (links: HTMLAnchorElement[]) => void,
 ): (element: HTMLElement) => void {
   const [element, setElement] = createSignal<HTMLElement>();
   const owner = createMemo(() => {
     const root = element();
-    const current = root && new MarkdownBlocks(root);
+    const current = root && new MarkdownBlocks(root, onFileLinks);
     onCleanup(() => current?.dispose());
     return current;
   });

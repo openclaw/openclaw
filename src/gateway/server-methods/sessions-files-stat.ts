@@ -1,4 +1,5 @@
 import { resolve as resolvePath } from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsFilesStatParams,
   SessionsFilesStatResult,
@@ -20,7 +21,8 @@ import {
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-import { findUniqueWorkspaceFileNames, getSessionWorkspaceFile } from "./workspace-files.js";
+import { getSessionWorkspaceFile, searchWorkspaceEntries } from "./workspace-files.js";
+import { openWorkspaceRoot } from "./workspace-fs.js";
 
 type SessionFileStatStatus = SessionsFilesStatResult["files"][number]["status"];
 type SessionFileStatReference = SessionsFilesStatParams["files"][number];
@@ -179,11 +181,29 @@ export async function handleSessionFilesStat(
               }
             }
           } else if (loaded.root && bareMisses.length > 0) {
-            const found = await findUniqueWorkspaceFileNames({
-              ...loaded,
-              names: bareMisses,
-              assertCurrent,
+            // The same Files searches the reader runs, over one walk; a complete search with
+            // exactly one same-name file is the match the reader would open.
+            const searches = bareMisses.flatMap((name) => {
+              const search = normalizeOptionalString(name);
+              return search ? [{ name, search }] : [];
             });
+            const workspaceRoot = await openWorkspaceRoot(loaded.readRoot ?? loaded.root);
+            const results = await searchWorkspaceEntries(
+              workspaceRoot ?? loaded.root,
+              searches.map(({ search }) => search),
+              undefined,
+              assertCurrent,
+            );
+            const found = new Map<string, string>();
+            for (const [index, { name }] of searches.entries()) {
+              const { entries, truncated } = results[index]!;
+              const matches = truncated
+                ? []
+                : entries.filter((entry) => entry.kind === "file" && entry.name === name);
+              if (matches.length === 1) {
+                found.set(name, matches[0]!.path);
+              }
+            }
             const opened = new Set<string>();
             const undecided = new Set<string>();
             for (const [name, match] of found) {
