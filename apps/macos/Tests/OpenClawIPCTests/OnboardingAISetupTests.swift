@@ -855,6 +855,7 @@ private func pressOnboardingEntryButton(_ title: String, in root: NSView) async 
             .compactMap(\.self)
         if element.accessibilityRole?() == .button,
            element.isAccessibilityEnabled?() == true,
+           element.accessibilityIdentifier?() == title ||
            text.contains(where: { $0 == title || (title == "API key" && $0.hasPrefix(title)) })
         {
             matches.append(element)
@@ -1506,7 +1507,7 @@ struct OnboardingAISetupTests {
             #expect(pendingState(defaults) == .none)
             #expect(storedActivationOwner(defaults) == nil)
             if manual {
-                #expect(model.selectedManualProvider?.id == "openai-api-key")
+                #expect(model.manualProvider()?.id == "openai-api-key")
                 #expect(model.manualKey == "fixture-key")
                 #expect(!model.manualTesting)
             } else {
@@ -3234,6 +3235,73 @@ struct OnboardingAISetupTests {
         #expect(model.phase == .idle)
         #expect(model.manualProviderID.isEmpty)
         #expect(model.manualKey.isEmpty)
+    }
+
+    @Test func `Gemini form submits to Gemini after changing gateways`() async throws {
+        try await TestIsolation.withIsolatedState {
+            let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingGeminiGatewayTests"))
+            let route = AISetupRouteIdentity("remote:id:gateway-a")
+            let url = try #require(URL(string: "ws://example.invalid"))
+            let config = AISetupGatewayConfig(url: url, token: "route-a-token")
+            let recorder = AISetupRequestRecorder()
+            let session = makeAISetupRequestSession(recorder: recorder) { task, request in
+                switch request.method {
+                case "openclaw.setup.detect":
+                    task.emitReceiveSuccess(.data(Data("""
+                    {"type":"res","id":"\(request.id)","ok":true,"payload":{
+                      "candidates":[],"manualProviders":[
+                        {"id":"openai-api-key","brandId":"openai","label":"OpenAI API key"},
+                        {"id":"gemini-api-key","brandId":"google","label":"Gemini API key"}
+                      ],"workspace":"/tmp/openclaw-workspace","setupComplete":false}}
+                    """.utf8)))
+                case "openclaw.setup.activate":
+                    task.emitReceiveSuccess(.data(failedActivationResponse(id: request.id)))
+                default:
+                    break
+                }
+            }
+            let gateway = GatewayConnection(
+                configProvider: { config.snapshot() },
+                sessionBox: WebSocketSessionBox(session: session)
+            )
+            let model = makeAISetupModel(gateway: gateway, defaults: defaults, routeIdentityProvider: { route.snapshot() })
+            await model.detectConnections()
+            _ = AppKitTestSupport.application
+            let hosting = NSHostingView(rootView: OnboardingAISetupView(
+                model: model, returnToGatewayAuthentication: {}, retryConfiguredGatewayProbe: { _ in }
+            ))
+            hosting.frame = NSRect(x: 0, y: 0, width: 550, height: 450)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            defer {
+                window.orderOut(nil)
+                window.contentView = nil
+                window.close()
+            }
+            window.orderFront(nil)
+            hosting.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            try await pressOnboardingEntryButton("onboarding-ai-row-gemini", in: hosting)
+
+            // The AI page is kept mounted while onboarding resets and rediscovers the selected Gateway.
+            model.resetForGatewayChange(clearPendingHandoff: false)
+            config.setToken("route-b-token")
+            route.set("remote:id:gateway-b")
+            await model.detectConnections()
+            model.manualKey = "gemini-fixture-key"
+            try await TestWait.state("Gemini key form after rediscovery") {
+                let surface = try await inspectAISetupAccessibility(hosting)
+                return surface.labels.contains("Gemini") && surface.actions["Connect"] == true
+            }
+            try await pressOnboardingEntryButton("Connect", in: hosting)
+            try await recorder.waitForMethod("openclaw.setup.activate")
+            let requests = await recorder.snapshot()
+            #expect(requests.authChoices == ["gemini-api-key"])
+            #expect(requests.apiKeys == ["gemini-fixture-key"])
+            try await TestWait.observed("Gemini submission settled") { !model.manualTesting }
+            await gateway.shutdown()
+        }
     }
 
     @Test func `configured model label stays pending until live verification`() async throws {

@@ -1612,9 +1612,9 @@ extension OnboardingAISetupModel {
 extension OnboardingAISetupModel {
     /// Captures submission synchronously; the task settles only after activation recovery finishes.
     @discardableResult
-    func submitManualKey() -> Task<Void, Never>? {
+    func submitManualKey(providerID: String? = nil) -> Task<Void, Never>? {
         let key = self.manualKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let provider = selectedManualProvider, !key.isEmpty, !self.isBusy else { return nil }
+        guard let provider = self.manualProvider(id: providerID), !key.isEmpty, !self.isBusy else { return nil }
         guard let context = beginAttemptContext() else {
             self.manualError = Self.transportFailure(
                 "No Gateway is selected. Select a Gateway, then try again.")

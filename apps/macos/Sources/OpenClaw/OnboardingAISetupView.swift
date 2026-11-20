@@ -385,8 +385,8 @@ struct OnboardingAISetupView: View {
                 self.displayName(for: row)))
         } else {
             switch row.action {
-            case .apiKey:
-                self.keyForm(fixedProvider: row.id == .gemini)
+            case let .apiKey(providerID):
+                self.keyForm(providerID: providerID)
             case .localModel:
                 self.localModelChoices
             case let .candidate(kind):
@@ -475,7 +475,7 @@ struct OnboardingAISetupView: View {
         case .chatGPT: "ChatGPT"
         case .claude: "Claude"
         case .gemini: "Gemini"
-        case .apiKey: self.model.selectedManualProvider?.label ?? String(localized: "your AI")
+        case .apiKey: self.model.manualProvider()?.label ?? String(localized: "your AI")
         case .localModel, .found: self.model.candidates.first { $0.kind == self.model.selectedKind }?.label
             ?? String(localized: "your AI")
         }
@@ -794,10 +794,10 @@ struct OnboardingAISetupView: View {
         .disabled(self.model.isBusy)
     }
 
-    private func keyForm(fixedProvider: Bool) -> some View {
+    private func keyForm(providerID: String?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                if !fixedProvider {
+                if providerID == nil {
                     Picker("Provider", selection: self.$model.manualProviderID) {
                         ForEach(self.model.manualProviders) { provider in
                             Text(provider.label).tag(provider.id)
@@ -809,10 +809,10 @@ struct OnboardingAISetupView: View {
 
                 SecureField("API key", text: self.$model.manualKey)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit { self.model.submitManualKey() }
+                    .onSubmit { self.model.submitManualKey(providerID: providerID) }
 
                 Button {
-                    self.model.submitManualKey()
+                    self.model.submitManualKey(providerID: providerID)
                 } label: {
                     if self.model.manualTesting {
                         ProgressView()
@@ -830,7 +830,7 @@ struct OnboardingAISetupView: View {
                 .disabled(self.model.isBusy ||
                     self.model.manualKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            if let website = OnboardingProviderAuthLink.safeURL(self.model.selectedManualProvider?.website) {
+            if let website = OnboardingProviderAuthLink.safeURL(self.model.manualProvider(id: providerID)?.website) {
                 Link("Where do I find my key?", destination: website)
                     .font(.caption)
                     .environment(\.openURL, AppActivation.shared.openURLAction)
