@@ -793,8 +793,7 @@ src/gateway/desktop/computer-service.ts	2
 src/gateway/device-revocation.ts	1
 src/gateway/event-web-push.ts	2
 src/gateway/exec-approval-authority.ts	1
-src/gateway/exec-approval-consumption.ts	1
-src/gateway/exec-approval-manager.ts	4
+src/gateway/exec-approval-manager.ts	2
 src/gateway/exec-approval-resolution-authority.ts	1
 src/gateway/gateway-codex-harness.command-evidence.live-helpers.ts	1
 src/gateway/github-oauth-lifecycle.ts	1
@@ -837,7 +836,6 @@ src/gateway/mention-inbox-recording.ts	5
 src/gateway/mention-inbox.ts	4
 src/gateway/message-action-turn-capability.ts	8
 src/gateway/node-claude-skill-runtime.ts	20
-src/gateway/node-invoke-plugin-approval.ts	2
 src/gateway/node-invoke-plugin-policy.ts	4
 src/gateway/node-registry-pairing.ts	2
 src/gateway/node-registry-private.ts	7

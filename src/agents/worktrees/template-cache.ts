@@ -149,6 +149,7 @@ async function retireWorktreeTemplate(
       (
         await listGitWorktrees(record.repoRoot, {
           signal: options.signal,
+          idleIoPriority: options.idleIoPriority,
           beforeRun: assertCurrent,
           stateOwnerPath: options.workerAuthority?.stateOwnerPath,
         })
@@ -160,6 +161,7 @@ async function retireWorktreeTemplate(
     if (registered) {
       await requireGit(record.repoRoot, ["worktree", "remove", "--force", record.path], {
         signal: options.signal,
+        idleIoPriority: options.idleIoPriority,
         beforeRun: assertCurrent,
         stateOwnerPath: options.workerAuthority?.stateOwnerPath,
         killProcessTree: true,

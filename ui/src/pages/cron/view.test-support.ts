@@ -58,6 +58,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     fieldErrors: {},
     canSubmit: true,
     editingJob: null,
+    cloning: false,
     createOpen: false,
     activityOpen: false,
     detailTab: "settings",
@@ -143,13 +144,8 @@ const SENTENCE_FREQUENCY: Record<string, string> = {
   event: "event",
 };
 
-/** Chooses a schedule kind as a person does: Repeat for kinds with their own controls, else the sentence's frequency. */
+/** Chooses a schedule kind from the frequency menu. */
 export function chooseSchedule(root: Pick<ParentNode, "querySelector">, kind: string) {
-  const segmented = root.querySelector<HTMLElement>(`[data-test-id="cron-schedule-kind-${kind}"]`);
-  if (segmented) {
-    getElement(segmented, "input.settings-segmented__input", HTMLInputElement).click();
-    return;
-  }
   getElement(root, '[data-test-id="cron-schedule-frequency"]', HTMLElement).click();
   getElement(
     root,

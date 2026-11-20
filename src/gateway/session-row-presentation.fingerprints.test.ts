@@ -162,6 +162,7 @@ it("retains nested publication facts across real transcript writes without hidin
         ],
       });
     await append();
+    using deleted = vi.spyOn(Reflect, "deleteProperty");
     using projection = await createTestProjection({ cfg, modelCatalog: [] });
     const read = async (unchanged = false) => {
       await projection.ensureMaterialized();
@@ -203,6 +204,9 @@ it("retains nested publication facts across real transcript writes without hidin
     };
     // The first delivery owns the weak fingerprint sample throughout this reuse proof.
     const initial = await read();
+    expect(
+      deleted.mock.calls.filter(([row]) => Reflect.get(row, "key") === query.key),
+    ).toHaveLength(0);
     let previous = initial;
     for (let update = 0; update < 3; update++) {
       await collectForRetentionCheck("session-row-fingerprint-sample", 1);
@@ -267,6 +271,20 @@ it("retains nested publication facts across real transcript writes without hidin
         JSON.stringify({ mcpToolsDeny }),
       );
     }
+    const retained = record.materialized;
+    const cleared = replaceSessionRowFacts(retained, {
+      toolOverrides: undefined,
+      lastAssistantMessage: undefined,
+    });
+    expect(Object.hasOwn(cleared.row, "toolOverrides")).toBe(false);
+    expect(Object.hasOwn(cleared.row, "lastAssistantMessage")).toBe(false);
+    expect(Object.isFrozen(cleared.row)).toBe(true);
+    expect(Object.keys(cleared.row)).toEqual(
+      Object.keys(retained.row).filter(
+        (field) => !["toolOverrides", "lastAssistantMessage"].includes(field),
+      ),
+    );
+    expect(retained.row.toolOverrides).toBeDefined();
   });
 });
 

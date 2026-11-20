@@ -50,7 +50,7 @@ import {
 import {
   acceptRestartResumeReceipt,
   recordRestartResumeFailure,
-  recordRestartYieldFailure,
+  recordUnreachableYieldFailure,
 } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
 import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
@@ -81,9 +81,9 @@ async function persistRunningSessions(
   summary: ReturnType<typeof createRestartResumeSummary>,
 ): Promise<void> {
   const assertCurrent = () => params.signal?.throwIfAborted();
-  // Enumeration is synchronous; persistence checks custody again at the write boundary.
+  // Snapshot live owners before ancestry reads; persistence checks custody again before writing.
   assertCurrent();
-  const sessions = selectLiveRestartResumeSessions(params.cfg, summary);
+  const sessions = await selectLiveRestartResumeSessions(params.cfg, summary);
   const selectors = new Map<string, { first: SessionIdentity; batch: SessionIdentity[] }>();
   for (const session of sessions.values()) {
     const key = JSON.stringify([session.agentId, session.storePath]);
@@ -393,7 +393,11 @@ async function resumeRestartStore(
             if (!selected) {
               return { result: undefined };
             }
+            const skip = restartResumeSkipReason(sessionKey, selected);
             let parked = resolveSessionYieldWait(sessionKey, selected, agentId);
+            if (parked === "unreachable" && !skip) {
+              parked = "resume";
+            }
             if (
               parked &&
               (await hasInterruptedCommittedRequesterSettleInput(
@@ -403,7 +407,6 @@ async function resumeRestartStore(
             ) {
               parked = undefined;
             }
-            const skip = restartResumeSkipReason(sessionKey, selected);
             const sameRun = selected.lifecycleRunId === snapshotEntry.lifecycleRunId;
             const resolved = resolveStartupRestartMarker(selected, sameRun, {
               parked,
@@ -471,7 +474,7 @@ async function resumeRestartStore(
           continue;
         }
         if (parked === "unreachable") {
-          await recordRestartYieldFailure({ sessionKey, agentId, entry, signal });
+          await recordUnreachableYieldFailure({ sessionKey, agentId, entry, signal });
           summary.record(agentId, sessionKey, "yield-source-unavailable");
         } else if (parked === "waiting") {
           // The registry retains the wait; a new requester message owns fresh admission.

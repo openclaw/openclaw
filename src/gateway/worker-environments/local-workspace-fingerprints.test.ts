@@ -299,16 +299,14 @@ it("preserves v1 slots and exact u64 identities when file paths are added and re
     codec.compress(bytes),
     Date.now(),
   );
-  const identity = "gateway:18446744073709551615:9007199254740993:4:0:1";
   expect(
-    scan.reuseFile("b.txt", identity, {
+    scan.reuseFile("b.txt", {
       dev: 18446744073709551615n,
       ino: 9007199254740993n,
       size: 4n,
       ctimeNs: 1n,
     }),
   ).toBe(baseline.get("b.txt")!.node);
-  scan.observe("b.txt", identity);
   scan.observe("a.txt", "gateway:18446744073709551615:9007199254740997:4:0:3");
   const current = createLocalWorkspaceManifestTree([file("b.txt"), file("a.txt")]);
   const currentRoot = current.get("")!.treeRef;
