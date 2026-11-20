@@ -26,6 +26,18 @@ For 100/50, change the two client counts. Keep the Node driver unchanged when
 selecting another Gateway runtime. Record executable hashes, source/build/lockfile
 identities, host topology, kernel, and observed affinity with each campaign.
 
+## Memory capacity
+
+Use `--gateway-memory-gib 2` and `--gateway-memory-gib 4` in separate runs on a
+delegated parent with the v2 memory controller enabled. The limit applies before
+the Gateway starts. Its descendants inherit the limit, and the controller,
+drivers, and mock provider run outside it.
+
+`resources.memoryBudget` records the verified byte limit, zero swap allowance,
+kernel high-water mark, and OOM counters. A valid run requires Gateway readiness,
+completed replies, and no OOM events. Compare the kernel high-water mark to the cap.
+Sampled process-tree RSS is a separate observation.
+
 ## Workload contract
 
 Drivers partition clients round-robin. Each signed Control UI webchat connection
