@@ -1,5 +1,4 @@
 import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { IMAGE_BLOCK_TOKENS } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import { estimateTokens } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
@@ -46,6 +45,8 @@ export function selectHandoff<T>(input: {
   maxBytes: number;
   maxTokens: number;
   priorOmitted?: number;
+  /** Ids of turns an earlier bounded read already omitted, oldest first. */
+  priorOmittedIds?: readonly string[];
   sessionKey?: string;
 }) {
   const { items, summary } = input;
@@ -57,8 +58,19 @@ export function selectHandoff<T>(input: {
   if (!priorOmitted && fits(input.maxBytes, input.maxTokens)) {
     return { values: all.map((item) => item.value), omittedCount: 0, notice: undefined };
   }
-  // The notice is at most an eighth of the allowance, so reserve that before selecting.
-  const reserve = Math.floor(input.maxBytes / 8);
+  // Reserve the notice before selecting: its id list may use a quarter of the allowance.
+  const allIds = [...(input.priorOmittedIds ?? []), ...items.flatMap((item) => item.id ?? [])];
+  let ids = allIds.slice(-MAX_LISTED_OMITTED_IDS);
+  const noticeFor = (listed: string[]) =>
+    handoffNotice(all.length, priorOmitted + all.length, listed, input.sessionKey);
+  while (ids.length && Buffer.byteLength(noticeFor(ids)) > input.maxBytes / 4) {
+    ids = ids.slice(1);
+  }
+  const reserve = Buffer.byteLength(noticeFor(ids)) + 2;
+  if (reserve > input.maxBytes || Math.ceil(reserve / 4) > input.maxTokens) {
+    // No room for history and its notice; the native turn runs on its own context.
+    return { values: [], omittedCount: priorOmitted + all.length, notice: undefined };
+  }
   let bytes = input.maxBytes - reserve;
   let tokens = input.maxTokens - Math.ceil(reserve / 4);
   const take = (item: HandoffItem<T> | undefined) => {
@@ -81,27 +93,24 @@ export function selectHandoff<T>(input: {
       selected.add(index);
     }
   }
-  const omittedIds = items.flatMap((item, index) =>
-    !selected.has(index) && item.id ? item.id : [],
-  );
+  const omittedIds = [
+    ...(input.priorOmittedIds ?? []),
+    ...items.flatMap((item, index) => (!selected.has(index) && item.id ? item.id : [])),
+  ];
   const omittedCount =
     priorOmitted + (summary && !keepSummary ? 1 : 0) + items.length - selected.size;
   const values = [
     ...(keepSummary && summary ? [summary.value] : []),
     ...items.filter((_, index) => selected.has(index)).map((item) => item.value),
   ];
-  let ids = omittedIds.slice(-MAX_LISTED_OMITTED_IDS);
-  let notice = handoffNotice(values.length, omittedCount, ids, input.sessionKey);
-  while (ids.length && Buffer.byteLength(notice) > reserve) {
-    ids = ids.slice(1);
-    notice = handoffNotice(values.length, omittedCount, ids, input.sessionKey);
-  }
+  // The reserved notice used the widest id list; the final list is never longer.
+  const notice = handoffNotice(
+    values.length,
+    omittedCount,
+    ids.length ? omittedIds.slice(-ids.length) : [],
+    input.sessionKey,
+  );
   return { values, omittedCount, notice: omittedCount ? notice : undefined };
-}
-
-export function readHandoffMessageId(message: unknown): string | undefined {
-  const id = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id;
-  return typeof id === "string" && id ? id : undefined;
 }
 
 /**
@@ -203,6 +212,7 @@ export function bindHandoff(
         }
       }
     }
+    const ids = new Map(history.map((message, index) => [message, facts.messageIds[index]]));
     const item = (message: AgentMessage): HandoffItem<AgentMessage> => {
       const extra = extraBytes.get(message) ?? 0;
       return {
@@ -210,7 +220,7 @@ export function bindHandoff(
         role: message.role,
         bytes: Buffer.byteLength(JSON.stringify(message)) + 1 + extra,
         tokens: estimateTokens(message) + Math.ceil(extra / 4),
-        id: readHandoffMessageId(message),
+        id: ids.get(message),
       };
     };
     const activeTokens = active.reduce((sum, message) => sum + item(message).tokens, 0);
@@ -225,8 +235,14 @@ export function bindHandoff(
       maxBytes: Math.min(maxBytes, (tokenBudget - activeTokens) * 4),
       maxTokens: tokenBudget - activeTokens,
       priorOmitted: facts.omittedCount,
+      priorOmittedIds: facts.omittedIds,
       sessionKey,
     });
+    if (!selection.values.length && selection.omittedCount) {
+      log.warn(
+        `native handoff allowance (${tokenBudget} tokens) cannot fit any history; ${selection.omittedCount} turns stay in the session transcript`,
+      );
+    }
     if (selection.notice) {
       // Advisory observer; its failure must not abort the turn (#177453).
       try {

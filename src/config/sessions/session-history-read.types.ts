@@ -66,8 +66,10 @@ export type SessionTranscriptContextSnapshot = {
   version?: SessionTranscriptContextVersion;
   seed?: {
     omittedCount: number;
-    omittedNonSummary: boolean;
-    retainedInputTokens: number;
+    /** Transcript entry ids aligned with `messages`. */
+    messageIds: string[];
+    /** Transcript entry ids of omitted turns, oldest first; sessions_history accepts them. */
+    omittedIds: string[];
     admittedUser?: AgentMessage;
     summary?: AgentMessage;
   };

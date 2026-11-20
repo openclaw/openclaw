@@ -48,6 +48,13 @@ it("keeps summary, first goal and newest intact turns, and names omitted message
   ).toBe(true);
 });
 
+it("delivers no history when the allowance cannot fit the omission notice", () => {
+  const items = [item("a", "user", "goal".repeat(50)), item("b", "assistant", "done".repeat(50))];
+  expect(
+    selectHandoff({ items, maxBytes: 120, maxTokens: 30, sessionKey: "agent:main:tiny" }),
+  ).toEqual({ values: [], omittedCount: 2, notice: undefined });
+});
+
 it("returns everything with no notice when the history fits", () => {
   const items = [item("a", "user", "goal"), item("b", "assistant", "done")];
   expect(selectHandoff({ items, maxBytes: 4_000, maxTokens: 1_000 })).toEqual({
@@ -132,6 +139,8 @@ it("bounds a tool-heavy transcript without a model call and tolerates a failing 
     });
     expect(JSON.stringify(seeded[0])).toContain("[OpenClaw context handoff]");
     expect(JSON.stringify(seeded[0])).toContain("sessions_history");
+    // Omitted turns are named by the transcript entry ids sessions_history accepts.
+    expect(JSON.stringify(seeded[0])).toMatch(/Newest omitted messageIds: [0-9a-f-]{8,}/);
     expect(JSON.stringify(seeded)).toContain("follow-up 12");
     expect(observer).toHaveBeenCalledWith({
       stream: "compaction",

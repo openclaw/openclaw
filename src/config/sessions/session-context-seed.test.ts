@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import { estimateCompactionHistoryTokens } from "../../agents/sessions/context-token-pressure.js";
 import { withSessionState } from "../../agents/sessions/session-manager-fixtures.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { toolResult } from "../../agents/sessions/session-message-fixtures.test-support.js";
@@ -55,12 +54,13 @@ it("bounds full payload hydration at the native seed worker operation, not its o
     const baseline = measure(unbounded);
     const candidate = measure(bounded);
     expect(baseline.count).toBe(16);
-    expect(candidate.count).toBe(1); // Only the first overflowing row, not all omitted bodies.
+    // Only the first overflowing row and the first user goal, not all omitted bodies.
+    expect(candidate.count).toBe(2);
     expect(candidate.bytes).toBeLessThan(baseline.bytes / 8);
     expect(candidate.result).toMatchObject({
       messages: boundContextEngineAssembly({ messages: full, estimatedTokens: 0 }, 4096, 1024)
         .messages,
-      seed: { omittedCount: 16, omittedNonSummary: true, retainedInputTokens: 0 },
+      seed: { omittedCount: 16 },
     });
     expect(baseline.result).toMatchObject({ messages: full });
   });
@@ -101,7 +101,7 @@ it("preserves full-fidelity seed selection, tool pairs, summary and admitted-tai
     );
     expect(current).toBeGreaterThan(0);
     for (const beforeAdmittedUser of [false, true]) {
-      for (const maxBytes of [512, 4096, 32768]) {
+      for (const maxBytes of [512, 4096, 65536]) {
         const seed = {
           maxBytes,
           tokenBudget: 8192,
@@ -126,7 +126,6 @@ it("preserves full-fidelity seed selection, tool pairs, summary and admitted-tai
         expect(result.messages).toEqual(expected);
         expect(result.seed).toMatchObject({
           omittedCount: history.length - expected.length,
-          retainedInputTokens: estimateCompactionHistoryTokens(full.slice(current)),
           summary: history.findLast((message) => message.role === "compactionSummary"),
         });
         expect(result.seed?.admittedUser).toEqual(beforeAdmittedUser ? full[current] : undefined);
@@ -137,5 +136,29 @@ it("preserves full-fidelity seed selection, tool pairs, summary and admitted-tai
         });
       }
     }
+  });
+});
+
+it("keeps the first user goal ahead of the newest turns and names every omitted turn", async () => {
+  await withSessionState("native-seed-goal", async ({ scope }) => {
+    const manager = SessionManager.open(scope);
+    const goalId = manager.appendMessage(makeUserMessage("GOAL: build the CSV parser", 1));
+    const middle = Array.from({ length: 8 }, (_, index) =>
+      manager.appendMessage(makeUserMessage(`middle ${index} ${"x".repeat(1_000)}`, index + 2)),
+    );
+    const recentId = manager.appendMessage(makeUserMessage("recent request", 20));
+    const result = readSessionContextSeed(manager.getBranch(), {
+      maxBytes: 3_000,
+      tokenBudget: 8_192,
+      beforeAdmittedUser: false,
+    });
+    expect(result.messages[0]).toMatchObject({ content: "GOAL: build the CSV parser" });
+    expect(result.messages.at(-1)).toMatchObject({ content: "recent request" });
+    expect(result.seed?.messageIds[0]).toBe(goalId);
+    expect(result.seed?.messageIds.at(-1)).toBe(recentId);
+    expect(result.seed?.omittedIds).toEqual(
+      middle.filter((id) => !result.seed?.messageIds.includes(id)),
+    );
+    expect(result.seed?.omittedCount).toBe(result.seed?.omittedIds.length);
   });
 });
