@@ -143,7 +143,83 @@ it.each([false, true])(
   },
 );
 
+it("refreshes an eager sharing roster when its menu's English loads", async () => {
+  const { manager } = await loadI18n();
+  const { createChatSessionSharingMobileAdapter } =
+    await import("../pages/chat/components/chat-session-sharing-mobile-adapter.tsx");
+  await import("../pages/chat/components/chat-session-sharing.solid.tsx");
+  await import("../pages/chat/components/chat-session-sharing-options.tsx");
+  const { mountSolid } = await import("../test-helpers/mount-solid.ts");
+  const { flush } = await import("solid-js");
+  let adapter!: ReturnType<typeof createChatSessionSharingMobileAdapter>;
+  const view = mountSolid(() => {
+    adapter = createChatSessionSharingMobileAdapter(
+      () => ({
+        session: { key: "agent:main:sharing", kind: "direct", sharingRole: "owner" },
+        state: {
+          loading: false,
+          result: {
+            sessionKey: "agent:main:sharing",
+            role: "owner",
+            allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
+            identities: [{ type: "human", id: "guest", label: "Guest" }],
+            members: [],
+            permissions: [
+              {
+                identityId: "guest",
+                level: "read",
+                options: ["read", "send"],
+                invitation: "member",
+              },
+            ],
+          },
+        },
+        onOpen: vi.fn(),
+        onVisibilityChange: vi.fn(),
+        onMemberChange: vi.fn(),
+        onPublicShareChange: vi.fn(),
+        onCopyPublicLink: vi.fn(),
+      }),
+      {
+        onOpenSharing: vi.fn(),
+        onOpenAccess: vi.fn(),
+        onApplied: vi.fn(),
+        accessTarget: () => undefined,
+      },
+    );
+    return document.createElement("span");
+  });
+  try {
+    expect(adapter.sharing.permissions?.rows[0]?.controlLabel).toBe("chat.sessionSharing.canRead");
+    expect(manager.t("chat.sessionSharing.publicIndicator")).toBe("Public");
+    expect(manager.t("sessionsView.noPeopleMatch")).toBe("sessionsView.noPeopleMatch");
+
+    await import("../pages/chat/components/chat-session-sharing-mobile.tsx");
+    flush();
+
+    expect(adapter.sharing.permissions?.rows[0]?.controlLabel).toBe("Can read");
+    expect(manager.t("sessionsView.noPeopleMatch")).toBe("No people or agents match your search.");
+  } finally {
+    view.unmount();
+  }
+});
+
 it.each([
+  [
+    "chat.sessionSharing.sharedDescription",
+    "Everyone with access can send",
+    () => import("../pages/chat/components/chat-session-sharing-content.tsx"),
+  ],
+  [
+    "chat.sessionSharing.searchPeople",
+    "Search people…",
+    () => import("../pages/chat/components/chat-session-sharing-menu.tsx"),
+  ],
+  [
+    "chat.sessionSharing.canRead",
+    "Can read",
+    () => import("../pages/chat/components/chat-session-sharing-mobile.tsx"),
+  ],
   [
     "chat.sessionSharing.copyPublicLink",
     "Copy public link",

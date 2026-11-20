@@ -390,7 +390,29 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   const sessionSharing: TranslationMap = {};
   const sharingCopy = registerChatSessionSharingEnglish.catalog.chat.sessionSharing;
   for (const [key, value] of Object.entries(
-    registerChatSessionEnglish.catalog.chat.sessionSharing,
+    Object.assign(
+      {
+        loweringAccessCancelsQueued: sharingCopy.loweringAccessCancelsQueued,
+        sessionAccess: registerChatSessionEnglish.catalog.chat.sessionSharing.sessionAccess,
+        sharedDescription: sharingCopy.sharedDescription,
+        readOnlyDescription: sharingCopy.readOnlyDescription,
+        suggestDescription: sharingCopy.suggestDescription,
+        draftDescription: sharingCopy.draftDescription,
+        linkSharing: sharingCopy.linkSharing,
+        anyoneWithLink: sharingCopy.anyoneWithLink,
+        publicLinkDescription: sharingCopy.publicLinkDescription,
+        publicDraftDescription: sharingCopy.publicDraftDescription,
+        linkUnavailable: sharingCopy.linkUnavailable,
+        permissions: sharingCopy.permissions,
+        creator: registerChatSessionEnglish.catalog.chat.sessionSharing.creator,
+        canRead: sharingCopy.canRead,
+        canSuggest: sharingCopy.canSuggest,
+        canSend: sharingCopy.canSend,
+        searchPeople: sharingCopy.searchPeople,
+        closeSearch: sharingCopy.closeSearch,
+      },
+      registerChatSessionEnglish.catalog.chat.sessionSharing,
+    ),
   )) {
     sessionSharing[key] = value;
     const coldKeys: Array<keyof typeof sharingCopy> =

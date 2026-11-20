@@ -29,13 +29,13 @@ import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ChatSessionSharingError } from "./chat-session-sharing-error.tsx";
 import {
   type ChatSessionSharingProps,
   VISIBILITY_LABEL_KEYS,
   CHAT_SESSION_SHARING_DESCRIPTION_KEYS,
   createChatSessionSharingPresentation,
   ChatSessionSharingModeIcon,
-  ChatSessionSharingError,
   projectChatSessionSharingRoster,
   chatSessionPermissionLabel,
 } from "./chat-session-sharing-shared.tsx";
