@@ -300,15 +300,12 @@ describe("Skills mutation presentation", () => {
           input.dispatchEvent(new Event("input", { bubbles: true }));
           await waitForFast(() =>
             expect(
-              page.querySelector<HTMLButtonElement>(".skill-reader-dialog__actions .primary")
-                ?.disabled,
+              page.querySelector<HTMLButtonElement>(".skill-requirement__key .primary")?.disabled,
             ).toBe(false),
           );
-          control = page.querySelector<HTMLButtonElement>(
-            ".skill-reader-dialog__actions .primary",
-          )!;
+          control = page.querySelector<HTMLButtonElement>(".skill-requirement__key .primary")!;
         } else {
-          control = page.querySelector<HTMLButtonElement>(".skill-reader-dialog__actions .btn")!;
+          control = page.querySelector<HTMLButtonElement>(".skill-requirement__control > .btn")!;
         }
       }
       control.click();
