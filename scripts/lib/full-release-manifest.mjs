@@ -156,6 +156,9 @@ export function buildReleaseValidationManifest({ plan, drain, context, reusedMan
             ])
           : {
               normalCi: runs.normalCi ?? "",
+              ...(Object.hasOwn(runs, "stableClientCompatibility")
+                ? { stableClientCompatibility: runs.stableClientCompatibility }
+                : {}),
               pluginPrereleaseIndependent: runs.pluginPrereleaseIndependent ?? "",
               pluginPrereleaseCandidate: runs.pluginPrereleaseCandidate ?? "",
               releaseChecksIndependent: runs.releaseChecksIndependent ?? "",

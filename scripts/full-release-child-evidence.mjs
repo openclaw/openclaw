@@ -8,6 +8,7 @@ import {
   releaseChildSpec,
   releaseCompositeJobsSha256,
   validateReleaseChildRunProvenance,
+  terminalPolicyPass,
 } from "./full-release-validation-policy.mjs";
 import { canonicalizeJsonValue } from "./lib/canonical-json.mjs";
 import {
@@ -81,11 +82,13 @@ async function seal() {
     throw new Error("Child evidence publisher is not in the current active workflow attempt");
   }
   const targetInput =
-    role === "npmTelegram"
-      ? "harness_ref"
-      : role.startsWith("releaseChecks")
-        ? "ref"
-        : "target_ref";
+    role === "stableClientCompatibility"
+      ? "target_sha"
+      : role === "npmTelegram"
+        ? "harness_ref"
+        : role.startsWith("releaseChecks")
+          ? "ref"
+          : "target_ref";
   if (inputs[targetInput] !== targetSha) {
     throw new Error("Child evidence target differs from the exact dispatched product source");
   }
@@ -134,11 +137,17 @@ async function seal() {
     dispatchId,
     sourceParentRunId: parent[1],
     sourceParentAttempt: Number(parent[2]),
-    workloadConclusion: composite.jobs.every((job) =>
-      ["success", "neutral"].includes(job.conclusion),
-    )
-      ? "success"
-      : "failure",
+    workloadConclusion:
+      (role !== "stableClientCompatibility" ||
+        terminalPolicyPass({
+          key: role,
+          jobs: composite.jobs,
+          status: "completed",
+          conclusion: "success",
+        })) &&
+      composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion))
+        ? "success"
+        : "failure",
     inputs: inputsWithoutDispatch,
     publisher: { jobId: String(publisher.id), jobName: PUBLISHER_JOB },
     ...composite,

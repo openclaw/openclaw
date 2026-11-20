@@ -66,7 +66,7 @@ function seal(data = fixture(), runAttempt = 1, targetInput = TARGET) {
     JSON.stringify({
       inputs: {
         dispatch_id: `full-release-validation-77-1${spec.suffix}`,
-        target_ref: targetInput,
+        [role === "stableClientCompatibility" ? "target_sha" : "target_ref"]: targetInput,
         release_scope: "full",
       },
     }),
@@ -187,6 +187,25 @@ describe("full release child evidence producer", () => {
       `artifact_name=full-release-child-evidence-${TARGET}-${role}-101-1\n`,
     );
   });
+
+  it.each(["success", "failure", "skipped"])(
+    "seals stable client role with its exact target_sha and gate (%s)",
+    (conclusion) => {
+      const data = fixture("stableClientCompatibility");
+      data.jobs[1]!.name = "Verify stable client compatibility";
+      data.jobs[1]!.conclusion = conclusion;
+      const { evidence } = sealed(data);
+      expect(evidence).toMatchObject({
+        role: "stableClientCompatibility",
+        targetSha: TARGET,
+        inputs: { target_sha: TARGET },
+        workloadConclusion: conclusion === "success" ? "success" : "failure",
+      });
+      const { result } = seal(data, 1, SHA);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("exact dispatched product source");
+    },
+  );
 
   it("seals independent Q without substituting the dispatched C", () => {
     const data = fixture();
