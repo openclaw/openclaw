@@ -22,7 +22,7 @@ function runRemoteGate(env: NodeJS.ProcessEnv, prepareScript?: string) {
         leaseId: "cbx_stub",
         runId: "run_stub",
         exitCode: 0,
-        runStatus: "passed",
+        runStatus: "succeeded",
         leaseStopped: env.FAIL_STAGE !== "cleanup",
       }
     : { provider: "blacksmith-testbox", leaseId: "tbx_stub", exitCode: 0, runStatus: "passed" };
@@ -234,6 +234,7 @@ it.each([
   { leaseId: "tbx_other" },
   { runId: "" },
   { runStatus: "cancelled" },
+  { runStatus: "passed" },
   { exitCode: 1 },
   { leaseStopped: undefined },
 ])("rejects incomplete Boat timing ($provider, $runStatus, $leaseStopped)", (override) => {
@@ -245,7 +246,7 @@ it.each([
       leaseId: "cbx_stub",
       runId: "run_stub",
       exitCode: 0,
-      runStatus: "passed",
+      runStatus: "succeeded",
       leaseStopped: true,
       ...override,
     }) + "\n",

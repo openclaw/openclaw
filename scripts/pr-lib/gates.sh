@@ -226,7 +226,7 @@ require_remote_boat_gate_stamp() {
   stamp=$(jq -c -R '
     fromjson?
     | select(type == "object")
-    | select(.provider == "ascii-box" and .exitCode == 0 and .runStatus == "passed"
+    | select(.provider == "ascii-box" and .exitCode == 0 and .runStatus == "succeeded"
         and .leaseStopped == true
         and ((.leaseId // "") | startswith("cbx_"))
         and ((.runId // "") | startswith("run_")))
