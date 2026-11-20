@@ -90,6 +90,19 @@ export type Invite = {
   };
 };
 
+/** Whether a role that requires a sandbox can start one now; null when the Gateway cannot check. */
+export type RoleSandboxReadiness =
+  | { ready: true }
+  | { ready: null; backend: string }
+  | { ready: false; reason: "engine_unavailable"; backend: string }
+  | {
+      ready: false;
+      reason: "image_missing";
+      backend: string;
+      image: string;
+      doctorBuilds: boolean;
+    };
+
 /** Small public role summary, not the full permission definition. */
 export type Role = { name: string; requiresSandbox: boolean } & (
   | { defined: false }
@@ -97,6 +110,8 @@ export type Role = { name: string; requiresSandbox: boolean } & (
       defined: true;
       sessions: "none" | "view" | "suggest" | "write";
       admin: boolean;
+      /** Present on the owner's People data for roles that require a sandbox. */
+      sandbox?: RoleSandboxReadiness;
     }
 );
 
@@ -114,8 +129,6 @@ export type Link = {
   members?: Member[];
   roles?: Role[];
   recoveryUses?: MemberRecoveryUse[];
-  /** Default engine liveness; null means this backend is not probed here. */
-  sandboxBackend?: { backend: string; available: boolean | null };
   invites?: Invite[];
   existingProfiles?: ExistingProfile[];
   nodes?: NodeRecord[];
