@@ -17,6 +17,7 @@ import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-termin
 import { buildCodexContinuityCalibration } from "./context-engine-projection.js";
 import { applyCodexAssistantTerminalOutcome } from "./event-projector-assistant-message.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
+import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import {
@@ -46,6 +47,7 @@ import {
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import {
+  CodexUsageLimitPromptError,
   markCodexAuthProfileBlockedFromRateLimits,
   refreshCodexUsageLimitPromptError,
 } from "./usage-limit-error.js";
@@ -221,7 +223,6 @@ export async function finalizeCodexAttempt(
     const refreshedUsageLimitPromptError = await refreshCodexUsageLimitPromptError({
       client: resourceState.client,
       promptError: enrichedPromptError,
-      rateLimitsRevisionBeforeTurnStart: state.rateLimitsRevisionBeforeLastTurnStart,
       timeoutMs: appServer.requestTimeoutMs,
       signal: runAbortController.signal,
     });
@@ -232,6 +233,17 @@ export async function finalizeCodexAttempt(
         rateLimits: refreshedUsageLimitPromptError.rateLimitsForProfile,
       });
       enrichedPromptError = refreshedUsageLimitPromptError.promptError;
+    } else if (
+      enrichedPromptError instanceof CodexUsageLimitPromptError &&
+      state.rateLimitsRevisionBeforeLastTurnStart !== undefined &&
+      readCodexRateLimitsRevision(resourceState.client) >
+        state.rateLimitsRevisionBeforeLastTurnStart
+    ) {
+      await markCodexAuthProfileBlockedFromRateLimits({
+        params,
+        authProfileId: startupAuthProfileId,
+        rateLimits: readRecentCodexRateLimits(resourceState.client),
+      });
     }
     const projectTerminalOutcome = () => {
       const effectiveTimedOut = state.timeout !== undefined;

@@ -171,7 +171,8 @@
   cursor: default;
 }
 
-.model-providers__profile-grip:focus-visible {
+.model-providers__profile-grip:focus-visible,
+.model-providers__usage-segment:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
   border-radius: var(--radius-sm);
@@ -403,7 +404,8 @@
   grid-template-columns: fit-content(25%) minmax(0, 1fr);
   padding-block: var(--space-2);
   margin-inline-start: calc(-1 * var(--provider-detail-indent));
-  min-width: 0;
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
 }
 .model-providers__usage-bars > small {
   grid-column: 1 / -1;
@@ -412,7 +414,6 @@
   display: grid;
   grid-column: 1 / -1;
   grid-template-columns: subgrid;
-  gap: var(--space-2);
   align-items: center;
 }
 .model-providers__usage-label {
@@ -428,22 +429,15 @@
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-1);
+  display: grid;
+  place-items: center;
   padding: var(--space-1) var(--space-2);
   min-height: 36px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-hover);
-  color: var(--text);
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
 }
 .model-providers__usage-track > [data-movable] {
-  user-select: none;
   cursor: grab;
   touch-action: pan-y;
 }
@@ -451,11 +445,8 @@
 .model-providers__profiles--sorting
   .model-providers__profile:not(.model-providers__profile--dragging),
 .model-providers__usage-bars[data-sorting] .model-providers__usage-track > :not([data-grabbed]) {
+  /* base.css disables transition durations for reduced motion. */
   transition: translate 100ms ease-out;
-
-  @media (prefers-reduced-motion: reduce) {
-    transition: none;
-  }
 }
 .model-providers__usage-track > [data-grabbed] {
   position: relative;
@@ -464,10 +455,6 @@
   border-radius: var(--radius-sm);
   background-color: var(--card);
   box-shadow: var(--shadow-md);
-}
-.model-providers__usage-segment:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
 }
 .model-providers__usage-segment[data-known="false"] {
   border-style: dashed;
@@ -488,20 +475,14 @@
 .model-providers__credit {
   text-align: center;
   font-size: var(--control-ui-text-sm);
-  font-variant-numeric: tabular-nums;
 }
 .model-providers__segment-name {
   display: grid;
-  justify-items: stretch;
   align-content: start;
   border: 0;
   background: transparent;
-  color: inherit;
-  font: inherit;
   font-weight: 600;
   padding: var(--space-1) 0;
-  text-align: center;
-  font-size: var(--control-ui-text-xs);
 }
 .model-providers__account-name {
   overflow: hidden;
@@ -799,7 +780,7 @@
   display: grid;
   gap: var(--space-4);
   padding: var(--space-1) var(--space-4) var(--space-4)
-    calc(var(--space-4) + var(--provider-row-icon) + var(--provider-row-gap));
+    calc(var(--space-4) + var(--provider-detail-indent));
 }
 
 /* Rows touch and carry their own spacing: dragging reads their slots as one column. */
@@ -865,7 +846,6 @@
   /* A phone has no width to spare for hanging the detail off the name. */
   .provider-row__detail {
     --provider-detail-indent: 0px;
-    padding-inline-start: var(--space-4);
   }
 
   .provider-row--quiet .model-providers__inline-form,

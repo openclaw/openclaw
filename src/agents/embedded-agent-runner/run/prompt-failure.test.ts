@@ -387,33 +387,6 @@ describe("handleEmbeddedPromptFailure", () => {
     ).toBe("hard_timeout");
   });
 
-  it.each(["rotated", "exhausted", "capped"])(
-    "suspends quota failures unless rotation succeeds (%s)",
-    async (rotation) => {
-      const cap = new FailoverError("Rotation cap reached", { reason: "rate_limit" });
-      const promptError = Object.assign(new Error("You've hit your usage limit."), { status: 429 });
-      const advanceAuthProfile = vi.fn(async () => rotation === "rotated");
-      if (rotation === "capped") {
-        advanceAuthProfile.mockRejectedValue(cap);
-      }
-      const params = makeParams({
-        promptError,
-        fallbackConfigured: rotation === "capped",
-        failover: { advanceAuthProfile },
-      });
-      const outcome = handleEmbeddedPromptFailure(params);
-      if (rotation === "rotated") {
-        await expect(outcome).resolves.toMatchObject({ action: "retry" });
-        expect(params.runInput.suspendForFailure).not.toHaveBeenCalled();
-      } else {
-        await expect(outcome).rejects.toBe(rotation === "capped" ? cap : promptError);
-        expect(params.runInput.suspendForFailure).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ reason: "quota_exhausted" }),
-        );
-      }
-    },
-  );
-
   it.each(["prompt", "compaction", "tool_execution"] as const)(
     "retains an opaque %s watchdog failure without changing its retry routing",
     async (phase) => {

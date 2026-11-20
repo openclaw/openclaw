@@ -186,17 +186,13 @@ it("waits for the provider floor before exhausting recovery and rotating credent
   expect(sleep).toHaveBeenCalledExactlyOnceWith(2000, undefined);
   await checkRetry(retry, false);
   expect(controller.rateLimitRetriesExhausted).toBe(1);
-  // Confirmed account limits neither spend nor replenish transient rotations.
-  const exhausted = { ...rotationContext, code: "usage_limit_reached" };
-  await expect(controller.advanceAuthProfile("rate_limit", exhausted)).resolves.toBe(true);
   await expect(rotate()).resolves.toBe(true);
-  await expect(controller.advanceAuthProfile("rate_limit", exhausted)).resolves.toBe(true);
   await expect(rotate()).rejects.toMatchObject({
     name: "FailoverError",
     reason: "rate_limit",
     status: 429,
   });
-  expect(advance).toHaveBeenCalledTimes(3);
+  expect(advance).toHaveBeenCalledTimes(1);
 });
 
 it.each([-90_000, 0, 90_000])(

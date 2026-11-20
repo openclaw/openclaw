@@ -1136,11 +1136,6 @@ select.input {
   }
 }
 
-:root {
-  --field-chevron-mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>")
-    center / contain no-repeat;
-}
-
 .field select,
 select.settings-select:not([multiple]) {
   appearance: none;
@@ -1194,7 +1189,8 @@ select.settings-select:not([multiple]) {
         margin: 0;
         padding: 0;
         background: var(--text-tertiary);
-        mask: var(--field-chevron-mask);
+        mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>")
+          center / contain no-repeat;
         transition: none;
       }
 
@@ -3905,8 +3901,8 @@ select.data-table-pagination__size {
   width: 26px;
 }
 
-/* Keep zero-specificity leaves separately indexed. Session sort and cron search
-   already render a settings-select and settings-input, respectively. */
+/* Keep zero-specificity leaf selectors flat: a mixed ancestor family makes
+   unrelated elements pay for repeated matching during style resolution. */
 :where(.field) :where(input, textarea, select),
 :where(.settings-input),
 :where(select.settings-select),
@@ -3916,39 +3912,90 @@ select.data-table-pagination__size {
 :where(.usage-date-input),
 :where(.usage-select),
 :where(.usage-query-input),
-:where(.dashboards-search, .data-table-search) :where(input),
+:where(.sessions-sort) :where(select),
+:where(.dashboards-search) :where(input),
+:where(.data-table-search) :where(input),
+:where(.cron-search-box) :where(input),
 :where(.input) {
   corner-shape: superellipse(1.5);
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 :where(.field) :where(input, textarea, select)::placeholder,
 :where(.settings-input)::placeholder,
+:where(select.settings-select)::placeholder,
+:where(.picker-select__trigger)::placeholder,
+:where(.agent-select__trigger)::placeholder,
 :where(.multi-select)::placeholder,
 :where(.usage-date-input)::placeholder,
+:where(.usage-select)::placeholder,
 :where(.usage-query-input)::placeholder,
-:where(.dashboards-search, .data-table-search) :where(input)::placeholder,
+:where(.sessions-sort) :where(select)::placeholder,
+:where(.dashboards-search) :where(input)::placeholder,
+:where(.data-table-search) :where(input)::placeholder,
+:where(.cron-search-box) :where(input)::placeholder,
 :where(.input)::placeholder {
   color: var(--muted);
 }
-/* Both states keep the expanded selector's specificity; actual focus also
-   applies to menu items. Only the outline changes in forced colors. */
-:where(.field)
-  :where(input, textarea, select):is(:focus-visible, [aria-expanded="true"]:not(.oc-menu-item)),
-:where(.settings-input):is(:focus-visible, [aria-expanded="true"]:not(.oc-menu-item)),
-:where(select.settings-select):is(:focus-visible, [aria-expanded="true"]:not(.oc-menu-item)),
-:where(.picker-select__trigger):is(:focus-visible, [aria-expanded="true"]:not(.oc-menu-item)),
-:where(.agent-select__trigger):is(:focus-visible, [aria-expanded="true"]:not(.oc-menu-item)),
-:where(.multi-select):is(:focus-visible, [aria-expanded="true"]:not(.oc-menu-item)),
-:where(.usage-date-input):is(:focus-visible, [aria-expanded="true"]:not(.oc-menu-item)),
-:where(.usage-select):is(:focus-visible, [aria-expanded="true"]:not(.oc-menu-item)),
-:where(.usage-query-input):is(:focus-visible, [aria-expanded="true"]:not(.oc-menu-item)),
-:where(.dashboards-search, .data-table-search)
-  :where(input):is(:focus-visible, [aria-expanded="true"]:not(.oc-menu-item)),
-:where(.input):is(:focus-visible, [aria-expanded="true"]:not(.oc-menu-item)) {
+:where(.field) :where(input, textarea, select):focus-visible:focus-visible,
+:where(.settings-input):focus-visible:focus-visible,
+:where(select.settings-select):focus-visible:focus-visible,
+:where(.picker-select__trigger):focus-visible:focus-visible,
+:where(.agent-select__trigger):focus-visible:focus-visible,
+:where(.multi-select):focus-visible:focus-visible,
+:where(.usage-date-input):focus-visible:focus-visible,
+:where(.usage-select):focus-visible:focus-visible,
+:where(.usage-query-input):focus-visible:focus-visible,
+:where(.sessions-sort) :where(select):focus-visible:focus-visible,
+:where(.dashboards-search) :where(input):focus-visible:focus-visible,
+:where(.data-table-search) :where(input):focus-visible:focus-visible,
+:where(.cron-search-box) :where(input):focus-visible:focus-visible,
+:where(.input):focus-visible:focus-visible,
+:where(.field) :where(input, textarea, select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.settings-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(select.settings-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.picker-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.agent-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.multi-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-date-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-query-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.sessions-sort) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.dashboards-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.data-table-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.cron-search-box) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.input)[aria-expanded="true"]:not(.oc-menu-item) {
   border-color: var(--field-focus-border);
   outline: none;
-
-  @media (forced-colors: active) {
+}
+@media (forced-colors: active) {
+  :where(.field) :where(input, textarea, select):focus-visible:focus-visible,
+  :where(.settings-input):focus-visible:focus-visible,
+  :where(select.settings-select):focus-visible:focus-visible,
+  :where(.picker-select__trigger):focus-visible:focus-visible,
+  :where(.agent-select__trigger):focus-visible:focus-visible,
+  :where(.multi-select):focus-visible:focus-visible,
+  :where(.usage-date-input):focus-visible:focus-visible,
+  :where(.usage-select):focus-visible:focus-visible,
+  :where(.usage-query-input):focus-visible:focus-visible,
+  :where(.sessions-sort) :where(select):focus-visible:focus-visible,
+  :where(.dashboards-search) :where(input):focus-visible:focus-visible,
+  :where(.data-table-search) :where(input):focus-visible:focus-visible,
+  :where(.cron-search-box) :where(input):focus-visible:focus-visible,
+  :where(.input):focus-visible:focus-visible,
+  :where(.field) :where(input, textarea, select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.settings-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(select.settings-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.picker-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.agent-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.multi-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-date-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-query-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.sessions-sort) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.dashboards-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.data-table-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.cron-search-box) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.input)[aria-expanded="true"]:not(.oc-menu-item) {
     outline-offset: 2px;
     outline: 2px solid selecteditem;
   }
@@ -4018,7 +4065,31 @@ select.data-table-pagination__size {
       [aria-expanded="true"],
       [data-disabled]
     ),
-  :where(.dashboards-search, .data-table-search)
+  :where(.sessions-sort)
+    :where(select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.dashboards-search)
+    :where(input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.data-table-search)
+    :where(input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.cron-search-box)
     :where(input):hover:not(
       :disabled,
       :focus-visible,
@@ -4045,7 +4116,10 @@ select.data-table-pagination__size {
 :where(.usage-date-input):disabled,
 :where(.usage-select):disabled,
 :where(.usage-query-input):disabled,
-:where(.dashboards-search, .data-table-search) :where(input):disabled,
+:where(.sessions-sort) :where(select):disabled,
+:where(.dashboards-search) :where(input):disabled,
+:where(.data-table-search) :where(input):disabled,
+:where(.cron-search-box) :where(input):disabled,
 :where(.input):disabled {
   opacity: 0.5;
   cursor: not-allowed;

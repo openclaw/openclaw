@@ -481,7 +481,7 @@ State is stored in the per-agent SQLite auth state:
 }
 ```
 
-Overload and temporary rate limits allow one same-provider auth-profile rotation by default before advancing to the next configured model fallback. The active runtime first uses its eligible same-model recovery budget. When Codex confirms an account has exhausted its usage window, OpenClaw skips further retries on that account and tries the next eligible account in order. These switches do not spend or reset the temporary rate-limit rotation budget. Auth-profile rotation and model fallback still require evidence that replaying the original attempt is safe.
+Overloaded and rate-limit errors allow one same-provider auth-profile rotation by default before advancing to the next configured model fallback. The active runtime first uses its eligible same-model recovery budget. Auth-profile rotation and model fallback still require evidence that replaying the original attempt is safe.
 
 Confirmed pre-execution tool rejections do not by themselves make an attempt
 replay-unsafe. Non-replay-safe operations that started, or may have started,

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   classifyRateLimitWindow,
   hasOrganizationTpmRateLimitEvidence,
-  shouldRetryFailoverSignal,
   resolveRetryAfterMs,
 } from "./retry-evidence.js";
 
@@ -75,14 +74,6 @@ describe("resolveRetryAfterMs", () => {
       headers: { ...exhausted.headers, "retry-after": "9" },
     });
   });
-});
-
-it.each([
-  ["usage_limit_reached", false],
-  ["rate_limit_exceeded", true],
-] as const)("applies replay policy to 429 code %s without provider prose", (code, retry) => {
-  const classification = { kind: "reason", reason: "rate_limit" } as const;
-  expect(shouldRetryFailoverSignal({ classification, signal: { status: 429, code } })).toBe(retry);
 });
 
 describe("classifyRateLimitWindow", () => {

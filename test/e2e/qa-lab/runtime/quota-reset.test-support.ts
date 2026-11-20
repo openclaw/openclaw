@@ -5,7 +5,6 @@ import { createServer, type IncomingMessage } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { buffer } from "node:stream/consumers";
 import { setTimeout as delay } from "node:timers/promises";
 import { zstdDecompressSync } from "node:zlib";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
@@ -25,7 +24,6 @@ import { connectGatewayClient } from "../../../../src/gateway/test-helpers.e2e.j
 import { openNodeSqliteDatabase } from "../../../../src/infra/node-sqlite.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import { resolveOpenClawStateSqlitePath } from "../../../../src/state/openclaw-state-db.paths.js";
-import { closeHttpServer, listenLoopback } from "../../../helpers/gateway-integration-fixtures.js";
 import {
   createOpenClawTestInstance,
   formatGatewayReadinessDiagnostic,
@@ -73,7 +71,6 @@ type RequestRecord = {
   authorization: string | undefined;
   accountId: string | string[] | undefined;
 };
-type ResponseText = string | ((request: RequestRecord) => string);
 type ChatHistory = {
   messages: Array<{
     role: string;
@@ -123,11 +120,9 @@ function assistantTexts(history: ChatHistory): string[] {
 
 export async function startQuotaProvider(
   source: BlockSource,
-  responseText: ResponseText,
+  responseText: string,
   tls?: { key: Buffer; cert: Buffer },
-  accountIds = [ACCOUNT_ID, "quota-alternate-account"],
 ) {
-  const exhaustedAccounts = new Set<string>();
   let phase: Phase = "healthy";
   let nextSuccessObserver: { observe: () => void; model: string; path: string } | undefined;
   let nextUsageHold: { arrived: Deferred<HeldProviderResponse>; released: Deferred } | undefined;
@@ -148,21 +143,17 @@ export async function startQuotaProvider(
     headers?: Record<string, string>;
   }> = [];
   const errors: string[] = [];
-  const primaryExhausted = (current = phase) =>
-    current === "initial-exhaustion" || current === "exhausted";
+  const primaryExhausted = () => phase === "initial-exhaustion" || phase === "exhausted";
+  const exhausted = () => phase !== "healthy" && phase !== "restored" && phase !== "revoked";
   const recordRequest = (
     request: IncomingMessage,
     body: string | undefined,
     transport: RequestRecord["transport"],
     bodyBytes?: Buffer,
   ) => {
-    const accountId = request.headers["chatgpt-account-id"];
     const recorded: RequestRecord = {
       atMs: Date.now(),
-      phase:
-        typeof accountId === "string" && exhaustedAccounts.has(accountId)
-          ? "initial-exhaustion"
-          : phase,
+      phase,
       transport,
       path: request.url ?? "",
       method: request.method,
@@ -171,7 +162,7 @@ export async function startQuotaProvider(
       body,
       bodyBase64: bodyBytes?.toString("base64"),
       authorization: request.headers.authorization,
-      accountId,
+      accountId: request.headers["chatgpt-account-id"],
     };
     requests.push(recorded);
     return recorded;
@@ -219,18 +210,15 @@ export async function startQuotaProvider(
         phase === "workspace-exhaustion" ? { type: "workspace_owner_credits_depleted" } : null,
     };
   };
-  const failure = (requestPhase: Phase) => {
-    if (requestPhase === "healthy" || requestPhase === "restored") {
-      return undefined;
-    }
+  const failure = () => {
     const ordinaryRateLimit =
-      requestPhase === "ordinary-rate-limit" ||
-      requestPhase === "ordinary-rate-limit-with-capacity" ||
-      requestPhase === "ordinary-rate-limit-with-exhausted-usage";
+      phase === "ordinary-rate-limit" ||
+      phase === "ordinary-rate-limit-with-capacity" ||
+      phase === "ordinary-rate-limit-with-exhausted-usage";
     // Ordinary throttles carry the provider's retry timing; it alone sets the cooldown.
     const headers: Record<string, string> = ordinaryRateLimit
       ? { "retry-after": String(ORDINARY_RATE_LIMIT_RETRY_AFTER_MS / 1000) }
-      : primaryExhausted(requestPhase) && source === "codex_rate_limits"
+      : primaryExhausted() && source === "codex_rate_limits"
         ? {
             "x-codex-primary-used-percent": "100",
             "x-codex-primary-window-minutes": "300",
@@ -242,9 +230,9 @@ export async function startQuotaProvider(
         : {};
     return {
       type: "error",
-      status: requestPhase === "revoked" ? 401 : 429,
+      status: phase === "revoked" ? 401 : 429,
       error:
-        requestPhase === "revoked"
+        phase === "revoked"
           ? {
               type: "invalid_request_error",
               code: "invalid_api_key",
@@ -265,10 +253,7 @@ export async function startQuotaProvider(
       headers,
     };
   };
-  const successEvents = (
-    request: RequestRecord,
-    marker = typeof responseText === "string" ? responseText : responseText(request),
-  ) => {
+  const successEvents = (request: RequestRecord, marker = responseText) => {
     const observer = nextSuccessObserver;
     if (observer && new URL(request.path, "http://127.0.0.1").pathname === observer.path) {
       let body: Record<string, unknown> | undefined;
@@ -330,7 +315,11 @@ export async function startQuotaProvider(
   const server = tls ? createHttpsServer(tls) : createServer();
   server.on("request", (request, response) => {
     void (async () => {
-      const bodyBytes = await buffer(request);
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(Buffer.from(chunk));
+      }
+      const bodyBytes = Buffer.concat(chunks);
       const encoding = request.headers["content-encoding"];
       const decoded =
         encoding === undefined
@@ -360,7 +349,7 @@ export async function startQuotaProvider(
       };
       if (requestPath === "/backend-api/wham/accounts/check") {
         json(200, {
-          accounts: accountIds.map((id) => ({
+          accounts: [ACCOUNT_ID, "quota-alternate-account"].map((id) => ({
             id,
             workspace_backend_origin: "NO_CONSTRAINT",
             account_routing_override: "NO_CONSTRAINT",
@@ -371,7 +360,7 @@ export async function startQuotaProvider(
         // Preserve the native block source only on the original quota failure.
         if (
           requestPath === "/core-wham/usage" &&
-          ((source === "codex_rate_limits" && recorded.phase === "initial-exhaustion") ||
+          ((source === "codex_rate_limits" && phase === "initial-exhaustion") ||
             phase === "ordinary-rate-limit")
         ) {
           json(503, { error: { message: "Usage view temporarily unavailable" } });
@@ -472,11 +461,11 @@ export async function startQuotaProvider(
         json(200, { models: [] });
       } else if (requestPath.endsWith("/responses")) {
         const backup = requestPath === BACKUP_RESPONSES_PATH;
-        const failureEvent = backup ? undefined : failure(recorded.phase);
-        if (failureEvent) {
-          json(failureEvent.status, { error: failureEvent.error }, failureEvent.headers);
+        if (!backup && (exhausted() || phase === "revoked")) {
+          const event = failure();
+          json(event.status, { error: event.error }, event.headers);
         } else {
-          const events = successEvents(recorded, backup ? BACKUP_MARKER : undefined);
+          const events = successEvents(recorded, backup ? BACKUP_MARKER : responseText);
           responses.push({
             atMs: Date.now(),
             status: 200,
@@ -509,8 +498,7 @@ export async function startQuotaProvider(
       websocket.on("error", (error) => errors.push(String(error)));
       websocket.on("message", (raw) => {
         const recorded = recordRequest(request, rawDataToString(raw), "websocket");
-        const failureEvent = failure(recorded.phase);
-        const events = failureEvent ? [failureEvent] : successEvents(recorded);
+        const events = exhausted() || phase === "revoked" ? [failure()] : successEvents(recorded);
         for (const event of events) {
           responses.push({
             atMs: Date.now(),
@@ -526,7 +514,15 @@ export async function startQuotaProvider(
       });
     });
   });
-  const baseUrl = await listenLoopback(server, tls ? "https" : "http");
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Provider did not bind loopback");
+  }
+  const baseUrl = `${tls ? "https" : "http"}://127.0.0.1:${address.port}`;
   const dispatcher = new Agent(tls ? { connect: { ca: tls.cert } } : {});
   return {
     baseUrl,
@@ -538,7 +534,6 @@ export async function startQuotaProvider(
     responses,
     heldUsageResponses,
     heldCatalogResponses,
-    exhaustedAccounts,
     errors,
     setPhase(next: Phase) {
       phase = next;
@@ -576,7 +571,10 @@ export async function startQuotaProvider(
       await new Promise<void>((resolve, reject) => {
         sockets.close((error) => (error ? reject(error) : resolve()));
       });
-      await closeHttpServer(server);
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }
@@ -595,10 +593,6 @@ export async function createQuotaResetFixture(
     runtime = "codex",
     enableIsolatedTool = false,
     includeAlternateProfile = false,
-    extraProfiles = includeAlternateProfile
-      ? { "openai:quota-alternate": "quota-alternate-account" }
-      : {},
-    env,
     responseText = MARKER,
     controlUi = false,
   }: {
@@ -610,9 +604,7 @@ export async function createQuotaResetFixture(
     runtime?: "openclaw" | "codex";
     enableIsolatedTool?: boolean;
     includeAlternateProfile?: boolean;
-    extraProfiles?: Record<string, string>;
-    env?: NodeJS.ProcessEnv;
-    responseText?: ResponseText;
+    responseText?: string;
     controlUi?: boolean;
   },
 ) {
@@ -648,8 +640,7 @@ export async function createQuotaResetFixture(
     );
     tls = { key: await fs.readFile(keyPath), cert: await fs.readFile(caPath) };
   }
-  const accounts = { ...extraProfiles, [PROFILE_ID]: ACCOUNT_ID };
-  const provider = await startQuotaProvider(source, responseText, tls, Object.values(accounts));
+  const provider = await startQuotaProvider(source, responseText, tls);
   context.onTestFinished(() => provider.stop());
   const nativeLogFile = path.join(root, "native.private.log");
   const refreshReceipt = path.join(root, "refresh-receipt.jsonl");
@@ -713,7 +704,6 @@ export async function createQuotaResetFixture(
       OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
       OPENCLAW_SKIP_PROVIDERS: undefined,
       OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
-      ...env,
     },
     config: {
       ...(controlUi
@@ -748,6 +738,7 @@ export async function createQuotaResetFixture(
                       "quota-backup": {
                         baseUrl: `${provider.baseUrl}/quota-backup`,
                         api: "openai-responses" as const,
+                        apiKey: BACKUP_API_KEY,
                         request: { allowPrivateNetwork: true },
                         models: [
                           {
@@ -841,28 +832,26 @@ export async function createQuotaResetFixture(
         {
           version: 1,
           profiles: {
-            ...Object.fromEntries(
-              Object.entries(accounts).map(([id, accountId]) => [
-                id,
-                {
-                  type: "oauth",
-                  provider: "openai",
-                  access: syntheticAccessToken(expires, accountId),
-                  refresh: `synthetic-refresh-${accountId}`,
-                  expires,
-                  accountId,
-                },
-              ]),
-            ),
-            ...(includeBackup
+            ...(includeAlternateProfile
               ? {
-                  "quota-backup:backup": {
-                    type: "api_key" as const,
-                    provider: "quota-backup",
-                    key: BACKUP_API_KEY,
+                  [alternateProfileId]: {
+                    type: "oauth",
+                    provider: "openai",
+                    access: alternateAccess,
+                    refresh: "synthetic-alternate-refresh",
+                    expires,
+                    accountId: "quota-alternate-account",
                   },
                 }
               : {}),
+            [PROFILE_ID]: {
+              type: "oauth",
+              provider: "openai",
+              access,
+              refresh: "synthetic-refresh",
+              expires,
+              accountId: ACCOUNT_ID,
+            },
           },
           order: { openai: [PROFILE_ID] },
         },

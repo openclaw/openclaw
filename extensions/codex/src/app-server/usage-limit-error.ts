@@ -76,6 +76,7 @@ type CodexUsageLimitErrorSource = {
   message?: string | null;
   codexErrorInfo?: JsonValue | null;
   rateLimits?: JsonValue;
+  rateLimitsTrustedForProfile?: boolean;
 };
 
 type CodexUsageLimitErrorResult = {
@@ -87,28 +88,21 @@ type CodexUsageLimitErrorResult = {
 // HTTP 429 alone is not subscription exhaustion and must not inherit its reset cooldown.
 export class CodexUsageLimitPromptError extends Error {
   readonly status = 429;
-  readonly code?: "usage_limit_reached";
 
   constructor(
     message: string,
     readonly nativeMessage?: string | null,
-    rateLimitsForProfile?: JsonValue,
   ) {
     super(message);
-    // Only a blocking window with a future reset proves retrying this login is futile.
-    if (resolveCodexUsageLimitResetAtMs(rateLimitsForProfile) !== undefined) {
-      this.code = "usage_limit_reached";
-    }
   }
 }
 
 export function resolveCodexPromptError(
-  source: CodexUsageLimitErrorSource,
+  source: Pick<CodexUsageLimitErrorSource, "message" | "codexErrorInfo" | "rateLimits">,
   runtime: { model: string } & CodexRuntimeUpdateFacts,
 ): string | Error | undefined {
   const usageLimitMessage = formatCodexUsageLimitErrorMessage(source);
   if (usageLimitMessage) {
-    // The projector can use cached reset text; only attempt resolution can attribute it.
     return new CodexUsageLimitPromptError(usageLimitMessage, source.message);
   }
   // Native retry exhaustion is not a permanent model/configuration failure.
@@ -268,7 +262,12 @@ export async function resolveCodexTurnStartError(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<CodexUsageLimitErrorResult | undefined> {
-  const source = readCodexTurnStartUsageLimitErrorSource(params.error, params.errorNotification);
+  const source = readCodexTurnStartUsageLimitErrorSource(
+    params.client,
+    params.error,
+    params.errorNotification,
+    params.rateLimitsRevisionBeforeTurnStart,
+  );
   const usageLimit = await refreshCodexUsageLimitError({ ...params, source });
   if (usageLimit) {
     return usageLimit;
@@ -285,11 +284,13 @@ export async function resolveCodexTurnStartError(params: {
 export async function refreshCodexUsageLimitPromptError(params: {
   client: CodexAppServerClient;
   promptError: unknown;
-  rateLimitsRevisionBeforeTurnStart?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<CodexUsageLimitErrorResult | undefined> {
-  if (!(params.promptError instanceof CodexUsageLimitPromptError)) {
+  if (
+    !(params.promptError instanceof CodexUsageLimitPromptError) ||
+    !shouldRefreshCodexRateLimitsForUsageLimitMessage(params.promptError.message)
+  ) {
     return undefined;
   }
   return refreshCodexUsageLimitError({
@@ -298,6 +299,7 @@ export async function refreshCodexUsageLimitPromptError(params: {
       // Refresh from the native cause, never from our already formatted guidance.
       message: params.promptError.nativeMessage,
       codexErrorInfo: "usageLimitExceeded",
+      rateLimits: readRecentCodexRateLimits(params.client),
     },
   });
 }
@@ -305,23 +307,10 @@ export async function refreshCodexUsageLimitPromptError(params: {
 async function refreshCodexUsageLimitError(params: {
   client: CodexAppServerClient;
   source: CodexUsageLimitErrorSource;
-  rateLimitsRevisionBeforeTurnStart?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<CodexUsageLimitErrorResult | undefined> {
-  const snapshot = params.source.rateLimits ?? readRecentCodexRateLimits(params.client);
-  const initialMessage = formatCodexUsageLimitErrorMessage({
-    ...params.source,
-    rateLimits: snapshot,
-  });
-  if (!initialMessage) {
-    return undefined;
-  }
-  // The client cache can describe a prior login. Only a primary update during
-  // this attempt, a snapshot on its RPC error, or a fresh read can govern retries.
-  const updatedDuringTurn =
-    params.rateLimitsRevisionBeforeTurnStart !== undefined &&
-    readCodexRateLimitsRevision(params.client) > params.rateLimitsRevisionBeforeTurnStart;
+  const initialMessage = formatCodexUsageLimitErrorMessage(params.source);
   const rateLimits = shouldRefreshCodexRateLimitsForUsageLimitMessage(initialMessage)
     ? await readCodexRateLimitsFromAppServerForUsageLimitError(params)
     : undefined;
@@ -332,17 +321,15 @@ async function refreshCodexUsageLimitError(params: {
         rateLimitsAuthoritative: true,
       }) ?? initialMessage)
     : initialMessage;
-  const rateLimitsForProfile =
-    rateLimits ?? params.source.rateLimits ?? (updatedDuringTurn ? snapshot : undefined);
-  return {
-    message,
-    promptError: new CodexUsageLimitPromptError(
-      message,
-      params.source.message,
-      rateLimitsForProfile,
-    ),
-    rateLimitsForProfile,
-  };
+  return message
+    ? {
+        message,
+        promptError: new CodexUsageLimitPromptError(message, params.source.message),
+        ...(rateLimits || params.source.rateLimitsTrustedForProfile
+          ? { rateLimitsForProfile: rateLimits || params.source.rateLimits }
+          : {}),
+      }
+    : undefined;
 }
 
 async function readCodexRateLimitsFromAppServerForUsageLimitError(params: {
@@ -376,11 +363,14 @@ function resolveCodexUsageLimitRateLimitRefreshTimeoutMs(timeoutMs: number | und
 }
 
 function readCodexTurnStartUsageLimitErrorSource(
+  client: CodexAppServerClient,
   error: unknown,
   errorNotification: CodexServerNotification | undefined,
+  rateLimitsRevisionBeforeTurnStart: number | undefined,
 ): CodexUsageLimitErrorSource {
   const notificationError = readCodexErrorNotification(errorNotification);
   const errorPayload = readCodexErrorPayload(error);
+  const rateLimits = errorPayload.rateLimits ?? readRecentCodexRateLimits(client);
   // Explicit RPC failures own their facts; unbound notices only enrich a matching local error.
   const source =
     !(error instanceof CodexAppServerRpcError) &&
@@ -389,10 +379,18 @@ function readCodexTurnStartUsageLimitErrorSource(
     notificationError.message === errorPayload.message
       ? notificationError
       : errorPayload;
+  // The cached snapshot may predate this attempt or belong to another turn on
+  // the same process. Trust it for the auth profile only when this client saw
+  // a primary update after this turn's startup began.
+  const cacheUpdatedDuringTurnStart =
+    rateLimitsRevisionBeforeTurnStart !== undefined &&
+    readCodexRateLimitsRevision(client) > rateLimitsRevisionBeforeTurnStart;
   return {
     message: source.message,
     codexErrorInfo: source.codexErrorInfo,
-    rateLimits: errorPayload.rateLimits,
+    rateLimits,
+    rateLimitsTrustedForProfile:
+      errorPayload.rateLimits !== undefined || cacheUpdatedDuringTurnStart,
   };
 }
 

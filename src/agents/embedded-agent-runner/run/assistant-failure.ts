@@ -439,7 +439,6 @@ export async function handleEmbeddedAssistantFailure(input: {
     }
 
     const rotated = await input.failover.advanceAuthProfile(assistantFailoverReason, {
-      code: assistantSignal?.code,
       failoverProvider: activeErrorContext.provider,
       failoverModel: activeErrorContext.model,
       logFallbackDecision: logFailoverDecision,

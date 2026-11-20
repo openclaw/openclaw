@@ -75,11 +75,10 @@ async function waitForRequest(
 function expectRateRead(harness: Harness, called: boolean) {
   expect(harness.requests.some(({ method }) => method === "account/rateLimits/read")).toBe(called);
 }
-function expectResetError(result: Result, confirmed = true) {
+function expectResetError(result: Result) {
   const error = expectUsageLimitPromptError(result);
   expect(error.message).toContain("Codex reported a usage or quota limit.");
   expect(error.message).toContain("Next reset in");
-  expect(Reflect.get(error, "code")).toBe(confirmed ? "usage_limit_reached" : undefined);
   return error;
 }
 
@@ -265,18 +264,17 @@ export function registerCodexUsageLimitTests() {
       },
     );
 
-    it.each(["primary startup", "unrelated startup", "unrelated terminal"])(
-      "preserves reset details and attributes only current limits (%s update)",
+    it.each(["primary", "unrelated"] as const)(
+      "preserves reset details with a %s startup update",
       async (source) => {
         const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-        const primary = source === "primary startup";
-        const terminal = source === "unrelated terminal";
+        const primary = source === "primary";
         const unrelated = {
           method: "account/rateLimits/updated",
           params: { rateLimits: exhaustedLimit(resetsAt + 60, "codex_other", 60) },
         };
         const harness: Harness = createStartedThreadHarness(async (method) => {
-          if (method === "turn/start" && !terminal) {
+          if (method === "turn/start") {
             const revision = readCodexRateLimitsRevision(harness.client);
             await harness.notify(primary ? rateLimitsUpdated(resetsAt) : unrelated);
             if (primary) {
@@ -290,18 +288,12 @@ export function registerCodexUsageLimitTests() {
           rememberCodexRateLimitsRead(harness.client, { rateLimits: exhaustedLimit(resetsAt) });
         }
         const params = createUsageParams(primary ? "agent" : undefined);
-        const run = runCodexAppServerAttempt(params);
-        if (terminal) {
-          await waitForRequest(harness, run, "turn/start");
-          await harness.notify(unrelated);
-          await harness.notify(
-            turnCompleted({ id: "turn-1", status: "failed", error: usageError }),
-          );
-        }
-        const result = await run;
-        expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
-        expectResetError(result, primary);
-        if (!primary) {
+        const result = await runCodexAppServerAttempt(params);
+        if (primary) {
+          expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
+          expectResetError(result);
+        } else {
+          expect(expectUsageLimitPromptError(result).message).toContain("Next reset in");
           expect(params.authProfileStore.usageStats?.["openai:work"]?.blockedUntil).toBeUndefined();
         }
       },
@@ -336,7 +328,6 @@ export function registerCodexUsageLimitTests() {
         const result = await run;
         expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
         const promptError = expectUsageLimitPromptError(result);
-        expect(Reflect.get(promptError, "code")).toBeUndefined();
         if (ordinaryUsageAllowed === null) {
           expect(promptError.message).toContain("could not determine a reset time");
           expect(promptError.message).not.toContain("Next reset");
@@ -401,9 +392,9 @@ export function registerCodexUsageLimitTests() {
 
         const result = await run;
 
-        const promptError = expectUsageLimitPromptError(result);
-        expect(promptError.message).toContain(blocked ? "Next reset in" : error.message);
-        expect(Reflect.get(promptError, "code")).toBe(blocked ? "usage_limit_reached" : undefined);
+        expect(expectUsageLimitPromptError(result).message).toContain(
+          blocked ? "Next reset in" : error.message,
+        );
         expect(params.authProfileStore.usageStats?.["openai:work"]?.blockedUntil).toBe(
           blocked ? resetsAt * 1000 : undefined,
         );
