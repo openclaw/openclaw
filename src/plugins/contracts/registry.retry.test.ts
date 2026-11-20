@@ -119,7 +119,8 @@ describe("plugin contract registry public artifacts", () => {
     const resolveBundledExplicitWebFetchProvidersFromPublicArtifacts = vi.fn<
       () => PluginWebFetchProviderEntry[] | null
     >(() => [provider]);
-    vi.doMock("../web-provider-public-artifacts.explicit.js", () => ({
+    vi.doMock("../web-provider-public-artifacts.explicit.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../web-provider-public-artifacts.explicit.js")>()),
       resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
     }));
 
