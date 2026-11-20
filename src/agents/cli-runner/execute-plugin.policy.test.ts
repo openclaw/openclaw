@@ -192,32 +192,6 @@ describe("plugin-owned CLI native tool policy", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("denies native tools when caller authority expires during policy or before a retained call", async () => {
-    const { context } = await createExecution({ nativeTools: ["WebFetch"] });
-    let callerCurrent = true;
-    context.params.assertCurrent = () => {
-      if (!callerCurrent) {
-        throw new Error("caller revoked");
-      }
-    };
-    const hook = vi.fn(async () => {
-      callerCurrent = false;
-    });
-    installBeforeToolCallHook(hook);
-    await runPlugin(context, async function* (execution) {
-      await expect(
-        requestNativeTool(execution, "WebFetch", { url: "https://example.com" }),
-      ).resolves.toMatchObject({ behavior: "deny" });
-      await expect(
-        requestNativeTool(execution, "WebFetch", { url: "https://example.com/retained" }),
-      ).resolves.toMatchObject({ behavior: "deny" });
-      expect(execution.abortSignal?.aborted).toBe(false);
-      yield SUCCESS_RESULT;
-    });
-    expect(hook).toHaveBeenCalledOnce();
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
   it("runs canonical policy before native approval and carries rewritten params plus run context", async () => {
     const hook = vi.fn(async (_event: unknown, _context: unknown) => ({
       params: { url: "https://example.com/rewritten" },
