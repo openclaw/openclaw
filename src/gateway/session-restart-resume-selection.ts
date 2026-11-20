@@ -18,6 +18,7 @@ import {
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getSessionControllerEntryForOperation } from "../sessions/session-controller.identity.js";
 import { findSessionControllerOperationByRunId } from "../sessions/session-controller.queries.js";
+import { getRpcSourceForSignal } from "../sessions/session-controller.rpc-sources.js";
 import {
   activeSessionOperations,
   getOperationBackendRunIds,
@@ -35,6 +36,7 @@ export type SessionIdentity = {
   needsResume: boolean;
   scheduledAutomation?: boolean;
   parked?: boolean;
+  directChat?: boolean;
   operatorSource?: NonNullable<InternalSessionEntry["resumeAfterRestart"]>["operatorSource"];
 };
 
@@ -44,12 +46,13 @@ export async function selectLiveRestartResumeSessions(
   summary: ReturnType<typeof createRestartResumeSummary>,
 ): Promise<Map<string, SessionIdentity>> {
   const sessions = new Map<string, SessionIdentity>();
+  const chatRoots = new Set<string>();
   const inputs: Array<Partial<SessionIdentity> & { sessionKey: string }> = [];
   const add = (input: (typeof inputs)[number]) => inputs.push(input);
   const select = async (input: (typeof inputs)[number]) => {
     const root = input.parked
       ? input
-      : await resolveRootSubagentRequester(input.sessionKey, input.agentId).catch(
+      : await resolveRootSubagentRequester(input.sessionKey, input.agentId, chatRoots).catch(
           (error: unknown) => {
             subagentRegistryLog.warn("failed to resolve live subagent restart ancestry", {
               sessionKey: input.sessionKey,
@@ -87,6 +90,7 @@ export async function selectLiveRestartResumeSessions(
         needsResume: input.needsResume !== false,
         scheduledAutomation: root.sessionKey === input.sessionKey && input.scheduledAutomation,
         parked: input.parked,
+        directChat: chatRoots.has(root.sessionKey),
         operatorSource: root.sessionKey === input.sessionKey ? input.operatorSource : undefined,
       });
     } else {
@@ -113,10 +117,26 @@ export async function selectLiveRestartResumeSessions(
       continue;
     }
     const { target, mailbox } = getSessionControllerEntryForOperation(operation);
+    const claim = mailbox?.claim?.operation === operation ? mailbox.claim : undefined;
+    const input = claim?.inputs[0];
+    const source = claim?.sources[0]?.run;
+    const provenance = source?.inputProvenance;
+    // A new chat input owns its turn, even if the dashboard was originally a child.
+    // A steer into a delegated operation is not its originating input.
+    if (
+      parseAgentSessionKey(operation.key)?.rest.startsWith("dashboard:") &&
+      ((input?.protocolRunId &&
+        getRpcSourceForSignal(input.protocolRunId, input.abortSignal)?.adapter.kind ===
+          "chat-send" &&
+        (!provenance || provenance.kind === "external_user")) ||
+        (source?.internalEventExecution &&
+          provenance?.kind === "internal_system" &&
+          provenance.sourceTool === "restart"))
+    ) {
+      chatRoots.add(operation.key);
+    }
     // Cron owns interrupted occurrences, including those targeting an ordinary conversation.
-    let scheduledAutomation =
-      mailbox?.claim?.operation === operation &&
-      mailbox.claim.sources.some((source) => source.run.scheduledAutomation);
+    let scheduledAutomation = claim?.sources.some((item) => item.run.scheduledAutomation);
     if (scheduledAutomation) {
       for (const runId of getOperationBackendRunIds(operation) ?? []) {
         if (getAgentRunContext(runId)?.acceptedUserReply) {
@@ -152,7 +172,7 @@ export async function selectLiveRestartResumeSessions(
       add({ sessionKey: run.sessionKey, agentId: run.agentId, sessionId: run.sessionId });
     }
   }
-  const roots = listLiveSubagentRootSessions();
+  const roots = listLiveSubagentRootSessions(chatRoots);
   const waiting = [...listYieldWaitingSessions()];
   for (const root of await roots) {
     add(root);

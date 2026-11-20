@@ -76,12 +76,13 @@ export type SubagentRootRequester = {
 export async function resolveRootSubagentRequester(
   sessionKey: string,
   agentId?: string,
+  chatRoots?: ReadonlySet<string>,
 ): Promise<SubagentRootRequester> {
   let root: SubagentRootRequester = { sessionKey, agentId };
   const visited = new Set<string>();
   for (;;) {
     const identity = JSON.stringify([root.agentId, root.sessionKey]);
-    if (visited.has(identity)) {
+    if (visited.has(identity) || chatRoots?.has(root.sessionKey)) {
       return root;
     }
     visited.add(identity);
@@ -135,7 +136,9 @@ export async function resolveRootSubagentRequester(
   }
 }
 
-export async function listLiveSubagentRootSessions(): Promise<SubagentRootRequester[]> {
+export async function listLiveSubagentRootSessions(
+  chatRoots?: ReadonlySet<string>,
+): Promise<SubagentRootRequester[]> {
   const requests: Promise<SubagentRootRequester | undefined>[] = [];
   for (const runId of listLiveAgentRunIds()) {
     const entry = subagentRuns.get(runId);
@@ -143,7 +146,7 @@ export async function listLiveSubagentRootSessions(): Promise<SubagentRootReques
       continue;
     }
     requests.push(
-      resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId).catch(
+      resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId, chatRoots).catch(
         (error: unknown) => {
           subagentRegistryLog.warn("failed to resolve live subagent restart ancestry", {
             sessionKey: entry.childSessionKey,
