@@ -14,7 +14,11 @@ export type TestModelSetupPage = ReturnType<typeof createPage>;
 export const customIconUrl = "https://cdn.example.com/acme.png";
 
 const subscribe = () => () => undefined;
-const selection = () => ({ state: { selectedId: "main", scopeId: "main" }, subscribe });
+const selection = () => ({
+  state: { selectedId: "main", scopeId: "main" },
+  subscribe,
+  set: vi.fn(),
+});
 
 export const detection: SystemAgentSetupDetectResult = {
   candidates: [],
@@ -42,6 +46,15 @@ export function createContext() {
       type: "hello-ok" as const,
       protocol: 1,
       auth: { role: "operator", scopes: ["operator.read", "operator.admin"] },
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "main",
+          mainKey: "main",
+          mainSessionKey: "agent:main:main",
+          modelConfigured: false,
+          scope: "per-sender",
+        },
+      },
       features: {
         methods: [
           "config.set",
@@ -67,12 +80,15 @@ export function createContext() {
     },
     subscribe,
     subscribeEvents: subscribe,
+    setSessionKey: vi.fn(),
   } as unknown as ApplicationGateway;
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const context = {
     gateway,
     agentSelection: selection(),
     settingsAgentSelection: selection(),
+    agents: { state: { agentsList: null } },
+    sessions: { state: { result: null } },
     basePath: "/openclaw",
     resourceBasePath: "/openclaw",
     navigate: vi.fn(),

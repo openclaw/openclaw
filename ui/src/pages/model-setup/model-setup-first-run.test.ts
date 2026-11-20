@@ -10,7 +10,8 @@ import {
 } from "./first-run-activation-receipt.ts";
 import {
   missingWizardError,
-  waitForOnboarding,
+  agentChat,
+  waitForAgentChat,
   waitForElement,
   waitForText,
   pageButton,
@@ -189,7 +190,7 @@ describe("ModelSetupPage first-run inference", () => {
           },
         ],
       ]);
-      expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" });
+      expect(context.navigate).toHaveBeenCalledWith("chat", agentChat);
     });
   });
 
@@ -296,7 +297,7 @@ describe("ModelSetupPage first-run inference", () => {
             "openclaw.setup.detect",
             "openclaw.setup.verify",
           ]);
-          expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" });
+          expect(context.navigate).toHaveBeenCalledWith("chat", agentChat);
         });
         expect(context.navigate).not.toHaveBeenCalledWith("chat");
         activation.resolve(activated(expected, { gatewayRestartRequired: true }));
@@ -389,7 +390,7 @@ describe("ModelSetupPage first-run inference", () => {
         ],
       ]);
     });
-    await waitForOnboarding(context);
+    await waitForAgentChat(context);
     expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
   });
 });
@@ -559,9 +560,7 @@ describe("ModelSetupPage first-run application recovery", () => {
         "openclaw.setup.detect",
         "openclaw.setup.activate.start",
       ]);
-      expect(relaunched.context.navigate).toHaveBeenCalledWith("custodian", {
-        search: "?onboarding=1",
-      });
+      expect(relaunched.context.navigate).toHaveBeenCalledWith("chat", agentChat);
     });
     expect(original.request).toHaveBeenCalledOnce();
   });
@@ -620,7 +619,7 @@ describe("ModelSetupPage first-run application recovery", () => {
 
     await waitForFast(() => {
       expect(activationCount).toBe(2);
-      expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" });
+      expect(context.navigate).toHaveBeenCalledWith("chat", agentChat);
     });
     resolveFirstActivation?.(activated("openai/new", { gatewayRestartRequired: true }));
   });
