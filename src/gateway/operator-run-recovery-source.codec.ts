@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import { GatewayOperatorRoleDefinitionSchema } from "../config/zod-schema.gateway-roles.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { userChannelAuthorizationReferenceSchema } from "../state/user-channel-authorization-reference.js";
@@ -10,13 +11,16 @@ const refs = z.strictObject({
   exact: z.array(boundedString).max(4096),
   wildcards: z.array(boundedString).max(256),
 });
+type RecoveryRolePolicy = Omit<GatewayOperatorRoleDefinition, "modelPolicy">;
+const recoveryRolePolicySchema: z.ZodType<RecoveryRolePolicy, RecoveryRolePolicy> =
+  GatewayOperatorRoleDefinitionSchema.omit({ modelPolicy: true });
 const handshakeRecoverySnapshotSchema = z.strictObject({
   profileId: boundedString,
   openclawIdPrincipal: openClawIdRecoveryPrincipalSchema.optional(),
   scopes: z.array(boundedString).max(64),
   assignedRole: boundedString.nullable(),
   githubLogin: boundedString.nullable(),
-  rolePolicy: GatewayOperatorRoleDefinitionSchema.omit({ modelPolicy: true }).optional(),
+  rolePolicy: recoveryRolePolicySchema.optional(),
   modelPolicy: z
     .strictObject({
       models: z.array(z.strictObject({ provider: boundedString, model: boundedString })).max(4096),
