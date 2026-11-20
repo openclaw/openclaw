@@ -22,6 +22,11 @@ const WEBSOCKET_CONNECTING = 0;
 const WEBSOCKET_OPEN = 1;
 const WEBSOCKET_CLOSING = 2;
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
+// The broker caps every attach frame, both the metadata preamble and the stream
+// body, at this size. Outbound reads must be split to match: Bun-based node
+// hosts read larger loopback blocks than Node's 64 KiB, and one oversized send
+// closes the stream with 1009.
+const MAX_ATTACH_FRAME_BYTES = 64 * 1024;
 const PAUSE_BUFFERED_BYTES = 4 * 1024 * 1024;
 const RESUME_CHECK_MS = 25;
 // An empty target close has nothing left to deliver. Bound that handshake so
@@ -191,7 +196,14 @@ export async function runNodeStreamTransport(params: {
           return;
         }
         forwardedBytes += chunk.length;
-        streamWs.send(chunk, { binary: true }, (error) => error && finish("send-error", error));
+        // Ordered split: the receiver rejects any frame above its attach limit.
+        for (let offset = 0; offset < chunk.length; offset += MAX_ATTACH_FRAME_BYTES) {
+          const frame =
+            chunk.length <= MAX_ATTACH_FRAME_BYTES
+              ? chunk
+              : chunk.subarray(offset, offset + MAX_ATTACH_FRAME_BYTES);
+          streamWs.send(frame, { binary: true }, (error) => error && finish("send-error", error));
+        }
         if (streamWs.bufferedAmount <= PAUSE_BUFFERED_BYTES || resumeTimer) {
           return;
         }

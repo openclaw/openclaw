@@ -11,9 +11,15 @@ import { WebSocketServer } from "ws";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { waitForClose } from "../gateway/desktop/desktop.test-support.js";
+import { createNodeDesktopStreamBroker } from "../gateway/desktop/node-stream-broker.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
+import {
+  NODE_DESKTOP_ATTACH_PATH,
+  NODE_PORTAL_ATTACH_PATH,
+} from "../shared/node-desktop-stream.js";
 import { runNodeStreamTransport } from "./node-stream-transport.js";
 
 type StreamOptions = Parameters<typeof runNodeStreamTransport>[0];
@@ -571,4 +577,79 @@ describe("node stream close acknowledgement", () => {
       await harness.cleanup();
     }
   });
+  // #202267: a single loopback read larger than the broker's 64 KiB attach
+  // frame limit must reach the consumer intact. Bun-based node hosts deliver
+  // such reads during large framebuffer updates; forwarding them unsplit makes
+  // the production broker reject the message (1009) and drops the stream.
+  it.each([
+    { kind: "desktop", attachPath: NODE_DESKTOP_ATTACH_PATH, metadata: { auth: "vnc-password" } },
+    { kind: "portal", attachPath: NODE_PORTAL_ATTACH_PATH, metadata: { ok: true } },
+  ] as const)(
+    "delivers one oversized loopback read through a $kind broker attach",
+    async ({ kind, attachPath, metadata }) => {
+      const broker = createNodeDesktopStreamBroker();
+      const session = { connId: "conn-1", pairingGeneration: "generation-1" };
+      const registry = {
+        getForPairingGeneration: () => ({ connId: session.connId }),
+        isConnectionCurrentPairingState: async () => true,
+      };
+      const server = createHttpServer();
+      const upgraded: Promise<void>[] = [];
+      server.on("upgrade", (req, socket, head) => {
+        upgraded.push(waitForClose(socket));
+        void broker.handleUpgrade(req, socket, head, registry as never);
+      });
+      const attachPort = await listenServer(server);
+      const minted =
+        kind === "desktop"
+          ? broker.mint({ nodeId: "node-1", ...session })
+          : broker.mintPortal({ nodeId: "node-1", ...session });
+      const received: Buffer[] = [];
+      const gotAll = createDeferred<void>();
+      // 200 KiB in one write: Bun's loopback reads exceed the 64 KiB frame cap.
+      const payload = Buffer.alloc(200 * 1024, 0x5a);
+      // Node loopback reads stop at 64 KiB, so emit the oversized chunk directly:
+      // Bun-based node hosts read larger blocks during framebuffer updates.
+      const oversizedTarget = new Duplex({
+        read() {},
+        write(chunk, _encoding, callback) {
+          this.push(chunk);
+          callback();
+        },
+      });
+      oversizedTarget.push(payload);
+      const controller = new AbortController();
+      const attached = minted.attached.then((claim) => {
+        claim.stream.on("data", (chunk: Buffer) => {
+          received.push(chunk);
+          if (Buffer.concat(received).length >= payload.length) {
+            gotAll.resolve();
+          }
+        });
+        return claim;
+      });
+      const running = runStream({
+        gatewayUrl: `ws://127.0.0.1:${attachPort}`,
+        attachPath: minted.attachPath,
+        expectedAttachPath: attachPath,
+        metadata,
+        streamName: kind,
+        target: { stream: oversizedTarget },
+        signal: controller.signal,
+      });
+      const settled = running.catch(() => undefined);
+      try {
+        const claim = await attached;
+        await gotAll.promise;
+        expect(Buffer.concat(received)).toEqual(payload);
+        claim.stream.destroy();
+      } finally {
+        controller.abort();
+        oversizedTarget.destroy();
+        await settled;
+        await close(server);
+        await Promise.all(upgraded);
+      }
+    },
+  );
 });
