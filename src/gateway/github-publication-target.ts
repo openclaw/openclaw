@@ -8,7 +8,6 @@ import {
   prepareGitHubPublicationRepositoryIdentity,
   type readGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
-import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
 import {
   GitHubPublicationRequesterUnavailableError,
   GitHubPublicationBranchChangedError,
@@ -27,6 +26,7 @@ import {
   type PublishedGitHubPullRequest,
 } from "./github-publication-pull-requests.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
+import { resolveRecordedPublicationBaseBranch } from "./github-publication-recorded-base.js";
 import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
 import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
@@ -214,7 +214,12 @@ export async function prepareGitHubPublicationTarget(params: {
   const repository = `${target.pullRequest.owner}/${target.pullRequest.repo}`;
   const baseBranch = target.fork
     ? target.pullRequest.defaultBranch
-    : parseGitHubPublicationBaseBranch(worktree.baseRef, target.pullRequest.defaultBranch);
+    : await resolveRecordedPublicationBaseBranch(
+        worktree.path,
+        worktree.baseRef,
+        target.pullRequest.defaultBranch,
+      );
+  assertCurrent();
   if (!target.fork && branch === baseBranch) {
     throw new GitHubPublicationWorkspaceChangedError(
       "GitHub publication branch changed to its pull request base.",

@@ -17,13 +17,13 @@ import {
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { integrateManagedWorkspaceSource } from "./github-publication-base-refresh.js";
-import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
 import {
   createGitHubPublicationCommandRunner,
   readGitHubPublicationBaseSha,
 } from "./github-publication-git-transport.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
+import { resolveRecordedPublicationBaseBranch } from "./github-publication-recorded-base.js";
 import {
   captureGitHubPublicationActionAuthority,
   prepareGitHubPublicationRequesterV2,
@@ -306,7 +306,12 @@ export async function performSessionGitHubPreparation(
           "This workspace belongs to another repository. Its existing files and history were preserved.",
         );
       }
-      const branch = parseGitHubPublicationBaseBranch(owner.worktree.baseRef, "");
+      const branch = await resolveRecordedPublicationBaseBranch(
+        owner.worktree.path,
+        owner.worktree.baseRef,
+        "",
+      );
+      assertCurrent();
       if (branch) {
         projectBase = { repository: name, branch };
       }
