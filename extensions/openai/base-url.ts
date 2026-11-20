@@ -1,11 +1,23 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveOpenAICodexClientVersion } from "./codex-client-version.js";
 
 export const OPENAI_CODEX_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/codex";
 
-/** ChatGPT model-list URL. The backend gates models on the reported Codex client version. */
+/**
+ * ChatGPT model-list URL. The backend hides models whose `minimal_client_version` is above
+ * `client_version`, so list as the OpenClaw version that Responses turns already send.
+ * Live 2026-11-18: 2026.11.5, 0.169.0 and 99.0.0 listed the same models; 0.164.0 hid GPT-6.2
+ * and 0.0.0 returned a frozen legacy list. Accepted: a Codex-harness binary older than a
+ * listed model fails that turn with its update instructions.
+ */
 export async function resolveOpenAICodexModelsEndpoint(): Promise<string> {
-  const clientVersion = await resolveOpenAICodexClientVersion();
+  const { resolveProviderRequestPolicy } = await import("openclaw/plugin-sdk/provider-http");
+  const version = resolveProviderRequestPolicy({
+    provider: "openai",
+    baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+  }).attributionHeaders?.version;
+  // Send only the numeric release; placeholders such as "unknown" or "0.0.0-dev" would hide models.
+  const release = /^(\d{4})\.\d+\.\d+/u.exec(version ?? "");
+  const clientVersion = release && Number(release[1]) >= 2026 ? release[0] : "99.0.0";
   return `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${encodeURIComponent(clientVersion)}`;
 }
 
