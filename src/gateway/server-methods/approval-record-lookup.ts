@@ -8,6 +8,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import { canResolveParticipationExecApproval } from "../exec-approval-participation.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
 import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
@@ -264,7 +265,14 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   cfg?: OpenClawConfig;
   prepared?: Parameters<typeof canAccessApprovalSession>[0]["prepared"];
   sessionAccess?: Awaited<ReturnType<typeof prepareApprovalSessionAccess>>;
+  resolving?: boolean;
 }): boolean {
+  if (params.resolving) {
+    const participation = canResolveParticipationExecApproval(params.record, params.client);
+    if (participation !== undefined) {
+      return participation;
+    }
+  }
   const scopes = params.client?.connect.scopes ?? [];
   if (scopes.includes(ADMIN_SCOPE)) {
     return true;
@@ -362,6 +370,7 @@ async function resolveApprovalRecordForState<TPayload>(
     getCfg?: () => OpenClawConfig;
     exposeAmbiguousPrefixError?: boolean;
     recordFilter?: (record: ExecApprovalRecord<TPayload>) => boolean | Promise<boolean>;
+    resolving?: boolean;
   },
   expectedState: "pending" | "resolved",
 ): Promise<ApprovalRecordLookupResult<TPayload>> {
@@ -390,6 +399,7 @@ async function resolveApprovalRecordForState<TPayload>(
         client: params.client ?? null,
         ...(cfg ? { cfg } : {}),
         sessionAccess,
+        resolving: params.resolving,
       }) &&
       ((await params.recordFilter?.(record)) ?? true)
     );

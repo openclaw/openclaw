@@ -11,12 +11,16 @@ export function retainGatewayOperatorInvocation(
   captured: { authority: AdmittedRunOperatorAuthority; release: () => void },
   invocation: Parameters<typeof captureGatewayOperatorRunAuthority>[0]["invocationAuthority"],
 ) {
-  if (!invocation) return captured;
+  if (!invocation) {
+    return captured;
+  }
   let references = 1;
   const releaseHold = () => {
     let released = false;
     return () => {
-      if (released) return;
+      if (released) {
+        return;
+      }
       released = true;
       if (--references === 0) {
         try {
@@ -30,7 +34,9 @@ export function retainGatewayOperatorInvocation(
   const assertCurrent = composeSessionSourceAssertion(
     [captured.authority.assertCurrent, invocation.assertCurrent],
     (assertSources) => {
-      if (!references) throw new Error("Operator invocation was released");
+      if (!references) {
+        throw new Error("Operator invocation was released");
+      }
       invocation.signal?.throwIfAborted();
       assertSources();
     },

@@ -17,7 +17,9 @@ export function revokeSessionParticipationQueueInTransaction(
   database: OpenClawAgentDatabase,
   target: { sessionKey: string; sessionId: string; profileId: string },
 ): void {
-  if (!hasSessionPendingInputsSchema(database.db)) return;
+  if (!hasSessionPendingInputsSchema(database.db)) {
+    return;
+  }
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
@@ -31,14 +33,15 @@ export function revokeSessionParticipationQueueInTransaction(
   ).rows;
   const actor = readSessionActorTransactionState(database, target);
   for (const row of rows) {
-    const ceiling = parseSessionPendingInputMessage(row.message_json).__openclaw
-      ?.participationCeiling;
+    const { __openclaw: provenance } = parseSessionPendingInputMessage(row.message_json);
+    const ceiling = provenance?.participationCeiling;
     if (
       ceiling?.kind !== "send" ||
       ceiling.profileId !== target.profileId ||
       ceiling.sessionKey !== target.sessionKey
-    )
+    ) {
       continue;
+    }
     const changes = { state: "cancelled", end_cause: "revoked", origin_source_json: null };
     withSqliteDatabaseWriteScope(
       database.db,

@@ -61,9 +61,12 @@ export function createSessionParticipationAuthorization(
       if (
         !params.participationRequired &&
         !(access?.access === "send" && access.invitedAccessCeiling && boundedMethod)
-      )
+      ) {
         return undefined;
-      if (error) return { error };
+      }
+      if (error) {
+        return { error };
+      }
       const profileId =
         resolveAuthenticatedPersonalGatewayProfileId(params.client) ??
         (params.method === "chat.send"
@@ -78,10 +81,11 @@ export function createSessionParticipationAuthorization(
       ) {
         return { error: hiddenSessionNotFound(targetRef.sessionKey) };
       }
-      if (!boundedMethod)
+      if (!boundedMethod) {
         return {
           error: errorShape(ErrorCodes.FORBIDDEN, "Participation does not authorize this method."),
         };
+      }
       ceiling = { kind: "send", profileId, sessionKey: target.canonicalKey };
       return { error: null };
     },

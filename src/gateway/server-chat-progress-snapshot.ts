@@ -378,7 +378,9 @@ export function updateChatRunProgressSnapshot(
         (candidate.data.phase === "waiting-approval" ||
           candidate.data.phase === "approval-resolved"),
     );
-    if (phase === "approval-resolved") return next;
+    if (phase === "approval-resolved") {
+      return next;
+    }
   }
   if (isUsage) {
     // Context-only updates must retain the run total already reported by completed responses.

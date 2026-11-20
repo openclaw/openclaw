@@ -40,8 +40,9 @@ export function readQueuedParticipationProfile(params: unknown): string | undefi
     typeof params !== "object" ||
     !("idempotencyKey" in params) ||
     typeof params.idempotencyKey !== "string"
-  )
+  ) {
     return undefined;
+  }
   const current = readQueuedChatInputAdmission(params.idempotencyKey);
   const ceiling = current?.participationCeiling;
   return ceiling &&

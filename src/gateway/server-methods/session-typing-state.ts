@@ -30,7 +30,9 @@ type SessionTypingState = {
 };
 
 function clearSessionTypingStateValue(state: SessionTypingState): void {
-  for (const entry of state.broadcasts.values()) entry.pending?.release?.();
+  for (const entry of state.broadcasts.values()) {
+    entry.pending?.release?.();
+  }
   for (const entries of [state.broadcasts, state.connections]) {
     for (const entry of entries.values()) {
       clearTimeout(entry.timer);

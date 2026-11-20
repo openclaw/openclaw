@@ -3,6 +3,7 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -13,8 +14,14 @@ import {
 
 it("retires exact persisted participant inputs atomically before downgrade/remove and re-invite", async () => {
   await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = { agentId: "main", env, sessionKey: "agent:main:participation" };
-    await upsertSessionEntryCore(scope, { sessionId: "current", updatedAt: 1 });
+    await upsertSessionEntryCore(scope, { sessionId: "old", updatedAt: 1 });
+    await upsertSessionEntryCore(scope, { sessionId: "current", updatedAt: 2 });
+    await upsertSessionEntryCore(
+      { ...scope, sessionKey: "agent:main:sibling" },
+      { sessionId: "sibling", updatedAt: 1 },
+    );
     addSessionMember(scope, { identityId: "participant", addedBy: "creator", access: "send" });
     const seed = (suffix: string) =>
       runOpenClawAgentWriteTransaction((database) => {
@@ -23,7 +30,7 @@ it("retires exact persisted participant inputs atomically before downgrade/remov
           ["own", scope.sessionKey, "current", "participant"],
           ["foreign", scope.sessionKey, "current", "other"],
           ["incarnation", scope.sessionKey, "old", "participant"],
-          ["sibling", "agent:main:sibling", "current", "participant"],
+          ["sibling", "agent:main:sibling", "sibling", "participant"],
         ]) {
           const id = `${name}-${suffix}`;
           withSqliteDatabaseWriteScope(database.db, [sessionKey], () =>
@@ -63,13 +70,16 @@ it("retires exact persisted participant inputs atomically before downgrade/remov
       );
     for (const operation of ["downgrade", "remove"] as const) {
       seed(operation);
-      if (operation === "downgrade")
+      if (operation === "downgrade") {
         setSessionMemberAccess(scope, { identityId: "participant", access: "read" });
-      else removeSessionMember(scope, "participant");
-      if (operation === "downgrade")
+      } else {
+        removeSessionMember(scope, "participant");
+      }
+      if (operation === "downgrade") {
         setSessionMemberAccess(scope, { identityId: "participant", access: "send" });
-      else
+      } else {
         addSessionMember(scope, { identityId: "participant", addedBy: "creator", access: "send" });
+      }
       for (const row of read()) {
         expect(row.state).toBe(row.input_id.startsWith("own-") ? "cancelled" : "queued");
         expect(row.end_cause).toBe(row.input_id.startsWith("own-") ? "revoked" : null);

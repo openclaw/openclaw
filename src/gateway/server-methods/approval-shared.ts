@@ -555,6 +555,7 @@ export async function handleApprovalResolve<
     client: params.client,
     exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
     recordFilter,
+    resolving: true,
   };
   let resolved: ApprovalRecordLookupResult<TPayload>;
   try {
@@ -634,6 +635,7 @@ export async function handleApprovalResolve<
         !isApprovalRecordVisibleToClient({
           record: resolved.snapshot,
           client: params.client,
+          resolving: true,
           ...(params.authority.guard.family === "native-compatibility"
             ? { cfg: params.context.getRuntimeConfig(), sessionAccess: retainedSessionAccess }
             : {}),

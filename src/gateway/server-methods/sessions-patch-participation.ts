@@ -19,8 +19,9 @@ export async function isParticipationPermissionTightening(params: {
     nextMode === "full" ||
     (params.before.permissionMode &&
       modes.indexOf(nextMode) > modes.indexOf(params.before.permissionMode))
-  )
+  ) {
     return false;
+  }
   const [before, after] = await Promise.all([
     resolveExecDefaultsAsync({ ...params, sessionEntry: params.before }),
     resolveExecDefaultsAsync({ ...params, sessionEntry: params.after }),

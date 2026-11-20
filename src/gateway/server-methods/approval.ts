@@ -21,6 +21,7 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { prepareApprovalChannelCustody } from "../approval-channel-custody.js";
 import { normalizeControlUiBasePath } from "../control-ui-shared.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import { canResolveParticipationExecApproval } from "../exec-approval-participation.js";
 import { canAccessOperatorApproval } from "../operator-approval-authorization.js";
 import { projectOperatorApprovalSnapshot } from "../operator-approval-snapshot.js";
 import {
@@ -284,7 +285,7 @@ export function createApprovalHandlers(
 
     "approval.resolve": async (options) => {
       const { params: rawParams, respond, client, context } = options;
-      using authority = createApprovalRequestAuthority(options);
+      using authority = createApprovalRequestAuthority(options, params.execApprovalManager);
       const validParams = validateApprovalResolveParams(rawParams);
       const resolveParams = validParams ? rawParams : null;
       const hasReviewer = isRecord(rawParams) && "reviewer" in rawParams;
@@ -384,11 +385,14 @@ export function createApprovalHandlers(
         approvalGuard.assertCurrent();
         if (
           client?.invalidated ||
-          !canAccessOperatorApproval({
-            client,
-            allowApprovalRuntime: true,
-            binding: { reviewerDeviceIds: record.reviewerDeviceIds },
-          }) ||
+          !(
+            canResolveParticipationExecApproval(liveRecord, client) ??
+            canAccessOperatorApproval({
+              client,
+              allowApprovalRuntime: true,
+              binding: { reviewerDeviceIds: record.reviewerDeviceIds },
+            })
+          ) ||
           (approvalGuard.family === "native-compatibility" && !readCurrent()) ||
           (resolveParams?.reviewer && (!liveRecord || !custody?.isCurrent(liveRecord)))
         ) {

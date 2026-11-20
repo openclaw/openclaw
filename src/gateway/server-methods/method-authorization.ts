@@ -10,6 +10,7 @@ import {
   type SessionOperatorScope,
 } from "../../shared/session-method-scopes-base.js";
 import { holdsCronManagementGrant } from "../cron-creator-authority-grant.js";
+import { authorizeParticipationExecApprovalMethod } from "../exec-approval-participation.js";
 import { isInProcessSessionRun } from "../in-process-session-run.js";
 import {
   ADMIN_SCOPE,
@@ -132,6 +133,22 @@ export function authorizeGatewayMethod(
     // Scope recovery must remain reachable from a paired operator whose grant is empty;
     // the handlers bind both calls to the connection's exact device identity.
     return { error: null };
+  }
+  const participationApproval = authorizeParticipationExecApprovalMethod({
+    method,
+    params,
+    client,
+    manager: context.execApprovalManager,
+  });
+  if (participationApproval !== undefined) {
+    return {
+      error: participationApproval
+        ? null
+        : errorShape(
+            ErrorCodes.FORBIDDEN,
+            "Only the session creator or an administrator may review this participation approval.",
+          ),
+    };
   }
   if (scopes.includes(ADMIN_SCOPE)) {
     return { error: null };
