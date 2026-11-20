@@ -4,6 +4,7 @@ import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { isRecoverableOAuthRefreshFailure } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const request = vi.hoisted(() => vi.fn());
@@ -561,4 +562,58 @@ describe("ChatGPT token-sharing authorization", () => {
       oauthRefreshFailure: { reason: "invalid_grant" },
     });
   });
+
+  it.each([
+    Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    }),
+    new TypeError("fetch failed", {
+      cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), {
+        code: "ECONNREFUSED",
+        syscall: "connect",
+      }),
+    }),
+    Object.assign(new Error("getaddrinfo ENOTFOUND auth.openai.com"), {
+      code: "ENOTFOUND",
+      syscall: "getaddrinfo",
+    }),
+  ])("marks provably undispatched refresh failures as not-attempted: %s", async (failure) => {
+    const credential = await loginCredential();
+    request.mockClear();
+    request.mockRejectedValueOnce(failure);
+    const error = await refreshTokenSharingCredential(credential).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      oauthRefreshOutcome: {
+        version: 1,
+        phase: "before-dispatch",
+        outcome: "not-attempted",
+        recovery: { kind: "later", evidence: "dispatch-not-started" },
+      },
+    });
+    expect(isRecoverableOAuthRefreshFailure(error)).toBe(true);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    Object.assign(new Error("reset before headers"), { code: "ECONNRESET" }),
+    new Error("unknown provider failure"),
+  ])(
+    "does not infer nonconsumption from ambiguous refresh transport failures: %s",
+    async (failure) => {
+      const credential = await loginCredential();
+      request.mockClear();
+      request.mockRejectedValueOnce(failure);
+      const error = await refreshTokenSharingCredential(credential).catch(
+        (cause: unknown) => cause,
+      );
+      expect(error).toBeInstanceOf(Error);
+      // Ambiguous failures keep their existing shape: no not-attempted outcome
+      // is attached, so the manager still treats the refresh as unrecoverable.
+      expect((error as { oauthRefreshOutcome?: unknown }).oauthRefreshOutcome).toBeUndefined();
+      expect(isRecoverableOAuthRefreshFailure(error)).toBe(false);
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
 });

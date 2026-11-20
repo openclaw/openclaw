@@ -278,6 +278,64 @@ describe("xAI OAuth", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    }),
+    new TypeError("fetch failed", {
+      cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), {
+        code: "ECONNREFUSED",
+        syscall: "connect",
+      }),
+    }),
+    Object.assign(new Error("getaddrinfo ENOTFOUND auth.x.ai"), {
+      code: "ENOTFOUND",
+      syscall: "getaddrinfo",
+    }),
+    Object.assign(new Error("getaddrinfo EAI_AGAIN auth.x.ai"), {
+      code: "EAI_AGAIN",
+      syscall: "getaddrinfo",
+    }),
+  ])("marks provably undispatched refresh failures as not-attempted: %s", async (failure) => {
+    fetchImpl.mockRejectedValueOnce(failure);
+    const error = await refresh().catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      oauthRefreshOutcome: {
+        version: 1,
+        phase: "before-dispatch",
+        outcome: "not-attempted",
+        recovery: { kind: "later", evidence: "dispatch-not-started" },
+      },
+    });
+    expect(isRecoverableOAuthRefreshFailure(error)).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("does not infer nonconsumption when a redirect response precedes the transport failure", async () => {
+    fetchImpl
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://auth.x.ai/oauth2/token" },
+        }),
+      )
+      .mockRejectedValueOnce(
+        Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+      );
+    const error = await refresh().catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      oauthRefreshOutcome: { version: 1, phase: "token-response", outcome: "unknown" },
+    });
+    expect(isRecoverableOAuthRefreshFailure(error)).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it("never restores a success whose body fails with a transport-looking error", async () => {
     fetchImpl.mockResolvedValueOnce(
       streamResponse({

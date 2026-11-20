@@ -6,7 +6,17 @@ import {
   resolveTimerTimeoutMs,
 } from "../../packages/normalization-core/src/number-coercion.js";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
+import { isProvenDeliveryNotSentError } from "../infra/delivery-recovery.shared.js";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import type { Model } from "../llm/types.js";
+import {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
+  isRecoverableOAuthRefreshFailure,
+  readOAuthRefreshErrorReason,
+  type OAuthRefreshErrorReason,
+  type OAuthRefreshOutcome,
+} from "../shared/oauth-refresh-outcome.js";
 import { generatePkceVerifierChallenge } from "./oauth-utils.js";
 export { oauthErrorHtml, oauthSuccessHtml } from "../shared/oauth-page.js";
 export {
@@ -14,9 +24,9 @@ export {
   createOAuthRefreshResponseError,
   isRecoverableOAuthRefreshFailure,
   readOAuthRefreshErrorReason,
-  type OAuthRefreshOutcome,
   type OAuthRefreshErrorReason,
-} from "../shared/oauth-refresh-outcome.js";
+  type OAuthRefreshOutcome,
+};
 
 export { CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/profile-ids.js";
 export { isFailedOAuthRefreshFence } from "../agents/auth-profiles/oauth-refresh-marker.js";
@@ -208,6 +218,31 @@ export function resolveOAuthTokenExpiresAt(
         nowMs: options.nowMs,
         bufferMs: options.refreshSkewMs,
       });
+}
+
+/**
+ * Preserve a refresh grant only with proof that it never reached the provider.
+ * The caller must exclude observed responses, including redirect hops.
+ */
+export function createNotAttemptedOAuthRefreshError(
+  /** Provider refresh context shown in the error message. */
+  context: string,
+  /** Transport failure thrown before any response was received. */
+  cause: unknown,
+): ReturnType<typeof createOAuthRefreshError> | undefined {
+  if (!(cause instanceof SsrFBlockedError) && !isProvenDeliveryNotSentError(cause)) {
+    return undefined;
+  }
+  return createOAuthRefreshError(
+    `${context} transport failed before dispatch`,
+    {
+      version: 1,
+      phase: "before-dispatch",
+      outcome: "not-attempted",
+      recovery: { kind: "later", evidence: "dispatch-not-started" },
+    },
+    { cause },
+  );
 }
 
 /**
