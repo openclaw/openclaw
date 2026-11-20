@@ -96,6 +96,8 @@ describe("Skills mutation presentation", () => {
       mounted.publishRouteData({ report: original });
       await waitForFast(() => expect(mounted.page.textContent).toContain("Original inventory"));
       mounted.page.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
+      // The installed skill dialog loads on the first detail click.
+      await vi.dynamicImportSettled();
       await waitForFast(() =>
         expect(mounted.page.querySelector('input[role="switch"]')).not.toBeNull(),
       );
