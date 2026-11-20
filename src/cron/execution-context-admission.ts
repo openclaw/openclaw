@@ -12,6 +12,7 @@ import {
   prepareCommandOwnerAuthority,
   type PreparedCommandOwnerAuthority,
 } from "../auto-reply/command-auth.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -327,9 +328,10 @@ export async function admitScheduledOccurrence(
     async mint(run) {
       let result: ScheduledExecutionContextResult;
       try {
+        // Run settings can predate a slot wait; ownership must use the current config owner.
         const requesterOwner =
           requester && requester.kind !== "operator-source"
-            ? await checkRequesterOwner(run.cfg, requester)
+            ? await checkRequesterOwner(await captureRuntimeConfigAsyncReader()(), requester)
             : undefined;
         const facts = assembleScheduledAdmissionFacts(
           {
