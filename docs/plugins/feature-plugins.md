@@ -342,12 +342,24 @@ that changes in place, so the composer never moves:
   resolves `"accepted"` or `"dismissed"`. Pass `insert: true` to replace the draft
   at once instead, with the same single undo step and **Undo** receipt; while
   dictation or a pending goal locks the editor, the proposal waits for **Use**.
+  Pass `send: true` to insert and then send it as if the user pressed Enter, with
+  the same admission and follow-up queueing; when the composer cannot send yet,
+  the inserted draft stays unsent with its **Undo** receipt.
 - **Failure:** `task.fail(message)` shows the message with **Dismiss** and **Try
   again**, which runs the action again.
 
 `composer.propose(text, { title })` offers a draft without a working phase. A
 replacement composer has no task card, so `startTask` throws and `propose`
 rejects there; fall back to `setDraft` or report the error.
+
+Work that outlives the card, such as a Gateway run, can show itself again when
+the user returns to the chat. Give the action an `attach` handler: the host
+calls it, with the same context as `run`, each time a built-in composer shows the
+chat. Start a task again there (pass `startedAt` to keep the clock) and follow
+the work, or return at once when there is none. Leaving the chat aborts the
+action's `signal` and retires the card; keep the work going then, and stop it
+only when the task's own signal aborts while `signal` has not, which is the user
+pressing **Cancel**.
 
 ```typescript
 host.ui.registerAction({

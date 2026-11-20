@@ -196,6 +196,15 @@ extension RootTabs {
         navigationPath.last ?? baseRoute
     }
 
+    /// The destination header's sidebar control hides the sidebar only beside a visible
+    /// split sidebar; a drawer is dismissed from its own header, scrim, or swipe.
+    static func sidebarHeaderControlHidesSidebar(
+        isSidebarVisible: Bool,
+        layoutMode: SidebarLayoutMode) -> Bool
+    {
+        layoutMode == .split && isSidebarVisible
+    }
+
     static func requestedInitialSidebarVisibility(arguments: [String]) -> Bool? {
         guard let value = arguments.drop(while: { $0 != "--openclaw-sidebar-visibility" }).dropFirst().first
         else { return nil }

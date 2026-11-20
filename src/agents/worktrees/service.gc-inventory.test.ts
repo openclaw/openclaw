@@ -99,13 +99,14 @@ describe("worktree GC inventories", () => {
     const buffered = vi.spyOn(gitExec, "executeGitCommandBuffered");
     const resetSpawns = () => [text, bytes, buffered].forEach((spy) => spy.mockClear());
     const gitSpawns = [];
+    const service = new ManagedWorktreeService({ env });
     for (let pass = 0; pass < 2; pass++) {
       if (pass > 0) {
         await stateDatabase.closeOpenClawStateDatabaseAsync();
         stateDatabase.closeOpenClawStateDatabaseForTest();
       }
       resetSpawns();
-      const result = await new ManagedWorktreeService({ env }).gc();
+      const result = await service.gc();
       gitSpawns.push(
         text.mock.calls.filter(([, args]) => !isRepositoryMaintenance(args)).length +
           bytes.mock.calls.length +
@@ -145,7 +146,7 @@ describe("worktree GC inventories", () => {
     // A managed owner revision reopens only that record, even if it is still idle.
     await registry.updateRegistryWorktree(env, records[0]!.id, { lastActiveAt: 2 });
     resetSpawns();
-    await new ManagedWorktreeService({ env }).gc();
+    await service.gc();
     const inspectedPaths = [...text.mock.calls, ...bytes.mock.calls, ...buffered.mock.calls]
       .filter(([cwd, args]) => cwd !== missingRepository && !isRepositoryMaintenance(args))
       .map(([cwd]) => cwd);
@@ -174,8 +175,8 @@ describe("worktree GC inventories", () => {
     expect(getRegistryWorktree(env, records[1]!.id)?.gcProtection).toBeUndefined();
   });
 
-  it.each(["inner", ".openclaw/tmp/inner"])(
-    "requires explicit retry after repairing nested repository %s",
+  it.each(["inner", ".openclaw/tmp-user/inner"])(
+    "preserves user nested repository %s until its repair changes the checkout",
     async (nestedPath) => {
       const {
         repo: repoRoot,
@@ -210,12 +211,12 @@ describe("worktree GC inventories", () => {
       expect((await service.gc()).removed).toEqual([]);
       expect(inspections).not.toHaveBeenCalled();
 
-      // Terminal preservation does not scan for external repairs until explicitly retried.
+      // A changed checkout reopens the existing fingerprint receipt.
       await fs.rm(path.join(nested!.path, nestedPath), { recursive: true });
       expect(getRegistryWorktree(env, nested!.id)?.lastActiveAt).toBe(1);
-      expect((await service.gc()).removed).toEqual([]);
-      expect(inspections).not.toHaveBeenCalled();
-      expect((await service.gc({ retryDeferred: true })).removed).toEqual([nested!.id]);
+      expect((await service.gc({ retryDeferred: nestedPath !== "inner" })).removed).toEqual([
+        nested!.id,
+      ]);
       expect(inspections.mock.calls.length).toBeGreaterThan(0);
       expect(inspections.mock.calls.some(([record]) => record.id === nested!.id)).toBe(true);
       inspections.mockClear();

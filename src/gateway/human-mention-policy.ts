@@ -31,7 +31,6 @@ import type { MentionInbox } from "./mention-inbox.contracts.js";
 import type { MentionCommittedInput } from "./mention-inbox.types.js";
 import {
   authorizeGatewaySessionCreation,
-  resolveAdministratorMemberRolePolicy,
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
@@ -65,7 +64,7 @@ type MentionTarget = {
 };
 type MentionReader = {
   profile: MentionProfile;
-  administratorMemberPolicy: ReturnType<typeof resolveAdministratorMemberRolePolicy>;
+  rolePolicy: ReturnType<typeof resolveOperatorRolePolicy>;
   canRead: (target: MentionTarget) => boolean;
   canInvite: (target: MentionTarget) => boolean;
 };
@@ -169,7 +168,6 @@ export function createHumanMentionPolicy(params: {
     if (!profile) {
       return err(authenticatedProfileUnavailableError());
     }
-    const administratorMemberPolicy = resolveAdministratorMemberRolePolicy(client, cfg);
     const readerClient: GatewayClient = {
       connect: { ...client.connect },
       internal: {
@@ -190,7 +188,7 @@ export function createHumanMentionPolicy(params: {
     const { entryFilter } = prepareSessionSharing({ cfg, client: readerClient });
     return ok({
       profile,
-      administratorMemberPolicy,
+      rolePolicy: policy,
       canRead: (target) =>
         entryFilter?.(target.sessionKey, target.entry, target.membership?.has(profile.profileId)) ??
         true,
@@ -275,9 +273,7 @@ export function createHumanMentionPolicy(params: {
         profileId: requester.profile.profileId,
         agentId: agent.agentId,
       },
-      requester.administratorMemberPolicy
-        ? { policy: requester.administratorMemberPolicy }
-        : undefined,
+      requester.rolePolicy ? { policy: requester.rolePolicy } : undefined,
     );
     if (creationError) {
       return err(creationError);

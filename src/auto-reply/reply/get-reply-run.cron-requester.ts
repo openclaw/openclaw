@@ -1,7 +1,10 @@
 import { createCronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import { normalizeCronAuthenticatedChannelRequester } from "../../cron/tools-allow-provenance.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
+
+const log = createSubsystemLogger("cron");
 
 /** Map fresh native ingress identity, not message text or stored delivery, to a requester. */
 export function resolveReplyCronChannelRequester(
@@ -57,4 +60,25 @@ export function createReplyCronAuthorityFactory(
       requester,
       { isCurrent: isCurrentOwner, ...owner },
     );
+}
+
+/**
+ * A configured owner whose ingress identity the host did not bind keeps caller-scoped
+ * automations. Record why: the tool itself only reports "cron job not found".
+ */
+export function logReplyCronOwnerWithoutAuthority(
+  context: object,
+  params: { channel?: string; accountId?: string },
+): void {
+  const owner = getCommandOwnerAuthority(context);
+  const reason = !owner?.channelPrincipal
+    ? "ingress-identity-unbound"
+    : owner.isCurrent()
+      ? "ingress-identity-mismatch"
+      : "owner-revoked";
+  log.info("cron: owner turn without management authority", {
+    channel: params.channel,
+    accountId: normalizeAccountId(params.accountId),
+    reason,
+  });
 }

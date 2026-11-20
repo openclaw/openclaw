@@ -335,6 +335,9 @@ struct RootTabs: View {
                 startFirstGatewaySetup: self.hasNeverHadGateway
                     ? { self.evaluateOnboardingPresentation(force: true) }
                     : nil)
+                // Sidebar open/close rebuilds this branch with fresh closures; the gate keeps
+                // that from re-running the chat tab and its transcript (see `ChatProTab ==`).
+                    .equatable()
         case .overview:
             CommandCenterTab(
                 headerSidebarAction: self.sidebarHeaderAction,
@@ -433,10 +436,13 @@ struct RootTabs: View {
         return NodeAppModel.execApprovalInboxKey(self.appModel.pendingExecApprovalPrompt)
     }
 
-    private var sidebarHeaderAction: OpenClawSidebarHeaderAction? {
-        // A presented drawer covers the destination, so its control only ever reveals.
-        // Only the split layout reads visibility here; toggling it re-lays out the detail anyway.
-        let hidesSidebar = !self.isSidebarDrawerLayout && self.sidebarPresentation.isSettledPresented
+    /// Every destination header keeps this item; only split mode turns it into Hide.
+    /// In drawer mode it stays a constant Show item while the drawer covers the card.
+    /// The button observes presentation itself so opening never restructures the toolbar.
+    private var sidebarHeaderAction: OpenClawSidebarHeaderAction {
+        let hidesSidebar = Self.sidebarHeaderControlHidesSidebar(
+            isSidebarVisible: !self.isSidebarDrawerLayout && self.sidebarPresentation.isSettledPresented,
+            layoutMode: self.isSidebarDrawerLayout ? .drawer : .split)
         return OpenClawSidebarHeaderAction(
             systemName: "line.3.horizontal",
             accessibilityLabel: hidesSidebar ? .localized("Hide Sidebar") : .localized("Show Sidebar"),
@@ -444,7 +450,7 @@ struct RootTabs: View {
                 ? Self.sidebarHideButtonAccessibilityIdentifier
                 : Self.sidebarShowButtonAccessibilityIdentifier,
             drawerPresentation: self.isSidebarDrawerLayout ? self.sidebarPresentation : nil,
-            action: { self.sidebarPresentation.isPresented ? self.hideSidebar() : self.showSidebar() })
+            action: hidesSidebar ? { self.hideSidebar() } : { self.showSidebar() })
     }
 
     private var sidebarAnimation: Animation? {

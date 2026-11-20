@@ -33,6 +33,7 @@ function normalizeFinding(
     ["fixHint", 500],
     ["severity", 16],
     ["path", 128],
+    ["target", 160],
     ["requirement", 200],
   ] as const) {
     const value = safe[key];

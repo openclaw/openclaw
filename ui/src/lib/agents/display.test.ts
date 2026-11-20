@@ -8,14 +8,17 @@ import {
 } from "../avatar.ts";
 import {
   buildAgentContext,
-  buildModelOptions,
-  createPrimaryModelExclusion,
   formatBytes,
   listSelectableAgents,
   normalizeAgentTargetLabel,
   resolveAgentSkillsFilter,
   resolveEffectiveModelFallbacks,
 } from "./display.ts";
+import { buildModelOptions, createPrimaryModelExclusion } from "./model-options.ts";
+
+it("ignores a draft model map that is not a record", () => {
+  expect(buildModelOptions({ agents: { defaults: { models: "unfinished" } } })).toEqual([]);
+});
 
 it("keeps known unavailable choices visible but disabled", () => {
   const config = { agents: { defaults: { models: { "fixture/blocked": {} } } } };

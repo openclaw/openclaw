@@ -65,7 +65,8 @@
 
 .installed-plugins-card__art img,
 .plugins-tile img,
-.plugin-catalog-detail__icon img {
+.plugin-catalog-detail__icon img,
+.plugin-capability__icon img {
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -252,15 +253,16 @@
     color var(--duration-fast) ease;
 }
 
-.plugin-catalog-chip:hover,
-.plugin-catalog-chip.is-active {
+.plugin-catalog-chip:hover {
   border-color: var(--border-strong);
   background: var(--bg-hover);
   color: var(--text-strong);
 }
 
 .plugin-catalog-chip.is-active {
-  background: var(--bg-elevated);
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--bg);
 }
 
 .plugin-catalog-chip > span {
@@ -1307,6 +1309,7 @@
   flex: 0 0 36px;
   width: 36px;
   height: 36px;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--accent);
@@ -1328,8 +1331,10 @@
     justify-content: flex-end;
   }
 }
+/* Only action rows (plain div rows) stack; a navigation row keeps its status on the
+   chevron's line. */
 @media (max-width: 560px) {
-  .plugin-capabilities .settings-row:has(> .plugin-capability__icon) > .settings-row__control {
+  .plugin-capabilities div.settings-row:has(> .plugin-capability__icon) > .settings-row__control {
     flex-direction: column;
     align-items: flex-end;
     gap: 6px;
