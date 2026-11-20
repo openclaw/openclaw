@@ -2,7 +2,6 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveReplyFailureSummary } from "../../auto-reply/reply/agent-runner-failure-reply.js";
-import type { CliExecutionHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   CliBackendExecute,
@@ -10,7 +9,6 @@ import type {
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
 } from "../../plugins/cli-backend.types.js";
-import * as execDefaults from "../exec-defaults.js";
 import { resolveReplyFailoverFacts } from "../failover/request-error-facts.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
@@ -149,27 +147,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function historyWriter(overrides: Partial<CliExecutionHistoryWriter>): CliExecutionHistoryWriter {
-  return {
-    target: {
-      agentId: "main",
-      sessionId: "sdk-session",
-      sessionKey: "agent:main:main",
-      storePath: "/synthetic/sessions.sqlite",
-    },
-    runId: "history-owner",
-    authFingerprint: "a".repeat(64),
-    bindsNativeLogin: false,
-    replaysHistory: true,
-    assertCurrent() {},
-    async assertReadable() {},
-    checkNativeLoginBoundary() {},
-    bindExecutionEnv() {},
-    async settleNativeLogin() {},
-    ...overrides,
-  };
-}
-
 describe("plugin-owned CLI execution host boundary", () => {
   it("streams plugin events through the canonical host output boundary", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -221,67 +198,6 @@ describe("plugin-owned CLI execution host boundary", () => {
       await runPlugin(context, execute);
 
       expect(observedExecution?.promptOrigin).toBe(origin);
-    },
-  );
-
-  it.each(["permission preparation", "native prompt send"])(
-    "does not disclose private context when history authority changes during %s",
-    async (boundary) => {
-      const { context } = await createExecution();
-      if (boundary === "permission preparation") {
-        context.promptContext = { prependContext: "private conversation history" };
-      }
-      let current = true;
-      const assertCurrent = () => {
-        if (!current) {
-          throw new Error("Private history account changed");
-        }
-      };
-      context.cliHistoryWriter = historyWriter({
-        bindsNativeLogin: boundary === "native prompt send",
-        async assertReadable() {
-          if (boundary === "permission preparation") {
-            assertCurrent();
-          }
-        },
-        checkNativeLoginBoundary(carriesSavedHistory) {
-          if (boundary === "native prompt send" && carriesSavedHistory) {
-            assertCurrent();
-          }
-        },
-      });
-      const preparingPermission = createDeferred();
-      const releasePermission = createDeferred();
-      if (boundary === "permission preparation") {
-        const resolvePermission = execDefaults.resolveExecDefaultsAsync;
-        vi.spyOn(execDefaults, "resolveExecDefaultsAsync").mockImplementationOnce(
-          async (...args) => {
-            preparingPermission.resolve();
-            await releasePermission.promise;
-            return resolvePermission(...args);
-          },
-        );
-      }
-      const execute = vi.fn(async function* (execution: CliBackendExecuteContext) {
-        const host: CliBackendExecuteContext & { assertPrivateInputCurrent?: () => void } =
-          execution;
-        current = false;
-        host.assertPrivateInputCurrent?.();
-        yield SUCCESS_RESULT;
-      });
-      const result = runPlugin(context, execute).catch((error: unknown) => error);
-      if (boundary === "permission preparation") {
-        try {
-          await preparingPermission.promise;
-          current = false;
-        } finally {
-          releasePermission.resolve();
-        }
-      }
-      expect(await result).toEqual(new Error("Private history account changed"));
-      if (boundary === "permission preparation") {
-        expect(execute).not.toHaveBeenCalled();
-      }
     },
   );
 

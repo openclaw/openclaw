@@ -92,20 +92,7 @@ export async function executePreparedCliRun(
   cliSessionIdToUse?: string,
   options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
-  // A writer that replays history may put saved history in this prompt: a fresh recovery
-  // prompt, or durable reference context and interrupted inputs on a resumed turn.
-  const carriesSavedHistory = inputContext.cliHistoryWriter?.replaysHistory === true;
-  // Reuse the writer's run authority; each transport checks private history
-  // separately at its disclosure boundary.
-  const context = inputContext.cliHistoryWriter
-    ? {
-        ...inputContext,
-        params: {
-          ...inputContext.params,
-          assertCurrent: inputContext.cliHistoryWriter.assertCurrent,
-        },
-      }
-    : inputContext;
+  const context = inputContext;
   const params = context.params;
   const assertCurrent = createCliRunCurrentAssertion(params);
   assertCurrent();
@@ -380,8 +367,6 @@ export async function executePreparedCliRun(
       const nodeClearEnv = [
         ...new Set([...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv]),
       ];
-      // The history writer's native owner must be the one this final environment selects.
-      context.cliHistoryWriter?.bindExecutionEnv(env, carriesSavedHistory);
 
       let executionCommand = backend.command;
       let executionArgv0: string | undefined;
@@ -580,8 +565,6 @@ export async function executePreparedCliRun(
     } catch (error) {
       recordRunError(error);
     } finally {
-      // Attest a token the CLI rotated during the run before any of its rows commit.
-      await context.cliHistoryWriter?.settleNativeLogin();
       await toolTracking.finishDeliveryTracking({
         useManagedClaudeLiveSession,
         recordRunError,
