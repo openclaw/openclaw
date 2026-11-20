@@ -9,7 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { retireExpiredStandaloneDoctorCaptures } from "./doctor-capture-retention.js";
+import { retireSupersededStandaloneDoctorCaptures } from "./doctor-capture-retention.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { retainedCheckpointBinding } from "./update-retained-checkpoint.test-support.js";
 import {
@@ -23,7 +23,7 @@ afterEach(() => closeOpenClawStateDatabaseForTest());
 const now = Date.parse("2026-10-16T12:00:00Z");
 
 function retire(f: ReturnType<typeof fixture>, keepRunId = "", assertCurrent = vi.fn()) {
-  return retireExpiredStandaloneDoctorCaptures({ ...f, now, keepRunId, assertCurrent });
+  return retireSupersededStandaloneDoctorCaptures({ ...f, keepRunId, assertCurrent });
 }
 
 function fixture() {
@@ -51,27 +51,25 @@ function fixture() {
 }
 
 it.each([
-  { ages: [5, 4, 3, 2, 1], retained: [false, false, true, true, true] },
+  { ages: [5, 4, 3, 2, 1], retained: [false, false, false, false, true] },
   { ages: [40, 31], retained: [false, true] },
-])(
-  "retains recent captures up to the limit and always keeps the newest: $ages",
-  async ({ ages, retained }) => {
-    const f = fixture();
-    const captures = ages.map((age) => f.seal(age));
-    const result = await retire(f);
-    expect(result.warnings).toEqual([]);
-    expect(result.retired.toSorted()).toEqual(
-      captures.filter((_, index) => !retained[index]).toSorted(),
-    );
-    expect(captures.map(fs.existsSync)).toEqual(retained);
-  },
-);
+  { ages: [400], retained: [true] },
+])("retains only the newest sealed capture, however old: $ages", async ({ ages, retained }) => {
+  const f = fixture();
+  const captures = ages.map((age) => f.seal(age));
+  const result = await retire(f);
+  expect(result.warnings).toEqual([]);
+  expect(result.retired.toSorted()).toEqual(
+    captures.filter((_, index) => !retained[index]).toSorted(),
+  );
+  expect(captures.map(fs.existsSync)).toEqual(retained);
+});
 
 it("protects an old capture referenced by active recovery and keeps all captures when recovery is unreadable", async () => {
   const f = fixture();
   const old = f.seal(40);
   const superseded = f.seal(4);
-  [3, 2, 1].forEach((age) => f.seal(age));
+  const newest = f.seal(1);
   const options = { env: f.env };
   const { runId } = createUpdateRun({ trigger: "cli" }, options);
   const runtime = { root: f.stateDir, nodePath: process.execPath, version: "1.0.0", buildId: null };
@@ -81,7 +79,7 @@ it("protects an old capture referenced by active recovery and keeps all captures
   storeRetainedUpdateRecovery(record, options);
   const retired = await retire(f);
   expect(retired).toEqual({ retired: [superseded], warnings: [] });
-  expect(fs.existsSync(old)).toBe(true);
+  expect([old, newest].map(fs.existsSync)).toEqual([true, true]);
   const unreadableCandidate = f.seal(10);
   openOpenClawStateDatabase(options)
     .db.prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
@@ -92,10 +90,10 @@ it("protects an old capture referenced by active recovery and keeps all captures
   expect(fs.existsSync(unreadableCandidate)).toBe(true);
 });
 
-it("retires only expired sealed standalone Doctor captures and preserves incomplete or linked copies", async () => {
+it("retires only superseded sealed standalone Doctor captures and preserves incomplete or linked copies", async () => {
   const f = fixture();
   const store = resolveUpdateCaptureRoot(f.stateDir);
-  const expired = f.seal(31);
+  const superseded = f.seal(2);
   const recent = f.seal(1);
   const incomplete = path.join(store, `doctor-${randomUUID()}`);
   await fsPromises.mkdir(incomplete);
@@ -110,9 +108,9 @@ it("retires only expired sealed standalone Doctor captures and preserves incompl
 
   const result = await retire(f, path.basename(recent), assertCurrent);
 
-  expect(result).toEqual({ retired: [expired], warnings: [] });
+  expect(result).toEqual({ retired: [superseded], warnings: [] });
   expect(assertCurrent).toHaveBeenCalled();
-  await expect(fsPromises.lstat(expired)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(fsPromises.lstat(superseded)).rejects.toMatchObject({ code: "ENOENT" });
   for (const retained of [recent, incomplete, update, linkedTarget, interrupted]) {
     expect((await fsPromises.lstat(retained)).isDirectory()).toBe(true);
   }
