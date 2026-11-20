@@ -479,7 +479,6 @@ export async function maybeSpawnVisibleSession(
             })
           : independent
             ? createGatewayCall("sessions.create", createParams, {
-                revalidateOnCompletion: false,
                 requesterCommitGuard: assertActive,
                 timeoutMs: null,
               })

@@ -310,7 +310,7 @@ export function registerGatewayToolFinalEffectTests() {
           );
           if (outcome === "tool-cancelled") {
             expect(result).toMatchObject({
-              error: { message: "agent tool caller authority is no longer active" },
+              error: { name: "AbortError" },
             });
           }
           // A cancelled tool wait can finish before the approval owner's durable handoff.

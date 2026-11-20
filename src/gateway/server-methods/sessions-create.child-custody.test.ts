@@ -649,11 +649,7 @@ describe("hosted creation transfers accepted child input", () => {
           runError: { code: "UNAVAILABLE", message: "Error: inherited tool invocation closed" },
         });
       } else {
-        await expect(creating).rejects.toThrow(
-          system
-            ? "agent tool caller authority is no longer active"
-            : "operator execution authority is no longer active",
-        );
+        await expect(creating).rejects.toThrow("agent tool caller authority is no longer active");
       }
       expect(fixture.beforeInputCommit).toHaveBeenCalledOnce();
       expect(await listSessionPendingInputs(fixture.scope())).toEqual({ items: [], total: 0 });

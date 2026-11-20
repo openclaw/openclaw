@@ -3,10 +3,7 @@ import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
-import {
-  createCronMutationCompletion,
-  type CronMutationCompletion,
-} from "../../cron/mutation-completion.js";
+import { createCronMutationCompletion } from "../../cron/mutation-completion.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { withInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
@@ -58,8 +55,6 @@ type InProcessGatewayCallOptions = {
   sessionMutationCommitGuard?: () => void;
   signal?: AbortSignal;
   timeoutMs?: number | null;
-  /** False when a committed result belongs to its target rather than the requesting turn. */
-  revalidateOnCompletion?: boolean;
   /** Spawn creation only: the requesting tool's fence, checked by the Gateway at commit. */
   requesterCommitGuard?: () => void;
 };
@@ -191,26 +186,10 @@ async function runBoundInProcessGatewayCall<T>(
   boundGateway: ReturnType<typeof bindInProcessGatewayContext> | undefined,
   run: (resolveGatewayContext?: GatewayContextResolver) => Promise<T>,
   assertCallerCurrent?: () => void,
-  revalidateOnCompletion = true,
-  completion?: CronMutationCompletion,
 ): Promise<T> {
-  const assertCurrent = (afterDispatch = false) => {
-    boundGateway?.assertCurrent();
-    if (!afterDispatch || (completion ? !completion.isCommitted() : revalidateOnCompletion)) {
-      assertCallerCurrent?.();
-    }
-  };
-  try {
-    assertCurrent();
-    const result = completion
-      ? await completion.run(() => run(boundGateway?.resolve))
-      : await run(boundGateway?.resolve);
-    assertCurrent(true);
-    return result;
-  } catch (error) {
-    assertCurrent(true);
-    throw error;
-  }
+  boundGateway?.assertCurrent();
+  assertCallerCurrent?.();
+  return await run(boundGateway?.resolve);
 }
 
 export function hasInProcessGatewayToolContext(): boolean {
@@ -244,7 +223,7 @@ async function callAgentToolGatewayRequestBound<T>(
   runtimeIdentity: AgentRuntimeIdentity | undefined,
   assertCallerCurrent: ReturnType<typeof captureGatewayToolCallerAssertion>,
   forceTransport = false,
-  revalidateOnCompletion = true,
+  forwardAbortSignal = true,
   positional?: {
     sessionCreation?: TrustedSessionCreation;
     onExecution?: (execution: Promise<void>) => void;
@@ -262,10 +241,10 @@ async function callAgentToolGatewayRequestBound<T>(
   const assertCurrent =
     assertCallerCurrent ||
     assertDispatchCurrent ||
-    ((!revalidateOnCompletion || completion) && request.signal)
+    ((!forwardAbortSignal || completion) && request.signal)
       ? composeSessionSourceAssertion([callerSource, assertDispatchCurrent], (assertSources) => {
           assertSources();
-          if (!revalidateOnCompletion || completion) {
+          if (!forwardAbortSignal || completion) {
             request.signal?.throwIfAborted();
           }
         })
@@ -319,16 +298,22 @@ async function callAgentToolGatewayRequestBound<T>(
     } = request;
     return await runBoundInProcessGatewayCall(
       boundGateway,
-      () =>
-        callGateway<T>({
-          ...wireRequest,
-          method,
-          assertDispatchCurrent:
-            readQuestionDispatchCapability(request.assertDispatchCurrent)
-              ?.assertCompatibilityCurrent ?? request.assertDispatchCurrent,
-        }),
+      async () => {
+        try {
+          return await callGateway<T>({
+            ...wireRequest,
+            method,
+            assertDispatchCurrent:
+              readQuestionDispatchCapability(request.assertDispatchCurrent)
+                ?.assertCompatibilityCurrent ?? request.assertDispatchCurrent,
+          });
+        } finally {
+          if (completion && forwardAbortSignal) {
+            request.signal?.throwIfAborted();
+          }
+        }
+      },
       assertCurrent,
-      revalidateOnCompletion,
     );
   }
   const syntheticScopeMode: "minimum" | "exact" =
@@ -393,26 +378,36 @@ async function callAgentToolGatewayRequestBound<T>(
             ),
         }
       : {}),
-    // A commit receipt owns settlement; cancellation still fences dispatch, commit, and uncommitted results.
-    ...(request.signal && revalidateOnCompletion && !completion ? { signal: request.signal } : {}),
+    // Committed Cron outcomes survive cancellation; uncommitted work remains signal-fenced.
+    ...(request.signal && forwardAbortSignal && !completion ? { signal: request.signal } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(boundGateway ? { resolveGatewayContext: boundGateway.resolve } : {}),
     ...(assertMutationCurrent ? { sessionMutationCommitGuard: assertMutationCurrent } : {}),
   };
   return await runBoundInProcessGatewayCall(
     boundGateway,
-    async () =>
-      await dispatchGatewayMethodInProcess<T>(
-        method,
-        (request.params ?? {}) as Record<string, unknown>,
-        bindInProcessSubagentResume(
-          withInProcessAgentRuntimeIdentity(dispatchOptions, runtimeIdentity),
-          readInProcessSubagentResume(request),
-        ),
-      ),
+    async () => {
+      const dispatch = () =>
+        dispatchGatewayMethodInProcess<T>(
+          method,
+          (request.params ?? {}) as Record<string, unknown>,
+          bindInProcessSubagentResume(
+            withInProcessAgentRuntimeIdentity(dispatchOptions, runtimeIdentity),
+            readInProcessSubagentResume(request),
+          ),
+        );
+      if (!completion) {
+        return await dispatch();
+      }
+      try {
+        return await completion.run(dispatch);
+      } finally {
+        if (!completion.isCommitted()) {
+          request.signal?.throwIfAborted();
+        }
+      }
+    },
     assertCurrent,
-    revalidateOnCompletion,
-    completion,
   );
 }
 
@@ -420,8 +415,8 @@ async function callAgentToolGatewayRequestBound<T>(
 export function bindAgentToolGatewayRequest(options?: {
   resolveGatewayContext?: GatewayContextResolver;
   hostedOnly?: boolean;
-  /** Submitted writes retain their outcome; every dispatch still checks the caller. */
-  revalidateOnCompletion?: boolean;
+  /** False keeps cancellation in pre-commit guards instead of aborting the dispatch wait. */
+  forwardAbortSignal?: boolean;
 }): AgentToolGatewayRequestCaller {
   const scope = getPluginRuntimeGatewayRequestScope();
   const resolver =
@@ -446,7 +441,7 @@ export function bindAgentToolGatewayRequest(options?: {
           assertCallerCurrent,
           (!resolver && !admitted) ||
             (options?.hostedOnly === true && admitted?.localEmbedded === true),
-          options?.revalidateOnCompletion,
+          options?.forwardAbortSignal,
         ),
       ),
     );
@@ -494,7 +489,7 @@ async function callInProcessGatewayToolBound<T>(
     undefined,
     assertCallerCurrent,
     false,
-    options.revalidateOnCompletion ?? true,
+    true,
     {
       sessionCreation: options.sessionCreation,
       onExecution: options.onExecution,
