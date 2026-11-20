@@ -399,5 +399,44 @@ it.each(["chat", "new-session"] as const)(
     options[1]!.click();
     await vi.advanceTimersByTimeAsync(0);
     expect(view.value().mentions[0]?.access).toBe("suggest");
+    await view.search("@Peter Steinberger @Peter");
+    view.key("Enter");
+    expect(view.value().mentions.map((entry) => entry.access)).toEqual(["suggest", "suggest"]);
+  },
+);
+
+it.each(["chat", "new-session"] as const)(
+  "%s keeps recovered invitation grants visible and permits lowering without stale options",
+  async (kind) => {
+    const view = composerFixture(
+      kind,
+      "@Peter Steinberger ",
+      [{ profileId: peter.profileId, start: 0, end: 18, access: "suggest" }],
+      undefined,
+      true,
+    );
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.container.textContent).toContain(
+      "Reselect @Peter Steinberger to refresh available invitation levels.",
+    );
+    expect(view.container.textContent).toContain("Can suggest");
+    view.replaceOwner();
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.container.textContent).toContain("Can suggest");
+    view.query<HTMLButtonElement>(".chat-invite-access button")!.click();
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    const options = Array.from(
+      view.container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+    );
+    expect(options.map((option) => option.textContent?.trim())).toEqual([
+      "Can read",
+      "Can suggest",
+    ]);
+    options[0]!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.value().mentions[0]?.access).toBe("read");
   },
 );

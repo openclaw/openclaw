@@ -228,7 +228,13 @@ export function createHumanMentionEngine(owner: MentionEngineOwner) {
       {
         profileId: person.profileId,
         ...(owner.directory?.inviteAccessAvailable && person.inviteAccessOptions?.length
-          ? { access: "read" as const }
+          ? {
+              access:
+                host
+                  .getMentions()
+                  .find((mention) => mention.profileId === person.profileId && mention.access)
+                  ?.access ?? ("read" as const),
+            }
           : {}),
         start: target.start + prefix.length,
         end: target.start + prefix.length + label.length,
