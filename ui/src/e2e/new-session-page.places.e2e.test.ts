@@ -143,6 +143,11 @@ suite.define(() => {
     const slashMenu = page.locator("#chat-new-session-slash-menu-listbox");
     await pollLocatorText(slashMenu).toContain("/status");
     expect(await slashMenu.textContent()).not.toContain("/clear");
+    // Presence in the list doesn't mean the first command survived pane clipping.
+    const menuBox = await bounds(slashMenu);
+    const scrollBox = await bounds(page.locator(".new-session-page__scroll"));
+    expect(menuBox.y).toBeGreaterThanOrEqual(scrollBox.y);
+    expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(scrollBox.y + scrollBox.height);
     await message.fill("fix the flaky test");
     expect(new URL(page.url()).pathname).toBe("/new");
     expect(

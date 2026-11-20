@@ -331,34 +331,33 @@ describe("shared GitHub publication requester authority", () => {
     const f = await fixture("local");
     let committed = f.config;
     const restricted = withPublicationGuestRole(f.config, { scopes: [] });
-    setRuntimeConfigSnapshot(restricted);
     const getCommittedRuntimeConfig = () => committed;
-    const captured = await createGitHubPublicationRequesterFixture({
+    const caller = await createGitHubPublicationRequesterFixture({
       profileId: f.guestProfile,
       scopes: guestScopes,
       ...f.guestSource.session,
       getCommittedRuntimeConfig,
     });
-    const coordinator = createTestGitHubPublicationCoordinator({
+    setRuntimeConfigSnapshot(restricted);
+    const captured = await prepareGitHubPublicationRequesterV2(caller, caller.session);
+    onTestFinished(captured.release);
+    const { requester } = captured;
+    const runner = createTestGitHubPublicationCoordinator({
       placements: f.placements,
       getCommittedRuntimeConfig,
     });
     const claim = await holdWorkerTurn(f);
-    const tentative = await coordinator.requestForSessionV2(
-      f.request("tentative-config", captured.requester),
-    );
+    const tentative = await runner.requestForSessionV2(f.request("tentative-config", requester));
     expect(tentative.status).toBe("requested");
     await f.placements.releaseTurn(claim);
-    await coordinator.resumeSessionRequests();
-    await expectResult(coordinator, tentative.requestId);
-    const later = await coordinator.requestForSessionV2(
-      f.request("committed-config", captured.requester),
-    );
+    await runner.resumeSessionRequests();
+    await expectResult(runner, tentative.requestId);
+    const later = await runner.requestForSessionV2(f.request("committed-config", requester));
     expect(later.status).toBe("requested");
     committed = restricted;
-    await coordinator.resumeSessionRequests();
-    await expectResult(coordinator, later.requestId, identityChanged);
-    expect(f.readRequester(later.requestId)).toEqual(captured.requester.snapshot);
+    await runner.resumeSessionRequests();
+    await expectResult(runner, later.requestId, identityChanged);
+    expect(f.readRequester(later.requestId)).toEqual(requester.snapshot);
     expect(f.publishedTitles).toEqual(["tentative-config"]);
   });
 

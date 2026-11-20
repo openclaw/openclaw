@@ -395,14 +395,17 @@ export async function buildTelegramInboundContextPayload(
         key: ambientTranscriptWatermarkKey,
       })
     : undefined;
+  // An existing session already replays its own user and assistant turns, so a
+  // window rebuilt from that transcript keeps only delivery mirrors replay omits.
+  // Fresh sessions and explicit replies keep the full transcript window.
+  const replaysPersistedSessionTurns =
+    previousTimestamp !== undefined && visibleReplyChain.length === 0 && !visibleReplyTarget;
+  // Plain DMs also drop Telegram's native window: it holds only the same private
+  // turns. Group windows carry room messages that never became turns, so they stay.
   const shouldSuppressPersistedDmChatWindowContext =
-    !isGroup &&
-    previousTimestamp !== undefined &&
-    dmThreadId == null &&
-    visibleReplyChain.length === 0 &&
-    !visibleReplyTarget;
-  // Existing plain DMs already carry their history through the persistent
-  // transcript. Keep chat windows for fresh DMs, topics, replies, and groups.
+    !isGroup && dmThreadId == null && replaysPersistedSessionTurns;
+  const sessionTranscriptDeliveryOnly =
+    shouldSuppressPersistedDmChatWindowContext || (isGroup && replaysPersistedSessionTurns);
   const baseVisiblePromptContext = shouldSuppressPersistedDmChatWindowContext
     ? promptContext.filter((entry) => !isTelegramChatWindowPromptContext(entry))
     : promptContext;
@@ -560,7 +563,7 @@ export async function buildTelegramInboundContextPayload(
     },
     sessionTranscript: {
       chatWindow: true,
-      ...(shouldSuppressPersistedDmChatWindowContext ? { deliveryOnly: true } : {}),
+      ...(sessionTranscriptDeliveryOnly ? { deliveryOnly: true } : {}),
       historyLimit: isGroup ? historyLimit : dmHistoryLimit,
       beforeTimestampMs: options?.receivedAtMs ?? messageTimestamp,
       minTimestampMs: options?.promptContextMinTimestampMs,

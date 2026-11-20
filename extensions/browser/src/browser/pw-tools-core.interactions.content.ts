@@ -205,6 +205,8 @@ type ScreenshotOptions = {
   type?: "png" | "jpeg";
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Effective launch mode recorded on the owned Chrome process, when known. */
+  headless?: boolean;
 };
 
 async function runScreenshotOperation<T>(
@@ -242,6 +244,11 @@ async function capturePageScreenshot(
   opts.signal?.throwIfAborted();
   if (locator && opts.fullPage) {
     throw new Error("fullPage is not supported for element screenshots");
+  }
+  // Headless background tabs never produce a frame, so the native capture would
+  // never settle and keep this page's transition queue busy. Match the raw CDP path.
+  if (opts.headless !== false) {
+    await page.bringToFront().catch(() => {});
   }
   const type = opts.type ?? "png";
   const emulation = ensurePageState(page).emulation;

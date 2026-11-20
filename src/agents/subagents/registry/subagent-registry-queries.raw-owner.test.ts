@@ -4,9 +4,9 @@ import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import {
   getSubagentRunByChildSessionKeyFromRuns as findChildRun,
   buildSubagentRunReadIndexFromRuns as indexRuns,
-  countActiveRunsForSessionFromRuns as countActiveRuns,
   listRunsForControllerFromRuns as listControlledRuns,
 } from "./subagent-registry-queries.js";
+import { countActiveSubagentRunsForSession as countActiveRuns } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { buildSubagentRunView } from "./subagent-run-view.js";
 

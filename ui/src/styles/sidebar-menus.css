@@ -1199,7 +1199,7 @@
   border: 0;
 }
 
-.sidebar-agent-menu__settings {
+.sidebar-agent-menu__action {
   display: grid;
   place-items: center;
   flex: none;
@@ -1215,24 +1215,24 @@
   opacity: 0;
 }
 
-.sidebar-agent-menu__agent-switch:hover .sidebar-agent-menu__settings,
-.sidebar-agent-menu__settings:focus-visible {
+.sidebar-agent-menu__agent-switch:hover .sidebar-agent-menu__action,
+.sidebar-agent-menu__action:focus-visible {
   opacity: 1;
 }
 
 @media (hover: none) {
-  .sidebar-agent-menu__settings {
+  .sidebar-agent-menu__action {
     opacity: 1;
   }
 }
 
-.sidebar-agent-menu__settings:hover,
-.sidebar-agent-menu__settings:focus-visible {
-  background: var(--bg-hover);
+/* Row actions brighten on hover without a box of their own. */
+.sidebar-agent-menu__action:hover,
+.sidebar-agent-menu__action:focus-visible {
   color: var(--text-strong);
 }
 
-.sidebar-agent-menu__settings:focus-visible {
+.sidebar-agent-menu__action:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -1381,7 +1381,8 @@
   flex: 0 0 calc(var(--space-6) * 4);
 }
 
-.sidebar-session-menu-segmented {
+/* Compound selectors outrank the shared .settings-segmented rules in any stylesheet load order. */
+.settings-segmented.sidebar-session-menu-segmented {
   display: flex;
   flex: 1 1 auto;
   flex-wrap: nowrap;
@@ -1390,7 +1391,7 @@
   height: var(--settings-control-height);
 }
 
-.sidebar-session-menu-segmented > .settings-segmented__btn {
+.settings-segmented.sidebar-session-menu-segmented > .settings-segmented__btn {
   flex: 1 1 auto;
   justify-content: center;
   min-height: calc(var(--settings-control-height) - var(--space-1) * 1.5);

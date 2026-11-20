@@ -215,7 +215,9 @@ Snapshots taken while a Gateway may still be writing are available for
 manual recovery only until verified successful activation, even if it exits later.
 Migrated files are kept as
 `<database>.migrated-<runId>` for inspection, and the report names the snapshots
-and displaced files. See [Recovery limits](/cli/update/how-updates-run#recovery-limits)
+and displaced files. A `<database>.migrated-<runId>.receipt.json` beside them records
+which files the rollback moved; the next verified successful update deletes them (see
+[what automatic cleanup deletes](/cli/update/repair-and-recovery#what-automatic-cleanup-deletes)). See [Recovery limits](/cli/update/how-updates-run#recovery-limits)
 for disk requirements and the lifecycle checks.
 
 Database restoration preserves current update history, including failure details

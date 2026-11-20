@@ -31,10 +31,6 @@ export async function loadStoredOriginDeviceAuth(
   }
 }
 
-export async function hasStoredOriginDeviceAuth(deviceAuthScope: string): Promise<boolean> {
-  return Boolean((await loadStoredOriginDeviceAuth(deviceAuthScope))?.token);
-}
-
 /**
  * A device paired with only session scopes (a team guest) connects within that
  * grant; requesting the default scopes would file a scope-upgrade request.

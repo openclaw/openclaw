@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
 import { writeFile, readFile, rm, rename } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -323,6 +323,53 @@ it("cross-process publishers fence competing edits and never lose the winner", a
   expect(winner.state).toBe("published");
   const current = (await f.service.record_detail({ id: created.id }, f.owner)).record;
   expect(current!.hash).toBe(winner.hash);
+  expect(current!.revision).toBe(2);
+});
+
+it("a scan overtaken by publication cannot record a false deletion", async () => {
+  const f = await fixture();
+  const created = await f.service.save_page(draft(), f.owner);
+  const original = (await f.service.record_detail({ id: created.id }, f.owner)).record;
+  const input = edit(original, { body: "Published winner" });
+  const writer = new KnowledgeStorage(f.config, f.store, (stage) => {
+    if (stage === "after-accept") {
+      throw new Error("pause accepted publication");
+    }
+  });
+  class InterleavedStore extends SqliteIdentityStore {
+    beforeObserve?: () => void;
+    override withDatabase<T>(run: (db: DatabaseSync) => T): T {
+      const beforeObserve = this.beforeObserve;
+      this.beforeObserve = undefined;
+      beforeObserve?.();
+      return super.withDatabase(run);
+    }
+  }
+  const store = new InterleavedStore(f.config.statePath);
+  const reader = new KnowledgeStorage(f.config, store);
+  const full = path.join(f.root, "private", created.path);
+  const displaced = full + ".displaced";
+  await expect(
+    reader.run(f.access(), async (vault) => {
+      await expect(writer.save(input, f.access(), "agent")).rejects.toThrow(
+        "pause accepted publication",
+      );
+      // Reproduce the scan seeing a publisher's displacement, then waiting for
+      // that publisher's SQLite transaction before recording its observation.
+      await rename(full, displaced);
+      store.beforeObserve = () => {
+        renameSync(displaced, full);
+        writer.resume(f.access(), input.requestId);
+      };
+      return vault.scan();
+    }),
+  ).rejects.toThrow(/identity|unavailable/);
+  const unavailable = f.store.withDatabase((db) =>
+    db.prepare("SELECT id FROM history WHERE provenance='external-unavailable'").all(),
+  );
+  expect(unavailable).toEqual([]);
+  const current = (await f.service.record_detail({ id: created.id }, f.owner)).record;
+  expect(current!.body).toBe("Published winner");
   expect(current!.revision).toBe(2);
 });
 

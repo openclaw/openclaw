@@ -6,87 +6,19 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createContext, createRuntimeConfigStub } from "./skill-workshop-page.test-support.ts";
 import { SkillWorkshopPage } from "./skill-workshop-page.tsx";
 
-it.each([
-  { width: 390, height: 844, nativeChrome: false },
-  { width: 844, height: 390, nativeChrome: true },
-])(
-  "reveals the stacked reader at $width px (native chrome: $nativeChrome)",
-  async ({ width, height, nativeChrome }) => {
-    const { page } = await import("vitest/browser");
-    await page.viewport(width, height);
-    vi.stubGlobal("__OPENCLAW_NATIVE_WEB_CHROME__", nativeChrome);
-    const request = vi.fn(async (method: string, params: { agentId: string }) => {
-      if (method === "skills.workshop.list") {
-        return {
-          agentId: params.agentId,
-          mode: "auto",
-          root: "/synthetic/workshop",
-          skills: Array.from({ length: 16 }, (_, index) => ({
-            name: `review-${index}`,
-            description: "Review the source and preserve existing behavior.",
-            updatedAtMs: Date.now(),
-            sizeBytes: 40,
-            files: ["SKILL.md"],
-          })),
-          archived: [],
-        };
-      }
-      if (method === "skills.workshop.changes") {
-        return { changes: [] };
-      }
-      if (method === "skills.workshop.read") {
-        return { content: "# Review procedure", files: ["SKILL.md"] };
-      }
-      throw new Error(`Unexpected method: ${method}`);
-    });
-    const scrollingPage = () => (
-      <div style={{ height: "100vh", overflow: "auto" }}>
-        <SkillWorkshopPage />
-      </div>
-    );
-    const mounted = mountSolid(scrollingPage, {
-      wrapper: createSolidApplicationContextProvider(
-        createContext(request, { runtimeConfig: createRuntimeConfigStub({ sourceConfig: {} }) }),
-      ).wrapper,
-    });
-    try {
-      await waitForSolid(() =>
-        expect(mounted.container.querySelector(".sw-markdown")).not.toBeNull(),
-      );
-      const find = (selector: string) => mounted.container.querySelector<HTMLElement>(selector)!;
-      const detail = find(".sw-detail");
-      expect(detail.getBoundingClientRect().top).toBeGreaterThan(window.innerHeight);
-      mounted.getByRole("button", { name: /^review-3/ }).click();
-      await waitForSolid(() => {
-        expect(find(".sw-detail__title").textContent).toBe("review-3");
-        expect(find(".sw-detail__title").getBoundingClientRect().bottom).toBeLessThan(
-          window.innerHeight,
-        );
-      });
-    } finally {
-      mounted.unmount();
-      vi.unstubAllGlobals();
-    }
-  },
-);
-
-it("grows the skill reader with the list and keeps a bounded reader when stacked", async () => {
-  const { page } = await import("vitest/browser");
-  await page.viewport(1440, 900);
-  const content =
-    "# Review procedure\n\n" + "Read the source and report actionable findings.\n\n".repeat(150);
-  const request = vi.fn(async (method: string, params: { agentId: string }) => {
+function workshopRequest(content: string, files = ["SKILL.md"]) {
+  return vi.fn(async (method: string, params: { agentId: string }) => {
     if (method === "skills.workshop.list") {
       return {
         agentId: params.agentId,
-        mode: "off",
+        mode: "auto",
         root: "/synthetic/workshop",
-        skills: Array.from({ length: params.agentId === "research" ? 3 : 16 }, (_, index) => ({
+        skills: Array.from({ length: 16 }, (_, index) => ({
           name: `review-${index}`,
           description: "Review the source and preserve existing behavior.",
           updatedAtMs: Date.now(),
           sizeBytes: content.length,
-          files: ["SKILL.md", "references/checklist.txt"],
+          files,
         })),
         archived: [],
       };
@@ -95,57 +27,87 @@ it("grows the skill reader with the list and keeps a bounded reader when stacked
       return { changes: [] };
     }
     if (method === "skills.workshop.read") {
-      return { content, files: ["SKILL.md", "references/checklist.txt"] };
+      return { content, files };
     }
     throw new Error(`Unexpected method: ${method}`);
   });
-  const context = createContext(request);
+}
+
+it.each([
+  { width: 390, height: 844, nativeChrome: false },
+  { width: 844, height: 390, nativeChrome: true },
+])(
+  "opens a skill's page from a scrolled list at $width px (native chrome: $nativeChrome)",
+  async ({ width, height, nativeChrome }) => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(width, height);
+    vi.stubGlobal("__OPENCLAW_NATIVE_WEB_CHROME__", nativeChrome);
+    const scrollingPage = () => (
+      <div style={{ height: "100vh", overflow: "auto" }}>
+        <SkillWorkshopPage />
+      </div>
+    );
+    const mounted = mountSolid(scrollingPage, {
+      wrapper: createSolidApplicationContextProvider(
+        createContext(workshopRequest("# Review procedure"), {
+          runtimeConfig: createRuntimeConfigStub({ sourceConfig: {} }),
+        }),
+      ).wrapper,
+    });
+    try {
+      const row = await waitForSolid(() => mounted.getByRole("button", { name: /^review-12/ }));
+      row.scrollIntoView();
+      row.click();
+      const find = (selector: string) => mounted.container.querySelector<HTMLElement>(selector)!;
+      await waitForSolid(() => {
+        expect(find(".sw-detail h1").textContent).toBe("review-12");
+        const top = find(".sw-detail h1").getBoundingClientRect();
+        expect(top.top).toBeGreaterThanOrEqual(0);
+        expect(top.bottom).toBeLessThan(window.innerHeight);
+        expect(find(".sw-markdown")).not.toBeNull();
+      });
+      expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
+      mounted.getByRole("link", { name: "Skill workshop" }).click();
+      await waitForSolid(() =>
+        expect(mounted.container.querySelectorAll(".sw-row")).toHaveLength(16),
+      );
+    } finally {
+      mounted.unmount();
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
+it("keeps the facts beside the reading column on a wide page and under it on a phone", async () => {
+  const { page } = await import("vitest/browser");
+  await page.viewport(1440, 900);
+  const content =
+    "# Review procedure\n\n" + "Read the source and report actionable findings.\n\n".repeat(40);
+  const context = createContext(workshopRequest(content, ["SKILL.md", "references/checklist.txt"]));
   const mounted = mountSolid(() => <SkillWorkshopPage />, {
     wrapper: createSolidApplicationContextProvider(context).wrapper,
   });
   try {
-    await waitForSolid(() =>
-      expect(mounted.container.querySelector(".sw-markdown")).not.toBeNull(),
-    );
     const find = (selector: string) => mounted.container.querySelector<HTMLElement>(selector)!;
-    const assertAligned = () => {
-      const list = find(".sw-list").getBoundingClientRect();
-      const detail = find(".sw-detail").getBoundingClientRect();
-      expect(detail.top).toBeCloseTo(list.top, 0);
-      expect(detail.bottom).toBeCloseTo(list.bottom, 0);
-    };
-    const assertScrollable = () => {
-      const body = find(".sw-detail__body");
-      expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
-      body.scrollTop = body.scrollHeight;
-      expect(body.scrollTop).toBeGreaterThan(0);
-      body.scrollTop = 0;
-    };
-    assertAligned();
-    assertScrollable();
-    const initialHeight = find(".sw-detail__body").clientHeight;
-    context.agentSelection.set("scout");
-    await waitForSolid(() =>
-      expect(mounted.container.querySelectorAll(".sw-row")).toHaveLength(16),
-    );
+    (await waitForSolid(() => mounted.getByRole("button", { name: /^review-0/ }))).click();
     await waitForSolid(() => expect(find(".sw-markdown")).not.toBeNull());
-    assertAligned();
-    assertScrollable();
-    expect(find(".sw-detail__body").clientHeight).toBeGreaterThan(initialHeight + 100);
+    const main = find(".plugin-catalog-detail__main").getBoundingClientRect();
+    const facts = find(".sw-facts").getBoundingClientRect();
+    expect(facts.left).toBeGreaterThan(main.right);
+    expect(facts.top).toBeLessThan(main.bottom);
 
     mounted.getByRole("button", { name: /^Files/ }).click();
     await waitForSolid(() => expect(find(".sw-file")).not.toBeNull());
-    assertScrollable();
     mounted.getByRole("button", { name: /^Instructions$/ }).click();
     await waitForSolid(() => expect(find(".sw-markdown")).not.toBeNull());
 
     await page.viewport(390, 844);
-    const list = find(".sw-list").getBoundingClientRect();
-    const detail = find(".sw-detail").getBoundingClientRect();
-    expect(detail.top).toBeGreaterThanOrEqual(list.bottom);
-    expect(find(".sw-detail__body").clientHeight).toBeLessThanOrEqual(window.innerHeight * 0.7 + 1);
-    expect(detail.right).toBeLessThanOrEqual(window.innerWidth);
-    assertScrollable();
+    await waitForSolid(() => {
+      const column = find(".plugin-catalog-detail__main").getBoundingClientRect();
+      const stacked = find(".sw-facts").getBoundingClientRect();
+      expect(stacked.top).toBeGreaterThanOrEqual(column.bottom);
+      expect(stacked.right).toBeLessThanOrEqual(window.innerWidth);
+    });
   } finally {
     mounted.unmount();
   }

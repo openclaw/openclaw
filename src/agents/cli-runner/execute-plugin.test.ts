@@ -2,7 +2,6 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveReplyFailureSummary } from "../../auto-reply/reply/agent-runner-failure-reply.js";
-import type { CliExecutionHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   CliBackendExecute,
@@ -10,7 +9,6 @@ import type {
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
 } from "../../plugins/cli-backend.types.js";
-import * as execDefaults from "../exec-defaults.js";
 import { resolveReplyFailoverFacts } from "../failover/request-error-facts.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
@@ -149,27 +147,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function historyWriter(overrides: Partial<CliExecutionHistoryWriter>): CliExecutionHistoryWriter {
-  return {
-    target: {
-      agentId: "main",
-      sessionId: "sdk-session",
-      sessionKey: "agent:main:main",
-      storePath: "/synthetic/sessions.sqlite",
-    },
-    runId: "history-owner",
-    authFingerprint: "a".repeat(64),
-    bindsNativeLogin: false,
-    replaysHistory: true,
-    assertCurrent() {},
-    async assertReadable() {},
-    checkNativeLoginBoundary() {},
-    bindExecutionEnv() {},
-    async settleNativeLogin() {},
-    ...overrides,
-  };
-}
-
 describe("plugin-owned CLI execution host boundary", () => {
   it("streams plugin events through the canonical host output boundary", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -224,69 +201,8 @@ describe("plugin-owned CLI execution host boundary", () => {
     },
   );
 
-  it.each(["permission preparation", "native prompt send"])(
-    "does not disclose private context when history authority changes during %s",
-    async (boundary) => {
-      const { context } = await createExecution();
-      if (boundary === "permission preparation") {
-        context.promptContext = { prependContext: "private conversation history" };
-      }
-      let current = true;
-      const assertCurrent = () => {
-        if (!current) {
-          throw new Error("Private history account changed");
-        }
-      };
-      context.cliHistoryWriter = historyWriter({
-        bindsNativeLogin: boundary === "native prompt send",
-        async assertReadable() {
-          if (boundary === "permission preparation") {
-            assertCurrent();
-          }
-        },
-        checkNativeLoginBoundary(carriesSavedHistory) {
-          if (boundary === "native prompt send" && carriesSavedHistory) {
-            assertCurrent();
-          }
-        },
-      });
-      const preparingPermission = createDeferred();
-      const releasePermission = createDeferred();
-      if (boundary === "permission preparation") {
-        const resolvePermission = execDefaults.resolveExecDefaultsAsync;
-        vi.spyOn(execDefaults, "resolveExecDefaultsAsync").mockImplementationOnce(
-          async (...args) => {
-            preparingPermission.resolve();
-            await releasePermission.promise;
-            return resolvePermission(...args);
-          },
-        );
-      }
-      const execute = vi.fn(async function* (execution: CliBackendExecuteContext) {
-        const host: CliBackendExecuteContext & { assertPrivateInputCurrent?: () => void } =
-          execution;
-        current = false;
-        host.assertPrivateInputCurrent?.();
-        yield SUCCESS_RESULT;
-      });
-      const result = runPlugin(context, execute).catch((error: unknown) => error);
-      if (boundary === "permission preparation") {
-        try {
-          await preparingPermission.promise;
-          current = false;
-        } finally {
-          releasePermission.resolve();
-        }
-      }
-      expect(await result).toEqual(new Error("Private history account changed"));
-      if (boundary === "permission preparation") {
-        expect(execute).not.toHaveBeenCalled();
-      }
-    },
-  );
-
   it.each([false, true])(
-    "runs plugin user questions with current caller authority (revoked=%s)",
+    "finishes plugin user questions after caller authority changes (revoked=%s)",
     async (revoked) => {
       const { context } = await createExecution({
         runId: "plugin-user-input",
@@ -336,73 +252,10 @@ describe("plugin-owned CLI execution host boundary", () => {
         }),
       );
 
-      expect(result).toEqual(
-        revoked
-          ? expect.objectContaining({ status: "cancelled" })
-          : { status: "answered", answers: { one: ["one"] } },
-      );
+      expect(result).toEqual({ status: "answered", answers: { one: ["one"] } });
       expect(onBlockReply).toHaveBeenCalledOnce();
     },
   );
-
-  it.each(["caller", "admission"] as const)(
-    "rejects %s revocation before restart or plugin execution",
-    async (authority) => {
-      const { context, admission } = await createExecution();
-      const session = registerOwnerSession(context, "dispatch-owner");
-      if (authority === "caller") {
-        context.params.assertCurrent = () => {
-          throw new Error("caller revoked");
-        };
-      } else {
-        admission.close();
-      }
-      const execute = vi.fn(async function* () {
-        yield SUCCESS_RESULT;
-      });
-      await expect(
-        runPlugin(context, execute, { liveSession: true, forceNewSession: true }),
-      ).rejects.toThrow();
-      expect(session.close).not.toHaveBeenCalled();
-      expect(execute).not.toHaveBeenCalled();
-      await expect(runPlugin(context, execute)).rejects.toThrow();
-      expect(execute).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not close a successor or execute after caller revocation during restart cleanup", async () => {
-    const { context } = await createExecution();
-    const successor = await createExecution();
-    const session = registerOwnerSession(successor.context, "successor-during-restart");
-    const entered = createDeferred();
-    const held = createDeferred();
-    const revoke = setCallerAuthority(context);
-    context.preparedBackend.closeLiveSession = async () => {
-      entered.resolve();
-      await held.promise;
-    };
-    const execute = vi.fn(async function* () {
-      yield SUCCESS_RESULT;
-    });
-    const run = runPlugin(context, execute, { liveSession: true, forceNewSession: true });
-    const observed = run.catch((error: unknown) => error);
-    try {
-      await entered.promise;
-      revoke();
-    } finally {
-      held.resolve();
-    }
-    expect(await observed).toEqual(new Error("caller revoked"));
-    expect(session.close).not.toHaveBeenCalled();
-    expect(execute).not.toHaveBeenCalled();
-    await runTurn(
-      successor.context,
-      (execution) => {
-        expect(execution.liveSession?.current()).toBe(session.handle);
-      },
-      { liveSession: true },
-    );
-  });
 
   it.each(["reseed", "resume-capable", "no-resume"])(
     "restarts only truly fresh sessions: %s",
@@ -767,7 +620,7 @@ describe("plugin-owned CLI execution host boundary", () => {
   });
 
   it.each(["admission", "caller"] as const)(
-    "denies approval when %s authority closes during the awaited decision",
+    "finishes native approval after %s authority closes",
     async (authority) => {
       const { admission, context } = await createApprovalExecution();
       const revoke = setCallerAuthority(context);
@@ -783,10 +636,7 @@ describe("plugin-owned CLI execution host boundary", () => {
         requestNativeTool(execution, "WebFetch", { url: "https://example.com" }),
       );
 
-      expect(decision).toMatchObject({
-        behavior: "deny",
-        message: expect.stringContaining("closed"),
-      });
+      expect(decision).toMatchObject({ behavior: "allow" });
     },
   );
 

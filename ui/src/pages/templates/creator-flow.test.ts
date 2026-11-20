@@ -120,6 +120,79 @@ it("invokes the bundled skill in the existing main session, then reviews and pub
   expect(calls.some(([method]) => method === "sessions.create")).toBe(false);
 });
 
+it.each(["published", "failed"] as const)(
+  "checks a pending publication 30 seconds after each response and stops on %s",
+  async (terminal) => {
+    const publication = { publicationStatus: "pending", attemptId: "attempt-1" };
+    const first = Promise.withResolvers<unknown>();
+    const check = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue({
+        publicationState:
+          terminal === "published"
+            ? { status: terminal, publication: { ...publication, publicationStatus: terminal } }
+            : { status: terminal, reason: "Not accepted" },
+      });
+    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === "templates.drafts.read") {
+        return { revision: "a", content: JSON.stringify({ scope }) };
+      }
+      if (method === "templates.drafts.review") {
+        return params.checkPublication
+          ? check(params)
+          : { name: "@maker/brief", reviewToken: "review-1", items: [] };
+      }
+      if (method === "templates.drafts.publish") {
+        return publication;
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const flow = new TemplateCreatorFlow(
+      createContext(request, {
+        methods: ["templates.drafts.create", "chat.send"],
+        runtimeConfig: createRuntimeConfigStub({
+          sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
+        }),
+      }),
+    );
+    const session = "agent:research:main";
+    flow.hydrate("research", draftId, session);
+    await vi.advanceTimersByTimeAsync(0);
+    await flow.publish();
+    expect(flow.publication?.publicationStatus).toBe("pending");
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(check).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(check).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ attemptId: "attempt-1", reviewToken: "review-1" }),
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(check).toHaveBeenCalledTimes(1);
+    // In the failure case, leave while the first check is in flight and return later.
+    if (terminal === "failed") {
+      flow.retirePresentation();
+    }
+    first.resolve({ publicationState: { status: "pending", publication } });
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(check).toHaveBeenCalledTimes(1);
+    if (terminal === "failed") {
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(check).toHaveBeenCalledTimes(1);
+      flow.hydrate("research", draftId, session);
+    }
+    await vi.advanceTimersByTimeAsync(1);
+    expect(flow.publication?.publicationStatus ?? flow.publicationIssue).toBe(terminal);
+    flow.retirePresentation();
+    flow.hydrate("research", draftId, session);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(
+      request.mock.calls.filter(([method]) => method === "templates.drafts.publish"),
+    ).toHaveLength(1);
+  },
+);
+
 it("reviews an agent-authored draft in the requesting conversation without another model turn or publication", async () => {
   const request = vi.fn(async (method: string) => {
     if (method === "templates.drafts.read") {

@@ -75,7 +75,7 @@ export type {
   OAuthPrompt,
   OAuthSelectOption,
   OAuthSelectPrompt,
-} from "../../../plugin-sdk/provider-oauth-runtime.js";
+} from "../../../llm/utils/oauth/types.js";
 
 interface ExtensionUIDialogOptions {
   /** AbortSignal to programmatically dismiss the dialog. */
