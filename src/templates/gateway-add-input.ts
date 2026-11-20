@@ -55,6 +55,11 @@ export type ChatTemplateAddInput = ClawHubFetchOptions & {
     agent: { agentId: string; sessionKey: string },
     report: TemplateSetupReport,
   ) => Promise<void>;
+  /** Scheduler-owned declaration keys for this agent's setup conversation, including paused jobs. */
+  readSetupAutomationKeys?: (agent: {
+    agentId: string;
+    sessionKey: string;
+  }) => Promise<Set<string>>;
 };
 
 /** Both sources share the same installer; only registry coordinates can continue chat setup. */

@@ -48,7 +48,7 @@ export function buildTemplateOpeningMessage(
     'Greeting. Greet the user briefly in your own voice, using the instructions already in your context. Send this greeting immediately, before any reads or other setup tools, with `message` ({"action":"send","final":false,"message":"..."}) and no channel or target. Do not ask them to choose a role or change your personality.',
     [
       'Automations. Read `CLAW.md`, then call `automations` with {"action":"list","includeDisabled":true}. For each entry under `automations` (`cronJobs` in older manifests), skip it when a listed automation already has `declarationKey` ' +
-        `${JSON.stringify(declarationKey)}; do not add or update that one, including user-enabled jobs. Follow list pagination. If no entries remain, skip this step. Otherwise, before adding anything, call \`automations\` with all remaining slots in manifest order:`,
+        `${JSON.stringify(declarationKey)} and is owned by this conversation (owner.agentId ${JSON.stringify(agent.agentId)}, owner.sessionKey ${JSON.stringify(agent.sessionKey)}, default account); do not add or update that one, including user-enabled jobs. Follow list pagination. If no entries remain, skip this step. Otherwise, before adding anything, call \`automations\` with all remaining slots in manifest order:`,
       JSON.stringify({ action: "plan", slots: [slot] }),
       "Use the returned planId and the corresponding entry id in each add:",
       addAutomation,
