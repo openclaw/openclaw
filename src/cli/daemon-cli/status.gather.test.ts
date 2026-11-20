@@ -981,6 +981,35 @@ describe("gatherDaemonStatus", () => {
     expect(output.errors).toContain(`this OpenClaw command is version ${VERSION}`);
   });
 
+  it.each([
+    { args: ["--port", "19001"], port: 19002, role: "diagnostic-only" },
+    { args: [], port: 19002, role: "diagnostic-only" },
+    { args: ["--port", "19001"], port: 19001, role: "target" },
+  ])(
+    "probes the dashboard port $port with installed args $args ($role)",
+    async ({ args, port, role }) => {
+      daemonLoadedConfig = { gateway: { port: 19001, auth: { token: "daemon-token" } } };
+      setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
+      resolveGatewayPort.mockImplementationOnce((cfg, env) => {
+        const configPort = (cfg as { gateway?: { port?: number } }).gateway?.port;
+        const envPort = (env as NodeJS.ProcessEnv).OPENCLAW_GATEWAY_PORT;
+        return envPort ? Number(envPort) : (configPort ?? 18789);
+      });
+      serviceReadCommand.mockResolvedValueOnce({
+        programArguments: ["/bin/node", "cli", "gateway", "run", ...args],
+        environment: daemonEnvironment,
+      });
+
+      const probeUrl = "ws://127.0.0.1:" + port;
+      const status = await gatherStatus({ dashboardTarget: { port, probeUrl } });
+
+      expect(status.rpc?.url).toBe(probeUrl);
+      expect(status.service.targetRole).toBe(role);
+      expect(probeInput().url).toBe(probeUrl);
+      expect(probeInput().token).toBe(role === "target" ? "daemon-token" : undefined);
+    },
+  );
+
   it("uses raw explicit URLs for probes but redacts them from status diagnostics", async () => {
     const rawUrl =
       "wss://user:password@override.example:18790/ws?token=secret&key=api-key&X-Amz-Signature=signed";
