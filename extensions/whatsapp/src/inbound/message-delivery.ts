@@ -72,6 +72,7 @@ type WhatsAppMessageDeliveryOptions = {
   loadConfig?: () => OpenClawConfig;
   verbose: boolean;
   accountId: string;
+  authDir: string;
   sock: WASocket;
   socketSession: WhatsAppAttachedSocketSession;
   groupMetadata: WhatsAppGroupMetadataCacheOwner;
@@ -262,6 +263,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     const enriched = await enrichWhatsAppInboundMessage({
       msg,
       sock,
+      authDir: options.authDir,
       mediaMaxMb: options.mediaMaxMb,
     });
     if (!enriched) {

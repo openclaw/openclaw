@@ -8,7 +8,6 @@ import {
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
-import { jidToE164 } from "../targets-runtime.js";
 import { parseVcard } from "../vcard.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import type { WhatsAppStructuredContactContext } from "./types.js";
@@ -371,6 +370,7 @@ export function extractLocationData(
 
 export function describeReplyContext(
   source: WhatsAppInboundMessageSource,
+  authDir?: string,
 ): WhatsAppReplyContext | null {
   const projection = resolveWhatsAppInboundMessageProjection(source);
   const message = unwrapMessage(projection);
@@ -387,10 +387,8 @@ export function describeReplyContext(
     return null;
   }
   const senderJid = contextInfo?.participant ?? undefined;
-  const sender = resolveComparableIdentity({
-    jid: senderJid,
-    label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
-  });
+  const identity = resolveComparableIdentity({ jid: senderJid }, authDir);
+  const sender = { ...identity, label: identity.e164 ?? (senderJid || "unknown sender") };
   if (!quoted) {
     // Baileys may preserve a real reply ID while omitting its private quoted payload.
     return {
