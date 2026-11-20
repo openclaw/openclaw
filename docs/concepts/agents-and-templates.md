@@ -107,13 +107,13 @@ and needs an administrator connection.
    conversation. It writes the proposal for a new owner instead of copying your
    workspace.
 2. If the card asks you to **Sign in**, approve ClawHub access in your browser.
-   Review opens in the same chat when the draft is ready. The card shows the exact files in the package and
-   the skills, plugins, MCP servers, and automations it declares. The review is
+   When the draft is ready, its card appears in the same chat. Select **Preview**
+   to inspect the exact files, skills, plugins, MCP servers, and automations. The preview is
    read-only, so ask the agent to revise the proposal when something should
    change. Known private paths and credential-like text are rejected, but read
    the remaining text for personal details yourself.
-3. To share the Template, select **Publish** on the review card. Publishing is
-   your decision; the agent cannot publish for you. The card shows **Pending**
+3. To share the Template, select **Publish** on the card or in the preview.
+   The agent cannot publish for you. The card shows **Pending**
    while ClawHub checks the submission and **Published** once the Template is
    available, with a link you can share.
 

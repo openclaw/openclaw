@@ -76,7 +76,7 @@ function renderTemplateTrustWarning(warning: string) {
     <InlineAlert tone="warning" class="templates-trust-warning" role="alert">
       {audit ? (
         <>
-          <strong class="templates-trust-warning__title">{title}</strong>
+          <strong>{title}</strong>
           <p>{audit.overview}</p>
           {detailsUrl ? (
             <a href={detailsUrl} target="_blank" rel="noopener noreferrer">
@@ -85,7 +85,7 @@ function renderTemplateTrustWarning(warning: string) {
           ) : undefined}
         </>
       ) : (
-        <span class="templates-trust-warning__plain">{warning}</span>
+        <span>{warning}</span>
       )}
     </InlineAlert>
   );
@@ -279,10 +279,8 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                                 role="status"
                                 aria-label={t("templatesCatalog.contentsLoading")}
                               >
-                                <div class="templates-content-skeleton__title skeleton" />
-                                <For each={[0, 1, 2, 3]}>
-                                  {() => <div class="templates-content-skeleton__row skeleton" />}
-                                </For>
+                                <div class="skeleton-title skeleton" />
+                                <For each={[0, 1, 2, 3]}>{() => <div class="skeleton" />}</For>
                               </section>
                             }
                           >
@@ -326,9 +324,9 @@ export function TemplateAddFeedback(props: { view: TemplatesCatalogViewProps }) 
         </InlineAlert>
       </Show>
       <Show when={props.view.consentWarning}>
-        <section class="templates-add-consent" aria-label={t("templatesCatalog.trustReview")}>
+        <section class="templates-add-consent stack" aria-label={t("templatesCatalog.trustReview")}>
           {renderTemplateTrustWarning(props.view.consentWarning!)}
-          <div class="templates-add-consent__actions">
+          <div class="template-actions templates-add-consent__actions">
             <button type="button" class="btn" onClick={() => props.view.onCancelConsent()}>
               {t("common.cancel")}
             </button>

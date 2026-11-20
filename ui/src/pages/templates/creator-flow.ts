@@ -37,6 +37,8 @@ import { readTemplatePackagePreview } from "./template-package-preview.ts";
 registerEnglishCatalog(registerAgentsHomeEnglish);
 registerEnglishCatalog(registerTemplateCreatorEnglish);
 
+const PENDING_PUBLICATION_POLL_MS = 30_000;
+
 type Target = {
   agentId: string;
   draftId: string;
@@ -65,6 +67,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
   private readonly listeners = createChangeListeners();
   private target: Target | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private presentationActive = false;
   private generation = 0;
   private reviewRequest = 0;
   private seenRevision: string | null = null;
@@ -146,6 +149,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
   }
 
   retirePresentation() {
+    this.presentationActive = false;
     this.clawHubSignIn.retire();
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
@@ -250,6 +254,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
         throw new Error(t("templatesDraft.sendFailed"));
       }
       this.navigate(target);
+      this.presentationActive = true;
       this.schedulePoll(target, generation);
     } catch (error) {
       if (this.context.gateway.snapshot.client === client && this.generation === generation) {
@@ -280,6 +285,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
     this.busy = null;
     const generation = this.reset(target);
     this.navigate(target);
+    this.presentationActive = true;
     this.schedulePoll(target, generation, 0);
   }
 
@@ -306,13 +312,17 @@ export class TemplateCreatorFlow implements TemplateCreator {
         this.clawHubSignIn.show(this.target!);
       }
       this.inlineReview = true;
+      this.presentationActive = true;
       this.changed();
       if (this.busy === "publishing") {
         return;
       }
-      if (this.publication || this.publicationIssue) {
+      if (
+        this.publication?.publicationStatus === "pending" ||
+        this.publicationIssue === "unconfirmed"
+      ) {
         void this.checkPublication();
-      } else {
+      } else if (!this.publication && !this.publicationIssue) {
         this.schedulePoll(this.target!, this.generation, 0);
       }
       return;
@@ -324,11 +334,16 @@ export class TemplateCreatorFlow implements TemplateCreator {
       this.clawHubSignIn.show(target);
     }
     this.inlineReview = true;
+    this.presentationActive = true;
     this.changed();
     this.schedulePoll(target, generation, 0);
   }
 
   private schedulePoll(target: Target, generation: number, delay = 2500) {
+    // A read or write can settle after the card unmounts. Keep its result, not its timer.
+    if (!this.presentationActive) {
+      return;
+    }
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
     }
@@ -367,6 +382,9 @@ export class TemplateCreatorFlow implements TemplateCreator {
         this.seenRevision = draft.revision;
         if (!this.signIn && !this.clawHubSignIn.checking && hasCompleteScope(draft.content)) {
           await this.refreshReview(target, generation);
+        } else if (this.review) {
+          // No refresh will notify the card to retire its stale preview.
+          this.changed();
         }
       }
     } catch (error) {
@@ -487,7 +505,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
       if (this.current(target, generation)) {
         this.busy = null;
         if (this.publication?.publicationStatus === "pending") {
-          this.schedulePoll(target, generation, 5000);
+          this.schedulePoll(target, generation, PENDING_PUBLICATION_POLL_MS);
         }
         this.changed();
       }
@@ -540,7 +558,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
         this.busy = null;
         this.changed();
         if (this.publication?.publicationStatus === "pending") {
-          this.schedulePoll(target, generation, 5000);
+          this.schedulePoll(target, generation, PENDING_PUBLICATION_POLL_MS);
         }
       }
     }

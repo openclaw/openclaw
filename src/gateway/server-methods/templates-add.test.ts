@@ -545,7 +545,7 @@ it("keeps the new agent when another automation appears before rollback", async 
   expect(deleteAgent).not.toHaveBeenCalled();
 });
 
-it("rejects a declaration created after the Template list check without mutating it", async () => {
+it("rejects an existing declaration at the scheduler without relying on a list precheck", async () => {
   const cron = makeCron({
     add: vi.fn(async (_input, options) => {
       options.matchesExisting({
@@ -557,13 +557,9 @@ it("rejects a declaration created after the Template list check without mutating
     }),
   });
   validateDelivery.mockResolvedValue(undefined);
-  const request = await applyThrough(
-    async (input) => {
-      expect(await input.cronGateway!.list!(agentId)).toEqual({ jobs: [] });
-      await input.cronGateway!.add(schedule);
-    },
-    { cron },
-  );
+  const request = await applyThrough((input) => input.cronGateway!.add(schedule), { cron });
+
+  expect(cron.list).not.toHaveBeenCalled();
 
   expect(request[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
 });

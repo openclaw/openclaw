@@ -9,6 +9,7 @@ import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import type { AutomationProjection } from "../chat-automation-projection-loader.ts";
 import { createPendingSteerLookup } from "../chat-pending-input-display.ts";
 import { indexQuestionPrompts } from "../chat-question-placement.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
@@ -75,6 +76,7 @@ export function projectChatTranscript(
   props: ChatThreadProps,
   transcript: ChatTranscriptSession,
   search = getTranscriptState(props.paneId).search.snapshot,
+  projectAutomations?: AutomationProjection,
 ) {
   const state = getTranscriptState(props.paneId);
   const { actions, dependencies: actionDependencies } = createTranscriptActions(
@@ -116,6 +118,7 @@ export function projectChatTranscript(
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
+    projectAutomations,
     guardianNotices: props.guardianNotices,
     streamSegments: props.streamSegments,
     get stream() {
