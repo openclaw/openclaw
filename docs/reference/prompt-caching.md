@@ -53,8 +53,35 @@ The existing route and history-boundary refresh contracts remain in effect.
 
 The `sessions_yield` description does not change with sibling tool availability.
 Per-turn prompt-hook tool restrictions gate execution while retaining the session's
-provider definitions. Genuine config, skill, and tool refreshes still apply; the
-tool set is not permanently frozen to the first request.
+provider definitions. The tool set and every definition are fixed at the first
+request of a prompt series, whatever starts a later turn (user, cron, wake, or
+restart recovery). A tool that a later turn builds but the series did not send
+waits for the next series; a pinned tool that a turn did not build stays listed
+and refuses its calls. A tool or plugin configuration change starts a new pin.
+
+With Tool Search on (`tools.toolSearch` enabled in `mode: "tools"` without
+`include` or `exclude` selections), every turn of a session builds the same list:
+
+- `message` is listed on every turn: user, cron, wake, subagent completion, and
+  child-session turns. A turn whose reply delivery or tool policy does not allow
+  the message tool refuses the call with a visible message. The turn's own
+  delivery rules still decide whether a send is allowed.
+- A run's `toolsAllow` (scheduled runs, queued follow-ups, and cross-session
+  events) and group `tools` / `toolsBySender` policy keep the session's tools
+  listed and refuse each call they do not allow with a visible message, including
+  calls made through `dispatch_action`. They refuse the same calls as when they
+  removed those tools from the list, so every sender in a group chat sends one list.
+- The deferred MCP tool directory is part of the system prompt's deferred-tool
+  section, not the `tool_search` definition. An MCP server that connects,
+  disconnects, or changes its tools later reaches the model as an appended
+  prompt update.
+
+These exceptions keep the earlier behavior, where `message`, `toolsAllow`, and
+sender policy filter the list: Tool Search off (`tools.toolSearch: false`) or
+disabled for a run (Code Mode, memory flush, and runs that disable Tool Search),
+`include` or `exclude` selections, and `mode: "directory"`. On these opt-out
+surfaces a later turn can still add a tool to the pinned list mid-session, for
+example `skills_read` or `skills_search`, by design.
 
 Within an embedded run, bounded transcript reloads retain the admitted history
 boundary even when its compaction summary falls outside the loaded window.
@@ -661,8 +688,8 @@ Mid-session changes (skills, workspace files, permissions, exec wakes,
 inter-session input, subagent completions) go out as appended deltas: an
 in-history system message where the route supports one (direct Anthropic API
 keys on prefix-binding Claude models, native OpenAI Responses), otherwise a
-user-role note. A tool that the session has not sent before extends the tool
-pin once.
+user-role note. Tools change only at a rebuild point or a tool configuration
+change.
 
 The session prompt rebuilds only at these points:
 
@@ -687,7 +714,6 @@ Known exceptions:
   Gemini's managed explicit caching or a proxy that misreads a trailing
   carrier. That route then drops the previous turn's carrier, which rewrites
   that turn's tail once.
-- A tool that the session has not sent before extends the tool pin once.
 - Routes that merge consecutive user turns (strict Chat Completions
   compatibility, Google, Bedrock) can rewrite the last message once. This
   happens when a turn with a prompt update ends without a stored assistant

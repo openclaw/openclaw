@@ -247,6 +247,12 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
     explicitToolAllowlist: collectExplicitAllowlist(explicitToolAllowlistPolicies),
     explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
     explicitToolDenylist: collectExplicitDenylist(explicitToolAllowlistPolicies),
+    // A fixed listing builds plugins past sender, group and run denies; the turn policy gates calls.
+    sessionToolDenylist: collectExplicitDenylist(
+      explicitToolAllowlistPolicies.filter(
+        (policy) => ![groupPolicy, senderPolicy, runtimeToolPolicy].includes(policy),
+      ),
+    ),
     runtimePluginToolGrant: params.runtimePluginToolGrant,
   };
 }

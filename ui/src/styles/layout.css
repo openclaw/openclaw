@@ -474,6 +474,15 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   display: none;
 }
 
+/* Settings still needs an exit when titlebar Back is hidden or disabled. */
+html.openclaw-native-macos
+  .shell--settings:not(.shell--mobile-nav)
+  > openclaw-macos-titlebar-controls:has(.macos-titlebar-controls__back:enabled)
+  ~ .shell-nav
+  .settings-sidebar__back {
+  display: none;
+}
+
 .shell--onboarding {
   --shell-nav-width: 0px;
   /* The incoming page already fills the viewport; do not sweep it through the old sidebar. */
@@ -559,50 +568,33 @@ div.shell.shell--onboarding {
   background: var(--sidebar-bg);
 }
 
+/* Back, title and agent avatar share one row. 8px top pad centers the 32px
+   controls on the shared 24px chrome centerline, mirroring .sidebar-shell;
+   macOS overrides with titlebar clearance. */
 .settings-sidebar__header {
   flex-shrink: 0;
-  /* 8px top pad centers the 32px back button on the shared 24px chrome
-     centerline, mirroring .sidebar-shell; macOS overrides with titlebar
-     clearance. */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   padding: 8px 12px 6px;
 }
 
-/* Header, picker, search and nav rows share the 12px panel inset, a 32px
-   control height and the field radius; text and glyphs start 10px inside each
-   row (the nav rows reach it with a 1px border plus 9px padding). */
-.settings-sidebar__back {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  min-height: 32px;
-  padding: 0 10px;
-  border: none;
-  border-radius: var(--field-radius);
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: calc(12.5px * var(--control-ui-text-scale));
-  font-weight: 550;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.settings-sidebar__back-icon {
-  display: inline-flex;
-  width: var(--chrome-icon-size);
-  height: var(--chrome-icon-size);
-}
-
+/* Search and nav rows share the 12px panel inset, a 32px control height and the
+   field radius; text and glyphs start 10px inside each row (the nav rows reach it
+   with a 1px border plus 9px padding). */
 .settings-sidebar__title {
-  margin: 14px 0 0;
-  padding: 0 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
   font-size: calc(21px * var(--control-ui-text-scale));
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.15;
   color: var(--text-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-sidebar__agent {
@@ -611,10 +603,20 @@ div.shell.shell--onboarding {
   padding: 8px 12px 0;
 }
 
+.settings-sidebar__agent--header {
+  padding: 0;
+}
+
 .settings-sidebar__loading-agent {
   display: block;
   height: 32px;
   border-radius: var(--field-radius);
+}
+
+/* Matches the header trigger: a 24px avatar and chevron in a 32px pill. */
+.settings-sidebar__agent--header .settings-sidebar__loading-agent {
+  width: 54px;
+  border-radius: var(--radius-full);
 }
 
 @media (pointer: coarse) {
@@ -632,12 +634,6 @@ div.shell.shell--onboarding {
   margin: 8px 12px 0;
   padding-bottom: 8px;
   color: var(--muted);
-}
-
-.settings-sidebar__back-icon svg {
-  width: var(--chrome-icon-size);
-  height: var(--chrome-icon-size);
-  stroke-width: var(--chrome-icon-stroke);
 }
 
 .settings-sidebar__nav {
@@ -1002,7 +998,6 @@ div.shell.shell--onboarding {
 
 .sidebar-brand__icon:hover:not(:disabled, [aria-disabled="true"]),
 .sidebar-brand__icon:focus-visible,
-.settings-sidebar__back:hover,
 .settings-sidebar__search-clear:hover,
 .topbar-icon-btn:hover:not(:disabled),
 .sidebar-issues-button:hover,
@@ -3736,7 +3731,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .shell-chrome-controls__button:focus-visible,
-.settings-sidebar__back:focus-visible,
 .settings-sidebar__search-clear:focus-visible,
 .settings-sidebar__item:focus-visible,
 .settings-sidebar__subitem:focus-visible,

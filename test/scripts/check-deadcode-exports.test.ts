@@ -255,6 +255,12 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     [
       "yml",
       ".github/workflows/full-release-validation.yml",
+      "resolveReleaseContextIdentity",
+      "../../scripts/lib/release-context.mjs",
+    ],
+    [
+      "yml",
+      ".github/workflows/full-release-validation.yml",
       "resolveReleaseQualificationScope",
       "../../scripts/full-release-validation-policy.mjs",
     ],

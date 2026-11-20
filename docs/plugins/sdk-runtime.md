@@ -762,6 +762,10 @@ The experimental mixed-mode configuration is described in
 
 External stores continue using `resolveDatabaseEngineInput(config)`, which follows
 `database.engine` independently of the built-in family overrides.
+For PostgreSQL stores, `openclaw database port` and the built-in backup and restore
+commands cover only the registered database families listed in the
+[PostgreSQL operator guide](/gateway/postgresql#support-matrix). Plugins using
+private PostgreSQL stores need their own migration, backup, and restore procedures.
 
 Engine-aware stores keep host secret resolution and operation settlement in
 `openclaw/plugin-sdk/database-engine-runtime`, and physical opens and transaction

@@ -312,6 +312,8 @@ The handoff rechecks that conversation's current access after preparing the app
 document. Activity in other conversations does not restart navigation. If access
 changes during preparation, the handoff stops with a visible error and offers
 reload or login; it does not redirect back into another automatic probe.
+An agent's main chat, `/chat/<agentId>`, opens the same way for a signed-in
+operator before the agent's first message, as it does when the app opens from `/`.
 The anonymous private-thread document initially returns `404`, then an admitted
 browser opens the app through the session-entry handoff with a `200` response. No extra
 **Log in** click is needed. Without a saved credential, **Log in** opens the normal

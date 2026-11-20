@@ -186,7 +186,7 @@ export async function sweepCollectorArchiveGroups(
           removalReason: "retention",
         };
       },
-      { runs },
+      { runs, deleteOnly: true },
     );
     if (deleted) {
       for (const [runId] of groupEntries) {

@@ -209,7 +209,7 @@ export async function resolveGatewayScopedTools(
     agentProviderPolicy,
     profilePolicy,
     providerProfilePolicy,
-    gatewayConfigReadAllowed,
+    gatewayManagementActionsAllowed,
   } = configuredToolPolicies;
   const policyAgentId = resolvedPolicyAgentId ?? runtimePolicyAgentId;
   const senderId = params.channelContext?.sender?.id;
@@ -389,7 +389,7 @@ export async function resolveGatewayScopedTools(
     },
     computerExecutionId: params.admittedRunContext?.operationalRunInstance.instanceId,
     sessionPortalTarget,
-    gatewayConfigReadAllowed,
+    gatewayManagementActionsAllowed,
     requesterIsSubagent: subagentPolicy !== undefined,
     agentSessionKey: params.sessionKey,
     messageToolTurnCapability:

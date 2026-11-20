@@ -491,7 +491,7 @@ export function createSubagentRegistrySweeper(params: {
               typeof current.cleanupCompletedAt === "number" &&
               now - current.cleanupCompletedAt > SUBAGENT_SESSION_RUN_TTL_MS &&
               !hasRequiredRequesterReceipt(current),
-            () => null,
+            null,
           );
           if (deleted === null) {
             params.clearPendingLifecycleError(runId);
@@ -540,7 +540,7 @@ export function createSubagentRegistrySweeper(params: {
             current.archiveAtMs !== undefined &&
             current.archiveAtMs <= now &&
             !(current.collect && current.collectorCompletion),
-          () => null,
+          null,
         );
         if (deleted !== null) {
           continue;

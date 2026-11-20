@@ -1309,18 +1309,16 @@ function createPageFixture(
     };
     const templates = templateEntries();
     const templateCategories = [
-      "personal",
-      "health",
+      "engineering",
+      "operations",
+      "household",
+      "entertainment",
       "travel",
       "productivity",
       "research",
-      "engineering",
-      "governance",
-      "operations",
-      "finance",
+      "health",
       "sales",
       "product",
-      "people",
       "other",
     ];
     const environments: EnvironmentSummary[] = [

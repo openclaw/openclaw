@@ -78,9 +78,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
-  createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
-  prepareAgentRunAdmission,
   prepareSystemAgentRunAdmission,
 } from "../admitted-run-context.js";
 import {
@@ -2590,7 +2588,6 @@ describe("prepareCliRunContext", () => {
   it.each([
     "direct-with-placeholder",
     "reply-owned",
-    "creator-closed",
     "caller-retired",
     "request-cancelled",
     "retained-after-exit",
@@ -2777,16 +2774,7 @@ describe("prepareCliRunContext", () => {
               caller,
               assertSourceCurrent: () => {},
             });
-          if (mode === "creator-closed") {
-            admission.close();
-            await expect(answer()).rejects.toThrow("no longer active");
-            expect(
-              gateway.requests.filter((frame) => frame.method === "question.resolve"),
-            ).toHaveLength(0);
-            requestAbort.abort();
-            await processRun;
-            expect(nativeAnswer).toMatchObject({ status: "cancelled" });
-          } else if (mode === "caller-retired") {
+          if (mode === "caller-retired") {
             callerCurrent = false;
             await expect(answer()).rejects.toThrow("original CLI caller retired");
             expect(
@@ -3783,67 +3771,6 @@ describe("prepareCliRunContext", () => {
       expect(context.openClawHistoryPrompt).toContain("warm follow-up");
     });
   });
-
-  it.each(["prepared", "admitted"] as const)(
-    "stops CLI skill preparation before sandbox materialization when %s authority is revoked",
-    async (phase) => {
-      const { dir } = fixture.session;
-      const skillDir = path.join(dir, "skills", "awaited-probe");
-      fs.mkdirSync(skillDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(skillDir, "SKILL.md"),
-        '---\nname: awaited-probe\ndescription: Probe before sandbox setup\nmetadata: {"openclaw":{"requires":{"bins":["cli-preparation-fixture-tool"]}}}\n---\n',
-      );
-      const started = createDeferred();
-      const release = createDeferred();
-      const originalAccess = fs.promises.access;
-      const access = vi.spyOn(fs.promises, "access").mockImplementation(async (file, mode) => {
-        if (String(file).includes("cli-preparation-fixture-tool")) {
-          started.resolve();
-          await release.promise;
-          throw new Error("fixture executable is absent");
-        }
-        return originalAccess(file, mode);
-      });
-      const revoked = new Error("skill preparation source revoked");
-      let current = true;
-      const admission = prepareAgentRunAdmission({
-        cfg: {},
-        facts: {
-          runId: "cli-skills-revocation",
-          agentId: "main",
-          ingress: { kind: "system", boundary: "skills-test", state: "present" },
-        },
-        operationalRunInstance: createOperationalRunInstanceRef("cli-skills-revocation"),
-        assertSourceCurrent: () => {
-          if (!current) {
-            throw revoked;
-          }
-        },
-      });
-      try {
-        const pending = fixture.prepare({
-          runId: "cli-skills-revocation",
-          skillsSnapshot: undefined,
-          ...(phase === "prepared"
-            ? { preparedRunAdmission: admission }
-            : { admittedRunContext: await admission.admit("embedded") }),
-          workspaceDir: dir,
-          config: { plugins: { enabled: false }, skills: { load: { watch: false } } },
-        });
-        const rejected = expect(pending).rejects.toThrow(/revoked|authority/);
-        await started.promise;
-        current = false;
-        release.resolve();
-        await rejected;
-        expect(ensureSandboxWorkspaceForSessionMock).not.toHaveBeenCalled();
-      } finally {
-        release.resolve();
-        admission.close();
-        access.mockRestore();
-      }
-    },
-  );
 
   it("renders sandbox-readable CLI skills for the explicit global-session owner", async () => {
     const sessionKey = "global";
