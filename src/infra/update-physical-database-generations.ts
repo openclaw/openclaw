@@ -158,7 +158,11 @@ export async function readUpdatePhysicalDatabaseGenerationPair(
   return result;
 }
 
-/** Released 9.x and 10.x parents request different formats with the same unmarked message. */
+/**
+ * Released parents send the same unmarked request for physical generations in
+ * 2026.9.7–2026.9.9 and 2026.9.33–2026.9.37 and committed generations in
+ * 2026.10.x and 2026.11.1–2026.11.4.
+ */
 export async function readUnmarkedUpdatePhysicalDatabaseGenerations(input: {
   paths: readonly string[];
   stateDir: string;
@@ -181,7 +185,7 @@ export async function readUnmarkedUpdatePhysicalDatabaseGenerations(input: {
     const run = engine.engine === "sqlite" && readActiveUpdateRun(db);
     physical = Boolean(
       run &&
-      /^2026\.9\.(?:9|3[3-7])$/u.test(run.before.version ?? "") &&
+      /^2026\.9\.(?:[7-9]|3[3-7])$/u.test(run.before.version ?? "") &&
       [run.origin.driver, ...(run.origin.previousDrivers ?? [])].some(
         (owner) => owner && sameUpdateRunDriver(owner, parent),
       ),

@@ -502,6 +502,8 @@ it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
 );
 
 it.each([
+  { version: "2026.9.7", ownsRun: true },
+  { version: "2026.9.8", ownsRun: true },
   { version: "2026.9.33", ownsRun: true },
   { version: "2026.9.34", ownsRun: true },
   { version: "2026.9.37", ownsRun: true },
@@ -519,7 +521,9 @@ it.each([
     // Earlier parents can inspect a single store without requesting the shared ledger.
     const missing = path.join(root, "missing.sqlite");
     const paths =
-      version === "2026.9.33" || version === "2026.9.34" ? [pathname] : [pathname, shared, missing];
+      version === "2026.9.8" || version === "2026.9.33" || version === "2026.9.34"
+        ? [pathname]
+        : [pathname, shared, missing];
     const maintenance = await acquireGatewayLock({
       env,
       role: "sqlite-maintenance",
