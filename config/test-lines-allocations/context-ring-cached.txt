@@ -1,2 +1,0 @@
-102
-# Cached first-frame usage/opacity and live replacement; withdrawn usage clears display before snapshot replacement and remains cleared on partial rows; unavailable row facts survive reconciliation; existing meter and scoped snapshot round-trip proof.

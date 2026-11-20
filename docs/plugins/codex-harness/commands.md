@@ -48,7 +48,22 @@ Common forms:
 - `/codex compact` runs the same completion and session-accounting pipeline as
   `/compact`, then reports whether Codex compacted the session and the resulting
   token count. If compaction is skipped or fails, the reply includes the reason.
-- `/codex review` starts Codex native review for the attached thread.
+- `/codex review` starts a native review of uncommitted changes on the attached
+  Codex thread. Choose one alternative target:
+  - `/codex review --base <branch>` reviews changes against a base branch.
+  - `/codex review --commit <sha>` reviews changes introduced by one commit.
+    Use a full or abbreviated SHA of 7–40 hexadecimal characters.
+  - `/codex review <instructions>` starts a review with free-text instructions.
+
+  Only a leading unquoted `--base` or `--commit` selects a Git target. Other
+  text, including a leading `--force` or flags later in a sentence, is sent as
+  custom instructions. Ref values can use balanced quotes, for example
+  `--base "rachel's-fix"`.
+
+  Codex resolves branch and commit targets in the attached thread's checkout,
+  which can differ from the Gateway's workspace. The chat reply confirms that
+  the review started; it does not include the findings.
+
 - `/codex diagnostics [note]` asks before sending Codex feedback for the
   attached thread.
 - `/codex account` shows account and rate-limit status for the selected connection. Native Codex accounts stay separate from saved OpenClaw profiles, even when they share an email address. If both reads fail, the command reports that connection's errors.

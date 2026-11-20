@@ -1,4 +1,0 @@
-# Exercise the real macOS stale-updater scan with native failures and rejections.
-# Assert actionable warnings retain failure details while redacting private paths.
-# Exact net test-line growth against the PR base, including the native mock repair.
-35

@@ -78,6 +78,7 @@ it("keeps daily headers aligned with numeric cells", () => {
       cacheWriteCost: 4,
       totalCost: -2,
       missingCostEntries: 2,
+      cacheUnmeasuredInput: 0,
     },
   ]);
   expect(csv).toBe(

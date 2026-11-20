@@ -1,0 +1,121 @@
+{
+  "openai": {
+    "model": "synthetic-served-model",
+    "usage": {
+      "input_tokens": 42,
+      "output_tokens": 252
+    },
+    "answers": [
+      {
+        "name": "refund",
+        "type": "predicate",
+        "probability": 0.98
+      },
+      {
+        "name": "team",
+        "type": "choice",
+        "choice": "billing",
+        "confidence": 0.8,
+        "probabilities": [
+          {
+            "value": "billing",
+            "probability": 0.9
+          },
+          {
+            "value": "support",
+            "probability": 0.1
+          }
+        ]
+      },
+      {
+        "name": "urgency",
+        "type": "score",
+        "score": 0.2,
+        "confidence": 0.6,
+        "probabilities": [
+          {
+            "label": "0",
+            "value": 0,
+            "probability": 0.8
+          },
+          {
+            "label": "1",
+            "value": 1,
+            "probability": 0.2
+          }
+        ]
+      }
+    ]
+  },
+  "systemone": {
+    "model": "synthetic-served-model",
+    "usage": {
+      "input_tokens": 42,
+      "output_tokens": 252
+    },
+    "answers": {
+      "refund": {
+        "type": "noul",
+        "noul": 0.98
+      },
+      "team": {
+        "type": "choice",
+        "choice": "billing",
+        "confidence": 0.8,
+        "probabilities": {
+          "billing": 0.9,
+          "support": 0.1
+        }
+      },
+      "urgency": {
+        "type": "score",
+        "score": 0.2,
+        "confidence": 0.6,
+        "probabilities": {
+          "0": 0.8,
+          "1": 0.2
+        },
+        "legend": {
+          "0": "Routine",
+          "1": "Emergency"
+        }
+      }
+    }
+  },
+  "fastino": {
+    "model": "synthetic-served-model",
+    "usage": {
+      "input_tokens": 42,
+      "output_tokens": 252
+    },
+    "answers": {
+      "refund": {
+        "type": "noul",
+        "noul": 0.98
+      },
+      "team": {
+        "type": "choice",
+        "choice": "billing",
+        "confidence": 0.8,
+        "probabilities": {
+          "billing": 0.9,
+          "support": 0.1
+        }
+      },
+      "urgency": {
+        "type": "score",
+        "score": 0,
+        "confidence": 0.6,
+        "probabilities": {
+          "0": 0.8,
+          "1": 0.2
+        },
+        "legend": {
+          "0": "Routine",
+          "1": "Emergency"
+        },
+        "expected_level": 0.2
+      }
+    }
+  }
+}

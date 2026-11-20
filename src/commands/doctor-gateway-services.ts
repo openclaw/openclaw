@@ -403,7 +403,7 @@ export async function maybeRepairGatewayServiceConfig(
       message:
         "Gateway service entrypoint does not match the current install." +
         (installationDrift
-          ? ` ${formatGatewayServiceInstallationDrift(installationDrift, serviceInstallEnv)}`
+          ? ` ${formatGatewayServiceInstallationDrift(installationDrift, serviceInstallEnv, { command })}`
           : ""),
       detail: `${serviceLayout?.entrypoint} -> ${runtimeLayout?.entrypoint}`,
       level: "recommended",
@@ -440,19 +440,6 @@ export async function maybeRepairGatewayServiceConfig(
     serviceLayout,
     definitionRepair,
   );
-  if (installationDrift && expectedRoot && !serviceRepairDeferred) {
-    try {
-      await assertGatewayServiceInstallationRepairAllowed({
-        service,
-        command,
-        activeRoot: expectedRoot,
-        maintenance: options.serviceMaintenance,
-      });
-    } catch (error) {
-      note(String(error), "Gateway service installation");
-      return cfg;
-    }
-  }
   audit.issues = audit.issues.filter((issue) => issue.repair !== "host");
   if (audit.issues.length === 0 && !definitionRepair) {
     return cfg;
@@ -516,6 +503,20 @@ export async function maybeRepairGatewayServiceConfig(
       "Gateway service config",
     );
     return cfg;
+  }
+
+  if (installationDrift && expectedRoot) {
+    try {
+      await assertGatewayServiceInstallationRepairAllowed({
+        service,
+        command,
+        activeRoot: expectedRoot,
+        maintenance: options.serviceMaintenance,
+      });
+    } catch (error) {
+      note(String(error), "Gateway service installation");
+      return cfg;
+    }
   }
 
   const gatewayTokenForRepair = expectedGatewayToken ?? readEmbeddedGatewayToken(managedDefinition);

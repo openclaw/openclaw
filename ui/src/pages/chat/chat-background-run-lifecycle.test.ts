@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { chatItemGroups } from "./chat-agent-run-grouping.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { createProps, makeMessage } from "./chat-thread.test-support.ts";
+import { readProjectedContinuation } from "./chat-turn-boundary.ts";
 import { projectTranscriptChain } from "./components/chat-transcript-message-index.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-snapshot.ts";
@@ -87,7 +89,7 @@ describe("background run lifecycle projection", () => {
     expect(frames(result.chain).map((frame) => [frame.runId, frame.outcome.kind])).toEqual([
       ["one", "active"],
       ["two", "active"],
-      ["old", "interrupted"],
+      ["old", "completed"],
     ]);
   });
 
@@ -165,14 +167,138 @@ describe("background run lifecycle projection", () => {
     const activeRunIds = result.options.activeRunIds;
     activeRunIds.splice(0, 1, "two");
     const second = frames(projectTranscriptChain(result.items, result.options));
-    expect(first.map((frame) => frame.outcome.kind)).toEqual(["active", "interrupted"]);
-    expect(second.map((frame) => frame.outcome.kind)).toEqual(["interrupted", "active"]);
+    expect(first.map((frame) => frame.outcome.kind)).toEqual(["active", "completed"]);
+    expect(second.map((frame) => frame.outcome.kind)).toEqual(["completed", "active"]);
     expect(second.map((frame) => frame.key)).toEqual(first.map((frame) => frame.key));
     activeRunIds.length = 0;
     expect(
       frames(projectTranscriptChain(result.items, result.options)).map(
         (frame) => frame.outcome.kind,
       ),
-    ).toEqual(["interrupted", "interrupted"]);
+    ).toEqual(["completed", "completed"]);
+  });
+});
+
+describe("self-woken continuation projection", () => {
+  const row = (id: string, seq: number, runId: string, fields: Record<string, unknown> = {}) =>
+    makeMessage(id, seq, { runId, timestamp: seq * 60_000, ...fields });
+  const wake = (source: string, seq: number, runId: string) =>
+    row(`${runId}-call`, seq, runId, {
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: `${runId}-tool`, name: "exec", arguments: {} }],
+      __openclaw: {
+        id: `${runId}-call`,
+        seq,
+        runId,
+        ...(source === "subagent" ? {} : { turnBoundary: true }),
+        continuation: { source },
+      },
+    });
+  const result = (seq: number, runId: string) =>
+    row(`${runId}-result`, seq, runId, {
+      role: "toolResult",
+      toolCallId: `${runId}-tool`,
+      toolName: "exec",
+      content: "done",
+    });
+
+  it("continues the answered block below a Resumed rule per wake, until the next prompt", () => {
+    const sessionKey = "agent:main:dashboard:continuation";
+    const messages = [
+      row("ask", 1, "ask", { role: "user", content: "Review the change" }),
+      row("answer", 2, "ask", { content: "Long final answer", stopReason: "stop" }),
+      wake("exec", 3, "late"),
+      result(4, "late"),
+      wake("subagent", 5, "settle"),
+      result(6, "settle"),
+      row("settled", 7, "settle", { content: "Child finished; all good.", stopReason: "stop" }),
+      row("next", 8, "next", { role: "user", content: "Thanks" }),
+      row("reply", 9, "next", { content: "Anytime.", stopReason: "stop" }),
+    ];
+    const items = buildChatItems(createProps({ sessionKey, messages, showToolCalls: true }));
+    const chain = projectTranscriptChain(items, {
+      sessionKey,
+      messages,
+      runWorking: false,
+      searchActive: false,
+    });
+    const [first, second, ...rest] = frames(chain);
+    expect(rest).toEqual([]);
+    // One block per prompt; the earlier answer stays visible in place.
+    expect(first!.parts.map((part) => [part.kind, chatItemGroups(part)[0]?.runId])).toEqual([
+      ["group", "ask"],
+      ["activity-run", "late"],
+      ["activity-run", "settle"],
+      ["group", "settle"],
+    ]);
+    expect(
+      first!.parts.map((part) =>
+        readProjectedContinuation(chatItemGroups(part)[0]?.messages[0]?.message),
+      ),
+    ).toEqual([undefined, "exec", "subagent", undefined]);
+    expect(second!.runId).toBe("next");
+  });
+
+  it("keeps the Resumed rule when tool calls hide the row that carries it", () => {
+    const sessionKey = "agent:main:dashboard:continuation-hidden-tools";
+    const messages = [
+      row("ask", 1, "ask", { role: "user", content: "Review the change" }),
+      row("answer", 2, "ask", { content: "Long final answer", stopReason: "stop" }),
+      wake("exec", 3, "late"),
+      result(4, "late"),
+      row("late-answer", 5, "late", { content: "Command finished.", stopReason: "stop" }),
+    ];
+    const items = buildChatItems(createProps({ sessionKey, messages, showToolCalls: false }));
+    const chain = projectTranscriptChain(items, {
+      sessionKey,
+      messages,
+      runWorking: false,
+      searchActive: false,
+    });
+    const [first, ...rest] = frames(chain);
+    expect(rest).toEqual([]);
+    // The hidden tool row stays as the part that opens with the Resumed rule.
+    expect(
+      first!.parts.map((part) =>
+        readProjectedContinuation(chatItemGroups(part)[0]?.messages[0]?.message),
+      ),
+    ).toEqual([undefined, "exec", undefined]);
+  });
+
+  it("keeps a settle wake's completion receipt in the answered block", () => {
+    const completion = { runId: "child", sessionKey: "agent:main:subagent:w", label: "W" };
+    const messages = [
+      row("ask", 1, "ask", { role: "user", content: "Review the change" }),
+      row("answer", 2, "ask", { content: "Long final answer", stopReason: "stop" }),
+      row("receipt", 3, "settle", {
+        phase: "commentary",
+        content: [{ type: "subagent_completion" }],
+        subagentCompletions: [completion],
+        __openclaw: {
+          id: "receipt",
+          seq: 3,
+          runId: "settle",
+          continuation: { source: "subagent" },
+        },
+      }),
+      row("settled", 4, "settle", { content: "W finished; all good.", stopReason: "stop" }),
+    ];
+    for (const showToolCalls of [true, false]) {
+      const sessionKey = `agent:main:dashboard:settle-receipt-${showToolCalls}`;
+      const items = buildChatItems(createProps({ sessionKey, messages, showToolCalls }));
+      const chain = projectTranscriptChain(items, {
+        sessionKey,
+        messages,
+        runWorking: false,
+        searchActive: false,
+      });
+      const [first, ...rest] = frames(chain);
+      expect(rest).toEqual([]);
+      expect(
+        first!.parts.map((part) =>
+          readProjectedContinuation(chatItemGroups(part)[0]?.messages[0]?.message),
+        ),
+      ).toContain("subagent");
+    }
   });
 });

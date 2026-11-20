@@ -12,6 +12,8 @@ type TelegramSentWidget = {
   name: string;
   sourceHash: string;
   title: string;
+  /** Original private forum topic; absent for widgets sent in a plain DM. */
+  messageThreadId?: number;
   state?: string;
   /** Kept so a tap turn in a later session can still read the widget's state shape. */
   source?: string;

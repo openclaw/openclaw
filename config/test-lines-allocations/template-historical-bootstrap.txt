@@ -1,2 +1,0 @@
-# Shipped stock bootstrap recovery across restart and a later profile edit.
-14

@@ -8,6 +8,36 @@ import { card, mount, props, text } from "./view.test-support.tsx";
 
 beforeEach(() => i18n.setLocale("en"));
 
+it("uses the scoped check outcome without hiding catalog or account problems", () => {
+  const viewProps = props({ cards: [card({ catalogStatus: "ready" })] });
+  const container = mount(viewProps);
+  const status = () => text(container.querySelector(".provider-row__status"));
+  const probe = { provider: "openai", status: "billing" as const, results: [] };
+  mount({ ...viewProps, probeResults: { openai: probe } }, container);
+  expect(status()).toBe("Billing problem");
+  mount({ ...viewProps, probeResults: { another: probe } }, container);
+  expect(status()).toBe("Ready");
+  const partial = {
+    provider: "openai",
+    status: "ok" as const,
+    results: [{ label: "Secondary account", status: "auth" as const }],
+  };
+  mount({ ...viewProps, probeResults: { openai: partial } }, container);
+  expect(status()).toBe("Access verified with warnings");
+  for (const [catalogStatus, label] of [
+    ["auth-rejected", "Credentials rejected"],
+    ["unavailable", "Models unavailable"],
+  ] as const) {
+    mount(
+      { ...viewProps, cards: [card({ catalogStatus })], probeResults: { openai: partial } },
+      container,
+    );
+    expect(status()).toBe(label);
+  }
+  mount({ ...viewProps, probeResults: { openai: { ...partial, results: [] } } }, container);
+  expect(status()).toBe("Ready");
+});
+
 it("uses catalog evidence for short-lived OAuth without treating expiry alone as sign-out", () => {
   const oauth = {
     profileId: "example:account",
@@ -40,13 +70,30 @@ it("uses catalog evidence for short-lived OAuth without treating expiry alone as
         {
           ...providerCard,
           auth: { kind: "expired" },
-          profiles: [{ ...oauth, status: "expired", reasonCode: "expired", expiry: undefined }],
+          profiles: [
+            { ...oauth, status: "expired", reasonCode: "refresh_failed", expiry: undefined },
+          ],
         },
       ],
     },
     container,
   );
   expect(status()).toBe("Expired");
+  // A refresh in progress settles on its own; the row keeps its catalog evidence.
+  mount(
+    {
+      ...viewProps,
+      cards: [
+        {
+          ...providerCard,
+          auth: { kind: "expired" },
+          profiles: [{ ...oauth, status: "expired", reasonCode: "expired", expiry: undefined }],
+        },
+      ],
+    },
+    container,
+  );
+  expect(status()).toBe("Ready");
   mount(
     { ...viewProps, cards: [{ ...providerCard, auth: { kind: "expired" }, profiles: [] }] },
     container,
@@ -121,13 +168,17 @@ it("does not prescribe OAuth sign-in for a rejected API key with excluded OAuth 
   const container = mount(props({ cards, configuredModels: [] }));
   expect(text(container.querySelector(".provider-row__status"))).toBe("Credentials rejected");
   const excluded = container.querySelector('[data-profile-id="example:excluded"]');
-  expect(text(excluded)).toContain("Sign-in unavailable");
+  expect(text(excluded)).toContain("Refreshing");
   expect(text(excluded)).not.toContain("Sign in again");
 });
 
-it.each(["missing_credential", "expired"] as const)(
+it.each([
+  ["missing_credential", "Not signed in"],
+  ["refresh_failed", "Sign-in expired"],
+  ["expired", "Refreshing"],
+] as const)(
   "preserves selected static-token expiry beside an excluded OAuth %s reason",
-  (reasonCode) => {
+  (reasonCode, label) => {
     const cards = buildModelProviderCards({
       authStatus: {
         ts: 1,
@@ -156,9 +207,7 @@ it.each(["missing_credential", "expired"] as const)(
     expect(text(container.querySelector(".provider-row__status"))).toBe("Expiring");
     container.querySelector<HTMLButtonElement>(".provider-row__summary")!.click();
     flush();
-    expect(text(container.querySelector('[data-profile-id="example:excluded"]'))).toContain(
-      reasonCode === "missing_credential" ? "Sign in again" : "Sign-in unavailable",
-    );
+    expect(text(container.querySelector('[data-profile-id="example:excluded"]'))).toContain(label);
   },
 );
 
@@ -167,7 +216,7 @@ it("keeps one signal per state: the row speaks for an only account, not beside o
     profileId: "example:failing",
     type: "oauth" as const,
     status: "expired" as const,
-    reasonCode: "expired" as const,
+    reasonCode: "refresh_failed" as const,
   };
   const rejected = {
     id: "example",
@@ -184,14 +233,14 @@ it("keeps one signal per state: the row speaks for an only account, not beside o
 
   const healthy = { profileId: "example:healthy", type: "oauth" as const, status: "ok" as const };
   const several = mount(props({ cards: [card({ ...rejected, profiles: [healthy, failing] })] }));
-  expect(accountStatus(failing.profileId, several)).toBe("Sign-in unavailable");
+  expect(accountStatus(failing.profileId, several)).toBe("Sign-in expired");
   expect(accountStatus(healthy.profileId, several)).toBe("");
 
   // A key could be what was rejected, so the account can't be assumed to be the cause.
   const besideKey = mount(
     props({ cards: [card({ ...rejected, apiKey: { source: "config" }, profiles: [failing] })] }),
   );
-  expect(accountStatus(failing.profileId, besideKey)).toBe("Sign-in unavailable");
+  expect(accountStatus(failing.profileId, besideKey)).toBe("Sign-in expired");
 });
 
 it("counts a provider's only unavailable model in the singular", () => {

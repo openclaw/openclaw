@@ -53,7 +53,7 @@ import { maintenanceConfig } from "./session-cold-storage.test-support.js";
 import * as sqliteTargets from "./session-sqlite-target.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.worker.js";
 
 afterEach(() => vi.restoreAllMocks());
 

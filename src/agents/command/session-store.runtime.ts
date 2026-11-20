@@ -4,3 +4,4 @@ export { updateSessionStoreAfterAgentRun } from "./session-store.js";
 export { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 export { captureSessionEntryCurrentRead } from "../../config/sessions/session-entry-current-runtime.js";
 export { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+export { prepareSessionStoreCandidatesInWorker } from "../../config/sessions/session-transcript-worker-resources.js";

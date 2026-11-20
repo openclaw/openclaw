@@ -3,6 +3,10 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as pricing from "../../model-catalog/pricing.js";
+import { resolveRemoteCatalogUrl } from "../../model-catalog/remote-config.js";
+import { prepareRemoteModelCatalogStartupSnapshot } from "../../model-catalog/remote-overlay.js";
+import { setRemoteModelCatalogOverlaySourcesForTest } from "../../model-catalog/remote-overlay.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
   createOpenClawTestState,
@@ -11,6 +15,7 @@ import {
 import { discoverAuthStorageFacts, discoverModelsAsync } from "../agent-model-discovery.js";
 import { clearRuntimeAuthProfileStoreSnapshots, saveAuthProfileStore } from "../auth-profiles.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
+import { MODELS_JSON_STATE } from "../models-config-state.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { registerModelAuthReadTests } from "./model.auth-read.test-support.js";
 import {
@@ -502,6 +507,56 @@ describe("resolveModel", () => {
     expect(resolveBundledProviderStaticCatalogModelMock).toHaveBeenCalledWith(lookup);
     expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModelsAsync).not.toHaveBeenCalled();
+  });
+
+  it("bills each call at its resolved price: authored, then hosted, then bundled, never a placeholder", async () => {
+    const bundled = { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 };
+    const hosted = { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 };
+    const free = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const luna = { id: "gpt-5.6-luna", name: "GPT-5.6 Luna" };
+    const rows = (cost: typeof free) => ({ openai: { models: [{ ...luna, cost }] } });
+    const bundle = { schemaVersion: 1, generatedAt: 200, sourceCommit: "hosted" };
+    const bundle_json = JSON.stringify({ ...bundle, providers: rows(hosted) });
+    const source_url = resolveRemoteCatalogUrl({});
+    const row = { id: 1, source_url, bundle_json, generated_at: 200, checked_at: 200 };
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: () => 100,
+      readStoredCatalog: () => ({ ...row, min_version: null, etag: null, last_modified: null }),
+    });
+    await prepareRemoteModelCatalogStartupSnapshot();
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "openai", modelCatalog: { providers: rows(bundled) } }],
+    });
+    fs.mkdirSync(state.agentDir(), { recursive: true });
+    const route = { api: "openai-responses", baseUrl: "https://api.openai.com/v1" } as const;
+    const resolve = async (authored: typeof free | undefined, cost = bundled) => {
+      const [provider, id] = authored ? ["google", "fresh-model"] : ["openai", luna.id];
+      const providers = { google: { models: [{ id: "fresh-model", cost: authored }] } };
+      fs.writeFileSync(`${state.agentDir()}/models.json`, JSON.stringify({ providers }));
+      MODELS_JSON_STATE.costCache.clear();
+      resolveBundledProviderStaticCatalogModelMock.mockResolvedValueOnce(
+        makeProviderModelFixture({ ...route, provider, id, cost }),
+      );
+      const result = await resolveWithoutDiscovery(provider, id, undefined, {
+        allowBundledStaticCatalogFallback: true,
+        preparedModelRuntime: createEmptyPreparedModelRuntimeFixture({
+          agentDir: state.agentDir(),
+          config: {},
+          metadataSnapshot,
+          createStores: createEmptyAgentDiscoveryStores,
+        }),
+      });
+      return expectResolvedModel(result).cost;
+    };
+
+    using preparePricing = vi.spyOn(pricing, "prepareModelPricingContext");
+    expect(await resolve(bundled)).toMatchObject(bundled);
+    expect(preparePricing).not.toHaveBeenCalled();
+    // The transport bills each call from this cost: hosted beats bundled, a placeholder never bills $0.
+    expect(await resolve(undefined)).toMatchObject(hosted);
+    expect(await resolve(bundled, free)).toMatchObject(bundled);
+    expect(await resolve(free, free)).toMatchObject(free);
+    setRemoteModelCatalogOverlaySourcesForTest();
   });
 
   it("keeps the prepared auth mode through async provider model resolution", async () => {

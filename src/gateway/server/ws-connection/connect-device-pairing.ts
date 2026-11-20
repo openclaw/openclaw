@@ -2,7 +2,6 @@ import {
   normalizeSortedUniqueTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import { GATEWAY_CLIENT_IDS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   buildPairingConnectCloseReason,
   buildPairingConnectErrorDetails,
@@ -31,14 +30,12 @@ import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing
 import { retireDeviceTokenClients } from "../../device-token-client-lifecycle.js";
 import { normalizeNodeHostCompatibilityMetadata } from "../../node-legacy-protocol-filter.js";
 import { isScopelessNodePairingRequest } from "../../node-pairing-auto-approve.js";
-import {
-  openclawIdPeerKeyOf,
-  recordDeviceTokenPeer,
-  recordTokenlessOpenClawIdOperator,
-} from "../../openclaw-id/device-token-binding.js";
+import { recordDeviceTokenPeer } from "../../openclaw-id/device-token-binding.js";
 import { approveOpenClawIdNodePairing } from "../../openclaw-id/node-pairing.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../../operator-role-enforcement.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { broadcastRejectedDevicePairing } from "../../pairing-events.js";
+import { preparePublicationReaderAdmission } from "../../publication-reader.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import {
@@ -52,9 +49,10 @@ import {
   resolvePairedAccessScopes,
   resolvePinnedClientMetadata,
 } from "./connect-device-metadata.js";
-import { issueGatewayConnectDeviceTokens } from "./connect-device-tokens.js";
+import { createGatewayConnectDeviceTokenPreparation } from "./connect-device-tokens.js";
 import { authorizeExistingGatewayDevice } from "./connect-existing-device.js";
 import { startGatewayNodePairingSshApproval } from "./connect-node-pairing-ssh.js";
+import { prepareOpenClawIdMemberConnect } from "./connect-openclaw-id-member-grant.js";
 import {
   resolveLocalPairingApproval,
   resolvePairingApprovalPlan,
@@ -69,6 +67,50 @@ export async function authorizeGatewayConnectDevice(
   context: GatewayConnectPhaseContext,
   state: AuthenticatedGatewayConnect,
 ): Promise<DeviceAuthorizedGatewayConnect | undefined> {
+  // Reserved service-reader admission precedes delegation and human-owner fallback.
+  let publicationReader;
+  try {
+    publicationReader = await preparePublicationReaderAdmission({
+      role: state.role,
+      authMethod: state.authMethod,
+      scopes: state.scopes,
+      requestedScopes: state.publicationReadScopes ?? context.connectParams.scopes ?? [],
+      deviceId: state.device?.id,
+      publicKey: state.devicePublicKey,
+      token: context.connectParams.auth?.deviceToken ?? context.connectParams.auth?.token,
+      hasHumanIdentity: Boolean(
+        state.authResult.user ||
+        state.authResult.delegation ||
+        state.authResult.openclawId ||
+        state.remoteIngressPrincipal,
+      ),
+    });
+  } catch {
+    const message = "publication reader requires an exact singleton paired device token";
+    context.markHandshakeFailure("publication-reader-denied");
+    context.sendHandshakeErrorResponse(ErrorCodes.FORBIDDEN, message);
+    context.handler.close(1008, message);
+    return undefined;
+  }
+  if (publicationReader) {
+    return {
+      ...state,
+      publicationReader,
+      handoffBootstrapProfile: null,
+      deviceToken: null,
+      bootstrapDeviceTokens: [],
+    };
+  }
+  if (state.authResult.delegation) {
+    // The private proxy owns admission. A browser key never enrolls or widens this grant.
+    return {
+      ...state,
+      scopes: [...state.authResult.delegation.scopes],
+      handoffBootstrapProfile: null,
+      deviceToken: null,
+      bootstrapDeviceTokens: [],
+    };
+  }
   const {
     connId,
     buildRequestContext,
@@ -100,6 +142,18 @@ export async function authorizeGatewayConnectDevice(
   } = state;
   const isConnectAuthorizationCurrent = () =>
     resolveGatewayConnectPolicyFailure(context, state) === undefined;
+  const memberRoleScopes = await prepareOpenClawIdMemberConnect(
+    context,
+    state,
+    isConnectAuthorizationCurrent,
+  );
+  if (memberRoleScopes === undefined) {
+    return undefined;
+  }
+  if (memberRoleScopes) {
+    scopes = memberRoleScopes;
+    connectParams.scopes = scopes;
+  }
   const failPairingHandshake = (params: {
     message: string;
     details?:
@@ -116,7 +170,8 @@ export async function authorizeGatewayConnectDevice(
     sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message, details ? { details } : undefined);
     close(1008, truncateCloseReason(closeReason ?? message));
   };
-  const roleConfiguredHumanOperator = role === "operator" && Boolean(configSnapshot.gateway?.roles);
+  const roleConfiguredHumanOperator =
+    role === "operator" && isNamedOperatorRoleEnforcementEnabled(configSnapshot);
   // An admitted OpenClaw ID owner device is the Gateway owner, like a shared-secret client.
   const sharedSecretOwner =
     authMethod === "token" ||
@@ -124,6 +179,7 @@ export async function authorizeGatewayConnectDevice(
     (authMethod === "trusted-proxy" && authResult.openclawId?.kind === "owner");
   if (
     roleConfiguredHumanOperator &&
+    configSnapshot.gateway?.roles?.default &&
     !sharedSecretOwner &&
     !authResult.user?.trim() &&
     state.remoteIngressPrincipal?.operatorRoleActor.kind !== "operator"
@@ -305,10 +361,21 @@ export async function authorizeGatewayConnectDevice(
             publicKey: devicePublicKey,
             commands: connectParams.commands ?? [],
             caps: connectParams.caps ?? [],
+            permissions: connectParams.permissions,
             accessMetadata: clientAccessMetadata,
             isCurrent: isConnectAuthorizationCurrent,
           });
         } else if (operatorApprovalScopes !== null && plan.operatorApprovalKind) {
+          if (authResult.openclawId) {
+            // Persist attribution before the grant: a failed binding must not leave
+            // a tokenless native approval usable as local authority on retry.
+            // If approval later fails, any existing same-key grant stays bound.
+            await recordDeviceTokenPeer({
+              deviceId: device.id,
+              role,
+              peerKey: authResult.openclawId.peerKey,
+            });
+          }
           approved = await approveDevicePairing(pairing.request.requestId, {
             callerScopes: operatorApprovalScopes,
             accessMetadata: clientAccessMetadata,
@@ -561,7 +628,7 @@ export async function authorizeGatewayConnectDevice(
     if (paired && !isPaired && state.remoteIngressPrincipal) {
       failPairingHandshake({
         message:
-          "Remote Control UI device key does not match the paired device; remove the stale device in Devices and reconnect with a fresh browser identity.",
+          "Remote web app device key does not match the paired device; remove the stale device in Devices and reconnect with a fresh browser identity.",
       });
       return undefined;
     }
@@ -631,49 +698,21 @@ export async function authorizeGatewayConnectDevice(
     return undefined;
   }
 
-  // Ingress authenticates exclusively from its live principal grant and signed
-  // device proof. Never mint a reusable credential that can outlive that grant.
-  const tokensStartedAt = performance.now();
-  const { deviceToken, bootstrapDeviceTokens } =
-    state.remoteIngressPrincipal || (roleConfiguredHumanOperator && authResult.user?.trim())
-      ? { deviceToken: null, bootstrapDeviceTokens: [] }
-      : await issueGatewayConnectDeviceTokens({
-          state: { ...state, scopes, handoffBootstrapProfile },
-          scopes,
-          hasApprovedDeviceBaseline: hasServerApprovedDeviceTokenBaseline,
-          isIssuanceCurrent: isConnectAuthorizationCurrent,
-        });
-
-  // A token issued over the OpenClaw ID tunnel belongs to the device key that obtained it.
-  const issuedPeerKey = openclawIdPeerKeyOf(context.handler.ingressAttribution);
-  if (issuedPeerKey && state.device) {
-    for (const issued of [deviceToken, ...bootstrapDeviceTokens]) {
-      if (issued) {
-        await recordDeviceTokenPeer({
-          deviceId: state.device.id,
-          role: issued.role,
-          peerKey: issuedPeerKey,
-        });
-      }
-    }
-    if (role === "operator" && !deviceToken && state.isControlUi) {
-      // Lanes that issue no token still mark the browser as managed on the Access page.
-      // Approval may have persisted a token this lane never delivers; binding it keeps that
-      // token on the membership lifecycle. Browser device keys are per origin, so a token
-      // issued to this key on ordinary ingress needs the same origin there too (accepted).
-      const current = await getPairedDevice(state.device.id);
-      if (current?.clientId === GATEWAY_CLIENT_IDS.CONTROL_UI) {
-        await recordTokenlessOpenClawIdOperator(state.device.id, issuedPeerKey);
-      }
-    }
-  }
-  context.recordAttachTiming?.("deviceTokensMs", tokensStartedAt);
+  const prepareDeviceTokens = createGatewayConnectDeviceTokenPreparation(
+    context,
+    { ...state, scopes, handoffBootstrapProfile },
+    hasServerApprovedDeviceTokenBaseline,
+    isConnectAuthorizationCurrent,
+  );
+  const tokens =
+    role === "operator"
+      ? { deviceToken: null, bootstrapDeviceTokens: [], prepareDeviceTokens }
+      : await prepareDeviceTokens({ profileId: undefined, openclawIdMember: false });
 
   return {
     ...state,
     scopes,
     handoffBootstrapProfile,
-    deviceToken,
-    bootstrapDeviceTokens,
+    ...tokens,
   };
 }

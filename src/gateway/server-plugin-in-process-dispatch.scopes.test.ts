@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayTool,
@@ -108,6 +110,43 @@ describe("synthetic operator scope attenuation", () => {
       }
     },
   );
+});
+
+describe("own-run exec approvals under a System launch client", () => {
+  it.each([
+    ["exec.approval.request", true],
+    ["exec.approval.waitDecision", true],
+    ["exec.approval.resolve", false],
+  ] as const)("lets a subagent run call %s: %s", async (method, allowed) => {
+    const handler = vi.fn(({ client, respond }: GatewayRequestHandlerOptions) => {
+      expect(client?.connect.scopes).toEqual(["operator.approvals"]);
+      respond(true, { ok: true });
+    });
+    const context = createContext([[method, "operator.approvals", "approval-proof", handler]]);
+    // Subagent launches and settle wakes run their tools under a write-only System client.
+    const client = createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" } });
+    await withPluginRuntimeGatewayRequestScope(
+      { client, context, isWebchatConnect: () => false },
+      () =>
+        withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:subagent:child",
+            operationalRunInstance: createOperationalRunInstanceRef("child-run"),
+            receiptAuthority: () => true,
+          },
+          async () => {
+            const request = callAgentToolGatewayRequest({ method, params: {} });
+            if (allowed) {
+              await expect(request).resolves.toEqual({ ok: true });
+            } else {
+              await expect(request).rejects.toThrow("missing scope: operator.approvals");
+            }
+          },
+        ),
+    );
+    expect(handler).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  });
 });
 
 describe("registered plugin SDK scope attenuation", () => {
@@ -227,10 +266,11 @@ describe("registered plugin SDK scope attenuation", () => {
         releases.push(recaptured.release);
         expect(recaptured.authority.scopes).toEqual([`operator.${effective}`]);
         expect(recaptured.authority.source).toBe(source.authority.source);
-        expect(recaptured.authority.signal).toBe(source.authority.signal);
+        expect(recaptured.authority.signal?.aborted).toBe(false);
         expect(recaptured.authority.assertCurrent).not.toThrow();
         sourceController.abort(new Error("original operator source revoked"));
         expect(recaptured.authority.signal?.aborted).toBe(true);
+        expect(recaptured.authority.signal?.reason).toBe(sourceController.signal.reason);
         await expect(invoke(false)).rejects.toThrow("original operator source revoked");
         expect(handler).toHaveBeenCalledTimes(effective === "write" ? 2 : 1);
       } finally {

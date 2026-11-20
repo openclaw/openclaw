@@ -22,7 +22,7 @@ import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
 import { isSkillAvailable } from "../../lib/skills-shared.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
 import { SkillDialogBoundary } from "./skill-dialog-boundary.tsx";
-import { SkillRowStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
+import { SkillStateStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
 import type { SkillsProps, SkillsStatusFilter } from "./view-types.ts";
 
 registerSkillsBrowserEnglish();
@@ -319,7 +319,7 @@ function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
         <span class="settings-row__desc">{clampText(props.skill.description, 140)}</span>
       </button>
       <div class="settings-row__control">
-        <SkillRowStatus skill={props.skill} verdict={verdict()} />
+        <SkillStateStatus skill={props.skill} verdict={verdict()} showLabel />
         <Show
           when={props.skill.clawhub?.status === "linked"}
           fallback={

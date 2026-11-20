@@ -1,6 +1,7 @@
 import { ChildProcess } from "node:child_process";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
+import * as commandIdentity from "../../process/command-process-identity.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as processIdentity from "../../shared/pid-alive.js";
 import { runUpdateStep } from "./shared.js";
@@ -29,7 +30,10 @@ it.skipIf(process.platform === "win32").each(["timeout", "signal"] as const)(
   "settles a SIGTERM-ignoring update tree before reporting %s",
   async (termination) => {
     vi.useFakeTimers();
-    vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(123);
+    (process.platform === "linux" || process.platform === "android"
+      ? vi.spyOn(commandIdentity, "readCommandProcessStartTime")
+      : vi.spyOn(processIdentity, "getFileLockProcessStartTime")
+    ).mockReturnValue(123);
     const root = Object.assign(new UpdateChild(), {
       pid: 4242,
       stdout: new PassThrough(),

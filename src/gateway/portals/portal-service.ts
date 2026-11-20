@@ -582,7 +582,7 @@ export function createGatewayPortalService(params: {
                 }
                 gatewayUrl.port = String(httpsPort);
                 if (params.gatewayOrigins?.includes(gatewayUrl.origin)) {
-                  throw new Error("Portal HTTPS origin conflicts with the Control UI");
+                  throw new Error("Portal HTTPS origin conflicts with the web app");
                 }
                 portal.publicOrigin = gatewayUrl.origin;
               } else {

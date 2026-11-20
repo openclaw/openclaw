@@ -11,7 +11,10 @@ import {
   coalesceAgentRunFrames,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
-import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import {
+  assistantGroupCanOwnActiveRunStatus,
+  explicitlyAbortedRunId,
+} from "../chat-assistant-reply.ts";
 import { isHandoffBoundaryItem } from "../chat-sessions-yield.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
@@ -20,6 +23,7 @@ import {
   type buildCachedChatItems,
   findLiveStreamIndex,
   getExpansionStateVersion,
+  getExplicitToolExpansion,
   getChatItemsGeneration,
   setExpansionState,
 } from "../chat-thread.ts";
@@ -43,15 +47,13 @@ import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
-import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
-import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import { CHAT_TRANSCRIPT_ESTIMATED_ROW_PX } from "./chat-transcript-session.ts";
-import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 
 type ChatRenderItem = SystemEventRenderItem;
 
 type TranscriptChain = Readonly<{
   searchActive: boolean;
+  interruptedRunIds: ReadonlySet<string>;
   runDurations: ReadonlyMap<string, number>;
   workGroups: readonly Extract<ChatRenderItem, { kind: "work-group" }>[];
   collapsedItems: readonly ChatRenderItem[];
@@ -166,7 +168,10 @@ export function projectTranscriptChain(
     messages?: readonly unknown[];
     activeRunId?: string | null;
     activeRunIds?: readonly string[];
-    session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
+    session?: Pick<
+      GatewaySessionRow,
+      "key" | "lastRunId" | "status" | "runtimeMs" | "abortedLastRun"
+    >;
   },
 ): TranscriptChain {
   const { session } = options;
@@ -185,6 +190,7 @@ export function projectTranscriptChain(
     session?.key,
     session?.lastRunId,
     session?.status,
+    session?.abortedLastRun,
     session?.runtimeMs,
     readLiveTerminalRevision(),
   ];
@@ -249,7 +255,14 @@ export function projectTranscriptChain(
           }
         : undefined;
   }
+  const interruptedRunIds = new Set(
+    (options.messages ?? []).flatMap((message) => {
+      const runId = explicitlyAbortedRunId(message);
+      return runId ? [runId] : [];
+    }),
+  );
   const value: TranscriptChain = {
+    interruptedRunIds,
     runDurations,
     collapsedItems,
     transcriptItems,
@@ -322,15 +335,17 @@ function messageRevision(message: object): string {
 
 export function projectTranscriptIndex(
   chain: TranscriptIndexSource,
-  expandedToolCards: Map<string, boolean>,
+  sharedExpansion: Map<string, boolean>,
   props: Pick<
     ChatThreadProps,
     "assistantName" | "currentAgentId" | "agents" | "userId" | "userName" | "messageReactions"
   >,
+  readerExpandedWork?: ReadonlySet<string>,
 ): TranscriptIndex {
   const cacheKey = [
-    expandedToolCards,
-    getExpansionStateVersion(expandedToolCards),
+    sharedExpansion,
+    getExpansionStateVersion(sharedExpansion),
+    readerExpandedWork,
     props.assistantName,
     props.currentAgentId,
     props.agents,
@@ -339,6 +354,13 @@ export function projectTranscriptIndex(
     props.messageReactions,
   ];
   return indexes(chain, cacheKey, (): TranscriptIndex => {
+    // This derived view is pane-local; it never publishes automatic expansion.
+    const expandedToolCards = readerExpandedWork?.size ? new Map(sharedExpansion) : sharedExpansion;
+    for (const key of readerExpandedWork ?? []) {
+      if (getExplicitToolExpansion(sharedExpansion, key) === undefined) {
+        expandedToolCards.set(key, true);
+      }
+    }
     // Smaller transcripts scroll more cheaply without repeatedly mounting fragments.
     let sourceCount = 0;
     const prepareIdleFrameFragments = chain.transcriptItems.some((item) => {
@@ -651,12 +673,11 @@ export type PlacedContentRow = Extract<TranscriptRow, { kind: "content" }> & {
 
 export function projectTranscriptRows(
   rows: readonly TranscriptRow<ChatRenderItem>[],
-  workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>,
   contentRows: readonly PlacedContentRow[],
 ): readonly TranscriptRow<ChatRenderItem>[] {
-  const key = [workPreviews, ...contentRows.flatMap((row) => [row.key, row.after])];
+  const key = contentRows.flatMap((row) => [row.key, row.after]);
   return presentationRows(rows, key, () => {
-    if (!workPreviews.size && !contentRows.length) {
+    if (!contentRows.length) {
       return rows;
     }
     const placed = Map.groupBy(
@@ -671,22 +692,6 @@ export function projectTranscriptRows(
     const result: TranscriptRow<ChatRenderItem>[] = take(null);
     for (const row of rows) {
       result.push(row);
-      const previews = workPreviews.get(row.key);
-      // Work groups and run frames render their previews inline.
-      if (
-        previews &&
-        !(
-          row.kind === "item" &&
-          (row.item.kind === "work-group" || row.item.kind === "agent-run-frame")
-        )
-      ) {
-        const content: NativeTranscriptView = { kind: "work-previews", previews };
-        result.push({
-          kind: "content",
-          key: `work-previews:${row.key}`,
-          content: new GuardedTranscriptItem([content], content),
-        });
-      }
       result.push(...take(row.key));
     }
     // An anchor outside these rows keeps its content visible at the end.

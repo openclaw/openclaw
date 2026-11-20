@@ -20,6 +20,7 @@ import { chatHistoryRequests } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
 import { makeRequestMock, requestCalls } from "./chat-host.test-support.ts";
+import { inlineCommandPresentation } from "./chat-inline-command-presentation.ts";
 import {
   createTestChatPane,
   connectPaneTestView,
@@ -183,6 +184,36 @@ const setConnected = (pane: TestChatPane, value: boolean) =>
   Object.defineProperty(pane, "isConnected", { configurable: true, value });
 
 describe("chat pane connection lifecycle", () => {
+  it("reasserts inline-output interest before recovery on reconnect without changing the draft", async () => {
+    const { pane, state, request } = reconnectPane({ messages: [], sessionId: "inline-reconnect" });
+    state.settings = { ...state.settings, chatInlineCommands: true };
+    state.inlineCommandPresentation = await inlineCommandPresentation();
+    state.chatMessage = "Unsent reconnect draft";
+    pane.connectedClient = null;
+    const connected = pane.context.gateway.snapshot;
+    let previousSubscription = state.chatSessionMessageSubscription;
+    for (let connection = 0; connection < 2; connection++) {
+      pane.applyGatewaySnapshot(connected);
+      await waitForSolid(() => {
+        expect(state.chatSessionMessageSubscription?.includeLiveToolOutput).toBe(true);
+        expect(requestCalls(request, "chat.startup")).toHaveLength(connection + 1);
+      });
+      expect(state.chatSessionMessageSubscription).not.toBe(previousSubscription);
+      previousSubscription = state.chatSessionMessageSubscription;
+      expect(state.chatMessage).toBe("Unsent reconnect draft");
+      const subscriptions = requestCalls(request, "sessions.messages.subscribe");
+      expect(subscriptions).toHaveLength(connection + 1);
+      expect(subscriptions.at(-1)?.[1]).toMatchObject({ includeLiveToolOutput: true });
+      const methods = request.mock.calls.map(([method]) => method);
+      expect(methods.lastIndexOf("sessions.messages.subscribe")).toBeLessThan(
+        methods.lastIndexOf("chat.startup"),
+      );
+      disconnect(pane);
+      expect(state.connected).toBe(false);
+      expect(state.sessions.captureConnectionScope()).toBeNull();
+    }
+  });
+
   it.each([true, false])(
     "reactivation retries failed live admission only when retryable (%s)",
     async (retryable) => {

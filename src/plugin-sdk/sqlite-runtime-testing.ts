@@ -42,6 +42,10 @@ export {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 export { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
+export { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+export { prepareAgentDatabaseStartupVerification } from "../state/agent-database-startup-integrity.js";
+export { verifyAgentDatabaseStartupIntegrity } from "../state/agent-database-startup-verification.js";
+export { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
 
 export { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 export { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";

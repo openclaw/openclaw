@@ -286,7 +286,7 @@ describe("memory actor history", () => {
     ];
     for (const query of reads) {
       expect(() => storage.readCurrent(query, authority)).toThrow(
-        "Transcript history message exceeds the 8388608-byte page limit",
+        "Chat history message exceeds the 8388608-byte page limit",
       );
     }
     expect(

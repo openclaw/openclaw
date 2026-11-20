@@ -235,12 +235,18 @@ function tabCloseHasTransparentBackground(tab: Locator) {
   });
 }
 
-async function dragDivider(page: Page, divider: Locator, axis: "x" | "y", delta: number) {
+async function dragDivider(
+  page: Page,
+  divider: Locator,
+  axis: "x" | "y",
+  delta: number,
+  grabOffset = 1,
+) {
   await waitForPanelGeometry(page);
   const box = await divider.boundingBox();
   expect(box).not.toBeNull();
-  const x = box!.x + (axis === "x" ? 1 : box!.width / 2);
-  const y = box!.y + (axis === "y" ? 1 : box!.height / 2);
+  const x = box!.x + (axis === "x" ? grabOffset : box!.width / 2);
+  const y = box!.y + (axis === "y" ? grabOffset : box!.height / 2);
   await page.mouse.move(x, y);
   await page.mouse.down();
   await page.mouse.move(axis === "x" ? box!.x + delta : x, axis === "y" ? box!.y + delta : y);
@@ -488,6 +494,11 @@ async function exerciseTabbedPanel(page: Page) {
   const divider = page.locator(".sidebar-column__divider");
   await dragDivider(page, divider, "x", -90);
   await expect.poll(() => panelSize(page, "width")).toBeGreaterThan(panelWidth + 70);
+  // The visible line borders the panel, so a press just past it must still grab.
+  const widenedWidth = await panelSize(page, "width");
+  const gutterWidth = (await divider.boundingBox())!.width;
+  await dragDivider(page, divider, "x", 40, gutterWidth + 2);
+  await expect.poll(() => panelSize(page, "width")).toBeLessThan(widenedWidth - 20);
   const resizedWidth = await panelSize(page, "width");
 
   await dockChatSidePanel(page, "bottom");

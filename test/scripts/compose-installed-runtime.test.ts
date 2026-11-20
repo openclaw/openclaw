@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   composeInstalledRuntime,

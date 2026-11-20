@@ -8,6 +8,7 @@ import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import { measuredRequestPressure, type OpenAICompletionsOptions } from "../provider-options.js";
 import {
+  PROVIDER_DEFERRED_TOOL_NAMES,
   PROVIDER_MODEL_INPUT,
   type ProviderContext,
   type ProviderModel,
@@ -15,7 +16,11 @@ import {
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { prepareOpenAIFunctionTool } from "../providers/openai-function-tool.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
-import { applyOpenAICompletionsToolReasoning } from "../providers/openai-reasoning-effort.js";
+import {
+  applyOpenAICompletionsToolReasoning,
+  isOpenAIGpt6Model,
+  supportsOpenAITemperature,
+} from "../providers/openai-reasoning-effort.js";
 import {
   resolveOpenAIRequestReasoning,
   resolveOpenAISimpleReasoningEffort,
@@ -293,7 +298,11 @@ export function buildOpenAICompletionsRequest(
   const convertedMessages = convertMessages(providerModel, context, compat, {
     cacheOptOutIndexes,
     supportsTools,
-    declaredToolNames: new Set(converted?.projection.tools.map((tool) => tool.name)),
+    // Deferred tools stay callable without a declaration; only unavailable history becomes text.
+    declaredToolNames: new Set([
+      ...(converted?.projection.tools.map((tool) => tool.name) ?? []),
+      ...(options?.[PROVIDER_DEFERRED_TOOL_NAMES] ?? []),
+    ]),
     preserveSystemPromptCacheBoundary:
       cacheControl !== undefined &&
       !managedCompat?.requiresStringContent &&
@@ -325,10 +334,10 @@ export function buildOpenAICompletionsRequest(
   if (policy.mode === "direct" || (compat.supportsPromptCacheKey && promptCacheKey)) {
     params.prompt_cache_key = compat.supportsPromptCacheKey ? promptCacheKey : undefined;
   }
-  if (options?.temperature !== undefined) {
+  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;
   }
-  if (policy.mode === "managed" && options?.topP !== undefined) {
+  if (policy.mode === "managed" && options?.topP !== undefined && !isOpenAIGpt6Model(model)) {
     params.top_p = options.topP;
   }
   const requestedResponseFormat = options?.responseFormat;

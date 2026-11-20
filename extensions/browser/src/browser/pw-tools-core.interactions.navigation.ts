@@ -74,6 +74,7 @@ export function interactionNavigationPolicy(
   return withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
     assertNavigationCurrent: opts.assertNavigationCurrent,
+    standingSsrfPolicy: opts.standingSsrfPolicy,
   });
 }
 
@@ -240,7 +241,7 @@ type ObservedDelayedNavigations = {
   subframes: string[];
 };
 
-function createInteractionFrameListener(
+export function createInteractionFrameListener(
   page: NavigationObservablePage,
   previousUrl: string,
   subframes: string[],

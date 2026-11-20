@@ -39,7 +39,7 @@ import {
 } from "./code-mode-control-tools.js";
 import type { ClientToolDefinition } from "./command/shared-types.js";
 import { readNodePermissionError } from "./node-permission-error.js";
-import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
+import { projectAgentToolDefinition } from "./prepared-tool-definition.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { ToolInputError } from "./tool-input-error.js";

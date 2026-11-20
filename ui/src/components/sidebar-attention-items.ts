@@ -1,9 +1,13 @@
-import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
+import type { CronCompactJob, CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { isCronJobActiveFailure, isCronJobRunning } from "../lib/cron-status.ts";
 import { clampText, formatTimeAgo } from "../lib/format.ts";
-import { isMonitoredAuthProvider, listEffectiveModelAuthProviders } from "../lib/model-auth.ts";
+import {
+  hasRoutineOAuthExpiry,
+  isMonitoredAuthProvider,
+  listEffectiveModelAuthProviders,
+} from "../lib/model-auth.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 
 registerSidebarAttentionEnglish();
@@ -20,6 +24,23 @@ export type CronAttentionJob = Pick<
     "lastRunStatus" | "lastStatus" | "lastRunAtMs" | "nextRunAtMs" | "runningAtMs" | "autoDisabled"
   >;
 };
+
+export function compactCronAttentionJob(job: CronCompactJob): CronAttentionJob {
+  return {
+    id: job.id,
+    name: job.name,
+    agentId: job.agentId,
+    enabled: job.enabled,
+    updatedAtMs: job.updatedAtMs,
+    state: {
+      nextRunAtMs: job.nextRunAtMs ?? undefined,
+      lastRunAtMs: job.lastRunAtMs ?? undefined,
+      lastRunStatus: job.lastRunStatus ?? undefined,
+      runningAtMs: job.runningAtMs,
+      autoDisabled: job.autoDisabled,
+    },
+  };
+}
 
 export function cronOverdueAt(job: CronAttentionJob, schedulerEnabled: boolean | null): number {
   return schedulerEnabled !== false &&
@@ -54,7 +75,9 @@ export function buildSidebarAttentionEntries(params: {
     isMonitoredAuthProvider,
   );
   const expired = monitored.filter(
-    (provider) => provider.status === "expired" || provider.status === "missing",
+    (provider) =>
+      provider.status === "missing" ||
+      (provider.status === "expired" && !hasRoutineOAuthExpiry("expired", provider.profiles)),
   );
   for (const provider of expired) {
     // Auth is agent-scoped; one agent's dismissal must not hide another's warning.

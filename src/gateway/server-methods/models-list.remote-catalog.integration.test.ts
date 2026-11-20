@@ -19,7 +19,7 @@ import * as bundledStamp from "../../model-catalog/bundled-catalog-stamp.js";
 import * as pricing from "../../model-catalog/pricing.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../../model-catalog/remote-overlay.test-support.js";
 import { refreshRemoteModelCatalog } from "../../model-catalog/remote-refresh.js";
-import { resolveModelCostConfig } from "../../utils/usage-format.js";
+import { captureModelCostPricing, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
   createCatalogState,
   createCatalogModel,
@@ -215,13 +215,15 @@ it.for([1, 2])(
             stop();
           }
         };
-        const price = (config: OpenClawConfig, model = "remote-first") =>
-          resolveModelCostConfig({
-            config,
-            agentDir: state.agentDir(),
-            provider: "kimi",
-            model,
-          })?.input;
+        const price = async (config: OpenClawConfig, model = "remote-first") =>
+          (
+            await resolveModelCostConfig({
+              config,
+              agentDir: state.agentDir(),
+              provider: "kimi",
+              model,
+            })
+          )?.input;
         const currentPrice = (model = "remote-first") => price(getRuntimeConfig(), model);
         const settleInterrupted = async (pending: Promise<ModelsListResult>) => {
           await withinTest(
@@ -255,6 +257,7 @@ it.for([1, 2])(
           run.snapshot.createStores().modelRegistry.find("kimi", "remote-first");
         const oldModel = expectDefined(runModel(oldRun), "old run model");
         expect(oldModel.cost.input).toBe(1);
+        const oldPricing = await captureModelCostPricing(config, state.agentDir());
         pausePublication = true;
         body = encode(next);
         expect((await refresh()).status).toBe("updated");
@@ -271,14 +274,14 @@ it.for([1, 2])(
             ),
           ).toBe(true);
         }
-        expect(price(config)).toBe(1);
+        expect(oldPricing.resolve("kimi", "remote-first")?.input).toBe(1);
         pausePublication = false;
         commit.resolve();
         const published = await waitForRows("remote-next");
         expect(kimiIds(published)).toContain("remote-next");
-        expect(price(config, "remote-next")).toBe(9);
+        expect(await price(config, "remote-next")).toBe(9);
         expect(
-          withPreparedModelRuntimePluginGenerationScope(oldRun.pluginGeneration, () =>
+          await withPreparedModelRuntimePluginGenerationScope(oldRun.pluginGeneration, () =>
             price(config),
           ),
         ).toBe(1);
@@ -327,13 +330,13 @@ it.for([1, 2])(
           body = rejected;
           expect((await refresh()).status).toBe("error");
           expect(kimiIds(await list())).toContain("remote-next");
-          expect(price(config)).toBe(7);
+          expect(await price(config)).toBe(7);
         }
         body = encode(first);
         const stale = await refresh();
         expect(stale).toMatchObject({ status: "unchanged", generatedAt: generatedAt + 1 });
         expect(kimiIds(await list())).toContain("remote-next");
-        expect(price(config)).toBe(7);
+        expect(await price(config)).toBe(7);
 
         const committedThread = providerThread;
         exitWorkerOnce = true;
@@ -342,7 +345,7 @@ it.for([1, 2])(
         expect(kimiIds(await list(true))).toContain("remote-next");
         await waitForRows("remote-next", () => providerThread !== committedThread);
         expect(providerThread).not.toBe(committedThread);
-        expect(currentPrice()).toBe(7);
+        expect(await currentPrice()).toBe(7);
 
         const finalCatalog = makeCatalog(2, [
           makeModel("remote-first", "Remote First", 11),
@@ -353,8 +356,8 @@ it.for([1, 2])(
         expect((await refresh()).status).toBe("updated");
         await list(true);
         expect(kimiIds(await waitForRows("remote-last"))).toContain("remote-last");
-        expect(currentPrice()).toBe(11);
-        expect(currentPrice("remote-last")).toBe(13);
+        expect(await currentPrice()).toBe(11);
+        expect(await currentPrice("remote-last")).toBe(13);
         expect(oldModel.cost.input).toBe(1);
         expect(runModel(newRun)?.cost.input).toBe(7);
 
@@ -367,14 +370,14 @@ it.for([1, 2])(
         const withoutRemote = await list(true);
         expect(kimiIds(withoutRemote)).not.toContain("remote-next");
         expect(kimiIds(withoutRemote)).not.toContain("remote-last");
-        expect(currentPrice("remote-last")).toBeUndefined();
+        expect(await currentPrice("remote-last")).toBeUndefined();
         const disabledThread = providerThread;
         exitWorkerOnce = true;
         await settleInterrupted(list(true));
         await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
         expect(kimiIds(await list(true))).not.toContain("remote-last");
         await waitForRows("remote-first", () => providerThread !== disabledThread);
-        expect(currentPrice("remote-last")).toBeUndefined();
+        expect(await currentPrice("remote-last")).toBeUndefined();
         expect(providerThread).not.toBe(disabledThread);
         expect([oldModel.cost.input, newModel.cost.input]).toEqual([1, 7]);
         expect(unexpectedRestart).not.toHaveBeenCalled();

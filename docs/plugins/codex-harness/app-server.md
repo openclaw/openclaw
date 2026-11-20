@@ -289,7 +289,7 @@ the native configured model provider; select the model with the standard
 OpenClaw model ref. Explicit non-OpenAI providers remain explicit. Prepared
 route compatibility and subscription/API-key account checks still apply.
 
-Owned local stdio processes use the [agent Git maintenance defaults](/concepts/managed-worktrees). OpenClaw preserves unrelated native Git parameters and shell-environment policy. Inherited Git parameters stay in the private process environment rather than being copied into native thread configuration. Clearing them removes the inherited values while retaining the host's maintenance defaults. External app-server peers and remote execution retain their own environment policy.
+Owned local stdio processes use the [agent Git maintenance defaults](/concepts/managed-worktrees). The client acquisition owner applies these defaults before choosing a shared process, including catalog, resume, fork, and turn requests, so those paths do not start competing writers merely because one prepared Git settings first. OpenClaw preserves unrelated native Git parameters and shell-environment policy. Inherited Git parameters stay in the private process environment rather than being copied into native thread configuration. Clearing them removes the inherited values while retaining the host's maintenance defaults. External app-server peers and remote execution retain their own environment policy.
 
 If a deployment needs additional environment isolation, add those
 variables to `appServer.clearEnv`:

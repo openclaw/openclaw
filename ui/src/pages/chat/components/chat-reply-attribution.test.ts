@@ -202,7 +202,6 @@ function draw(
             },
             options: {
               streamOptions: {},
-              workPreviews: new Map(),
               partDependencies: (part) => [part],
               renderGroupOptions: () => options,
               isWorkExpanded: () => false,
