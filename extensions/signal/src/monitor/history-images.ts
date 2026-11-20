@@ -36,16 +36,16 @@ export async function resolveSignalGroupHistoryContext(params: {
     historyKey: groupId,
     limit: deps.historyLimit,
     currentMessage: params.currentMessage,
-    formatEntry: (entry) =>
+    formatEntry: (historyEntry) =>
       formatInboundEnvelope({
         channel: "Signal",
         from: fromLabel,
-        timestamp: entry.timestamp,
-        body: `${[entry.body, formatSignalMediaText(entry.media ?? [])]
+        timestamp: historyEntry.timestamp,
+        body: `${[historyEntry.body, formatSignalMediaText(historyEntry.media ?? [])]
           .filter(Boolean)
-          .join("\n")}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
+          .join("\n")}${historyEntry.messageId ? ` [id:${historyEntry.messageId}]` : ""}`,
         chatType: "group",
-        senderLabel: entry.sender,
+        senderLabel: historyEntry.sender,
         envelope: envelopeOptions,
       }),
   });
