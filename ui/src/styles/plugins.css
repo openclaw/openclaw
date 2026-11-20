@@ -2405,7 +2405,8 @@
   padding-bottom: 16px;
 }
 
-.plugin-catalog-detail__readme-well.is-clamped > .plugin-catalog-detail__readme-body {
+.plugin-catalog-detail__readme-well.is-clamped
+  > .plugin-catalog-detail__readme-body:not(:focus-within) {
   max-height: var(--plugin-readme-clamp);
   overflow: hidden;
   mask-image: linear-gradient(black 62%, transparent 100%);
