@@ -1,0 +1,2 @@
+# Backport #202019: real setup discovery/inference, empty and failed listing, cancellation, and no persisted config/catalog changes.
+226
