@@ -37,6 +37,47 @@ async function startSignIn(page: Page, context: BrowserContext, held: string) {
 }
 
 suite.define(() => {
+  it("returns to the original sign-in after reloading the setup window", async () => {
+    await withPage(async ({ page, context }) => {
+      const rpc = setup.setupRpc;
+      const url = "https://oauth.example.invalid/authorize";
+      await context.route(url, (route) =>
+        route.fulfill({ contentType: "text/html", body: "Sign in" }),
+      );
+      const gateway = await installMockGateway(page, {
+        featureMethods: [rpc.detect, rpc.auth, rpc.next, rpc.verify],
+        methodResponses: {
+          [rpc.detect]: detection,
+          [rpc.auth]: setup.runningWizard(),
+          [rpc.next]: setup.runningStep("redirect", "text", "Paste the redirect URL", {
+            externalUrl: url,
+          }),
+          [rpc.verify]: { ok: true, modelRef: "fixture/oauth" },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+      const [provider] = await Promise.all([
+        context.waitForEvent("page"),
+        page.locator('[data-auth-choice="openrouter-oauth"] button').click(),
+      ]);
+      await provider.waitForURL(url);
+      const firstRead = await gateway.waitForRequest(rpc.next);
+      expect(firstRead.params).toEqual({ sessionId: expect.any(String) });
+      expect(await gateway.getRequests(rpc.auth)).toHaveLength(1);
+      await provider.bringToFront();
+      await page.bringToFront();
+      await page.reload();
+      await page.locator(".wizard-sign-in").waitFor();
+      const resumed = await gateway.waitForRequest(rpc.next);
+      expect(resumed.params).toEqual(firstRead.params);
+      expect(context.pages()).toHaveLength(2);
+      expect(await gateway.getRequests(rpc.auth)).toHaveLength(0);
+      await gateway.setMethodResponse(rpc.next, setup.activated("fixture/oauth"));
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
+      expect(await gateway.getRequests(rpc.activate)).toHaveLength(0);
+    });
+  });
+
   it("closes the sign-in tab and explains a start the Gateway never answers", async () => {
     await withPage(async ({ page, context }) => {
       await page.clock.install();

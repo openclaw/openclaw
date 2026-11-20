@@ -3,6 +3,7 @@ import Foundation
 import OpenClawDiscovery
 import OpenClawIPC
 import OpenClawKit
+import SwiftUI
 import Testing
 @testable import OpenClaw
 
@@ -238,6 +239,25 @@ struct OnboardingViewSmokeTests {
             for: OnboardingView.windowHeight + 200)
 
         #expect(taller - baseline == 200)
+    }
+
+    @Test func `reopening setup keeps an in-flight sign-in instead of replacing it`() throws {
+        let controller = OnboardingController()
+        defer { controller.close() }
+        controller.present(Text("Original attempt"))
+        let window = try #require(controller.sheetPresentationWindow)
+        let inFlight = window.contentViewController
+
+        controller.busyReason = "OpenClaw is completing provider sign-in."
+        window.miniaturize(nil)
+        #expect(window.isMiniaturized)
+        controller.present(Text("Reopened setup"))
+        #expect(window.isMiniaturized == !AppActivation.shared.allowsActivation)
+        #expect(window.contentViewController === inFlight)
+
+        controller.busyReason = nil
+        controller.present(Text("Reopened setup"))
+        #expect(window.contentViewController !== inFlight)
     }
 
     @Test func `onboarding window fits within a short visible screen`() {
