@@ -75,7 +75,7 @@ it("waits for the cancelled preparation's actual return before Stop completes", 
     upstream.abort();
     finishPreparation.resolve();
     const result = await preparation.catch(() => undefined);
-    (result?.kind === "admitted" ? result.turn.operation : result?.operation)?.complete();
+    (result?.kind === "skipped" ? result.operation : result?.turn.operation)?.complete();
     const claim = queued.controllerInput?.claim;
     if (claim) {
       mailbox.releaseSessionControllerClaim(claim);

@@ -1,0 +1,2 @@
+# Native reply and queue tests cover persistence, pre-output typing, silence, recovery, and delivery.
+256

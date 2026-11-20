@@ -186,7 +186,7 @@ export function registerSteeringIntentProducerCases(params: {
                   runFollowup: followup,
                 }),
               ),
-            ).resolves.toBe("handled");
+            ).resolves.toBe("followup");
             expect(getExistingFollowupQueue(produced.queueKey)?.items).toContain(
               produced.followupRun,
             );
