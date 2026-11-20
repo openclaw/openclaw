@@ -12,6 +12,7 @@ import type { ChannelMessageActionName } from "../channels/plugins/types.public.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDeliveredCurrentSourceReply } from "../infra/outbound/source-reply-mirror.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
+import { stampAgentControls } from "../interactive/agent-control.js";
 import {
   normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
@@ -52,7 +53,7 @@ export function extractToolAuthoredSourceReplyPayload(
   if (!details || !sourceReply || sourceReply.final === false) {
     return undefined;
   }
-  const payload = readSourceReplyPayload(sourceReply);
+  const payload = readSourceReplyPayload(stampAgentControls(sourceReply));
   if (!payload) {
     return undefined;
   }
