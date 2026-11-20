@@ -1,5 +1,7 @@
 // Prompt-cache invariant: one session sends one tool list, whatever starts each turn.
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { stagePostCompactionCustodyDelegate } from "../auto-reply/continuation/delegate-store-post-compaction.js";
+import { enqueuePendingDelegate } from "../auto-reply/continuation/delegate-store.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { COMPUTER_USE_V2_ACTION_NAMES } from "../plugins/computer-use-schemas.js";
@@ -25,6 +27,9 @@ vi.mock("./openclaw-plugin-tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-plugin-tools.js")>()),
   resolveOpenClawPluginToolsForOptions: () => [],
 }));
+// The continuation delegate's custody writers: a refused call must reach neither.
+vi.mock("../auto-reply/continuation/delegate-store.js", { spy: true });
+vi.mock("../auto-reply/continuation/delegate-store-post-compaction.js", { spy: true });
 
 type ToolOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
 
@@ -276,4 +281,79 @@ it("keeps the continuation tools in a series a cron-runner turn started", async 
   expect(isAgentToolExecutionAvailable(work(cron))).toBe(false);
   const refused = await work(cron).execute("cron-continue", { reason: "more" });
   expect(JSON.stringify(refused.content)).toContain("continue_work is not available in this turn");
+});
+
+it("refuses every continuation effect on a cron-runner turn in a series a user turn started", async () => {
+  const continuation: OpenClawConfig = {
+    ...config,
+    agents: { ...config.agents, defaults: { continuation: { enabled: true } } },
+    tools: {
+      ...config.tools,
+      alsoAllow: ["computer", "continue_work", "continue_delegate", "request_compaction"],
+    },
+  };
+  setRuntimeConfigSnapshot(continuation);
+  // Live runner callbacks: the wake a continue_work call schedules, the compaction a request starts.
+  const requestContinuation = vi.fn();
+  const triggerCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
+  const turn = (options: ToolOptions): ToolOptions => ({
+    ...options,
+    config: continuation,
+    continueWorkOpts: { requestContinuation },
+    requestCompactionOpts: {
+      sessionId,
+      contextUsageOrigin: "live_runner",
+      getContextUsage: () => 0.95,
+      triggerCompaction,
+    },
+  });
+  using chat = retainEmbeddedSessionPromptState(sessionId);
+  const user = send(chat.state, turn(turns.user!));
+  const cron = send(chat.state, turn(turns.cron!));
+  const find = (tools: AnyAgentTool[], name: string) => tools.find((tool) => tool.name === name)!;
+  const text = (result: { content: unknown }) => JSON.stringify(result.content);
+  const refusal = (name: string) => `${name} is not available in this turn. Do not retry ${name}.`;
+
+  // The cron turn sends the series' list: the continuation names stay listed.
+  expect(definitions(cron)).toEqual(definitions(user));
+  expect(cron.map((tool) => tool.name)).toEqual(
+    expect.arrayContaining(["continue_work", "continue_delegate", "dispatch_action"]),
+  );
+  // Direct calls are refused with the reason, before any argument preparation.
+  for (const [name, args] of [
+    ["continue_work", { reason: "more" }],
+    ["continue_delegate", { task: "audit the build", mode: "normal" }],
+  ] as const) {
+    const refused = await find(cron, name).execute(`cron-${name}`, args);
+    expect(refused.details).toMatchObject({ gated: true });
+    expect(text(refused)).toContain(refusal(name));
+  }
+  // Through Tool Search: the deferred request_compaction reaches this turn's refusal, and the
+  // direct-only tools are not dispatchable at all.
+  const dispatch = find(cron, "dispatch_action");
+  const compaction = await dispatch.execute("cron-compact", {
+    id: "request_compaction",
+    args: { reason: "context is full" },
+  });
+  expect(JSON.stringify(compaction.details)).toContain('"gated":true');
+  expect(text(compaction)).toContain(refusal("request_compaction"));
+  for (const name of ["continue_work", "continue_delegate"]) {
+    await expect(
+      dispatch.execute(`cron-dispatch-${name}`, { id: name, args: { reason: "more" } }),
+    ).rejects.toThrow("already available directly");
+  }
+  // No wake was scheduled, no delegate written or staged, no compaction requested.
+  expect(requestContinuation).not.toHaveBeenCalled();
+  expect(vi.mocked(enqueuePendingDelegate)).not.toHaveBeenCalled();
+  expect(vi.mocked(stagePostCompactionCustodyDelegate)).not.toHaveBeenCalled();
+  expect(triggerCompaction).not.toHaveBeenCalled();
+
+  // The same calls on the user turn reach those effects: the refusals above are the cron turn's.
+  await find(user, "continue_work").execute("user-continue", { reason: "more" });
+  expect(requestContinuation).toHaveBeenCalledTimes(1);
+  await find(user, "dispatch_action").execute("user-compact", {
+    id: "request_compaction",
+    args: { reason: "context is full" },
+  });
+  expect(triggerCompaction).toHaveBeenCalledTimes(1);
 });
