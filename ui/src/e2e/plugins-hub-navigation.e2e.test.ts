@@ -223,6 +223,39 @@ async function expectActivePanelLabel(page: Page, labelId: string) {
 }
 
 suite.define(() => {
+  it("replaces the disconnected catalog without stale cards", async () => {
+    const context = await createContext({ width: 1200, height: 900 });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["plugins.list", "plugins.catalog.browse", "plugins.catalog.categories"],
+      methodResponses,
+    });
+    try {
+      await page.goto(suite.server.baseUrl + "plugins");
+      const catalog = page.locator(".plugin-catalog-results");
+      const search = catalog.getByRole("searchbox");
+      await catalog.locator(".plugin-catalog-card").first().waitFor();
+      await gateway.setOnline(false);
+      await page.waitForFunction(
+        () => window.openclawControlUi?.snapshot().gatewayPhase === "reconnecting",
+      );
+      await captureScreenshot(
+        page,
+        (process.env.OPENCLAW_PROOF_STAGE ?? "after") + "-catalog-disconnected.png",
+      );
+      await expect.poll(() => catalog.textContent()).toContain("Plugin catalog unavailable");
+      expect(await catalog.locator(".plugin-catalog-card").count()).toBe(0);
+      await search.fill("tool");
+      await expect.poll(() => catalog.textContent()).toContain("Plugin catalog unavailable");
+      expect(await search.inputValue()).toBe("tool");
+      await gateway.setOnline(true);
+      await search.fill("");
+      await catalog.locator(".plugin-catalog-card").first().waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps model-provider video capabilities discoverable in Media across pagination", async () => {
     const context = await createContext({ width: 1200, height: 928 });
     const page = await context.newPage();

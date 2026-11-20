@@ -325,6 +325,8 @@ Workshop at `/skills/workshop`. **Settings → Plugins** at `/settings/plugins`
 shows the searchable local inventory. Select a plugin to open its overview.
 Catalog browsing and search load independently of that inventory. Installation
 stays disabled until the Gateway confirms the current inventory and permissions.
+If the Gateway disconnects while the catalog is open, search and filter choices
+are kept and results reload when it reconnects.
 
 Opening a plugin shows its description, publisher when available, skills, tools,
 MCP servers, and full README on one overview. Select a tool to read its full

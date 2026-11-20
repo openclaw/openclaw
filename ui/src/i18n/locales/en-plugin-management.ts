@@ -422,6 +422,8 @@ const enPluginManagement = {
     loadMore: "Load more",
     loadingMore: "Loading more…",
     discoveryOffline: "Reconnect to browse plugins from ClawHub.",
+    discoveryDisconnectedTitle: "Plugin catalog unavailable",
+    discoveryDisconnectedHint: "Results load when the Gateway reconnects.",
     noDiscoveryResults: "No plugins match your search.",
     noDiscoveryResultsHint: "Try a different search or choose another filter.",
     searchClawHub: "Search ClawHub plugins",
