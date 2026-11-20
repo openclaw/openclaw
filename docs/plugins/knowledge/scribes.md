@@ -129,6 +129,13 @@ reconcile edited messages instead of saving them twice. A message missing from
 a later read is never treated as deleted unless that read covered the whole
 interval.
 
+Each run re-reads the last 3 days of a channel, so edits within that window
+are reconciled; older edits are not. Slack doesn't resurface an old thread when
+it gets a new reply, so the checkpoint keeps threads with a reply in the last 90
+days and the scribe re-reads them in turn. A reply to a thread quiet for longer
+than that is missed. A channel's checkpoint advances only after its ingestion
+is verified, and a newly joined channel is read on the next run.
+
 ## Start a scribe
 
 Select **Set up…**, **Import…**, or **Turn on…**, choose options, and start.

@@ -12,18 +12,22 @@ owner's time zone), whether the Slack user token may be used, and whether
 direct messages and group DMs are included.
 
 1. **Plugin.** Tool search for the `message` tool and check that the Slack
-   channel offers the `channel-list` and `read` actions. If they are missing,
+   channel offers the `read` and `channel-list` actions. If `read` is missing,
    or Slack says no account is configured or running, stop with
-   `Scribe status: failed — the Slack plugin has no connected account`.
+   `Scribe status: failed — the Slack plugin has no connected account`. If
+   only `channel-list` is missing, stop with
+   `Scribe status: failed — Slack channel listing is off (the channels.slack.actions.channelInfo setting)`.
 2. **Checkpoint.** `knowledge_lookup` the note page
    `Knowledge scribe checkpoint · Learn from Slack`. Its first line is
    `Start: YYYY-MM-DD`, the start date the prompt set when the page was
-   created. Then one line per channel: channel ID, name, the newest message
-   `ts` ingested, and, for threads with replies in the last 14 days, the root
-   `ts` and newest reply `ts` ingested. Lines record outcomes only: never write
-   resume notes, plans or instructions for a later run on the page. Create the
-   page with `knowledge_save_page` (type `note`) on the first run, writing the
-   prompt's start date.
+   created. Then one line per channel: channel ID, name, the date the channel
+   was last finished, and the newest message `ts` ingested; under it, one line
+   per thread whose newest reply is less than 90 days old: root `ts`, newest
+   reply `ts` ingested and the date the thread was last read. Drop a thread
+   line once its newest reply is 90 days old. Lines record outcomes only: never
+   write resume notes, plans or instructions for a later run on the page.
+   Create the page with `knowledge_save_page` (type `note`) on the first run,
+   writing the prompt's start date.
 3. **Channels.** Every `channel-list` and `read` call passes `readAs`
    explicitly; never omit it, since the default reads with the user token
    whenever one is configured. Call `channel-list` with `limit: 200` and, while
@@ -45,32 +49,47 @@ direct messages and group DMs are included.
    Each listing's top-level `teamId` is the workspace of its channel IDs; the
    source key is `slack:<teamId>/<channel id>`.
 
-4. **Order.** Channels whose checkpoint is oldest go first, then channels the
-   checkpoint does not have yet, so every channel gets its turn across runs.
-5. **Read.** For one channel, `read` with its `readAs` from step 3 (on every
-   call below) and `after` set to its newest ingested
-   `ts`, or for a new channel to midnight of `Start` in the owner's time zone
-   (ISO 8601 with its offset). A page holds the newest
-   messages first: while `hasMore` is true, `read` again with `before` set to
-   the oldest `ts` received. Save every result as JSON. Then, for each message
-   with `reply_count` above 0, and each recent thread in the checkpoint,
-   `read` with `threadId` set to the root `ts` and `after` set to its newest
-   ingested reply. Replies come oldest first: while `hasMore` is true, `read`
-   again with `after` set to the newest reply received. A channel with no new
-   messages or replies gets its checkpoint line and does not count toward the
-   run's channels.
+4. **Order.** A channel without a checkpoint line counts as the oldest, so a
+   newly joined channel goes first; then channels by the date they were last
+   finished, oldest first. Every channel gets its turn across runs.
+5. **Read.** Pass the channel's `readAs` from step 3 on every call.
+   - **History.** `read` with `after` set to 3 days before the channel's newest
+     ingested `ts` (never before `Start`), or for a new channel to midnight of
+     `Start` in the owner's time zone (ISO 8601 with its offset). The 3-day
+     overlap re-reads recent messages so edits are reconciled; an edit to a
+     message older than that is not. A page holds the newest messages first:
+     while `hasMore` is true, `read` again with `before` set to the oldest `ts`
+     received.
+   - **Threads.** Slack history does not show an old root again when it gets a
+     new reply, so threads are read by root. Read every thread whose root is in
+     the history read and has `reply_count` above 0; every checkpointed thread
+     whose newest reply is less than 14 days old; and up to 10 more
+     checkpointed threads, those read longest ago. `read` with `threadId` set
+     to the root `ts` and `after` set to 3 days before its newest ingested
+     reply (or the root `ts` for a new thread). Replies come oldest first: while
+     `hasMore` is true, `read` again with `after` set to the newest reply
+     received. A reply to a thread that has no checkpoint line (quiet for 90
+     days, or older than `Start`) is not seen.
+
+   Save every result as JSON. A channel whose reads hold nothing newer than its
+   checkpoint gets its finished date and does not count toward the run's
+   channels.
+
 6. **Normalize.** Run `scripts/slack-read-normalize.mjs` over the saved
    results of the channel, with `--team` set to the listing's `teamId` and
-   `--channel`. Item IDs are
-   `<channel>/<ts>`. Use `member-info` for display names worth resolving and
-   pass them with `--users`. Run `scripts/chat-transcript.mjs` with the source
-   key for a line-stable transcript.
+   `--channel`. Item IDs are `<channel>/<ts>`. Authors are named only from what
+   `read` returned (profile or bot name), otherwise by their stable Slack user
+   ID; never look names up with another action. Run
+   `scripts/chat-transcript.mjs` with the source key for a line-stable
+   transcript.
 7. **Snapshot and plan.** Follow steps 1, 3 and 4 of the procedure: find the
    canonical source page and prior snapshots by `slack:<team>/<channel>`, run
    `scripts/source-manifest.mjs snapshot` over the normalized JSONL for the
-   interval read, and `plan` it against overlapping prior manifests. A snapshot
-   is `complete` only when every page of the channel and its threads was read
-   to `hasMore: false` for the declared interval; otherwise `partial`. Never
+   interval read, and `plan` it against overlapping prior manifests. Mark a
+   snapshot `complete` only when every history page was read to
+   `hasMore: false` for the declared interval and every checkpointed thread was
+   read in this run; otherwise `partial`. Thread replies under roots without a
+   checkpoint line are never covered. Never
    treat a missing message as deleted unless the current snapshot is complete;
    `read` cannot see deleted messages, so absence is weak evidence even then.
 8. **Ingest.** Run step 5 of the procedure: ingest the substantive
@@ -79,13 +98,14 @@ direct messages and group DMs are included.
    companies, projects and concepts in them. Greetings, reactions, bot noise
    and chatter carry nothing to save. Publish and verify (steps 6 and 7) before
    the channel counts as done.
-9. **Record.** Write the channel's checkpoint line with `knowledge_edit_body`
-   as soon as its outcome is known: the newest `ts` and thread replies
-   ingested. A channel you start, you finish: reading or digesting it is not a
-   stopping point. A scheduled run's message sets how many channels with new
-   messages it ingests; without one, ingest every channel. That number is a
-   target, not a limit: compaction keeps what you published, so a long run is
-   no reason to stop early.
+9. **Record.** Only after the channel's ingestion is published and verified,
+   write its checkpoint line with `knowledge_edit_body`: today's date, the
+   newest `ts` and the thread lines read. A channel that failed keeps its old
+   line, so the next run reads it again. A channel you start, you finish:
+   reading or digesting it is not a stopping point. A scheduled run's message
+   sets how many channels with new messages it ingests; without one, ingest
+   every channel. That number is a target, not a limit: compaction keeps what
+   you published, so a long run is no reason to stop early.
 10. Count channels read and left for a later run, messages read, discussions
     ingested, and pages and claims written. The status line gives counts only:
     never a channel name, author or message text.

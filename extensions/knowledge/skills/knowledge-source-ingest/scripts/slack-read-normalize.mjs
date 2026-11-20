@@ -1,17 +1,21 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { createWriteStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { finished } from "node:stream/promises";
 
 const USAGE =
-  "Usage: node slack-read-normalize.mjs --team TEAM_ID --channel CHANNEL_ID --input PATH [--input PATH ...] [--users PATH] [--output PATH|-]\n\n" +
+  "Usage: node slack-read-normalize.mjs --team TEAM_ID --channel CHANNEL_ID --input PATH [--input PATH ...] [--output PATH|-]\n\n" +
   "Converts saved results of the Slack plugin's `read` message action (channel history pages and thread\n" +
   "replies of one channel) into deterministic normalized chat JSONL, the format discrawl-normalize.mjs\n" +
   "writes, for chat-transcript.mjs and source-manifest.mjs. Each input is a JSON read result\n" +
   "({messages, hasMore}), an array of them, or JSON Lines of them. Item IDs are CHANNEL_ID/ts; replies\n" +
-  "carry thread_id and reply_to_message_id of their root. --users is a JSON object of user ID to display\n" +
-  "name. A message read more than once keeps its latest edit. Prints the source key and counts to stderr.\n";
+  "carry thread_id and reply_to_message_id of their root. Authors are named from the profile or bot name\n" +
+  "the read returned, otherwise by user ID. Each row's sha256 covers the message itself, not the labels\n" +
+  "that depend on what else was read (author and thread names, reply counts), so an unchanged message\n" +
+  "keeps its hash across overlapping reads. A message read more than once keeps its latest edit.\n" +
+  "Prints the source key and counts to stderr.\n";
 
 /** Run the command; the help branch returns so stdout drains before Node exits. */
 async function run(argv) {
@@ -43,9 +47,6 @@ async function run(argv) {
   if (!inputs.length) {
     throw new Error("--input is required");
   }
-  const users = options.has("users")
-    ? JSON.parse(await readFile(options.get("users"), "utf8"))
-    : {};
 
   // Slack ts is "<seconds>.<microseconds>"; it becomes RFC3339 UTC with microseconds.
   const instant = (ts, what) => {
@@ -125,7 +126,6 @@ async function run(argv) {
           : {}),
         author_id: author,
         author_name:
-          users[author] ||
           message.user_profile?.display_name ||
           message.user_profile?.real_name ||
           message.username ||
@@ -144,6 +144,19 @@ async function run(argv) {
       },
     };
   });
+  // The hash leaves out labels that depend on the rest of the batch or change with later replies.
+  for (const row of rows) {
+    const {
+      thread_name: _threadName,
+      author_name: _authorName,
+      reply_count: _replyCount,
+      ...source
+    } = row.payload;
+    const canonical = JSON.stringify(
+      Object.fromEntries(Object.entries(source).toSorted(([a], [b]) => (a < b ? -1 : 1))),
+    );
+    row.sha256 = createHash("sha256").update(canonical).digest("hex");
+  }
   rows.sort((a, b) => a.occurred_at.localeCompare(b.occurred_at) || a.id.localeCompare(b.id));
 
   const output = options.get("output") ?? "-";
