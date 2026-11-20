@@ -1,6 +1,7 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeThinkLevel } from "../auto-reply/thinking.js";
+import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { isIndexedSessionEntry } from "../config/sessions/session-entry-codec.js";
@@ -601,6 +602,26 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
   try {
     abortSignal.throwIfAborted();
     if (cliAnchor) {
+      // The fork runs on the account the session's turns select: its pin, or for an automatic
+      // pin the account its native session was bound with. A CLI turn records the runtime as its
+      // provider, so the caller cannot match the session's pin to it.
+      const { resolveCliExecutionAuthProfileId } = await import("./cli-execution-auth.js");
+      const sessionPin = cliEntry?.authProfileOverride?.trim();
+      const authProfileId =
+        params.model.authProfileId ??
+        (await resolveCliExecutionAuthProfileId({
+          cliExecutionProvider: cliAnchor.provider,
+          authProfileProvider: canonicalProvider ?? params.model.provider,
+          config,
+          agentDir,
+          selected: sessionPin
+            ? {
+                authProfileId: sessionPin,
+                authProfileIdSource: resolveCollapsedSessionAuthPinSource(cliEntry),
+              }
+            : undefined,
+          sessionBinding: cliAnchor.binding,
+        }));
       const result = await runCliSessionFork({
         anchor: cliAnchor,
         config,
@@ -615,7 +636,11 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
         // The native session lives under the cwd the session's turns ran the CLI in.
         cwd: cliEntry?.spawnedCwd?.trim() || resolveAgentRunCwd(config, agentId),
         prompt: params.prompt,
-        model: { ...params.model, provider: canonicalProvider ?? params.model.provider },
+        model: {
+          provider: canonicalProvider ?? params.model.provider,
+          model: params.model.model,
+          ...(authProfileId ? { authProfileId } : {}),
+        },
         toolCallsAllow: toolExecutionAllow,
         ...(params.requester ? { requester: params.requester } : {}),
         conversation: sessionConversationFacts(entry),

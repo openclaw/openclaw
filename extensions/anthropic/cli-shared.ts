@@ -456,11 +456,17 @@ export function resolveClaudeCliExecutionArgs(
           applyClaudeCliEffortArgs(baseArgs, context.thinkingLevel),
           context,
         );
-  const resolvedArgs = context.toolAvailability
+  const restrictedArgs = context.toolAvailability
     ? resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability, {
         preserveSlashCommands: context.controlOperation === "compact",
       })
     : executionArgs;
+  // A hidden session fork branches the native session for one answer; Claude must not save it.
+  const resolvedArgs =
+    context.controlOperation === "fork" &&
+    !restrictedArgs.includes(CLAUDE_NO_SESSION_PERSISTENCE_ARG)
+      ? [...restrictedArgs, CLAUDE_NO_SESSION_PERSISTENCE_ARG]
+      : restrictedArgs;
   return options.excludeDynamicSystemPromptSections && context.executionMode !== "side-question"
     ? [...resolvedArgs, CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_ARG]
     : resolvedArgs;

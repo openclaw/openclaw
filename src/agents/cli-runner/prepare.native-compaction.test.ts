@@ -238,6 +238,8 @@ it("a session fork branches the native session and runs only its own tools", asy
   // session's tools, so the resumed native session keeps its catalog, and runs only the fork's.
   const argv = fork?.argv ?? [];
   expect(argv[argv.indexOf("--tools") + 1]?.split(",")).toEqual(["ToolSearch"]);
+  // The branched native session is used for one answer and never saved.
+  expect(argv).toContain("--no-session-persistence");
   expect(grantContexts).toHaveLength(1);
   expect(grantContexts[0]?.toolsAllow).toEqual(expect.arrayContaining(["read", "ls", "exec"]));
   expect(grantContexts[0]?.toolCallsAllow).toEqual(["read"]);

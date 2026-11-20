@@ -495,7 +495,7 @@ export async function executePreparedCliRun(
               : params.cliToolAvailability,
           hostOwnedTools: context.hostOwnedTools,
           useResume,
-          ...(params.controlOperation === "compact" ? { controlOperation: "compact" } : {}),
+          ...(params.controlOperation ? { controlOperation: params.controlOperation } : {}),
           baseArgs: baseArgsWithSkills,
         });
         if (

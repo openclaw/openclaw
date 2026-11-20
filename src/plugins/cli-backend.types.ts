@@ -291,8 +291,11 @@ export type CliBackendResolveExecutionArgsContext = Omit<
   /** Canonical tools routed through OpenClaw; disable equivalent native tools. */
   hostOwnedTools?: readonly string[];
   useResume: boolean;
-  /** The backend process is executing a native control operation. */
-  controlOperation?: "compact";
+  /**
+   * The backend process is executing a native control operation. `fork` is a hidden session
+   * fork: its branched native session must not be kept.
+   */
+  controlOperation?: "compact" | "fork";
   baseArgs: readonly string[];
 };
 

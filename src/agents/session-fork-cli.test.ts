@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { runSessionFork } from "./session-fork-run.js";
 import { withSessionState } from "./sessions/session-manager-fixtures.test-support.js";
@@ -16,6 +17,13 @@ const runCliAgent = vi.hoisted(() => vi.fn<typeof import("./cli-runner.runtime.j
 vi.mock("./embedded-agent.js", () => ({ runEmbeddedAgent }));
 // mock-isolation: observe the CLI fork request without starting a CLI process.
 vi.mock("./cli-runner.runtime.js", () => ({ runCliAgent }));
+// mock-isolation: account selection reads a fixture credential instead of the runtime auth store.
+vi.mock("./auth-profiles/store-runtime.js", () => ({
+  loadAuthProfileStoreForRuntimeAsync: async () => ({
+    version: 1,
+    profiles: { "anthropic:work": createApiKeyCredential("anthropic", "fixture-key") },
+  }),
+}));
 
 const CLI_MODEL = { provider: "anthropic", model: "claude-opus-4-7" };
 const cliConfig: OpenClawConfig = {
@@ -57,16 +65,26 @@ async function withCliSession(
     workspaceDir: string;
     transcript: () => unknown[];
   }) => Promise<void>,
-  options: { nativeReply?: boolean; bindingSessionId?: string; spawnedCwd?: string } = {},
+  options: {
+    nativeReply?: boolean;
+    bindingSessionId?: string;
+    spawnedCwd?: string;
+    pin?: { authProfileOverride: string; authProfileOverrideSource: "user" | "auto" };
+    bindingAuthProfileId?: string;
+  } = {},
 ) {
   await withSessionState("cli-fork", async ({ scope, state }) => {
     await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 2,
       cliSessionBindings: {
-        "claude-cli": { sessionId: options.bindingSessionId ?? "native-1" },
+        "claude-cli": {
+          sessionId: options.bindingSessionId ?? "native-1",
+          ...(options.bindingAuthProfileId ? { authProfileId: options.bindingAuthProfileId } : {}),
+        },
       },
       ...(options.spawnedCwd ? { spawnedCwd: options.spawnedCwd } : {}),
+      ...options.pin,
     });
     const source = SessionManager.open(scope);
     await source.appendMessageAsync({ role: "user", content: "Rewrite my prompt", timestamp: 1 });
@@ -189,6 +207,32 @@ it.each([
       expect(runCliAgent.mock.calls[0]?.[0].cwd).toBe(row.cwd);
     },
     { spawnedCwd: row.spawnedCwd },
+  );
+});
+
+it.each([
+  {
+    name: "the session's user pin",
+    pin: { authProfileOverride: "anthropic:work", authProfileOverrideSource: "user" as const },
+  },
+  {
+    name: "the account its native session was bound with",
+    pin: { authProfileOverride: "anthropic:work", authProfileOverrideSource: "auto" as const },
+    bindingAuthProfileId: "anthropic:work",
+  },
+])("runs a CLI fork of the turn's CLI ref on $name", async (row) => {
+  await withCliSession(
+    async ({ anchor, workspaceDir }) => {
+      // The turn records its runtime as provider, so the caller passes no profile.
+      await fork(anchor, workspaceDir, {
+        model: { provider: "claude-cli", model: "claude-opus-4-7" },
+      });
+      expect(runCliAgent.mock.calls[0]?.[0].authProfileId).toBe("anthropic:work");
+    },
+    {
+      pin: row.pin,
+      ...(row.bindingAuthProfileId ? { bindingAuthProfileId: row.bindingAuthProfileId } : {}),
+    },
   );
 });
 
