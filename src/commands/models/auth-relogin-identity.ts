@@ -41,11 +41,22 @@ export function isAuthProfileReconnect(
   if (!previous || previous.provider !== incoming.provider || previous.type !== incoming.type) {
     return false;
   }
-  try {
-    return matcher?.(incoming, previous) ?? true;
-  } catch {
-    return false;
+  if (matcher) {
+    try {
+      return matcher(incoming, previous);
+    } catch {
+      return false;
+    }
   }
+  // A reused slot does not prove OAuth identity. Subjects are registration-scoped.
+  return (
+    incoming.type !== "oauth" ||
+    (previous.type === "oauth" &&
+      Boolean(incoming.accountId) &&
+      incoming.accountId === previous.accountId &&
+      incoming.issuer === previous.issuer &&
+      incoming.clientId === previous.clientId)
+  );
 }
 
 export function resolveReloginProfileIdentity(params: {

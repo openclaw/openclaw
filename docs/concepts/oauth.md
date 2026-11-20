@@ -256,8 +256,9 @@ The auth profile store supports multiple profile IDs for the same provider.
 When an interactive CLI login or **Settings → Models** adds a second account
 for the same provider, OpenClaw offers an optional name such as **Work**.
 Press Enter to keep the suggested label, or enter your own. Skipping the name
-does not remove the saved sign-in. Reconnecting a saved account keeps its name.
-Chat `/login` adds accounts without asking for a name.
+does not remove the saved sign-in. Reconnecting keeps the saved name when
+OpenClaw can identify the same account. Chat `/login` adds accounts without
+asking for a name.
 
 Pick which profile is used:
 

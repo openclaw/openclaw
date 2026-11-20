@@ -24,11 +24,11 @@ const personal = `${provider}:personal`;
 const work = `${provider}:work`;
 const explicit = `${provider}:explicit`;
 const email = "person@example.invalid";
-function credential(accountId: string, access: string): OAuthCredential {
+function credential(accountId: string | undefined, access: string): OAuthCredential {
   return {
     type: "oauth",
     provider,
-    accountId,
+    ...(accountId ? { accountId } : {}),
     access,
     refresh: "fixture-refresh",
     expires: 2_000_000_000_000,
@@ -73,6 +73,34 @@ it.each([
     answer: "Replacement",
     name: "Replacement",
   },
+  {
+    scenario: "reconnect to the same OAuth account without a provider matcher",
+    offer: false,
+    reconnect: true,
+    useWorkSlot: true,
+    noMatcher: true,
+    name: "Existing work name",
+  },
+  {
+    scenario: "replace a different OAuth account without a provider matcher",
+    offer: true,
+    reconnect: true,
+    useWorkSlot: true,
+    noMatcher: true,
+    replace: true,
+    answer: "Replacement",
+    name: "Replacement",
+  },
+  {
+    scenario: "do not reuse an OAuth name when the account is unknown",
+    offer: true,
+    reconnect: true,
+    useWorkSlot: true,
+    noMatcher: true,
+    noIdentity: true,
+    answer: "Replacement",
+    name: "Replacement",
+  },
   { scenario: "cancel the name without losing the account", offer: true, cancel: true },
   { scenario: "failed name prompt leaves the account saved", offer: true, promptError: true },
   { scenario: "reports a concurrent name-write miss", offer: true, updateMiss: true },
@@ -102,11 +130,14 @@ it.each([
     if (test.reconnect) {
       await upsertAuthProfileAsync({
         profileId: work,
-        credential: { ...credential("work", "old-access"), displayName: "Existing work name" },
+        credential: {
+          ...credential(test.noIdentity ? undefined : "work", "old-access"),
+          displayName: "Existing work name",
+        },
       });
     }
     const inputId = test.reconnect ? `${provider}:provider-chosen-id` : work;
-    const accountId = test.replace ? "replacement" : "work";
+    const accountId = test.noIdentity ? undefined : test.replace ? "replacement" : "work";
     const savedId = test.explicit ? explicit : work;
     const plugin: ProviderPlugin = {
       id: provider,
@@ -116,11 +147,15 @@ it.each([
           id: "oauth",
           label: "Example login",
           kind: "oauth",
-          matchesPersonalAccount: (next, previous) =>
-            next.type === "oauth" &&
-            previous.type === "oauth" &&
-            next.provider === previous.provider &&
-            next.accountId === previous.accountId,
+          ...(test.noMatcher
+            ? {}
+            : {
+                matchesPersonalAccount: (next, previous) =>
+                  next.type === "oauth" &&
+                  previous.type === "oauth" &&
+                  next.provider === previous.provider &&
+                  next.accountId === previous.accountId,
+              }),
           run: async () => ({
             profiles: [
               {
