@@ -3,6 +3,24 @@ import { ClawHubDownloadabilitySchema, ClawHubSelectedReleaseSchema } from "./cl
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
+/**
+ * ClawHub resolves a bare slug against every publisher, so requests that carry only the slug
+ * fail with 409 AMBIGUOUS_SKILL_SLUG once two publishers share it. Clients send the reference
+ * `skills.search` returned for the entry the operator picked.
+ */
+export const ClawHubSkillReferenceSchema = Type.String({
+  minLength: 1,
+  description:
+    "ClawHub skill reference: `@owner/slug`, `skills-sh:owner/repo/slug`, or a bare `slug` when no publisher is known.",
+});
+
+/** Reads registry detail for one skill. */
+export const SkillsDetailParamsSchema = closedObject({
+  includeInstructions: Type.Optional(Type.Boolean()),
+  slug: ClawHubSkillReferenceSchema,
+  version: Type.Optional(NonEmptyString),
+});
+
 /** Skill registry detail, latest version, metadata, and owner info. */
 const SkillRegistrySetupSchema = Type.Array(
   closedObject({
@@ -15,18 +33,19 @@ const SkillDetailUnavailableSchema = closedObject({
   reason: NonEmptyString,
 });
 
+const SkillDocumentSchema = Type.Union([
+  closedObject({ status: Type.Literal("available"), content: Type.String() }),
+  SkillDetailUnavailableSchema,
+]);
+
 export const SkillsDetailResultSchema = closedObject({
+  instructions: Type.Optional(SkillDocumentSchema),
   registry: Type.Optional(NonEmptyString),
   source: Type.Optional(Type.Literal("clawhub")),
   installRef: Type.Optional(NonEmptyString),
   selectedRelease: Type.Optional(Type.Union([ClawHubSelectedReleaseSchema, Type.Null()])),
   downloadability: Type.Optional(ClawHubDownloadabilitySchema),
-  card: Type.Optional(
-    Type.Union([
-      closedObject({ status: Type.Literal("available"), content: Type.String() }),
-      SkillDetailUnavailableSchema,
-    ]),
-  ),
+  card: Type.Optional(SkillDocumentSchema),
   requirements: Type.Optional(
     Type.Union([
       closedObject({

@@ -17,7 +17,11 @@ import { NonEmptyString, Sha256String } from "./primitives.js";
 import { RecommendedPromptsSchema } from "./recommended-prompts.js";
 import { GitHubSetupHandleSchema } from "./secrets.js";
 import { SessionPermissionModeSchema } from "./sessions-row.js";
-import { SkillsDetailResultSchema } from "./skill-detail.js";
+import {
+  ClawHubSkillReferenceSchema,
+  SkillsDetailParamsSchema,
+  SkillsDetailResultSchema,
+} from "./skill-detail.js";
 import { SkillWorkshopDraftSchema } from "./skill-workshop-drafts.js";
 
 export {
@@ -28,7 +32,7 @@ export type {
   AgentsAvatarGenerateParams,
   AgentsAvatarGenerateResult,
 } from "./agents-avatar-generate.js";
-export { SkillsDetailResultSchema } from "./skill-detail.js";
+export { SkillsDetailParamsSchema, SkillsDetailResultSchema } from "./skill-detail.js";
 export { AgentKindSchema, AgentOwnershipSchema };
 export {
   AgentsCreateParamsSchema,
@@ -301,14 +305,6 @@ export const SkillsUploadCommitParamsSchema = closedObject({
   sha256: Type.Optional(Sha256String),
 });
 
-/**
- * ClawHub resolves a bare slug against every publisher, so requests that carry only the slug
- * fail with 409 AMBIGUOUS_SKILL_SLUG once two publishers share it. Clients send the reference
- * `skills.search` returned for the entry the operator picked.
- */
-const CLAWHUB_SKILL_REF_DESCRIPTION =
-  "ClawHub skill reference: `@owner/slug`, `skills-sh:owner/repo/slug`, or a bare `slug` when no publisher is known.";
-
 /** Installs a skill from legacy install id, ClawHub, or uploaded archive. */
 export const SkillsInstallParamsSchema = Type.Union([
   closedObject({
@@ -327,7 +323,7 @@ export const SkillsInstallParamsSchema = Type.Union([
   closedObject({
     agentId: Type.Optional(NonEmptyString),
     source: Type.Literal("clawhub"),
-    slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
+    slug: ClawHubSkillReferenceSchema,
     version: Type.Optional(NonEmptyString),
     force: Type.Optional(Type.Boolean()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
@@ -359,12 +355,6 @@ export const SkillsUpdateParamsSchema = Type.Union([
     force: Type.Optional(Type.Boolean()),
   }),
 ]);
-
-/** Reads registry detail for one skill. */
-export const SkillsDetailParamsSchema = closedObject({
-  slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
-  version: Type.Optional(NonEmptyString),
-});
 
 /** Reads current security verdicts for configured skills. */
 export const SkillsSecurityVerdictsParamsSchema = closedObject({

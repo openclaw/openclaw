@@ -18,10 +18,11 @@ import {
   resolveClawHubBaseUrl,
   resolveClawHubImageUrl,
   type ClawHubFetchOptions,
+  type ClawHubRequestParams,
 } from "./clawhub-client.js";
 import { reportClawHubInstallTelemetry } from "./clawhub-telemetry.js";
 
-const SKILL_CARD_MAX_BYTES = 256 * 1024;
+const SKILL_DOCUMENT_MAX_BYTES = 256 * 1024;
 // Full scanner evidence can exceed the metadata reader's 16 MiB cap.
 const SKILL_VERIFICATION_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -403,6 +404,7 @@ export async function fetchClawHubSkillDetail(
     version?: string;
     /** Interactive detail reads include card and release scans; install resolution needs metadata only. */
     includeInspection?: boolean;
+    includeInstructions?: boolean;
   },
 ): Promise<ClawHubSkillDetail> {
   const registry = resolveClawHubBaseUrl(params.baseUrl);
@@ -418,16 +420,40 @@ export async function fetchClawHubSkillDetail(
   if (params.ownerHandle && detail.owner?.handle && detail.owner.handle !== params.ownerHandle) {
     throw new Error("ClawHub returned details for a different publisher.");
   }
-  if (!params.includeInspection && params.version === undefined) {
+  const ownerHandle = params.ownerHandle ?? detail.owner?.handle ?? undefined;
+  const version = normalizeOptionalString(params.version) ?? detail.latestVersion?.version;
+  if (params.includeInstructions || (!params.includeInspection && params.version === undefined)) {
+    let instructions: ClawHubSkillDetail["instructions"];
+    if (params.includeInstructions && detail.skill) {
+      instructions = {
+        status: "unavailable",
+        reason: "No published release is available for SKILL.md.",
+      };
+      if (version) {
+        try {
+          const content = await fetchClawHubSkillMarkdown(
+            {
+              ...params,
+              baseUrl: registry,
+              path: "/api/v1/skills/" + encodeURIComponent(params.slug) + "/file",
+              search: { ownerHandle, version, path: "SKILL.md" },
+            },
+            "SKILL.md",
+          );
+          instructions = { status: "available", content };
+        } catch (error) {
+          instructions = { status: "unavailable", reason: String(error) };
+        }
+      }
+    }
     return {
       ...detail,
+      ...(instructions ? { instructions } : {}),
       skill: detail.skill
         ? { ...detail.skill, icon: resolveClawHubImageUrl(detail.skill.icon, registry) }
         : null,
     };
   }
-  const ownerHandle = params.ownerHandle ?? detail.owner?.handle ?? undefined;
-  const version = normalizeOptionalString(params.version) ?? detail.latestVersion?.version;
   const request = { ...params, baseUrl: registry, ownerHandle, version };
   const warnings: string[] = [];
   // The version endpoint is the owner of release-specific security. Base metadata only
@@ -642,7 +668,7 @@ export async function fetchClawHubSkillCard(
     providedToken == null &&
     new URL(cardUrl, `${resolveClawHubBaseUrl(params.baseUrl)}/`).origin !==
       new URL(`${resolveClawHubBaseUrl(params.baseUrl)}/`).origin;
-  return await withClawHubResponse(
+  return await fetchClawHubSkillMarkdown(
     {
       ...params,
       url: cardUrl,
@@ -651,19 +677,23 @@ export async function fetchClawHubSkillCard(
       search: cardUrl ? undefined : buildVersionOrTagSearch(params),
       skipAuth,
     },
-    async ({ response, url, hasToken }) => {
-      if (!response.ok) {
-        throw await createClawHubError(response, url, hasToken, params.timeoutMs);
-      }
-      const bytes = await readClawHubBytes({
-        response,
-        maxBytes: SKILL_CARD_MAX_BYTES,
-        timeoutMs: params.timeoutMs,
-        resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
-      });
-      return decodeClawHubResponseBody(bytes);
-    },
+    slug ? `skill card for ${slug}` : "skill card",
   );
+}
+
+function fetchClawHubSkillMarkdown(params: ClawHubRequestParams, resourceLabel: string) {
+  return withClawHubResponse(params, async ({ response, url, hasToken }) => {
+    if (!response.ok) {
+      throw await createClawHubError(response, url, hasToken, params.timeoutMs);
+    }
+    const bytes = await readClawHubBytes({
+      response,
+      maxBytes: SKILL_DOCUMENT_MAX_BYTES,
+      timeoutMs: params.timeoutMs,
+      resourceLabel,
+    });
+    return decodeClawHubResponseBody(bytes);
+  });
 }
 
 export async function reportClawHubSkillInstallTelemetry(

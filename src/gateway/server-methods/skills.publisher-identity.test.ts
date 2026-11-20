@@ -93,6 +93,9 @@ function fakeClawHub(input: string): Response {
       },
     });
   }
+  if (url.pathname === `/api/v1/skills/${SLUG}/file`) {
+    return new Response("# Original instructions");
+  }
   if (url.pathname === `/api/v1/skills/${SLUG}/card`) {
     return new Response(`# Email skill ${url.searchParams.get("version")}\nFull card content.`);
   }
@@ -173,6 +176,28 @@ describe("ClawHub publisher identity across skills.search and skills.detail", ()
       expect(results.map((r) => r.installOnly)).toEqual([undefined, undefined, true]);
     },
   );
+
+  it("reads only the requested publisher’s SKILL.md for the catalog document view", async () => {
+    const { ok, response } = await callSkillsHandler("skills.detail", {
+      slug: "@wangchenyu8/" + SLUG,
+      includeInstructions: true,
+    });
+    expect(ok).toBe(true);
+    expect(Value.Check(SkillsDetailResultSchema, response)).toBe(true);
+    expect(response).toMatchObject({
+      instructions: { status: "available", content: "# Original instructions" },
+    });
+    const urls = requestedUrls.map((input) => new URL(input));
+    expect(urls.map((url) => url.pathname)).toEqual([
+      "/api/v1/skills/" + SLUG,
+      "/api/v1/skills/" + SLUG + "/file",
+    ]);
+    expect(Object.fromEntries(urls[1]!.searchParams)).toEqual({
+      ownerHandle: "wangchenyu8",
+      version: "2.0.0",
+      path: "SKILL.md",
+    });
+  });
 
   it("reads the selected release card and scan without relabeling latest requirements", async () => {
     const { ok, response, error } = await callSkillsHandler("skills.detail", {

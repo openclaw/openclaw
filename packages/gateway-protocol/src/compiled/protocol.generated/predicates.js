@@ -801,7 +801,7 @@ var External = [
     /^.*$/u,
     /(^agentId$|^source$|^slug$|^all$|^force$)/u,
     /(^query$|^limit$)/u,
-    /(^slug$|^version$)/u,
+    /(^includeInstructions$|^slug$|^version$)/u,
     /(^agentId$)/u,
     /(^agentId$|^limit$|^beforeMs$)/u,
     /(^agentId$|^name$|^filePath$|^versionId$|^draftId$)/u,
@@ -5132,6 +5132,9 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_348, unique_349) => External[178].test(unique_348) || check_2(value[unique_348]),
     ) &&
+    (value.includeInstructions === void 0 ||
+      !("includeInstructions" in value) ||
+      check_181(value.includeInstructions)) &&
     check_616(value.slug) &&
     (value.version === void 0 || !("version" in value) || check_63(value.version)),
   check_639 = (value) => check_640(value),
