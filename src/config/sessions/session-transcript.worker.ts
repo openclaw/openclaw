@@ -38,7 +38,7 @@ let releaseReadValidation:
   | undefined;
 const memoryPressure = diagnosticsChannel("openclaw.memory.critical");
 
-serveOwnedWorkerTasks(
+export const startHostedWorker = serveOwnedWorkerTasks(
   async (input, channel, control): Promise<TranscriptReply | UsageCostWorkerReply> => {
     // Pressure stays inside this isolate and drops decoded caches before the next snapshot.
     // Bun's compatibility probe walks the heap instead of describing a V8 allocation limit.

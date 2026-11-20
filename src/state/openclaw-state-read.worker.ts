@@ -355,7 +355,7 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
   }
 };
 
-serveOwnedWorkerTasks(
+export const startHostedWorker = serveOwnedWorkerTasks(
   async (message, channel, control) => {
     // SAFETY: The typed state-read pool owns this private task input.
     const input = message as OpenClawStateReadRequest;

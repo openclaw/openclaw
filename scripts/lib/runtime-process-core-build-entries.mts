@@ -79,6 +79,7 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
   runtimeProcessEntrypoints.sqliteSourceRevision,
   runtimeProcessEntrypoints.stateRead,
   runtimeProcessEntrypoints.sessionTranscript,
+  runtimeProcessEntrypoints.sharedWorkerHost,
   ...privateChunkRuntimeProcessEntrypoints,
   runtimeProcessEntrypoints.shellSnapshotEnvironment,
   runtimeProcessEntrypoints.nativeHookRelayClient,
@@ -114,6 +115,10 @@ export function getStandaloneRuntimeProcessOutputOptions(name: string) {
   }
   if (name === sqliteReadEntry) {
     return { codeSplitting: true, chunkFileNames: "infra/sqlite-readonly-[name]-[hash].mjs" };
+  }
+  if (name === runtimeProcessEntrypoints.sharedWorkerHost.distWorkerPath.replace(/\.js$/u, "")) {
+    // Lean hosts these core modules in one isolate; they must load one shared graph.
+    return { codeSplitting: true, chunkFileNames: "infra/shared-worker-host-[name]-[hash].mjs" };
   }
   if (name === runtimeProcessEntrypoints.sessionTranscript.distWorkerPath.replace(/\.js$/u, "")) {
     return { codeSplitting: true, chunkFileNames: "config/sessions/transcript-[name]-[hash].mjs" };
