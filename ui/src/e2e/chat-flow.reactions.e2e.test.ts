@@ -1,6 +1,7 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
+  captureUiProof,
   chatMessage,
   createChatFlowE2eSuite,
   exactButton,
@@ -11,6 +12,54 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("matches the message bubble fill when you have reacted", async () => {
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), colorScheme: "light" },
+      async ({ page }) => {
+        const sessionKey = "agent:main:main";
+        const messageId = "reaction-fill";
+        const identity = { type: "profile", id: "profile-avery" } as const;
+        await installMockGateway(page, {
+          sessionKey,
+          authMethod: "trusted-proxy",
+          authMode: "trusted-proxy",
+          presenceUsers: [{ self: true, id: identity.id, identity, name: "Avery" }],
+          sessions: [{ key: sessionKey, visibility: "shared", sharingRole: "owner" }],
+          historyMessages: [
+            chatMessage("user", "Does the preview look right?", {
+              __openclaw: {
+                id: messageId,
+                seq: 1,
+                senderName: "Avery",
+                senderId: identity.id,
+                senderIdentity: identity,
+              },
+            }),
+          ],
+          sessionReactions: {
+            [sessionKey]: { [messageId]: [{ emoji: "👀", count: 1, identities: [identity] }] },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const tab = page.getByRole("button", { name: "👀 You", exact: true });
+        await tab.waitFor();
+        await captureUiProof(suite, page, "reaction-fill", "reaction-fill.png");
+        const colors = await tab.evaluate((button) => {
+          const bubble = button.closest(".chat-bubble")!;
+          const canvas = document.createElement("canvas");
+          const ctx = canvas.getContext("2d")!;
+          return [bubble, button].map((element) => {
+            ctx.clearRect(0, 0, 1, 1);
+            ctx.fillStyle = getComputedStyle(element).backgroundColor;
+            ctx.fillRect(0, 0, 1, 1);
+            return Array.from(ctx.getImageData(0, 0, 1, 1).data);
+          });
+        });
+        expect(colors[0]).toEqual(colors[1]);
+      },
+    );
+  });
+
   it.each([560, 1024])("keeps earlier own actions reachable by touch at %ipx", async (width) => {
     await suite.withPage(
       {
