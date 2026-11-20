@@ -14,6 +14,7 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
+import { readSubagentRunAnnounceResult } from "../announce/subagent-announce-output.js";
 import { retireSubagentCompletionControllerInput } from "../registry/subagent-controller-inputs.js";
 import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
@@ -60,10 +61,11 @@ export async function recordRequiredCompletionNotice(
   entry: SubagentRunRecord,
   reason: string,
   batch: readonly SubagentRunRecord[] = [entry],
-  kind: "failed" | "delayed" = "failed",
+  kind: "failed" | "delayed" | "result" = "failed",
 ): Promise<void> {
   const wake = entry.requesterSettleWake;
   if (
+    kind !== "result" &&
     subagentRuns.get(entry.runId)?.delivery?.status === "delivered" &&
     (kind === "delayed" || !wake?.requesterYieldBatch)
   ) {
@@ -82,7 +84,7 @@ export async function recordRequiredCompletionNotice(
     return;
   }
   // Share the yielded requester's failure identity with its lifecycle settlement.
-  const runId =
+  const noticeId =
     wake?.requesterYieldBatch || batch.length > 1
       ? (wake?.requesterRunId ??
         buildAnnounceIdempotencyKey(
@@ -96,6 +98,16 @@ export async function recordRequiredCompletionNotice(
           }:delivery-failure`,
         ))
       : `subagent-delivery-failure:${entry.taskRunId ?? entry.runId}:${entry.delivery?.generation ?? 1}`;
+  // Independently admitted partitions contain different saved results, even within one wake.
+  const runId =
+    kind === "result"
+      ? buildAnnounceIdempotencyKey(
+          `${noticeId}:result:${batch
+            .map((child) => child.runId)
+            .toSorted()
+            .join(",")}`,
+        )
+      : noticeId;
   // Report delivery state without borrowing its retired execution authority.
   // Address the current chat, including a compaction successor; deletion and Stop get no notice.
   const requester = {
@@ -107,7 +119,30 @@ export async function recordRequiredCompletionNotice(
   if (!current?.sessionId || current.status === "killed") {
     return;
   }
-  const customType = kind === "delayed" ? "subagent-delivery-delayed" : "run-failed-before-reply";
+  const customType =
+    kind === "delayed"
+      ? "subagent-delivery-delayed"
+      : kind === "result"
+        ? "subagent-completion"
+        : "run-failed-before-reply";
+  const findings = (
+    await Promise.all(
+      batch.map(async (child) => {
+        const outcome = child.execution.outcome;
+        return [
+          `Child ${child.childSessionKey} (run ${child.runId})`,
+          outcome?.status === "error"
+            ? outcome.error === "Gateway stopped"
+              ? "Interrupted by Gateway restart; not resumed."
+              : outcome.error
+            : outcome?.status,
+          kind === "result" ? (await readSubagentRunAnnounceResult(child)).text : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+      }),
+    )
+  ).join("\n\n");
   const result = await runWithoutOwnedSessionTranscriptWrites(() =>
     appendSessionTranscriptReport(
       {
@@ -124,14 +159,18 @@ export async function recordRequiredCompletionNotice(
             : {
                 customType,
                 display: true,
-                excludeFromContext: true,
+                excludeFromContext:
+                  kind !== "failed" ||
+                  batch.every((child) => child.delivery?.requesterDelivery?.state === "consumed"),
                 content:
                   kind === "delayed"
                     ? "Automatic delivery of a child result timed out. The result is still saved and may still arrive automatically."
-                    : expectDefined(
-                        renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
-                        "child completion failure notice",
-                      ),
+                    : kind === "result"
+                      ? findings
+                      : `${expectDefined(
+                          renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
+                          "child completion failure notice",
+                        )}\n\n${findings}`,
                 details: { runId, childRunId: entry.runId, error: reason },
               },
       },
@@ -631,6 +670,17 @@ export async function mutateRequesterCompletionBatch(
     operation: RequesterWakeMutation | { kind: "settle"; outcome: SubagentAnnounceDeliveryResult };
   },
 ): Promise<CompletionMutationPublication> {
+  if (params.operation.kind === "settle" && !params.operation.outcome.delivered) {
+    params.assertCurrent();
+    // Delete cleanup may retire the last result row. Its visible outcome must commit first.
+    for (const entry of params.entries) {
+      await recordRequiredCompletionNotice(
+        entry,
+        params.operation.outcome.error ?? params.operation.outcome.disposition ?? "not delivered",
+        params.entries,
+      );
+    }
+  }
   const publication = await mutateCompletion(
     params.entries,
     (rows) => {
@@ -660,18 +710,5 @@ export async function mutateRequesterCompletionBatch(
       },
     },
   );
-  if (
-    publication.applied &&
-    params.operation.kind === "settle" &&
-    !params.operation.outcome.delivered
-  ) {
-    for (const entry of params.entries) {
-      await recordRequiredCompletionNotice(
-        entry,
-        params.operation.outcome.error ?? params.operation.outcome.disposition ?? "not delivered",
-        params.entries,
-      );
-    }
-  }
   return publication;
 }
