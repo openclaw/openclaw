@@ -124,6 +124,7 @@ export function captureSessionStoreInventoryRouting(
 
 export type SessionStoreTargetInventoryRequest = {
   preserveSourceArtifacts?: true;
+  coldMaintenance?: true;
   selection?: "configured" | "recovery" | "known-owners";
   config: OpenClawConfig;
   agentIds: string[];

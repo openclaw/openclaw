@@ -2,6 +2,9 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   readDatabasePathIdentitySync,
   assertDatabasePathIdentity,
@@ -13,8 +16,10 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawRegisteredAgentDatabase,
 } from "../../state/openclaw-agent-db-contract.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { AgentDatabaseRegistryMutation } from "../../state/openclaw-agent-db-registry-listing.js";
 import { matchesAgentDatabaseReadCandidatePath } from "../../state/openclaw-agent-db-resources.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
   isIncognitoOpenClawAgentSqlitePath,
@@ -321,6 +326,7 @@ export type SessionStoreTargetInventoryResult =
           database: { agentId: string; path: string };
           readIdentity: DatabasePathIdentity;
           readCustody: readonly SessionStoreReadCustody[];
+          coldMaintenanceNeeded?: boolean;
         }>;
       }>;
     };
@@ -546,9 +552,44 @@ export function readSessionStoreTargetInventory(
     const selected = request.candidates.find(
       (candidate) => !candidate.scope && candidate.identity?.canonicalPath === database.path,
     );
+    const coldMaintenance = request.coldMaintenance
+      ? withOpenClawAgentDatabaseReadOnly(
+          (opened) =>
+            runSqliteReadSnapshotSync(opened.db, () => {
+              const db = getNodeSqliteKysely<DB>(opened.db);
+              // Any transcript can need age-based archival; do not confuse an empty
+              // session-node roster with absence of historical transcript work.
+              if (
+                executeSqliteQueryTakeFirstSync(
+                  opened.db,
+                  db.selectFrom("transcript_events").select("seq").limit(1),
+                ) ||
+                executeSqliteQueryTakeFirstSync(
+                  opened.db,
+                  db.selectFrom("session_transcript_cold_archives").select("session_id").limit(1),
+                ) ||
+                executeSqliteQueryTakeFirstSync(
+                  opened.db,
+                  db.selectFrom("session_transcript_archives").select("session_id").limit(1),
+                )
+              ) {
+                return true;
+              }
+              return (
+                !isPostgresSqlConnection(opened.db) &&
+                // sqlite-allow-raw -- Empty stores can still need physical page reclamation.
+                Number(opened.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0) > 0
+              );
+            }),
+          { ...database, env },
+        )
+      : undefined;
     return {
       target,
       database,
+      ...(coldMaintenance
+        ? { coldMaintenanceNeeded: !coldMaintenance.found || coldMaintenance.value }
+        : {}),
       readIdentity: selected?.identity ?? readDatabasePathIdentitySync(database.path),
       readCustody: [{ sourcePath, candidates: request.candidates }],
     };
