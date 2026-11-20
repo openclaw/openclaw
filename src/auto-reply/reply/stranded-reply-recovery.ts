@@ -2,6 +2,7 @@ import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-termi
 import {
   createMissingReplyNotice,
   resolveReplyExpectation,
+  type ReplyExpectation,
 } from "../../agents/reply-completion.js";
 import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
@@ -30,14 +31,15 @@ export function resolveStrandedReplyRecovery(params: {
   successfulSourceReplyDelivery: boolean;
   isRoomEvent: boolean;
 }): StrandedReplyRecovery {
+  const replyExpectation = resolveReplyExpectation({
+    ...params.base.run,
+    scheduledAutomation: params.base.run.scheduledAutomation !== undefined,
+  });
   // Host-owned payloads can still be awaiting transport when completion bookkeeping runs.
   if (
     !isStrandedPrivateMessageToolFinal({
       ...params,
-      replyExpectation: resolveReplyExpectation({
-        ...params.base.run,
-        scheduledAutomation: params.base.run.scheduledAutomation !== undefined,
-      }),
+      replyExpectation,
     }) ||
     params.payloads.some(
       (payload) =>
@@ -57,7 +59,7 @@ export function resolveStrandedReplyRecovery(params: {
     kind: "retry",
     run: {
       ...params.base,
-      prompt: buildStrandedReplyRetryPrompt(params.finalText),
+      prompt: buildStrandedReplyRetryPrompt(params.finalText, replyExpectation),
       summaryLine: STRANDED_REPLY_RETRY_MARKER,
       strandedReplyRetry: true,
       disableCollectBatching: true,
@@ -84,11 +86,16 @@ export function resolveStrandedReplyRecovery(params: {
   };
 }
 
-function buildStrandedReplyRetryPrompt(finalText: string): string {
+function buildStrandedReplyRetryPrompt(
+  finalText: string,
+  replyExpectation: ReplyExpectation,
+): string {
   return formatSystemTurnPrompt(
     `Your previous reply was not delivered because you did not call message(action=send). ` +
       `Your reply text was: "${finalText}". ` +
-      `If the user should see a reply, send it now with message(action=send). ` +
-      `If no reply is needed, answer exactly NO_REPLY.`,
+      (replyExpectation === "result-required"
+        ? `This turn requires a reply. Send it now with message(action=send).`
+        : `If the user should see a reply, send it now with message(action=send). ` +
+          `If no reply is needed, answer exactly NO_REPLY.`),
   );
 }

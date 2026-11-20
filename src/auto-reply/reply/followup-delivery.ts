@@ -305,14 +305,13 @@ export async function resolveFollowupDeliveryDecision(params: {
     terminalFailurePayload: accounting.terminalFailurePayload,
   });
   const directBlockDeliveries = execution.outcome.directBlockDeliveries;
-  const sourceReplyDelivery = resolveSourceReplyDelivery(
-    result,
-    await resolveTerminalReplyDelivery({
-      directBlockDeliveries,
-      resolveReplyDelivery: opts?.resolveReplyDelivery,
-      sourceReplyDeliveryState: result.sourceReplyDeliveryState,
-    }),
-  );
+  const terminalReplyDelivery = await resolveTerminalReplyDelivery({
+    directBlockDeliveries,
+    resolveReplyDelivery: opts?.resolveReplyDelivery,
+    sourceReplyDeliveryState: result.sourceReplyDeliveryState,
+    sourceOnly: authoredSilence && terminalReplyExpectation === "result-required",
+  });
+  const sourceReplyDelivery = resolveSourceReplyDelivery(result, terminalReplyDelivery);
   let completion = resolveReplyCompletion(
     resolveClaimedReplyExpectation(terminalReplyExpectation, result.meta),
     result.meta?.error?.kind === "hook_block" || result.didSendDeterministicApprovalPrompt === true
@@ -326,6 +325,7 @@ export async function resolveFollowupDeliveryDecision(params: {
             : pendingContinuation
               ? "pending"
               : "empty",
+    sourceReplyDelivery,
   );
   const explicitSilence = completion.outcome === "silent";
   const sourcePayloads = selectAutomationReplyPayloads(
@@ -366,10 +366,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     await opts?.onObservedReplyDelivery?.();
   }
   const recovery =
-    explicitSilence ||
-    terminalRunFailed ||
-    !missingReplyNoticeAllowed ||
-    completion.outcome !== "missing"
+    explicitSilence || terminalRunFailed || completion.outcome !== "missing"
       ? ({ kind: "none" } as const)
       : resolveStrandedReplyRecovery({
           base: turn.queued,
@@ -386,10 +383,14 @@ export async function resolveFollowupDeliveryDecision(params: {
       kind: "retry-source-delivery" as const,
       run: recovery.run,
       finalTextLength: assistantFinalText.trim().length,
+      missingReplyNoticeAllowed,
       resolved: runtimeResolved,
     };
   }
   if (recovery.kind === "diagnostic") {
+    if (!missingReplyNoticeAllowed) {
+      throw new Error(MISSING_REPLY_NOTICE_TEXT);
+    }
     const [payload] = preparePayloads([recovery.payload]);
     return payload
       ? { kind: "deliver" as const, payloads: [payload], resolved: runtimeResolved }
@@ -562,6 +563,9 @@ export async function deliverFollowupDecision(params: {
       );
     if (enqueued) {
       return { kind: "source-retry" as const };
+    }
+    if (!decision.missingReplyNoticeAllowed) {
+      throw new Error(MISSING_REPLY_NOTICE_TEXT);
     }
     payloads = resolveFollowupDeliveryPayloads({
       ...resolveFollowupPayloadContext(turn),

@@ -45,8 +45,9 @@ recent conversation to decide whether a reply is invited or adds clear value.
 
 A rejected message is recorded without a primary-model run. Approval commits the
 primary model to a conversational reply in its usual voice. Existing permissions
-and delivery rules still apply, including `NO_REPLY` after message-tool delivery
-to prevent duplicate output.
+and delivery rules still apply. An undelivered `NO_REPLY` follows existing
+generation recovery and failure handling; `NO_REPLY` after confirmed message-tool
+delivery prevents duplicate output.
 
 Mentions, commands, media turns, and generic CLI backends keep ordinary behavior.
 Embedded harnesses, including Codex, support participation assessment. With
