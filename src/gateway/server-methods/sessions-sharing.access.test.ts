@@ -4,7 +4,7 @@ import { SessionMembersListEvidenceResultSchema } from "../../../packages/gatewa
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { setDisplayName, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
@@ -21,6 +21,7 @@ it("manages bounded invitation levels without granting send members session mana
     const guest = ensureProfileForEmail("access-guest@example.test");
     const ordinary = ensureProfileForEmail("access-ordinary@example.test");
     setUserProfileRole(guest.id, "guest");
+    setDisplayName(guest.id, "Alice Collaborator");
     const cfg: OpenClawConfig = {
       gateway: {
         roles: {
@@ -191,5 +192,22 @@ it("manages bounded invitation levels without granting send members session mana
       events.find((event) => event.action === "member-added" && event.identityId === guest.id)
         ?.access,
     ).toBe("read");
+    expect(events.filter((event) => event.access)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "member-added",
+          identityId: guest.id,
+          identityLabel: "Alice Collaborator",
+        }),
+        ...["suggest", "send", "read"].map((access) =>
+          expect.objectContaining({
+            action: "member-access-changed",
+            identityId: guest.id,
+            identityLabel: "Alice Collaborator",
+            access,
+          }),
+        ),
+      ]),
+    );
     expect(events.at(-1)?.action).toBe("member-removed");
   }));

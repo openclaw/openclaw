@@ -254,11 +254,84 @@ suite.define(() => {
       expect(await gateway.getRequests("session.members.remove")).toHaveLength(0);
     });
   });
+  it("reads a transcript on an older Gateway with only session-read scope", async () => {
+    await suite.withPage({ viewport, colorScheme: "dark" }, async ({ page }) => {
+      const messages = [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Older Gateway transcript is readable" }],
+          timestamp: Date.now(),
+        },
+      ];
+      const gateway = await installMockGateway(
+        page,
+        {
+          sessionKey: key,
+          featureMethods: methods,
+          featureCapabilities: [],
+          operatorScopes: ["operator.sessions.read"],
+          roleAllowsAdmin: false,
+          historyMessages: messages,
+          presenceUsers: [
+            {
+              self: true,
+              id: "alice",
+              name: "Alice Collaborator",
+              identity: { type: "profile", id: "alice" },
+            },
+          ],
+          sessions: [
+            createControlUiSessionRow(key, "Launch planning", Date.now(), {
+              sharingRole: "viewer",
+              visibility: "shared",
+              createdActor: creator,
+            }),
+          ],
+        },
+        {
+          requestHandlers: {
+            "sessions.messages.subscribe": (raw) => {
+              const params = raw as { includeApprovals?: boolean; initialHistory?: unknown };
+              if (params.includeApprovals) {
+                return {
+                  __mockError: {
+                    code: "INVALID_REQUEST",
+                    message: "missing scope: operator.approvals",
+                  },
+                };
+              }
+              return {
+                key,
+                agentId: "main",
+                ...(params.initialHistory
+                  ? { initialHistory: { ok: true, payload: { messages } } }
+                  : {}),
+              };
+            },
+          },
+        },
+      );
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+      await page.getByText("Older Gateway transcript is readable", { exact: true }).waitFor();
+      const subscriptions = await gateway.getRequests("sessions.messages.subscribe");
+      expect(subscriptions.length).toBeGreaterThan(0);
+      expect(
+        subscriptions.every(
+          (request) => !(request.params as { includeApprovals?: boolean }).includeApprovals,
+        ),
+      ).toBe(true);
+      expect(
+        await page.getByText("missing scope: operator.approvals", { exact: false }).count(),
+      ).toBe(0);
+    });
+  });
+
   it("shows participants status without reviewer payload and clears it on terminal", async () => {
     await suite.withPage({ viewport, colorScheme: "dark" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         sessionKey: key,
         featureMethods: methods,
+        featureCapabilities: ["session-approval-recipients-v1"],
         operatorScopes: ["operator.sessions.read"],
         operatorSessionCap: "invited",
         roleAllowsAdmin: false,
@@ -276,6 +349,9 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
       await page.locator(".agent-chat__composer-combobox textarea").fill("Review pending approval");
+      await gateway.waitForRequest("sessions.messages.subscribe", {
+        match: { includeApprovals: true },
+      });
       const event = {
         phase: "participant",
         sessionKey: key,
@@ -362,23 +438,43 @@ suite.define(() => {
         action: "member-added",
         sessionKey: key,
         agentId: "main",
-        identityId: "Alice",
+        identityId: "profile-alice-opaque",
+        identityLabel: "Alice Collaborator",
         ts: Date.now(),
         actor: creator,
       };
       await gateway.emitGatewayEvent("session.sharing", event);
       expect(
-        await page.getByText("Morgan invited Alice with Read access", { exact: true }).count(),
+        await page
+          .getByText("Morgan invited Alice Collaborator with Read access", { exact: true })
+          .count(),
       ).toBe(0);
       await gateway.emitGatewayEvent("session.sharing", { ...event, access: "read" });
-      await page.getByText("Morgan invited Alice with Read access", { exact: true }).waitFor();
+      await page
+        .getByText("Morgan invited Alice Collaborator with Read access", { exact: true })
+        .waitFor();
       await gateway.emitGatewayEvent("session.sharing", {
         ...event,
         ts: Date.now() + 1,
         action: "member-access-changed",
         access: "send",
       });
-      await page.getByText("Morgan changed Alice’s access to Send", { exact: true }).waitFor();
+      await page
+        .getByText("Morgan changed Alice Collaborator’s access to Send", { exact: true })
+        .waitFor();
+      await gateway.emitGatewayEvent("session.sharing.evidence", {
+        ...event,
+        actor: undefined,
+        actorState: "unknown",
+        identityLabel: undefined,
+        ts: Date.now() + 2,
+        action: "member-access-changed",
+        access: "read",
+      });
+      await page.getByText("Unknown person’s access changed to Read", { exact: true }).waitFor();
+      expect(await page.locator(".chat-notice").allTextContents()).not.toEqual(
+        expect.arrayContaining([expect.stringContaining("profile-alice-opaque")]),
+      );
       await capture(page, "transcript-notices");
     });
   });

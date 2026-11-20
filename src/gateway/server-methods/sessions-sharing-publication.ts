@@ -3,6 +3,7 @@ import type {
   SessionSharingEvidenceEvent,
   SessionSharingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { getResidentUserProfileDisplay } from "../../state/user-profile-list.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { revokeSessionParticipation } from "../session-participation-lifetime.js";
 import type { SessionSharingTarget } from "../session-sharing-policy.js";
@@ -19,12 +20,22 @@ export function publishSharingChange(params: {
   const eventOptions = {
     sessionKeys: [params.event.sessionKey],
   };
+  // Explicit invitation levels belong to admitted human profiles, not opaque channel ids.
+  const change = {
+    ...params.event,
+    ...(params.event.access && params.event.identityId
+      ? {
+          identityLabel:
+            getResidentUserProfileDisplay(params.event.identityId).displayName ?? undefined,
+        }
+      : {}),
+  };
   if (params.actor.state === "present") {
-    const event: SessionSharingEvent = { ...params.event, actor: params.actor.actor };
+    const event: SessionSharingEvent = { ...change, actor: params.actor.actor };
     params.context.broadcast("session.sharing", event, eventOptions);
   } else {
     const event: SessionSharingEvidenceEvent = {
-      ...params.event,
+      ...change,
       ...(params.actor.state === "unknown" ? { actorState: "unknown" } : {}),
     };
     params.context.broadcast("session.sharing.evidence", event, eventOptions);

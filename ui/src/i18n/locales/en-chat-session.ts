@@ -14,6 +14,7 @@ const enChatSession = {
       accessProgram: "Couldn’t change the access program. Try again. {error}",
     },
     sharingNotice: {
+      unknownPerson: "Unknown person",
       invited: "{identity} was invited with {access} access",
       invitedByActor: "{actor} invited {identity} with {access} access",
       accessChanged: "{identity}’s access changed to {access}",

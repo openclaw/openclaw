@@ -17,6 +17,7 @@ export type ChatSharingNotice = {
   key: string;
   action: "member-added" | "member-access-changed";
   identityId: string;
+  identityLabel?: string;
   access: SessionMemberPermissionLevel;
   actorLabel?: string;
   timestamp: number;
@@ -95,7 +96,7 @@ export function applyChatSharingNoticeEvent(
     return false;
   }
   const actor = event.event === "session.sharing" ? asNullableRecord(source.actor) : null;
-  const actorLabel = normalizeOptionalString(actor?.label) ?? normalizeOptionalString(actor?.id);
+  const actorLabel = normalizeOptionalString(actor?.label);
   const key = `sharing:${JSON.stringify([source.action, identityId, source.access, source.ts, actorLabel])}`;
   const scope = currentScope(state, agentId);
   if (scope?.notices.some((notice) => notice.key === key)) {
@@ -105,6 +106,7 @@ export function applyChatSharingNoticeEvent(
     key,
     action: source.action,
     identityId,
+    identityLabel: normalizeOptionalString(source.identityLabel),
     access: source.access,
     actorLabel,
     timestamp: source.ts,
@@ -137,7 +139,7 @@ export function projectChatSharingNotice(
     showTimestamp: true,
     text: "",
     label: t(`chat.sharingNotice.${action}${notice.actorLabel ? "ByActor" : ""}`, {
-      identity: notice.identityId,
+      identity: notice.identityLabel ?? t("chat.sharingNotice.unknownPerson"),
       access: t(`chat.sharingNotice.access.${notice.access}`),
       actor: notice.actorLabel ?? "",
     }),
