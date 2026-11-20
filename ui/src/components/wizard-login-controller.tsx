@@ -17,8 +17,7 @@ import {
   ModelSetupWizardRunner,
   type ModelSetupWizardCompletion,
 } from "../pages/model-setup/wizard-runner.ts";
-import { ModelSetupWizard, type WizardViewProps } from "../pages/model-setup/wizard-view-solid.tsx";
-import "../styles/model-setup.css";
+import type { WizardViewProps } from "../pages/model-setup/wizard-view-solid.tsx";
 import { InlineAlert } from "./solid/inline-alert.tsx";
 
 registerModelSetupEnglish();
@@ -201,17 +200,3 @@ export function createWizardLogin(options: {
 }
 
 export type WizardLoginState = ReturnType<typeof createWizardLogin>;
-
-export function WizardLogin(props: {
-  controller: WizardLoginState;
-  busy?: boolean;
-  options?: Parameters<WizardLoginState["viewProps"]>[0];
-  signInIcon?: WizardViewProps["signInIcon"];
-}) {
-  const view = createMemo(() => props.controller.viewProps(props.options));
-  return (
-    <div onModal-cancel={(event: Event) => event.preventDefault()}>
-      <ModelSetupWizard {...view()} busy={props.busy} signInIcon={props.signInIcon} />
-    </div>
-  );
-}

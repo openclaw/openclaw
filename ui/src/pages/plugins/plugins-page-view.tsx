@@ -23,7 +23,6 @@ import {
   SettingsPageHeader,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { WizardLogin } from "../../components/wizard-login-controller.tsx";
 import { configSecretFields } from "../../lib/config/config-secret-fields.ts";
 import { currentConfigRead } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -41,7 +40,6 @@ import { PluginsHubHeader } from "./plugins-hub-header.tsx";
 import { pluginsHubPanel, type PluginsHubTab } from "./plugins-hub.ts";
 import { installRequestForDiscoveryDetail } from "./plugins-page-model.ts";
 import type { PluginsPageModel } from "./plugins-page.ts";
-import { PluginArtTile } from "./presentation.tsx";
 import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-inventory.tsx";
 import {
   pluginAdvancedSchema,
@@ -276,6 +274,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           pluginId={detailProps.pluginId}
           installProgress={page().consent.getActiveInstall(pluginRowKey(detailProps.pluginId))}
           inspection={page().state.detail?.inspection ?? null}
+          mcpLogin={props.page.mcpLogin.dialog}
           mcpLoginBusy={page().mcpLogin.busy}
           canMcpLogin={canCallGatewayMethod(
             page().gateway.snapshot,
@@ -498,23 +497,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         )}
       </SettingsWorkspace>
       <PluginSkillPreview preview={page().skillPreview} state={page().skillPreview.state} />
-      <WizardLogin
-        controller={props.page.mcpLogin.dialog}
-        signInIcon={
-          <Show when={detailPluginId()}>
-            {(pluginId) => (
-              <PluginArtTile
-                registerIcon={page().icons.register}
-                slug={pluginId()}
-                name={page().mcpLogin.dialog.state().authLabel ?? pluginId()}
-                iconUrl={page().state.iconUrls[pluginId()]}
-                loading={page().icons.installed.isLoading(pluginId())}
-                onIconError={() => page().icons.installed.handleError(pluginId())}
-              />
-            )}
-          </Show>
-        }
-      />
       <Show when={page().consent.read().consent}>
         {(consent) => {
           const icon = createMemo(() => {

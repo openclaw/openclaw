@@ -11,6 +11,8 @@ import {
   SettingsSection,
   SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
+import type { WizardLoginState } from "../../components/wizard-login-controller.tsx";
+import { WizardLogin } from "../../components/wizard-login-view.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
@@ -86,6 +88,7 @@ export type DetailProps = SharedProps &
     onSelectPrompt?: (prompt: string) => void;
     promptBusy?: boolean;
     promptBlockedReason?: string | null;
+    mcpLogin?: WizardLoginState;
     mcpLoginBusy?: boolean;
     canMcpLogin?: boolean;
     onMcpLogin?: (serverName: string) => void;
@@ -268,6 +271,23 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
       ) : (
         <PluginOverview {...props} />
       )}
+      <Show when={props.mcpLogin}>
+        {(dialog) => (
+          <WizardLogin
+            controller={dialog()}
+            signInIcon={
+              <PluginArtTile
+                registerIcon={props.registerIcon}
+                slug={props.pluginId}
+                name={dialog().state().authLabel ?? props.pluginId}
+                iconUrl={props.iconUrls[props.pluginId]}
+                loading={props.iconLoading?.(props.pluginId)}
+                onIconError={() => props.onIconError(props.pluginId)}
+              />
+            }
+          />
+        )}
+      </Show>
     </>
   );
 }
