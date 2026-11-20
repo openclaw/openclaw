@@ -114,13 +114,16 @@ export function ChatThread(input: ChatThreadInput) {
   const initialReady =
     (initialRestoring && !heldWarmBoot) || Boolean(input.props.initialSubmission);
   const [ready, setReady] = createSignal(initialReady);
-  const automation = createMemo(loadAutomationProjection, { lazy: true });
   const needsAutomation = createMemo(
     () =>
       input.props.messages.some(hasAutomationActivity) ||
       input.props.toolMessages.some(hasAutomationActivity),
   );
-  const projectAutomations = () => (needsAutomation() ? automation() : undefined);
+  // History owns the transcript. Optional card enrichment must not suspend its first mount.
+  const projectAutomations = createMemo(
+    () => (needsAutomation() ? loadAutomationProjection().catch(() => undefined) : undefined),
+    { loadingValue: undefined },
+  );
   const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
   const reveal = createTimeout(() => {
     if (isPresented()) {
@@ -151,7 +154,7 @@ export function ChatThread(input: ChatThreadInput) {
           });
           return (
             <>
-              {ready() && (!needsAutomation() || projectAutomations()) ? (
+              {ready() ? (
                 <ChatThreadContent
                   {...input}
                   presented={isPresented()}
