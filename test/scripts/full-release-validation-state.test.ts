@@ -74,8 +74,7 @@ import {
   registryRecord,
 } from "./full-release-validation-state.test-support.js";
 
-// These policy-composition fixtures own their immutable input; the release ledger
-// is intentionally empty once a candidate closes and is not fixture data.
+// mock-isolation: Policy-composition fixtures own immutable inputs, not the live release ledger.
 vi.mock("../../scripts/lib/release-validation-waivers.json", () => ({
   default: {
     schema: "openclaw.release-validation-waivers/v1",
