@@ -42,6 +42,7 @@ import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.
 import { createLsTool, type LsOperations } from "./sessions/tools/ls.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
+import { SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT } from "./subagents/subagent-attachment-paths.js";
 import { bindAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 import { getAgentWorkspaceAccess, WorkspaceAccessUnavailableError } from "./workspace-access.js";
@@ -260,7 +261,13 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   // Declared mount read exceptions do not grant writes or enumeration outside
   // the container workspace. Both sets reuse the same effective selection.
   const sandboxReadMounts = options.strictWorkspaceRoot
-    ? sandboxWorkspaceMounts
+    ? sandboxFileMounts.filter(
+        (mount) =>
+          sandboxWorkspaceMounts.includes(mount) ||
+          (mount.containerRoot === SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT &&
+            options.attachmentReadRoot !== undefined &&
+            path.resolve(mount.hostRoot) === path.resolve(options.attachmentReadRoot)),
+      )
     : sandboxFileMounts;
 
   const guardWorkspaceTool = (tool: AnyAgentTool) =>
