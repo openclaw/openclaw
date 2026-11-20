@@ -3,7 +3,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { openStartDialog, pluginButton } from "./scribe-dialog.js";
 import { defaultOptions, scribeById, scribeSetup, setupPrompt } from "./scribes-catalog.js";
-import type { AccountTokens, PluginReadiness } from "./scribes-state.js";
+import type { PluginReadiness, ScribeDetection } from "./scribes-state.js";
 
 const slack = scribeById("slack")!;
 const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -22,7 +22,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const open = (tokens?: AccountTokens, readiness: PluginReadiness = "ready") =>
+const open = (
+  tokens?: NonNullable<ScribeDetection["tokens"]>[string],
+  readiness: PluginReadiness = "ready",
+) =>
   openStartDialog({
     scribe: slack,
     agentName: "Main",

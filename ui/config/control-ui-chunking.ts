@@ -92,6 +92,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/i18n/locales/en-skill-library.ts":
+    case "ui/src/lib/skills-grouping.ts":
+    case "ui/src/lib/skills-shared.ts":
+      // Both inventory views load the grouping and availability helpers with the same English copy.
+      return "skill-inventory-runtime";
     case "ui/src/pages/plugins/catalog-grid.tsx":
     case "ui/src/pages/plugins/plugin-card.tsx":
       // Catalogs already load both; a lazy skill reader must not split their first visit.

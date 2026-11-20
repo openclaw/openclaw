@@ -5,7 +5,7 @@ import type { ServerResponse } from "node:http";
 import { crc32 } from "node:zlib";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../src/config/types.models.js";
 
-export const FAKE_TRANSPORTS = [
+const FAKE_TRANSPORTS = [
   "anthropic-messages",
   "openai-responses",
   "openai-completions",
