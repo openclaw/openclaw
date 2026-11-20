@@ -11,12 +11,13 @@ export function cronFailureTimestamp(job: {
   };
 }): number | undefined {
   const state = job.state;
+  const disabledAtMs = state?.autoDisabled?.atMs;
   if ((state?.lastRunStatus ?? state?.lastStatus) === "error") {
-    // Older jobs can have a failed status with no timestamp. Schedule edits must
-    // not change the identity of that failure.
-    return state?.lastRunAtMs ?? 0;
+    // One row acknowledges both failure causes. Older failures without a
+    // run timestamp keep a stable identity across schedule edits.
+    return Math.max(state?.lastRunAtMs ?? 0, disabledAtMs ?? 0);
   }
-  return state?.autoDisabled?.atMs;
+  return disabledAtMs;
 }
 
 export function readCronFailureDismissals(value: unknown): Map<string, number> {
