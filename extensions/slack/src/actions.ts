@@ -18,6 +18,7 @@ import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackLookupClient, createSlackWriteClient, getSlackWriteClient } from "./client.js";
 import {
   listSlackConversationsWithClient,
+  resolveSlackTokenWorkspaceWithClient,
   type SlackConversationListOptions,
 } from "./conversation-list.js";
 import {
@@ -575,6 +576,9 @@ export async function listSlackConversations(
   slackTeamIdSchema.parse(opts.teamId);
   return await listSlackConversationsWithClient(await getClient(opts), opts);
 }
+
+export const resolveSlackTokenWorkspace = async (opts: SlackActionClientOpts = {}) =>
+  await resolveSlackTokenWorkspaceWithClient(await getClient(opts));
 
 export async function getSlackMemberInfo(userId: string, opts: SlackActionClientOpts = {}) {
   const client = await getClient(opts);

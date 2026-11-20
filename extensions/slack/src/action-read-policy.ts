@@ -211,3 +211,11 @@ function isSlackGroupDmTargetConfigured(
     );
   });
 }
+
+/** Whether any policy entry is qualified by workspace, so unqualified reads need one. */
+export function hasSlackTeamScopedPolicy(account: ResolvedSlackAccount): boolean {
+  return [
+    ...Object.keys(account.config.channels ?? {}),
+    ...(account.config.dm?.groupChannels ?? []).map(String),
+  ].some((key) => /^team:/i.test(key.trim()));
+}

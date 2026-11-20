@@ -8,9 +8,17 @@ export type SlackConversationListOptions = {
   includeArchived: boolean;
   limit: number;
   cursor?: string;
-  /** Workspace already known for this account; otherwise auth.test names it. */
-  knownTeamId?: string;
 };
+
+export type SlackTokenWorkspace = { teamId?: string; enterpriseInstall: boolean };
+
+export async function resolveSlackTokenWorkspaceWithClient(
+  client: WebClient,
+): Promise<SlackTokenWorkspace> {
+  const auth = await client.auth.test();
+  const teamId = normalizeOptionalString(auth.team_id);
+  return { ...(teamId ? { teamId } : {}), enterpriseInstall: auth.is_enterprise_install === true };
+}
 
 export type SlackConversationSummary = {
   id: string;
@@ -26,7 +34,7 @@ export type SlackConversationSummary = {
 export async function listSlackConversationsWithClient(
   client: WebClient,
   opts: SlackConversationListOptions,
-): Promise<{ teamId?: string; conversations: SlackConversationSummary[]; nextCursor?: string }> {
+): Promise<{ conversations: SlackConversationSummary[]; nextCursor?: string }> {
   const result = await fetchSlackChannelListPage(client, opts.cursor, {
     types: opts.types.join(","),
     excludeArchived: !opts.includeArchived,
@@ -66,8 +74,5 @@ export async function listSlackConversationsWithClient(
     ];
   });
   const nextCursor = normalizeOptionalString(result.response_metadata?.next_cursor);
-  const teamId =
-    normalizeOptionalString(opts.knownTeamId) ??
-    normalizeOptionalString((await client.auth.test()).team_id);
-  return { ...(teamId ? { teamId } : {}), conversations, ...(nextCursor ? { nextCursor } : {}) };
+  return { conversations, ...(nextCursor ? { nextCursor } : {}) };
 }

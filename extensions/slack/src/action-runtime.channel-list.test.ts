@@ -2,13 +2,17 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, expect, it, vi } from "vitest";
 import { handleSlackAction, type SlackActionContext } from "./action-runtime.js";
 import { createSlackActions } from "./channel-actions.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { listSlackMessageActions } from "./message-actions.js";
 
 const list = vi.hoisted(() => vi.fn());
 const history = vi.hoisted(() => vi.fn());
 const authTest = vi.hoisted(() => vi.fn());
 const createSlackLookupClient = vi.hoisted(() =>
-  vi.fn((_token: string) => ({ auth: { test: authTest }, conversations: { list, history } })),
+  vi.fn((token: string) => ({
+    auth: { test: async () => await authTest(token) },
+    conversations: { list, history },
+  })),
 );
 const createSlackReadClient = vi.hoisted(() =>
   vi.fn((_token: string) => ({
@@ -21,6 +25,7 @@ vi.mock("./client.js", async (importOriginal) => ({
   createSlackReadClient,
 }));
 
+let installation: ReturnType<typeof registerSlackInstallationState> | undefined;
 const direct: SlackActionContext = { conversationReadOrigin: "direct-operator" };
 const conversations = [
   { id: "C1", name: "general", is_channel: true, is_member: true, topic: { value: "News" } },
@@ -57,6 +62,8 @@ beforeEach(() => {
   list.mockReset().mockResolvedValue({ ok: true, channels: conversations });
   history.mockReset().mockResolvedValue({ ok: true, messages: [], has_more: false });
   authTest.mockReset().mockResolvedValue({ ok: true, team_id: "T1" });
+  installation?.release();
+  installation = undefined;
   createSlackLookupClient.mockClear();
   createSlackReadClient.mockClear();
 });
@@ -176,11 +183,40 @@ it("gates discovery and execution on actions.channelInfo", async () => {
   );
 });
 
-it("reports an explicit workspace without an auth.test lookup", async () => {
-  const details = await listChannels(slackConfig(), { teamId: "T2" });
+it("applies workspace-qualified denials when the caller omits teamId", async () => {
+  const cfg = slackConfig({
+    groupPolicy: "open",
+    channels: { "team:T1:channel:C1": { enabled: false } },
+  });
+  const listed = await listChannels(cfg, {}, {});
+  expect(listed.teamId).toBe("T1");
+  expect(listed.channels.map((channel) => channel.id)).toEqual(["G1", "G2"]);
 
-  expect(details.teamId).toBe("T2");
+  await expect(
+    handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg, {}),
+  ).rejects.toThrow("Slack read target channel is not allowed.");
+  await expect(
+    handleSlackAction({ action: "readMessages", channelId: "C1", readAs: "bot" }, cfg, direct),
+  ).rejects.toThrow("Slack read target channel is not allowed.");
+  expect(history).not.toHaveBeenCalled();
+});
+
+it("labels each token with its own workspace and rejects a mismatched teamId", async () => {
+  installation = registerSlackInstallationState("default", "workspace", "TBOT");
+  authTest.mockImplementation(async (token: string) => ({
+    ok: true,
+    team_id: token === "xoxp-user" ? "TUSER" : "TOTHER",
+  }));
+  const cfg = slackConfig({ userToken: "xoxp-user" });
+
+  expect((await listChannels(cfg, { readAs: "bot" })).teamId).toBe("TBOT");
   expect(authTest).not.toHaveBeenCalled();
+  expect((await listChannels(cfg, { readAs: "user" })).teamId).toBe("TUSER");
+  expect(authTest).toHaveBeenCalledWith("xoxp-user");
+  await expect(listChannels(cfg, { readAs: "user", teamId: "TBOT" })).rejects.toThrow(
+    "Slack teamId TBOT does not match workspace TUSER of the selected token.",
+  );
+  expect((await listChannels(cfg, { readAs: "user", teamId: "TUSER" })).teamId).toBe("TUSER");
 });
 
 it.each([
@@ -195,7 +231,8 @@ it.each([
   // A delegated DM read resolves the DM owner, so both lookups prove the selected token.
   await handleSlackAction({ action: "readMessages", channelId: dm, readAs }, cfg, {});
   expect(createSlackReadClient.mock.calls.map(([used]) => used)).toEqual([token]);
-  expect(lookupTokens()).toEqual([token, token]);
+  // channel-list: auth.test + conversations.list; read: conversations.history.
+  expect(lookupTokens()).toEqual([token, token, token]);
 });
 
 it("rejects readAs when the requested token is not configured", async () => {

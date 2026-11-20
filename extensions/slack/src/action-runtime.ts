@@ -18,10 +18,12 @@ import {
 } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "./accounts.js";
+import { listSlackReadableConversations } from "./action-channel-list.js";
 import type { SlackActionContext } from "./action-context.js";
-import { readSlackConversationListParams, resolveSlackReadAsToken } from "./action-read-params.js";
+import { resolveSlackReadAsToken, resolveSlackTokenPolicyTeamId } from "./action-read-params.js";
 import {
   hasSlackRequesterAccount,
+  hasSlackTeamScopedPolicy,
   isSlackDmTargetConfigured,
   isSlackResolvedReadTargetAllowed,
   resolveSlackChannelReadPolicy,
@@ -34,7 +36,6 @@ import {
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import type { SlackConversationInfo } from "./channel-type.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
-import { getSlackInstallationTeamId } from "./installation-identity-state.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { hasSlackNativeDataBlock } from "./native-data-blocks.js";
 import { mergeSlackSendResults } from "./send-results.js";
@@ -84,6 +85,7 @@ export const slackActionRuntime = {
   editSlackRenderedMessage: bindSlackAction((runtime) => runtime.editSlackRenderedMessage),
   getSlackMemberInfo: bindSlackAction((runtime) => runtime.getSlackMemberInfo),
   listSlackConversations: bindSlackAction((runtime) => runtime.listSlackConversations),
+  resolveSlackTokenWorkspace: bindSlackAction((runtime) => runtime.resolveSlackTokenWorkspace),
   listSlackEmojis: bindSlackAction((runtime) => runtime.listSlackEmojis),
   listSlackPins: bindSlackAction((runtime) => runtime.listSlackPins),
   listSlackReactions: bindSlackAction((runtime) => runtime.listSlackReactions),
@@ -601,7 +603,19 @@ export async function handleSlackAction(
         const target = resolveChannelTarget();
         const { channelId } = target;
         const readToken = resolveSlackReadAsToken(account, params);
-        await assertReadTargetAllowed(target, readToken);
+        const policyTeamId =
+          target.teamId ??
+          (hasSlackTeamScopedPolicy(account)
+            ? await resolveSlackTokenPolicyTeamId({
+                account,
+                selectedToken: readToken ?? resolveSlackOperationToken(account, "read"),
+                lookup: () =>
+                  slackActionRuntime.resolveSlackTokenWorkspace(
+                    buildActionOpts("read", undefined, readToken),
+                  ),
+              })
+            : undefined);
+        await assertReadTargetAllowed({ ...target, teamId: policyTeamId }, readToken);
         const readOpts = buildActionOpts("read", target.teamId, readToken);
         const limit = readPositiveIntegerParam(params, "limit", {
           message: "limit must be a positive integer.",
@@ -761,51 +775,25 @@ export async function handleSlackAction(
     if (!isActionEnabled("channelInfo")) {
       throw new Error("Slack channel list is disabled.");
     }
-    const teamId =
+    const requestedTeamId =
       readStringParam(params, "teamId") ?? resolveTrustedCurrentSlackTeamId({ account, context });
-    assertSlackDetachedTargetAllowed(account.accountId, teamId);
+    assertSlackDetachedTargetAllowed(account.accountId, requestedTeamId);
     const readAsToken = resolveSlackReadAsToken(account, params);
     const readToken = readAsToken ?? resolveSlackOperationToken(account, "read");
-    // A bot sees every public channel; list only conversations its token can read.
-    const membersOnly = !readToken || readToken !== account.userToken?.trim();
-    const page = await slackActionRuntime.listSlackConversations({
-      ...buildActionOpts("read", teamId, readAsToken),
-      knownTeamId: teamId ?? getSlackInstallationTeamId(account.accountId),
-      ...readSlackConversationListParams(params),
-    });
-    const requesterAccount = hasSlackRequesterAccount(account, context);
-    const channels = [];
-    for (const conversation of page.conversations) {
-      if (membersOnly && !conversation.isMember) {
-        continue;
-      }
-      const target = formatSlackTarget({ teamId, kind: "channel", id: conversation.id });
-      const allowed = await isSlackResolvedReadTargetAllowed({
+    const listOpts = buildActionOpts("read", requestedTeamId, readAsToken);
+    return jsonResult(
+      await listSlackReadableConversations({
         account,
         cfg,
-        channelId: conversation.id,
-        teamId,
-        conversationReadOrigin: context?.conversationReadOrigin,
-        info: {
-          type:
-            conversation.type === "im" ? "dm" : conversation.type === "mpim" ? "group" : "channel",
-          name: conversation.name,
-          user: conversation.userId,
-        },
-        currentConversation: Boolean(
-          requesterAccount && context && slackContextTargetsMatch(target, context),
-        ),
-      });
-      if (allowed) {
-        channels.push(conversation);
-      }
-    }
-    return jsonResult({
-      ok: true,
-      ...(page.teamId ? { teamId: page.teamId } : {}),
-      channels,
-      ...(page.nextCursor ? { nextPageToken: page.nextCursor } : {}),
-    });
+        params,
+        context,
+        readToken,
+        requestedTeamId,
+        listConversations: (options) =>
+          slackActionRuntime.listSlackConversations({ ...listOpts, ...options }),
+        lookupWorkspace: () => slackActionRuntime.resolveSlackTokenWorkspace(listOpts),
+      }),
+    );
   }
 
   throw new Error(`Unknown action: ${action}`);

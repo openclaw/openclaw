@@ -1,8 +1,9 @@
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type { ResolvedSlackAccount } from "./accounts.js";
-import type { SlackConversationListOptions } from "./conversation-list.js";
+import type { SlackConversationListOptions, SlackTokenWorkspace } from "./conversation-list.js";
 import { SLACK_CONVERSATION_LIST_TYPES } from "./cursor-pages.js";
+import { getSlackInstallationTeamId } from "./installation-identity-state.js";
 
 const SLACK_CONVERSATION_LIST_DEFAULT_LIMIT = 200;
 const SLACK_CONVERSATION_LIST_MAX_LIMIT = 1000;
@@ -28,9 +29,40 @@ export function resolveSlackReadAsToken(
   return token;
 }
 
+/**
+ * Workspace whose policy applies to conversations read with the selected token: the
+ * requested one, the monitor's when it authenticated this bot token, else auth.test.
+ */
+export async function resolveSlackTokenPolicyTeamId(params: {
+  account: ResolvedSlackAccount;
+  selectedToken?: string;
+  requestedTeamId?: string;
+  lookup: () => Promise<SlackTokenWorkspace>;
+}): Promise<string | undefined> {
+  const { account, requestedTeamId } = params;
+  const installTeamId =
+    params.selectedToken && params.selectedToken === account.botToken?.trim()
+      ? getSlackInstallationTeamId(account.accountId)
+      : undefined;
+  const workspace = installTeamId
+    ? { teamId: installTeamId, enterpriseInstall: false }
+    : await params.lookup();
+  if (
+    requestedTeamId &&
+    workspace.teamId &&
+    !workspace.enterpriseInstall &&
+    workspace.teamId.toLowerCase() !== requestedTeamId.toLowerCase()
+  ) {
+    throw new Error(
+      `Slack teamId ${requestedTeamId} does not match workspace ${workspace.teamId} of the selected token.`,
+    );
+  }
+  return requestedTeamId ?? workspace.teamId;
+}
+
 export function readSlackConversationListParams(
   params: Record<string, unknown>,
-): Omit<SlackConversationListOptions, "knownTeamId"> {
+): SlackConversationListOptions {
   return {
     types: readSlackConversationListTypes(params.types),
     includeArchived: readBooleanParam(params, "includeArchived") === true,
