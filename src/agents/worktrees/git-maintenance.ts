@@ -463,10 +463,10 @@ async function consolidatePacks(
       const selected = batch.map((pack) => pack.name);
       // Validate only selected inputs. The streaming writer does not check source CRCs.
       await verify(selected);
-      // Copy every object, including unreachable ones, and compress separately fetched revisions.
+      // Keep every object and compact offset deltas; full base IDs inflate small deltas.
       // index-pack publishes the promisor marker and verified index before returning the hash.
       const alias =
-        "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=10 --window-memory=8m --threads=1 | git index-pack --stdin --threads=1" +
+        "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --delta-base-offset --window=10 --window-memory=8m --threads=1 | git index-pack --stdin --threads=1" +
         (promisor ? " --promisor" : "");
       const result = await git.requireGit(
         repoRoot,

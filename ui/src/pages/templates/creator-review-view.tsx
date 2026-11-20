@@ -1,10 +1,10 @@
 import { createMemo, createSignal, Match, Show, Switch } from "solid-js";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { ModalDialog } from "../../components/modal-dialog.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
+import { TemplateArtwork } from "../agents-home/template-artwork.tsx";
 import type { TemplateCreator } from "./creator-publication.ts";
 import { TemplateReviewCard } from "./template-review-card.tsx";
 
@@ -71,7 +71,7 @@ export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: 
       <section class="template-publish-card" aria-label={t("templatesDraft.publishTitle")}>
         <header>
           <span class="template-art">
-            <Icon name="blobster" />
+            <TemplateArtwork src={review()?.iconUrl} />
           </span>
           <div>
             <h2>{review()?.displayName ?? t("templatesDraft.draftTitle")}</h2>
