@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../types.js";
 
-export type ToolCallLike = { id: string; name?: string };
+type ToolCallLike = { id: string; name?: string };
 type CallFact = ToolCallLike & { contentIndex: number };
 export type ToolPairingMessageFact =
   | { role: "assistant"; calls: CallFact[]; failed: boolean }
@@ -82,7 +82,7 @@ export function createToolCallOccurrenceQueue<T>(): {
   };
 }
 
-export function resolveLegacyToolResultId(
+function resolveLegacyToolResultId(
   id: string | null,
   name: string | undefined,
   calls: readonly ToolCallLike[],

@@ -29,7 +29,7 @@ export function getMessageFromEntryForCompaction(
 export const IMAGE_BLOCK_TOKENS = 2_000;
 const IMAGE_BLOCK_CHARS = IMAGE_BLOCK_TOKENS * CHARS_PER_TOKEN_ESTIMATE;
 
-export function countCompactionContentChars(
+function countCompactionContentChars(
   content: string | Array<{ type: string; content?: unknown; text?: string }>,
 ): number {
   const { text, omissionText } = getCompactionContent(content);
@@ -38,7 +38,7 @@ export function countCompactionContentChars(
   return countCompactionContentCharsFromParts(estimateStringChars(text), images, omissionText);
 }
 
-export function countCompactionContentCharsFromParts(
+function countCompactionContentCharsFromParts(
   textChars: number,
   images: number,
   omissionText?: string,
@@ -50,7 +50,7 @@ export function countCompactionContentCharsFromParts(
 }
 
 /** Unrounded contribution; callers merging turns must round only after merging. */
-export function estimateCompactionChars(message: AgentMessage): number {
+function estimateCompactionChars(message: AgentMessage): number {
   if ("excludeFromContext" in message && message.excludeFromContext === true) {
     return 0;
   }
