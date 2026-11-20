@@ -3,6 +3,7 @@ import type {
   SessionsFilesStatParams,
   SessionsFilesStatResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import {
@@ -102,20 +103,22 @@ export async function handleSessionFilesStat(
             assertSourceCurrent,
             assertReaderCurrent,
             undefined,
-            // Touched files change candidate resolution only when the session cwd is not the root.
+            // Touched files change candidate resolution when the session cwd is not the root, or
+            // when re-resolving a workspace path would reinterpret "@", "~" or "file:" syntax.
             {
-              touchedFiles: Boolean(
-                source.root &&
-                source.fileRoot &&
-                resolvePath(source.fileRoot) !== resolvePath(source.root),
-              ),
+              touchedFiles:
+                Boolean(
+                  source.root &&
+                  source.fileRoot &&
+                  resolvePath(source.fileRoot) !== resolvePath(source.root),
+                ) || indices.some((index) => /[@~]|file:/u.test(params.files[index]!.path)),
             },
           );
           repository = loaded.repository;
           assertCurrent();
           const statPath = async (path: string): Promise<SessionFileStatStatus> => {
-            // Repository files live with the session runner; only a full read can answer.
-            if (repository) {
+            // Repository and remote workspace files live elsewhere; only a full read can answer.
+            if (repository || (source.root && getAgentWorkspaceAccess(source.root))) {
               return "unknown";
             }
             const prepared = await prepareSessionFileReadPath({
@@ -181,8 +184,23 @@ export async function handleSessionFilesStat(
               names: bareMisses,
               assertCurrent,
             });
+            const opened = new Set<string>();
+            for (const [name, match] of found) {
+              // The reader then opens the match by its full path, under the same admission.
+              const { file } = await getSessionWorkspaceFile({
+                ...loaded,
+                path: resolvePath(loaded.root, match),
+                includeContent: false,
+                admitRead: true,
+                assertCurrent,
+                authorizeHostRead: hostRead.authorizeHostRead,
+              });
+              if (file && !file.missing) {
+                opened.add(name);
+              }
+            }
             for (const index of indices) {
-              if (statuses[index] === "missing" && found.has(params.files[index]!.path)) {
+              if (statuses[index] === "missing" && opened.has(params.files[index]!.path)) {
                 statuses[index] = "file";
               }
             }

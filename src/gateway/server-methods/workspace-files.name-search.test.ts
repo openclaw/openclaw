@@ -19,19 +19,20 @@ async function searchFallback(root: string, name: string) {
     browser && !browser.truncated
       ? browser.entries.filter((entry) => entry.kind === "file" && entry.name === name)
       : [];
-  return matches.length === 1;
+  return matches.length === 1 ? matches[0]!.path : undefined;
 }
 
 async function expectParity(root: string, names: string[]) {
   const shared = await findUniqueWorkspaceFileNames({ root, files: [], names });
-  const expected: string[] = [];
+  const expected = new Map<string, string>();
   for (const name of names) {
-    if (await searchFallback(root, name)) {
-      expected.push(name);
+    const match = await searchFallback(root, name);
+    if (match) {
+      expected.set(name, match);
     }
   }
-  expect([...shared].toSorted()).toEqual([...new Set(expected)].toSorted());
-  return shared;
+  expect(shared).toEqual(expected);
+  return new Set(shared.keys());
 }
 
 it("matches each name's own search for unique, duplicate, and absent names", async () => {

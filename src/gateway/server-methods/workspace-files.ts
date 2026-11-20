@@ -399,19 +399,28 @@ export async function listSessionWorkspaceFiles(
 }
 
 /**
- * Returns the bare filenames whose Files search would list exactly one file of that name in a
- * complete result, which is the Control UI's bare-name reader fallback. One ordered walk serves
+ * Maps each bare filename whose Files search would list exactly one file of that name in a
+ * complete result to that file's browser path, which is the Control UI's bare-name reader fallback. One ordered walk serves
  * every name; each name stops where its own `listSessionWorkspaceFiles` search would.
  */
 export async function findUniqueWorkspaceFileNames(
   params: LoadedSessionFiles & { names: readonly string[]; assertCurrent?: () => void },
-): Promise<Set<string>> {
-  const unique = new Set<string>();
+): Promise<Map<string, string>> {
+  const unique = new Map<string, string>();
   const root = params.root;
   const queries = [...new Set(params.names)].flatMap((name) => {
     const search = normalizeOptionalString(name);
     return search
-      ? [{ name, query: foldSearchCase(search).normalize("NFC"), matches: 0, exact: 0, open: true }]
+      ? [
+          {
+            name,
+            query: foldSearchCase(search).normalize("NFC"),
+            matches: 0,
+            exact: 0,
+            match: "",
+            open: true,
+          },
+        ]
       : [];
   });
   if (!root || queries.length === 0) {
@@ -425,7 +434,7 @@ export async function findUniqueWorkspaceFileNames(
     query.open = false;
     openQueries -= 1;
     if (complete && query.exact === 1) {
-      unique.add(query.name);
+      unique.set(query.name, query.match);
     }
   };
   // A search stops, incomplete, before its next entry once it holds MAX_SEARCH_ENTRIES
@@ -462,6 +471,7 @@ export async function findUniqueWorkspaceFileNames(
             query.matches += 1;
             if (dirent.isFile && dirent.name === query.name) {
               query.exact += 1;
+              query.match = browserPath;
             }
           }
         }
