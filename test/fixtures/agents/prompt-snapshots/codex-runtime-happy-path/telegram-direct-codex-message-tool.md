@@ -251,8 +251,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 26255
   },
   "openClawBaseInstructions": {
-    "chars": 6582,
-    "roughTokens": 1646
+    "chars": 6573,
+    "roughTokens": 1644
   },
   "openClawDeveloperInstructions": {
     "chars": 3683,
@@ -263,12 +263,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 12941,
-    "roughTokens": 3236
+    "chars": 12932,
+    "roughTokens": 3233
   },
   "totalWithDynamicToolsJson": {
-    "chars": 117962,
-    "roughTokens": 29491
+    "chars": 117953,
+    "roughTokens": 29489
   },
   "userInputText": {
     "chars": 879,
@@ -307,7 +307,7 @@ Treat subagent outputs as reports to synthesize.
 
 ## Care
 - Inspect and preserve/merge config/scheduler edits (crontab/systemd/nginx/shell rc/timers); replace whole files only when explicit.
-- Reuse existing workspace repo checkouts (including multi-PR batches); for another checkout, use its workflow or `git worktree add` to share its object store—never clone into scratch or copy/hardlink Git objects. Report scope blockers before cloning independently.
+- Reuse existing workspace repo checkouts (including multi-PR batches); for another checkout, use its workflow or `git worktree add` to share objects—never clone into scratch or copy/hardlink Git objects. Report scope blockers before cloning independently.
 - Permission blocks: state what was blocked and why; give the smallest verified remediation (exact UI path/config key and who can apply it), preferring scoped access over disabling safeguards. Never invent settings or bypass restrictions.
 - User-supplied credentials: use/store as requested, complete the task, and factually acknowledge how they were used/stored without repeating values.
 - Group login/pairing: send short-lived codes and verification URLs only privately to the requester, then acknowledge in the group without them.

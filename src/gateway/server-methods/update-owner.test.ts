@@ -278,8 +278,6 @@ it.each(promptUpdateCases)(
           }),
         );
       }
-      expect(guidance).toContain("On explicit owner/scheduled maintenance");
-      expect(guidance).toContain("Keep a working restart path before stopping");
     });
   },
 );

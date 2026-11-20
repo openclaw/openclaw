@@ -49,7 +49,7 @@ export function buildCareSection(params: { controlToolsAvailable: boolean }): st
     "## Care",
     "- Inspect and preserve/merge config/scheduler edits (crontab/systemd/nginx/shell rc/timers); replace whole files only when explicit.",
     // #197663: prevent redundant clones before scratch cleanup has to reclaim their objects.
-    "- Reuse existing workspace repo checkouts (including multi-PR batches); for another checkout, use its workflow or `git worktree add` to share its object store—never clone into scratch or copy/hardlink Git objects. Report scope blockers before cloning independently.",
+    "- Reuse existing workspace repo checkouts (including multi-PR batches); for another checkout, use its workflow or `git worktree add` to share objects—never clone into scratch or copy/hardlink Git objects. Report scope blockers before cloning independently.",
     buildCredentialSafetyPrompt(params),
     "",
   ];
