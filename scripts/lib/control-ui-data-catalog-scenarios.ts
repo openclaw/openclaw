@@ -37,7 +37,8 @@ function suffix(index: number) {
   return String(index).padStart(4, "0");
 }
 
-function createDataCatalogInventory(revision = 1, uninstalledIndex?: number) {
+function createDataCatalogInventory(revision = 1, uninstalledIndex?: number | "all") {
+  const isInstalled = (index: number) => uninstalledIndex !== "all" && index !== uninstalledIndex;
   const plugins: PluginCatalogItem[] = Array.from({ length: inventorySize }, (_, index) => ({
     id: `data-plugin-${suffix(index)}`,
     catalogId: `data-catalog-${suffix(index)}`,
@@ -63,19 +64,19 @@ function createDataCatalogInventory(revision = 1, uninstalledIndex?: number) {
       latestVersion: "1.0.0",
     },
     local: {
-      pluginId: index === uninstalledIndex ? undefined : plugin.id,
-      present: index !== uninstalledIndex,
-      installed: index !== uninstalledIndex,
-      enabled: index !== uninstalledIndex,
-      state: index === uninstalledIndex ? "not-installed" : "enabled",
-      action: index === uninstalledIndex ? "install" : "manage",
+      pluginId: isInstalled(index) ? plugin.id : undefined,
+      present: isInstalled(index),
+      installed: isInstalled(index),
+      enabled: isInstalled(index),
+      state: isInstalled(index) ? "enabled" : "not-installed",
+      action: isInstalled(index) ? "manage" : "install",
     },
   }));
   return {
     plugins:
       uninstalledIndex === undefined
         ? plugins
-        : plugins.filter((_plugin, index) => index !== uninstalledIndex),
+        : plugins.filter((_plugin, index) => isInstalled(index)),
     entries,
   };
 }
@@ -98,7 +99,7 @@ function catalogPage(
 
 function createDataCatalogFixture(
   revision = 1,
-  uninstalledIndex?: number,
+  uninstalledIndex?: number | "all",
 ): InteractionFixtureOverrides {
   const { plugins, entries } = createDataCatalogInventory(revision, uninstalledIndex);
   const groups: ToolsCatalogResult["groups"] = Array.from(
@@ -1023,6 +1024,8 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
   {
     ...fixture,
     id: "data-catalog-category-first-render",
+    // Catalog browsing lists plugins available to install, not installed inventory.
+    fixtureOverrides: () => createDataCatalogFixture(1, "all"),
     route: pathForRoute("plugins"),
     expected: "Opening Tools presents the first 100 entries of the 1,000-entry catalog.",
     rowSelector: ".plugin-catalog-card",
