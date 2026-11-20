@@ -271,7 +271,6 @@ export function createModelSetup(
       wizard.close({ retireOwner: true });
     }
     if (ownerChanged) {
-      state.nativeSessionCatalogsEnabled = false;
       state.manualProviderId = "";
       state.manualApiKey = "";
       state.manualError = null;
@@ -377,16 +376,7 @@ export function createModelSetup(
     state.activationState = { phase: "testing", targetId };
     pendingPrepareOption = null;
     state.wizardMode = "activate";
-    await runWizardMutation(() =>
-      wizard.activate({ ...params, ...nativeSessionCatalogPreference() }, targetId),
-    );
-  }
-
-  function nativeSessionCatalogPreference(): { nativeSessionCatalogsEnabled?: boolean } {
-    return state.pageState.phase === "ready" &&
-      state.pageState.result.nativeSessionCatalogPreferenceRequired === true
-      ? { nativeSessionCatalogsEnabled: state.nativeSessionCatalogsEnabled }
-      : {};
+    await runWizardMutation(() => wizard.activate(params, targetId));
   }
 
   function connectManual(): void {
@@ -482,13 +472,11 @@ export function createModelSetup(
         wizardMutationActive = false;
         wizardSaving.retire();
         const prepareOption = pendingPrepareOption;
-        const catalogPreference = nativeSessionCatalogPreference();
         pendingPrepareOption = null;
         await completeModelSetupWizard(
           { state, firstRun, wizard, detect, activate },
           completion,
           prepareOption,
-          catalogPreference,
         );
       } else if (state.wizardState.phase === "step" && state.wizardState.busy) {
         state.wizardState = { ...state.wizardState, busy: false };
@@ -597,11 +585,7 @@ export function createModelSetup(
       manualApiKey: state.manualApiKey,
       manualError: state.manualError,
       moreSignInOpen: state.moreSignInOpen,
-      nativeSessionCatalogsEnabled: state.nativeSessionCatalogsEnabled,
       nativeModels,
-      onNativeSessionCatalogsChange: (enabled: boolean) => {
-        state.nativeSessionCatalogsEnabled = enabled;
-      },
       firstRun: routeData()?.firstRun === true,
       iconUrls: state.iconUrls,
       onDetect: () => {
@@ -620,12 +604,7 @@ export function createModelSetup(
         pendingPrepareOption = null;
         state.wizardMode = "auth";
         void runWizardMutation(() =>
-          wizard.start(
-            option.id,
-            "openclaw.setup.auth.start",
-            nativeSessionCatalogPreference(),
-            option.modelTarget,
-          ),
+          wizard.start(option.id, "openclaw.setup.auth.start", {}, option.modelTarget),
         );
       },
       onStartPrepare: (option: ModelSetupPrepareOption) => {

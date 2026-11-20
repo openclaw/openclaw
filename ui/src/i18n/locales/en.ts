@@ -5,7 +5,6 @@ import * as agentEn from "./en-agents.ts";
 
 type EnglishCatalog = TranslationMap & {
   languages: TranslationMap;
-  onboarding: TranslationMap & { memoryImport: TranslationMap };
   execApproval: TranslationMap & { labels: TranslationMap; scope: TranslationMap };
   sessionProgressCard: TranslationMap & {
     refresh: TranslationMap;
@@ -1119,11 +1118,6 @@ const startupEnglish = {
     providerConnected: {},
   },
   memoryImport: {},
-  onboarding: {
-    memoryImport: {
-      title: "Bring your agent memory with you",
-    },
-  },
   assistantPanel: {
     title: "Assistant sidebar",
     home: "Home",

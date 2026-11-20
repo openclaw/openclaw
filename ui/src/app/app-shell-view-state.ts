@@ -168,7 +168,6 @@ export function readShellView(host: ShellViewHost) {
       activeRoute === "cron");
   const settingsTakeover = settingsRoute && !host.onboardingMode && !nativeEmbed;
   const onboarding = host.onboardingMode;
-  const memoryImportActive = onboarding && activeRoute !== "custodian";
   // Drawer motion invalidates only the bindings that read its presentation.
   const navDrawerOpen = () => {
     host.navigationRevision();
@@ -425,7 +424,6 @@ export function readShellView(host: ShellViewHost) {
     embedSettings,
     settingsTakeover,
     onboarding,
-    memoryImportActive,
     get navDrawerOpen() {
       return navDrawerOpen();
     },
