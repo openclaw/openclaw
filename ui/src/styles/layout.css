@@ -474,6 +474,15 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   display: none;
 }
 
+/* Settings still needs an exit when titlebar Back is hidden or disabled. */
+html.openclaw-native-macos
+  .shell--settings:not(.shell--mobile-nav)
+  > openclaw-macos-titlebar-controls:has(.macos-titlebar-controls__back:enabled)
+  ~ .shell-nav
+  .settings-sidebar__back {
+  display: none;
+}
+
 .shell--onboarding {
   --shell-nav-width: 0px;
   /* The incoming page already fills the viewport; do not sweep it through the old sidebar. */
