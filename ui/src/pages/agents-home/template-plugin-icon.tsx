@@ -22,7 +22,8 @@ export function TemplatePluginName(props: {
       fallback={
         <>
           <span
-            class="plugin-metadata__placeholder skeleton template-plugin-name-placeholder"
+            class="plugin-metadata__placeholder skeleton"
+            style={{ "--skeleton-base": "var(--skeleton-base-raised)", "max-width": "7rem" }}
             aria-hidden="true"
           />
           <span class="sr-only">{props.name}</span>
