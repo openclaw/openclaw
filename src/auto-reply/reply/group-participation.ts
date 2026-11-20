@@ -1,5 +1,9 @@
 import { isDecisionAssistanceEligible } from "../../agents/decision-assistance.js";
+import { buildBootstrapContextForFiles } from "../../agents/embedded-agent-helpers/bootstrap.js";
+import { loadAgentIdentityFromWorkspaceAsync } from "../../agents/identity-file.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import { DEFAULT_IDENTITY_FILENAME } from "../../agents/workspace-bootstrap-policy.js";
+import { loadWorkspaceBootstrapFiles } from "../../agents/workspace-file-read.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { resolveReplyCandidateRuntime } from "./agent-runner-runtime.js";
@@ -64,6 +68,18 @@ export async function prepareGroupParticipation(params: Params & { operation: Re
     limit: 16,
     includeMessageToolSourceReplies: true,
   });
+  const agentName =
+    run.groupParticipation?.agentName ??
+    normalizeOptionalString(
+      (await loadAgentIdentityFromWorkspaceAsync(run.run.workspaceDir))?.name,
+    );
+  const identityFiles = await loadWorkspaceBootstrapFiles(run.run.workspaceDir, [
+    DEFAULT_IDENTITY_FILENAME,
+  ]);
+  const agentIdentity = buildBootstrapContextForFiles(
+    identityFiles.filter((file) => !file.missing),
+    { config: run.run.config, agentId: run.run.agentId },
+  )[0]?.content;
   assertCurrent();
   const { evaluateDecision } = await import("../../decisions/runtime.js");
   const outcome = await runWithReplyOperationLifecycleAdmission(operation, () =>
@@ -71,7 +87,8 @@ export async function prepareGroupParticipation(params: Params & { operation: Re
       {
         state: {
           agentId: run.run.agentId,
-          agentName: run.groupParticipation?.agentName ?? run.run.agentId,
+          agentName: agentName ?? null,
+          agentIdentity: agentIdentity ?? null,
           conversation: conversation.map(({ role, text }) => ({ role, text })),
           message: run.prompt,
           replyTo: run.groupParticipation?.replyToText ?? null,
