@@ -5,7 +5,9 @@ import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../../ui/src/test-helpers/mount-solid.js";
 import { InviteForm } from "./invite-form.js";
 import { createPeopleMotion } from "./people-motion.js";
-import type { Role, RoleSandboxReadiness } from "./types.js";
+import type { Role } from "./types.js";
+
+type RoleSandboxReadiness = Extract<Role, { defined: true }>["sandbox"];
 
 type PickerOptions = Parameters<ControlUiHost["components"]["mountSelectPicker"]>[1];
 
