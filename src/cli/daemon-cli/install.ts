@@ -65,7 +65,7 @@ import {
   normalizeEnvVarKey,
 } from "../../infra/host-env-security.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
-import { parseTcpPort } from "../../infra/tcp-port.js";
+import { parseTcpPort, parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
 import { omitSecretEgressProxyEnvironment } from "../../secrets/egress-proxy/environment.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
@@ -569,6 +569,33 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   if (loaded && !opts.force && !autoRefreshMessage) {
+    const currentCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);
+    const unapplied: string[] = [];
+    const hints: string[] = [];
+    if (currentCommand && opts.port !== undefined) {
+      const installedPort = parseTcpPortFromArgs(currentCommand.programArguments);
+      if (installedPort !== port) {
+        unapplied.push(`--port ${port}`);
+        hints.push(
+          `Reinstall with: ${formatCliCommand(`openclaw gateway install --force --port ${port}`)}.`,
+        );
+      }
+    }
+    if (currentCommand && opts.token !== undefined) {
+      if (readEmbeddedGatewayToken(currentCommand) !== opts.token) {
+        unapplied.push("--token");
+        hints.push(
+          `Set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN, then run ${formatCliCommand("openclaw gateway install --force")}; install does not persist --token.`,
+        );
+      }
+    }
+    if (unapplied.length > 0) {
+      fail(
+        `Gateway service already ${service.loadedText}; ${unapplied.join(" and ")} would not be applied.`,
+        hints,
+      );
+      return;
+    }
     emitMessage({
       ok: true,
       result: "already-installed",
