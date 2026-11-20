@@ -97,22 +97,22 @@ export async function handleSessionFilesStat(
         let repository: Awaited<ReturnType<typeof loadSessionFiles>>["repository"];
         try {
           assertCurrent();
+          // Touched files change candidate resolution when the session cwd is not the root, or
+          // when re-resolving a workspace path would reinterpret "@", "~" or "file:" syntax.
+          const syntaxSensitive = (path: string) => /[@~]|file:/u.test(path);
+          const touchedFiles =
+            Boolean(
+              source.root &&
+              source.fileRoot &&
+              resolvePath(source.fileRoot) !== resolvePath(source.root),
+            ) || indices.some((index) => syntaxSensitive(params.files[index]!.path));
           const loaded = await loadSessionFiles(
             source,
             context,
             assertSourceCurrent,
             assertReaderCurrent,
             undefined,
-            // Touched files change candidate resolution when the session cwd is not the root, or
-            // when re-resolving a workspace path would reinterpret "@", "~" or "file:" syntax.
-            {
-              touchedFiles:
-                Boolean(
-                  source.root &&
-                  source.fileRoot &&
-                  resolvePath(source.fileRoot) !== resolvePath(source.root),
-                ) || indices.some((index) => /[@~]|file:/u.test(params.files[index]!.path)),
-            },
+            { touchedFiles },
           );
           repository = loaded.repository;
           assertCurrent();
@@ -185,7 +185,13 @@ export async function handleSessionFilesStat(
               assertCurrent,
             });
             const opened = new Set<string>();
+            const undecided = new Set<string>();
             for (const [name, match] of found) {
+              // Without the touched files, such a match could resolve differently than the reader.
+              if (!touchedFiles && syntaxSensitive(match)) {
+                undecided.add(name);
+                continue;
+              }
               // The reader then opens the match by its full path, under the same admission.
               const { file } = await getSessionWorkspaceFile({
                 ...loaded,
@@ -200,8 +206,11 @@ export async function handleSessionFilesStat(
               }
             }
             for (const index of indices) {
-              if (statuses[index] === "missing" && opened.has(params.files[index]!.path)) {
+              const reference = params.files[index]!.path;
+              if (statuses[index] === "missing" && opened.has(reference)) {
                 statuses[index] = "file";
+              } else if (statuses[index] === "missing" && undecided.has(reference)) {
+                statuses[index] = "unknown";
               }
             }
           }

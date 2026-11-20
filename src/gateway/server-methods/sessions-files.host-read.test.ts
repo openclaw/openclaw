@@ -331,6 +331,12 @@ it("stats touched references that name literal @ files like the reader", async (
   const preview = await fixture.files.request("get", "./@report.md");
   expect(preview[0]?.ok).toBe(true);
   expect(stat.files).toEqual([{ path: "./@report.md", status: "file" }]);
+
+  // A bare name whose only match needs @-sensitive resolution is left to the reader.
+  fs.mkdirSync(path.join(workspaceRoot, "@docs"), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, "@docs/notes.md"), "# Notes\n");
+  const bare = await fixture.files.ok("stat", { files: [{ path: "notes.md" }] });
+  expect(bare.files).toEqual([{ path: "notes.md", status: "unknown" }]);
 });
 
 it("canonicalizes host previews and lists outside touched-file metadata without edit tokens", async () => {
