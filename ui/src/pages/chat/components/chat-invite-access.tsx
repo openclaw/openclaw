@@ -37,7 +37,9 @@ export function ChatInviteAccess(props: {
         return (
           <>
             <div class="chat-invite-access composer-context-strip">
-              <span>{t("chat.composer.inviteAs", { name: name() })}</span>
+              <span class="composer-context-strip__text">
+                {t("chat.composer.inviteAs", { name: name() })}
+              </span>
               <Menu
                 id={`${id}-${mention().profileId}`}
                 label={t("chat.composer.inviteLevel", { name: name() })}
@@ -65,7 +67,7 @@ export function ChatInviteAccess(props: {
               />
             </div>
             <Show when={!props.options.has(mention().profileId)}>
-              <small class="chat-invite-access__stale">
+              <small class="chat-invite-access__stale muted">
                 {t("chat.composer.inviteLevelsStale", { name: name() })}
               </small>
             </Show>
