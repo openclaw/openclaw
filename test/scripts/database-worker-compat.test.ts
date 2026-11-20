@@ -465,7 +465,9 @@ it("batches shorthand receiver types while rejecting typed receiver and paramete
     );
     // A growing multi-file inventory must not require a round trip per receiver/member.
     expect(referenceRequests).toBeLessThan(consumers.length);
-    expect(batches.mock.calls.every((generators) => generators.length <= 256)).toBe(true);
+    expect(
+      batches.mock.calls.every((generators: readonly unknown[]) => generators.length <= 256),
+    ).toBe(true);
   } finally {
     batches.mockRestore();
     Object.defineProperty(Checker.prototype, "getTypeAtLocation", descriptor);
