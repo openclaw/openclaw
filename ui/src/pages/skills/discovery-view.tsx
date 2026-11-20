@@ -427,6 +427,12 @@ function InstalledSkills(props: {
   });
   const accepted = () =>
     Boolean(props.view.state.skillsReport) && props.view.libraryEntries !== undefined;
+  // Both sources can insert rows before the other. Settle the first reads before
+  // showing the grid; a later refresh of accepted data keeps the rows in place.
+  const firstReadPending = () =>
+    props.view.state.connected &&
+    ((props.view.loading && !props.view.state.skillsReport) ||
+      (props.view.libraryLoading && props.view.libraryEntries === undefined));
   return (
     <>
       <div class="skill-installed-heading">
@@ -472,38 +478,29 @@ function InstalledSkills(props: {
         </p>
       </Show>
       <div class="plugin-catalog-results__body">
-        <Show
-          when={entries().length > 0}
-          fallback={
-            <Show when={props.view.state.connected && !props.view.error}>
-              <Show
-                when={accepted()}
-                fallback={
-                  <Show when={props.view.loading || props.view.libraryLoading}>
-                    <div role="status">
-                      {renderCatalogGridSkeleton({ label: t("common.loading"), cards: 6 })}
-                    </div>
-                  </Show>
-                }
-              >
+        <Show when={!firstReadPending()} fallback={renderCatalogGridSkeleton({ cards: 6 })}>
+          <Show
+            when={entries().length > 0}
+            fallback={
+              <Show when={props.view.state.connected && !props.view.error && accepted()}>
                 <SettingsGroup>
                   <SettingsEmpty
                     message={query().trim() ? t("skillsPage.noMatches") : t("skillsPage.empty")}
                   />
                 </SettingsGroup>
               </Show>
-            </Show>
-          }
-        >
-          <PluginCatalogGrid
-            items={entries()}
-            results
-            busy={props.view.loading || props.view.libraryLoading}
+            }
           >
-            {(entry, contentRef) => (
-              <DiscoveryRow entry={entry()} skills={props.view} contentRef={contentRef} />
-            )}
-          </PluginCatalogGrid>
+            <PluginCatalogGrid
+              items={entries()}
+              results
+              busy={props.view.loading || props.view.libraryLoading}
+            >
+              {(entry, contentRef) => (
+                <DiscoveryRow entry={entry()} skills={props.view} contentRef={contentRef} />
+              )}
+            </PluginCatalogGrid>
+          </Show>
         </Show>
       </div>
     </>

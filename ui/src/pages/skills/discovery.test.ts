@@ -149,6 +149,53 @@ describe("unified skill discovery", () => {
     expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1);
   });
 
+  it.each(["workspace", "library"] as const)(
+    "holds the first installed grid until both reads settle when %s arrives first",
+    async (first) => {
+      const entry = libraryEntry();
+      const report = createReport([createSkill({ name: "Workspace marker" })]);
+      const library = { ...personalLibrary, entries: [entry] };
+      const statusRead = Promise.withResolvers<typeof report>();
+      const libraryRead = Promise.withResolvers<typeof library>();
+      const request = vi.fn(async (method: string) => {
+        if (method === "skills.status") return statusRead.promise;
+        if (method === "skills.library.list") return libraryRead.promise;
+        if (method === "skills.search") return { results: [] };
+        throw new Error("Unexpected method: " + method);
+      });
+      const { container, publishRouteData } = mountSkills(request, "discovery");
+      publishRouteData({ reportRead: statusRead.promise });
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith("skills.library.list", { scope: "all" }),
+      );
+      openInstalled(container);
+      const gridCards = () => [...container.querySelectorAll(".skill-discovery [data-skill-id]")];
+      const skeleton = () => container.querySelector(".plugin-catalog-grid--skeleton");
+      await waitForFast(() => expect(skeleton()).not.toBeNull());
+      try {
+        if (first === "workspace") statusRead.resolve(report);
+        else libraryRead.resolve(library);
+        await waitForFast(() =>
+          expect(shelfText(container)).toContain(
+            first === "workspace" ? "Workspace marker" : entry.slug,
+          ),
+        );
+        expect(gridCards()).toHaveLength(0);
+        expect(skeleton()).not.toBeNull();
+      } finally {
+        statusRead.resolve(report);
+        libraryRead.resolve(library);
+      }
+      await waitForFast(() => {
+        expect(skeleton()).toBeNull();
+        expect(gridCards().map((card) => card.querySelector("h3")?.textContent)).toEqual([
+          entry.slug,
+          "Workspace marker",
+        ]);
+      });
+    },
+  );
+
   it("keeps cards visible without a loading label while loading", () => {
     const container = document.createElement("div");
     for (const loading of [true, false]) {
