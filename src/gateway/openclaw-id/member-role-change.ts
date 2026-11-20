@@ -4,6 +4,7 @@ import {
   type AuthorityState,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { onOperatorRolePolicyChanged } from "../operator-role-policy.js";
 import type { AuthorityRefusal } from "./authority-result.js";
 
 class UndefinedMemberRoleError extends Error {
@@ -20,18 +21,20 @@ export function refuseUndefinedMemberRole(error: unknown): AuthorityRefusal {
 }
 
 /** Validate the target role once when the queued owner-signed change starts. */
-export function assertMemberRoleDefined(input: unknown): void {
+export function assertMemberRoleDefined(input: unknown) {
   const change = parseStatement(input, "MembershipChange");
-  const role =
+  const target =
     change.ok && change.statement.body.target.op === "set_role"
-      ? change.statement.body.target.role
+      ? change.statement.body.target
       : undefined;
+  const role = target?.role;
   if (
     role !== undefined &&
     !Object.hasOwn(getRuntimeConfigSnapshot()?.gateway?.roles?.definitions ?? {}, role)
   ) {
     throw new UndefinedMemberRoleError(role);
   }
+  return target;
 }
 
 // A member whose role changed reconnects, so their Gateway connections pick up the
@@ -45,4 +48,24 @@ export function roleChangeDisconnects(
     return previous && previous.role !== member.role ? member.peer_keys : [];
   });
   return peerKeys.length > 0 ? [{ type: "disconnect", peer_keys: peerKeys }] : [];
+}
+
+/** Refresh the display label and Discovery mirror when the profile authority changes. */
+export function publishMemberProfileRoleChanges(params: {
+  enabled: () => boolean;
+  changed: () => void;
+  publish: () => Promise<void>;
+  warn: (message: string) => void;
+}): () => void {
+  return onOperatorRolePolicyChanged(() => {
+    if (!params.enabled()) {
+      return;
+    }
+    params.changed();
+    void params
+      .publish()
+      .catch((error: unknown) =>
+        params.warn(`openclaw-id: role label publication failed: ${String(error)}`),
+      );
+  });
 }

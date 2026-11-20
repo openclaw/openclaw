@@ -21,8 +21,8 @@ import { stateTest } from "../plugin-state/plugin-state-fixtures.test-support.js
 import { createCorePluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { ensureOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
 
 const { spawnCommand } = vi.hoisted(() => ({ spawnCommand: vi.fn() }));
 // mock-isolation: Only container engine I/O is synthetic; local storage and config writes stay real.
@@ -147,7 +147,7 @@ const clawStore = () =>
 it("reads member roles from a monolithic claw record", async ({ state }) => {
   state.applyEnv();
   await clawStore().register("current", claw({ alice: "retired" }));
-  expect(await readDoctorMemberRoles()).toEqual(new Map([["alice", "retired"]]));
+  expect(await readDoctorMemberRoles(cfg())).toEqual(new Map([["alice", "retired"]]));
 });
 
 it("reports incomplete local membership instead of passing silently", async ({ state }) => {
@@ -189,7 +189,7 @@ for (const key of ["members", "members:1"]) {
     for (const value of [null, [], 42, "not a member collection"]) {
       await writeStoredClaw(claw({ alice: "undefined-role" }));
       await clawStore().register(key, value);
-      await expect(readDoctorMemberRoles()).rejects.toThrow(
+      await expect(readDoctorMemberRoles(cfg())).rejects.toThrow(
         "OpenClaw ID claw storage has an invalid member collection",
       );
       expect(await detect(cfg())).toEqual([
@@ -304,16 +304,24 @@ it("does not warn for unused required roles or an unprobed non-container backend
   expect(spawnCommand).not.toHaveBeenCalled();
 });
 
-it("warns about stored assignments only when the named default is absent", async ({ state }) => {
+it("warns for inactive non-member assignments but not catalog-enforced members", async ({
+  state,
+}) => {
   state.applyEnv();
-  const profile = ensureProfileForEmail("alice@example.test");
+  const profile = ensureOpenClawIdUserProfile({ accountId: "alice" }, {});
   setUserProfileRole(profile.id, "viewer");
+  await writeStoredClaw(claw({ alice: "viewer" }));
   await closeOpenClawStateDatabaseAsync();
   expect(await detect(cfg(false))).toEqual([
     expect.objectContaining({
       requirement: "assignments-inactive",
-      message: expect.stringMatching(/enforcement is off.*assignments have no effect/),
+      message: expect.stringContaining("1 profile(s)"),
     }),
+  ]);
+  expect(await detect(cfg())).toEqual([]);
+  await writeStoredClaw(claw({}));
+  expect(await detect(cfg())).toEqual([
+    expect.objectContaining({ requirement: "assignments-inactive" }),
   ]);
   const config = cfg(false);
   config.gateway!.roles!.default = "viewer";

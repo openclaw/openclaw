@@ -21,7 +21,19 @@ vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
       }
     };
     assertCurrent();
-    return { assertCurrent };
+    return {
+      assertCurrent,
+      readCurrentFacts: () => {
+        assertCurrent();
+        return {
+          profileId,
+          emails: [],
+          assignedRole: null,
+          githubLogin: null,
+          openclawIdAccountIds: [],
+        };
+      },
+    };
   },
 }));
 

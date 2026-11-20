@@ -26,6 +26,7 @@ import {
 import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
 import { promptDelta } from "./session-prompt-delta.js";
+import { resolvePromptHistoryId } from "./session-prompt-history-id.js";
 import {
   readToolSurfaceCheckpoint,
   type ToolDefinition,
@@ -63,6 +64,8 @@ type SystemPromptSeries = {
   renderedPrefix: string;
   routeKey: string;
   historyId: string | null;
+  /** The transcript's boundary count when this series was written; see resolvePromptHistoryId. */
+  boundaryCount?: number;
   permissionNotice?: string;
   usageRanking?: ToolUsageRankingSnapshot;
   restart: boolean;
@@ -133,26 +136,6 @@ type ToolSurfaceInput = {
   historyBoundaryCount?: number;
   tools: AnyAgentTool[];
 };
-
-function resolvePromptHistoryId(params: {
-  state: EmbeddedSessionPromptState;
-  entries: SessionEntry[];
-  historyBoundaryCount?: number;
-}): string | null {
-  // Bounded reloads can omit a compaction's payload without changing history.
-  // The manager's boundary count, not its visible window, invalidates this run's fact.
-  const previous = params.state.historyBoundary;
-  if (previous && previous.count === params.historyBoundaryCount) {
-    return previous.id;
-  }
-  const id =
-    params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
-    null;
-  if (params.historyBoundaryCount !== undefined) {
-    params.state.historyBoundary = { count: params.historyBoundaryCount, id };
-  }
-  return id;
-}
 
 /** The prompt owner alone decides when persisted usage may enter provider-visible text. */
 export async function prepareSessionToolUsageRanking(params: {
@@ -440,6 +423,8 @@ export function prepareSessionSystemPrompt(params: {
         renderedPrefix: shareSystemPromptPrefix(data.renderedPrefix),
         routeKey: params.routeKey,
         historyId,
+        // The persisted count: a checkpoint written before the count existed is rewritten with it.
+        boundaryCount: typeof data.boundaryCount === "number" ? data.boundaryCount : undefined,
         permissionNotice:
           typeof data.permissionNotice === "string" ? data.permissionNotice : undefined,
         usageRanking: params.state.persistedUsageRanking,
@@ -479,12 +464,14 @@ export function prepareSessionSystemPrompt(params: {
         renderedPrefix,
         routeKey: params.routeKey,
         historyId,
+        boundaryCount: params.historyBoundaryCount,
         permissionNotice,
         usageRanking: params.state.usageRanking?.snapshot,
         restart: true,
       }
     : {
         ...series!,
+        boundaryCount: params.historyBoundaryCount,
         renderedPrefix,
         permissionNotice,
         usageRanking: params.state.usageRanking?.snapshot,
@@ -553,6 +540,7 @@ export async function persistSessionSystemPrompt(
     snapshot.renderedPrefix !== previous.renderedPrefix ||
     snapshot.routeKey !== previous.routeKey ||
     snapshot.historyId !== previous.historyId ||
+    snapshot.boundaryCount !== previous.boundaryCount ||
     snapshot.permissionNotice !== previous.permissionNotice ||
     snapshot.usageRanking !== previous.usageRanking
   ) {

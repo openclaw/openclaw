@@ -93,9 +93,9 @@ Gateway restart repeats the selection, which picks up Codex installs, upgrades,
 and removals.
 
 The binary selection does not decide which OpenAI models the picker shows. The
-ChatGPT subscription model list reports the OpenClaw version, with a `99.0.0`
-fallback when it is unavailable or not a calendar version with a four-digit
-year of 2026 or later (see
+ChatGPT subscription model list reports the latest published stable Codex version,
+cached for six hours, with the bundled Codex version as its floor and registry
+failure fallback (see
 [Model discovery](/plugins/codex-harness-reference/model-discovery)), so it can
 list a model that the selected Codex binary is too old to run. A Codex-harness
 turn on such a model fails with a message that names the running Codex version

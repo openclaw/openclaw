@@ -163,11 +163,10 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         }),
       ),
     );
-    expect(completed.map(({ name }) => name).toSorted()).toEqual([
-      "crashed-0-2",
-      "crashed-1-2",
-      "crashed-2-2",
-    ]);
+    // Each replacement gets a fresh ID-derived name instead of the retained crashed one.
+    completed.forEach(({ name }, index) =>
+      expect(name).toMatch(new RegExp(`^crashed-${index}-[0-9a-f]{6}$`)),
+    );
     await expect(
       service.create({ repoRoot: repo, name: "crashed-0", baseRef: "HEAD" }),
     ).rejects.toThrow(/retained.*unused name/);

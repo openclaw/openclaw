@@ -1,16 +1,22 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { gatewayOperatorAccessError } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/users.js";
 import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveAuthenticatedDeviceTokenIdentity } from "../../../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../../../infra/device-pairing-store-readonly.js";
 import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { errorShapeFromError } from "../../error-shape.js";
+import { currentOwnerDevicePrincipal } from "../../openclaw-id/tunnel-principal.js";
 import {
   GatewayOperatorAccessDeniedError,
   hasGatewayOperatorAccessPolicies,
   resolveGatewayOperatorAccessAuthority,
 } from "../../operator-access-policy.js";
+import {
+  onOperatorRolePolicyChanged,
+  resolveOperatorRolePolicy,
+} from "../../operator-role-policy.js";
 import { PUBLICATION_READ_SCOPE } from "../../operator-scopes.js";
 import { invalidateGatewayPolicyClient } from "../ws-policy-close.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -25,6 +31,14 @@ export function prepareGatewayConnectOperatorAccess(client: GatewayWsClient): vo
   }
   const profile = client.authenticatedUserProfile;
   const config = getRuntimeConfig();
+  if (
+    profile &&
+    profile.profileId !== GATEWAY_OWNER_PROFILE_ID &&
+    !currentOwnerDevicePrincipal(client) &&
+    resolveOperatorRolePolicy(client, config)?.scopes.length === 0
+  ) {
+    throw new GatewayOperatorAccessDeniedError("access-record-inactive");
+  }
   const source = { openclawIdPrincipal: client.internal?.openclawIdPrincipal };
   if (hasGatewayOperatorAccessPolicies(config, source) && !profile) {
     throw new GatewayOperatorAccessDeniedError("profile-invalidated");
@@ -65,6 +79,21 @@ export function bindGatewayConnectOperatorAccess(
   context: GatewayConnectPhaseContext,
   client: GatewayWsClient,
 ): boolean {
+  const releaseRole = onOperatorRolePolicyChanged((change) => {
+    if (
+      change.kind === "assignment" &&
+      change.profileId === client.authenticatedUserProfile?.profileId &&
+      !(change.roleOnly && currentOwnerDevicePrincipal(client))
+    ) {
+      invalidateGatewayPolicyClient(client, {
+        reason: "operator-role-changed",
+        code: 4001,
+        message: "operator role changed",
+        close: () => context.handler.close(4001, "operator role changed"),
+      });
+    }
+  });
+  client.socket.once("close", releaseRole);
   const authority = client.internal?.operatorAccessAuthority;
   if (!authority) {
     return true;
