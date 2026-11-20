@@ -496,7 +496,10 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
     : withFreshOpenClawStateDatabaseReadOnly(operation, options, existingPath);
 }
 
-/** Fixed reads observe committed state unless their owner explicitly selected a snapshot. */
+/**
+ * Adopts a command whose producer owns its data until completion. Capture borrowed mutable
+ * inputs at that producer, before calling or yielding. Reads otherwise observe committed state.
+ */
 export function executeExistingOpenClawStateRead<Command extends OpenClawStateReadCommand>(
   options: OpenClawStateDatabaseOptions,
   command: Command,
