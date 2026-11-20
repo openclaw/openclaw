@@ -31,7 +31,6 @@ import {
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
 } from "../../local-model-lean.js";
-import { resolveModelAuthModeAsync } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { resolveNativeWebSearchRoute } from "../../native-web-search.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
@@ -390,14 +389,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         skillLibraryAuthoring: attempt.skillLibraryAuthoring,
         modelCompat: extractModelCompat(attempt.model),
         delegationCapability: attempt.delegationCapability,
-        modelAuthMode: await resolveModelAuthModeAsync(
-          attempt.model.provider,
-          attempt.config,
-          attempt.authProfileStore,
-          {
-            workspaceDir: params.setup.effectiveWorkspace,
-          },
-        ),
         includeCoreTools: toolConstructionPlan.includeCoreTools,
         includeToolSearchControls: toolSearchControlsEnabledForRun,
         toolSearchCatalogExecutor: params.toolSearchCatalogExecutor,
