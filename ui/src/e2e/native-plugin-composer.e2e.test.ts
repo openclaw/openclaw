@@ -373,7 +373,7 @@ suite.define(() => {
 
   it("shows a chat's running task again when the user comes back", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const { gateway, textarea } = await open(page);
+      const { gateway } = await open(page);
       await page.getByRole("button", { name: "Resumable rewrite", exact: true }).click();
       const working = page.locator('.agent-chat__composer-task[data-state="working"]');
       await working.getByText("Resuming").waitFor();
