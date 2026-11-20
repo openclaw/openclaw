@@ -30,7 +30,7 @@ function systemMessages(request: unknown) {
 
 it.each([
   ["silent", 0],
-  ["text", 1],
+  ["text", 2],
   ["message-tool", 2],
 ] as const)("persists and delivers %s participation", async (mode, primaryRequests) => {
   await writeFile(
@@ -45,6 +45,9 @@ it.each([
   const onAbandoned = vi.fn();
   const messageToolOnly = mode === "message-tool";
   const text = "The TLS port is 443.";
+  if (mode === "text") {
+    fixture.respond(answer("NO_REPLY"));
+  }
   if (messageToolOnly) {
     fixture.respond(
       {

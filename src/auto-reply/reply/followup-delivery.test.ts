@@ -607,11 +607,15 @@ describe("resolveFollowupDeliveryDecision", () => {
     },
   );
 
-  it.each([false, true])(
-    "does not let private payloads settle an empty message-tool final (progress=%s)",
-    async (progress) => {
+  it.each([
+    ["required", false],
+    ["result-required", true],
+  ] as const)(
+    "does not let private payloads settle an empty %s message-tool final (progress=%s)",
+    async (expectation, progress) => {
       const turn = createTurn();
       turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+      turn.queued.run.terminalReplyExpectation = expectation;
       const text = "Private terminal diagnostic.";
       const execution = createSettledExecution();
       if (progress) {
