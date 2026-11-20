@@ -19,7 +19,6 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import "../../styles/chat/text.css";
@@ -100,23 +99,20 @@ export function SkillWorkshopView(props: { view: WorkshopView; reads: WorkshopRe
       },
     },
   );
-  // The list is the start page; a skill or draft opens as its own page over the same selection.
-  // A chat notice link (?skill=<name>) arrives for one skill, so it opens on that skill's page.
-  const [pageOpen, setPageOpen] = createSignal(
-    new URLSearchParams(useApplication().router.getState().location.search).has("skill"),
-  );
+  // The list is the start page; a skill or draft opens as its own page, named in the URL so
+  // Back returns to the list and a reload keeps the page.
   let panel: HTMLElement | undefined;
   const page: WorkshopPage = {
     // A row low in a long list opens its page from the top; the breadcrumb back is already there.
     open: () => {
-      setPageOpen(true);
+      props.view().onOpenPage();
       panel?.scrollIntoView({ block: "start", behavior: resolveScrollBehavior("auto") });
     },
-    close: () => setPageOpen(false),
+    close: () => props.view().onClosePage(),
   };
   // Without a selection (the last draft was discarded, another agent was picked) the list shows.
   const detail = () =>
-    pageOpen() && !props.view().plugin && props.view().snapshot && props.view().viewer;
+    props.view().pageOpen && !props.view().plugin && props.view().snapshot && props.view().viewer;
   return (
     <>
       <Show when={!detail()}>

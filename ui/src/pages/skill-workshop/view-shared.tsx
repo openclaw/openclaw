@@ -29,6 +29,10 @@ export type WorkshopView = () => {
   snapshot: WorkshopSnapshot | null;
   error: string | null;
   viewer: WorkshopViewer | null;
+  /** The URL names a skill or draft page (`?skill=` / `?draft=`). */
+  pageOpen: boolean;
+  onOpenPage: () => void;
+  onClosePage: () => void;
   filter: WorkshopFilter;
   sort: WorkshopSort;
   tab: WorkshopTab;
