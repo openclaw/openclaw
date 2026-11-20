@@ -19,7 +19,6 @@ import type {
   createGatewayCloseTestHandlerFactory,
   GatewayCloseParams,
 } from "./server-close.test-support.js";
-import { isGatewayCleanupRetainedError } from "./server-shutdown.js";
 
 type GatewayCloseHandler = ReturnType<ReturnType<typeof createGatewayCloseTestHandlerFactory>>;
 
@@ -99,20 +98,24 @@ export function registerGatewayResourceRetirementTests(
         restartExpectedMs: 1_500,
         exitAfterClose: true,
       });
-      const failure = closing.catch((error: unknown) => error);
+      let settled = false;
+      void closing.then(() => {
+        settled = true;
+      });
       await vi.advanceTimersByTimeAsync(5_000);
       expect(sharedStateLifecycle.has("open")).toBe(true);
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(isGatewayCleanupRetainedError(await failure)).toBe(true);
+      expect(settled).toBe(false);
       expect(stopChannel).toHaveBeenCalledWith("discord");
       expect(sharedStateLifecycle.has("open")).toBe(true);
       expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
       expect(getActivePluginRegistry()).toBe(registry);
       expect(stop).toHaveBeenCalledOnce();
       cleanup.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(sharedStateLifecycle.has("open")).toBe(true);
-      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
+      expect((await closing).warnings).toContain("plugin-services");
+      expect(sharedStateLifecycle.has("open")).toBe(false);
+      expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
+      expect(getActivePluginRegistry()).not.toBe(registry);
     } finally {
       cleanup.resolve();
       await Promise.allSettled([strictStopping, closing]);
@@ -132,9 +135,11 @@ export function registerGatewayResourceRetirementTests(
       const close = createGatewayCloseHandler({
         httpServer: { close: httpClose, closeIdleConnections: vi.fn() } as never,
       });
-      const closePromise = close({ reason: "test shutdown", exitAfterClose: true }).catch(
-        (error: unknown) => error,
-      );
+      const closePromise = close({ reason: "test shutdown", exitAfterClose: true });
+      let settled = false;
+      void closePromise.then(() => {
+        settled = true;
+      });
       try {
         if (label === "bundle-mcp") {
           await vi.advanceTimersByTimeAsync(0);
@@ -143,9 +148,9 @@ export function registerGatewayResourceRetirementTests(
             mocks.disposeAllBundleLspRuntimes.mock.invocationCallOrder[0]!,
           );
         }
-        // Disposal, the retained-work join, and the final cleanup join each have a grace.
+        // Independent teardown progresses, but the final barrier retains pending work.
         await vi.advanceTimersByTimeAsync(15_000);
-        expect(isGatewayCleanupRetainedError(await closePromise)).toBe(true);
+        expect(settled).toBe(false);
         expect(httpClose).toHaveBeenCalledOnce();
         expect(sharedStateLifecycle.has("open")).toBe(true);
         expect(mocks.closeProviderTransportDispatcherPool).not.toHaveBeenCalled();
@@ -153,7 +158,8 @@ export function registerGatewayResourceRetirementTests(
         cleanup.resolve();
         await closePromise;
       }
-      expect(mocks.closeProviderTransportDispatcherPool).not.toHaveBeenCalled();
+      expect(mocks.closeProviderTransportDispatcherPool).toHaveBeenCalledOnce();
+      expect(sharedStateLifecycle.has("open")).toBe(false);
     },
   );
 

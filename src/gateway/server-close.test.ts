@@ -39,6 +39,7 @@ import {
   firstMockCall,
 } from "./server-close.test-support.js";
 import { prepareGatewayRunShutdown } from "./server-run-shutdown.js";
+import { isGatewayCleanupRetainedError } from "./server-shutdown.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 const { mocks } = await vi.hoisted(() => import("./server-close.mocks.test-support.js"));
@@ -252,7 +253,12 @@ describe("createGatewayCloseHandler", () => {
           settled = true;
         });
         await Promise.resolve();
-        expect(settled).toBe(false);
+        // SDK draining remains bounded; earlier finalizers join the retirement barrier.
+        if (owner === "sdk") {
+          expect(isGatewayCleanupRetainedError(await closing)).toBe(true);
+        } else {
+          expect(settled).toBe(false);
+        }
         expect(database.db.isOpen).toBe(true);
         expect(sdkDatabase.isOpen).toBe(true);
         expect(preparedDatabase.isOpen).toBe(true);
@@ -260,7 +266,12 @@ describe("createGatewayCloseHandler", () => {
         expect(sharedStateLifecycle.has("open")).toBe(true);
         release.resolve();
         await finished.promise;
-        expect(await closing).toBeUndefined();
+        if (owner !== "sdk") {
+          expect(await closing).toEqual({
+            durationMs: expect.any(Number),
+            warnings: [owner === "harness" ? "agent-harnesses" : eventKey],
+          });
+        }
         expect(failures).toEqual([]);
         expect(reads).toEqual([{ value: 1 }]);
       } finally {
