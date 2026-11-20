@@ -42,7 +42,7 @@ import type {
 } from "./subagent-completion-mutation.types.js";
 
 export class SubagentCompletionSourceChangedError extends SubagentRegistryMutationRejectedError {}
-export class SubagentRequesterWakeProgressChangedError extends SubagentCompletionSourceChangedError {}
+class SubagentRequesterWakeProgressChangedError extends SubagentCompletionSourceChangedError {}
 
 type AdmissionReceipt =
   SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
