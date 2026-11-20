@@ -135,7 +135,7 @@ function DiscoveryRow(props: {
 /** Installed skills in one line: their marks, the section name and the first names. */
 function InstalledShelf(props: { entries: SkillDiscoveryEntry[]; onOpen: () => void }) {
   const marked = createMemo(() =>
-    [...props.entries].sort(
+    props.entries.toSorted(
       (left, right) => Number(Boolean(right.skill?.emoji)) - Number(Boolean(left.skill?.emoji)),
     ),
   );
