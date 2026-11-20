@@ -121,6 +121,36 @@ it.each(["failed", "succeeded"] as const)(
   },
 );
 
+it.each(["skipped", "failed", "succeeded"] as const)(
+  "selects the repair retry's prior update after a %s standalone repair",
+  (status) => {
+    const prior = ledger.createUpdateRun({ trigger: "cli" });
+    ledger.finishUpdateRun(prior.runId, { status: "failed", reason: "post-update-failed" });
+
+    vi.advanceTimersByTime(1);
+    const firstRepair = new UpdateFinalizationLifecycle(false, undefined, () => {});
+    const firstRepairId = firstRepair.attachLedger(true);
+    firstRepair.recordInstallKind("package");
+    ledger.finishUpdateRun(firstRepairId, {
+      status,
+      ...(status === "skipped" ? { reason: "doctor-maintenance-pending" } : {}),
+    });
+
+    vi.advanceTimersByTime(1);
+    const retry = new UpdateFinalizationLifecycle(false, undefined, () => {});
+    const repair = getUpdateRun(retry.attachLedger(true))!;
+    const link = repair.steps.find((step) => step.step === "finalize:repaired-run");
+    if (status === "succeeded") {
+      expect(link).toBeUndefined();
+    } else {
+      expect(link).toMatchObject({
+        status: "completed",
+        detail: `Update ${prior.runId} failed at requested: post-update-failed.`,
+      });
+    }
+  },
+);
+
 it("writes successful finalization progress to stderr and failures as errors", async () => {
   const info = vi.spyOn(getLogger(), "info");
   const warn = vi.spyOn(getLogger(), "warn");

@@ -119,6 +119,22 @@ it("labels standalone repair and leads with the update it repaired", () => {
   expect(report.lines[0]).toBe(`Repaired update: ${detail}`);
 });
 
+it("bounds the repaired update lead alongside long pending-repair guidance", () => {
+  const detail = "x".repeat(1024);
+  const report = render({
+    status: "skipped",
+    reason: "doctor-maintenance-pending",
+    origin: { nextAction: "Recovery instructions ".repeat(48) },
+    steps: [
+      { step: "repairing", status: "skipped" },
+      { step: "finalize:repaired-run", status: "completed", detail },
+    ],
+  });
+  expectChatBudget(report.markdown);
+  expectText(report.markdown, [report.headline, "Repaired update:"]);
+  expect(report.lines[0]).toBe(`Repaired update: ${detail}`);
+});
+
 it("reports repeated database-path advisories once across Doctor phases", () => {
   const detail =
     "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.";

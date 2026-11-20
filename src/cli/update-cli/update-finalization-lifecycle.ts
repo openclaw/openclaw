@@ -144,7 +144,9 @@ export class UpdateFinalizationLifecycle {
       // Keep the latest failed update visible after this repair becomes the newest run.
       const prior = listUpdateRuns({ limit: 8, excludeReason: "dry-run" }, this.ledgerOptions).find(
         (run) =>
-          run.runId !== this.runId && !run.steps.some((step) => step.step === "reconcile:settle"),
+          run.runId !== this.runId &&
+          !run.steps.some((step) => step.step === "reconcile:settle") &&
+          !(isUpdateRepairRun(run) && run.status !== "succeeded"),
       );
       if (prior?.status === "failed" && !isUpdateRepairRun(prior)) {
         recordUpdateRunStep(

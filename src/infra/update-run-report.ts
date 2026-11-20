@@ -583,12 +583,13 @@ export function renderUpdateRunReport(
   }
   const repairedDetail = run.steps.find((step) => step.step === UPDATE_RUN_REPAIRED_STEP)?.detail;
   const repaired = repairedDetail ? [`Repaired update: ${repairedDetail}`] : [];
+  const repairedLead = repaired.map((line) => bounded(line, 300));
   const next = hints.at(-1);
   if (refusalLine) {
     // The terminal shows only the instruction; the saved report keeps every detail.
     const details = ["Details:", `Reason code: ${reason}`, ...lines, ...hints].join("\n");
     const steps = refusalBlock?.slice(1) ?? [];
-    const lead = bounded([headline, ...repaired, ...steps].join("\n"), 1100);
+    const lead = bounded([headline, ...repairedLead, ...steps].join("\n"), 1100);
     return {
       headline,
       lines: [...repaired, ...steps],
@@ -604,7 +605,7 @@ export function renderUpdateRunReport(
       ...lines,
       ...hints.filter((line) => line !== next),
     ];
-    const lead = [headline, ...repaired, ...(next ? [bounded(next, 1100)] : []), ""].join("\n");
+    const lead = [headline, ...repairedLead, ...(next ? [bounded(next, 1100)] : []), ""].join("\n");
     return {
       headline,
       lines: [...repaired, ...(next ? [next, ""] : []), ...details],
