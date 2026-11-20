@@ -1465,12 +1465,11 @@ export async function createChangedCiLintPlan(
   const commands = createChangedCheckPlan(lintResult, { lintOnly: true }).commands;
   if (
     result.paths.some((file) => path.basename(file) === "package.json") ||
-    commands.some(({ args }) =>
-      ["lint", "lint:core", "lint:extensions", "lint:scripts"].includes(args[0] ?? ""),
-    )
+    commands.some(({ args }) => ["lint", "lint:core", "lint:extensions"].includes(args[0] ?? ""))
   ) {
     return null;
   }
+  const fullScripts = commands.some(({ args }) => args[0] === "lint:scripts");
   const { createOxlintShards, selectCoreOxlintStripe, selectExtensionOxlintStripe } =
     await import("./run-oxlint-shards.mts");
   const changedFiles = result.paths.filter((file) => /\.[cm]?[jt]sx?$/u.test(file));
@@ -1491,7 +1490,7 @@ export async function createChangedCiLintPlan(
     coreStripes: [],
     extensionStripes: [],
     groups: [],
-    fullGroups: [],
+    fullGroups: fullScripts ? ["scripts"] : [],
     central: true,
   };
   const core: { stripe: number; lint_selection_json: string }[] = [];
@@ -1565,6 +1564,10 @@ export async function createChangedCiLintPlan(
     if (selected.some((shard) => shard.name === "scripts")) {
       central.groups = ["scripts"];
     }
+  }
+  // Full scripts lint already owns these consumers; retain independent core and extension rows.
+  if (fullScripts) {
+    central.groups = central.groups.filter((group) => group !== "scripts");
   }
   central.files = filesFor(central.coreStripes, central.extensionStripes, central.groups);
   // Both workflow outputs and process arguments are bounded. A very broad

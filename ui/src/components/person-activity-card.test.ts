@@ -40,10 +40,13 @@ function session(key: string, updatedAt: number): GatewaySessionRow {
 }
 function data(sessions: GatewaySessionRow[]): PersonActivityData {
   return {
-    sessionsResult: {
-      ...createSessionsListResult({ defaultsModel: null }),
-      sessions,
-      count: sessions.length,
+    sessions: {
+      status: "ready",
+      result: {
+        ...createSessionsListResult({ defaultsModel: null }),
+        sessions,
+        count: sessions.length,
+      },
     },
     presencePayload: undefined,
   };
@@ -152,7 +155,9 @@ it("replaces a failed read without retaining its error or accepting an obsolete 
   flush();
   expect(container.getAttribute("aria-label")).toBe("Activity for Bob");
   expect(container.querySelector(".person-activity-card")).not.toBeNull();
-  expect(getQueriesForElement(container).queryByRole("status")).toBeNull();
+  expect(getQueriesForElement(container).getByRole("status").textContent).toBe(
+    "Recent sessions unavailable.",
+  );
 });
 
 it("exposes the activity link while presence is offline", () => {

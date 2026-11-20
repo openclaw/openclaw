@@ -28,6 +28,7 @@ import {
   GatewayOperatorAccessUnavailableError,
 } from "../infra/operator-authority-error.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import type { UserTurnInput } from "./user-turn-input.types.js";
 import {
   readPendingUserTurnTranscriptAdmission,
   readUserTurnRequesterOrigin,
@@ -37,7 +38,6 @@ import {
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
   resolvePersistedUserTurnText,
-  type UserTurnInput,
 } from "./user-turn-transcript.js";
 import {
   isUserMessage,

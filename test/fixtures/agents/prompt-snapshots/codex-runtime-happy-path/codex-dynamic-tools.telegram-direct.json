@@ -1720,13 +1720,15 @@
       },
       {
         "deferLoading": true,
-        "description": "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup.",
+        "description": "Read Gateway config/schema. Local profile roles: users.getRole; users.setRole assigns or clears (admin). Owner request/operator schedule: update.run, restart, update.cleanup.",
         "inputSchema": {
           "properties": {
             "action": {
               "enum": [
                 "config.get",
                 "config.schema.lookup",
+                "users.getRole",
+                "users.setRole",
                 "update.run",
                 "restart",
                 "update.cleanup"
@@ -1736,6 +1738,10 @@
             "dryRun": {
               "description": "update.cleanup only: preview without removing recovery copies.",
               "type": "boolean"
+            },
+            "email": {
+              "description": "users.getRole: exact email alias instead of profileId.",
+              "type": "string"
             },
             "gatewayToken": {
               "type": "string"
@@ -1750,6 +1756,22 @@
             "path": {
               "description": "Required for config.schema.lookup; optional for config.get.",
               "type": "string"
+            },
+            "profileId": {
+              "description": "Canonical target profile ID for users.getRole or users.setRole.",
+              "type": "string"
+            },
+            "role": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "users.setRole: configured role name, or explicit null to clear the assignment."
             },
             "timeoutMs": {
               "minimum": 1,

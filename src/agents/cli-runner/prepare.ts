@@ -126,7 +126,7 @@ import {
   unsupportedIsolatedCompletionError,
 } from "./execution-target.js";
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
-import { replayableTarget, prepareCliHistoryBoundary } from "./history-boundary.js";
+import { admitCliHistoryAccount } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
 import { prepareCliLoopbackBundleMcp } from "./loopback-bundle-mcp.js";
 import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
@@ -1384,14 +1384,13 @@ async function prepareCliRunContextWithinReadFence(
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
     const historyParams = (params = await admitCliRunParams(params, workspaceResolution.agentId));
     const historyIdentity = { credential: authCredential, preparedBackend: preparedBackendFinal };
-    const cliHistoryWriter = !isSideQuestion
-      ? await prepareCliHistoryBoundary(historyParams, historyIdentity)
+    const cliHistoryAdmission = !isSideQuestion
+      ? await admitCliHistoryAccount(historyParams, historyIdentity)
       : undefined;
-    // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
-    // Native compatibility and transcript account ownership are independent gates.
-    // A session-less backend starts every turn fresh, so the account-owned transcript is
-    // its only continuity; the backend's raw-reseed opt-in still decides delivery.
-    const rawTranscriptReseedReason = !(params.sessionManager || replayableTarget(cliHistoryWriter))
+    // Saved history replays unless another account already ran this session. Caller-owned
+    // memory cannot authorize durable history; a session-less backend's only continuity is
+    // the session transcript, and its raw-reseed opt-in still decides delivery.
+    const rawTranscriptReseedReason = !(params.sessionManager || cliHistoryAdmission?.target)
       ? "auth-unknown"
       : reusableCliSessionId
         ? "session-expired"
@@ -1506,7 +1505,7 @@ async function prepareCliRunContextWithinReadFence(
           ...(params.runtimeContextFragments ?? []),
           ...(finalizedRuntimeContext ?? []),
         ],
-        sessionTarget: params.isolatedCompletion ? undefined : replayableTarget(cliHistoryWriter),
+        sessionTarget: params.isolatedCompletion ? undefined : cliHistoryAdmission?.target,
         context: [promptBuildHookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
       }));
       params.assertCurrent?.();
@@ -1592,7 +1591,7 @@ async function prepareCliRunContextWithinReadFence(
       systemPrompt,
       systemPromptReport,
       claudeSkillsPlugin,
-      ...(cliHistoryWriter ? { cliHistoryWriter } : {}),
+      ...(cliHistoryAdmission ? { cliHistoryAdmission } : {}),
       resumeContext: sessionPromptContext?.resumeContext,
       transcriptCursor: sessionPromptContext?.transcriptCursor,
       authEpoch,

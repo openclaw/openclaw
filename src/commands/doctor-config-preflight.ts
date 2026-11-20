@@ -137,7 +137,7 @@ async function runDoctorConfigPreflightOperation(
     stateMigrationUnsettled ||=
       result.outcome === "deferred" ||
       (result.warnings.length > 0 && result.warningDisposition !== "recoverable");
-    pluginMigrations.observe(result);
+    pluginMigrations.observe(result, configSnapshotRead?.pluginMetadataSnapshot);
     noteDoctorMigrationResult(result, { prefix: "- " });
   };
   // One preflight owns completion; each read still checks the current update phase.

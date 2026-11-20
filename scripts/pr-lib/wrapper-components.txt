@@ -1726,6 +1726,7 @@ src/plugins/installed-plugin-package-ownership.ts
 src/plugins/installed-plugin-record-match.ts
 src/plugins/jiti-factory.ts
 src/plugins/loader-cache-state.ts
+src/plugins/loader-registration-config.ts
 src/plugins/managed-npm-retention-contract.ts
 src/plugins/managed-npm-retention.ts
 src/plugins/management-lifecycle-error.ts
@@ -1938,6 +1939,7 @@ src/process/exec-termination.ts
 src/process/exec.ts
 src/process/gateway-work-admission-state.ts
 src/process/gateway-work-admission.ts
+src/process/idle-io-priority.ts
 src/process/kill-tree.ts
 src/process/linux-core-dump.ts
 src/process/linux-exec-cgroup-device.ts

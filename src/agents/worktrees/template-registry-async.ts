@@ -128,10 +128,12 @@ async function runTemplateReadCommand<
   source.assertCurrent();
   const reply = await readWorktreeRegistryCommand(
     context,
-    command({
-      workspaceEvidence: source.workspaceEvidence,
-      stateOwnerPath: source.stateOwnerPath,
-    }),
+    command(
+      structuredClone({
+        workspaceEvidence: source.workspaceEvidence,
+        stateOwnerPath: source.stateOwnerPath,
+      }),
+    ),
     workerAuthority?.signal,
   );
   source.assertCurrent();

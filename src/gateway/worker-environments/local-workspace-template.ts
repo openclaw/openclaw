@@ -79,6 +79,7 @@ async function validateTemplate(
     directory,
     true,
     {
+      idleIoPriority: guard.idleIoPriority,
       signal: guard.signal,
       beforeRun: guard.commitGuard,
       stateOwnerPath: guard.workerAuthority?.stateOwnerPath,
@@ -96,6 +97,7 @@ async function validateTemplate(
           "--ignored=matching",
         ],
         {
+          idleIoPriority: guard.idleIoPriority,
           signal: guard.signal,
           beforeRun: guard.commitGuard,
           stateOwnerPath: guard.workerAuthority?.stateOwnerPath,
@@ -161,12 +163,12 @@ type LocalWorkspaceTemplateParams = {
   backgroundUsedAt?: number;
   buildCacheInputs?: string[];
   guard: Pick<WorktreeAllocationGuard, "commitGuard" | "rollbackGuard" | "requireDiskSpace"> &
-    Pick<WorktreeFilesystemOptions, "workerAuthority"> & {
+    Pick<WorktreeFilesystemOptions, "workerAuthority" | "idleIoPriority"> & {
       signal: AbortSignal;
     };
 };
 
-export function sandboxTemplateCacheKey(commonDir: string, templateRoot: string, identity: string) {
+function sandboxTemplateCacheKey(commonDir: string, templateRoot: string, identity: string) {
   return digest(`sandbox-v1\n${commonDir}\n${templateRoot}\n${identity}`);
 }
 
@@ -206,6 +208,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
               previous: prior && changedPaths ? { ...prior, changedPaths } : undefined,
             },
             options.signal,
+            guard.idleIoPriority,
           ),
         );
       },
@@ -218,6 +221,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     return undefined;
   }
   const gitOptions = {
+    idleIoPriority: guard.idleIoPriority,
     signal: guard.signal,
     beforeRun: guard.commitGuard,
     stateOwnerPath: guard.workerAuthority?.stateOwnerPath,
@@ -273,6 +277,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
         signal: templateGuard.signal,
         assertCurrent: templateGuard.commitGuard,
         workerAuthority: templateGuard.workerAuthority,
+        idleIoPriority: templateGuard.idleIoPriority,
       }),
     );
   };
@@ -294,6 +299,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
       // Refreshes retain the template row, but must not reuse its retired builder.
       scopeKey: randomUUID(),
       identity,
+      idleIoPriority: templateGuard.idleIoPriority,
       signal: templateGuard.signal,
       assertCurrent: templateGuard.commitGuard,
       rollbackGuard: templateOptions.rollbackGuard,
