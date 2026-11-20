@@ -262,7 +262,7 @@ it("rechecks retained file links when read permissions change, ignoring old answ
     const { retireSessionWorkspaceCheckout } =
       await import("../pages/chat/components/chat-session-workspace-state.ts");
     show(false);
-    await flush();
+    flush();
     retireSessionWorkspaceCheckout(state);
     workspace = state.sessionWorkspaceState!;
     statFiles.mockImplementation(async () => ({
