@@ -46,7 +46,10 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
   return {
     ...operations,
     writeFile: async (absolutePath: string, content: string, signal?: AbortSignal) => {
-      const commit = () => operations.writeFile(absolutePath, content, signal);
+      const commit = () => {
+        signal?.throwIfAborted();
+        return operations.writeFile(absolutePath, content, signal);
+      };
       if (!(await observer.classifies(absolutePath))) {
         await commit();
         return;

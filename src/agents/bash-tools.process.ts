@@ -597,6 +597,7 @@ export function createProcessTool(
           }
           await writeProcessStdin(stdin, payload);
           if (inputAction === "write" && params.eof) {
+            signal?.throwIfAborted();
             stdin.end();
           }
           const text =
