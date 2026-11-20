@@ -577,6 +577,9 @@ export async function consultRealtimeVoiceAgent(params: {
               provider: params.provider,
               model: params.model,
               thinkingOnce: params.thinkLevel,
+              // Bridges pick a level for every model ("off" for FaceTime); like the embedded
+              // runner, a model without that level runs at its closest one instead of failing.
+              thinkingOnceClosest: true,
               fastMode: params.fastMode,
               // Speech needs no run diagnostics; the session keeps its saved verbose level.
               verboseOnce: "off",

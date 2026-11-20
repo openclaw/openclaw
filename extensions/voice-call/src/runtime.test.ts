@@ -504,6 +504,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       provider: undefined,
       model: undefined,
       thinkingOnce: "ultra",
+      thinkingOnceClosest: true,
       fastMode: true,
       deliver: false,
     });

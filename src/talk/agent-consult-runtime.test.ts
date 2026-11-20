@@ -381,6 +381,7 @@ describe("realtime voice agent consult runtime", () => {
       provider: undefined,
       model: undefined,
       thinkingOnce: undefined,
+      thinkingOnceClosest: true,
       fastMode: true,
       verboseOnce: "off",
       timeout: "10",

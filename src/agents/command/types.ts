@@ -78,6 +78,8 @@ export type AgentCommandOpts = {
   sessionKey?: string;
   thinking?: string;
   thinkingOnce?: string;
+  /** With `thinkingOnce`: run an unsupported level at the closest supported one instead of failing. */
+  thinkingOnceClosest?: boolean;
   verbose?: string;
   /** Verbose level for this run only; unlike `verbose`, never saved to the session. */
   verboseOnce?: string;

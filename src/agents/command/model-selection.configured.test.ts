@@ -211,10 +211,12 @@ describe("command selection with configured model facts", () => {
     { previous: "max", observed: null, configured: undefined, supported: false },
     { previous: null, observed: "max", configured: null, supported: false },
     { previous: "max", observed: null, configured: "max", supported: true },
+    // A one-run level the caller allows to clamp (realtime voice consults) runs at the closest.
+    { previous: "max", observed: null, configured: undefined, supported: true, closest: true },
     { previous: "max", observed: undefined, configured: undefined, supported: true },
   ])(
     "prefers observed max support ($supported) to stale facts",
-    async ({ previous, observed, configured, supported }) => {
+    async ({ previous, observed, configured, supported, closest }) => {
       const fixture = createFixture();
       fixture.custom.models.forEach((model) => {
         model.reasoning = true;
@@ -233,6 +235,7 @@ describe("command selection with configured model facts", () => {
         observed === undefined ? [] : [{ ...stale, thinkingLevelMap: { max: observed } }],
       );
       const selection = fixture.select({
+        opts: { message: "Select max", allowModelOverride: false, thinkingOnceClosest: closest },
         configuredThinkingCatalog: [stale],
         requestedThinkLevel: "max",
         thinkOnce: "max",
