@@ -202,6 +202,8 @@ describeControlUiE2e("Chat plugin installation status", () => {
             const authorBox = author.getBoundingClientRect();
             const badgeBox = badge.getBoundingClientRect();
             return {
+              width: element.getBoundingClientRect().width,
+              height: element.getBoundingClientRect().height,
               padding: Number.parseFloat(style.paddingTop),
               buttonPadding: Number.parseFloat(buttonStyle.paddingInlineStart),
               buttonHeight: button.getBoundingClientRect().height,
@@ -213,6 +215,10 @@ describeControlUiE2e("Chat plugin installation status", () => {
               overflow: element.scrollWidth > element.clientWidth,
             };
           });
+          if (width >= 768) {
+            expect(metrics.width).toBeLessThanOrEqual(395);
+            expect(metrics.height).toBeLessThanOrEqual(65);
+          }
           expect(metrics.padding).toBeLessThanOrEqual(16);
           expect(metrics.buttonPadding).toBeLessThanOrEqual(12);
           // Browser geometry can round CSS dimensions a few millionths below their size.
@@ -337,7 +343,7 @@ describeControlUiE2e("Chat plugin installation status", () => {
           await surface
             .locator(".chat-clawhub-card")
             .evaluate((element) => getComputedStyle(element).borderRadius),
-        ).toBe("27px");
+        ).toBe("15px");
         const width = (await surface.boundingBox())!.width;
         desktopWidth ??= width;
         expect(width).toBe(desktopWidth);
@@ -404,10 +410,13 @@ describeControlUiE2e("Chat plugin installation status", () => {
             await surface
               .locator(".chat-clawhub-card")
               .evaluate((element) => getComputedStyle(element).borderRadius),
-          ).toBe("20px");
+          ).toBe("15px");
           const identity = await surface.locator(".chat-clawhub-card__listing").boundingBox();
           const actions = await surface.locator(".chat-clawhub-card__actions").boundingBox();
-          expect(actions!.y).toBeGreaterThanOrEqual(identity!.y + identity!.height);
+          expect(
+            actions!.x >= identity!.x + identity!.width ||
+              actions!.y >= identity!.y + identity!.height,
+          ).toBe(true);
           if (artifactDir) {
             const frame = await takeControlUiScreenshotFrame(
               page,

@@ -437,7 +437,7 @@ export const skillsLibraryHandlers: GatewayRequestHandlers = {
         const listed = await access.read("list", {});
         const result = projectSkillLibraryList(listed.value, params);
         if (session) {
-          const pins = session.target.entry.skillLibrarySelections ?? [];
+          const pins = structuredClone(session.target.entry.skillLibrarySelections ?? []);
           const selected = await access.read("pins", pins);
           listed.assertCurrent();
           selected.assertCurrent();

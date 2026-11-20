@@ -189,6 +189,7 @@ it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
         reconnectIfIdle: true,
         ...(idleMs >= 1000 ? { validateIfIdle: true } : {}),
         id: 3,
+        deadlineMs: 120_000,
       },
       {
         operation: "query",
@@ -197,6 +198,7 @@ it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
         parameters: [],
         reconnectIfIdle: true,
         id: 4,
+        deadlineMs: 120_000,
       },
     ]);
   } finally {
@@ -244,7 +246,7 @@ it("checks transport status after a query error instead of reusing an earlier id
     fixture.sent.mockClear();
     fixture.db.releaseIdleTransport();
     expect(fixture.sent.mock.calls.map(([request]) => request)).toEqual([
-      { operation: "release", id: 4 },
+      { operation: "release", id: 4, deadlineMs: 120_000 },
     ]);
   } finally {
     vi.advanceTimersByTime(3 * 60_000);
