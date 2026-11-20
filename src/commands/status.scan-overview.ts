@@ -57,6 +57,7 @@ export type StatusScanOverviewResult = {
         | "pluginReload"
         | "sqliteWal"
         | "databaseStores"
+        | "resources"
       > &
         Partial<Pick<StatusSummary, "heartbeat">>)
     | null;
@@ -256,6 +257,7 @@ export async function collectStatusScanOverview(params: {
           ...(params.opts.deep && status.childRuntime ? { childRuntime: status.childRuntime } : {}),
           secretEgressProxy: status.secretEgressProxy,
           pluginReload: status.pluginReload,
+          resources: status.resources,
           sqliteWal: status.sqliteWal,
           ...(status.databaseStores ? { databaseStores: status.databaseStores } : {}),
           // The Gateway owns route readiness; CLI channel runtimes stay unloaded.
