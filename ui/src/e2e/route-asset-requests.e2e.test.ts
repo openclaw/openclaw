@@ -168,7 +168,9 @@ suite.define(() => {
             const dialog = page.locator("openclaw-modal-dialog .skill-reader-dialog");
             await dialog.waitFor({ state: "visible" });
             expect(await dialog.locator(".oc-dialog__title").textContent()).toBe("Data skill 0999");
-            await dialog.getByRole("heading", { name: "Data skill 0999 instructions", exact: true }).waitFor();
+            await dialog
+              .getByRole("heading", { name: "Data skill 0999 instructions", exact: true })
+              .waitFor();
           } finally {
             held.release();
           }

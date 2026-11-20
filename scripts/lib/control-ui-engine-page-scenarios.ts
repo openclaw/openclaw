@@ -35,7 +35,7 @@ import {
 } from "../../ui/src/test-helpers/transcripts.test-support.ts";
 import { parityBaseScenario, parityWorkboardScenario } from "../control-ui-parity/fixtures.ts";
 import { dataActivityScenarios } from "./control-ui-data-activity-scenarios.ts";
-import { dataCatalogScenarios } from "./control-ui-data-catalog-scenarios.ts";
+import { dataCatalogScenarios, dataCatalogSkillCard } from "./control-ui-data-catalog-scenarios.ts";
 import {
   engineProbeInitScript,
   waitForEngineTranscript,
@@ -1397,6 +1397,7 @@ function createPageFixture(
           "skills.workshop.list",
           "skills.workshop.changes",
           "skills.workshop.read",
+          ...(id === "skills" ? ["skills.skillCard"] : []),
           "skills.search",
           "secrets.store.set",
           "users.setDisplayName",
@@ -1522,6 +1523,18 @@ function createPageFixture(
           content: "# Census skill\n\nReview source and verify behavior.\n",
           files: ["SKILL.md"],
         },
+        ...(id === "skills"
+          ? {
+              "skills.skillCard": {
+                cases: [
+                  {
+                    match: { skillKey: dataCatalogSkillCard.skillKey },
+                    response: dataCatalogSkillCard,
+                  },
+                ],
+              },
+            }
+          : {}),
         "skills.search":
           id === "skills"
             ? {
