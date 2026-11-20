@@ -122,6 +122,13 @@ describe("CORE_HEALTH_CHECKS", () => {
       configChecks: [],
       install: [],
     };
+    const mixedRequirements = {
+      bins: [],
+      anyBins: ["alpha", "beta"],
+      env: ["API_KEY"],
+      config: [],
+      os: [],
+    };
     const unavailable = [
       {
         ...baseSkill,
@@ -129,6 +136,13 @@ describe("CORE_HEALTH_CHECKS", () => {
         skillKey: "bin-gap",
         missing: { bins: ["ffmpeg"], anyBins: [], env: [], config: [], os: [] },
         requirements: { bins: ["ffmpeg"], anyBins: [], env: [], config: [], os: [] },
+      },
+      {
+        ...baseSkill,
+        name: "mixed-gap",
+        skillKey: "mixed-gap",
+        missing: mixedRequirements,
+        requirements: mixedRequirements,
       },
       {
         ...baseSkill,
@@ -150,7 +164,14 @@ describe("CORE_HEALTH_CHECKS", () => {
     const envFinding = findings.find(
       (finding) => finding.path === "skills.entries.env-gap.enabled",
     );
-    expect(binFinding?.fixHint).toMatch(/Install\/configure the missing binary/);
+    const mixedFinding = findings.find(
+      (finding) => finding.path === "skills.entries.mixed-gap.enabled",
+    );
+    expect(mixedFinding?.message).toContain("any bins: alpha, beta; env: API_KEY");
+    expect(mixedFinding?.fixHint).toContain("Satisfy the listed requirements");
+    expect(mixedFinding?.fixHint).toContain("skills.entries.mixed-gap.enabled to false");
+    expect(mixedFinding?.fixHint).not.toContain("doctor --fix");
+    expect(binFinding?.fixHint).toContain("paired node");
     expect(binFinding?.fixHint).not.toContain("doctor --fix");
     expect(binFinding?.fixHint).toContain("skills.entries.bin-gap.enabled");
     expect(binFinding?.fixHint).not.toMatch(/allowlist/);

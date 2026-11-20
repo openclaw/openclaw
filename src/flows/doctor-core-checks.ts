@@ -546,8 +546,8 @@ function unavailableSkillToFinding(skill: SkillStatusEntry): HealthFinding {
     message: `${skill.name} is allowed but unavailable: ${formatMissingSkillSummary(skill)}.`,
     path: skillReadinessPath(skill),
     fixHint: missingBinary
-      ? `Install/configure the missing binary, or disable the skill by setting ${skillReadinessPath(skill)} to false (missing local binaries stay enabled in case a paired node provides them).`
-      : "Install/configure the missing requirement, or run `openclaw doctor --fix` to disable unused unavailable skills.",
+      ? `Satisfy the listed requirements, or disable the skill by setting ${skillReadinessPath(skill)} to false. Doctor leaves the skill enabled because a paired node may provide the missing binaries.`
+      : "Satisfy the listed requirements, or run `openclaw doctor --fix` to disable unused unavailable skills.",
   };
 }
 
