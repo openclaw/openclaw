@@ -208,7 +208,6 @@ export const databaseWorkerCoreTestFiles = [
   "packages/memory-host-sdk/src/host/memory-schema-admission.test.ts",
   "src/agents/command-runtime.incognito.test.ts",
   "src/agents/runtime-recovery.incognito.test.ts",
-  "src/agents/cli-runner/history-boundary.incognito.test.ts",
   "src/agents/sandbox/runtime-status.incognito.test.ts",
   "src/agents/harness/execution-environment.worker.test.ts",
   "src/agents/harness/host-capability.node-authority.test.ts",
