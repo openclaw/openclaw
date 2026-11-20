@@ -137,7 +137,9 @@ export async function admitCliHistoryAccount(
           ? current.cliHistoryBoundary
           : undefined;
       const recorded = isKnownCliHistoryBoundary(stored) ? stored.authFingerprint : undefined;
-      const mixed = stored?.state === "mixed";
+      // Older releases wrote `unknown` for any history they could not prove, including a
+      // real account switch, so it keeps refusing like `mixed`.
+      const mixed = stored !== undefined && !isKnownCliHistoryBoundary(stored);
       replaysHistory = !mixed && (recorded === undefined || recorded === accountFingerprint);
       const next: CliHistoryBoundary | undefined = mixed
         ? undefined

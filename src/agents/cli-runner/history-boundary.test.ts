@@ -123,6 +123,17 @@ describe("CLI history account", () => {
     expect(await session.turn(key("account-b"), next)).toContain("fresh canary");
   });
 
+  it("keeps refusing a legacy record that could hide an account switch", async () => {
+    const session = await createSession();
+    session.say("A private canary");
+    await upsertSessionEntryCore(session.target, {
+      sessionId: session.target.sessionId,
+      updatedAt: 3,
+      cliHistoryBoundary: { version: 1, sessionId: session.target.sessionId, state: "unknown" },
+    });
+    expect(await session.turn(key("account-c"))).not.toContain("A private canary");
+  });
+
   it("distinguishes named OAuth accounts from identity-less rotating tokens", async () => {
     const oauth = (accountId?: string, access = "access-1"): AuthProfileCredential => ({
       type: "oauth",
