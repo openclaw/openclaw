@@ -221,18 +221,18 @@ export function LifecycleOperations(props: {
           aria-label={label()}
           onClick={() => first().options.onToggleToolExpanded?.(disclosureId(), expanded())}
         />
-        <span class="chat-tool-msg-summary__icon" aria-hidden="true">
-          <Show
-            when={
-              unnamedLabel() ||
-              !entries()
-                .slice(0, 2)
-                .some((entry) => entry.key)
-            }
-          >
+        <Show
+          when={
+            unnamedLabel() ||
+            !entries()
+              .slice(0, 2)
+              .some((entry) => entry.key)
+          }
+        >
+          <span class="chat-tool-msg-summary__icon" aria-hidden="true">
             <Icon name="bot" />
-          </Show>
-        </span>
+          </span>
+        </Show>
         <span class="chat-tool-disclosure__content">
           <Show
             when={!unnamedLabel()}

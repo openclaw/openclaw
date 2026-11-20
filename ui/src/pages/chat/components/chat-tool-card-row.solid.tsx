@@ -255,14 +255,13 @@ export function ToolCardRow(props: ToolCardProps) {
   const toggle = () => props.options.onToggleExpanded(card().id);
   const rowContent = () => (
     <>
-      <span
-        class="chat-tool-msg-summary__icon"
-        role="img"
-        aria-label={display().name}
-        aria-hidden={hasSubagentAvatar() ? "true" : undefined}
-        title={hasSubagentAvatar() ? undefined : display().name}
-      >
-        <Show when={!hasSubagentAvatar()}>
+      <Show when={!hasSubagentAvatar()}>
+        <span
+          class="chat-tool-msg-summary__icon"
+          role="img"
+          aria-label={display().name}
+          title={display().name}
+        >
           <ToolIcon
             name={
               readSubagentCancellation(card())
@@ -271,8 +270,8 @@ export function ToolCardRow(props: ToolCardProps) {
             }
             tool={{ toolName: display().name, pluginToolIcons: props.options.pluginToolIcons }}
           />
-        </Show>
-      </span>
+        </span>
+      </Show>
       <span ref={(element) => (disclosureContent = element)} class="chat-tool-disclosure__content">
         <Show
           when={launch()}
