@@ -16,6 +16,8 @@ suite.define(() => {
   it("waits for personal library knowledge and preserves error and reload recovery", () =>
     suite.withPage({ viewport: { width: 1280, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        // This scenario observes the page while its initial library read is still pending.
+        awaitInitialRoster: false,
         deferredMethods: ["skills.library.list", "skills.search"],
         methodResponses: {
           "skills.status": {
