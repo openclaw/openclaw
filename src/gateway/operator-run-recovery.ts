@@ -32,6 +32,7 @@ import {
   bindGatewayDeviceRevocation,
   captureGatewayDeviceRevocation,
   readGatewayDeviceRevocationGuard,
+  retainGatewayDeviceRevocationIndex,
 } from "./device-revocation.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
@@ -591,19 +592,14 @@ export async function captureGatewayOperatorContinuation(
     // One origin keeps one comparable source identity, as completion batches require.
     source: inherited.source,
     scopes: intersectOperatorScopes(restored.authority.scopes, input.client?.connect.scopes ?? []),
-    // Every hold keeps the origin's device revocation indexed after the origin request ends.
+    // Every hold keeps the origin's device revocation indexed, not its ended request lifetime.
     retain: () => {
       const releaseRestored = restored.authority.retain?.();
-      try {
-        const releaseOrigin = inherited.retain?.();
-        return () => {
-          releaseRestored?.();
-          releaseOrigin?.();
-        };
-      } catch (error) {
+      const releaseOrigin = retainGatewayDeviceRevocationIndex(inherited.assertCurrent);
+      return () => {
         releaseRestored?.();
-        throw error;
-      }
+        releaseOrigin?.();
+      };
     },
     // A tokenless snapshot carries no device; a start checks the origin's revocation, not its liveness.
     reauthorize: () => {

@@ -91,12 +91,13 @@ function acceptedCaller(fixture: RecoveryFixture) {
   };
   return {
     ...caller,
-    capture: () =>
+    capture: (invocationAuthority?: { assertCurrent: () => void }) =>
       captureGatewayOperatorRunAuthority({
         client: captureAgentTurnPrincipal(fixture.client),
         context: fixture.context,
         sourceAuthority: null,
         hasCurrentClientAuthority: caller.isCurrent,
+        invocationAuthority,
       }),
   };
 }
@@ -579,7 +580,11 @@ describe("scheduled authenticated operator source", () => {
           const connection = new AbortController();
           Object.assign(fixture.client, { connectionSignal: connection.signal });
           const caller = acceptedCaller(fixture);
-          const captured = expectDefined(await caller.capture(), "accepted source");
+          const parent = new AbortController();
+          const captured = expectDefined(
+            await caller.capture({ assertCurrent: () => parent.signal.throwIfAborted() }),
+            "accepted source",
+          );
           expectDefined(fixture.client.internal, "authenticated client").operatorRunAuthority =
             captured.authority;
           const continuation = expectDefined(
@@ -589,7 +594,7 @@ describe("scheduled authenticated operator source", () => {
             }),
             "detached continuation",
           );
-          const releaseRetained = expectDefined(continuation.authority.retain, "retain")();
+          let releaseRetained = expectDefined(continuation.authority.retain, "retain")();
           try {
             expect(continuation.authority.recoverySnapshot?.device).toBeUndefined();
             // The original request, its closure and its connection all end before replay.
@@ -597,6 +602,11 @@ describe("scheduled authenticated operator source", () => {
             captured.release();
             caller.release();
             connection.abort(new Error("Original socket closed"));
+            // The parent invocation is obsolete; a detached child still takes new holds.
+            parent.abort(new Error("Parent chat was edited"));
+            const releaseNext = expectDefined(continuation.authority.retain, "retain")();
+            releaseRetained();
+            releaseRetained = releaseNext;
             const replay = expectDefined(continuation.authority.reauthorize, "replay admission");
             if (change === "allowed") {
               expect(replay).not.toThrow();
