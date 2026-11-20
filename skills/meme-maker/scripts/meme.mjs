@@ -259,18 +259,19 @@ function defaultBoxes(count) {
 }
 
 async function renderLocal(template, texts, flags) {
+  const boxes = template.boxes?.length ? template.boxes : defaultBoxes(texts.length);
+  if (texts.length > boxes.length) {
+    throw new Error(
+      `${template.name} has ${boxes.length} caption boxes, but got ${texts.length} captions. Remove extra --text arguments.`,
+    );
+  }
   const { buffer } = await cachedTemplateImage(template);
   const imageMime = mimeFromExt(extFromUrl(template.imageUrl));
   const imageData = `data:${imageMime};base64,${buffer.toString("base64")}`;
-  const boxes = template.boxes?.length
-    ? template.boxes
-    : defaultBoxes(texts.length || template.fields.length);
   const width = Number(template.width);
   const height = Number(template.height);
   const textNodes = texts
-    .map((text, index) =>
-      textSvg(text, boxes[index] ?? boxes[boxes.length - 1], width, height, index),
-    )
+    .map((text, index) => textSvg(text, boxes[index], width, height, index))
     .join("\n");
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
   <style>
