@@ -36,6 +36,7 @@ export type {
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
   RealtimeVoiceToolResultOptions,
+  RealtimeVoiceUsageReport,
 } from "../talk/provider-types.js";
 export {
   normalizeRealtimeVoiceResponseOutcome,

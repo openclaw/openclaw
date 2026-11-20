@@ -1,6 +1,9 @@
 import { createServer } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { RealtimeVoiceResponseOutcome } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceResponseOutcome,
+  RealtimeVoiceUsageReport,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { describe, expect, it } from "vitest";
 import type WebSocket from "ws";
@@ -31,6 +34,7 @@ async function capture(
   const errors: string[] = [];
   const events: string[] = [];
   const outcomes: RealtimeVoiceResponseOutcome[] = [];
+  const usages: RealtimeVoiceUsageReport[] = [];
   const tools: Array<{ itemId: string; callId: string; name: string; args: unknown }> = [];
   const responseCreated = createDeferred<void>();
   const terminalProcessed = createDeferred<void>();
@@ -63,7 +67,7 @@ async function capture(
   });
   const port = await listenOnLoopback(server);
   const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
-    providerConfig: { apiKey: "fixture-value", azureEndpoint: `http://127.0.0.1:${port}` },
+    providerConfig: { apiKey: "fixture-value", baseUrl: `ws://127.0.0.1:${port}` },
     onAudio() {},
     onClearAudio() {},
     onError: (error) => errors.push(error.message),
@@ -77,6 +81,7 @@ async function capture(
         throw new Error("consumer callback failed");
       }
     },
+    onUsage: (usage) => usages.push(usage),
     onToolCall: (tool) => {
       tools.push(tool);
       events.push(`tool:${tool.callId}`);
@@ -110,7 +115,15 @@ async function capture(
     if (options.completeFollowup) {
       await waitFor(followupCompleted.promise, "completed follow-up");
     }
-    return { clientEvents, errors, events, outcomes, tools, connected: bridge.isConnected() };
+    return {
+      clientEvents,
+      errors,
+      events,
+      outcomes,
+      tools,
+      usages,
+      connected: bridge.isConnected(),
+    };
   } finally {
     await bridge.close();
     for (const socket of wss.clients) {
@@ -158,7 +171,13 @@ describe("OpenAI realtime terminal response ownership", () => {
         done({ status, status_details, output: status === "completed" ? [] : [completedTool] }),
         { queueFollowup: true },
       );
-      expect(actual).toEqual({ errors: [], outcomes: [expected], tools: [], connected: true });
+      expect(actual).toEqual({
+        errors: [],
+        outcomes: [expected],
+        tools: [],
+        usages: [],
+        connected: true,
+      });
       expect(clientEvents.filter((type) => type === "response.create")).toHaveLength(1);
       expect(events.indexOf(`outcome:${expected.status}`)).toBeLessThan(
         events.indexOf("server:response.done"),
@@ -195,4 +214,35 @@ describe("OpenAI realtime terminal response ownership", () => {
     expect(captured.clientEvents.filter((type) => type === "response.create")).toHaveLength(1);
     expect(captured.connected).toBe(true);
   });
+
+  it.each(["completed", "cancelled"] as const)(
+    "reports %s response usage once with its modality split",
+    async (status) => {
+      const usage = {
+        total_tokens: 1_900,
+        input_tokens: 1_500,
+        output_tokens: 400,
+        input_token_details: {
+          text_tokens: 700,
+          audio_tokens: 750,
+          image_tokens: 50,
+          cached_tokens: 600,
+          cached_tokens_details: { text_tokens: 400, audio_tokens: 200, image_tokens: 0 },
+        },
+        output_token_details: { text_tokens: 100, audio_tokens: 300 },
+      };
+      const captured = await capture(done({ status, output: [], usage }));
+      expect(captured.usages).toEqual([
+        {
+          provider: "openai",
+          model: "gpt-realtime-2.1",
+          responseId,
+          status,
+          input: { text: 700, audio: 750, image: 50 },
+          cachedInput: { text: 400, audio: 200, image: 0 },
+          output: { text: 100, audio: 300 },
+        },
+      ]);
+    },
+  );
 });

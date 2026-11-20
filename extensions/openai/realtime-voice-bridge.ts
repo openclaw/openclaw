@@ -41,6 +41,7 @@ import {
   type OpenAIRealtimeVoiceBridgeConfig,
   type RealtimeEvent,
 } from "./realtime-voice-session-policy.js";
+import { readOpenAIRealtimeUsage } from "./realtime-voice-usage.js";
 
 const OPENAI_REALTIME_MAX_BUFFERED_AUDIO_BYTES = 1024 * 1024;
 const OPENAI_REALTIME_AUDIO_DROP_WARN_INTERVAL_MS = 5_000;
@@ -673,6 +674,18 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
       providerTerminated = this.handleCompletedResponse(event, connection);
       this.config.onResponseDone?.(outcome);
       emitServerEvent();
+      // Stale-connection and cancelled responses are billed too, so usage skips acceptsEvent.
+      // Azure bills deployments outside the OpenAI catalog, so its usage stays unattributed.
+      const usage = this.config.azureEndpoint ? undefined : readOpenAIRealtimeUsage(event.response);
+      if (usage) {
+        this.config.onUsage?.({
+          provider: "openai",
+          model: this.config.model ?? OPENAI_REALTIME_DEFAULT_MODEL,
+          ...(outcome.responseId ? { responseId: outcome.responseId } : {}),
+          status: outcome.status,
+          ...usage,
+        });
+      }
     } finally {
       // response.done owns response state regardless of observer success. A fatal tool
       // boundary still clears state, but must not start queued work on a closing socket.

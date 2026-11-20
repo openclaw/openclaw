@@ -929,6 +929,7 @@ export class RealtimeCallHandler {
       provider: realtimeProvider,
       cfg: this.coreConfig,
       agentId,
+      ...(callRecord.sessionKey ? { usageSessionKey: callRecord.sessionKey } : {}),
       providerConfig,
       capabilities,
       language: resolveCallTranscriptionLanguage(callRecord),

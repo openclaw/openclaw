@@ -115,6 +115,18 @@ export type RealtimeVoiceResponseOutcome =
       message: string;
     });
 
+/** Token counts the provider reported for one realtime response; cached counts are subsets. */
+export type RealtimeVoiceUsageReport = {
+  /** Billing provider and model that served the response. */
+  provider: string;
+  model: string;
+  responseId?: string;
+  status: RealtimeVoiceResponseOutcome["status"];
+  input: { text: number; audio: number; image: number };
+  cachedInput: { text: number; audio: number; image: number };
+  output: { text: number; audio: number };
+};
+
 /** Normalizes OpenAI-style realtime response status details into the shared Talk contract. */
 export function normalizeRealtimeVoiceResponseOutcome(params: {
   providerLabel: string;
@@ -205,6 +217,8 @@ export type RealtimeVoiceBridgeCallbacks = {
   /** Diagnostic observation; returning from this callback cannot veto an event. */
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
   onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
+  /** Billed usage, once per provider response, including cancelled and stale responses. */
+  onUsage?: (usage: RealtimeVoiceUsageReport) => void;
   onToolCall?: (event: RealtimeVoiceToolCallEvent) => void;
   onReady?: () => void;
   onError?: (error: Error) => void;
