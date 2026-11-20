@@ -51,6 +51,7 @@ import {
   loadPluginManifestRegistryCore,
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
+import { slotOwnerRequestsMemoryBackends } from "./memory-backend.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
 import { pluginInvocationContext } from "./plugin-instance-scope.js";
@@ -581,6 +582,10 @@ export function* loadOpenClawPluginsSteps(
       seenIds: new Map(),
       selectedMemoryPluginId: null,
       memorySlotMatched: false,
+      memoryBackendsRequested: slotOwnerRequestsMemoryBackends(
+        manifestRegistry.plugins,
+        context.normalized.slots.memory,
+      ),
       pluginLoadAttemptCount: 0,
     };
     const pluginLoadStartMs = performance.now();

@@ -26,7 +26,7 @@ type FixtureGlobal = typeof globalThis & {
   };
 };
 
-function writeMemoryPlugin(id: string, dir: string) {
+function writeMemoryPlugin(id: string, dir: string, manifestExtra: Record<string, unknown> = {}) {
   const plugin = writePlugin({
     id,
     dir,
@@ -68,14 +68,28 @@ function writeMemoryPlugin(id: string, dir: string) {
   });
   const manifestPath = path.join(dir, "openclaw.plugin.json");
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
-  fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, kind: "memory" }), "utf-8");
+  fs.writeFileSync(
+    manifestPath,
+    JSON.stringify({ ...manifest, kind: "memory", ...manifestExtra }),
+    "utf-8",
+  );
   return plugin;
 }
 
-function loadMemoryPlugins(params: { memoryBackend?: boolean; slot?: string; activate: boolean }) {
+function loadMemoryPlugins(params: {
+  memoryBackend?: boolean;
+  slot?: string;
+  activate: boolean;
+  /** Owner manifest declares `memoryBackends: true`. */
+  ownerRequestsBackends?: boolean;
+}) {
   useNoBundledPlugins();
   const root = makePluginLoaderTempDir();
-  const owner = writeMemoryPlugin("memory-fusion", path.join(root, "owner"));
+  const owner = writeMemoryPlugin(
+    "memory-fusion",
+    path.join(root, "owner"),
+    params.ownerRequestsBackends ? { memoryBackends: true } : {},
+  );
   const store = writeMemoryPlugin("memory-store", path.join(root, "store"));
   delete (globalThis as FixtureGlobal)[modesKey];
   const config: OpenClawConfig = {
@@ -154,4 +168,46 @@ it("opens backends through a standalone slot owner lookup", async () => {
   expect(seen.backendHits).toEqual(["memory-store hit"]);
   await acquired.provider!.close();
   expect(seen.closed).toEqual(["memory-fusion", "memory-store"]);
+});
+
+it.each([true, false])(
+  "loads every enabled memory plugin as a backend when the owner manifest asks (activate: %s)",
+  (activate) => {
+    const { registry, store, modes, ownedBy } = loadMemoryPlugins({
+      ownerRequestsBackends: true,
+      activate,
+    });
+    expect(store).toMatchObject({ status: "loaded", enabled: true, memoryBackend: true });
+    expect(modes["memory-store"]).toEqual(["memory-backend"]);
+    expect(registry.memoryBackends.map(({ pluginId }) => pluginId)).toEqual(["memory-store"]);
+    expect(registry.memoryCapabilities.map(({ pluginId }) => pluginId)).toEqual(["memory-fusion"]);
+    expect(ownedBy("memory-store")).toEqual({ tools: 0, typedHooks: 0, services: 0 });
+  },
+);
+
+it("keeps a plugin out of an owner-requested fusion with memoryBackend: false", () => {
+  const { registry, store, modes } = loadMemoryPlugins({
+    ownerRequestsBackends: true,
+    memoryBackend: false,
+    activate: false,
+  });
+  expect(store).toMatchObject({ enabled: false });
+  expect(store?.memoryBackend).toBeUndefined();
+  expect(modes["memory-store"]).toBeUndefined();
+  expect(registry.memoryBackends).toEqual([]);
+});
+
+it("opens owner-requested backends through a standalone slot owner lookup", async () => {
+  const { config } = loadMemoryPlugins({ ownerRequestsBackends: true, activate: false });
+  resetStandaloneMemoryRegistrySlot();
+  const acquired = await getActiveMemoryProviderCore({
+    cfg: config,
+    agentId: "main",
+    context: { authority: { kind: "host", operation: "backend-test" }, assertCurrent() {} },
+  });
+  const seen = (globalThis as FixtureGlobal)[modesKey]!;
+  expect(acquired.providerId).toBe("memory-fusion");
+  expect(seen.listed).toEqual(["memory-store"]);
+  expect(seen.backendHits).toEqual(["memory-store hit"]);
+  await acquired.provider!.close();
 });

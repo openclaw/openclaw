@@ -360,8 +360,23 @@ their existing ownership. Native provider workflows continue alongside it.
 ### Memory backends
 
 One memory slot owner, such as a plugin that fuses results from several stores,
-can query other memory plugins that load only as passive backends. An operator
-opts each backend in:
+can query other memory plugins that load only as passive backends.
+
+A fusion owner usually requests backends in its manifest, so selecting it is
+the only step:
+
+```json
+{
+  "id": "memory-fusion",
+  "kind": "memory",
+  "memoryBackends": true
+}
+```
+
+While that plugin owns `plugins.slots.memory`, every other memory plugin that
+normal plugin policy enables loads as a backend. Set
+`plugins.entries.<id>.memoryBackend: false` to keep one out. Without an owner
+that requests backends, an operator can still opt a single plugin in:
 
 ```json5
 {
@@ -375,8 +390,9 @@ opts each backend in:
 }
 ```
 
-Without `memoryBackend: true`, a memory plugin that does not own the slot stays
-disabled before its `register()` runs, as before. With it, the plugin must
+Without a backend request from the owner manifest or `memoryBackend: true`, a
+memory plugin that does not own the slot stays disabled before its `register()`
+runs, as before. As a backend, the plugin must
 still be enabled by normal plugin policy, and:
 
 - `register()` runs with `api.registrationMode === "memory-backend"`. Only

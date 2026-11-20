@@ -80,6 +80,8 @@ export type PluginLoadLoopState = {
   seenIds: Map<string, PluginRecord["origin"]>;
   selectedMemoryPluginId: string | null;
   memorySlotMatched: boolean;
+  /** The selected slot owner's manifest asked for every enabled memory plugin as a backend. */
+  memoryBackendsRequested: boolean;
   pluginLoadAttemptCount: number;
 };
 
@@ -279,7 +281,13 @@ export function* loadRuntimePluginCandidate(params: {
     return;
   }
   const memorySlot = context.normalized.slots.memory;
-  const asBackend = isMemoryBackendRequested(entry, memorySlot, record.id, registrationPlan.mode);
+  const asBackend = isMemoryBackendRequested(
+    entry,
+    memorySlot,
+    record.id,
+    registrationPlan.mode,
+    state.memoryBackendsRequested,
+  );
   const memoryDecisionFor = (kind: PluginRecord["kind"]) =>
     resolveMemorySlotDecision({
       id: record.id,

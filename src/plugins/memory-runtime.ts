@@ -8,8 +8,12 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import { loadPluginRegistryHandle } from "./loader.js";
-import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
+import {
+  loadPluginManifestRegistryCore,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
 import { assertMemoryCallerCurrent, isHostMemoryAudience } from "./memory-audience.js";
+import { resolveMemoryBackendPolicyIds } from "./memory-backend.js";
 import { adaptLegacyMemoryProvider } from "./memory-provider-adapter.js";
 import {
   createMemoryBackendAccess,
@@ -112,9 +116,12 @@ function normalizeRegisteredMemoryManager(
 
 /**
  * Resolves the configured memory slot to the single runtime plugin that may own memory,
- * followed by opted-in backends. The loader still decides which of them become backends.
+ * followed by requested backends. The loader still decides which of them become backends.
  */
-function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
+function resolveMemoryRuntimePluginIds(
+  config: OpenClawConfig,
+  loadManifests: () => PluginManifestRegistry,
+): string[] {
   const plugins = normalizePluginsConfig(config.plugins);
   const pluginId = plugins.slots.memory;
   if (!plugins.enabled || !pluginId) {
@@ -124,9 +131,14 @@ function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
   if (plugins.deny.includes(policyId) || plugins.entries[policyId]?.enabled === false) {
     return [];
   }
-  const backendIds = Object.entries(plugins.entries).flatMap(([id, entry]) =>
-    entry.memoryBackend === true && id !== policyId && !plugins.deny.includes(id) ? [id] : [],
-  );
+  const backendIds = resolveMemoryBackendPolicyIds({
+    ownerId: pluginId,
+    entries: plugins.entries,
+    allow: plugins.allow,
+    deny: plugins.deny,
+    manifests: loadManifests().plugins,
+    normalizeId: normalizePluginPolicyId,
+  });
   return [pluginId, ...backendIds];
 }
 
@@ -167,15 +179,18 @@ function ensureMemoryRuntime(params: {
       backends: listMemoryBackendRegistrations(),
     };
   }
-  const onlyPluginIds = resolveMemoryRuntimePluginIds(params.cfg);
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  let manifestRegistry: PluginManifestRegistry | undefined;
+  const loadManifests = () =>
+    (manifestRegistry ??= loadPluginManifestRegistryCore({ config: params.cfg, workspaceDir }));
+  const onlyPluginIds = resolveMemoryRuntimePluginIds(params.cfg, loadManifests);
   if (onlyPluginIds.length === 0) {
     return undefined;
   }
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const registry = loadPluginRegistryHandle({
     config: params.cfg,
     registrationConfigOrigin: params.cfg,
-    manifestRegistry: loadPluginManifestRegistryCore({ config: params.cfg, workspaceDir }),
+    manifestRegistry: loadManifests(),
     onlyPluginIds,
     workspaceDir,
     activate: false,

@@ -34,6 +34,7 @@ import {
 } from "./gateway-startup-plugin-providers.js";
 import { collectConfiguredSpeechProviderIds } from "./gateway-startup-speech-providers.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
+import { resolveMemoryBackendPolicyIds } from "./memory-backend.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-contributions.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
@@ -146,12 +147,14 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   });
   const memoryBackendStartupPolicyIds = new Set(
     memorySlotStartupPluginId
-      ? Object.entries(activationSourcePlugins.entries).flatMap(([policyId, entry]) =>
-          entry.memoryBackend === true &&
-          policyId !== normalizePluginPolicyId(memorySlotStartupPluginId)
-            ? [policyId]
-            : [],
-        )
+      ? resolveMemoryBackendPolicyIds({
+          ownerId: memorySlotStartupPluginId,
+          entries: activationSourcePlugins.entries,
+          allow: activationSourcePlugins.allow,
+          deny: activationSourcePlugins.deny,
+          manifests: params.manifestRegistry.plugins,
+          normalizeId: normalizePluginPolicyId,
+        })
       : [],
   );
   const startupDreamingPluginIds = resolveAuthorizedGatewayStartupDreamingPluginIds({

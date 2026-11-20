@@ -60,3 +60,43 @@ it.each([true, false])(
     ).toEqual(memoryBackend ? ["memory-fusion", "memory-store"] : ["memory-fusion"]);
   },
 );
+
+it.each([
+  { label: "without an entry", entry: {}, expected: ["memory-fusion", "memory-store"] },
+  {
+    label: "with memoryBackend: false",
+    entry: { memoryBackend: false },
+    expected: ["memory-fusion"],
+  },
+])(
+  "starts memory plugins the owner manifest requests as backends $label",
+  ({ entry, expected }) => {
+    const manifestRegistry = {
+      plugins: [
+        createPluginManifestRecordFixture({
+          id: "memory-fusion",
+          kind: "memory",
+          origin: "global",
+          memoryBackends: true,
+        }),
+        createPluginManifestRecordFixture({ id: "memory-store", kind: "memory", origin: "global" }),
+      ],
+      diagnostics: [],
+    };
+    const index = createInstalledPluginIndexFixture(manifestRegistry);
+    const config: OpenClawConfig = {
+      channels: {},
+      plugins: {
+        slots: { memory: "memory-fusion" },
+        entries: {
+          "memory-fusion": { enabled: true },
+          "memory-store": { enabled: true, ...entry },
+        },
+      },
+    };
+    expect(
+      resolveGatewayStartupPluginPlanFromRegistry({ config, env: {}, index, manifestRegistry })
+        .pluginIds,
+    ).toEqual(expected);
+  },
+);
