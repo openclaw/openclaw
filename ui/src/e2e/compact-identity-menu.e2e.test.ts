@@ -101,7 +101,7 @@ suite.define(() => {
       await installMockGateway(page, { sessions: [], historyMessages: [] });
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").pressSequentially("hi");
-      await page.locator(".topbar-nav-toggle").click();
+      await page.locator(".mobile-header__navigation").click();
       const keycap = (await openMenu(page)).locator(
         '[data-value="command:settings"] .shortcut-kbd',
       );

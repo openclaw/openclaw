@@ -2,60 +2,69 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 
 const mocks = vi.hoisted(() => ({
-  dispatchGatewayLifecycleMethod: vi.fn(async () => {}),
-  waitForAgentJob: vi.fn<typeof import("./agent-turn/agent-job.js").waitForAgentJob>(
-    async () => ({ status: "ok" }) as never,
-  ),
+  enqueueSessionEventForHost: vi.fn(),
+  captureCronJobTurnTarget: vi.fn(async () => ({ target: {}, release: () => {} })),
+  withTimeout: vi.fn(async (promise: Promise<unknown>, _timeoutMs: number) => await promise),
 }));
 
-vi.mock("./server-lifecycle-runtime-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./server-lifecycle-runtime-context.js")>()),
-  dispatchGatewayLifecycleMethod: mocks.dispatchGatewayLifecycleMethod,
+vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/session-event-handoff.js")>()),
+  enqueueSessionEventForHost: mocks.enqueueSessionEventForHost,
 }));
 
-vi.mock("./agent-turn/agent-job.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./agent-turn/agent-job.js")>()),
-  waitForAgentJob: mocks.waitForAgentJob,
+vi.mock("./cron-job-turn-target.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cron-job-turn-target.js")>()),
+  captureCronJobTurnTarget: mocks.captureCronJobTurnTarget,
+}));
+
+vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/fs-safe.js")>()),
+  withTimeout: mocks.withTimeout,
 }));
 
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createGatewayCronFailureRepair } from "./server-cron-notifications.js";
+import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
 async function runRepairAndCaptureBudget(opts: { elapsed: number; wall: number }) {
   let monotonicNow = 1_700_000_000_000;
   vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
   vi.setSystemTime(monotonicNow);
 
-  const dispatch = createDeferred();
-  mocks.dispatchGatewayLifecycleMethod.mockReturnValue(dispatch.promise);
+  const accepted = createDeferred<{ ok: true }>();
+  mocks.enqueueSessionEventForHost.mockReturnValue({
+    accepted: accepted.promise,
+    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+    cancel: () => true,
+  });
+  const context = {
+    cron: { getJob: () => ({ id: "job-1" }) },
+  } as unknown as GatewayRequestContext;
 
-  const repair = createGatewayCronFailureRepair({}, undefined);
+  const repair = createGatewayCronFailureRepair({}, () => context);
   const runPromise = repair.runCronFailureRepair({
     jobId: "job-1",
     repairId: "repair-1",
     timeoutMs: 30_000,
-    sessionKey: "session:owner",
+    agentId: "main",
+    sessionKey: "agent:main:owner",
     message: "repair the failing cron",
   });
 
-  await Promise.resolve();
-  await Promise.resolve();
-
+  await vi.waitFor(() => expect(mocks.enqueueSessionEventForHost).toHaveBeenCalledTimes(1));
   monotonicNow += opts.elapsed;
   vi.setSystemTime(opts.wall);
 
-  dispatch.resolve();
+  accepted.resolve({ ok: true });
   await runPromise;
 
-  expect(mocks.dispatchGatewayLifecycleMethod).toHaveBeenCalledTimes(1);
-  expect(mocks.waitForAgentJob).toHaveBeenCalledTimes(1);
-  return mocks.waitForAgentJob.mock.calls[0]?.[0]?.timeoutMs;
+  expect(mocks.withTimeout).toHaveBeenCalledTimes(1);
+  return mocks.withTimeout.mock.calls[0]?.[1];
 }
 
 beforeEach(() => {
   resetGatewayWorkAdmission();
   vi.clearAllMocks();
-  mocks.waitForAgentJob.mockResolvedValue({ status: "ok" } as never);
 });
 
 afterEach(() => {

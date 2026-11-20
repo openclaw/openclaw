@@ -53,7 +53,7 @@ const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const { syncBuiltinESMExports } = require("node:module");
-const { execFileSync: nativeExecFileSync, spawn: nativeSpawn } = childProcess;
+const { execFileSync: nativeExecFileSync, spawn: nativeSpawn, spawnSync: nativeSpawnSync } = childProcess;
 const { EventEmitter } = require("node:events");
 const { PassThrough } = require("node:stream");
 function resolvesToFixture(file, args, options) {
@@ -95,6 +95,13 @@ childProcess.execFileSync = function(file, args, options = {}) {
     });
   }
   return stdout;
+};
+// Real live-cwd ownership is covered by pr-worktree-evidence.test.ts; merge fixtures are quiescent.
+childProcess.spawnSync = function(file, args, options = {}) {
+  if (file === "lsof" && JSON.stringify(args) === '["-nP","-d","cwd","-Fpn0"]' && options.encoding === "utf8") {
+    return { status: 0, signal: null, stdout: "p" + process.pid + "\0n" + process.cwd() + "\0", stderr: "" };
+  }
+  return nativeSpawnSync(file, args, options);
 };
 childProcess.spawn = function(file, args, options = {}) {
   if (!resolvesToFixture(file, args, options)) return nativeSpawn(file, args, options);

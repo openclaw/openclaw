@@ -163,7 +163,7 @@ describe("exec approvals policy helpers", () => {
     ).toBe(true);
   });
 
-  it("marks policy-blocked segments as non-durable allowlist entries", () => {
+  it("marks policy-blocked segments as non-durable allowlist entries", async () => {
     const executable = makeMockExecutableResolution({
       rawExecutable: "/usr/bin/echo",
       resolvedPath: "/usr/bin/echo",
@@ -177,7 +177,7 @@ describe("exec approvals policy helpers", () => {
         source: "allow-always" as const,
       },
     ];
-    const result = execApprovals.evaluateExecAllowlist({
+    const result = await execApprovals.evaluateExecAllowlist({
       analysis: {
         ok: true,
         segments: [

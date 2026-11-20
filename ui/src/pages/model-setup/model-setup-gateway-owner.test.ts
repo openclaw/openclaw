@@ -187,7 +187,7 @@ it.each(ownerChanges)(
         expect(sent(/^wizard\./u)).toHaveLength(0);
         expect(pendingReceipt()).toBe(replacementReceipt);
         if (authorityLost) {
-          expect(page.textContent).toContain("operator.admin");
+          expect(page.textContent).toContain("You need admin access to set up models.");
           expect(sent(/^openclaw\.setup\./u)).toHaveLength(0);
         }
       }

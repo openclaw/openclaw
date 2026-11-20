@@ -2,18 +2,20 @@
  * Session event owner microbenchmark: 65 recipients, staggered histories, row deltas,
  * field references and legacy envelopes. Synthetic prepared rows replace only the
  * presentation boundary; the actual event projector and delivery planner run unchanged.
- * The diagnostic sink is inert and access revision fixed; retention accounting still runs.
+ * Access revision is fixed; retention accounting and broadcast diagnostics still run.
  * This measures owner CPU/allocation, not authorization or whole-Gateway latency.
  *
  * node --expose-gc --experimental-test-module-mocks --import ./scripts/tsx.mjs \
  *   scripts/perf/session-event-envelope-measure.ts --events 3000
  * Add --owner .local/base-projection.ts for a saved projection source, --delivery-owner
- * src/gateway/.delivery-baseline.ts to compare delta preparation, and --allocations
+ * .local/delivery-baseline.ts to compare delta preparation, and --allocations
  * for a separate sampled-allocation pass. Alternate baseline/candidate timing and
  * allocation runs. Acceptance: identical payload digest, lower allocation and CPU;
  * report absolute costs and spread, and do not infer whole-Gateway tail changes.
  * --audiences selects distinct prepared row identities (default 2); use 8 with 65
  * clients to measure reuse within interleaved audiences rather than across all clients.
+ * --distinct-viewers keeps each recipient's authorization key distinct while sharing
+ * those prepared row identities, measuring equivalent views across viewer profiles.
  * --fresh-fields replaces every nested field per event to measure misses separately.
  * --profile <path> saves the sampled profile when used with --allocations.
  * Add --no-turbo-inlining to Node for callee attribution. Compare --clients 1/10/60
@@ -21,10 +23,21 @@
  * --sessions 64 rotates changing rows through the connection-owned delivery histories.
  * --reuse-envelope certifies the fixture's producer-owned envelope for both revisions.
  * --encode-envelopes includes payload encoding once per distinct projected payload.
- * The baseline encoder mirrors the broadcaster's plain-envelope path; the candidate
- * uses its prepared encoder when present. This excludes transport/authorization;
- * session-event-field-order.ts separately compares complete real-broadcaster frames.
- * --fields-owner <saved-source.ts> replaces only the field fingerprint owner.
+ * The actual broadcaster and frame assembly run with inert socket sinks; use
+ * --broadcast-owner <saved-source.ts> alongside --owner for baseline comparisons.
+ * Histories follow 40/20/10 sidebar/dashboard/chat cohorts with staggered omissions.
+ * --session-kib 128 --clients 70 --audiences 8 --distinct-viewers --source-revisions
+ * exercises large changing session rows. UTF-8 counts and exact complete-frame
+ * digests run in a separate replay, outside CPU/allocation.
+ * --compression --port 41872 uses real negotiated Control UI WebSockets, with receivers
+ * in a subprocess. Every publication reaches every peer; broadcastCpuMs and tails
+ * cover synchronous broadcaster/transport work only, excluding receiver inflation.
+ * --fragmented-histories preserves distinct history tokens while clearing baselines;
+ * --cpu-profile <file> attributes a separate sender-only measured pass.
+ * --start-at <epoch-ms> synchronizes warmed paired senders on separate --port values;
+ * a sender that misses the start fails rather than reporting an unmatched timing arm.
+ * --fields-owner <saved-source.ts> replaces the field/delta owner alongside --delivery-owner.
+ * patchEncoding counts JSON serializations and distinct patch sets in the digest replay.
  * --source-revisions replaces materialized rows for each transcript publication;
  * omit it to measure clock/runtime changes over unchanged materialized facts.
  * --yield-events gives each publication its own job, allowing weak samples to expire.
@@ -32,34 +45,54 @@
  * With --expose-gc, memoryAfterGc reports retained memory after the measured pass
  * and a job boundary for weak samples. Collection precedes digest replay and is
  * outside CPU/allocation measurement.
+ * Reports synchronous publication p99/max with sample counts; these are owner
+ * stalls, not whole-Gateway event-loop or sessions.list latency.
  */
 import assert from "node:assert/strict";
+import { fork, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
+import { EventEmitter, once } from "node:events";
 import { readFileSync, writeFileSync } from "node:fs";
+import type { IncomingMessage } from "node:http";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { mock } from "node:test";
-import { setImmediate } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
+import { setImmediate, setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionEventProjection } from "../../src/gateway/server-broadcast-types.js";
+import { WebSocketServer, type WebSocket } from "ws";
+import type { SerializedGatewayFrame } from "../../src/gateway/serialized-json.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
+import {
+  GATEWAY_PER_MESSAGE_DEFLATE,
+  installGatewayDeflateCodec,
+} from "../../src/gateway/server/ws-compression.js";
+import { createGatewayWebSocketTransport } from "../../src/gateway/server/ws-transport.js";
+import type { GatewayWsClient } from "../../src/gateway/server/ws-types.js";
 import type { SessionRowProjection } from "../../src/gateway/session-row-projection.js";
 import type { GatewaySessionRow } from "../../src/gateway/session-utils.types.js";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
+import type { CompressionPeerReport } from "./ws-compression-peers.js";
 
 const { values } = parseArgs({
   options: {
+    compression: { type: "boolean", default: false },
+    "fragmented-histories": { type: "boolean", default: false },
+    port: { type: "string", default: "41872" },
+    "cpu-profile": { type: "string" },
+    "start-at": { type: "string" },
+    "broadcast-owner": { type: "string", default: "src/gateway/server-broadcast.ts" },
+    "session-kib": { type: "string", default: "0" },
     owner: { type: "string", default: "src/gateway/session-event-projection.ts" },
     "delivery-owner": { type: "string", default: "src/gateway/session-ancestor-references.ts" },
     "fields-owner": { type: "string", default: "src/gateway/session-row-delta-fields.ts" },
     events: { type: "string", default: "3000" },
     clients: { type: "string", default: "65" },
     audiences: { type: "string", default: "2" },
+    "distinct-viewers": { type: "boolean", default: false },
     sessions: { type: "string", default: "1" },
     allocations: { type: "boolean", default: false },
     profile: { type: "string" },
@@ -70,6 +103,9 @@ const { values } = parseArgs({
     "yield-events": { type: "boolean", default: false },
   },
 });
+const sessionKiB = Number(values["session-kib"]);
+assert(Number.isSafeInteger(sessionKiB) && sessionKiB >= 0);
+const largeText = "Synthetic 🦞\n".repeat(Math.ceil((sessionKiB * 1024) / 15));
 const events = Number(values.events);
 const clients = Number(values.clients);
 const audiences = Number(values.audiences);
@@ -93,12 +129,17 @@ const fieldsHook = registerHooks({
 let key = "agent:main:stream-envelope";
 let row: GatewaySessionRow;
 let audienceRows: GatewaySessionRow[];
+function audienceFor(client: GatewayClient): number {
+  assert(client.connId);
+  return Number(client.connId.slice("synthetic-".length)) % audiences;
+}
 mock.module(new URL("../../src/gateway/session-row-presentation.ts", import.meta.url), {
   namedExports: {
     prepareSessionRowPublication: () => (client: GatewayClient) => ({
-      getAudienceKey: () => client.connect.scopes?.[0] ?? "viewer",
+      getAudienceKey: () =>
+        values["distinct-viewers"] ? client.connId : String(audienceFor(client)),
       getPresentation: () => ({
-        present: () => audienceRows[Number(client.connect.scopes![0])],
+        present: () => audienceRows[audienceFor(client)],
         sharing: {},
       }),
     }),
@@ -111,16 +152,32 @@ mock.module(new URL("../../src/gateway/session-event-payload.ts", import.meta.ur
     },
   },
 });
-mock.module(new URL("../../src/infra/diagnostic-events.ts", import.meta.url), {
-  namedExports: { emitTrustedDiagnosticEvent: () => {} },
-});
 mock.module(new URL("../../src/gateway/gateway-access-revision.ts", import.meta.url), {
   namedExports: { readGatewayAccessRevision: () => 0 },
 });
 const ownerUrl = new URL("../../src/gateway/session-event-projection.ts", import.meta.url).href;
 const loadedOwnerUrl = `${ownerUrl}?measured-owner`;
+const broadcastUrl = new URL("../../src/gateway/server-broadcast.ts", import.meta.url).href;
+const loadedBroadcastUrl = `${broadcastUrl}?measured-owner`;
+const deliveryOwner = path.resolve(values["delivery-owner"]);
+const deliveryUrl = new URL("../../src/gateway/session-ancestor-references.ts", import.meta.url)
+  .href;
 const ownerHook = registerHooks({
   load(url, context, nextLoad) {
+    if (url === deliveryUrl) {
+      return {
+        format: "module-typescript",
+        source: readFileSync(deliveryOwner, "utf8"),
+        shortCircuit: true,
+      };
+    }
+    if (url === loadedBroadcastUrl) {
+      return {
+        format: "module-typescript",
+        source: readFileSync(values["broadcast-owner"], "utf8"),
+        shortCircuit: true,
+      };
+    }
     return url === loadedOwnerUrl
       ? {
           format: "module-typescript",
@@ -133,10 +190,12 @@ const ownerHook = registerHooks({
 const {
   prepareSessionEventProjection,
 }: typeof import("../../src/gateway/session-event-projection.js") = await import(loadedOwnerUrl);
+const { createGatewayBroadcaster }: typeof import("../../src/gateway/server-broadcast.js") =
+  await import(loadedBroadcastUrl);
+const { GatewayClientRegistry } = await import("../../src/gateway/server/client-registry.js");
 ownerHook.deregister();
-const deliveryOwner = path.resolve(values["delivery-owner"]);
 const { ConnectionSessionRows }: typeof import("../../src/gateway/session-ancestor-references.js") =
-  await import(pathToFileURL(deliveryOwner).href);
+  await import(deliveryUrl);
 fieldsHook.deregister();
 const fields = Object.fromEntries(
   `createdActor owner participants participantCount visibility channel subject groupChannel space
@@ -215,7 +274,10 @@ const rowFields = freezeTrustedJsonSnapshot({
   activeRunIds: ["synthetic-run"],
   childSessions: ["agent:main:synthetic-child"],
   participants: [],
-  lastAssistantMessage: { text: "Synthetic streamed progress with tool calls", timestamp: 1 },
+  lastAssistantMessage: {
+    text: largeText || "Synthetic streamed progress with tool calls",
+    timestamp: 1,
+  },
 } satisfies Partial<GatewaySessionRow>);
 const materializedRows = Array.from({ length: sessions }, (_, index) =>
   freezeTrustedJsonSnapshot({
@@ -231,7 +293,7 @@ const materializedRows = Array.from({ length: sessions }, (_, index) =>
 );
 const record = {
   entry: { sessionId: "synthetic-session", lifecycleRevision: "1" },
-  materialized: { row: materializedRows[0]! },
+  materialized: { row: materializedRows[0]!, publicationIdentity: materializedRows[0]! },
 };
 // The fixture implements exactly the owner-facing read operations; presentation is mocked above.
 const projection = {
@@ -240,20 +302,62 @@ const projection = {
   isCurrent: () => true,
   ancestorRows: () => [],
 } as unknown as SessionRowProjection;
+const transports = new Map<number, ReturnType<typeof createGatewayWebSocketTransport>>();
+let receiver: ChildProcess | undefined;
+let server: WebSocketServer | undefined;
+let completeBroadcast: (() => void) | undefined;
+let failBroadcast: ((error: Error) => void) | undefined;
+const sockets: WebSocket[] = [];
+let measuredBroadcastCpuUs = 0;
+let measuredBroadcastMs: number[] = [];
 const peers = Array.from({ length: clients }, (_, index) => ({
   client: {
     connId: `synthetic-${index}`,
+    usesSharedGatewayAuth: false,
+    socket: Object.assign(new EventEmitter(), {
+      readyState: 1,
+      bufferedAmount: 0,
+      send(
+        frame: string | Buffer | SerializedGatewayFrame,
+        options?: { binary: false } | ((error?: Error) => void),
+        done?: (error?: Error) => void,
+      ) {
+        deliveries++;
+        if (activeWireDigest) {
+          if (typeof frame === "string" || Buffer.isBuffer(frame)) {
+            activeWireDigest.update(frame);
+          } else {
+            for (const segment of frame.segments) {
+              activeWireDigest.update(segment);
+            }
+          }
+        }
+        const transport = transports.get(index);
+        if (transport) {
+          transport.send(
+            typeof frame === "string" ? Buffer.from(frame) : frame,
+            { binary: false },
+            typeof options === "function" ? options : done,
+          );
+        } else {
+          (typeof options === "function" ? options : done)?.();
+        }
+      },
+      close() {},
+      terminate() {},
+    }),
     connect: {
+      role: "operator",
       client: { id: "openclaw-control-ui", version: "bench", platform: "bench", mode: "ui" },
       minProtocol: 3,
       maxProtocol: 3,
-      scopes: [String(index % audiences)],
+      scopes: ["operator.admin"],
       caps:
         (index + 1) % 10 === 0
           ? []
           : ["session-row-deltas", ...((index + 1) % 5 ? ["session-event-field-refs"] : [])],
     },
-  } satisfies GatewayClient,
+  } satisfies GatewayWsClient,
   rows: new ConnectionSessionRows(),
 }));
 const references = new Map<GatewayClient, InstanceType<typeof ConnectionSessionRows>>(
@@ -274,40 +378,38 @@ const prepare = prepareSessionEventProjection(
     : undefined,
 );
 
-function encodeEnvelope(result: SessionEventProjection): readonly Buffer[] {
-  if (result.serializePayload) {
-    return result.serializePayload();
-  }
-  // Match serializeFrameField for this fixture's plain, mutable projected envelope.
-  assert(isRecord(result.payload) && result.serializeSession);
-  const envelope = result.payload;
-  const sessionJSON = result.serializeSession();
-  const messageBytes = result.serializeMessage?.();
-  const { session, message } = envelope;
-  envelope.session = undefined;
-  if (messageBytes) {
-    envelope.message = undefined;
-  }
-  let fieldJSON: string;
-  try {
-    fieldJSON = JSON.stringify({ payload: envelope });
-  } finally {
-    envelope.session = session;
-    if (messageBytes) {
-      envelope.message = message;
-    }
-  }
-  const prefix = `,${fieldJSON.slice(1, -2)}${fieldJSON.endsWith("{}}") ? "" : ","}`;
-  const suffix = `"session":${sessionJSON}}`;
-  return messageBytes
-    ? [Buffer.from(prefix), messageBytes, Buffer.from(suffix)]
-    : [Buffer.from(`${prefix}${suffix}`)];
-}
-
 let envelopeEncodings = 0;
-let envelopeBytes = 0;
 let deliveries = 0;
-function publish(
+let activeWireDigest: ReturnType<typeof createHash> | undefined;
+let activeDigest: ReturnType<typeof createHash> | undefined;
+let currentSessionEncoder: unknown;
+let sessionEncodeCounts: Map<unknown, number> | undefined;
+const sessionEncodeHistogram: Record<number, number> = {};
+const broadcaster = createGatewayBroadcaster({
+  clients: new GatewayClientRegistry(peers.map((peer) => peer.client)),
+  canReceiveSessionEvent: () => true,
+  prepareSessionEventProjection: (event, payload, scope) => {
+    const project = prepare(event, payload, scope, context);
+    const encodedPayloads = new Set<unknown>();
+    return (
+      project &&
+      ((client) => {
+        const result = project(client);
+        assert(result);
+        activeDigest?.update(JSON.stringify(result.payload));
+        if (sessionEncodeCounts) {
+          currentSessionEncoder = result.serializeSession;
+        }
+        if (!encodedPayloads.has(result.payload)) {
+          encodedPayloads.add(result.payload);
+          envelopeEncodings++;
+        }
+        return result;
+      })
+    );
+  },
+});
+async function publish(
   index: number,
   digest?: ReturnType<typeof createHash>,
   wireDigest?: ReturnType<typeof createHash>,
@@ -315,11 +417,12 @@ function publish(
   key = `agent:main:stream-envelope-${index % sessions}`;
   record.entry.sessionId = `synthetic-session-${index % sessions}`;
   const source = materializedRows[index % sessions]!;
+  record.materialized.publicationIdentity = source;
   record.materialized.row = values["source-revisions"]
     ? freezeTrustedJsonSnapshot({
         ...source,
         lastAssistantMessage: {
-          text: `Synthetic streamed progress with tool calls ${index}`,
+          text: `${largeText || "Synthetic streamed progress with tool calls"} ${index}`,
           timestamp: index,
         },
       })
@@ -353,135 +456,352 @@ function publish(
   audienceRows = Array.from({ length: audiences }, (_, audience) =>
     freezeTrustedJsonSnapshot({ ...row, sharingRole: audience === 0 ? "owner" : "viewer" }),
   );
-  const project = prepare(
-    "sessions.changed",
-    { ...fields, ...row, sessionKey: key, session: row, reason: "send" },
-    { sessionKeys: [key], agentId: "main" },
-    context,
+  const payload = { ...fields, ...row, sessionKey: key, session: row, reason: "send" };
+  if (values["encode-envelopes"] || wireDigest) {
+    activeDigest = digest;
+    activeWireDigest = wireDigest;
+    sessionEncodeCounts = wireDigest ? new Map() : undefined;
+    const completed = receiver
+      ? new Promise<void>((resolve, reject) => {
+          completeBroadcast = resolve;
+          failBroadcast = reject;
+        })
+      : undefined;
+    const cpuBefore = process.threadCpuUsage();
+    const started = performance.now();
+    broadcaster.broadcastToConnIds(
+      "sessions.changed",
+      payload,
+      new Set(
+        peers.flatMap((peer, position) =>
+          !values.compression && index % 17 === (position % 7 < 4 ? 0 : position % 7 < 6 ? 1 : 2)
+            ? []
+            : [peer.client.connId],
+        ),
+      ),
+    );
+    const used = process.threadCpuUsage(cpuBefore);
+    measuredBroadcastCpuUs += used.user + used.system;
+    measuredBroadcastMs.push(performance.now() - started);
+    if (completed) {
+      const timeout = setTimeout(
+        () => failBroadcast?.(new Error("Receiver batch timed out")),
+        30_000,
+      );
+      try {
+        await completed;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    for (const count of sessionEncodeCounts?.values() ?? []) {
+      sessionEncodeHistogram[count] = (sessionEncodeHistogram[count] ?? 0) + 1;
+    }
+    sessionEncodeCounts = undefined;
+    currentSessionEncoder = undefined;
+    activeDigest = undefined;
+    activeWireDigest = undefined;
+  } else {
+    const project = prepare(
+      "sessions.changed",
+      payload,
+      { sessionKeys: [key], agentId: "main" },
+      context,
+    );
+    assert(project);
+    for (const [position, peer] of peers.entries()) {
+      if (index % 17 === (position % 7 < 4 ? 0 : position % 7 < 6 ? 1 : 2)) {
+        continue;
+      }
+      const result = project(peer.client);
+      assert(result);
+      result.delivered?.(peer.client);
+      deliveries++;
+    }
+  }
+}
+try {
+  if (values.compression) {
+    assert(values["encode-envelopes"]);
+    const port = Number(values.port);
+    assert(Number.isInteger(port) && port >= 40000 && port <= 65535);
+    server = new WebSocketServer({
+      host: "127.0.0.1",
+      port,
+      perMessageDeflate: GATEWAY_PER_MESSAGE_DEFLATE,
+    });
+    await once(server, "listening");
+    receiver = fork(
+      fileURLToPath(new URL("./ws-compression-peers.ts", import.meta.url)),
+      [JSON.stringify({ port, clients, windows: [15] })],
+      {
+        execArgv: ["--import", fileURLToPath(new URL("../tsx.mjs", import.meta.url))],
+        stdio: ["ignore", "inherit", "inherit", "ipc"],
+      },
+    );
+    console.error(`Owned receiver PID: ${receiver.pid}`);
+    receiver.on("message", (message: { type?: string; error?: string }) => {
+      if (message.type === "batch") {
+        completeBroadcast?.();
+      }
+      if (message.type === "error") {
+        failBroadcast?.(new Error(message.error));
+      }
+    });
+    for (let index = 0; index < clients; index++) {
+      const accepted = once(server, "connection", { signal: AbortSignal.timeout(30_000) });
+      receiver.send("connect");
+      const [socket, request] = (await accepted) as [WebSocket, IncomingMessage];
+      assert.equal(socket.extensions, "permessage-deflate");
+      sockets.push(socket);
+      const codec = installGatewayDeflateCodec(socket);
+      assert(
+        codec?.acceptsDeflatedSegments,
+        "Expected Control UI no-context-takeover codec at window 15",
+      );
+      transports.set(index, createGatewayWebSocketTransport(socket, request.socket, codec));
+    }
+  }
+  for (let index = 0; index < 200; index++) {
+    await publish(index);
+    if (values["yield-events"]) {
+      await setImmediate();
+    }
+  }
+  for (const peer of peers) {
+    peer.rows.clear();
+    if (!values["fragmented-histories"]) {
+      peer.rows = new ConnectionSessionRows();
+      references.set(peer.client, peer.rows);
+    }
+  }
+  envelopeEncodings = 0;
+  deliveries = 0;
+  if (receiver) {
+    const ready = once(receiver, "message", { signal: AbortSignal.timeout(30_000) });
+    receiver.send("measure");
+    await ready;
+  }
+  global.gc?.();
+  const inspector = new Session();
+  if (values.allocations) {
+    inspector.connect();
+    await inspector.post("HeapProfiler.startSampling", {
+      samplingInterval: 16384,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
+  }
+  if (values["cpu-profile"] && !values.allocations) {
+    inspector.connect();
+    await inspector.post("Profiler.enable");
+    await inspector.post("Profiler.start");
+  }
+  if (values["start-at"]) {
+    const startAt = Number(values["start-at"]);
+    assert(Number.isSafeInteger(startAt) && startAt > Date.now(), "Missed synchronized start");
+    await delay(startAt - Date.now());
+  }
+  measuredBroadcastCpuUs = 0;
+  measuredBroadcastMs = [];
+  const hostLoadBefore = loadavg();
+  const memoryBefore = process.memoryUsage();
+  const publicationMs: number[] = [];
+  const cpuStart = process.threadCpuUsage();
+  const start = performance.now();
+  for (let index = 0; index < events; index++) {
+    const publicationStart = performance.now();
+    await publish(index);
+    publicationMs.push(performance.now() - publicationStart);
+    if (values["yield-events"]) {
+      await setImmediate();
+    }
+  }
+  const elapsedMs = performance.now() - start;
+  const cpu = process.threadCpuUsage(cpuStart);
+  const memoryAfter = process.memoryUsage();
+  const sortedPublicationMs = (values.compression ? measuredBroadcastMs : publicationMs).toSorted(
+    (a, b) => a - b,
   );
-  assert(project);
-  const encodedPayloads =
-    values["encode-envelopes"] || wireDigest ? new Map<unknown, readonly Buffer[]>() : undefined;
-  for (const [position, peer] of peers.entries()) {
-    // Staggered delivery creates distinct live histories without growing the recipient set.
-    if (index % 17 === position % 17) {
-      continue;
-    }
-    const result = project(peer.client);
-    assert(result);
-    if (encodedPayloads) {
-      let encoded = encodedPayloads.get(result.payload);
-      if (!encoded) {
-        encoded = encodeEnvelope(result);
-        encodedPayloads.set(result.payload, encoded);
-        envelopeBytes += encoded.reduce((bytes, segment) => bytes + segment.byteLength, 0);
-        envelopeEncodings++;
-      }
-      for (const segment of encoded) {
-        wireDigest?.update(segment);
-      }
-    }
-    digest?.update(JSON.stringify(result.payload));
-    result.delivered?.(peer.client);
-    deliveries++;
+  const broadcastCpuMs = measuredBroadcastCpuUs / 1000;
+  if (values["cpu-profile"] && !values.allocations) {
+    writeFileSync(
+      values["cpu-profile"],
+      JSON.stringify((await inspector.post("Profiler.stop")).profile),
+    );
+    inspector.disconnect();
   }
-}
-for (let index = 0; index < 200; index++) {
-  publish(index);
-  if (values["yield-events"]) {
+  assert(deliveries > 0, "The measured replay must deliver frames");
+  const measuredEncoding = { envelopeEncodings, deliveries };
+  let sampledBytes: number | undefined;
+  if (values.allocations) {
+    const { profile } = await inspector.post("HeapProfiler.stopSampling");
+    if (values.profile) {
+      writeFileSync(values.profile, JSON.stringify(profile));
+    }
+    const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
+      node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
+    sampledBytes = sum(profile.head);
+    inspector.disconnect();
+  }
+  let memoryAfterGc: NodeJS.MemoryUsage | undefined;
+  if (global.gc) {
     await setImmediate();
+    global.gc();
+    memoryAfterGc = process.memoryUsage();
   }
-}
-for (const peer of peers) {
-  peer.rows.clear();
-}
-envelopeEncodings = 0;
-envelopeBytes = 0;
-deliveries = 0;
-global.gc?.();
-const inspector = new Session();
-if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
+  // Hash in a separate replay so serialization and cryptography do not mask projection savings.
+  for (const peer of peers) {
+    peer.rows.clear();
+    if (!values["fragmented-histories"]) {
+      peer.rows = new ConnectionSessionRows();
+      references.set(peer.client, peer.rows);
+    }
+  }
+  const digest = createHash("sha256");
+  const wireDigest = createHash("sha256");
+  const utf8 = { encodings: 0, bytes: 0, sessionEncodings: 0, sessionBytes: 0 };
+  const ownedCopies = { calls: 0, bytes: 0 };
+  const patchEncoding = { calls: 0, bytes: 0, distinctSets: 0 };
+  const patchSets = new WeakSet<object>();
+  const stringify = JSON.stringify;
+  JSON.stringify = new Proxy(stringify, {
+    apply(target, thisArg, args) {
+      const encoded: unknown = Reflect.apply(target, thisArg, args);
+      const value: unknown = args[0];
+      if (
+        typeof encoded === "string" &&
+        value &&
+        typeof value === "object" &&
+        "set" in value &&
+        "remove" in value
+      ) {
+        patchEncoding.calls++;
+        patchEncoding.bytes += Buffer.byteLength(encoded);
+        if (value.set && typeof value.set === "object" && !patchSets.has(value.set)) {
+          patchSets.add(value.set);
+          patchEncoding.distinctSets++;
+        }
+      }
+      return encoded;
+    },
   });
-}
-const hostLoadBefore = loadavg();
-const memoryBefore = process.memoryUsage();
-const cpuStart = process.threadCpuUsage();
-const start = performance.now();
-for (let index = 0; index < events; index++) {
-  publish(index);
-  if (values["yield-events"]) {
-    await setImmediate();
+  const ownedDescriptor = Object.getOwnPropertyDescriptor(Buffer, "allocUnsafeSlow");
+  assert(ownedDescriptor);
+  const ownedAllocate = Buffer.allocUnsafeSlow.bind(Buffer);
+  Buffer.allocUnsafeSlow = (size) => {
+    if (new Error().stack?.includes("copyOwnedBuffer")) {
+      ownedCopies.calls++;
+      ownedCopies.bytes += size;
+    }
+    return ownedAllocate(size);
+  };
+  const fromDescriptor = Object.getOwnPropertyDescriptor(Buffer, "from");
+  assert(fromDescriptor);
+  const from = Buffer.from.bind(Buffer);
+  Buffer.from = new Proxy(from, {
+    apply(target, thisArg, args) {
+      if (typeof args[0] === "string") {
+        utf8.encodings++;
+        utf8.bytes += Buffer.byteLength(args[0]);
+        const sessionOffset = args[0].indexOf('"session":');
+        if (sessionOffset >= 0) {
+          utf8.sessionEncodings++;
+          if (sessionEncodeCounts) {
+            sessionEncodeCounts.set(
+              currentSessionEncoder,
+              (sessionEncodeCounts.get(currentSessionEncoder) ?? 0) + 1,
+            );
+          }
+          utf8.sessionBytes += Buffer.byteLength(args[0].slice(sessionOffset));
+        }
+      }
+      return Reflect.apply(target, thisArg, args);
+    },
+  });
+  for (let index = 0; index < events; index++) {
+    await publish(index, digest, wireDigest);
+    if (values["yield-events"]) {
+      await setImmediate();
+    }
   }
-}
-const elapsedMs = performance.now() - start;
-const cpu = process.threadCpuUsage(cpuStart);
-const memoryAfter = process.memoryUsage();
-const measuredEncoding = { envelopeEncodings, envelopeBytes, deliveries };
-let sampledBytes: number | undefined;
-if (values.allocations) {
-  const { profile } = await inspector.post("HeapProfiler.stopSampling");
-  if (values.profile) {
-    writeFileSync(values.profile, JSON.stringify(profile));
+  JSON.stringify = stringify;
+  Object.defineProperty(Buffer, "from", fromDescriptor);
+  Object.defineProperty(Buffer, "allocUnsafeSlow", ownedDescriptor);
+  let received: CompressionPeerReport | undefined;
+  if (receiver) {
+    const report = once(receiver, "message", { signal: AbortSignal.timeout(30_000) });
+    receiver.send("finish");
+    [received] = (await report) as [CompressionPeerReport];
+    assert(received.received.every((count) => count === 200 + events * 2));
   }
-  const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-    node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
-  sampledBytes = sum(profile.head);
-  inspector.disconnect();
-}
-let memoryAfterGc: NodeJS.MemoryUsage | undefined;
-if (global.gc) {
-  await setImmediate();
-  global.gc();
-  memoryAfterGc = process.memoryUsage();
-}
-// Hash in a separate replay so serialization and cryptography do not mask projection savings.
-for (const peer of peers) {
-  peer.rows.clear();
-}
-const digest = createHash("sha256");
-const wireDigest = createHash("sha256");
-for (let index = 0; index < events; index++) {
-  publish(index, digest, wireDigest);
-  if (values["yield-events"]) {
-    await setImmediate();
+  console.log(
+    JSON.stringify({
+      owner,
+      ownerSha256,
+      fieldsOwnerSha256: createHash("sha256").update(fieldsSource).digest("hex"),
+      deliveryOwnerSha256: createHash("sha256").update(readFileSync(deliveryOwner)).digest("hex"),
+      node: process.version,
+      events,
+      sessionKiB,
+      compression: values.compression,
+      fragmentedHistories: values["fragmented-histories"],
+      received,
+      broadcastCpuMs,
+      utf8,
+      ownedCopies,
+      patchEncoding,
+      sessionEncodeHistogram,
+      clients,
+      audiences,
+      distinctViewers: values["distinct-viewers"],
+      sessions,
+      freshFields: values["fresh-fields"],
+      sourceRevisions: values["source-revisions"],
+      yieldEvents: values["yield-events"],
+      encodeEnvelopes: values["encode-envelopes"],
+      reuseEnvelope: values["reuse-envelope"],
+      ...measuredEncoding,
+      mode: values.allocations ? "allocation" : "timing",
+      elapsedMs,
+      threadCpuMs: (cpu.user + cpu.system) / 1000,
+      publicationSamples: publicationMs.length,
+      publicationP99Ms: sortedPublicationMs[Math.floor(publicationMs.length * 0.99)],
+      publicationP50Ms: sortedPublicationMs[Math.floor(publicationMs.length * 0.5)],
+      publicationsOver180Ms: sortedPublicationMs.filter((ms) => ms > 180).length,
+      publicationMaxMs: sortedPublicationMs.at(-1),
+      sampledBytes,
+      payloadDigest: digest.digest("hex"),
+      wireDigest: wireDigest.digest("hex"),
+      hostLoadBefore,
+      hostLoadAfter: loadavg(),
+      memoryBefore,
+      memoryAfter,
+      memoryAfterGc,
+    }),
+  );
+  for (const peer of peers) {
+    peer.rows.clear();
   }
+} finally {
+  for (const socket of sockets) {
+    socket.terminate();
+  }
+  if (receiver && receiver.exitCode === null && receiver.signalCode === null) {
+    const exited = once(receiver, "exit");
+    receiver.kill();
+    await exited;
+  }
+  if (server) {
+    await new Promise<void>((resolve, reject) => {
+      server!.close((error) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      });
+    });
+  }
+  mock.restoreAll();
 }
-console.log(
-  JSON.stringify({
-    owner,
-    ownerSha256,
-    fieldsOwnerSha256: createHash("sha256").update(fieldsSource).digest("hex"),
-    deliveryOwnerSha256: createHash("sha256").update(readFileSync(deliveryOwner)).digest("hex"),
-    node: process.version,
-    events,
-    clients,
-    audiences,
-    sessions,
-    freshFields: values["fresh-fields"],
-    sourceRevisions: values["source-revisions"],
-    yieldEvents: values["yield-events"],
-    encodeEnvelopes: values["encode-envelopes"],
-    reuseEnvelope: values["reuse-envelope"],
-    ...measuredEncoding,
-    mode: values.allocations ? "allocation" : "timing",
-    elapsedMs,
-    threadCpuMs: (cpu.user + cpu.system) / 1000,
-    sampledBytes,
-    payloadDigest: digest.digest("hex"),
-    wireDigest: wireDigest.digest("hex"),
-    hostLoadBefore,
-    hostLoadAfter: loadavg(),
-    memoryBefore,
-    memoryAfter,
-    memoryAfterGc,
-  }),
-);
-for (const peer of peers) {
-  peer.rows.clear();
-}
-mock.restoreAll();

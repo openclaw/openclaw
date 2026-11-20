@@ -2,7 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecutionDecisionWork } from "../../../audit/execution-decision-work.types.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { loadSubagentSpawnModuleForTest } from "./subagent-spawn.test-helpers.js";
@@ -55,7 +55,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     sessions.upsertSessionEntryCore(parentScope(), {
       totalTokens,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     });
   const expectNotLaunched = () => {
     expect(registerSubagentRun).not.toHaveBeenCalled();

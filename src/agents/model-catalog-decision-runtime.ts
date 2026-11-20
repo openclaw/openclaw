@@ -16,6 +16,9 @@ export function resolveCatalogDecisionRuntime(params: {
   entry: ModelCatalogEntry;
   evaluation: ModelAuthAvailabilityEvaluation;
   pluginRegistry?: PluginRegistry;
+  resolveOpenAIProviderRoutes?: Parameters<
+    typeof resolveAgentHarnessPolicy
+  >[0]["resolveOpenAIProviderRoutes"];
 }): GatewayAgentRuntime | undefined {
   const route = params.evaluation.selectedRoute;
   const context = {
@@ -31,6 +34,7 @@ export function resolveCatalogDecisionRuntime(params: {
       preparedAuth: params.evaluation.selectedCredential,
     },
     preparedModelProvider: true,
+    resolveOpenAIProviderRoutes: params.resolveOpenAIProviderRoutes,
   };
   const select = () => {
     const { policy } = resolveAgentHarnessAvailabilityDecision({

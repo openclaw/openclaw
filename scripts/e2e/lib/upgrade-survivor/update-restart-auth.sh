@@ -35,6 +35,10 @@ RUNTIME_PATHS
 #!/usr/bin/env bash
 exec node "$(dirname "$0")/systemd-fixture.mjs" busctl "$@"
 BUSCTL
+  cat >"$shim_dir/systemd-run" <<'SYSTEMD_RUN'
+#!/usr/bin/env bash
+exec node "$(dirname "$0")/systemd-fixture.mjs" handoff-launch "$@"
+SYSTEMD_RUN
   # Capture endpoint identity once; projected native clients cannot carry fixture-only env.
   {
     printf '#!/usr/bin/env bash\nset -euo pipefail\n'
@@ -500,6 +504,10 @@ case "$command" in
       exit 0
     fi
     [ "$unit_name" = openclaw-gateway.service ] || exit 1
+    if [ "$property" = Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic,InvocationID,FragmentPath ]; then
+      node "$manager_script" handoff-runtime
+      exit "$?"
+    fi
     if [ "$property" = TimeoutStopUSec,InvocationID,LoadState ]; then
       node "$manager_script" stop-policy --invocation-id
       exit 0
@@ -544,7 +552,7 @@ case "$command" in
 esac
 SHIM
   } >"$shim_dir/systemctl"
-  chmod +x "$shim_dir/systemctl" "$shim_dir/busctl"
+  chmod +x "$shim_dir/systemctl" "$shim_dir/busctl" "$shim_dir/systemd-run"
   export PATH="$shim_dir:$PATH"
 }
 

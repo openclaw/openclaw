@@ -1,4 +1,4 @@
-import { resolveSafeProviderId } from "../../agents/failover/user-copy.js";
+import { resolveSafeProviderId } from "../../agents/failover/provider-auth-user-copy.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import {
   CLAUDE_CLI_SETUP_GUIDANCE,
@@ -64,8 +64,8 @@ function describeUnavailableModel(params: {
   const agentFlag = params.agentId ? ` --agent ${params.agentId}` : "";
   const apiKeyRecovery = (verb: "Add" | "Update") =>
     safeProvider
-      ? `${verb} the API key in Control UI → Models → Connect provider, or run \`openclaw models auth login --provider ${safeProvider}${agentFlag}\`.`
-      : `${verb} the API key in Control UI → Models → Connect provider.`;
+      ? `${verb} the API key in the OpenClaw app under Models → Connect provider, or run \`openclaw models auth login --provider ${safeProvider}${agentFlag}\`.`
+      : `${verb} the API key in the OpenClaw app under Models → Connect provider.`;
   if (state.runtimeAuth?.source === "native" && state.availability === undefined) {
     return params.pending
       ? {

@@ -147,8 +147,11 @@ as text rather than becoming Markdown links.
 Use `awaitResults: true` when this program’s results are required to finish the
 current task. The existing cell owner keeps the tool call open while the VM is
 parked, then resumes that exact continuation when pending tool results settle.
-It does not return a `waiting` handle or make model polling calls. Completed
-actions are not replayed. Failure, Stop, owner replacement, and existing run
+It does not need model polling. If new steering arrives while the parked cell is
+waiting only for shell commands, it can return `status: "waiting"` with
+`reason: "steering"`. The command keeps running. Use `wait` with that `runId` to
+collect the original result without rerunning the program. Without room for a
+continuation, the cell keeps waiting inline. Completed actions are not replayed. Failure, Stop, owner replacement, and existing run
 and tool deadlines still end the operation.
 
 `awaitResults` pauses only off-VM tool waiting. Preparation, guest execution,

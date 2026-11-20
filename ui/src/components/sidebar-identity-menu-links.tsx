@@ -1,5 +1,6 @@
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import { REPORT_BUG_URL, SUGGEST_FEATURE_URL } from "../lib/issue-links.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { COMMUNITY_DISCORD_URL, OFFICIAL_SUPPORT_URL } from "../lib/product-links.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -22,6 +23,8 @@ const IDENTITY_MENU_LINKS: ReadonlyArray<{
     label: () => t("agentChip.getHelp"),
   },
   { href: COMMUNITY_DISCORD_URL, icon: "users", label: () => t("agentChip.discord") },
+  { href: REPORT_BUG_URL, icon: "bug", label: () => t("common.reportBug") },
+  { href: SUGGEST_FEATURE_URL, icon: "messageSquarePlus", label: () => t("common.suggestFeature") },
   {
     href: "https://docs.openclaw.ai/releases",
     icon: "scrollText",
@@ -41,12 +44,12 @@ export function renderSidebarHelpMenu(): MenuItem | undefined {
       className: "sidebar-identity-menu__help",
     }),
     trigger: (
-      <span class="sidebar-customize-menu__trigger">
+      <>
         <span class="nav-item__icon" aria-hidden="true">
           <Icon name="circleQuestionMark" />
         </span>
         <span class="sidebar-customize-menu__text">{t("agentChip.help")}</span>
-      </span>
+      </>
     ),
     content: undefined,
     children: IDENTITY_MENU_LINKS.map((link) => ({

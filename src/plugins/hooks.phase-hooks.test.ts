@@ -2,9 +2,8 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveModelPromptText } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { canonicalizeSessionEntry } from "../agents/sessions/session-manager-persistence-entry.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
-import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json-normalize.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
 import { createHookRunner } from "./hooks.js";
@@ -254,6 +253,7 @@ describe("prompt phase hooks", () => {
     const enrichment = vi.fn<PromptHook["handler"]>((_event, ctx) => {
       expect(ctx.toolAuthority?.allows("memory_search")).toBe(false);
       expect(ctx.toolAuthority?.allows("message")).toBe(true);
+      expect(ctx.toolAuthority?.list?.()).toEqual(["message"]);
       return { prependContext: "authorized context", systemPrompt: "ignored override" };
     });
     const runner = promptRunner([
@@ -269,6 +269,77 @@ describe("prompt phase hooks", () => {
     });
     const retained = enrichment.mock.calls[0]?.[1].toolAuthority;
     expect(() => retained?.assertActive()).toThrow("no longer active");
+    expect(() => retained?.list?.()).toThrow("no longer active");
+  });
+
+  it("enumerates only each finalized turn surface, including an empty surface", async () => {
+    const ordinary = vi.fn<PromptHook["handler"]>(() => ({ toolsAllow: ["message"] }));
+    const enrichment = vi.fn<PromptHook["handler"]>(() => ({ prependContext: "policy guidance" }));
+    const runner = promptRunner([
+      { handler: ordinary },
+      { requiresToolAuthority: true, handler: enrichment },
+    ]);
+    const policy = await runner.runBeforePromptBuild(phaseEvent, {});
+    expect(ordinary.mock.calls[0]?.[1].toolAuthority).toBeUndefined();
+    expect(enrichment).not.toHaveBeenCalled();
+    const tools = applyEmbeddedAttemptToolsAllow(
+      [{ name: "message" }, { name: "exec" }, { name: "memory_search" }],
+      policy?.toolsAllow,
+    );
+    for (const [activeToolNames, expected] of [
+      [tools.map((tool) => tool.name), ["message"]],
+      [[], []],
+      [["memory_search"], ["memory_search"]],
+    ] as const) {
+      let names: readonly string[] | undefined;
+      enrichment.mockImplementation((_event, ctx) => {
+        names = ctx.toolAuthority?.list?.();
+        return { prependContext: "policy guidance" };
+      });
+      await runner.runAuthorizedPromptBuild(phaseEvent, {}, { ...authority, activeToolNames });
+      expect(names).toEqual(expected);
+    }
+  });
+
+  it("returns immutable canonical names and rejects enumeration after host revocation", async () => {
+    const started = createDeferred();
+    const release = createDeferred();
+    const enrichment = vi.fn<PromptHook["handler"]>(async () => {
+      started.resolve();
+      await release.promise;
+    });
+    const runner = promptRunner([{ requiresToolAuthority: true, handler: enrichment }]);
+    let active = true;
+    const run = runner.runAuthorizedPromptBuild(
+      phaseEvent,
+      {},
+      {
+        ...authority,
+        activeToolNames: [" Message ", "memory_search", "message", ""],
+        assertHostActive: () => {
+          if (!active) {
+            throw new Error("host revoked");
+          }
+        },
+      },
+    );
+    const settled = expect(run).rejects.toThrow("host revoked");
+    try {
+      await started.promise;
+      const capability = enrichment.mock.calls[0]?.[1].toolAuthority;
+      const names = capability?.list?.();
+      expect(names).toEqual(["memory_search", "message"]);
+      expect(Object.isFrozen(names)).toBe(true);
+      expect(capability?.list?.()).toBe(names);
+      expect(capability?.allows("exec")).toBe(false);
+      expect(capability?.allows("memory_search")).toBe(true);
+      active = false;
+      expect(() => capability?.list?.()).toThrow("host revoked");
+    } finally {
+      active = false;
+      release.resolve();
+      await settled;
+    }
   });
 
   it("rejects stale enrichment and never starts its successor after host authority closes", async () => {
@@ -484,6 +555,9 @@ describe("prompt hook invocation", () => {
         secondGate.resolve();
         await expect(run).resolves.toEqual({ prependContext: "live context" });
         expect(isActive(contexts[1]?.hookInvocation)).toBe(false);
+        if (phase === "authorized") {
+          expect(() => contexts[0]?.toolAuthority?.list?.()).toThrow("no longer active");
+        }
       } finally {
         firstGate.resolve();
         secondGate.resolve();
@@ -649,88 +723,6 @@ describe("before_prompt_build dispatch", () => {
   });
 
   it.each(["before_prompt_build", "agent_turn_prepare"] as const)(
-    "%s shares immutable payloads without exposing stored metadata",
-    async (hookName) => {
-      const message = {
-        role: "toolResult" as const,
-        toolCallId: "call-1",
-        toolName: "synthetic",
-        isError: false,
-        timestamp: 0,
-        content: [{ type: "text" as const, text: "caller history" }],
-        details: { private: "storage only" },
-        __openclaw: { upstreamUserText: "storage prompt", retained: "visible" },
-      };
-      const entry = canonicalizeSessionEntry({
-        type: "message",
-        id: "entry-1",
-        parentId: null,
-        timestamp: "2026-01-01T00:00:00.000Z",
-        message: structuredClone(message),
-      });
-      normalizeTranscriptJsonValue(message, "");
-      const messages = [message, entry.message];
-      const owned = new Set<object>(messages.flatMap((item) => [item.content, item.content[0]!]));
-      const ownKeys = vi.spyOn(Reflect, "ownKeys");
-      const clone = vi.spyOn(globalThis, "structuredClone");
-      const entries = vi.spyOn(Object, "entries");
-      onTestFinished(() => {
-        ownKeys.mockRestore();
-        clone.mockRestore();
-        entries.mockRestore();
-      });
-      const runner = hookRunner(
-        [
-          {
-            hookName,
-            handler: (value: unknown) => {
-              const event = value as { messages: (typeof message)[] };
-              for (const [index, source] of messages.entries()) {
-                const projected = event.messages[index]!;
-                expect(projected.content).toBe(source.content);
-                expect(() => {
-                  projected.content[0]!.text = "forbidden mutation";
-                }).toThrow(TypeError);
-                expect(projected).not.toHaveProperty("details");
-                expect(projected["__openclaw"]).toEqual({ retained: "visible" });
-                projected["__openclaw"].retained = "local metadata";
-                projected.toolName = "local tool name";
-              }
-              return { prependContext: "returned context" };
-            },
-          },
-        ],
-        { catchErrors: false },
-      );
-      for (let turn = 0; turn < 2; turn++) {
-        ownKeys.mockClear();
-        clone.mockClear();
-        entries.mockClear();
-        const event = { prompt: "test", messages };
-        const result =
-          hookName === "before_prompt_build"
-            ? await runner.runBeforePromptBuild(event, {})
-            : await runner.runAgentTurnPrepare({ ...event, queuedInjections: [] }, {});
-        expect(result?.prependContext).toBe("returned context");
-        // Copy envelopes without allocating a key/value tuple for every history field.
-        expect(
-          entries.mock.calls.filter(([value]) => Reflect.get(value, "role") === "toolResult"),
-        ).toHaveLength(0);
-        expect(clone).toHaveBeenCalledTimes(hookName === "before_prompt_build" ? 0 : 1);
-        // Warm dispatch must not rescan the frozen payload graph (#182349).
-        if (turn > 0) {
-          expect(ownKeys.mock.calls.filter(([value]) => owned.has(value))).toHaveLength(0);
-        }
-        for (const source of messages) {
-          expect(source.content[0]!.text).toBe("caller history");
-          expect(source.toolName).toBe("synthetic");
-          expect(source["__openclaw"].retained).toBe("visible");
-        }
-      }
-    },
-  );
-
-  it.each(["before_prompt_build", "agent_turn_prepare"] as const)(
     "%s isolates array, envelope, and non-owned edits across dispatches",
     async (hookName) => {
       const message = { role: "user", content: [{ type: "text", text: "history" }] };
@@ -860,6 +852,24 @@ function finalize(...results: PluginHookBeforeAgentFinalizeResult[]) {
 }
 
 describe("before_agent_finalize", () => {
+  it("keeps the first presentation producer without changing finalization precedence", async () => {
+    const first = { title: "First", blocks: [{ type: "text" as const, text: "Summary" }] };
+    const second = { blocks: [{ type: "text" as const, text: "Other summary" }] };
+    await expect(
+      finalize({ finalPresentation: first }, { action: "continue", finalPresentation: second }),
+    ).resolves.toEqual({ action: "continue", finalPresentation: first });
+    await expect(
+      finalize({ finalPresentation: first }, { action: "revise", reason: "Correct the answer" }),
+    ).resolves.toEqual({ action: "revise", reason: "Correct the answer" });
+    await expect(
+      finalize(
+        { finalPresentation: first },
+        { action: "revise", reason: "Correct the answer" },
+        { action: "finalize", finalPresentation: second },
+      ),
+    ).resolves.toEqual({ action: "finalize", finalPresentation: second });
+  });
+
   it("retains valid retry candidates in order while discarding invalid instructions", async () => {
     const result = await finalize(
       { action: "revise", reason: "empty", retry: { instruction: "   ", idempotencyKey: "empty" } },

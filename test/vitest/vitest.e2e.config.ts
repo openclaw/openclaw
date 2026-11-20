@@ -6,7 +6,7 @@ import { RepoE2eSequencer } from "./vitest.e2e.sequencer.ts";
 import { vitestE2eTestGlob } from "./vitest.pattern-file.ts";
 import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { tuiPtyTestFiles } from "./vitest.test-shards.mjs";
-import { uiE2eRealGatewayTestFiles } from "./vitest.ui-paths.mjs";
+import { controlUiE2eTestGlobs, uiE2eRealGatewayTestFiles } from "./vitest.ui-paths.mjs";
 
 function resolveE2EWorkerCount(env: Record<string, string | undefined>): number {
   const requestedWorkers = Number.parseInt(env.OPENCLAW_E2E_WORKERS ?? "", 10);
@@ -28,6 +28,7 @@ const exclude = [
   ...(baseTest.exclude ?? []).filter((pattern) => pattern !== vitestE2eTestGlob),
   ...tuiPtyTestFiles,
   // Browser suites, including plugin-local files, need the Control UI project's setup.
+  ...controlUiE2eTestGlobs,
   ...uiE2eRealGatewayTestFiles,
 ];
 

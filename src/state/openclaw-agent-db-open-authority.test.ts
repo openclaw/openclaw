@@ -4,7 +4,6 @@ import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as integrity from "../infra/sqlite-integrity-worker.js";
 import * as agentLeases from "./openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-lifecycle.js";
@@ -18,10 +17,12 @@ import {
   resolveOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 const pending: Promise<unknown>[] = [];
 const releases: Array<() => void> = [];
+const maintenanceScopes: ReturnType<typeof createOpenClawDatabaseMaintenanceScope>[] = [];
 const realIntegrity = integrity.assertSqliteIntegrityInWorker;
 const wrongIndex = "CREATE INDEX idx_agent_cache_expiry ON cache_entries(key)";
 
@@ -29,6 +30,9 @@ const roots = useAgentDatabaseDirectories(async () => {
   releases.splice(0).forEach((release) => release());
   await Promise.allSettled(pending.splice(0));
   vi.restoreAllMocks();
+  for (const scope of maintenanceScopes.splice(0)) {
+    await scope.close();
+  }
 });
 
 function own<T>(work: Promise<T>): Promise<T> {
@@ -46,13 +50,16 @@ function fixture(repair = false) {
   }
   const pathname = database.path;
   closeOpenClawAgentDatabasesForTest(root);
-  revokeSqliteDatabaseAdmissionsForPath(pathname);
+  agentLeases.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
   const state = openOpenClawStateDatabase({ env: options.env });
   const leases = () => state.db.prepare("SELECT lease_id FROM agent_database_leases").all();
+  // Authority tests suspend explicit verification; lifecycle revocation alone no longer scans.
+  const scope = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+  maintenanceScopes.push(scope);
   const run = <T>(
     operation: Parameters<typeof withOpenClawAgentDatabaseAsync<T>>[1],
     guard?: () => void,
-  ) => own(withOpenClawAgentDatabaseAsync(options, operation, guard));
+  ) => own(scope.run(() => withOpenClawAgentDatabaseAsync(options, operation, guard)));
   return { options, pathname, state, leases, run, gate: holdIntegrity(pathname) };
 }
 

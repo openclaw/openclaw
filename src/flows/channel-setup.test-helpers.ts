@@ -5,8 +5,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 type ChannelMeta = import("../channels/plugins/types.core.js").ChannelMeta;
 type ChannelPluginCatalogEntry = import("../channels/plugins/catalog.js").ChannelPluginCatalogEntry;
 type ChannelSetupPlugin = import("../channels/plugins/setup-wizard-types.js").ChannelSetupPlugin;
-type ChannelSetupWizardAdapter =
-  import("../channels/plugins/setup-wizard-types.js").ChannelSetupWizardAdapter;
+
 type Discover = typeof import("../commands/channel-setup/discovery.js").resolveChannelSetupEntries;
 type LoadRegistryParams = Parameters<
   typeof import("../commands/channel-setup/plugin-install.js").loadChannelSetupPluginRegistrySnapshotForChannel
@@ -71,28 +70,7 @@ export function makeSetupPlugin(params: {
   };
 }
 
-export function makeExternalChatSetupPlugin(
-  setupWizard: Pick<ChannelSetupWizardAdapter, "configure"> & Partial<ChannelSetupWizardAdapter>,
-): ChannelSetupPlugin {
-  return makeSetupPlugin({
-    id: "external-chat",
-    label: "External Chat",
-    setupWizard: {
-      channel: "external-chat",
-      getStatus: async () => ({ channel: "external-chat", configured: false, statusLines: [] }),
-      ...setupWizard,
-    },
-  });
-}
-
-export function externalChatSetupEntries(overrides: Partial<ReturnType<Discover>> = {}) {
-  return makeChannelSetupEntries({
-    entries: [{ id: "external-chat", meta: makeMeta("external-chat", "External Chat") }],
-    ...overrides,
-  });
-}
-
-export function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegistry {
+function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegistry {
   return { ...createEmptyPluginRegistry(), ...overrides };
 }
 

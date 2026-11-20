@@ -431,11 +431,11 @@ function publishManaged(mode: "serve" | "funnel" = "serve") {
 }
 
 function fakeClaim() {
-  const exit = createDeferred();
+  const exit = createDeferred<string>();
   let active = true;
   const lose = () => {
     active = false;
-    exit.resolve();
+    exit.resolve("worker code 0");
   };
   const claim: TailscaleRouteClaim = {
     exited: exit.promise,

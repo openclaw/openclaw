@@ -16,6 +16,7 @@ import {
   updateStoredChatComposerQueueItems,
 } from "../pages/chat/composer-queue-persistence.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   dismissSidebarAttention,
@@ -418,6 +419,66 @@ describe("sidebar attention source publication", () => {
     expect(localStorage.getItem(legacyKey)).toBe(legacy);
   });
 
+  it("shows a finishing restart over a dismissed run and keeps that dismissal for later", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const request = inventoryRequest(() => cronPage());
+    const harness = gateway(request, true);
+    harness.update({
+      hello: {
+        ...harness.gateway.snapshot.hello!,
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["update.run", "update.status"], events: [] },
+      },
+    });
+    const run = createUpdateRunFixture({
+      status: "succeeded",
+      phase: "finished",
+      finishedAtMs: Date.now() - 60_000,
+    });
+    const runDismissal = {
+      kind: "updateAvailable" as const,
+      signature: JSON.stringify(["run", run.runId]),
+    };
+    dismissSidebarAttention(resolveSidebarAttentionKey(harness.gateway), runDismissal);
+    const snapshot = {
+      approvalQueue: [],
+      updateRun: run,
+      updateRunAcknowledged: false,
+      updateCampaignStatusHydrated: true,
+      updateAvailable: null,
+      updateSchedule: {
+        channel: "stable",
+        autoEnabled: true,
+        campaign: {
+          id: "owed",
+          state: "countdown",
+          announcedAtMs: 0,
+          forceAtMs: 1,
+          updatedAtMs: 0,
+        },
+      },
+    };
+    const overlays = { snapshot, subscribe: () => () => undefined };
+    store = createStore(
+      harness.gateway,
+      undefined,
+      undefined,
+      undefined,
+      overlays as unknown as ApplicationContext["overlays"],
+    );
+    // Each loaded source reconciles stored dismissals before it publishes.
+    const published = vi.fn();
+    store.subscribe(published);
+    store.activate(SidebarAttentionStoreOwner);
+    await waitForFast(() => expect(published.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(store.entries).toEqual([expect.objectContaining({ type: "update", dismissal: null })]);
+    expect(dismissalState(harness)).toEqual({ updateAvailable: [runDismissal.signature] });
+
+    // Turning automatic updates off retires the campaign; the dismissed outcome stays dismissed.
+    snapshot.updateSchedule = { channel: "stable", autoEnabled: false } as never;
+    expect(store.entries).toEqual([]);
+  });
+
   it.each(["ready", "hidden", "disposed"] as const)(
     "holds automatic cron inventory until chat is ready and respects a %s owner",
     async (boundary) => {
@@ -650,6 +711,15 @@ describe("sidebar attention source publication", () => {
     containsLabel("Cached auth");
     invalidateModelAuthStatusRequests(harness.gateway.snapshot.client!);
     harness.emitEvent("chat.metadata.changed", {
+      agentId: "other",
+      modelCatalogChanged: true,
+      authChanged: true,
+      commandsChanged: false,
+    });
+    await Promise.resolve();
+    expect(authCalls).toBe(3);
+    containsLabel("Cached auth");
+    harness.emitEvent("chat.metadata.changed", {
       agentId: "main",
       usageUpdatedAt: now,
       modelCatalogChanged: false,
@@ -831,8 +901,7 @@ describe("sidebar attention source publication", () => {
     expect(store.entries.map((entry) => entry.type)).toEqual(["outbox", "attention"]);
     expect(sidebarInboxTabCounts(store.entries)).toMatchObject({
       all: 2,
-      system: 1,
-      automations: 1,
+      system: 2,
     });
     store.dismiss(dismissal!);
     expect(store.entries.map((entry) => entry.type)).toEqual(["attention"]);

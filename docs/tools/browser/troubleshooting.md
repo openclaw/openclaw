@@ -25,6 +25,10 @@ waiting does not cancel the shared launch. Stopping or resetting the browser
 does cancel it. If startup exhausts its own budget, the error names the profile
 and startup deadline; inspect the browser startup logs before retrying.
 
+OpenClaw never starts an `attachOnly` CDP browser, but it waits up to about 30 seconds for one
+that is listening and still starting, without spending the action timeout. If the endpoint refuses
+the connection, the operation fails immediately: start the browser or its socket, then retry.
+
 ## Inspection times out but screenshots work
 
 Snapshots and page-text reads use a browser automation connection that can become
@@ -62,6 +66,7 @@ Common examples:
     loopback external CDP service is configured without `attachOnly: true`
 - Navigation SSRF block:
   - `open`, `navigate`, snapshot, or tab-opening flows fail with a browser/network policy error while `start` and `tabs` still work
+  - An address typed into a tab the agent has used shows the browser's "is blocked" page with `ERR_BLOCKED_BY_CLIENT`: the [SSRF policy](/tools/browser/configuration#ssrf-policy) denies that address. Open it in a new tab, or allow the host with `browser.ssrfPolicy.allowedHostnames`.
 
 Use this minimal sequence to separate the two:
 

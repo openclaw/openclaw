@@ -43,9 +43,9 @@ function reviewTree(files: readonly SessionDiffFile[], query: string): ReviewNod
     path: "",
     children: [],
   };
-  const filter = query.trim().toLocaleLowerCase();
+  const filter = query.trim().toLowerCase().normalize("NFC");
   for (const file of files) {
-    if (filter && !file.path.toLocaleLowerCase().includes(filter)) {
+    if (filter && !file.path.toLowerCase().normalize("NFC").includes(filter)) {
       continue;
     }
     const parts = file.path.replace(/\/$/, "").split("/");

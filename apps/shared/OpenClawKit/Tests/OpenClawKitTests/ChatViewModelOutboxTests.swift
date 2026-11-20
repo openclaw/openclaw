@@ -115,6 +115,9 @@ actor OutboxTransportState {
     var sendRoutingChanged = false
     var sendSettingsChanged = false
     var historyFails = false
+    /// A slow health answer that still honors the request timeout, like the gateway request does.
+    var healthDelayMs: Int?
+    var healthTimeoutsMs: [Int] = []
     var activeRun: OpenClawChatInFlightRun?
     var sessionListFails = false
     var historyRequestCount = 0
@@ -127,6 +130,9 @@ actor OutboxTransportState {
     var sessionListGate: DeleteGate?
     let sessionListStarted = DeleteGate()
     var staleHistoryRows: [AnyCodable]?
+    /// With `staleHistoryRows`, full pages carry this cursor and cursor reads
+    /// answer with an empty delta at the same tip.
+    var historyDeltaCursor: String?
     private var stateWaiters: [(
         condition: @Sendable (isolated OutboxTransportState) -> Bool,
         continuation: CheckedContinuation<Void, Never>)] = []
@@ -265,6 +271,20 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         try await self.requestHistory(sessionKey: sessionKey, agentID: nil, expectedRoute: nil)
     }
 
+    func requestHistory(sessionKey: String, cursor: String) async throws -> OpenClawChatHistoryPayload {
+        guard await self.state.historyDeltaCursor == cursor else {
+            return try await self.requestHistory(sessionKey: sessionKey)
+        }
+        guard await self.state.healthy, await !self.state.historyFails else { throw OutboxSendError() }
+        return OpenClawChatHistoryPayload(
+            sessionKey: sessionKey,
+            sessionId: "sess-live",
+            messages: [],
+            thinkingLevel: "off",
+            kind: "delta",
+            deltaCursor: cursor)
+    }
+
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
         let advertisedMethods = await state.advertisedMethods
         return advertisedMethods.map { $0.contains(method) }
@@ -350,11 +370,12 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         guard await self.state.healthy, await !self.state.historyFails else { throw OutboxSendError() }
         if let stale = await state.staleHistoryRows {
             // Gateway lag: the snapshot predates the just-acked send.
-            return OpenClawChatHistoryPayload(
+            return await OpenClawChatHistoryPayload(
                 sessionKey: sessionKey,
                 sessionId: "sess-live",
                 messages: stale,
-                thinkingLevel: "off")
+                thinkingLevel: "off",
+                deltaCursor: self.state.historyDeltaCursor)
         }
         let keys = await state.sentIdempotencyKeys
         let texts = await state.sentMessages
@@ -565,8 +586,13 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
             sessions: self.sessions)
     }
 
-    func requestHealth(timeoutMs _: Int) async throws -> Bool {
-        await self.state.healthy
+    func requestHealth(timeoutMs: Int) async throws -> Bool {
+        await self.state.update { $0.healthTimeoutsMs.append(timeoutMs) }
+        if let delayMs = await self.state.healthDelayMs {
+            try await Task.sleep(nanoseconds: UInt64(min(delayMs, timeoutMs)) * 1_000_000)
+            if delayMs > timeoutMs { throw URLError(.timedOut) }
+        }
+        return await self.state.healthy
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
@@ -772,6 +798,10 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
         guard let commands = await base.loadCommandsIfAvailable() else { return nil }
         await self.finishHeldLoad()
         return commands
+    }
+
+    func loadCommandStatusesIfAvailable() async -> [(id: String, status: OpenClawChatOutboxCommand.Status)]? {
+        await self.base.loadCommandStatusesIfAvailable()
     }
 
     private func delayLoad() async {
@@ -1233,7 +1263,9 @@ struct ChatViewModelOutboxTests {
         #expect(await MainActor.run { vm.supportsOfflineTextOutbox })
 
         await MainActor.run { vm.load() }
+        #expect(await vm.localSendRevision == 0)
         try await sendWhileOffline(vm, text: "hello offline")
+        #expect(await vm.localSendRevision == 1)
 
         // Nothing hit the transport; the command is durable instead.
         #expect(await transport.state.sentIdempotencyKeys.isEmpty)
@@ -1261,6 +1293,7 @@ struct ChatViewModelOutboxTests {
         try await waitForOutboxState { vm2.hasRestoredOutboxMessages }
         #expect(await MainActor.run { vm2.messages.contains { vm2.outboxState(for: $0.id) == .queued } })
         #expect(await userTexts(vm2) == ["hello offline"])
+        #expect(await vm2.localSendRevision == 0)
 
         // A cold launch can restore before the gateway provides its default
         // agent. The captured owner still keeps the bubble visible; replay

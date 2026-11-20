@@ -9,7 +9,7 @@ const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: runCommandWithTimeoutMock }));
 
-import { resolveCodexCliBin, resolveLocalAuthSpawnInvocation } from "./tui.js";
+import { resolveCodexCliBin, resolveLocalAuthSpawnInvocation } from "./tui-auth-invocation.js";
 
 const tempDirs: string[] = [];
 

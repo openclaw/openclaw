@@ -128,7 +128,9 @@ type ToolCatalogMetadata = {
 
 type ToolCatalogHandle = ((input?: unknown) => Promise<unknown>) &
   ToolCatalogMetadata & {
-    describe(): Promise<ToolCatalogDescription | McpCatalogDescription>;
+    describe(options?: {
+      includeRarelyNeededOutputSchema?: boolean;
+    }): Promise<ToolCatalogDescription | McpCatalogDescription>;
     toJSON(): ToolCatalogMetadata;
   };
 ```
@@ -165,7 +167,12 @@ declaration. Search also accepts the fully qualified `callableName`.
 `catalog.all()` continues to list only native and client handles; searching does
 not add remote tools to that list or to the trusted quick index.
 
-Full schema is loaded only on demand:
+Full schema is loaded only on demand. Native and client `describe()` omits
+`outputSchema` by default: `API.read("tools/<callableName>.d.ts")` already
+renders the trusted output as a TypeScript declaration, and the raw schema can
+cost tens of thousands of characters when returned. Pass
+`{ includeRarelyNeededOutputSchema: true }` only when the original JSON Schema
+is required, for example when declaration bounds leave the output `unknown`.
 
 ```typescript
 type ToolCatalogDescription = Omit<ToolCatalogMetadata, "toolName"> & {
@@ -260,6 +267,36 @@ in `content`, including empty-result messages and truncation notices. Directory
 pages retain `nextAfter`; search results retain their existing limit and
 truncation metadata.
 
+## File edits and multiline commands
+
+Prefer the enabled `edit` or `apply_patch` tool for file changes instead of
+nesting a Python replacement script inside JavaScript and a shell command.
+Use the callable names in the current quick index.
+
+For shell commands, ordinary JavaScript strings cannot contain literal newlines.
+Join command lines with `"\n"`; escape a backslash as `\\` inside each string:
+
+```javascript
+return await exec({
+  command: ["printf '%s\\n' '$HOME'", "printf '%s\\n' '`literal` ${value}\\n'"].join("\n"),
+});
+```
+
+This passes two command lines to the shell. The single-quoted shell arguments
+keep `$HOME`, backticks, `${value}`, and the final `\n` literal; the format
+argument `\n` is interpreted by `printf`. The JavaScript source goes in the
+outer tool's JSON `code` string, with normal JSON escaping. Code Mode does not
+unescape or repair JavaScript or change shell failure semantics. Check an edit
+or command result before running dependent validation.
+
+## Reading skill companions
+
+Installed skills use `await skills.read(name)` for complete instructions.
+For local Gateway skills, `await skills.read(name, "references/workflow.md")`
+returns a text companion scoped to that skill's directory (256 KiB maximum).
+Traversal, symlinks, hardlinks, and binary content are rejected. Restricted
+placements remain instruction-only; see [skill reads](/tools/skills#search-installed-skills).
+
 ## Session store
 
 Use `await store(key, value)` and `await load(key)` to keep small JSON values
@@ -317,3 +354,15 @@ with the same path and the returned `offset`, optional `cursor`, and optional
 Do not strip display-notice patterns from file data: those strings may be actual
 file contents. Each call still honors its explicit `limit`; if more file data
 remains, the result is `"truncated"` and its continuation describes the next page.
+
+Large local text reads stop after capturing a page. In a truncated result,
+`truncation.totalLines` and `truncation.totalBytes` are absent until the reader
+reaches EOF and can count the complete source and selection exactly. Use `continuation`, not a total
+or a display notice, to request more data. Reads that reach EOF retain exact totals.
+
+On Windows, files without a UTF-16 BOM choose UTF-8 or the system encoding from
+the first 1 MiB. Every offset and page uses that same leading window. Invalid
+bytes beyond the window no longer change the encoding of earlier text; they
+use the selected decoder’s replacement behavior. BOM-marked UTF-16 and
+non-Windows UTF-8 decoding are unchanged. Later offsets still require scanning
+the preceding text, but a page never requires scanning the remainder of the file.

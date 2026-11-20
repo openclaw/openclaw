@@ -1,11 +1,11 @@
 import fs from "node:fs";
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import util from "node:util";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
@@ -107,6 +107,18 @@ it("does not inspect or serialize disabled runtime output as sink levels change"
     expect(inspect).toHaveBeenCalledTimes(consoleLevel === "info" ? 2 : 0);
     expect(toJSON).toHaveBeenCalledTimes(consoleLevel === "info" ? 1 : 0);
     expect(sink).toHaveBeenCalledTimes(consoleLevel === "info" ? 3 : 0);
+  }
+});
+
+it("keeps Template Add timings out of info logs while retaining debug diagnostics", async () => {
+  const { withTemplateAddTimings } = await import("../templates/timings.js");
+  for (const level of ["info", "trace"] as const) {
+    const file = fileLogging(level);
+    await withTemplateAddTimings("synthetic-add", async () => undefined);
+    await testApi.flushFileLogQueueForTests();
+    const records = fs.existsSync(file) ? await readRecords(file) : [];
+    expect(records).toHaveLength(level === "info" ? 0 : 2);
+    expect(records.every((record) => record._meta.logLevelName === "DEBUG")).toBe(true);
   }
 });
 
@@ -246,12 +258,12 @@ describe("createSubsystemLogger().isEnabled", () => {
     const unsubscribeLogs = onInternalDiagnosticEvent(listener, { include: ["log.record"] });
     log.info("log listener");
     log.warn("warning with listener");
-    await yieldToEventLoop();
+    await waitForDiagnosticEventsDrained();
     setDiagnosticsEnabledForProcess(false);
     log.info("disabled diagnostics");
     setDiagnosticsEnabledForProcess(true);
     log.raw("enabled diagnostics");
-    await yieldToEventLoop();
+    await waitForDiagnosticEventsDrained();
     unsubscribeLogs();
     log.info("removed log listener");
     unsubscribeUnrelated();
@@ -431,6 +443,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       admitted: true,
       phaseDurationsMs: { open: 3, validation: 8 },
       note: "two words",
+      peer: "a\u001b]0;x\u0007\u009b2J\u2028\u2029",
       skipped: undefined,
       error: new Error("boom"),
     });
@@ -439,7 +452,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     const warnLine = consoleLine(warn);
     expect(warnLine).toContain("slow Codex catalog list phases");
     expect(warnLine).toContain(
-      'elapsedMs=12345 admissionWaitMs=0 admitted=true phaseDurationsMs={"open":3,"validation":8} note="two words" error={"name":"Error","message":"boom"',
+      'elapsedMs=12345 admissionWaitMs=0 admitted=true phaseDurationsMs={"open":3,"validation":8} note="two words" peer="a\\u001b]0;x\\u0007\\u009b2J\\u2028\\u2029" error={"name":"Error","message":"boom"',
     );
     expect(warnLine).not.toContain("skipped=");
     expect(consoleLine(error)).toContain("catalog failed reason=timeout");

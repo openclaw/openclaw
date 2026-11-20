@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-subagents-mobile.css";
@@ -10,7 +10,7 @@ import { SubagentDesktopAvatar } from "./chat-subagent-avatar.tsx";
 import { MobileStop, type ChatSubagentMobileStop } from "./chat-subagent-mobile-header.tsx";
 import type { SubagentStopControl } from "./chat-subagents-presentation.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 export type ChatSubagentMobileItem = {
   key: string;

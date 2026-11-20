@@ -30,7 +30,7 @@ import { captureWorkerInferenceForSession, createChatAbortOps } from "../chat-ab
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
-import { canRequesterAbortChatRun } from "./chat-abort-authorization.js";
+import { canRequesterAbortChatRun, getChatRunAbortAuthority } from "./chat-abort-authorization.js";
 import { abortControlledSubagents } from "./chat-abort-descendants.js";
 import type { ChatSessionAbortParams, ChatSessionAbortResult } from "./chat-abort-runtime.types.js";
 import { prepareChatSessionAbort } from "./chat-abort-session-plan.js";
@@ -130,11 +130,9 @@ export function abortDormantSubagentSession(
         storeAgentId: controller.controllerAgentId,
       }) !== parentKey ||
       resolveChatRunOwnerAgentId(parentIdentity) !== controller.controllerAgentId ||
-      !canRequesterAbortChatRun(
-        { ...parentIdentity, requester: parentSource.adapter.requester },
-        params.requester,
-        { requireOwnerMatch: true },
-      )
+      !canRequesterAbortChatRun(getChatRunAbortAuthority(parentSource), params.requester, {
+        requireOwnerMatch: true,
+      })
     ) {
       throw new Error(
         "Unauthorized dormant subagent Stop; use its active parent requester connection or an administrator.",
@@ -237,7 +235,6 @@ export function abortDormantSubagentSession(
           },
           onSnapshot: publishSnapshot,
           beforeSessionKill: async () => {
-            await params.beforeAbort?.();
             assertCurrent();
             plan = prepareChatSessionAbort(
               {
@@ -336,10 +333,7 @@ export async function abortChatRunsForSessionKeyWithPartials(
         prepareSelection: prepare ? { acceptsRequest: plan.acceptsRequest, prepare } : undefined,
         assertCurrent: params.assertCurrent,
         beforeKill: async () => {
-          await params.beforeAbort?.();
           plan.abort();
-          // Parent cancellation observers can replace the conversation before child effects.
-          await params.beforeAbort?.();
           return plan.canCascade;
         },
       });
@@ -347,12 +341,9 @@ export async function abortChatRunsForSessionKeyWithPartials(
       if (prepare) {
         await prepare();
       }
-      await params.beforeAbort?.();
       plan.abort();
     }
     if (!result.unauthorized && !result.error) {
-      // Observe child-triggered changes before persisting this Stop's own partial output.
-      await params.beforeAbort?.();
       params.assertCurrent?.();
       params.onCancellationStarted?.();
     }

@@ -120,7 +120,7 @@ async function mount(options: Parameters<typeof createDraftFixture>[0] = {}) {
 }
 
 describe("command palette attachments", () => {
-  it("owns dropped files immediately, retains intent through failures/removal, and clears an empty draft", async () => {
+  it("owns dropped files immediately, retains intent through failures/removal, and returns an emptied draft to Search", async () => {
     const { palette, input, query, start, create, context } = await mount();
     const surface = query<HTMLElement>(".cmd-palette")!;
     const dispatch = (type: string, files: File[] = []) => {
@@ -160,10 +160,62 @@ describe("command palette attachments", () => {
     expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(true);
     key(input, { key: "Enter" });
     expect(context.navigate).not.toHaveBeenCalled();
+    // The files chose Compose, not the person, so an empty draft goes back to Search.
     setInputValue(input, "");
     await palette.updateComplete;
     expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(false);
   });
+
+  it("reveals each newly admitted file after choosing Search over retained attachments", async () => {
+    const { palette, input, query } = await mount();
+    paste(input, [image("first.png")]);
+    finishRead(0);
+    await palette.updateComplete;
+    key(input, { key: "Tab" });
+    await palette.updateComplete;
+    expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(false);
+    paste(input, [image("second.png")]);
+    await palette.updateComplete;
+    expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(true);
+    finishRead(1);
+    await waitForSolid(() =>
+      expect(query(".chat-attachments-preview")?.querySelectorAll("img")).toHaveLength(2),
+    );
+  });
+
+  it.each(["automatic", "search", "compose"] as const)(
+    "preserves %s mode intent when the loading palette hands off a file",
+    async (choice) => {
+      const { palette, context, query } = await mount();
+      palette.togglePalette();
+      await palette.updateComplete;
+      const loading = createLoading(context);
+      loading.begin();
+      const coldInput = document.createElement("textarea");
+      coldInput.addEventListener("paste", (event) => loading.handlePaste(event));
+      loading.inputRef(coldInput);
+      paste(coldInput, [image()]);
+      if (choice !== "automatic") {
+        loading.setMode(choice);
+      }
+      palette.openPalette(loading.captureHandoff());
+      await palette.updateComplete;
+      paletteInput(palette).focus();
+      await palette.updateComplete;
+      finishRead(0);
+      await palette.updateComplete;
+      expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(choice !== "search");
+      if (choice === "search") {
+        key(paletteInput(palette), { key: "Tab" });
+        await palette.updateComplete;
+        expect(query(".chat-attachment-thumb")).not.toBeNull();
+        return;
+      }
+      query<HTMLButtonElement>(".chat-attachment-remove")!.click();
+      await palette.updateComplete;
+      expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(choice === "compose");
+    },
+  );
 
   it("keeps ready and pending attachments when dismissed, but releases them on disconnect", async () => {
     const registered = vi.spyOn(payloads, "registerChatAttachmentPayload");
@@ -255,7 +307,7 @@ describe("command palette attachments", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it("clears a rejected pasted-data-URL prompt when its image is removed", async () => {
+  it("hands pasted images to the started session and reopens an empty launcher", async () => {
     const { palette, input, create, start, query } = await mount();
     create.mockResolvedValueOnce({
       key: "agent:main:dashboard:rejected-images",
@@ -264,14 +316,12 @@ describe("command palette attachments", () => {
     paste(input, [], "data:image/png;base64,aW1hZ2U=");
     await vi.waitFor(() => expect(start().disabled).toBe(false));
     start().click();
-    await vi.waitFor(() =>
-      expect(query('[role="alert"]')?.textContent).toContain("Image turn rejected"),
-    );
-    expect(start().disabled).toBe(true);
-    await waitForSolid(() => expect(query(".chat-attachment-thumb img")).not.toBeNull());
-    query<HTMLButtonElement>(".chat-attachment-remove")!.click();
-    await palette.updateComplete;
+    await vi.waitFor(() => expect(palette.isOpen).toBe(false));
+    expect(create).toHaveBeenCalledOnce();
+    await openPalette(palette);
     expect(query('[role="alert"]')).toBeNull();
+    expect(query(".chat-attachment-thumb")).toBeNull();
+    expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(false);
   });
 
   it.each([
@@ -376,9 +426,7 @@ it("keeps mobile attachment Return native and starts only from its button", asyn
     expect(palette.isOpen).toBe(true);
   }
   expect(start().querySelector("kbd")).toBeNull();
-  const footer = query<HTMLElement>(".cmd-palette > .cmd-palette__footer")!;
-  expect(footer.querySelector("kbd")?.textContent).toMatch(/^(Enter|⏎)$/);
-  expect(footer.textContent).not.toContain("Start session");
+  expect(query(".cmd-palette > .cmd-palette__footer")).toBeNull();
   start().click();
   await vi.waitFor(() =>
     expectSubmit({

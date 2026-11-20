@@ -16,7 +16,9 @@ export type DoctorMaintenanceParams = {
   runtime: RuntimeEnv;
   runId?: string;
   assertCurrent?: () => void;
+  lendPolicyCustody?: import("../infra/update-doctor-result.js").UpdateDoctorWriteAuthority["lendPolicyCustody"];
   databaseGenerations?: UpdateDatabaseGenerations;
+  databaseWriteCapture?: import("../infra/update-doctor-result.js").UpdateDoctorWriteAuthority["databaseWriteCapture"];
   databasePluginOwners?: import("../infra/database-engine/port-descriptor.js").DatabasePortPluginOwners;
   /** Public update repair names the next step when it leaves a managed Gateway stopped. */
   reportStoppedService?: boolean;

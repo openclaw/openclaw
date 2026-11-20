@@ -14,6 +14,7 @@ export type { SqliteSchemaFacts } from "./sqlite-schema-scope.js";
 
 export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
   name: "sqlite-schema",
+  writer: "connection",
   lifetime: "process",
   schemaDependent: true,
   read: (value) => {
@@ -24,6 +25,7 @@ export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
 
 const textEncodingAdmission: SqliteDatabaseAdmissionKey<string> = {
   name: "sqlite-text-encoding",
+  writer: "connection",
   lifetime: "process",
   read: (value) => (typeof value === "string" ? value : undefined),
 };

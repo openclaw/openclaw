@@ -9,6 +9,7 @@ export function createChatMobileHostFixture(
   return {
     scopeKey,
     open: false,
+    exiting: false,
     suspended: false,
     mode: "dock",
     height: undefined,

@@ -12,9 +12,9 @@ import {
   matchesDiscordScenarioReply,
   waitForDiscordMessageDeleted,
   waitForDiscordMessageText,
-  waitForDiscordVoiceState,
   writeDiscordStatusReactionEvidence,
 } from "./discord-live.runtime.js";
+import { waitForDiscordVoiceState } from "./discord-live.voice.js";
 import { runDiscordTranscriptsVoiceAuthorizationScenario } from "./discord-transcripts-authorization.runtime.js";
 import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
@@ -50,6 +50,7 @@ export async function runDiscordScenario(
       throw new Error("Discord voice auto-join scenario did not resolve a voice channel.");
     }
     await waitForDiscordVoiceState({
+      expectation: "joined",
       token: environment.runtimeEnv.sutBotToken,
       guildId: environment.runtimeEnv.guildId,
       channelId: voiceChannel.id,

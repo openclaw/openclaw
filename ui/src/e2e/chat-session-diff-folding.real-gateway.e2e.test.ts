@@ -263,9 +263,9 @@ suite.define(() => {
           await button("Actions for example.ts").click();
           await page.getByRole("menuitem", { name, exact: true }).click();
         };
-        await action("Expand Code");
+        await action("Expand code");
         expect(await placeholder.count()).toBe(0);
-        await action("Collapse Functions and Classes");
+        await action("Collapse functions and classes");
         expect(await file.locator(".session-diff-split__row").count()).toBe(1);
         await writeFile(
           path.join(workspace, "example.ts"),
@@ -278,9 +278,9 @@ suite.define(() => {
         await file.getByText('return "nothing";', { exact: true }).waitFor();
         expect(await placeholder.count()).toBe(0);
         await button("Collapse code at line 1").waitFor();
-        await action("Collapse Code");
+        await action("Collapse code");
         expect(await file.locator(".session-diff-split__row").count()).toBe(1);
-        await action("Expand Code");
+        await action("Expand code");
         expect(await placeholder.count()).toBe(0);
         for (const asset of servedAssets) {
           const built = await readFile(path.join(process.cwd(), "dist/control-ui", asset.url));

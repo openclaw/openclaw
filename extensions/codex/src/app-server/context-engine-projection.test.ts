@@ -114,43 +114,36 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.developerInstructionAddition).toBe("memory recall");
   });
 
-  it.each([true])(
-    "places stable current sender provenance beside the request (history: %s)",
-    async (withHistory) => {
-      const prompt = "i am Bea coded wdym";
-      const currentUserMessage = {
-        ...senderAttributedTextMessage(prompt, {
-          senderId: "bea-id",
-          senderName: "Bea",
-          senderUsername: "bea",
+  it("places stable current sender provenance beside the request with history", async () => {
+    const prompt = "i am Bea coded wdym";
+    const currentUserMessage = {
+      ...senderAttributedTextMessage(prompt, {
+        senderId: "bea-id",
+        senderName: "Bea",
+        senderUsername: "bea",
+      }),
+      idempotencyKey: "current:user",
+    };
+    const result = await projectContextEngineAssemblyForCodex({
+      assembledMessages: [
+        senderAttributedTextMessage("Alice asked about the roster.", {
+          senderId: "alice-id",
+          senderName: "Alice",
         }),
-        idempotencyKey: "current:user",
-      };
-      const result = await projectContextEngineAssemblyForCodex({
-        assembledMessages: withHistory
-          ? [
-              senderAttributedTextMessage("Alice asked about the roster.", {
-                senderId: "alice-id",
-                senderName: "Alice",
-              }),
-              textMessage("assistant", "Alice got the strategist role; Bea got the scout role."),
-              currentUserMessage,
-            ]
-          : [currentUserMessage],
-        prompt,
+        textMessage("assistant", "Alice got the strategist role; Bea got the scout role."),
         currentUserMessage,
-        currentUserTurnIdempotencyKey: "current:user",
-      });
+      ],
+      prompt,
+      currentUserMessage,
+      currentUserTurnIdempotencyKey: "current:user",
+    });
 
-      if (withHistory) {
-        expect(result.promptText).toContain('[user sender={"id":"alice-id","name":"Alice"}]');
-      }
-      expect(result.promptText).toMatch(
-        /\[user sender={"id":"bea-id","name":"Bea","username":"bea"}\]\ni am Bea coded wdym$/,
-      );
-      expect(result.promptText.match(/i am Bea coded wdym/g)).toHaveLength(1);
-    },
-  );
+    expect(result.promptText).toContain('[user sender={"id":"alice-id","name":"Alice"}]');
+    expect(result.promptText).toMatch(
+      /\[user sender={"id":"bea-id","name":"Bea","username":"bea"}\]\ni am Bea coded wdym$/,
+    );
+    expect(result.promptText.match(/i am Bea coded wdym/g)).toHaveLength(1);
+  });
 
   it("does not infer current sender identity from display names without a stable ID", async () => {
     const prompt = "Current direct request";
@@ -411,23 +404,20 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
   });
 
-  it.each(["user"] as const)(
-    "retains complete %s text that fits the continuity window without a runtime budget",
-    async (type) => {
-      const text = `${"x".repeat(5_999)}😀${" café 雪".repeat(240)}\n80. Check every record.`;
-      const result = await projectContextEngineAssemblyForCodex({
-        assembledMessages: [{ role: type, content: text, timestamp: 1 }],
-        prompt: "next",
-        maxRenderedContextChars: resolveCodexContinuityProjectionMaxChars({}),
-      });
+  it("retains complete user text that fits the continuity window without a runtime budget", async () => {
+    const text = `${"x".repeat(5_999)}😀${" café 雪".repeat(240)}\n80. Check every record.`;
+    const result = await projectContextEngineAssemblyForCodex({
+      assembledMessages: [{ role: "user", content: text, timestamp: 1 }],
+      prompt: "next",
+      maxRenderedContextChars: resolveCodexContinuityProjectionMaxChars({}),
+    });
 
-      expect(result.promptText).toContain(`\n${text}\n</conversation_context>`);
-      expect(result.promptText).not.toContain("[truncated ");
-      expect(result.promptContextRange!.end - result.promptContextRange!.start).toBeLessThanOrEqual(
-        24_000,
-      );
-    },
-  );
+    expect(result.promptText).toContain(`\n${text}\n</conversation_context>`);
+    expect(result.promptText).not.toContain("[truncated ");
+    expect(result.promptContextRange!.end - result.promptContextRange!.start).toBeLessThanOrEqual(
+      24_000,
+    );
+  });
 
   it("reports omitted history within a marker-sized budget", async () => {
     const messages = [
@@ -448,7 +438,9 @@ describe("projectContextEngineAssemblyForCodex", () => {
     ).toBe("[truncated 369 chars from older context]");
   });
 
-  it.each(["unchanged", "hook", "preserved"] as const)(
+  // Images exist only with a projected context range (run-attempt-prompt.ts maps
+  // them through contextRange), so the range-less preserved path carries none.
+  it.each(["unchanged", "hook"] as const)(
     "keeps images with complete historical source spans after fitting %s context",
     (mode) => {
       const before = "history\n";
@@ -472,9 +464,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
       const fitted = fitCodexProjectedContextForTurnStart({
         promptText,
         imageGroups,
-        ...(mode === "preserved"
-          ? { preservedRange: { start: before.length, end: promptText.length } }
-          : { contextRange: { start: before.length, end: before.length + context.length } }),
+        contextRange: { start: before.length, end: before.length + context.length },
         ...(mode === "hook"
           ? {
               requestRange: {
@@ -526,7 +516,8 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
 
     expect(fitted.promptText).not.toContain("historical screenshot");
-    expect(fitted.promptText.endsWith("x".repeat(100))).toBe(true);
+    expect(fitted.promptText).toContain("Current user request:");
+    expect(fitted.promptText.endsWith("x".repeat(50))).toBe(true);
     expect(fitted.imageGroups).toBeUndefined();
   });
 
@@ -580,6 +571,51 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(fitted).not.toContain(before);
     expect(fitted).toContain("tail");
   });
+
+  it.each(["preserved", "request", "after-context"] as const)(
+    "keeps the instruction and both content boundaries of an oversized current request (%s)",
+    (mode) => {
+      // Shape of a hook agent message: instruction, opening untrusted-content
+      // marker, a large body, closing marker, then the run's trailing guidance.
+      const instruction = "Reply with ONLY the final codeword.";
+      const request =
+        `${instruction}\n<<<EXTERNAL_UNTRUSTED_CONTENT id="a1">>>\n${"b".repeat(5_000)}` +
+        `\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="a1">>>\nCollect results in this turn.`;
+      const context = `older ${"c".repeat(300)}`;
+      const maxChars = 400;
+      const fit = () => {
+        if (mode === "preserved") {
+          return fitCodexProjectedContextForTurnStart({
+            promptText: request,
+            preservedRange: { start: 0, end: request.length },
+            maxChars,
+          });
+        }
+        const header = "\n</conversation_context>\n\nCurrent user request:\n";
+        return fitCodexProjectedContextForTurnStart({
+          promptText: `${context}${header}${request}${mode === "request" ? "\nhook" : ""}`,
+          contextRange: { start: 0, end: context.length },
+          ...(mode === "request"
+            ? {
+                requestRange: {
+                  start: context.length,
+                  end: context.length + header.length + request.length,
+                },
+              }
+            : {}),
+          maxChars,
+        });
+      };
+      const { promptText: fitted } = fit();
+
+      expect(fitted.length).toBeLessThanOrEqual(maxChars);
+      expect(fitted).toContain(instruction);
+      expect(fitted).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="a1">>>');
+      expect(fitted).toMatch(/\[truncated \d+ chars from the middle of the current request\]/);
+      expect(fitted).toContain("Collect results in this turn.");
+      expect(fitted).not.toContain("older");
+    },
+  );
 
   it("keeps the original input when a hook appends context without a projection", async () => {
     const prompt = "current prompt survives";

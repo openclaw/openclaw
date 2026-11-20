@@ -98,13 +98,15 @@ export class SessionOrganizer {
     return operations.patchSession(this.deps, session, patch, scope, options);
   };
 
-  archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
+  /** `exitFrom` is the sidebar row to animate out once the archive is applied. */
+  archiveSessionWithUndo(session: SidebarRecentSession, exitFrom?: HTMLElement): Promise<void> {
     return this.runOperation(
       (operations, scope) =>
         operations.archiveSessionWithUndo(
           this.deps,
           { ...session, hasArchiveDescendants: sidebarSessionHasArchiveDescendants(session) },
           scope,
+          exitFrom,
         ),
       true,
     );

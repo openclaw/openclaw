@@ -3,6 +3,7 @@ import {
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readAutomationToolCreation } from "../chat/automation-job-result.js";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
 import {
@@ -44,6 +45,11 @@ export function projectToolResultDetails(
     return { details: undefined, truncated: false };
   }
   const projected: Record<string, unknown> = {};
+  const name = invocation.toolName ?? invocation.name;
+  const event = invocation.isError === false ? readAutomationToolCreation(name, record) : undefined;
+  if (event) {
+    projected.automationCreation = event;
+  }
   const inline = projectPluginInlineView(record, invocation);
   if (inline) {
     projected.pluginView = inline;

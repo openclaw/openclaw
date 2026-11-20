@@ -3,7 +3,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import { selectInstalledRecoveryCuts } from "../../scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
+import {
+  installedRecoveryLaneNames,
+  selectInstalledRecoveryCuts,
+} from "../../scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
 import {
   assertInstalledRecoveryConfig,
   assertPackageTree,
@@ -14,6 +17,11 @@ import {
   retirementCuts,
   startInstalledRecoveryRun,
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs";
+import {
+  findLaneByName,
+  parseLaneSelection,
+  resolveDockerE2ePlan,
+} from "../../scripts/lib/docker-e2e-plan.mts";
 import { quoteCliArg } from "../../src/cli/quote-cli-arg.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -35,6 +43,16 @@ const command = [
   "status",
 ];
 const printed = `Package publication recovery: ${command.map(quoteCliArg).join(" ")}`;
+
+function runNodeRecoveryScript(source: string): void {
+  const result = runProcess(
+    node,
+    ["--input-type=module", "-e", source],
+    { ...process.env, NODE_OPTIONS: "" },
+    10_000,
+  );
+  expect(result.status, result.stderr).toBe(0);
+}
 
 it("allows healthy-update bookkeeping while preserving operator settings and read-only status", () => {
   const gateway = JSON.parse(
@@ -82,12 +100,7 @@ it.skipIf(process.platform === "win32")(
     const observations = pathToFileURL(
       path.resolve("scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs"),
     ).href;
-    const result = runProcess(
-      node,
-      [
-        "--input-type=module",
-        "-e",
-        `
+    runNodeRecoveryScript(`
         import assert from 'node:assert/strict';
         import fs from 'node:fs';
         import path from 'node:path';
@@ -102,7 +115,7 @@ it.skipIf(process.platform === "win32")(
         fs.writeFileSync(path.join(original, 'node_modules/.package-lock.json'), 'hidden cache');
         fs.chmodSync(original, 0o755);
         fs.chmodSync(path.join(original, 'node_modules'), 0o750);
-        fs.chmodSync(path.join(original, 'payload'), 0o644);
+        fs.chmodSync(path.join(original, 'payload'), 0o664);
         fs.chmodSync(path.join(original, 'node_modules/.package-lock.json'), 0o664);
         const before = capturePackageTree(original);
         assert(before.some(entry => entry.path === ''));
@@ -111,16 +124,16 @@ it.skipIf(process.platform === "win32")(
           before.find(entry => entry.path === 'alias').identity);
         assert.throws(() => assertPackageTree(before, before, { tightenPermissions: true }), /mode/);
         for (const entry of before) {
-          if (entry.kind !== 'link') fs.chmodSync(path.join(original, entry.path), entry.mode & 0o7700);
+          if (entry.kind !== 'link') fs.chmodSync(path.join(original, entry.path), entry.mode & 0o7755);
         }
         fs.renameSync(original, displaced);
         const after = capturePackageTree(displaced);
         assert.throws(() => assertPackageTree(before, after), /mode/);
         assert.equal(assertPackageTree(before, after, { tightenPermissions: true }), after);
         assertPackageTree(after, capturePackageTree(displaced));
-        fs.chmodSync(path.join(displaced, 'payload'), 0o644);
+        fs.chmodSync(path.join(displaced, 'payload'), 0o664);
         assert.throws(() => assertPackageTree(after, capturePackageTree(displaced)), /mode/);
-        fs.chmodSync(path.join(displaced, 'payload'), 0o600);
+        fs.chmodSync(path.join(displaced, 'payload'), 0o644);
         for (const [name, contents] of [['payload', 'different bytes'],
           ['node_modules/.package-lock.json', 'different cache']]) {
           const file = path.join(displaced, name);
@@ -142,12 +155,7 @@ it.skipIf(process.platform === "win32")(
         assert.throws(() => assertPackageTree(complete, capturePackageTree(displaced)), /removed/);
         assert.throws(() => capturePackageTree(displaced, { maxEntries: 1 }), /entry budget/);
         assert.throws(() => capturePackageTree(displaced, { maxBytes: 1 }), /byte budget/);
-      `,
-      ],
-      { ...process.env, NODE_OPTIONS: "" },
-      10_000,
-    );
-    expect(result.status, result.stderr).toBe(0);
+      `);
   },
 );
 
@@ -156,8 +164,8 @@ it("rejects owner, special-bit, alias and partial-mode drift at the tightening b
   fs.writeFileSync(path.join(directory, "payload"), "package bytes");
   const captured = capturePackageTree(directory);
   const file = captured.find((entry) => entry.path === "payload")!;
-  const before = [{ ...file, mode: 0o6755 }];
-  const tightened = [{ ...before[0]!, mode: 0o6700 }];
+  const before = [{ ...file, mode: 0o6777 }];
+  const tightened = [{ ...before[0]!, mode: 0o6755 }];
   expect(assertPackageTree(before, tightened, { tightenPermissions: true })).toBe(tightened);
   for (const [field, value] of [
     ["uid", `${file.uid}-changed`],
@@ -165,10 +173,11 @@ it("rejects owner, special-bit, alias and partial-mode drift at the tightening b
     ["identity", `${file.identity}-changed`],
     ["kind", "directory"],
     ["content", "changed bytes"],
-    ["mode", 0o6600], // Lost owner execute permission.
-    ["mode", 0o4700], // Lost a special bit.
-    ["mode", 0o6740], // Only partly tightened.
-    ["mode", 0o6777], // Widened access.
+    ["mode", 0o6655], // Lost owner execute permission.
+    ["mode", 0o4755], // Lost a special bit.
+    ["mode", 0o6775], // Only partly tightened: group write remains.
+    ["mode", 0o6700], // Lost the group/other read and execute access that must stay.
+    ["mode", 0o6777], // Not tightened.
   ] as const) {
     expect(() =>
       assertPackageTree(before, [{ ...tightened[0]!, [field]: value }], {
@@ -211,12 +220,7 @@ it("bounds directory discovery before sorting and closes handles on entry overfl
   const observations = pathToFileURL(
     path.resolve("scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs"),
   ).href;
-  const result = runProcess(
-    node,
-    [
-      "--input-type=module",
-      "-e",
-      `
+  runNodeRecoveryScript(`
       import assert from 'node:assert/strict';
       import fs from 'node:fs';
       import path from 'node:path';
@@ -274,12 +278,7 @@ it("bounds directory discovery before sorting and closes handles on entry overfl
         fs.opendirSync = opendir;
         fs.lstatSync = lstat;
       }
-    `,
-    ],
-    { ...process.env, NODE_OPTIONS: "" },
-    10_000,
-  );
-  expect(result.status, result.stderr).toBe(0);
+    `);
 });
 
 it("extracts a sealed helper beyond Node's buffered limit and closes owned output files", () => {
@@ -288,12 +287,7 @@ it("extracts a sealed helper beyond Node's buffered limit and closes owned outpu
     path.resolve("scripts/e2e/lib/upgrade-survivor/installed-recovery-package.mjs"),
   ).href;
   // Use real Node even when Vitest runs on Bun: the Docker driver owns this limit.
-  const result = runProcess(
-    node,
-    [
-      "--input-type=module",
-      "-e",
-      `
+  runNodeRecoveryScript(`
       import assert from 'node:assert/strict';
       import { execFileSync } from 'node:child_process';
       import fs from 'node:fs';
@@ -331,32 +325,23 @@ it("extracts a sealed helper beyond Node's buffered limit and closes owned outpu
       } finally {
         fs.openSync = open;
       }
-    `,
-    ],
-    { ...process.env, NODE_OPTIONS: "" },
-    10_000,
-  );
-  expect(result.status, result.stderr).toBe(0);
+    `);
 });
 
 it.skipIf(process.platform === "win32")(
-  "keeps private evidence accessible through restrictive umask",
+  "keeps shared evidence readable through restrictive umask",
   () => {
     const directory = dirs.make("installed-recovery-evidence-");
     const observations = pathToFileURL(
       path.resolve("scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs"),
     ).href;
-    const result = runProcess(
-      node,
-      [
-        "--input-type=module",
-        "-e",
-        `
+    runNodeRecoveryScript(`
     import assert from 'node:assert/strict';
     import fs from 'node:fs';
     import path from 'node:path';
     import { startInstalledRecoveryRun, openInstalledRecoveryEvidence, writeInstalledRecoveryEvidence } from ${JSON.stringify(observations)};
-    for (const mode of [0o700, 0o2777]) {
+    for (const mode of [0o700, 0o2770, 0o2777]) {
+      const shared = mode === 0o2770;
       const root = path.join(${JSON.stringify(directory)}, String(mode));
       fs.mkdirSync(root); fs.chmodSync(root, mode);
       const mask = process.umask(0o777);
@@ -366,9 +351,9 @@ it.skipIf(process.platform === "win32")(
         const fd = openInstalledRecoveryEvidence(output);
         try { fs.writeFileSync(fd, 'private bytes'); } finally { fs.closeSync(fd); }
         writeInstalledRecoveryEvidence(run.summary, { status: 'running' });
-        assert.equal(fs.statSync(run.directory).mode & 0o7777, 0o700);
+        assert.equal(fs.statSync(run.directory).mode & 0o7777, shared ? 0o2750 : 0o700);
         for (const file of [output, run.summary]) {
-          assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+          assert.equal(fs.statSync(file).mode & 0o777, shared ? 0o640 : 0o600);
           assert.equal(fs.statSync(file).gid, fs.statSync(root).gid);
           assert(fs.readFileSync(file).length > 0);
         }
@@ -376,12 +361,7 @@ it.skipIf(process.platform === "win32")(
         assert.throws(() => openInstalledRecoveryEvidence(path.join(link, 'unsafe')), /physical directory/);
       } finally { process.umask(mask); }
     }
-  `,
-      ],
-      { ...process.env, NODE_OPTIONS: "" },
-      10_000,
-    );
-    expect(result.status, result.stderr).toBe(0);
+  `);
   },
 );
 
@@ -408,6 +388,15 @@ it("invalidates an earlier PASS before setup and isolates repeated attempts", ()
   expect(fs.readFileSync(helper, "utf8")).toBe("current helper");
 });
 
+it("records the explicit older-runtime proof without changing default retirement coverage", () => {
+  const artifacts = dirs.make("older-runtime-run-");
+  const run = startInstalledRecoveryRun(artifacts, "older-runtime");
+  expect(readJson(run.summary).selectedCuts).toEqual(["older-runtime"]);
+  expect(readJson(startInstalledRecoveryRun(artifacts).summary).selectedCuts).toEqual(
+    retirementCuts,
+  );
+});
+
 it("reads the printed recovery argv without evaluating quoted shell text", () => {
   expect(parseRecoveryCommand(`ordinary output\n${printed}\nordinary error`)).toEqual({
     node: command[0],
@@ -426,7 +415,7 @@ it("reads the printed recovery argv without evaluating quoted shell text", () =>
   }
 });
 
-it("selects every retirement cut by its original inventory ordinal", () => {
+it("selects every isolated recovery cell without expanding the published baseline matrix", () => {
   expect(retirementCuts).toEqual([
     "partial-previous",
     "anchor-before",
@@ -436,12 +425,86 @@ it("selects every retirement cut by its original inventory ordinal", () => {
     "helper-after",
     "helper-sync",
   ]);
+  const { plan } = resolveDockerE2ePlan({
+    allowFrozenTargetScenarioOmissions: true,
+    includeOpenWebUI: false,
+    liveMode: "all",
+    orderLanes: (lanes) => lanes,
+    planReleaseAll: false,
+    profile: "all",
+    releaseChunk: "core",
+    selectedLaneNames: parseLaneSelection("package-installed-recovery"),
+    timingStore: undefined,
+  });
+  expect(plan.lanes.map((lane) => lane.name)).toEqual(installedRecoveryLaneNames);
   for (const [sequence, cut] of retirementCuts.entries()) {
+    const lane = plan.lanes[sequence]!;
+    expect(lane).toMatchObject({
+      imageKind: "bare",
+      stateScenario: "empty",
+      live: false,
+      timeoutMs: 1_200_000,
+    });
+    expect(lane.command).toContain("OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=package-installed-recovery");
+    expect(lane.command).toContain(`OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT=${cut}`);
+    expect(lane.command).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=0");
     expect(selectInstalledRecoveryCuts(cut)).toEqual([[sequence, cut]]);
   }
   expect(selectInstalledRecoveryCuts()).toEqual([...retirementCuts.entries()]);
   expect(() => selectInstalledRecoveryCuts("unknown")).toThrow("Unknown installed recovery cut");
 });
+
+// The lane's Bash entrypoint executes in Linux Docker jobs; portable catalog
+// selection above remains covered on Windows without assuming a POSIX shell.
+it.skipIf(process.platform === "win32").each(retirementCuts)(
+  "isolates the %s writer from inherited published-survivor settings",
+  (cut) => {
+    const harness = dirs.make("installed-recovery-command-");
+    const script = path.join(harness, "scripts/e2e/upgrade-survivor-docker.sh");
+    fs.mkdirSync(path.dirname(script), { recursive: true });
+    const inheritedMode = {
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
+      OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: "1",
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@latest",
+      OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
+      OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS: "1",
+      OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS: "openai/example",
+      OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: "1",
+      OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT: "unrelated",
+    };
+    const observe = `printf '%s\n' ${Object.keys(inheritedMode)
+      .map((name) => `"$${name}"`)
+      .join(" ")}`;
+    fs.writeFileSync(script, `#!/bin/bash\nset -eu\n${observe}\n`);
+    const lane = findLaneByName(`package-installed-recovery-${cut}`);
+    expect(lane).toBeDefined();
+    const result = runProcess(
+      "/bin/bash",
+      ["-c", `set -eu\n${lane!.command}\n${observe}`],
+      {
+        ...process.env,
+        ...inheritedMode,
+        OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR: harness,
+        BASH_ENV: "",
+        ENV: "",
+      },
+      10_000,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.split("\n")).toEqual([
+      "package-installed-recovery",
+      "0",
+      "",
+      "manual",
+      "0",
+      "",
+      "0",
+      cut,
+      ...Object.values(inheritedMode),
+      "",
+    ]);
+  },
+);
 
 function fixture(cut: string) {
   const directory = fs.realpathSync(dirs.make("installed-recovery-observer-"));
@@ -574,12 +637,7 @@ it("preserves every native Node SQLite column across strict JSON snapshots", () 
     path.resolve("scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs"),
   ).href;
   // Vitest may run on Bun; the installed driver uses Node's null-prototype rows.
-  const result = runProcess(
-    node,
-    [
-      "--input-type=module",
-      "-e",
-      `
+  runNodeRecoveryScript(`
       import assert from 'node:assert/strict';
       import { DatabaseSync } from 'node:sqlite';
       import { readActivation } from ${JSON.stringify(observations)};
@@ -592,12 +650,7 @@ it("preserves every native Node SQLite column across strict JSON snapshots", () 
       } finally {
         db.close();
       }
-    `,
-    ],
-    { ...process.env, NODE_OPTIONS: "" },
-    10_000,
-  );
-  expect(result.status, result.stderr).toBe(0);
+    `);
 });
 
 // These tests qualify the observer's physical boundaries, not installed recovery.

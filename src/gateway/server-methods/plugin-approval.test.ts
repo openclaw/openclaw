@@ -340,13 +340,17 @@ describe("createPluginApprovalHandlers", () => {
       expect(error.message).toContain("exceeds the display limit");
     });
 
-    it("delivers requests to iOS push with the exec-equivalent visibility gate", async () => {
+    it("delivers requests to iOS push with requester and reviewer bindings", async () => {
       const handleRequested = vi.fn(async () => true);
       const iosPushDelivery = { handleRequested };
       const { pending, id } = await startRequest(
         { approvalReviewerDeviceIds: ["ios-reviewer"] },
         {
-          client: createClient({ clientId: "gateway-client", approvalRuntime: true }),
+          client: createClient({
+            clientId: "gateway-client",
+            deviceId: "requester-device",
+            approvalRuntime: true,
+          }),
           context: createApprovalContext(() => false),
         },
         createPluginApprovalHandlers(manager, { iosPushDelivery }),
@@ -355,26 +359,14 @@ describe("createPluginApprovalHandlers", () => {
       expect(handleRequested).toHaveBeenCalledTimes(1);
       expect(handleRequested.mock.contexts).toEqual([iosPushDelivery]);
       const requestCall = mockCall(handleRequested, 0, "iOS request delivery");
-      expect(requireRecord(requestCall[0], "iOS request").id).toBe(id);
-      const deliveryOptions = requireRecord(requestCall[1], "iOS delivery options");
-      const isTargetVisible = deliveryOptions.isTargetVisible;
-      expect(isTargetVisible).toBeTypeOf("function");
-      const visibility = isTargetVisible as (target: {
-        deviceId: string;
-        scopes: readonly string[];
-      }) => boolean;
-      expect(
-        visibility({
-          deviceId: "ios-reviewer",
-          scopes: ["operator.approvals", "operator.read"],
-        }),
-      ).toBe(true);
-      expect(
-        visibility({
-          deviceId: "other-device",
-          scopes: ["operator.approvals", "operator.read"],
-        }),
-      ).toBe(false);
+      expect(requireRecord(requestCall[0], "iOS request")).toMatchObject({
+        id,
+        requestedByConnId: "conn-test-client",
+        requestedByDeviceId: "requester-device",
+        requestedByClientId: "gateway-client",
+        requestedByDeviceTokenAuth: false,
+        approvalReviewerDeviceIds: ["ios-reviewer"],
+      });
 
       await settle({ id, pending });
     });

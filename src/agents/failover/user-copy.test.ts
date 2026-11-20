@@ -3,7 +3,6 @@ import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-
 import { renderFormatErrorCopy } from "./assistant-request-failure-copy.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
-  formatProviderAuthenticationErrorUserText,
   renderBillingReplyCopy as billingCopy,
   renderCliTimeoutReplyCopy,
   renderFailoverCodeUserCopy as codeCopy,
@@ -45,8 +44,11 @@ describe("failover user copy", () => {
   });
 
   it("renders only the allowlisted selected-profile code", () => {
+    expect(codeCopy("model_chat_unsupported")).toBe(
+      "This model doesn't support chat; pick another model.",
+    );
     expect(codeCopy("selected_auth_profile_unavailable")).toBe(
-      "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
+      "This saved login isn't available. Choose another login under Models in the OpenClaw app or run `openclaw configure`.",
     );
     expect(codeCopy("plugin_selected_profile_unavailable")).toBeUndefined();
     expect(codeCopy({ code: "selected_auth_profile_unavailable" })).toBeUndefined();
@@ -73,10 +75,7 @@ describe("failover user copy", () => {
       "openclaw configure",
     );
     expect(missingKeyCopy({ provider: "provider-with-secret-name" })).toBe(
-      "⚠️ provider-with-secret-name isn't signed in yet. Sign in with /login provider-with-secret-name or under Models in the Control UI. For now, switch to a working model with /model.",
-    );
-    expect(missingKeyCopy({ provider: "openai`\nrm -rf /" })).toBe(
-      "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.",
+      "⚠️ This AI service isn't set up yet. Sign in under Models in the OpenClaw app or run `openclaw configure`.",
     );
   });
 
@@ -172,7 +171,7 @@ describe("failover user copy", () => {
         },
       }),
     ).toBe(
-      "⚠️ The task took too long. Some work may have completed. Check its results before trying again. Try a smaller task, or increase the task time limit in the Control UI settings.",
+      "⚠️ The task took too long. Some work may have completed. Check its results before trying again. Try a smaller task, or increase the task time limit in the OpenClaw app settings.",
     );
   });
 
@@ -195,14 +194,6 @@ describe("failover user copy", () => {
     expect(sanitizedCopy(raw, errorContext ? { errorContext } : undefined)).toEqual(expected);
   });
   const aggregate = `All models failed (2): mock/${"model".repeat(60)}: You've hit your session limit · resets 6:20pm (Europe/London) (unknown) | mock/fallback: The usage limit has been reached (rate_limit)`;
-
-  it("names the provider and its sign-in step for authentication failures", () => {
-    expect(formatProviderAuthenticationErrorUserText("meta")).toBe(
-      "Couldn't sign in to meta. Sign in again with /login meta or under Models in the Control UI. For now, switch to a working model with /model.",
-    );
-    expect(formatProviderAuthenticationErrorUserText()).toBe(AUTH_INVALID_TOKEN_USER_TEXT);
-    expect(formatProviderAuthenticationErrorUserText("  ")).toBe(AUTH_INVALID_TOKEN_USER_TEXT);
-  });
 
   it("keeps reset hints beyond the summary length guard", () => {
     expect(aggregate.length).toBeGreaterThan(300);

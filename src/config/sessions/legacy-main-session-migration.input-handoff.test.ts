@@ -124,7 +124,7 @@ function createInputHandoff(sharedStore = false) {
         await receipt.completeAsync!(params.completion);
       }
     } finally {
-      receipt.finish(params.disposition ?? "interrupted");
+      receipt.finish(params.disposition ?? "interrupted", "failed");
       await receipt.settled?.();
     }
     return receipt;

@@ -9,7 +9,7 @@ title: "Configuration"
 
 OpenClaw reads an optional <Tooltip tip="JSON5 supports comments and trailing commas">**JSON5**</Tooltip> config from `~/.openclaw/openclaw.json`. If the file is missing, OpenClaw uses safe defaults.
 
-The active config path must be a regular file. OpenClaw-owned writes replace it atomically (rename onto the path), so a symlinked `openclaw.json` gets its target replaced rather than written through - avoid symlinked config layouts. If you keep config outside the default state directory, point `OPENCLAW_CONFIG_PATH` directly at the real file.
+Config writes require the active config path to be a regular file. Snapshot reads, including `backup create`, can follow a config-file symlink. The configured state directory may be a symlink: OpenClaw resolves its directory for atomic writes while retaining the configured path, and rejects a directory alias that changes during a write. To write config outside the default state directory, point `OPENCLAW_CONFIG_PATH` directly at the real file.
 
 Common reasons to add a config:
 
@@ -127,6 +127,13 @@ to an already-truncated file does not approve that earlier loss for replacing th
 backup, so Doctor can still restore the intact configuration.
 The health owner carries that anomaly across automatic metadata stamping and later
 reads; stamping a missing `meta` section does not restore the lost settings.
+Explicit Doctor repair can restore a suspicious reduction even when the remaining
+file still validates and the anomaly was already reported. It prefers an eligible
+intact `.bak` over the trusted, hash-verified `.last-good` copy, and saves the exact
+replaced bytes as `.clobbered.*`. A backup that is itself truncated is not used
+to repair that loss. When a healthy baseline is recorded, Doctor uses only backup
+bytes it previously recorded as healthy. Other backup bytes remain
+available for manual recovery. Startup and hot-reload recovery policy is unchanged.
 
 ## Configuration pages
 

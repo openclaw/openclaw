@@ -2,8 +2,8 @@ import {
   buildOAuthRefreshFailureLoginCommand,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
+import { resolveSafeProviderId } from "../agents/failover/provider-auth-user-copy.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
-import { resolveSafeProviderId } from "../agents/failover/user-copy.js";
 import type { ModelAuthRefreshOutcome } from "../commands/models/auth-refresh.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MessagePresentation } from "../interactive/payload.js";
@@ -131,7 +131,7 @@ export function buildProviderLoginRecovery(
   }
   const command = buildOAuthRefreshFailureLoginCommand(evidence.provider, { surface: "chat" });
   return {
-    hint: `Your model provider needs a new login. Send \`${command}\` from a private chat or Control UI session. Where shown, you can also select **Sign in**.`,
+    hint: `Your model provider needs a new login. Send \`${command}\` from a private chat or the OpenClaw app. Where shown, you can also select **Sign in**.`,
     presentation: {
       blocks: [
         {

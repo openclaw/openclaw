@@ -3,7 +3,7 @@ import { extractToolSchemaModelCompat } from "@openclaw/ai/internal/tool-schema"
 import { normalizeModelTransportBaseUrl } from "../agents/model-compat-catalog.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { getModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";
-import type { ModelCompatConfig } from "../config/types.models.js";
+import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import type { Model } from "../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "./plugin-metadata-snapshot.types.js";
 // Tool-schema compat predicates moved into @openclaw/ai (agent-tools-parameter-schema);

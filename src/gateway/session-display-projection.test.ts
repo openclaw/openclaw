@@ -156,13 +156,13 @@ describe("projectSessionDisplayMessage", () => {
     );
   });
 
-  test("flattens links before bounding a preview", () => {
+  test("flattens links and fences before bounding a preview", () => {
     const longUrl = `https://example.com/${"x".repeat(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS)}`;
-    const preview = projectSessionDisplayMessage(
-      assistant(`Read the [report](${longUrl}) and then deploy.`),
-      { flattenMarkdown: true },
+    const content = `[report](${longUrl})\n~~~~\n${longUrl}\n~~~~\ndeploy.`;
+    const message = assistant(content);
+    expect(projectSessionDisplayMessage(message, { flattenMarkdown: true })?.text).toBe(
+      "report deploy.",
     );
-
-    expect(preview?.text).toBe("Read the report and then deploy.");
+    expect(projectSessionDisplayMessage(message, { maxChars: 800 })?.text).toBe(content);
   });
 });

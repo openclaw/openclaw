@@ -13,6 +13,8 @@ import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types
 type ComposerKeyDownDeps = {
   prediction?: { text: string | null; dismiss: () => void };
   acceptPrediction?: () => void;
+  /** True when a plugin proposal replaced the draft. */
+  acceptProposal?: () => boolean;
   state: ChatComposerState;
   props: ChatComposerProps;
   skillMenuHost: SkillMenuHost;
@@ -25,6 +27,7 @@ type ComposerKeyDownDeps = {
     event: KeyboardEvent,
     followUpModeOverride?: ChatFollowUpMode,
   ) => void;
+  queueSubmit: (draft: string) => void;
   showAbortableUi: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
   goalComposer: GoalComposer;
@@ -33,6 +36,7 @@ type ComposerKeyDownDeps = {
 export function createComposerKeyDownHandler({
   prediction,
   acceptPrediction,
+  acceptProposal,
   state,
   props,
   skillMenuHost,
@@ -41,6 +45,7 @@ export function createComposerKeyDownHandler({
   sendShortcut,
   canSubmitDraft,
   submitDraft,
+  queueSubmit,
   showAbortableUi,
   alternateFollowUpMode,
   goalComposer,
@@ -68,7 +73,14 @@ export function createComposerKeyDownHandler({
     }
 
     if (goalComposer.active) {
-      if (event.key === "Escape") {
+      if (
+        (event.key === "Backspace" || event.key === "Delete") &&
+        target.value.length === 0 &&
+        goalComposer.restoreCommand()
+      ) {
+        event.preventDefault();
+        state.slashMenu.update(target.value, slashMenuHost);
+      } else if (event.key === "Escape") {
         event.preventDefault();
         goalComposer.cancel();
       } else if (
@@ -89,6 +101,25 @@ export function createComposerKeyDownHandler({
         state.slashMenu.handleKeydown(event, slashMenuHost, sendShortcut))
     ) {
       return;
+    }
+
+    if (state.tasks()?.card?.kind === "proposal") {
+      if (
+        event.key === "Tab" &&
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        acceptProposal?.()
+      ) {
+        event.preventDefault();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        state.tasks()?.dismiss();
+        return;
+      }
     }
 
     if (prediction?.text && !target.value) {
@@ -135,18 +166,8 @@ export function createComposerKeyDownHandler({
       }
     }
 
-    if (
-      event.key === "Escape" &&
-      !state.skillMenu.state.skillMenuOpen &&
-      !state.slashMenu.state.slashMenuOpen &&
-      !state.mentionMenu.open &&
-      !props.replyTarget &&
-      !state.dictation?.active &&
-      showAbortableUi &&
-      props.onAbort
-    ) {
+    if (event.key === "Escape" && stopRunFromEscape({ state, props, showAbortableUi })) {
       event.preventDefault();
-      props.onAbort();
       return;
     }
 
@@ -182,6 +203,10 @@ export function createComposerKeyDownHandler({
         return;
       }
       if (!canSubmitDraft(target.value)) {
+        if (props.submitPending) {
+          event.preventDefault();
+          queueSubmit(target.value);
+        }
         return;
       }
       event.preventDefault();
@@ -190,6 +215,27 @@ export function createComposerKeyDownHandler({
       submitDraft(target.value, event, followUpModeOverride);
     }
   };
+}
+
+/** Escape stops the visible run after composer menus, dictation, and replies decline it. */
+export function stopRunFromEscape({
+  state,
+  props,
+  showAbortableUi,
+}: Pick<ComposerKeyDownDeps, "state" | "props" | "showAbortableUi">): boolean {
+  if (
+    state.skillMenu.state.skillMenuOpen ||
+    state.slashMenu.state.slashMenuOpen ||
+    state.mentionMenu.open ||
+    props.replyTarget ||
+    state.dictation?.active ||
+    !showAbortableUi ||
+    !props.onAbort
+  ) {
+    return false;
+  }
+  props.onAbort();
+  return true;
 }
 
 export function handleQueueEditKeydown(

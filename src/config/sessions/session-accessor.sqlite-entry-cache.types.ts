@@ -39,6 +39,7 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     updatedAt: entry.updatedAt,
     createdAt: entry.createdAt,
     initializationPending: entry.initializationPending,
+    templateInitialization: entry.templateInitialization,
     providerReview: entry.providerReview,
     modelSelectionLocked: entry.modelSelectionLocked,
     pluginOwnerId: entry.pluginOwnerId,
@@ -72,7 +73,7 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     visibility: entry.visibility,
     incognito: entry.incognito,
     createdActor: entry.createdActor,
-    owner: entry.owner ? { ...entry.owner, assignedBy: entry.owner.assignedBy } : undefined,
+    owner: entry.owner,
     sandbox: entry.sandbox,
     spawnedBy: entry.spawnedBy,
     spawnDepth: entry.spawnDepth,
@@ -166,6 +167,8 @@ export type SessionEntryProjectionFacts = {
 };
 
 export type SessionEntryReplacementPublication = {
+  /** Required patch response facts survive optional full-snapshot receipt bounding. */
+  patchDiffBaselines?: ReadonlyMap<string, NonNullable<SessionEntry["sessionDiffBaseline"]>>;
   conversationPublication?: readonly import("./session-accessor.sqlite-conversation-publication.js").ConversationPublication[];
   /** Removed aliases preserved transcript contents, visibility, and logical-agent attribution. */
   transcriptInventoryUnchanged?: true;

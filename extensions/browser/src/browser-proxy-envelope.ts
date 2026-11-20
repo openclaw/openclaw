@@ -98,6 +98,15 @@ export function visitBrowserProxyFilePaths(
   }
 }
 
+export function collectBrowserProxyFilePaths(result: unknown): Set<string> {
+  const paths = new Set<string>();
+  visitBrowserProxyFilePaths(result, (filePath) => {
+    paths.add(filePath);
+    assertBrowserProxyFileCountWithinLimit(paths.size);
+  });
+  return paths;
+}
+
 type BrowserProxySuccess = {
   result: unknown;
   files?: BrowserProxyFile[];

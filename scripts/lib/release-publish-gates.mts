@@ -194,6 +194,9 @@ export function evaluateStableRollbackDrill(input: {
   nowMs: number;
   allowStaleRollbackDrill?: boolean;
 }): ReleasePublishGate[] {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const rollbackDrillMaxAgeMs = 90 * dayMs;
+  const rollbackDrillWarningWindowMs = 14 * dayMs;
   const gates: ReleasePublishGate[] = [
     {
       id: "stable-closeout.rollback-drill-id",
@@ -211,21 +214,28 @@ export function evaluateStableRollbackDrill(input: {
     typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(date)
       ? new Date(`${date}T00:00:00.000Z`).getTime()
       : Number.NaN;
+  const drillAgeMs = input.nowMs - drillDateMs;
+  let dateWarning = "";
   if (!Number.isFinite(drillDateMs) || new Date(drillDateMs).toISOString().slice(0, 10) !== date) {
     dateError = `rollback drill date is invalid: ${date ?? "<missing>"}.`;
-  } else if (input.nowMs - drillDateMs < 0) {
+  } else if (drillAgeMs < 0) {
     dateError = `rollback drill date is in the future: ${date}.`;
+  } else if (!input.allowStaleRollbackDrill && drillAgeMs > rollbackDrillMaxAgeMs) {
+    dateError = `rollback drill is older than 90 days: ${date}. Run the private rollback drill before stable closeout.`;
   } else if (
     !input.allowStaleRollbackDrill &&
-    input.nowMs - drillDateMs > 90 * 24 * 60 * 60 * 1000
+    rollbackDrillMaxAgeMs - drillAgeMs < rollbackDrillWarningWindowMs
   ) {
-    dateError = `rollback drill is older than 90 days: ${date}. Run the private rollback drill before stable closeout.`;
+    const expiryDate = new Date(drillDateMs + rollbackDrillMaxAgeMs).toISOString().slice(0, 10);
+    dateWarning = `Rollback drill expires on ${expiryDate}; run the private rollback drill before stable closeout.`;
   }
   gates.push({
     id: "stable-closeout.rollback-drill-date",
-    status: dateError ? "FAIL" : "PASS",
+    status: dateError ? "FAIL" : dateWarning ? "WARN" : "PASS",
     message:
-      dateError || "Rollback drill date satisfies the stable closeout freshness requirement.",
+      dateError ||
+      dateWarning ||
+      "Rollback drill date satisfies the stable closeout freshness requirement.",
     remediation:
       "Run the private rollback drill and record its UTC date in RELEASE_ROLLBACK_DRILL_DATE or supply rollback_drill_date to stable closeout.",
   });

@@ -41,6 +41,23 @@ const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
 
 type ErrorPayload = Record<string, unknown>;
 
+const PROVIDER_PRECAUTION_NOTICE =
+  "Chat stopped as a precaution. Review the findings in chat before continuing.";
+// Older transcripts retain only the error code, so this copy is a live producer too.
+const PROVIDER_LEGACY_MISALIGNMENT_NOTICE =
+  "The provider stopped this request as a safety precaution (misalignment).";
+const PROVIDER_REFUSAL_NOTICE_RE =
+  /^The provider refused this request(?: \(category: [a-zA-Z0-9_-]{1,64}\))?\. Revise the request and try again\.$/u;
+
+/** Recognize canonical display copy, not refusal or retry authority. */
+export function isProviderRefusalNoticeText(text: string): boolean {
+  return (
+    text === PROVIDER_PRECAUTION_NOTICE ||
+    text === PROVIDER_LEGACY_MISALIGNMENT_NOTICE ||
+    PROVIDER_REFUSAL_NOTICE_RE.test(text)
+  );
+}
+
 export function formatProviderRefusalText(message: {
   diagnostics?: unknown;
   errorCode?: unknown;
@@ -53,14 +70,14 @@ export function formatProviderRefusalText(message: {
   if (!refusal) {
     // Older transcripts retain the code but have no review findings or continuation state.
     return message.errorCode === "misalignment_policy_violation"
-      ? "The provider stopped this request as a safety precaution (misalignment)."
+      ? PROVIDER_LEGACY_MISALIGNMENT_NOTICE
       : undefined;
   }
   const category = asOptionalRecord(asOptionalRecord(refusal)?.details)?.category;
   const safeCategory =
     typeof category === "string" && /^[a-z0-9_-]{1,64}$/i.test(category) ? category : undefined;
   if (safeCategory === "misalignment") {
-    return "Chat stopped as a precaution. Review the findings in chat before continuing.";
+    return PROVIDER_PRECAUTION_NOTICE;
   }
   return `The provider refused this request${safeCategory ? ` (category: ${safeCategory})` : ""}. Revise the request and try again.`;
 }
@@ -234,7 +251,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   }
 
   if (isCloudflareOrHtmlErrorPage(trimmed)) {
-    return "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+    return "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
   }
 
   const httpMatch = extractHttpStatusMatch(trimmed.match(HTTP_STATUS_PREFIX_RE));
@@ -255,7 +272,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 }
 
 const CONNECTION_FAILED_MESSAGE =
-  "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+  "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
 const TRANSPORT_ERRORS = [
   {
     code: /\beconnrefused\b/i,
@@ -266,7 +283,7 @@ const TRANSPORT_ERRORS = [
     code: /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i,
     phrases: /socket hang up|connection reset|connection aborted/i,
     message:
-      "Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      "Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
   },
   {
     code: /\benotfound\b|\beai_again\b|\benetunreach\b|\behostunreach\b|\behostdown\b/i,

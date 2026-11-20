@@ -9,7 +9,7 @@ An editing pass by the change's author: run it on your own branch before you ope
 
 **The diff is a proposal.** Passing tests show it works, not that its architecture or every added test is needed.
 
-**Rules:** the root `AGENTS.md` sections "Design priorities", "One owner, complete cutover", "Runtime and code safeguards" and "Product and validation", plus the nearest scoped `AGENTS.md`. Steps 2 and 3 apply every rule to every changed file.
+**Rules:** the root `AGENTS.md` sections "Choose good compromises", "Design priorities", "One owner, complete cutover", "Runtime and code safeguards" and "Product and validation", plus the nearest scoped `AGENTS.md`. Steps 2 and 3 apply every rule to every changed file.
 
 ## 1. Re-derive the smallest complete fix
 
@@ -46,7 +46,7 @@ Preserve the requested fix and supported behavior, not the proposal's accidental
 
 For each added or changed test group and its setup helpers, name the distinct observable failure it catches.
 
-Keep regressions for the actual defect and distinct boundaries: ordering, cancellation, stale authority, restart, rejection, real errors and affected consumer differences. Keep static contract guards that independently protect a real boundary. Remove duplicate same-path cases, mock echoes, incidental field-copy or wording assertions, assertions on statically defined values, tests that only prove removed logic is gone, tests of obsolete implementations, and scaffolding or test-only production hooks. Consolidate useful cases in an existing owner suite.
+Keep regressions for the actual defect and distinct boundaries: ordering, cancellation, restart, rejection, real errors, authority checked when work starts, and affected consumer differences. Remove tests of a change that arrives while one request is in progress, unless a cited incident needs them. Keep static contract guards that independently protect a real boundary. Remove duplicate same-path cases, mock echoes, incidental field-copy or wording assertions, assertions on statically defined values, tests that only prove removed logic is gone, tests of obsolete implementations, and scaffolding or test-only production hooks. Consolidate useful cases in an existing owner suite.
 
 Removing tests never weakens the assertions, coverage of real boundaries or baselines that remain.
 

@@ -61,12 +61,12 @@ function expectDistinct(rows: ReturnType<typeof inlineRows>) {
 it.each([false, true])(
   "searches derived history and live summaries with tool details visible=%s",
   (showToolCalls) => {
-    const saved = ["one", "two"].map((id, index) =>
+    const saved = ["Cafe\u0301-one", "Café-two"].map((id, index) =>
       Object.assign(savedResult(id, index + 2), {
         content: [{ type: "text", text: "Tool metadata received." }],
       }),
     );
-    const live = ["one", "two"].map((id, index) => liveResult(id, index + 2));
+    const live = ["Cafe\u0301-one", "Café-two"].map((id, index) => liveResult(id, index + 2));
     for (const source of ["history", "live", "settled"]) {
       const props = createProps({
         showToolCalls,
@@ -76,13 +76,13 @@ it.each([false, true])(
       const unfiltered = inlineRows(props);
       expect(unfiltered).toHaveLength(2);
       expect(unfiltered.map(({ message }) => normalizeMessage(message).content[1])).toEqual([
-        block("one"),
-        block("two"),
+        block("Cafe\u0301-one"),
+        block("Café-two"),
       ]);
       for (const [searchOpen, searchQuery, indexes] of [
-        [true, " SHOWING ONE ", [0]],
+        [true, " SHOWING CAFÉ-ONE ", [0]],
+        [true, "showing cafe\u0301-two", [1]],
         [true, "showing", [0, 1]],
-        [true, "unrelated", []],
         [true, "Tool metadata received", []],
         [true, "   ", [0, 1]],
         [false, "unrelated", [0, 1]],
@@ -91,7 +91,7 @@ it.each([false, true])(
         expect(
           rows.map(({ message }) => extractTextCached(message)),
           source + ": " + searchQuery,
-        ).toEqual(indexes.map((index) => ["Showing one", "Showing two"][index]));
+        ).toEqual(indexes.map((index) => ["Showing Cafe\u0301-one", "Showing Café-two"][index]));
         expect(keys(rows)).toEqual(indexes.map((index) => unfiltered[index]!.key));
       }
     }

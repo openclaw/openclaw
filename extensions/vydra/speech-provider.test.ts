@@ -49,14 +49,29 @@ describe("vydra speech provider", () => {
     expect(result.audioBuffer).toEqual(Buffer.from("mp3-data"));
   });
 
-  it("treats blank environment API keys as unconfigured and rejects requests", async () => {
-    vi.stubEnv("VYDRA_API_KEY", "\t  \n");
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    expect(await provider.isConfiguredAsync?.({ ...request, providerConfig: {} })).toBe(false);
-    await expect(synthesize({ providerConfig: {} })).rejects.toThrow("Vydra API key missing");
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["configured key", "  configured-key  ", undefined, true],
+    ["configured and environment keys", "configured-key", "environment-key", true],
+    ["environment key", undefined, "  environment-key  ", true],
+    ["blank configured key", " \t ", "environment-key", true],
+    ["missing configured key and blank environment", undefined, "\t  \n", false],
+    ["blank configured and environment keys", " \t ", "\t  \n", false],
+  ] as const)(
+    "reports readiness for %s without HTTP",
+    async (_name, apiKey, envKey, configured) => {
+      vi.stubEnv("VYDRA_API_KEY", envKey);
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const providerConfig = { apiKey, baseUrl: "https://vydra.ai/api/v1/" };
+      const context = { ...request, providerConfig };
+      expect(provider.isConfigured(context)).toBe(configured);
+      expect(await provider.isConfiguredAsync?.(context)).toBe(configured);
+      if (!configured) {
+        await expect(synthesize({ providerConfig })).rejects.toThrow("Vydra API key missing");
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects generated audio downloads that exceed the configured media cap", async () => {
     stubFetch(

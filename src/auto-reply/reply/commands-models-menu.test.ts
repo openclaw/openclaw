@@ -70,7 +70,7 @@ describe("resolveModelSelectionAuthBlock", () => {
       model: "kimi-k2.5",
     });
     expect(block?.notice).toContain("API key");
-    expect(block?.notice).toContain("Control UI → Models → Connect provider");
+    expect(block?.notice).toContain("the OpenClaw app under Models → Connect provider");
     expect(block?.notice).toContain("`openclaw models auth login --provider opencode-go`");
     expect(block?.notice).not.toContain("/login");
   });

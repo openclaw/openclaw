@@ -9,8 +9,11 @@ import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { readStore } from "./short-term-promotion-store.js";
+import { resolveWorkspaceCreationMode, type WorkspaceFileMode } from "./workspace-file-mode.js";
 
 export const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
+export const FALLBACK_NARRATIVE =
+  "A memory trace surfaced, but details were unavailable in this run.";
 const DEEP_START_MARKER = "<!-- openclaw:dreaming:deep:start -->";
 const DEEP_END_MARKER = "<!-- openclaw:dreaming:deep:end -->";
 
@@ -88,25 +91,21 @@ export async function writeDreamsFileAtomic(
   dreamsPath: string,
   content: string,
   workspaceDir?: string,
+  workspaceFileMode?: WorkspaceFileMode,
 ): Promise<void> {
   const assertCurrent = captureMemoryMutationAuthority();
   assertCurrent?.();
   const files = workspaceDir ? getMemoryWorkspaceMaintenance(workspaceDir) : undefined;
   if (files) {
-    return await files.writeDreams(dreamsPath, content, assertCurrent);
+    return await files.writeDreams(dreamsPath, content, assertCurrent, workspaceFileMode);
   }
-  const directoryPath = path.dirname(dreamsPath);
-  const createdDirectory = await fs.mkdir(directoryPath, { recursive: true });
-  // fs-safe's 0o700 default would chmod an existing workspace, which fails with
-  // EPERM for a gateway user that can write it but not own it. A directory
-  // created here keeps that private default.
-  const dirMode = createdDirectory ? 0o700 : (await fs.stat(directoryPath)).mode & 0o7777;
+  const mode = resolveWorkspaceCreationMode(workspaceFileMode);
   await assertSafeDreamsPath(dreamsPath);
   await replaceFileAtomic({
     filePath: dreamsPath,
     content,
-    dirMode,
-    mode: 0o600,
+    dirMode: "preserve",
+    mode,
     preserveExistingMode: true,
     tempPrefix: `${path.basename(dreamsPath)}.dreams`,
     throwOnCleanupError: true,
@@ -116,6 +115,7 @@ export async function writeDreamsFileAtomic(
 
 export async function updateDreamsFile<T>(params: {
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   updater: (
     existing: string,
     dreamsPath: string,
@@ -138,6 +138,7 @@ export async function updateDreamsFile<T>(params: {
         dreamsPath,
         content.endsWith("\n") ? content : `${content}\n`,
         params.workspaceDir,
+        params.workspaceFileMode,
       );
     }
     return result;
@@ -146,11 +147,13 @@ export async function updateDreamsFile<T>(params: {
 
 export async function updateDeepDreamsFile(params: {
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   bodyLines: string[];
 }): Promise<string> {
   const body = params.bodyLines.join("\n");
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
+    workspaceFileMode: params.workspaceFileMode,
     updater: (existing, dreamsPath) => ({
       content: replaceManagedMarkdownBlock({
         original: existing,
@@ -194,10 +197,7 @@ function ensureDiarySection(existing: string): string {
     return existing;
   }
   const diarySection = `# Dream Diary\n\n${DIARY_START_MARKER}\n${DIARY_END_MARKER}\n`;
-  if (existing.trim().length === 0) {
-    return diarySection;
-  }
-  return diarySection + "\n" + existing;
+  return existing.trim().length === 0 ? diarySection : `${diarySection}\n${existing}`;
 }
 
 function replaceDiaryContent(existing: string, diaryContent: string): string {
@@ -265,7 +265,7 @@ function readDiaryBlocks(existing: string): string[] | null {
 function getDiaryContextEntries(existing: string): string[] {
   return (readDiaryBlocks(existing) ?? [])
     .map(normalizeDiaryBlockBody)
-    .filter((entry) => entry.length > 0);
+    .filter((entry) => entry.length > 0 && entry !== FALLBACK_NARRATIVE);
 }
 
 export async function readRecentDreamDiaryEntries(params: {
@@ -372,6 +372,7 @@ function buildBackfillDiaryEntry(params: {
 
 export async function writeBackfillDiaryEntries(params: {
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   entries: Array<{
     isoDay: string;
     bodyLines: string[];
@@ -382,6 +383,7 @@ export async function writeBackfillDiaryEntries(params: {
 }): Promise<{ dreamsPath: string; written: number; replaced: number }> {
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
+    workspaceFileMode: params.workspaceFileMode,
     updater: (existing, dreamsPath) => {
       const stripped = params.preserveExisting
         ? { updated: existing, removed: 0 }
@@ -444,6 +446,7 @@ export async function dedupeDreamDiaryEntries(params: {
 
 export async function appendNarrativeEntry(params: {
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   narrative: string;
   nowMs: number;
   timezone?: string;
@@ -454,6 +457,7 @@ export async function appendNarrativeEntry(params: {
   const entry = `\n---\n\n*${dateStr}*\n\n${params.narrative}\n`;
   return await updateDreamsFile<string | undefined>({
     workspaceDir: params.workspaceDir,
+    workspaceFileMode: params.workspaceFileMode,
     updater: async (existing, dreamsPath) => {
       const sourceKeys = params.sourceEntryKeys ?? [];
       const currentSources =

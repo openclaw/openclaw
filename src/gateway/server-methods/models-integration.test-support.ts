@@ -115,7 +115,7 @@ export async function writeAuthStoreExternally(
   store: AuthProfileStore | null,
 ) {
   const result = await promisify(execFile)(
-    resolveTestNodeExecPath(),
+    resolveTestNodeExecPath(state.env),
     [
       "--input-type=module",
       "--eval",

@@ -19,10 +19,7 @@ import {
   runWithSessionEntryCreationPublication,
 } from "./session-accessor.sqlite-entry-cache.js";
 import { applySessionEntryCreationReplacement } from "./session-accessor.sqlite-replacement-projection.js";
-import {
-  initializeSessionTranscriptInWorker,
-  prepareSessionEntryReplacementDatabase,
-} from "./session-accessor.sqlite-replacement-worker.js";
+import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   runExclusiveSqliteSessionWrite,
   resolveSqliteTranscriptScope,
@@ -39,7 +36,10 @@ import type {
 } from "./session-accessor.types.js";
 import { createSessionActorEntryWithTranscriptInScope } from "./session-actor-entry-adapter.js";
 import { publishSessionStateArchivesInWorker } from "./session-archive-publication.js";
+import { SessionEntryCreationNotCommittedError } from "./session-creation-operation.js";
 import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
+import { composeSessionSourceAssertion } from "./session-source-authority.js";
+import { initializeSessionTranscriptInWorker } from "./session-transcript-initialization.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { resolveSessionEntryCandidates } from "./store-entry.js";
 
@@ -111,10 +111,10 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
       if (!snapshot) {
         await prepareSessionEntryReplacementDatabase(
           databaseOptions,
-          () => {
+          composeSessionSourceAssertion([options.commitGuard], (assertSources) => {
             reader.assertCurrent();
-            options.commitGuard?.();
-          },
+            assertSources();
+          }),
           undefined,
           options.followRegistration,
         );
@@ -176,12 +176,15 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
                 runWithSessionEntryCreationPublication(operation, () => run(assertCurrent)),
               )
           : undefined;
-        const assertCurrent = () => {
-          if (source.kind === "worker") {
-            source.assertCurrent();
-          }
-          options.commitGuard?.();
-        };
+        const assertCurrent = composeSessionSourceAssertion(
+          [options.commitGuard],
+          (assertSources) => {
+            if (source.kind === "worker") {
+              source.assertCurrent();
+            }
+            assertSources();
+          },
+        );
         options.onPhase?.("entry");
         const created = await createEntry({ existingEntry, targetEntry, labelInUse });
         if (!created.ok) {
@@ -204,10 +207,7 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
         if (separateHeader) {
           options.onPhase?.("transcript");
           const initialize = async (assertSourceCurrent?: () => void) => {
-            const assertHeld = () => {
-              assertCurrent();
-              assertSourceCurrent?.();
-            };
+            const assertHeld = composeSessionSourceAssertion([assertCurrent, assertSourceCurrent]);
             try {
               if (source.kind === "worker") {
                 await initializeSessionTranscriptInWorker(
@@ -278,10 +278,23 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
             skipMaintenance: true,
             withCommit,
             beforeCommitInTransaction: () => {
-              assertCurrent();
-              assertSessionCreationLabelAvailable(source.database, normalizedKey, options.label);
+              try {
+                assertCurrent();
+                assertSessionCreationLabelAvailable(source.database, normalizedKey, options.label);
+              } catch (error) {
+                throw options.certifyNotCommitted
+                  ? new SessionEntryCreationNotCommittedError(error)
+                  : error;
+              }
             },
             creation: {
+              receipt: options.creationOperation
+                ? {
+                    operation: options.creationOperation,
+                    sessionKey: normalizedKey,
+                    entry: created.entry,
+                  }
+                : undefined,
               preparedTranscript,
               ownerAssignment: owner ? { sessionKey: normalizedKey, owner } : undefined,
             },
@@ -293,6 +306,7 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
         try {
           assertCurrent();
           await applySessionEntryCreationReplacement({
+            certifyNotCommitted: options.certifyNotCommitted,
             scope,
             agentId: scope.agentId,
             storePath: scope.path,
@@ -311,6 +325,7 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
               options.label === undefined
                 ? undefined
                 : { sessionKey: normalizedKey, label: options.label },
+            creationOperation: options.creationOperation,
             preparedTranscript,
             initializeTranscript: separateHeader || preparedTranscript ? undefined : initialization,
             onWriterAdmitted: separateHeader ? undefined : () => options.onPhase?.("commit"),

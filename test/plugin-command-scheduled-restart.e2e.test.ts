@@ -1,22 +1,15 @@
 // Real Gateway processes on one isolated state directory prove restart continuity for
 // requester-admitted scheduled command turns, without double-firing or reviving ended schedules.
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../packages/gateway-protocol/src/client-info.js";
-import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
-import { extractFirstTextBlock } from "../src/shared/chat-message-content.js";
-import { connectRestartClient } from "./gateway-restart.test-support.js";
-import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
 } from "./helpers/openai-responses-model-fixture.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
+import { createScheduledRestartConnector } from "./plugin-command-scheduled-restart.test-support.js";
 
 const PLUGIN_ID = "scheduled-restart-proof";
 const MODEL = "scheduled-restart-model";
@@ -27,8 +20,6 @@ const EVERY_MS = 20_000;
 const MAX_RUNS = 2;
 
 type Tick = { pid: number; label: string };
-type ChatEvent = { event?: string; payload?: unknown };
-type CronJobView = { id: string; enabled: boolean; name: string };
 
 function pluginSource(tickFile: string) {
   return `const fs = require("node:fs");
@@ -145,9 +136,7 @@ it.skipIf(process.platform === "win32")(
     });
     onTestFinished(() => instance.cleanup());
 
-    const deviceIdentity = loadOrCreateDeviceIdentity({
-      path: instance.state.path("scheduled-restart-device", "client", "credentials.sqlite"),
-    });
+    const connect = createScheduledRestartConnector(instance, SESSION_KEY, "/proof-schedule");
     const readTicks = async (): Promise<Tick[]> => {
       const text = await fs.readFile(tickFile, "utf8").catch(() => "");
       return text
@@ -157,50 +146,6 @@ it.skipIf(process.platform === "win32")(
     };
     const ticksFor = async (label: string) =>
       (await readTicks()).filter((tick) => tick.label === label);
-    const connect = async () => {
-      const events: ChatEvent[] = [];
-      // A paired operator device, as a real chat client: the requester whose authority each
-      // scheduled occurrence restores.
-      const client = await connectRestartClient(instance, {
-        deviceIdentity,
-        clientName: GATEWAY_CLIENT_IDS.TUI,
-        mode: GATEWAY_CLIENT_MODES.UI,
-        onEvent: (event) => events.push(event),
-      });
-      const schedule = async (label: string) => {
-        const runId = randomUUID();
-        await client.request("chat.send", {
-          sessionKey: SESSION_KEY,
-          message: "/proof-schedule " + label,
-          deliver: false,
-          idempotencyKey: runId,
-        });
-        let text: string | undefined;
-        await vi.waitFor(
-          () => {
-            const final = events.find((event) => {
-              const payload = event.payload as { runId?: string; state?: string } | undefined;
-              return (
-                event.event === "chat" && payload?.runId === runId && payload.state === "final"
-              );
-            });
-            text = extractFirstTextBlock((final?.payload as { message?: unknown })?.message);
-            // Captured plugin source gives this schedule restart continuity.
-            expect(text, instance.logs()).toMatch(/^SCHEDULED \S+ true$/);
-          },
-          { timeout: 60_000, interval: 50 },
-        );
-        return text!.split(" ")[1]!;
-      };
-      const jobs = async () =>
-        (
-          await client.request<{ jobs: CronJobView[] }>("cron.list", {
-            includeDisabled: true,
-            limit: 200,
-          })
-        ).jobs;
-      return { client, schedule, jobs };
-    };
 
     try {
       await instance.startGateway();

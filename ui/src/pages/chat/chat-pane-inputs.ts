@@ -21,6 +21,7 @@ export const chatPaneProperties = {
   active: { default: false },
   draft: { default: undefined },
   focusComposer: { default: false },
+  ownsRouteComposer: { default: false },
   dashboardExpanded: { default: false },
   routeFace: { default: undefined },
   onFaceChange: { default: undefined },

@@ -78,7 +78,7 @@ it("uses typed runtime guidance without exposing the private diagnostic", () => 
 it("tells the user to sign in when the selected provider has no credential", () => {
   const message = 'No API key found for provider "meta". Configure an API key (paste-api-key).';
   const expectedText =
-    "⚠️ meta isn't signed in yet. Sign in with /login meta or under Models in the Control UI. For now, switch to a working model with /model.";
+    "⚠️ meta isn't signed in yet. Sign in with /login meta or under Models in the OpenClaw app. For now, switch to a working model with /model.";
   const direct = new ProviderAuthError("missing-provider-auth", "meta", message);
   const directReply = externalReply(direct);
   expect(directReply.text).toBe(expectedText);

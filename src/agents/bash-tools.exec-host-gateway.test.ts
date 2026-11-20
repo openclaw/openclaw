@@ -37,11 +37,12 @@ import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { captureProcessUnhandledRejections } from "./bash-tools.exec-runtime.test-support.js";
-import type {
-  ExecApprovalFollowupFactory,
-  ExecApprovalFollowupOutcome,
-} from "./bash-tools.exec-types.js";
+import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-result.types.js";
+import {
+  captureProcessUnhandledRejections,
+  registerGatewayApprovalEventCases,
+} from "./bash-tools.exec-runtime.test-support.js";
+import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 import { captureSecurityEvents } from "./test-helpers/security-events.js";
 
 type SendExecApprovalFollowupResult =
@@ -320,21 +321,15 @@ describe("processGatewayAllowlist", () => {
     });
   }
 
-  function mockApprovedDetachedExec(params: {
-    outcome: ExecApprovalFollowupOutcome;
-    sessionId?: string;
-  }) {
+  function mockApprovedDetachedExec(outcome: ExecApprovalFollowupOutcome) {
     approvalDecisionMock.mockResolvedValueOnce("allow-once");
-    runExecProcessMock.mockResolvedValue({
-      session: { id: params.sessionId ?? "sess-1" },
-      promise: Promise.resolve(params.outcome),
-    });
+    mockCompletedProcess(outcome);
   }
 
-  function mockCompletedProcess(aggregated = "done", sessionId = "sess-1") {
+  function mockCompletedProcess(outcome = completedOutcome(), sessionId = "sess-1") {
     runExecProcessMock.mockResolvedValue({
       session: { id: sessionId },
-      promise: Promise.resolve(completedOutcome(aggregated)),
+      promise: Promise.resolve(outcome),
     });
   }
 
@@ -656,70 +651,17 @@ describe("processGatewayAllowlist", () => {
     expect(approvalRouteMock).toHaveBeenCalledOnce();
   });
 
-  it("publishes and records the approved Guardian review on its exec call", async () => {
-    const assessment = { decision: "allow-once", risk: "low", rationale: "read-only" } as const;
-    const command = "echo ok";
-    await configurePlanBackedCommand({ command });
-    const review = createDeferredCore<Awaited<ReturnType<ExecAutoReviewer>>>();
-    const autoReviewer = vi.fn<ExecAutoReviewer>(() => review.promise);
-    const reviews: Array<Record<string, unknown>> = [];
-    const publicationOrder: string[] = [];
-    const onApprovalReview = vi.fn((value: { status: string }) => {
-      publicationOrder.push(`stored:${value.status}`);
-    });
-    const unsubscribe = onAgentEvent((event) => {
-      if (
-        event.runId === "run-review" &&
-        event.stream === "tool" &&
-        event.data.phase === "review"
-      ) {
-        publicationOrder.push(`emitted:${String(event.data.approvalReviewOutcome)}`);
-        reviews.push(event.data);
-      }
-    });
-    try {
-      const pending = runGatewayAllowlist({
-        command,
-        ask: "on-miss",
-        autoReview: true,
-        autoReviewer,
-        runId: "run-review",
-        toolCallId: "tool-review",
-        onApprovalReview,
-      });
-      await vi.waitFor(() => expect(autoReviewer).toHaveBeenCalledOnce());
-      expect(reviews).toMatchObject([
-        {
-          toolCallId: "tool-review",
-          approvalReviewOutcome: "reviewing",
-          review: { status: "in_progress" },
-        },
-      ]);
-      review.resolve(assessment);
-      const result = await pending;
-      expect(reviews.map((event) => event.approvalReviewOutcome)).toEqual([
-        "reviewing",
-        "approved",
-      ]);
-      expect(reviews[1]).toMatchObject({
-        toolCallId: "tool-review",
-        review: {
-          id: "guardian:tool-review",
-          status: "approved",
-          riskLevel: assessment.risk,
-          rationale: assessment.rationale,
-        },
-      });
-      expect(publicationOrder).toEqual([
-        "emitted:reviewing",
-        "stored:approved",
-        "emitted:approved",
-      ]);
-      expect(approvalRouteMock).not.toHaveBeenCalled();
-      expect(result.deniedResult).toBeUndefined();
-    } finally {
-      unsubscribe();
-    }
+  registerGatewayApprovalEventCases({
+    configurePlanBackedCommand,
+    runGatewayAllowlist,
+    approvalDecisionMock,
+    approvalRouteFixture,
+    approvalRouteMock,
+    prepareDiagnosticsExport: (output) => mockApprovedDetachedExec(completedOutcome(output)),
+    expectPending,
+    waitForFollowup,
+    readFollowupTarget: () => followupMock.mock.calls[0]?.[0],
+    requireSentFollowupText,
   });
 
   it.runIf(process.platform !== "win32")(
@@ -917,7 +859,7 @@ describe("processGatewayAllowlist", () => {
     });
   });
 
-  it("offers allow-always for shell-wrapper misses with reusable executable patterns", async () => {
+  it("preserves detached launch options while recording reusable shell approvals", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -931,6 +873,11 @@ describe("processGatewayAllowlist", () => {
         allowedHosts: ["api.example.com"],
       },
     ];
+    const durable = {
+      durable: { notifyOnExit: true, notifyOnExitEmptySuccess: true },
+      agentId: "main",
+      sessionId: "origin-session",
+    };
     await configurePlanBackedCommand({ command, env });
     const approval = createDeferredCore<"allow-always">();
     approvalDecisionMock.mockReturnValue(approval.promise);
@@ -943,6 +890,7 @@ describe("processGatewayAllowlist", () => {
       env,
       secretEgressBindings,
       autoReview: false,
+      ...durable,
     });
     const expectedGitArgPattern = buildCwdBoundHashedArgPattern(
       ["/usr/bin/git", "status"],
@@ -956,9 +904,7 @@ describe("processGatewayAllowlist", () => {
     expect(runExecProcessMock).not.toHaveBeenCalled();
     approval.resolve("allow-always");
     await waitForFollowup();
-    expect(runExecProcessMock).toHaveBeenCalledWith(
-      expect.objectContaining({ env, secretEgressBindings }),
-    );
+    expectCall(runExecProcessMock, { env, secretEgressBindings, ...durable, notifyOnExit: false });
     expectCall(commitAuthorizationMock, {
       authorization: expect.objectContaining({ source: "explicit-approval" }),
       allowAlwaysDecision: {
@@ -1046,66 +992,11 @@ describe("processGatewayAllowlist", () => {
     ).rejects.toThrow("exec denied: allowlist miss");
   });
 
-  it("keeps webchat diagnostics approvals as direct pasteable followups", async () => {
-    mockApprovedDetachedExec({
-      outcome: completedOutcome(
-        JSON.stringify({
-          path: "/tmp/openclaw-diagnostics.zip",
-          bytes: 1234,
-          manifest: {
-            generatedAt: "2026-04-28T20:58:29.311Z",
-            openclawVersion: "2026.4.27",
-            contents: [
-              { path: "diagnostics.json", bytes: 100 },
-              { path: "summary.md", bytes: 200 },
-            ],
-            privacy: {
-              payloadFree: true,
-              rawLogsIncluded: false,
-              notes: ["Logs keep operational summaries."],
-            },
-          },
-        }),
-      ),
-    });
-
-    const approvalFollowup = vi.fn<ExecApprovalFollowupFactory>(
-      async () => "Synthetic harness diagnostics: thread-1",
-    );
-
-    const result = await runGatewayAllowlist({
-      command: "openclaw gateway diagnostics export --json",
-      trigger: "diagnostics",
-      approvalFollowupMode: "direct",
-      approvalFollowup,
-      turnSourceChannel: "webchat",
-    });
-    expectPending(result);
-    await waitForFollowup();
-
-    const followupTarget = followupMock.mock.calls[0]?.[0];
-    expect(followupTarget?.direct).toBe(true);
-    const followupText = requireSentFollowupText();
-    expect(followupText).toContain("Diagnostics export created.");
-    expect(followupText).toContain("Path: /tmp/openclaw-diagnostics.zip");
-    expect(followupText).toContain("Contents (2 files):");
-    expect(followupText).toContain("Size: 1234 bytes");
-    expect(followupText).toContain("Privacy:\n- payload-free: yes\n- raw logs included: no");
-    expect(followupText).toContain("- Logs keep operational summaries.");
-    expect(followupText).toContain("Synthetic harness diagnostics: thread-1");
-    expect(approvalFollowup.mock.calls[0]?.[0]).toMatchObject({
-      approvalId: approvalRouteFixture.id,
-      sessionId: "sess-1",
-      trigger: "diagnostics",
-      outcome: { status: "completed", exitCode: 0 },
-    });
-  });
-
   it("keeps a completed detached outcome terminal when agent follow-up registration fails", async () => {
     const unhandledRejections = captureProcessUnhandledRejections();
     const outcome = completedOutcome("completed output");
     const approvalFollowup = vi.fn<ExecApprovalFollowupFactory>(() => undefined);
-    mockApprovedDetachedExec({ outcome });
+    mockApprovedDetachedExec(outcome);
     followupMock.mockRejectedValueOnce(
       new Error("synchronous runtime-handoff registration failure"),
     );
@@ -1176,38 +1067,6 @@ describe("processGatewayAllowlist", () => {
     }
   });
 
-  it("emits inline approval park and clear events for a denial", async () => {
-    approvalDecisionMock.mockResolvedValue("deny");
-    const events: Array<Record<string, unknown>> = [];
-    const unsubscribe = onAgentEvent((event) => {
-      if (event.runId === "run-inline" && event.stream === "lifecycle") {
-        events.push(event.data);
-      }
-    });
-
-    try {
-      await runGatewayAllowlist({
-        command: "pwd",
-        turnSourceChannel: "webchat",
-        runId: "run-inline",
-        toolCallId: "tool-inline",
-        sessionKey: "agent:main:main",
-        sessionId: "session-inline",
-      });
-    } finally {
-      unsubscribe();
-    }
-
-    expect(events).toEqual([
-      { phase: "waiting-approval", approvalId: approvalRouteFixture.id, toolCallId: "tool-inline" },
-      {
-        phase: "approval-resolved",
-        approvalId: approvalRouteFixture.id,
-        toolCallId: "tool-inline",
-      },
-    ]);
-  });
-
   it("waits outside admission, then atomically hands an approved process to the registry", async () => {
     const approval = createDeferredCore<ExecApprovalDecision>();
     const outcome = createDeferredCore<ExecApprovalFollowupOutcome>();
@@ -1269,7 +1128,7 @@ describe("processGatewayAllowlist", () => {
         fs.writeFileSync(script, "#!/bin/sh\necho mutated\n");
         return "allow-once";
       });
-      mockCompletedProcess("approved", "sess-script-binding");
+      mockCompletedProcess(completedOutcome("approved"), "sess-script-binding");
 
       await runDetached({
         command,
@@ -1382,7 +1241,7 @@ describe("processGatewayAllowlist", () => {
 
   it("does not spawn or send a detached followup after cancellation during startup", async () => {
     const controller = new AbortController();
-    mockApprovedDetachedExec({ outcome: completedOutcome() });
+    mockApprovedDetachedExec(completedOutcome());
     const runtime = await vi.importActual<typeof import("./bash-tools.exec-runtime.js")>(
       "./bash-tools.exec-runtime.js",
     );

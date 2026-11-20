@@ -29,6 +29,7 @@ import { VERSION } from "../../version.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
 import { registerUpdateCli } from "../update-cli.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import {
   registerLeaseServiceRestorationTests,
@@ -50,7 +51,7 @@ import {
   writeScenario,
   type Lane,
 } from "./update-command-lease.test-harness.js";
-import type { ProducedPluginUpdateResult } from "./update-command-plugins-internals.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 
 // Register the shared mocks before any update entry point can capture its dependencies.
 await vi.hoisted(async () => {
@@ -250,29 +251,37 @@ describe("update orchestration lifecycle ownership", () => {
       }
       mocks.plugins.mockResolvedValue({ ...pluginResult, changed: false });
       const current = version === VERSION;
-      const result = convergeUpdatePlugins({
-        coreAlreadyCurrent: current,
-        result: {
-          status: current ? "skipped" : "ok",
-          mode: "git",
+      const env = { ...process.env };
+      const { runId } = createUpdateRun({ trigger: "cli" }, { env });
+      const result = withUpdateCommandExecutor(runId, async (executor) =>
+        convergeUpdatePlugins({
+          coreAlreadyCurrent: current,
+          result: {
+            status: current ? "skipped" : "ok",
+            mode: "git",
+            root: state.root,
+            before: { version: VERSION },
+            after: { version },
+            steps: [],
+            durationMs: 1,
+          },
           root: state.root,
-          before: { version: VERSION },
-          after: { version },
-          steps: [],
-          durationMs: 1,
-        },
-        root: state.root,
-        installKindChanged: false,
-        configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
-        requestedChannel: null,
-        storedChannel: "stable",
-        channel: "stable",
-        downgradeRisk: !current,
-        opts: { json: true, yes: true },
-        preUpdatePluginInstallRecords: {},
-        startedAt: Date.now(),
-        updateStepTimeoutMs: 15_000,
-      });
+          installKindChanged: false,
+          configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
+          requestedChannel: null,
+          storedChannel: "stable",
+          channel: "stable",
+          downgradeRisk: !current,
+          opts: {
+            json: true,
+            yes: true,
+            run: { runId, env, executorFence: await executor.enter(state.root) },
+          },
+          preUpdatePluginInstallRecords: {},
+          startedAt: Date.now(),
+          updateStepTimeoutMs: 15_000,
+        }),
+      );
       if (failure) {
         await expect(result).rejects.toThrow(failure);
         expect(mocks.plugins).not.toHaveBeenCalled();
@@ -577,7 +586,7 @@ describe("update orchestration lifecycle ownership", () => {
 
   it("repair reconciles captured runs before publishing successful convergence with warnings", async () => {
     const recovery = seedInterruptedPostCoreRun();
-    const warning: ProducedPluginUpdateResult = {
+    const warning: PostCorePluginUpdateResult = {
       ...pluginResult,
       status: "warning",
       changed: false,

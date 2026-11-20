@@ -24,6 +24,13 @@ refuses to complete repair, but snapshot contention alone does not call for a
 database restore. Integrity failures retain backup-restore guidance for the
 affected database.
 
+During an update, if Doctor runs out of temporary space for the read-only
+snapshot it uses to inspect session entry state, it defers that inspection
+instead of stopping the update. The agent database stays unchanged, and the
+update reports a warning. Free temporary snapshot space, then run
+`openclaw doctor --fix` to finish the inspection. Outside an update, and for any
+other snapshot failure, Doctor still refuses.
+
 If state storage is not writable, Doctor reports the database or sidecar path
 that blocked preparation and gives ownership, permission, writable-mount, and
 immutable-file recovery guidance. It checks effective access rather than treating
@@ -166,6 +173,8 @@ prepared catalog. Models it publishes do not receive an offline-catalog advisory
 server-reported missing models and legacy-reference migrations still do. If the
 Gateway is unavailable, Doctor keeps its offline checks without discovering or
 probing providers.
+The check also reports provider catalog discovery that the Gateway recorded as rejected
+(warning) or unavailable (info), with `openclaw models list --refresh` as the retry step.
 
 `doctor --fix` does not use the lint default profile and does not accept
 `--all`. It runs Doctor's ordered repair path: modern health checks may provide

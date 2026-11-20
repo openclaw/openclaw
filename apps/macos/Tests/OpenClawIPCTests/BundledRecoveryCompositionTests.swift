@@ -73,7 +73,8 @@ struct BundledRecoveryCompositionTests {
             let command = try #require(GatewayLaunchAgentManager.launchdProgramArguments())
             #expect(command.contains("--no-install"))
             let inspected = try #require(GatewayLaunchAgentManager.installedServiceCLI())
-            #expect(inspected.prefix.first == runtime.bun.path)
+            #expect(inspected.prefix.first == runtime.serviceBun.resolvingSymlinksInPath().path)
+            #expect(inspected.matchesBundledRuntime(runtime))
 
             // Same-version shell and app packages must not be interchangeable host-link owners.
             let wrongRoot = state.appendingPathComponent("other-install")

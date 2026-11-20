@@ -10,6 +10,8 @@
     "PYTHONPATH",
     "PERL5LIB",
     "PERL5OPT",
+    "PERL5SHELL",
+    "PERLLIB",
     "RUBYLIB",
     "RUBYOPT",
     "BASHOPTS",

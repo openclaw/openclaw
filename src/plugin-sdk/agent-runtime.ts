@@ -31,8 +31,8 @@ export {
 } from "../agents/identity.js";
 
 export { resolveApiKeyForProviderCore as resolveApiKeyForProvider } from "../agents/model-auth.js";
-export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog.js";
-export type { ModelCatalogEntry } from "../agents/model-catalog.js";
+export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog-lookup.js";
+export type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 /** Preserve the shipped SDK getter's background renewal; internal observations stay passive. */
 export { refreshExpiredPreparedModelCatalog as getPreparedModelCatalogSnapshot };
 

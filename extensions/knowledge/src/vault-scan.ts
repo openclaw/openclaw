@@ -12,7 +12,14 @@ import { readText, parseYaml, safeRoot } from "./files.js";
 import { RECORD_MAX_BYTES, AUXILIARY_MAX_BYTES } from "./limits.js";
 import { carryLinkExtraction, resolveLinks } from "./markdown-links.js";
 import { linkTargets, mergeProblem } from "./merge.js";
-import { approvedRecall, Envelope, type Issue, type LoadedRecord, type Scope } from "./model.js";
+import {
+  approvedRecall,
+  Envelope,
+  type Issue,
+  type LoadedRecord,
+  type Recall,
+  type Scope,
+} from "./model.js";
 import {
   bundledOntology,
   parseOntology,
@@ -138,15 +145,17 @@ export class VaultScanner {
           return false;
         }
         const file = dir + name,
-          stamp = fileStamp(this.root, file);
-        entries.push(`${file}|${stamp}`);
+          observed = fs.lstatSync(path.join(this.root, file), { bigint: true }),
+          directory = observed.isDirectory();
+        // Retained originals and publication staging change on every upload
+        // and save without changing the catalog; cited files carry their own
+        // evidence stamps. Only their kind (a real directory or not) matters here.
         if (!dir && (name === "artifacts" || name === ".knowledge-history")) {
+          entries.push(`${file}|${directory ? "directory" : fileStamp(this.root, file, observed)}`);
           continue;
         }
-        if (
-          fs.lstatSync(path.join(this.root, file)).isDirectory() &&
-          !walk(file + "/", depth + 1)
-        ) {
+        entries.push(`${file}|${fileStamp(this.root, file, observed)}`);
+        if (directory && !walk(file + "/", depth + 1)) {
           return false;
         }
       }
@@ -167,9 +176,12 @@ export class VaultScanner {
       this.cache.files ??= new Map();
       this.cache.evidence ??= new Map();
     }
-    const evidence = new EvidenceInspector(this.root, overlay ? undefined : this.cache?.evidence);
+    // Overlay scans share per-file parses and evidence outcomes, which are
+    // keyed by on-disk stamps. A parse that hydrated from an overlay artifact
+    // carries the disk stamp but not the disk bytes, so it is never cached.
+    const evidence = new EvidenceInspector(this.root, this.cache?.evidence);
     const descriptorStamp = sourceDescriptorStamper(this.root);
-    const parsed = overlay ? undefined : this.cache?.files,
+    const parsed = this.cache?.files,
       seen = new Set<string>();
     const directory = this.empty ? null : await safeRoot(this.root);
     const records: LoadedRecord[] = [];
@@ -252,6 +264,12 @@ export class VaultScanner {
           // Cache only deterministic outcomes of settled files; a failed read is retried.
           const descriptors = new Map<string, string>();
           const remember = (value: Omit<ParsedFile, "stamp" | "descriptors">) => {
+            if (
+              overlay &&
+              [...descriptors.keys()].some((p) => Object.hasOwn(overlay.artifacts, p))
+            ) {
+              return;
+            }
             // Unsettled files are still reread and validated; retain their parse
             // identity only to reuse links when those freshly read bytes match.
             const reusable =
@@ -381,6 +399,7 @@ export class VaultScanner {
       }
     }
     const byId = new Map<string, LoadedRecord[]>();
+    const recall = new Map<string, Recall>();
     for (const r of records) {
       byId.set(r.id, [...(byId.get(r.id) ?? []), r]);
     }
@@ -488,7 +507,10 @@ export class VaultScanner {
       for (const message of annotationProblems(m, (id) => byId.get(id) ?? [])) {
         problem("invalid-annotation", message);
       }
-      if (m.recall !== undefined && !approvedRecall(m.recall)) {
+      const approval = approvedRecall(m.recall);
+      if (approval) {
+        recall.set(r.id, approval);
+      } else if (m.recall !== undefined) {
         add(
           r.path,
           "invalid-recall",
@@ -551,7 +573,7 @@ export class VaultScanner {
       this.observe?.(records, this.scope, evidence);
     }
     const navigable = eligible(
-      { records, ontology, sources, issues, checkedAt: "" },
+      { records, recall, ontology, sources, issues, checkedAt: "" },
       undefined,
       false,
     );
@@ -572,7 +594,7 @@ export class VaultScanner {
       }
     }
     return {
-      data: { records, ontology, sources, issues, checkedAt: new Date().toISOString() },
+      data: { records, recall, ontology, sources, issues, checkedAt: new Date().toISOString() },
       evidence,
     };
   }

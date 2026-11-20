@@ -53,6 +53,8 @@
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-body: var(--mono);
   --font-chat: var(--mono);
+  --link: var(--accent);
+  --link-on-tint: var(--link);
 }
 
 :root[data-theme="phosphor-light"] {
@@ -75,7 +77,6 @@
   --card-foreground: #16201a;
   --card-highlight: rgba(20, 50, 30, 0.02);
   --popover-foreground: #16201a;
-  --session-hovercard-surface: var(--card);
 
   --text: #2a352b;
   --text-strong: #16201a;
@@ -98,4 +99,6 @@
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-body: var(--mono);
   --font-chat: var(--mono);
+  --link: var(--accent);
+  --link-on-tint: #006133;
 }

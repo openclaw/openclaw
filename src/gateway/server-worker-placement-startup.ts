@@ -41,7 +41,7 @@ import {
   runWorkerPlacementSessionBarrier,
 } from "./server-worker-placement-session-target.js";
 import { recoverGatewayWorkerPlacementWorkspaces } from "./server-worker-placement-workspace-recovery.js";
-import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
+import { createRepositoryGatewayMovePreparation } from "./session-repository-materialization.js";
 import { createDevicePlacementAuthority } from "./worker-environments/device-placement-eligibility.js";
 import {
   createNodeWorkspaceRetainCoordinator,
@@ -59,6 +59,8 @@ import type {
 } from "./worker-environments/placement-record.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { createRepositoryPublicationPreparation } from "./worker-environments/repository-publication-preparation.js";
+import { refreshRepositoryRefs } from "./worker-environments/repository-ref-refresh.js";
 import { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import { createWorkerPlacementRedispatch } from "./worker-environments/worker-placement-redispatch.js";
@@ -93,6 +95,8 @@ export type GatewayWorkerPlacementRuntimeParams = {
 
 export function createGatewayGitHubPublicationRuntime(params: {
   placements: WorkerSessionPlacementStore;
+  environments?: Pick<WorkerEnvironmentService, "get" | "startTunnel" | "ensureRetainedRunning">;
+  prepareRepositoryIntegration?: import("./repository-publication-integration.js").PrepareRepositoryPublicationIntegration;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   warn: (message: string) => void;
 }) {
@@ -116,6 +120,8 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
   const runtimeRefresh = createWorkerRuntimeRefreshWaiter({
     environments: params.environments,
     isStopping: () => stopped,
+    hasCurrentRunner: (deviceId) =>
+      nodeWorkerSupervisorTransport?.hasCurrentRunner(deviceId) === true,
   });
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
   const {
@@ -232,7 +238,20 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
             return activate(assertCurrent);
           },
         }),
-      onActivated: ({ sessionId }, placement) => {
+      onActivated: (request, placement) => {
+        const { sessionId } = request;
+        runInDetachedAsyncContext(() => {
+          void refreshRepositoryRefs({
+            identity: request,
+            placements: params.placements,
+            environments: params.environments,
+            resolveWorkspace,
+          }).catch(() => {
+            params.warn(
+              "Background repository main refresh was unavailable; session startup continues and publication will refresh its base.",
+            );
+          });
+        });
         const environment = params.environments.get(placement.environmentId);
         if (
           environment?.state === "attached" &&
@@ -251,19 +270,11 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
       }),
       resolveWorkspace,
-      prepareGatewayMove: (identity) =>
-        params.placements.withWorkspaceExclusion(
-          identity.sessionId,
-          async (assertOwned) =>
-            await materializeSessionRepositoryWorkspaceOnGateway({
-              cfg: getRuntimeConfig(),
-              ...identity,
-              assertCurrent: () => {
-                assertOwned();
-                identity.assertCurrent();
-              },
-            }),
-        ),
+      prepareGatewayMove: createRepositoryGatewayMovePreparation({
+        placements: params.placements,
+        environments: params.environments,
+        getConfig: getRuntimeConfig,
+      }),
       workspaceOperations,
       prepareAcceptedWorkspacePublication,
       publishAcceptedWorkspace,
@@ -600,23 +611,20 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         "sidecars.worker-environments.github-ready",
         () => githubPublicationReady,
       );
-      // Track startup reconciliation in the placement slot so a concurrent
-      // close prelude drains it before uninstalling guards and stopping environments.
-      for (const reconcile of [
-        () =>
-          reconcilePhase("startup.workspaces", () =>
-            recoverGatewayWorkerPlacementWorkspaces({
-              placements: params.placements,
-              resolveWorkspace,
-              isStopping,
-            }),
-          ),
-        () => reconcilePhase("startup.active", () => dispatchService.reconcile("startup")),
-      ]) {
-        await trackOperation("reconcile", reconcile());
-        if (isStopping() || hooks.isClosePreludeStarted()) {
-          return await stopBeforeReady();
-        }
+      // Local journals settle before readiness. Remote provider recovery below
+      // shares the tracked reconcile slot so close still drains its effects.
+      await trackOperation(
+        "reconcile",
+        reconcilePhase("startup.workspaces", () =>
+          recoverGatewayWorkerPlacementWorkspaces({
+            placements: params.placements,
+            resolveWorkspace,
+            isStopping,
+          }),
+        ),
+      );
+      if (isStopping() || hooks.isClosePreludeStarted()) {
+        return await stopBeforeReady();
       }
       void nodeWorkspaceRetention.start();
       if (hooks.isClosePreludeStarted()) {
@@ -628,14 +636,19 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       }
       void trackOperation(
         "reconcile",
-        reconcilePhase("reconcile.session-retirement", () =>
-          sessionRetirement.reconcile(optionalWorkSignal),
-        ).then(() =>
-          // Git/network recovery must drain on close, but cannot hold Gateway readiness.
-          reconcilePhase("startup.publications", () =>
-            reconcilePublications(isReconciliationPaused),
+        // Provider and Git/network recovery cannot hold Gateway readiness. Session
+        // admission still serializes recovery, and shutdown drains the entire chain.
+        reconcilePhase("startup.active", () => dispatchService.reconcile("startup"))
+          .then(() =>
+            reconcilePhase("reconcile.session-retirement", () =>
+              sessionRetirement.reconcile(optionalWorkSignal),
+            ),
+          )
+          .then(() =>
+            reconcilePhase("startup.publications", () =>
+              reconcilePublications(isReconciliationPaused),
+            ),
           ),
-        ),
         "Worker placement reconcile sweep failed",
       );
       void sweepDiskSpace();
@@ -671,6 +684,15 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     },
     placements: params.placements,
     githubPublication,
+    prepareRepositoryPublication: createRepositoryPublicationPreparation({
+      placements: params.placements,
+      environments: params.environments,
+      getConfig: getRuntimeConfig,
+      ensurePlacement: (request) => dispatchService.ensurePlacement(request),
+      resolveDevicePlacementRequirement,
+      waitForNode: runtimeRefresh.wait,
+      reconcileActive: (id) => dispatchService.reconcileActive(id),
+    }),
     repositoryWorkspaceMutationService: createRepositoryWorkspaceMutationService({
       placements: params.placements,
       environments: params.environments,

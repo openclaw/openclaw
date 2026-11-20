@@ -6,6 +6,7 @@ import {
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { CliCredentialRemovedError } from "../../agents/cli-runner/auth-profile-preparation-error.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   renderAgentHarnessPreflightUserMessage,
@@ -28,17 +29,19 @@ import {
   findLocalWorkerTaskFailure,
 } from "../../agents/failover/local-preparation-error.js";
 import { resolveExecutionApprovalFailureMessage } from "../../agents/failover/message-patterns.js";
-import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   formatProviderAuthPermanentErrorUserText,
   formatProviderAuthenticationErrorUserText,
+  renderProviderAwareMissingApiKeyReplyCopy,
+} from "../../agents/failover/provider-auth-user-copy.js";
+import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
+import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   renderAuthProfileFailoverCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
   renderCodexAppServerFailureCopy,
   renderFailoverCodeUserCopy,
-  renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
   type ReplyFallbackAttempt,
@@ -62,6 +65,7 @@ import {
   formatErrorMessage,
   readErrorCauses,
 } from "../../infra/errors.js";
+import { isProviderRefusalNoticeText } from "../../shared/assistant-error-format.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import {
@@ -88,11 +92,12 @@ function readFallbackAttempts(error: unknown): readonly ReplyFallbackAttempt[] {
 export function resolveReplyFailureSummary(params: {
   error: unknown;
   message: string;
-  reason: ReplyFailoverFacts["reason"];
+  facts: ReplyFailoverFacts;
   attempts?: readonly ReplyFallbackAttempt[];
+  config?: OpenClawConfig;
 }): { kind: "billing" | "rate_limit" | "overloaded"; text: string } | undefined {
   const attempts = params.attempts;
-  let kind = params.reason;
+  let kind = params.facts.reason;
   // The top-level reason describes the last attempt; aggregate copy must account for the entire chain.
   if (attempts?.length) {
     if (attempts.some((attempt) => attempt.reason === "billing")) {
@@ -111,26 +116,33 @@ export function resolveReplyFailureSummary(params: {
     return undefined;
   }
   const failoverError = isFailoverError(params.error) ? params.error : undefined;
+  const facts = params.facts;
   const text =
-    kind === "billing"
-      ? renderBillingReplyCopy({
-          attempts,
-          provider: failoverError?.provider,
-          model: failoverError?.model,
-          authMode: failoverError?.authMode,
-        })
-      : kind === "overloaded"
-        ? renderRateLimitOrOverloadedCopy({ reason: kind, raw: params.message })
-        : renderRateLimitReplyCopy({
-            message: params.message,
-            reason: params.reason,
+    kind === "rate_limit" && !attempts?.length && facts.requestFailureText
+      ? facts.requestFailureText
+      : kind === "billing"
+        ? renderBillingReplyCopy({
             attempts,
             provider: failoverError?.provider,
-            code: failoverError?.code,
-            rateLimitRetriesExhausted: failoverError?.rateLimitRetriesExhausted,
-            cooldownExpiry: failoverError?.soonestCooldownExpiry,
-            sanitizeText: (rawText) => sanitizeUserFacingText(rawText, { errorContext: true }),
-          });
+            model: failoverError?.model,
+            authMode: failoverError?.authMode,
+          })
+        : kind === "overloaded"
+          ? renderRateLimitOrOverloadedCopy({ reason: kind, raw: params.message })
+          : renderRateLimitReplyCopy({
+              message: params.message,
+              reason: facts.reason,
+              attempts,
+              provider: failoverError?.provider,
+              code: failoverError?.code,
+              rateLimitRetriesExhausted: failoverError?.rateLimitRetriesExhausted,
+              cooldownExpiry: failoverError?.soonestCooldownExpiry,
+              rateLimitResetAt: facts.rateLimitResetAt,
+              model: failoverError?.model,
+              locale: params.config?.ui?.prefs?.locale,
+              timeZone: params.config?.agents?.defaults?.userTimezone,
+              sanitizeText: (rawText) => sanitizeUserFacingText(rawText, { errorContext: true }),
+            });
   return { kind, text };
 }
 
@@ -235,6 +247,15 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const removedCredential = collectErrorGraphCandidates(error, readErrorCauses).find(
+    (candidate) => candidate instanceof CliCredentialRemovedError,
+  );
+  if (removedCredential) {
+    return {
+      text: `⚠️ ${removedCredential.userMessage(options?.includeAuthProfileId)}`,
+      isGenericRunnerFailure: false,
+    };
+  }
   const buildUnclassifiedReply = (): ExternalRunFailureReply => {
     const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     return {
@@ -285,7 +306,10 @@ export function buildExternalRunFailureReply(
   const failoverFacts =
     options?.failoverFacts ??
     resolveReplyFailoverFacts(error ?? normalizedMessage, normalizedMessage);
-  const failoverCodeCopy = renderFailoverCodeUserCopy(failoverFacts.code);
+  const failoverCodeCopy =
+    failoverFacts.rateLimitResetAt === undefined
+      ? renderFailoverCodeUserCopy(failoverFacts.code)
+      : undefined;
   if (failoverCodeCopy) {
     return { text: failoverCodeCopy, isGenericRunnerFailure: false };
   }
@@ -313,7 +337,7 @@ export function buildExternalRunFailureReply(
     const loginCommandMarkdown = formatInlineCodeSpan(loginCommand);
     const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
     const retryLoginHint = providerLoginRecovery
-      ? "send `/login` from a private chat or Control UI session to choose a provider, or re-auth"
+      ? "send `/login` from a private chat or the OpenClaw app to choose a provider, or re-auth"
       : "re-auth";
     if (oauthRefreshFailure.reason) {
       return {
@@ -356,12 +380,15 @@ export function buildExternalRunFailureReply(
   if (cliBackendTimeoutFailure) {
     return { text: cliBackendTimeoutFailure, isGenericRunnerFailure: false };
   }
-  if (isFailoverError(error) && error.rateLimitRetriesExhausted !== undefined) {
+  if (
+    (isFailoverError(error) && error.rateLimitRetriesExhausted !== undefined) ||
+    failoverFacts.rateLimitResetAt !== undefined
+  ) {
     const summary = resolveReplyFailureSummary({
       error,
       message,
-      reason: failoverFacts.reason,
-      attempts: error.attempts,
+      facts: failoverFacts,
+      attempts: isFailoverError(error) ? error.attempts : undefined,
     });
     if (summary) {
       return { text: summary.text, isGenericRunnerFailure: false };
@@ -381,7 +408,7 @@ export function buildExternalRunFailureReply(
           )
         : undefined;
     const missingCredentialCopy = typedAuthError
-      ? renderMissingApiKeyReplyCopy({
+      ? renderProviderAwareMissingApiKeyReplyCopy({
           provider: typedAuthError.provider,
           providerGuidance: typedAuthError.providerGuidance,
         })
@@ -417,7 +444,7 @@ export function buildExternalRunFailureReply(
       : undefined;
   const missingApiKeyFailure =
     factsAuthFailure ??
-    renderMissingApiKeyReplyCopy(
+    renderProviderAwareMissingApiKeyReplyCopy(
       authError
         ? { provider: authError.provider, providerGuidance: authError.providerGuidance }
         : undefined,
@@ -521,11 +548,13 @@ export async function resolveTerminalAgentRunFailurePayload(params: {
     terminalError.message.startsWith(MISSING_REPLY_NOTICE_TEXT);
   const suppressMissingReplyNotice =
     missingReplyNotice && !shouldDeliverMissingReplyNotice(params.run);
+  // A canonical provider refusal is the run's own failure notice, not generic copy.
   const ownedFailureNotice = params.result.payloads?.find(
     (payload) =>
       payload.isError === true &&
-      payload.isStatusNotice === true &&
-      getReplyPayloadMetadata(payload)?.assistantTranscriptOwned === true,
+      ((payload.isStatusNotice === true &&
+        getReplyPayloadMetadata(payload)?.assistantTranscriptOwned === true) ||
+        isProviderRefusalNoticeText(payload.text ?? "")),
   );
   if (ownedFailureNotice) {
     params.result.payloads = params.result.payloads?.filter(
@@ -553,6 +582,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   err: unknown;
   sessionCtx: TemplateContext;
   resolvedVerboseLevel: VerboseLevel | undefined;
+  config?: OpenClawConfig;
 }): ReplyPayload | undefined {
   // Preflight diagnostics are not provider failures. Only explicit public copy
   // can bypass the caller's diagnostic disclosure policy.
@@ -566,12 +596,13 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
       ? undefined
       : markAgentRunFailureReplyPayload({ text: reply.text });
   }
-  const failoverFacts = resolveReplyFailoverFacts(params.err, message);
+  const failoverFacts = resolveReplyFailoverFacts(params.err, message, params.config);
   const failureSummary = resolveReplyFailureSummary({
     error: params.err,
     message,
-    reason: failoverFacts.reason,
+    facts: failoverFacts,
     attempts: readFallbackAttempts(params.err),
+    config: params.config,
   });
   const knownFailureText =
     failureSummary?.kind === "billing"

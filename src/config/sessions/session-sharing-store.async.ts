@@ -14,7 +14,7 @@ import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-even
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { readResidentUserProfileAliases } from "../../state/user-profile-list.js";
@@ -151,7 +151,7 @@ export async function runSessionCollaborationWrite<
       storePath: options.path,
       sessionKey: resolved.sessionKey,
     };
-    const execution = captureOpenClawAgentDatabaseExecution(options);
+    const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
     const assertQueuedCurrent = () => {
       execution.assertCurrent();
       assertCurrent();
@@ -183,10 +183,15 @@ export async function runSessionCollaborationWrite<
             ...location,
             databaseIdentity: identity,
           });
+          // Invitation grants share the membership writer's unknown-outcome latch.
+          const authorityCommand: SqliteWorkerCommand<SessionSharingWorkerOperations> = command;
           const sharingAuthorityChanged =
-            capturedCommand.type === "add" ||
-            capturedCommand.type === "remove" ||
-            capturedCommand.type === "owner.assign";
+            authorityCommand.type === "add" ||
+            authorityCommand.type === "remove" ||
+            authorityCommand.type === "owner.assign" ||
+            (authorityCommand.type === "involvement" &&
+              authorityCommand.input.params.change.kind === "mention" &&
+              Boolean(authorityCommand.input.params.change.invitation?.profileIds.length));
           let publicationKeys = [location.sessionKey];
           let mutationDispatched = false;
           let resultReceived = false;
@@ -240,8 +245,12 @@ export async function runSessionCollaborationWrite<
                       | undefined
                     >();
                     for (const [key, fact] of candidate?.publication.facts ?? []) {
-                      if (fact.kind === "postimage" && fact.value[0]?.kind === "member") {
-                        memberships.set(key, fact.value[0].sessionId);
+                      if (fact.kind === "postimage") {
+                        for (const change of fact.value) {
+                          if (change.kind === "member") {
+                            memberships.set(key, change.sessionId);
+                          }
+                        }
                       }
                       if (
                         capturedCommand.type === "participant" &&
@@ -568,12 +577,14 @@ export function recordSessionParticipantInWorker(
         };
         // The committed count-only receipt keeps the actor's exact aggregate current.
         publishSessionCollaborationChanges([change], database);
-        emitSessionLifecycleEvent({
-          agentId: location.agentId,
-          sessionKey: location.sessionKey,
-          reason: "participants",
-          scope: "session-entry",
-        });
+        if (result.projectionChanged) {
+          emitSessionLifecycleEvent({
+            agentId: location.agentId,
+            sessionKey: location.sessionKey,
+            reason: "participants",
+            scope: "session-entry",
+          });
+        }
       }
       return result.value;
     },

@@ -110,6 +110,19 @@ it("resizes immutably and clamps both axes", () => {
   expect(resize(items, "a", 40, -2)).toEqual([item("a", 12, 1, 0), item("b", 4, 4, 1)]);
   expect(items[0]).toEqual(item("a", 3, 3, 0));
 });
+it("preserves expanded Auto spans without raising the Fixed resize bound", () => {
+  const items = [item("auto-a", 12, 80, 0), item("fixed", 6, 4, 1), item("auto-b", 12, 90, 2)];
+  expect(previewDrag(items, "auto-b", { name: "auto-a", x: 0, y: 0 }, 240)).toEqual([
+    item("auto-b", 12, 90, 0),
+    item("auto-a", 12, 80, 1),
+    item("fixed", 6, 4, 2),
+  ]);
+  expect(resize(items, "fixed", 40, 300, 240)).toEqual([
+    item("auto-a", 12, 80, 0),
+    item("fixed", 12, 20, 1),
+    item("auto-b", 12, 90, 2),
+  ]);
+});
 it.each([
   ["up", ["b", "a", "c"]],
   ["right", ["a", "c", "b"]],

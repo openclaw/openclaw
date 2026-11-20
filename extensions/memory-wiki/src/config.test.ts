@@ -22,6 +22,17 @@ function validateManifestConfig(value: unknown) {
 }
 
 describe("resolveMemoryWikiConfig", () => {
+  it.each([undefined, "sandboxed-only", "owner", "delegation", false])(
+    "validates bridge ownership %s in runtime and manifest schemas",
+    (ownership) => {
+      const config = { bridge: ownership === undefined ? {} : { ownership } };
+      const valid =
+        ownership === undefined || ownership === "sandboxed-only" || ownership === "owner";
+      expect(memoryWikiConfigSchema.safeParse?.(config)?.success).toBe(valid);
+      expect(validateManifestConfig(config)).toBe(valid);
+    },
+  );
+
   it("uses the configured state directory for schema-resolved defaults", () => {
     const stateDir = "/tmp/openclaw-schema-state";
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {

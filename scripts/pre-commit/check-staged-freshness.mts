@@ -14,6 +14,7 @@ import {
 } from "../changed-lanes.mts";
 import { hasProtocolGenerationInput } from "../lib/ci-check-family-scope.mts";
 import { toolingDependencyOptions } from "../lib/tooling-dependencies.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../windows-cmd-helpers.mjs";
 
 type FreshnessCheck = {
   name: string;
@@ -73,7 +74,8 @@ export function selectStagedFreshnessChecks(paths: string[]): FreshnessCheck[] {
     {
       name: "config docs baseline",
       script: "config:docs:check",
-      args: [],
+      toolingEntrypoint: "scripts/generate-config-doc-baseline.ts",
+      args: ["--check"],
       fix: "pnpm config:docs:gen",
       selects: hasConfigDocInput,
       unstagedInputs: "tree",
@@ -138,8 +140,16 @@ function resolveCommand(check: FreshnessCheck): [string, string[]] {
 // Independent read-only checks run together so the hook costs the slowest one.
 async function run(check: FreshnessCheck) {
   let invocation: [string, string[]];
+  let windowsVerbatimArguments = false;
   try {
     invocation = resolveCommand(check);
+    if (process.platform === "win32" && invocation[0] === "pnpm") {
+      invocation = [
+        resolveWindowsCmdExePath(),
+        ["/d", "/s", "/c", buildCmdExeCommandLine("pnpm.cmd", invocation[1])],
+      ];
+      windowsVerbatimArguments = true;
+    }
   } catch (error) {
     return { check, status: 1, output: String(error) };
   }
@@ -147,6 +157,7 @@ async function run(check: FreshnessCheck) {
   return await new Promise<{ check: FreshnessCheck; status: number; output: string }>((resolve) => {
     const child = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
+      ...(windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
       env: check.toolingEntrypoint ? { ...process.env, TSX_DISABLE_CACHE: "1" } : process.env,
     });
     let output = "";

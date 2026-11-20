@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import type { ReadableStream } from "node:stream/web";
 import { setTimeout as delay } from "node:timers/promises";
 import { TINY_PNG_BASE64, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import { GatewayClient } from "../../../../src/gateway/client.js";
+import { GatewayClient, GatewayClientRequestError } from "../../../../src/gateway/client.js";
 import type { DeviceIdentity } from "../../../../src/infra/device-identity.js";
 
 export async function waitForHotReloadFact<T>(
@@ -33,6 +33,32 @@ export type HotReloadConnection = {
   pluginSurfaceUrls: Record<string, string>;
   events: Array<{ event: string; payload?: unknown }>;
 };
+
+export function createHotReloadConfigPatcher(connection: HotReloadConnection) {
+  const rpc = <T>(method: string, params: unknown = {}) =>
+    connection.client.request<T>(method, params, { timeoutMs: 40_000 });
+  return async (change: unknown) => {
+    const { hash } = await rpc<{ hash: string }>("config.get");
+    const apply = () =>
+      rpc<{ sentinel: { payload: { stats: { requiresRestart: boolean } } } }>("config.patch", {
+        baseHash: hash,
+        raw: JSON.stringify(change),
+      });
+    const result = await apply().catch(async (error: unknown) => {
+      if (
+        !(error instanceof GatewayClientRequestError) ||
+        !error.retryable ||
+        typeof error.retryAfterMs !== "number" ||
+        !error.message.startsWith("rate limit exceeded for config.patch")
+      ) {
+        throw error;
+      }
+      await delay(error.retryAfterMs);
+      return apply();
+    });
+    assert.equal(result.sentinel.payload.stats.requiresRestart, false);
+  };
+}
 
 export async function connectHotReloadClient(
   gateway: HotReloadGateway,

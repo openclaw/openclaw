@@ -37,7 +37,6 @@ async function runProof(repoRoot: string, appendLog: (text: string) => void) {
       mock = await startQaMockOpenAiServer();
       gateway = await owner.start({
         repoRoot,
-        initializeCurrentRuntimeState: true,
         useRepoCli: true,
         command: {
           executablePath: process.execPath,

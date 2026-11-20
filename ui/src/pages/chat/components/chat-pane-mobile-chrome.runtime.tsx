@@ -1,8 +1,4 @@
 import { createMemo, lazy, Loading, Show, type Element } from "solid-js";
-import {
-  SHELL_NAV_DRAWER_TOGGLE_EVENT,
-  type ShellNavDrawerToggleDetail,
-} from "../../../components/command-palette-contract.ts";
 import { isSessionTitlePending } from "../../../lib/session-display.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
@@ -17,7 +13,6 @@ export function ChatPaneMobileChrome(props: {
   header: ChatPaneHeaderProps;
   project?: Element;
   details: Element;
-  notice: Element;
   sessionMenu: Element;
   mobile: boolean;
   presented: boolean;
@@ -60,13 +55,6 @@ export function ChatPaneMobileChrome(props: {
           publicAccess={props.header.publicAccessIndicator}
           incognito={props.incognito}
           navDrawerOpen={props.header.navDrawerOpen ?? false}
-          onToggleNavigation={(source) =>
-            window.dispatchEvent(
-              new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
-                detail: { trigger: source },
-              }),
-            )
-          }
           onOpenDetails={(source) => props.header.onOpenDetails?.(source)}
           onOpenPanels={(source) => host()?.reveal(source)}
           panelsOpen={Boolean(host()?.open && !host()?.suspended)}
@@ -108,7 +96,6 @@ export function ChatPaneMobileChrome(props: {
           actions={<Show when={props.mobile}>{props.sessionMenu}</Show>}
         />
         <Show when={props.mobile}>{props.details}</Show>
-        <Show when={props.mobile}>{props.notice}</Show>
       </div>
     </ContentPresentation>
   );

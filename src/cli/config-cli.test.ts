@@ -22,6 +22,7 @@ import { registerConfigJsonOutputTests } from "./config-cli.json-output.test-sup
 import { registerConfigMutationSchemaTests } from "./config-cli.mutation-schema.test-support.js";
 import {
   readConfigCliSnapshotWithMetadata,
+  replaceConfigCliSnapshot,
   type ConfigCliSnapshotReader,
   type ConfigCliWriter,
 } from "./config-cli.snapshot.test-support.js";
@@ -96,6 +97,7 @@ const mockLoadChannelSecretContractApi = vi.hoisted(() =>
   }),
 );
 
+// mock-isolation: Exercise CLI mutations against synthetic snapshots without filesystem persistence.
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: (...args: Parameters<typeof mockReadConfigFileSnapshot>) =>
     mockReadConfigFileSnapshot(...args),
@@ -107,18 +109,8 @@ vi.mock("../config/config.js", () => ({
     writeOptions: {},
   }),
   writeConfigFile: (...args: Parameters<ConfigCliWriter>) => mockWriteConfigFile(...args),
-  replaceConfigFile: (params: {
-    sourceConfig: OpenClawConfig;
-    writeOptions?: {
-      auditOrigin?: "cli";
-      unsetPaths?: string[][];
-      explicitSetPaths?: string[][];
-      assertConfigPathForWrite?: () => void;
-    };
-  }) => {
-    params.writeOptions?.assertConfigPathForWrite?.();
-    return mockWriteConfigFile(params.sourceConfig, params.writeOptions);
-  },
+  replaceConfigFile: (params: Parameters<typeof replaceConfigCliSnapshot>[1]) =>
+    replaceConfigCliSnapshot(mockWriteConfigFile, params),
 }));
 
 vi.mock("../secrets/resolve.js", () => ({
@@ -795,19 +787,48 @@ describe("config cli", () => {
       });
     });
 
+    it("preserves normal provider env keys and literal values", async () => {
+      setGatewaySnapshot();
+      const command = path.join(tempDirs.make("openclaw-config-provider-env-"), "resolver");
+      writeSecurePluginEntrypoint(command, "// Fixture command; never executed.\n");
+      await runConfigSet(
+        "secrets.providers.runner",
+        "--provider-source",
+        "exec",
+        "--provider-command",
+        command,
+        "--provider-env",
+        " NORMAL_KEY =one=two",
+        "--provider-env",
+        "EMPTY=",
+      );
+      expect(firstWrittenConfig().secrets?.providers?.runner).toEqual({
+        source: "exec",
+        command,
+        env: { NORMAL_KEY: "one=two", EMPTY: "" },
+      });
+    });
+
     it.each([
       [
         "leading equals",
         "=SYNTHETIC_PROVIDER_ENV_SECRET",
-        "--provider-env expects KEY=*** entries.",
+        "--provider-env entries must use KEY=***",
       ],
       [
         "whitespace key",
         "   =SYNTHETIC_PROVIDER_ENV_SECRET",
-        "--provider-env key must not be empty.",
+        "--provider-env entries must use a non-empty key.",
       ],
+      ...["__proto__", "constructor", "prototype"].map((key) => [
+        `reserved ${key}`,
+        ` ${key} =SYNTHETIC_PROVIDER_ENV_SECRET`,
+        `--provider-env key "${key}" is reserved; use a different key name.`,
+      ]),
     ])("does not disclose provider env values for a %s entry", async (_name, entry, message) => {
       const secret = "SYNTHETIC_PROVIDER_ENV_SECRET";
+      const command = path.join(tempDirs.make("openclaw-config-provider-key-"), "resolver");
+      writeSecurePluginEntrypoint(command, "// Fixture command; never executed.\n");
 
       await expect(
         runConfigSet(
@@ -815,7 +836,7 @@ describe("config cli", () => {
           "--provider-source",
           "exec",
           "--provider-command",
-          "/usr/bin/env",
+          command,
           "--provider-env",
           entry,
           "--dry-run",

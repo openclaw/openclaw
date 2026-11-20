@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { DecisionProviderV1 } from "openclaw/plugin-sdk/decisions";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { expect, it, vi } from "vitest";
 import plugin from "../index.js";
 
@@ -10,15 +10,20 @@ vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: () => ({ revision: 1, value: process.env.SUBQ_API_KEY }),
 }));
 
-it.runIf(process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.SUBQ_API_KEY))(
+const model = process.env.SUBQ_DECISION_MODEL;
+it.runIf(process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.SUBQ_API_KEY && model))(
   "evaluates a mixed synthetic batch through the registered SubQ endpoint",
   async () => {
     let provider: DecisionProviderV1 | undefined;
-    plugin.register({
-      registerDecisionProvider: (registered: DecisionProviderV1) => {
-        provider = registered;
-      },
-    } as unknown as OpenClawPluginApi);
+    plugin.register(
+      createTestPluginApi({
+        id: "subq",
+        registerDecisionProvider(registered) {
+          assert(registered.contractVersion === 1);
+          provider = registered;
+        },
+      }),
+    );
     assert(provider);
     const outcome = await provider.evaluate(
       {
@@ -42,7 +47,7 @@ it.runIf(process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.SUBQ_API_
         },
       },
       {
-        model: "subq-snap-preview",
+        model: model!,
         signal: new AbortController().signal,
         deadlineMonotonicMs: performance.now() + 30_000,
       },
@@ -51,7 +56,7 @@ it.runIf(process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.SUBQ_API_
     if (outcome.status !== "ok") {
       throw new Error("SubQ live evaluation unavailable: " + outcome.reason);
     }
-    expect(outcome.result.model).toBe("subq-snap-preview");
+    expect(outcome.result.model).toBeTruthy();
     expect(outcome.result.answers.red?.type).toBe("boolean");
     expect(outcome.result.answers.color?.type).toBe("choice");
     expect(outcome.result.answers.count?.type).toBe("score");

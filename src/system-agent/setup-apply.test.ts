@@ -446,6 +446,23 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "chooses full",
+      {},
+      "Tool profile: full (tools.profile). This profile allows every tool, including files, commands, the web and plugins.",
+    ],
+    [
+      "keeps messaging",
+      { tools: { profile: "messaging" } },
+      'Tool profile: messaging (tools.profile). This profile allows chat, messages and sessions, but not files, commands or the web. To add one tool, list it in agents.entries.main.tools.alsoAllow, or set tools.profile to "full".',
+    ],
+  ] as const)("says what the tool profile allows when setup %s", async (_case, tools, line) => {
+    start({ ...mainAgentModelConfig(), ...tools });
+    const result = await apply();
+    expect(result.lines).toContain(line);
+  });
+
   it("reports explicitly skipped service installation", async () => {
     const gateway = { status: "skipped", reason: "explicit" };
     mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });

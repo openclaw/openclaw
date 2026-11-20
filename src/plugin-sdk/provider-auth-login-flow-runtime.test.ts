@@ -258,7 +258,7 @@ describe("provider channel login runtime", () => {
     expect(reply.text).toContain("/login oauth/plugin-11/provider-11");
   });
 
-  it("adds a tappable Control UI button to setup handoffs only with a public URL", () => {
+  it("adds a tappable OpenClaw button to setup handoffs only with a public URL", () => {
     const setupChoice: ProviderChannelLoginChoice = {
       ...choice,
       methodId: "api-key",
@@ -269,13 +269,13 @@ describe("provider channel login runtime", () => {
       setupChoice,
       "https://gateway.example.com/settings/model-providers?provider=acme-cloud",
     );
-    expect(withUrl.text).toContain("needs provider setup. Open Control UI");
+    expect(withUrl.text).toContain("needs provider setup. In the OpenClaw app");
     const buttons = withUrl.presentation?.blocks.flatMap((block) =>
       block.type === "buttons" ? block.buttons : [],
     );
     expect(buttons).toEqual([
       {
-        label: "Open Control UI",
+        label: "Open OpenClaw",
         action: {
           type: "url",
           url: "https://gateway.example.com/settings/model-providers?provider=acme-cloud",
@@ -309,7 +309,7 @@ describe("provider channel login runtime", () => {
       );
       expect(buttons).toEqual([
         {
-          label: "Open Control UI",
+          label: "Open OpenClaw",
           action: {
             type: "url",
             url: "https://gateway.example.com/settings/model-providers?provider=acme-cloud&agent=research",

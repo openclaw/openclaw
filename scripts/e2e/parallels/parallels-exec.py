@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Run Parallels smoke commands with verified 27.0.0 and 27.0.2 guest-exec ABIs.
+"""Run Parallels smoke commands with verified installed guest-exec ABIs.
 
-Usage: parallels-exec.py [--timeout-ms N] -- exec VM [--current-user] COMMAND...
-Like prlctl, COMMAND arguments are joined with spaces; callers own shell quoting,
-including when passing one already-quoted shell command. Stdin is guest data.
+Usage: parallels-exec.py [--timeout-ms N] [--windows] -- exec VM [--current-user] COMMAND...
+Callers own shell quoting, including already-quoted shell commands. Windows
+preserves program/argv; POSIX joins COMMAND with spaces. Stdin is guest data.
 Other hosts/binaries use ordinary prlctl, selected before any guest execution.
 This is a bounded installed-binary workaround, not a supported public SDK client.
 """
@@ -24,9 +24,11 @@ import time
 
 APP = Path("/Applications/Parallels Desktop.app/Contents")
 # These digests identify the verified CLIs and their installed SDK ABI.
-CLI_HASHES = {
-    "759030a682c31ae71878ab71f1bf1560957ff89308c9de621d1b9bee4b9fcd80",  # 27.0.0
-    "aa112c4e83bb63ae4fe88ef3fbc76aeba643cb7e1fcd3acdc12f00b4ac3d45b3",  # 27.0.2
+# EVT_PARAM_VM_EXEC_APP_RET_CODE changed in 27.1; pin it with the CLI ABI.
+CLI_EXIT_CODE_PARAMETERS = {
+    "759030a682c31ae71878ab71f1bf1560957ff89308c9de621d1b9bee4b9fcd80": {"posix": 0x13e},  # 27.0.0
+    "aa112c4e83bb63ae4fe88ef3fbc76aeba643cb7e1fcd3acdc12f00b4ac3d45b3": {"posix": 0x13e},  # 27.0.2
+    "2f61a1c60db2d51591fb8479a248a982a81658f136f1501a94733b7a81731c57": {"windows": 0x13d},  # 27.1.0
 }
 DEFAULT_TIMEOUT_MS = 1_800_000
 MAX_TIMEOUT_MS = (1 << 31) - 1
@@ -54,12 +56,12 @@ class JobError(RuntimeError):
         self.code = code
 
 
-def uses_verified_sdk() -> bool:
+def verified_sdk_exit_code_parameter(windows: bool) -> int | None:
     if platform.system() != "Darwin" or platform.machine() != "arm64":
-        return False
+        return None
     selected = shutil.which("prlctl")
     if selected is None:
-        return False
+        return None
     try:
         # Honor PATH-selected fakes/custom installs. The standard prlctl symlink
         # resolves to this bundle's parallels_wrapper, not its native CLI binary.
@@ -67,18 +69,19 @@ def uses_verified_sdk() -> bool:
             APP / "MacOS/prlctl",
             APP / "MacOS/parallels_wrapper",
         }:
-            return False
+            return None
         digest = hashlib.sha256((APP / "MacOS/prlctl").read_bytes()).hexdigest()
     except OSError:
-        return False
-    return digest in CLI_HASHES
+        return None
+    return CLI_EXIT_CODE_PARAMETERS.get(digest, {}).get("windows" if windows else "posix")
 
 
 class GuestSdk:
-    def __init__(self, deadline: float):
+    def __init__(self, deadline: float, exit_code_parameter: int):
         library = APP / "Frameworks/ParallelsVirtualizationSDK.framework/Versions/11/libprl_sdk.11.dylib"
         self.api = C.CDLL(str(library))
         self.deadline = deadline
+        self.exit_code_parameter = exit_code_parameter
         self.resources = ExitStack()
         self.cleanup_error: Exception | None = None
         self.exit_code: int | None = None
@@ -97,6 +100,7 @@ class GuestSdk:
             "PrlVm_LoginInGuest": (H, [H, S, S, U]),
             "PrlVmGuest_Logout": (H, [H, U]),
             "PrlApi_CreateStringsList": (R, [HP]),
+            "PrlStrList_AddItem": (R, [H, S]),
             "PrlVmGuest_RunProgram": (H, [H, S, H, H, U, I, I, I]),
             "PrlJob_Wait": (R, [H, U]),
             "PrlJob_GetRetCode": (R, [H, C.POINTER(R)]),
@@ -206,32 +210,44 @@ class GuestSdk:
         self.resources.callback(self.cleanup, self.cleanup_job, self.api.PrlVmGuest_Logout, guest, 0)
         return guest
 
-    def run(self, guest, command: str, current_user: bool):
+    def run(self, guest, command_args: list[str], current_user: bool, windows: bool):
         args = self.output(self.api.PrlApi_CreateStringsList)
         env = self.output(self.api.PrlApi_CreateStringsList)
+        if windows:
+            # Windows resolves the program separately; SDK argv keeps the CLI's
+            # raw quoting, including cmd.exe /s /c payloads.
+            command = command_args[0]
+            for argument in command_args[1:]:
+                checked(self.api.PrlStrList_AddItem(args, argument.encode()), "PrlStrList_AddItem")
+        else:
+            command = " ".join(command_args)
         # Preserve the verified CLI shell/streaming flags and untouched stdin.
         flags = 0xb808 | (0x20000 if current_user else 0)
         self.remaining_timeout_ms()
         job = self.api.PrlVmGuest_RunProgram(guest, command.encode(), args, env, flags, 0, 1, 2)
         self.finish(job)
         event = self.output(self.api.PrlJob_GetEvent, job)
-        parameter = self.output(self.api.PrlEvent_GetParamByName, event, 0x13e)
+        parameter = self.output(self.api.PrlEvent_GetParamByName, event, self.exit_code_parameter)
         exit_code = U()
         checked(self.api.PrlEvtPrm_ToUint32(parameter, C.byref(exit_code)), "exit code")
         self.exit_code = exit_code.value
-        return self.exit_code
+        if windows and self.exit_code > 255:
+            print(f"[parallels-exec] Windows guest exit code 0x{self.exit_code:08x}", file=sys.stderr)
+        # Match prlctl: Windows codes must not wrap to POSIX success (e.g. 256).
+        return min(self.exit_code, 255) if windows else self.exit_code
 
 
 class Arguments(argparse.ArgumentParser):
     def error(self, message):
         # Unsupported auth input may contain credentials; do not echo argv.
-        raise ValueError("invalid wrapper arguments; use --timeout-ms N -- exec VM COMMAND...")
+        raise ValueError("invalid wrapper arguments; use [--windows] --timeout-ms N -- exec VM COMMAND...")
 
 
 def main() -> int:
     try:
         parser = Arguments(description=__doc__)
         parser.add_argument("--timeout-ms", type=int, default=DEFAULT_TIMEOUT_MS)
+        parser.add_argument("--windows", action="store_true")
         parser.add_argument("prlctl_args", nargs=argparse.REMAINDER)
         options = parser.parse_args()
         if not 1 <= options.timeout_ms <= MAX_TIMEOUT_MS:
@@ -240,7 +256,8 @@ def main() -> int:
         if argv[:1] == ["--"]:
             argv = argv[1:]
         deadline = time.monotonic() + options.timeout_ms / 1000
-        if not uses_verified_sdk():
+        exit_code_parameter = verified_sdk_exit_code_parameter(options.windows)
+        if exit_code_parameter is None:
             os.execvp("prlctl", ["prlctl", *argv])
         if len(argv) < 3 or argv[0] != "exec":
             raise ValueError("SDK route supports only exec VM [--current-user] COMMAND...")
@@ -252,10 +269,10 @@ def main() -> int:
             command_args = command_args[1:]
         if not command_args or command_args[0].startswith("-"):
             raise ValueError("SDK route requires a command; only --current-user is supported")
-        with GuestSdk(deadline) as sdk:
+        with GuestSdk(deadline, exit_code_parameter) as sdk:
             vm = sdk.connect(vm_name)
             guest = sdk.login_guest(vm, current_user)
-            return sdk.run(guest, " ".join(command_args), current_user)
+            return sdk.run(guest, command_args, current_user, options.windows)
     except KeyboardInterrupt:
         print("[parallels-exec] interrupted", file=sys.stderr)
         code = 130

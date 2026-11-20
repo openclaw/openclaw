@@ -14,7 +14,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("recovers a lease within the retry budget after a forward wall-clock step", async () => {
+it("recovers an asynchronous lease read within the retry budget after a forward wall-clock step", async () => {
   const read = vi
     .fn()
     .mockImplementationOnce(() => {
@@ -25,7 +25,7 @@ it("recovers a lease within the retry budget after a forward wall-clock step", a
     })
     .mockReturnValue("lease");
   const settled = vi.fn();
-  const result = retryScheduledTaskLeaseRead(read).then(settled, settled);
+  const result = retryScheduledTaskLeaseRead(async () => read()).then(settled, settled);
   vi.setSystemTime(Date.now() + 20_000);
   await vi.advanceTimersByTimeAsync(200);
   await result;

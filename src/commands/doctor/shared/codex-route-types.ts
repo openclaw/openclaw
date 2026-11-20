@@ -48,4 +48,5 @@ export type CodexSessionRouteRepairSummary = {
   scannedStores: number;
   warnings: string[];
   changes: string[];
+  requiresFullDoctor?: boolean;
 };

@@ -262,11 +262,16 @@ it.for(["queue", "reject"] as const)(
       followed.resolve({ params, operation: getSessionControllerOperation(targetKey) });
       return modelReply;
     });
-    const run = holdAgentRun("owner", (_params, operation) => {
+    const run = holdAgentRun("owner", async (params, operation) => {
+      const { provider, model } = params;
+      if (!provider || !model) {
+        throw new Error("Expected the incumbent's concrete provider and model");
+      }
+      const fingerprint = await operation.bindToolAuthorityRouteAsync({ provider, model });
       operation.attachBackend({
         kind: "embedded",
         cancel() {},
-        toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
+        toolAuthorityFingerprint: fingerprint,
         messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: injected },
       });
       operation.setPhase("running");

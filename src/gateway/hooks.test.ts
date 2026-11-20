@@ -193,13 +193,35 @@ describe("gateway hooks helpers", () => {
     });
   });
 
-  test("normalizeAgentPayload defaults + validates channel", () => {
-    expect(agentPayload()).toEqual({
+  test("hook wake modes map spelling variants and reject unknown values", () => {
+    for (const [raw, mode] of [
+      ["next_heartbeat", "next-heartbeat"],
+      [" Next-Heartbeat ", "next-heartbeat"],
+      [null, "now"],
+      ["  ", "now"],
+    ] as const) {
+      expect(normalizeWakePayload({ text: "hi", mode: raw })).toMatchObject({ value: { mode } });
+      expect(agentPayload({ wakeMode: raw })).toMatchObject({ value: { wakeMode: mode } });
+    }
+    for (const raw of ["later", 1]) {
+      expect(normalizeWakePayload({ text: "hi", mode: raw })).toEqual({
+        ok: false,
+        error: "mode must be now or next-heartbeat",
+      });
+      expect(agentPayload({ wakeMode: raw })).toEqual({
+        ok: false,
+        error: "wakeMode must be now or next-heartbeat",
+      });
+    }
+  });
+
+  test("normalizeAgentPayload defaults + validates channel and agent", () => {
+    expect(agentPayload({ timeoutSeconds: 0.5 })).toEqual({
       ok: true,
       value: expect.objectContaining({
         sessionKey: undefined,
         sessionMode: "isolated",
-        channel: "last",
+        timeoutSeconds: undefined,
         name: "Hook",
         deliver: true,
         delivery: { mode: "none" },
@@ -228,6 +250,9 @@ describe("gateway hooks helpers", () => {
       value: { sessionMode: "persistent" },
     });
     expectPayloadError({ sessionMode: "shared" }, "sessionMode must be isolated or persistent");
+    expect(agentPayload()).toMatchObject({ ok: true, value: { agentId: undefined } });
+    expectPayloadError({ agentId: 42 }, "agentId must be a non-empty string");
+    expectPayloadError({ agentId: "  " }, "agentId must be a non-empty string");
   });
 
   test("normalizeAgentPayload binds delivery only to a concrete channel and recipient", () => {
@@ -295,14 +320,11 @@ describe("gateway hooks helpers", () => {
     });
   });
 
-  test("normalizeAgentPayload passes agentId", () => {
-    expect(agentPayload({ agentId: "hooks" })).toMatchObject({
+  test.each([1, 1.9])("normalizeAgentPayload agent and timeout %s", (timeoutSeconds) => {
+    expect(agentPayload({ agentId: "hooks", timeoutSeconds })).toMatchObject({
       ok: true,
-      value: { agentId: "hooks" },
+      value: { agentId: "hooks", timeoutSeconds: 1 },
     });
-    expect(agentPayload()).toMatchObject({ ok: true, value: { agentId: undefined } });
-    expectPayloadError({ agentId: 42 }, "agentId must be a non-empty string");
-    expectPayloadError({ agentId: "  " }, "agentId must be a non-empty string");
   });
 
   test("hook target resolution keeps config fallback out of request payloads", () => {

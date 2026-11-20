@@ -12,6 +12,10 @@ WORKER_RUNTIME_HOST_ROOT=""
 LIMITS_SUMMARY=""
 run_completed="0"
 diagnostics_ready=0
+is_scheduler_installed_recovery() {
+  # Only the scheduler's retained producer identity assigns host finalization.
+  [ -n "${DOCKER_E2E_CONTAINER_CIDFILE:-}" ]
+}
 cleanup_outer() {
   local exit_status="$?"
   trap - EXIT
@@ -22,7 +26,13 @@ cleanup_outer() {
     echo "Upgrade survivor exited before the scenario completed." >&2
     exit_status=1
   fi
-  if [ "$exit_status" -ne 0 ]; then
+  # These finite scheduler cells publish after the lane group is joined. Its
+  # timeout can kill this shell, so it must not own the required host receipt.
+  local scheduler_recovery=0
+  if is_scheduler_installed_recovery; then
+    scheduler_recovery=1
+  fi
+  if [ "$exit_status" -ne 0 ] && [ "$scheduler_recovery" = "0" ]; then
     if [ "$diagnostics_ready" = "1" ]; then
       publish_diagnostics ||
         echo "Upgrade survivor diagnostics missing; preserving original lane failure." >&2
@@ -113,7 +123,9 @@ NODE
   *) exit "$context_status" ;;
 esac
 openclaw_resolve_frozen_upgrade_survivor_capabilities "$ROOT_DIR"
+openclaw_resolve_frozen_upgrade_skill_library_contract "$ROOT_DIR"
 UPGRADE_COMPAT_ENV_ARGS+=(
+  -e "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE=$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE"
   -e "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE=$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE"
   -e "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE=$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE"
 )
@@ -184,6 +196,14 @@ BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-}"
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}"
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
+if [ "$SCENARIO" = "git-release" ]; then
+  export OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1
+  # The baseline is main commit 7db69bedeab6, which reports 2026.11.5 and has the
+  # node_modules release layout; the published v2026.11.5 tag does not.
+  BASELINE_SPEC="${BASELINE_SPEC:-openclaw@2026.11.5}"
+  # Three full source builds (baseline, first hop, second hop) run in the container.
+  DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-3600s}"
+fi
 if [ "$SCENARIO" = "abandoned-update" ] && [ -z "${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-}" ]; then
   UPDATE_RESTART_MODE="auto-auth"
 fi
@@ -330,7 +350,12 @@ prepare_limit_summary() {
 }
 DOCKER_RUN_USER_ARGS=()
 UPGRADE_ENTRYPOINT=()
-if [ "$UPDATE_RESTART_MODE" = auto-auth ]; then
+if [ "$UPDATE_RESTART_MODE" = auto-auth ] ||
+  { [ "$SCENARIO" = package-installed-recovery ] && {
+    [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = older-runtime ] ||
+      [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = live-gateway ] ||
+      [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = owed-plugin-retry ]
+  }; }; then
   # MAC_OVERRIDE permits replacing unconfined; the entrypoint drops every capability.
   DOCKER_RUN_USER_ARGS+=(--user root --cgroupns private --cap-add SYS_ADMIN --cap-add MAC_OVERRIDE --security-opt apparmor=unconfined)
   UPGRADE_ENTRYPOINT=(bash /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/cgroup-entrypoint.sh)
@@ -395,7 +420,21 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   CANDIDATE_IS_CURRENT=0
   CANDIDATE_SPEC=""
 
-  if [ -n "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ] || [ "$CANDIDATE_RAW" = "current" ]; then
+  if [ "$SCENARIO" = "git-release" ]; then
+    if [ "$BASELINE_SPEC" != "openclaw@2026.11.5" ] || [ "$CANDIDATE_RAW" != current ] ||
+      [ "$UPDATE_RESTART_MODE" != manual ] || [ "$LIVE_ENABLED" != 0 ]; then
+      echo "git-release requires baseline 2026.11.5 (main 7db69bedeab6), candidate current, manual restart, and no live models" >&2
+      exit 2
+    fi
+    CANDIDATE_KIND="git"
+    CANDIDATE_SPEC="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+    source_git="$(git -C "$ROOT_DIR" rev-parse --path-format=absolute --git-common-dir)"
+    baseline_sha="$(git -C "$ROOT_DIR" rev-parse '7db69bedeab6^{commit}')"
+    UPGRADE_SCENARIO_ARGS+=(
+      -v "$source_git:/tmp/openclaw-source.git:ro"
+      -e "OPENCLAW_UPGRADE_SURVIVOR_GIT_BASELINE_SHA=$baseline_sha"
+    )
+  elif [ -n "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ] || [ "$CANDIDATE_RAW" = "current" ]; then
     PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor)"
     CANDIDATE_KIND="tarball"
     CANDIDATE_IS_CURRENT=1
@@ -467,7 +506,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
 
   if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "cron-owner-doctor" ]; then
     WORKER_RUNTIME_HOST_ROOT="$(mktemp -d "$ARTIFACT_DIR/worker-runtime.XXXXXX")"
-    chmod a+rwx "$WORKER_RUNTIME_HOST_ROOT"
+    chmod a+rwxt "$WORKER_RUNTIME_HOST_ROOT"
     UPGRADE_SCENARIO_ARGS+=(
       -v "$WORKER_RUNTIME_HOST_ROOT:$SURVIVOR_RUNTIME_ROOT"
     )
@@ -545,12 +584,25 @@ fi
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
 mkdir -p "$ARTIFACT_DIR"
-chmod -R a+rwX "$ARTIFACT_DIR" || true
+if is_scheduler_installed_recovery; then
+  # The host owns the private outer directory and setgid evidence mount. Keep
+  # appuser/HOME unchanged; only this group can read new private producer files.
+  DOCKER_RUN_USER_ARGS+=(--group-add "$(id -g)")
+else
+  chmod -R a+rwX "$ARTIFACT_DIR" || true
+fi
 prepare_diagnostics_capture
 prepare_limit_summary
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 if [ "$SCENARIO" = "package-installed-recovery" ]; then
+  recovery_image="$IMAGE_NAME"
+  recovery_name=""
+  if is_scheduler_installed_recovery && [ "$OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT" = partial-previous ]; then
+    recovery_name="openclaw-recovery-$(basename "$(dirname "$ARTIFACT_DIR")")"
+    recovery_image="$(docker_e2e_docker_with_timeout 10s image inspect --format '{{.Id}}' "$IMAGE_NAME")"
+    [[ "$recovery_image" =~ ^sha256:[a-f0-9]{64}$ ]]
+  fi
   docker_e2e_run_with_harness \
     --init \
     ${UPGRADE_LIMITS_ARGS[@]+"${UPGRADE_LIMITS_ARGS[@]}"} \
@@ -558,14 +610,48 @@ if [ "$SCENARIO" = "package-installed-recovery" ]; then
     -e OPENCLAW_TEST_STATE_FUNCTION_B64="$OPENCLAW_TEST_STATE_FUNCTION_B64" \
     -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
     -e OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT="${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" \
+    -e OPENCLAW_DOCKER_E2E_SELECTED_SHA="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
     -v "$HARNESS_ROOT_DIR/scripts:/tmp/openclaw-release-harness/scripts:ro" \
     ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
     -e OPENCLAW_E2E_COMMAND_TIMEOUT="$COMMAND_TIMEOUT" \
     ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
-    "$IMAGE_NAME" \
+    "$recovery_image" \
+    ${UPGRADE_ENTRYPOINT[@]+"${UPGRADE_ENTRYPOINT[@]}"} \
     timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \
     bash /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/installed-recovery.sh
+  if [ -n "$recovery_name" ]; then
+    # A joined host CLI alone does not prove container settlement. These two
+    # serial, offline readers consume the same image only after that proof.
+    docker_e2e_settle_container_cidfile "${DOCKER_E2E_CONTAINER_CIDFILE:?missing scheduler producer CID path}"
+    read -r producer_uid reader_uid reader_gid < <(node -e '
+      const fs = require("node:fs"), path = require("node:path");
+      const root = process.argv[1], host = process.getuid(), group = process.getgid();
+      if ((fs.lstatSync(path.dirname(root)).mode & 0o777) !== 0o700) process.exit(1);
+      const producer = fs.lstatSync(path.join(root, "installed-recovery.json")).uid;
+      let uid = 65534, gid = 65534;
+      while (uid === producer || uid === host) uid--;
+      while (gid === group) gid--;
+      console.log(producer, uid, gid);
+    ' "$ARTIFACT_DIR")
+    for access in shared outsider; do
+      reader_name="${recovery_name}-${access}"
+      reader_group=()
+      [ "$access" != shared ] || reader_group=(--group-add "$(id -g)")
+      status=0
+      docker_e2e_docker_with_timeout 30s run --name "$reader_name" --pull=never --rm \
+        --network=none --cap-drop=ALL --security-opt=no-new-privileges --read-only \
+        --user "$reader_uid:$reader_gid" --workdir=/ ${reader_group[@]+"${reader_group[@]}"} \
+        -v "$ARTIFACT_DIR:/evidence:ro" -v "$(dirname "$ARTIFACT_DIR"):/private:ro" \
+        -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs:/check.mjs:ro" \
+        --entrypoint node "$recovery_image" /check.mjs "$access" "$reader_uid" "$reader_gid" "$(id -g)" "$producer_uid" || status="$?"
+      docker_e2e_docker_with_timeout 10s rm -f "$reader_name" >/dev/null 2>&1 || true
+      state="$(docker_e2e_docker_with_timeout 10s ps -a --filter "name=^/${reader_name}$" --format '{{.State}}')"
+      [ -z "$state" ]
+      [ "$status" -eq 0 ] || exit "$status"
+    done
+    printf 'Installed recovery access proved with image %s\n' "$recovery_image"
+  fi
   run_completed="1"
   exit 0
 fi

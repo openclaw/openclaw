@@ -36,7 +36,9 @@ full-history checkouts retain their history.
 
 All three accept Node **24.16.0+ on 24.x or 26.1.0+** (24.22.1+/26.12.1+ strongly recommended for security) with a WAL-reset-safe linked SQLite library. When Node is missing and nvm is not detected, `install.sh` provisions Node 26 through Homebrew on macOS and the supported Node 24 LTS line through NodeSource on Linux. When a supported RPM-owned Node links unsafe SQLite, `install.sh` preserves the distro package and provisions a user-space Node runtime through `install-cli.sh`. The rootless `install-cli.sh` downloads Node 24.22.1 on macOS and glibc Linux. FreeBSD uses an installed system runtime. Linux ARMv7 is unsupported. On Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
 
-For npm installs, `install.sh` and `install.ps1` query the selected package’s `engines.node` before accepting an existing runtime. A runtime that does not satisfy the target release is upgraded through the normal Node provisioning path. The lookup has a bounded timeout; if npm or package metadata is unavailable, the installers use the conservative Node 24.22.1 / 26.12.1 floor required by the published default releases. The SQLite capability checks still apply. For git installs, they read `engines.node` from the selected checkout after clone/update and before selecting Node and bootstrapping pnpm. This retains a compatible runtime for main while respecting stricter engine requirements in older refs.
+For npm installs, `install.sh` and `install.ps1` query the selected package’s `engines.node` before accepting an existing runtime. A runtime that does not satisfy the target release is upgraded through the normal Node provisioning path. The lookup has a bounded timeout; if npm or package metadata is unavailable, the installers use the Node 24.16.0 / 26.1.0 compatibility floors. A compatible runtime below 24.22.1 on 24.x or 26.12.1 prints a security warning without triggering a download solely for that recommendation. The SQLite capability checks still apply. For git installs, they read `engines.node` from the selected checkout after clone/update and before selecting Node and bootstrapping pnpm. This retains a compatible runtime for main while respecting stricter engine requirements in older refs.
+
+On a fresh host, the installers provision Node/npm first, then query the requested package's engine requirement before installing it. `install.sh --beta` preserves the beta request through that bootstrap, selects the beta once npm is available, and checks that beta's engines. If the beta tag cannot be resolved after npm is available, it falls back to `latest` with a warning.
 
 On macOS, a failed Homebrew bootstrap stops `install.sh` before Node provisioning. Quiet and verbose modes preserve the bootstrap's exit status and error output; neither reports Homebrew success after a failure.
 
@@ -279,8 +281,10 @@ With `--install-method git`, `install.sh` and `install-cli.sh` accept a full
 40-character commit SHA through `--version`. The installer uses the existing
 object or fetches that exact commit from `origin`, checks it out detached, and
 installs dependencies with a frozen lockfile. A branch with the same name cannot
-replace the requested commit. `--no-git-update` skips branch rebasing; it does not
-prevent fetching a missing requested commit. The install fails if the requested
+replace the requested commit. `--no-git-update` skips rebasing local `main` onto
+`origin/main`, but the installer still fetches `origin/main` when selecting
+that branch. Other branch and tag selectors still contact `origin`, and a
+missing requested commit is still fetched. The install fails if the requested
 object is unavailable or cannot resolve to a commit.
 
 ### Examples (install.sh)
@@ -331,7 +335,7 @@ object is unavailable or cannot resolve to a commit.
 | `--version <version\|dist-tag\|spec>`   | npm version, dist-tag, or package spec (default: `latest`)              |
 | `--beta`                                | Use beta dist-tag if available, else fall back to `latest`              |
 | `--git-dir \| --dir <path>`             | Checkout directory (default: `~/openclaw`)                              |
-| `--no-git-update`                       | Skip `git pull` for existing checkout                                   |
+| `--no-git-update`                       | Skip rebasing local `main`. Git fetches can still occur.                |
 | `--no-prompt`                           | Disable prompts                                                         |
 | `--no-onboard`                          | Skip onboarding                                                         |
 | `--onboard`                             | Enable onboarding                                                       |
@@ -353,7 +357,7 @@ object is unavailable or cannot resolve to a commit.
 | `OPENCLAW_BETA=0\|1`                              | Use beta if available                                              |
 | `OPENCLAW_HOME=<path>`                            | Base directory for OpenClaw state and default git/onboarding paths |
 | `OPENCLAW_GIT_DIR=<path>`                         | Checkout directory                                                 |
-| `OPENCLAW_GIT_UPDATE=0\|1`                        | Toggle git updates                                                 |
+| `OPENCLAW_GIT_UPDATE=0\|1`                        | Set to `0` to skip rebasing local `main`                           |
 | `OPENCLAW_NO_PROMPT=1`                            | Disable prompts                                                    |
 | `OPENCLAW_VERIFY_INSTALL=1`                       | Run the post-install smoke verify                                  |
 | `OPENCLAW_NO_ONBOARD=1`                           | Skip onboarding                                                    |
@@ -376,6 +380,8 @@ Designed for environments where you want everything under a local prefix
 installs on macOS/Linux/WSL. FreeBSD uses the npm method. FreeBSD and Alpine use
 system Node packages.
 </Info>
+
+Quote `--prefix` and `--git-dir` values containing spaces or shell characters when invoking the installer. The generated launcher preserves those literal paths when called from another working directory.
 
 ### Flow (install-cli.sh)
 
@@ -485,7 +491,7 @@ its existing service-refresh behavior.
 | `--npm`                                 | Shortcut for npm method                                                           |
 | `--git \| --github`                     | Shortcut for git method                                                           |
 | `--git-dir \| --dir <path>`             | Git checkout directory (default: `~/openclaw`)                                    |
-| `--no-git-update`                       | Skip `git pull` for an existing git checkout                                      |
+| `--no-git-update`                       | Skip rebasing local `main`. Git fetches can still occur.                          |
 | `--version <ver>`                       | OpenClaw version or dist-tag (default: `latest`)                                  |
 | `--compatible-with <ver>`               | Refuse a CLI that cannot modify config written by `<ver>`                         |
 | `--node-version <ver>`                  | Node version (default: `24.22.1`)                                                 |
@@ -509,7 +515,7 @@ its existing service-refresh behavior.
 | `OPENCLAW_NODE_VERSION=<ver>`               | Node version                                                       |
 | `OPENCLAW_HOME=<path>`                      | Base directory for OpenClaw state and default git/onboarding paths |
 | `OPENCLAW_GIT_DIR=<path>`                   | Git checkout directory for git installs                            |
-| `OPENCLAW_GIT_UPDATE=0\|1`                  | Toggle git updates for existing checkouts                          |
+| `OPENCLAW_GIT_UPDATE=0\|1`                  | Set to `0` to skip rebasing local `main`                           |
 | `OPENCLAW_NO_ONBOARD=1`                     | Skip onboarding                                                    |
 | `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice` | npm log level (default: `error`)                                   |
 

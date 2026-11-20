@@ -11,7 +11,9 @@ export type CronConversationResultParams = {
   agentId: string;
   jobId: string;
   runStartedAt: number;
-  conversation: { sessionKey: string; sessionId: string; lifecycleRevision?: string };
+  conversation: { sessionKey: string };
+  /** The cron turn ran in this conversation; see `commitBackgroundResultToSession`. */
+  displayOnly?: true;
   payloads: ReplyPayload[];
   signal?: AbortSignal;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
@@ -20,19 +22,18 @@ export type CronConversationResultParams = {
 /** Commits an internal-channel result; external deliveries are recorded by outbound delivery. */
 export async function commitCronConversationResult(
   params: CronConversationResultParams,
-): Promise<{ ok: true; diagnostics?: CronRunDiagnostics } | { ok: false; reason: string }> {
+): Promise<
+  { ok: true; skipped?: true; diagnostics?: CronRunDiagnostics } | { ok: false; reason: string }
+> {
   const runId = createCronExecutionId(params.jobId, params.runStartedAt);
   await params.deliveryAttemptFence?.beforeAttempt();
   const committed = await commitBackgroundPayloadsToSession({
     agentId: params.agentId,
     sessionKey: params.conversation.sessionKey,
-    expectedGeneration: {
-      sessionId: params.conversation.sessionId,
-      lifecycleRevision: params.conversation.lifecycleRevision,
-    },
     payloads: params.payloads,
     idempotencyKey: `cron-current-completion:${runId}`,
     provenance: { kind: "cron", jobId: params.jobId, runId },
+    displayOnly: params.displayOnly,
     config: params.config,
     signal: params.signal,
     assertCurrent: () => {
@@ -43,12 +44,15 @@ export async function commitCronConversationResult(
   if (!committed.ok) {
     return committed;
   }
-  return committed.diagnostics
-    ? {
-        ok: true,
-        diagnostics: createCronRunDiagnosticsFromError("delivery", committed.diagnostics, {
-          severity: "warn",
-        }),
-      }
-    : { ok: true };
+  return {
+    ok: true,
+    ...(committed.skipped ? { skipped: true as const } : {}),
+    ...(committed.diagnostics
+      ? {
+          diagnostics: createCronRunDiagnosticsFromError("delivery", committed.diagnostics, {
+            severity: "warn",
+          }),
+        }
+      : {}),
+  };
 }

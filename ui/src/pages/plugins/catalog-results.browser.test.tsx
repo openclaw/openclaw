@@ -9,10 +9,10 @@ import {
   renderPluginCatalogResults as PluginCatalogResults,
   type PluginCatalogResultsProps,
 } from "./catalog-results.tsx";
-import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell } from "./detail-shell.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import { renderPluginContentCapabilities } from "./overview.tsx";
+import { PluginArtTile } from "./presentation.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import carapaceStyles from "../../styles/carapace-control-ui.css?inline";
 import componentStyles from "../../styles/components.css?inline";
@@ -557,12 +557,22 @@ it.each([390, 768, 1366, 1440])(
     );
     const readme = find(".plugin-catalog-detail__readme-section");
     const capabilities = find(".plugin-capabilities");
-    const gap = () =>
-      readme.getBoundingClientRect().top - capabilities.getBoundingClientRect().bottom;
+    const sidebar = find(".plugin-catalog-detail__sidebar");
+    const oneColumn =
+      getComputedStyle(find(".plugin-catalog-detail__content")).gridTemplateColumns.split(/\s+/u)
+        .length === 1;
+    // One column puts the facts between what the plugin adds and its README.
+    const above = oneColumn ? sidebar : capabilities;
+    const gap = () => readme.getBoundingClientRect().top - above.getBoundingClientRect().bottom;
+    if (oneColumn) {
+      expect(
+        sidebar.getBoundingClientRect().top - capabilities.getBoundingClientRect().bottom,
+      ).toBeLessThanOrEqual(32);
+    }
     expect(gap()).toBeGreaterThanOrEqual(20);
     expect(gap()).toBeLessThanOrEqual(32);
     await expect
-      .element(page.getByRole("heading", { name: /MCP Servers\s*2/, exact: true }))
+      .element(page.getByRole("heading", { name: "MCP servers", exact: true }))
       .toBeVisible();
     const server = page.getByText("workspace", { exact: true });
     await server.click();

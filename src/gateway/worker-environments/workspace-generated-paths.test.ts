@@ -42,14 +42,23 @@ async function makeWorkspace(files: Record<string, string>) {
   return { ...fixture, manifestPath, readLocal, capture };
 }
 const cacheRoots = [
-  ".openclaw/tmp",
-  ".local/share/pnpm/store",
+  ...["_cacache", "_logs"].map((name) => `.npm/${name}`),
+  ...["pip", "uv", "bun-transpiler", "vitest"].map((name) => `.cache/${name}`),
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
-  ".cache/bun-transpiler",
+  ".cache/convex/binaries",
+  ".pnpm-store",
+  ".bun/install/cache",
+  ...["registry", "git"].map((name) => `.cargo/${name}`),
+  ".gradle/caches",
+  ".local/share/NuGet/http-cache",
+  ".local/share/NuGet/v3-cache",
+  ".nuget/packages",
+  ".local/share/pnpm/store",
+  "artifacts/task-environment/local/share/pnpm/store",
+  ...["tmp", ".pnpm-store", "tools"].map((name) => `.openclaw/${name}`),
   ".artifacts/vitest-worker-cache",
   ".artifacts/vitest-workers",
-  ".cache/vitest",
   ".artifacts/dist-artifacts.lock",
 ];
 const generatedPaths = [
@@ -69,6 +78,9 @@ const userFiles = {
   ".openclaw/project.json": "project data\n",
   ".cache/openclaw/notes.md": "user notes\n",
   ".cache/user-data.json": "user data\n",
+  ".npm/npmrc": "user configuration\n",
+  ".cargo/config.toml": "user configuration\n",
+  ".gradle/gradle.properties": "user configuration\n",
   ...Object.fromEntries(
     cacheRoots.flatMap((root) => [
       [`${root}-notes`, "user notes\n"],
@@ -219,7 +231,7 @@ it("compares workspace inventories without allocating path-segment arrays", () =
   } finally {
     split.mockRestore();
   }
-  expect([...prepared.changed]).toEqual(["src/components/file.ts"]);
+  expect(prepared.preflight.changedPaths).toEqual(["src/components/file.ts"]);
   expect(prepared.preflight.currentNodes.map(([entryPath]) => entryPath)).toEqual([
     "src/components/file.ts",
     "src",
@@ -351,4 +363,36 @@ it("retains plain-workspace inputs when staging has created Git metadata", async
   const manifest = await fixture.readManifest(captured.stdout.trim());
   expect(manifest.baseCommit).toBeNull();
   expect(manifest.entries.map((entry) => entry.path)).toContain(input);
+});
+
+it("retains ignored result artifacts without enrolling other ignored project files", async () => {
+  const fixture = await makeWorkspace({ "source.txt": "base\n", "dist/tracked.txt": "base\n" });
+  const base = await initializeScriptGitWorkspace(fixture.workspace, ".");
+  await writeWorkspaceFiles(fixture.workspace, {
+    ".gitignore": "dist/\n.cache/\n.artifacts/\nnotes/\n",
+  });
+  const initial = await fixture.runManifest([base, "eligible"]);
+  expect(initial.code, initial.stderr).toBe(0);
+  await writeWorkspaceFiles(fixture.workspace, {
+    "source.txt": "edit\n",
+    "dist/tracked.txt": "tracked edit\n",
+    "dist/worker/sqlite-store.worker.mjs": "generated\n",
+    ".cache/openclaw-bun/runtime": "cached runtime\n",
+    "new.txt": "new source\n",
+    ".artifacts/proof/screenshot.png": "saved screenshot\n",
+    "notes/report.txt": "saved report\n",
+    ".cache/user-data.json": "saved data\n",
+  });
+  const result = await fixture.runManifest([base, "all", initial.stdout.trim().slice(7)]);
+  expect(result.code, result.stderr).toBe(0);
+  const manifest = await fixture.readManifest(result.stdout.trim());
+  expect(
+    manifest.entries.filter((entry) => entry.type === "file").map((entry) => entry.path),
+  ).toEqual([
+    ".artifacts/proof/screenshot.png",
+    ".gitignore",
+    "dist/tracked.txt",
+    "new.txt",
+    "source.txt",
+  ]);
 });

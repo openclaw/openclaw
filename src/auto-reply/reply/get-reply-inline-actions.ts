@@ -303,12 +303,6 @@ export async function handleInlineActions(
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
-      const { hasAnyAuthProfileStoreSourceAsync } =
-        await import("../../agents/auth-profiles/source-check.js");
-      const authSourceAgentDir = agentDir?.trim();
-      const authProfileStoreSource = authSourceAgentDir
-        ? await hasAnyAuthProfileStoreSourceAsync(authSourceAgentDir)
-        : false;
       const authorizedTools = await resolveSkillDispatchTools({
         message: {
           surface: ctx.Surface,
@@ -327,7 +321,6 @@ export async function handleInlineActions(
         cfg,
         agentId,
         agentDir,
-        authProfileStoreSource,
         sessionEntry: targetSessionEntry,
         sessionKey,
         workspaceDir,

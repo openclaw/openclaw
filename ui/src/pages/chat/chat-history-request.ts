@@ -1,9 +1,11 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { nativeHistoryMessageSourceId } from "../../lib/chat/history-message-identity.ts";
+import {
+  nativeHistoryMessageSourceId,
+  oldestNativeHistoryMessage,
+} from "../../lib/chat/history-message-identity.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import {
   isUiSelectedGlobalSessionKey,
@@ -23,6 +25,7 @@ import {
   type ChatHistoryResetResult,
   type ChatHistoryResponse,
   isHistoryCursor,
+  attachHistoryActivity,
   resolveChatHistoryPagination,
   historySessionId,
 } from "./chat-history-snapshot.ts";
@@ -66,34 +69,8 @@ export function captureChatHistoryRun(
 
 // Keep startup small, then amortize older-history reads and prepend work across
 // larger pages. The Gateway owns the response byte and single-message limits.
-const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
+export const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
 const CHAT_HISTORY_OLDER_PAGE_MAX_BYTES = 3 * 1024 * 1024;
-
-export function attachHistoryActivity<Result extends ChatHistoryResponse>(result: Result): Result {
-  if (isHistoryCursor(result) && result.kind === "reset") {
-    return result;
-  }
-  if (!result.activity || !result.messages) {
-    return result;
-  }
-  const byId = new Map(result.activity.map((entry) => [entry.messageId, entry.items]));
-  const withActivity = (message: unknown) => {
-    const record = asOptionalRecord(message);
-    const id = record?.messageId ?? asOptionalRecord(record?.["__openclaw"])?.id;
-    const activity = typeof id === "string" ? byId.get(id) : undefined;
-    return record && activity ? { ...record, activity } : message;
-  };
-  return {
-    ...result,
-    messages: result.messages.map((entry) => {
-      if (!isHistoryCursor(result)) {
-        return withActivity(entry);
-      }
-      const envelope = asOptionalRecord(entry);
-      return envelope ? { ...envelope, message: withActivity(envelope.message) } : entry;
-    }),
-  };
-}
 
 type SharedChatHistoryResponse = ChatHistoryResponse & {
   observation?: Omit<ChatHistoryObservation, "run">;
@@ -149,7 +126,7 @@ export function requestSharedHistory(
   sessions: ChatHistorySessions | null,
   ...[
     client,
-    requestKey,
+    baseRequestKey,
     method,
     sessionKey,
     requestAgentId,
@@ -170,7 +147,7 @@ export function requestSharedHistory(
     inputRunIds,
     historyState,
   );
-  requestKey += JSON.stringify(params.knownState);
+  const requestKey = baseRequestKey + JSON.stringify(params.knownState);
   let owners = sharedChatHistoryRequests.get(client);
   if (!owners) {
     owners = new WeakMap();
@@ -364,23 +341,20 @@ export async function requestChatSessionSnapshot(
 
 type OlderHistorySelector = { cursor: string } | { messageId: string; sessionId: string };
 
-export function chatHistoryOlderSelector(state: ChatState): OlderHistorySelector {
+export function chatHistoryOlderSelector(state: ChatState): OlderHistorySelector | null {
   const pagination = state.chatHistoryPagination;
-  if (pagination.hasMore) {
-    if (pagination.needsBoundary) {
-      const messageId = nativeHistoryMessageSourceId(state.chatMessages[0]);
-      const sessionId = state.currentSessionId?.trim();
-      if (messageId && sessionId) {
-        return { messageId, sessionId };
-      }
-    } else if (pagination.olderCursor) {
-      return { cursor: pagination.olderCursor };
-    }
+  if (!pagination.hasMore) {
+    return null;
   }
-  throw new Error("History has no usable older boundary. Reload the session to retry.");
+  if (pagination.olderCursor) {
+    return { cursor: pagination.olderCursor };
+  }
+  const sessionId = state.currentSessionId?.trim();
+  const messageId = nativeHistoryMessageSourceId(oldestNativeHistoryMessage(state.chatMessages));
+  return messageId && sessionId ? { messageId, sessionId } : null;
 }
 
-async function requestOlderChatHistoryPage(
+export async function requestOlderChatHistoryPage(
   client: GatewayBrowserClient,
   sessionKey: string,
   requestAgentId: string | undefined,

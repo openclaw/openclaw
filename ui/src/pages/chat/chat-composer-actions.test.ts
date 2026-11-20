@@ -14,6 +14,7 @@ import {
 } from "./chat-composer.test-support.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
+import { placeComposerDictation } from "./composer-dictation-session.ts";
 
 afterEach(() => resetComposerFixture());
 
@@ -61,6 +62,21 @@ async function renderQueue(queue: QueuedMessage[], overrides: Partial<ChatCompos
 }
 
 describe("renderChatComposer controls", () => {
+  it.each(["Win32", "Linux x86_64", "MacIntel"])(
+    "uses compact non-Mac alternate-send hints on %s",
+    (platform) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const { container } = renderComposer({
+        ...activeRun(),
+        draft: "Follow up",
+        followUpMode: "steer",
+        sendShortcut: "enter",
+      });
+      const hints = Array.from(container.querySelectorAll("kbd"), (key) => key.textContent);
+      expect(hints).toContain(platform === "MacIntel" ? "⌘/Ctrl+Enter" : "CtrlEnter");
+    },
+  );
+
   it.each([
     { name: "without send permission", draft: "local draft", canCompose: true, canSend: false },
     { name: "offline text", draft: "queue this", connected: false, allowed: true },
@@ -92,6 +108,55 @@ describe("renderChatComposer controls", () => {
     expect(textarea(container).value).toBe(overrides.draft);
   });
 
+  it("sends an Enter made while the session loads once the composer is ready", async () => {
+    const loading = {
+      draft: "Ship it",
+      canCompose: true,
+      canSend: false,
+      submitPending: true,
+      submitDisabledReason: "Loading conversation…",
+    };
+    const { container, props, onSend } = renderComposer(loading);
+    expect(pressComposerEnter(container).defaultPrevented).toBe(true);
+    await waitForSolid(() =>
+      expect(query(container, ".agent-chat__input--submit-queued")).not.toBeNull(),
+    );
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea(container).value).toBe("Ship it");
+
+    renderComposerInto(container, {
+      ...props,
+      canSend: true,
+      submitPending: false,
+      submitDisabledReason: null,
+    });
+    await waitForSolid(() => expect(onSend).toHaveBeenCalledOnce());
+    expect(query(container, ".agent-chat__input--submit-queued")).toBeNull();
+  });
+
+  it("withdraws a queued Enter when the draft changes before the session is ready", async () => {
+    const { container, props, onSend } = renderComposer({
+      draft: "First thought",
+      canCompose: true,
+      canSend: false,
+      submitPending: true,
+      submitDisabledReason: "Loading conversation…",
+    });
+    pressComposerEnter(container);
+    renderComposerInto(container, { ...props, draft: "Second thought" });
+    renderComposerInto(container, {
+      ...props,
+      draft: "Second thought",
+      canSend: true,
+      submitPending: false,
+      submitDisabledReason: null,
+    });
+    await waitForSolid(() =>
+      expect(query(container, ".agent-chat__input--submit-queued")).toBeNull(),
+    );
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("keeps desktop and mobile Stop available with a pending attachment", () => {
     const onAbort = vi.fn();
     const onTypingChange = vi.fn();
@@ -106,7 +171,7 @@ describe("renderChatComposer controls", () => {
     const stop = primaryButton(container);
 
     expect(stop.disabled).toBe(false);
-    expect(stop.getAttribute("aria-label")).toBe(t("chat.runControls.stopGenerating"));
+    expect(stop.getAttribute("aria-label")).toBe(t("chat.runControls.stop"));
     expect(query(container, ".chat-mobile-primary-action > openclaw-tooltip > button")).toBe(stop);
     expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
     stop.click();
@@ -141,6 +206,8 @@ describe("renderChatComposer controls", () => {
     const locked = vi.spyOn(dictation, "locksComposer", "get").mockReturnValue(true);
     vi.spyOn(dictation, "finalizing", "get").mockReturnValue(finalizing);
     const finishActive = vi.spyOn(dictation, "finishActive").mockResolvedValue(true);
+    // Commits arrive only after the capture module, which places transcripts, has loaded.
+    vi.spyOn(dictation, "placeTranscript").mockImplementation(placeComposerDictation);
     const update = vi.spyOn(dictation, "update");
     renderComposerInto(container, props);
     const commit = update.mock.lastCall?.[0].onCommit;
@@ -152,7 +219,7 @@ describe("renderChatComposer controls", () => {
 
   it("finishes locked dictation before submitting the complete draft with history held", async () => {
     const { container, active, locked, finishActive, onSend, commit } = renderDictatingComposer({
-      submitDisabledReason: "Loading chat",
+      submitDisabledReason: "Loading conversation…",
     });
     const finalTranscript = createDeferred<string>();
     finishActive.mockImplementation(async () => {
@@ -393,7 +460,9 @@ describe("renderChatComposer controls", () => {
       const tooltip = primaryButton(view.container).closest<HTMLElement & { content?: string }>(
         "openclaw-tooltip",
       );
-      expect(tooltip?.content).toBe(expected);
+      const text = tooltip?.querySelector('[slot="content"]')?.textContent ?? tooltip?.content;
+      expect(text).toContain(expected);
+      expect(text).not.toContain(" · ");
     }
   });
 
