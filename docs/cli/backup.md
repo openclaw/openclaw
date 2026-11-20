@@ -74,7 +74,8 @@ exported from one `REPEATABLE READ READ ONLY` snapshot, the same per-store
 consistency as the live SQLite snapshots in the archive; separate stores are
 captured one after another, not at one shared instant. Rows committed after a
 store's snapshot belong to the next backup. With the Gateway stopped, the command
-holds offline custody instead. Restore, Git backups, and generic local snapshots
+holds offline custody instead. Git capture, including scheduled Git backups, uses
+the same online per-store snapshot path. Restore and generic local snapshots
 that select PostgreSQL still require the Gateway stopped and refuse while it is
 running: “stop through the service owner, then rerun.”
 
@@ -476,9 +477,10 @@ uses its family and resource identity, so multiple PostgreSQL stores have
 distinct Git destinations.
 `--global` and `--agent <id>` keep their existing source selection. For a
 PostgreSQL source, Git backup routing captures the same sanitized export image,
-anchor, and format-2 manifest. Stop the Gateway through
-its service owner before capture or restore; a running Gateway is refused, never
-stopped automatically. A matched PostgreSQL restore verifies the artifacts and
+anchor, and format-2 manifest. Capture works while the Gateway runs, including
+scheduled Git backups, with the same per-store consistency as archive capture.
+Stop the Gateway through its service owner before restore; a running Gateway is
+refused, never stopped automatically. A matched PostgreSQL restore verifies the artifacts and
 loads a fresh owned namespace before publishing its anchor. Existing SQLite Git
 backups retain their format and restore behavior.
 
