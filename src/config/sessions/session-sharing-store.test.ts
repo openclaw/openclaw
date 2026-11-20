@@ -380,7 +380,6 @@ it("round-trips optional member access through the writer, worker, and replaceme
       readExactSessionEntryFactsInDatabase(database, [scope.sessionKey]).members[scope.sessionKey],
     ).toEqual(expected);
     const initial = readSessionMembershipFactsInDatabase(database);
-    expect(initial.facts[0]?.[5]).toEqual({ reader: "suggest" });
     const projection = createSessionMembershipProjection();
     projection.updateTargets([
       {

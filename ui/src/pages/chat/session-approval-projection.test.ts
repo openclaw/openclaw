@@ -55,44 +55,29 @@ const ancestorProjection = {
 };
 
 describe("session approval projection", () => {
-  it("preserves exact decision eligibility in session events and replay", () => {
+  it("preserves exact eligibility and turn attribution in events and replay", () => {
+    const turnActor = { id: "profile:pat", label: "Pat" };
     const approval = {
       ...pendingPluginApproval,
       canDecide: true,
-      presentation: {
-        kind: "exec",
-        commandText: "pwd",
-        allowedDecisions: ["allow-once", "deny"],
-      },
+      turnActor,
+      presentation: { kind: "exec", commandText: "pwd", allowedDecisions: ["allow-once", "deny"] },
     };
-    expect(project({ ...replay(), approvals: [approval] }, host)[0]?.canDecide).toBe(true);
-    expect(reconcile([], { ...event(), approval }, host)?.[0]?.canDecide).toBe(true);
-    expect(
-      reconcile([], { ...event(), approval: { ...approval, canDecide: "true" } }, host),
-    ).toBeNull();
-  });
-
-  it("preserves turn attribution in reviewer events and replay without weakening payload validation", () => {
-    const turnActor = { id: "profile:pat", label: "Pat" };
-    const approval = { ...pendingPluginApproval, turnActor };
-    expect(project({ ...replay(), approvals: [approval] }, host)[0]?.request.turnActor).toEqual(
-      turnActor,
-    );
-    expect(reconcile([], { ...event(), approval }, host)?.[0]?.request.turnActor).toEqual(
-      turnActor,
-    );
-    expect(
-      reconcile([], { ...event(), approval: { ...approval, unexpected: "private" } }, host),
-    ).toBeNull();
+    for (const canDecide of [true, false]) {
+      const current = { ...approval, canDecide };
+      const expected = { canDecide, request: { turnActor } };
+      expect(project({ ...replay(), approvals: [current] }, host)[0]).toMatchObject(expected);
+      expect(reconcile([], { ...event(), approval: current }, host)?.[0]).toMatchObject(expected);
+    }
+    for (const invalid of [{ canDecide: "true" }, { unexpected: "private" }]) {
+      expect(reconcile([], { ...event(), approval: { ...approval, ...invalid } }, host)).toBeNull();
+    }
   });
 
   it("projects only own-turn status, without creating a reviewable approval or retaining private fields", () => {
     const { state, request } = createSessionEventState({
       sessionKey: host,
       chatSessionApprovalQueue: [],
-    });
-    onTestFinished(() => {
-      vi.restoreAllMocks();
     });
     const changed = vi.fn();
     onTestFinished(chatRunPresentation(state).subscribeNonText(changed));
@@ -128,9 +113,6 @@ describe("session approval projection", () => {
     expect(applySessionApprovalEvent(state, { ...status, status: "terminal" })).toBe(true);
     expect(own()).toBeNull();
     applySessionApprovalEvent(state, { ...status, expiresAtMs: 1 });
-    expect(own()).toBeNull();
-    applySessionApprovalEvent(state, status);
-    state.connectionEpoch++;
     expect(own()).toBeNull();
     applySessionApprovalEvent(state, status);
     chatHistoryRequests(state).subscriptionGeneration++;

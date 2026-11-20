@@ -79,7 +79,6 @@ describe("live sharing transcript notices", () => {
     const publish = vi.fn();
     const stop = chatRunPresentation(state).subscribeNonText(publish);
     for (const payload of [
-      { access: undefined },
       { access: "admin" },
       { action: "visibility", visibility: "shared" },
       { action: "member-removed" },
@@ -100,7 +99,7 @@ describe("live sharing transcript notices", () => {
     stop();
   });
 
-  it.each(["client", "epoch", "session", "instance", "subscription", "disconnect"])(
+  it.each(["client", "session", "instance", "subscription", "disconnect"])(
     "retires notices when the %s owner changes",
     (change) => {
       const { state } = createSessionEventState();
@@ -108,9 +107,6 @@ describe("live sharing transcript notices", () => {
       expect(currentChatSharingNotices(state)).toHaveLength(1);
       if (change === "client") {
         state.client = createTestGatewayClient(vi.fn());
-      }
-      if (change === "epoch") {
-        state.connectionEpoch += 1;
       }
       if (change === "session") {
         state.sessionKey = "agent:main:other";

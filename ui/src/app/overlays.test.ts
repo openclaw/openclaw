@@ -220,6 +220,10 @@ describe("application approval overlays", () => {
       id: projected.id,
       decision: "deny",
     });
+    const broad = fixture(request, ["operator.approvals"]);
+    request.mockClear();
+    await broad.overlays.decideApproval("deny", projected.id, { ...projected, canDecide: false });
+    expect(request).not.toHaveBeenCalledWith("exec.approval.resolve", expect.anything());
   });
 
   it("leaves approval authority and presentation untouched by live tool output", async () => {

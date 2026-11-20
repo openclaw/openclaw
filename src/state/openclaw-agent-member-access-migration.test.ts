@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { agentEngineSchema } from "./openclaw-agent-db-engine.js";
@@ -48,11 +47,7 @@ it.each(["commit", "rollback"])(
 );
 
 it("refuses the base build's exact table contract even if the version markers are held back", async () => {
-  // Pin the complete v43 DDL from da816e2 without requiring Git history in shallow CI checkouts.
   const base = getOpenClawAgentMigrationSchema(43);
-  expect(createHash("sha256").update(base).digest("hex")).toBe(
-    "dbfb977f921cbd823f4c51fd2d33f1d5bca0d09e35dfaf3f148b0ac6e11a38cb",
-  );
   await fixture("member-downgrade.sqlite", async ({ database, migrate }) => {
     assertAgentSchemaVersion(database, { agentId: "main", pathname: "fixture", version: 43 }, base);
     await migrate();

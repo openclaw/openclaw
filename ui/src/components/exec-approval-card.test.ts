@@ -137,12 +137,15 @@ describe("exec approval card", () => {
         canDecide: true,
         request: {
           command: "pwd",
-          turnActor: { id: "participant", label: "Pat" },
+          turnActor: { id: "participant", label: "Pat <script>" },
           allowedDecisions: ["allow-once", "deny"],
         },
         expiresAtMs: Date.now() + 60_000,
       });
       const view = renderSurface(request, variant, onDecision, undefined, false);
+      expect(container.textContent).toContain("Requested during Pat <script>’s turn");
+      expect(container.querySelector("script")).toBeNull();
+      expect(buttons()).toHaveLength(2);
       const allow = buttons().find((button) => button.textContent?.includes("Allow"));
       expect(allow?.disabled).toBe(false);
       allow?.click();
@@ -153,28 +156,6 @@ describe("exec approval card", () => {
       expect(buttons().every((button) => button.disabled)).toBe(true);
       buttons().forEach((button) => button.click());
       expect(onDecision).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["inline", "modal", "sidebar"] as const)(
-    "attributes a participant turn in the %s card without changing decisions",
-    (variant) => {
-      const onDecision = vi.fn();
-      const request = approval({
-        request: {
-          command: "pwd",
-          turnActor: { id: "profile:pat", label: "Pat <script>" },
-          allowedDecisions: ["allow-once", "deny"],
-        },
-        expiresAtMs: Date.now() + 60_000,
-      });
-      renderSurface(request, variant, onDecision);
-      expect(container.textContent).toContain("Requested during Pat <script>’s turn");
-      expect(container.querySelector("script")).toBeNull();
-      expect(buttons()).toHaveLength(2);
-      const allow = buttons().find((button) => button.textContent?.includes("Allow"));
-      allow?.click();
-      expect(onDecision).toHaveBeenCalledWith(request.id, "allow-once");
     },
   );
 
