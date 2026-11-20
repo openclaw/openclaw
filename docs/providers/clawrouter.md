@@ -702,6 +702,9 @@ The bridge uses the existing transport-turn and streaming hooks, including
 simple completions. Qualified Console Responses routes use the native tool-schema
 and `web_search` alias policy, restoring tool names and dynamic-record arguments
 in stream events, final results, and replay. Qualified Go Chat routes for
+`kimi-k2.5`, `kimi-k2.6`, and `kimi-k2.7-code` remove unsupported reasoning
+from outbound replay using the native Go policy. K3 retains its reasoning replay.
+Stored messages are unchanged. Qualified Go Chat routes for
 `deepseek-v4-pro` use the native thinking and replay policy: per-call reasoning
 overrides the configured level, off/none disables thinking, and xhigh/max uses
 max effort while other enabled levels use high effort. The two Flash IDs,

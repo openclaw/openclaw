@@ -7,8 +7,10 @@ import {
   wireMessage,
 } from "../../packages/ai/src/transports/openai-stream-cases.test-support.js";
 import { streamSimple } from "../llm/stream.js";
+import { registerSingleProviderPlugin } from "../plugin-sdk/plugin-test-runtime.js";
 import { clearLiveCatalogCacheForTests } from "../plugin-sdk/provider-catalog-live-runtime.js";
 import * as catalogRuntime from "../plugin-sdk/provider-catalog-live-runtime.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import {
   fixture,
   rawStream,
@@ -65,6 +67,220 @@ function reasoningReply(route: Route) {
 }
 
 describe("qualified OpenCode replay and native thinking", () => {
+  it.each(
+    ["kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k3"].flatMap((upstream) =>
+      [true, false].flatMap((native) =>
+        (["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const).map((hook) => ({
+          upstream,
+          native,
+          hook,
+        })),
+      ),
+    ),
+  )(
+    "matches native Kimi replay policy: $upstream $native $hook",
+    async ({ upstream, native, hook }) => {
+      const route: Route = [
+        "opencode-go",
+        upstream,
+        "openai-completions",
+        "llm.chat",
+        "chat_completions",
+        "/chat/completions",
+        "openai.chat_completions",
+      ];
+      const entry = await loadBundledPluginFacade<{
+        default: Parameters<typeof registerSingleProviderPlugin>[0];
+      }>({ pluginId: "opencode-go", artifactBasename: "index.js" });
+      const nativePlugin = await registerSingleProviderPlugin(entry.default);
+      await fixture(
+        route,
+        async ({ model, plugin, requests, expectedUrl }) => {
+          const nativeModel = {
+            ...model,
+            id: upstream,
+            provider: "opencode-go",
+            baseUrl: "https://opencode.ai/inference/go/openai/v1",
+          };
+          for (const selected of [
+            {
+              name: "native Go",
+              plugin: nativePlugin,
+              model: nativeModel,
+              url: nativeModel.baseUrl + "/chat/completions",
+              wireModel: upstream,
+            },
+            {
+              name: "ClawRouter",
+              plugin,
+              model,
+              url: expectedUrl,
+              wireModel: native ? upstream : model.id,
+            },
+          ]) {
+            const stream = selected.plugin[hook]!({
+              provider: selected.model.provider,
+              modelId: selected.model.id,
+              model: selected.model,
+              streamFn: hook === "wrapStreamFn" ? rawStream : streamSimple,
+            })!;
+            const options = { apiKey: "synthetic-router-key", cacheRetention: "none" as const };
+            const first = await (
+              await stream(selected.model, completionContext("First"), options)
+            ).result();
+            expect(first.stopReason, first.errorMessage).toBe("stop");
+            expect(first.model).toBe(selected.model.id);
+            expect(first.content).toContainEqual(
+              expect.objectContaining({
+                type: "thinking",
+                thinking: "Synthetic replay reasoning",
+              }),
+            );
+            const context = {
+              messages: [first, { role: "user" as const, content: "Continue", timestamp: 2 }],
+            };
+            const original = structuredClone(context);
+            const second = await (await stream(selected.model, context, options)).result();
+            expect(second.stopReason, second.errorMessage).toBe("stop");
+            expect(context).toEqual(original);
+            const request = requests.at(-1)!;
+            expect(request.url).toBe(selected.url);
+            expect(request.headers.get("authorization")).toBe("Bearer synthetic-router-key");
+            const body = await request.json();
+            expect(body.model).toBe(selected.wireModel);
+            const replay = body.messages.find(
+              (message: { role: string }) => message.role === "assistant",
+            );
+            expect(replay).toMatchObject({ role: "assistant", content: "Prior answer" });
+            if (upstream === "kimi-k3") {
+              expect(replay, selected.name).toHaveProperty(
+                "reasoning_content",
+                "Synthetic replay reasoning",
+              );
+            } else {
+              expect(replay, selected.name).not.toHaveProperty("reasoning_content");
+            }
+          }
+          expect(requests).toHaveLength(4);
+        },
+        {
+          native,
+          respond: () =>
+            new Response(
+              `data: ${JSON.stringify({
+                id: "k2-replay",
+                object: "chat.completion.chunk",
+                model: upstream,
+                choices: [
+                  {
+                    index: 0,
+                    delta: {
+                      reasoning_content: "Synthetic replay reasoning",
+                      content: "Prior answer",
+                    },
+                    finish_reason: "stop",
+                  },
+                ],
+              })}\n\ndata: [DONE]\n\n`,
+              { headers: { "content-type": "text/event-stream" } },
+            ),
+        },
+      );
+    },
+  );
+
+  it.each([
+    { provider: "opencode-go", upstream: "kimi-k2.5", api: "openai-completions", strip: true },
+    { provider: "opencode-go", upstream: "kimi-k2.6", api: "openai-completions", strip: true },
+    { provider: "opencode-go", upstream: "kimi-k2.7-code", api: "openai-completions", strip: true },
+    { provider: "opencode-go", upstream: "kimi-k3", api: "openai-completions", strip: false },
+    { provider: "opencode", upstream: "kimi-k2.7-code", api: "openai-completions", strip: false },
+    { provider: "opencode-go", upstream: "future-kimi", api: "openai-completions", strip: false },
+    { provider: "opencode-go", upstream: "kimi-k2.7-code", api: "openai-responses", strip: false },
+  ] as const)(
+    "bounds replay sanitation to $provider $upstream $api",
+    async ({ provider, upstream, api, strip }) => {
+      const chat = api === "openai-completions";
+      const route: Route = [
+        provider,
+        upstream,
+        api,
+        chat ? "llm.chat" : "llm.responses",
+        chat ? "chat_completions" : "responses",
+        chat ? "/chat/completions" : "/responses",
+        chat ? "openai.chat_completions" : "openai.responses",
+      ];
+      for (const native of [true, false]) {
+        await fixture(
+          route,
+          async ({ model, plugin, requests }) => {
+            for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
+              const stream = plugin[hook]!({
+                provider: "clawrouter",
+                modelId: model.id,
+                model,
+                streamFn: hook === "wrapStreamFn" ? rawStream : streamSimple,
+              })!;
+              const controls = {
+                reasoning_content: "synthetic",
+                reasoning_details: [],
+                reasoning: { effort: "high" },
+                reasoning_text: "synthetic",
+                reasoning_effort: "high",
+                reasoningEffort: "high",
+                messages: [
+                  {
+                    role: "assistant",
+                    content: [{ type: "thinking", thinking: "synthetic" }],
+                    reasoning_content: "synthetic",
+                  },
+                ],
+                input: [
+                  { type: "reasoning", summary: [] },
+                  { role: "assistant", content: "visible", reasoning_details: [] },
+                ],
+              };
+              const original = structuredClone(controls);
+              const result = await (
+                await stream(model, completionContext("Continue"), {
+                  apiKey: "synthetic-router-key",
+                  cacheRetention: "none",
+                  onPayload: (payload) => ({ ...payload, ...structuredClone(controls) }),
+                })
+              ).result();
+              expect(result.stopReason, result.errorMessage).toBe("stop");
+              const body = await requests.at(-1)!.json();
+              expect(controls).toEqual(original);
+              if (strip) {
+                for (const key of [
+                  "reasoning_content",
+                  "reasoning_details",
+                  "reasoning",
+                  "reasoning_text",
+                  "reasoning_effort",
+                  "reasoningEffort",
+                ]) {
+                  expect(body).not.toHaveProperty(key);
+                }
+                expect(body.messages).toEqual([
+                  {
+                    role: "assistant",
+                    content: [{ type: "text", text: "[assistant reasoning omitted]" }],
+                  },
+                ]);
+                expect(body.input).toEqual([{ role: "assistant", content: "visible" }]);
+              } else {
+                expect(body).toMatchObject(original);
+              }
+            }
+            expect(requests).toHaveLength(2);
+          },
+          { native },
+        );
+      }
+    },
+  );
+
   it.each([
     { route: routes[2], native: true },
     { route: routes[2], native: false },

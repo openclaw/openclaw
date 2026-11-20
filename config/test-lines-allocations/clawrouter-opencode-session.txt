@@ -1,2 +1,2 @@
-# Qualified provider transport and UI recovery, discovery, and responsive navigation controls.
-1185
+# Qualified provider transport, Kimi replay exclusions, and UI recovery/navigation controls.
+1410

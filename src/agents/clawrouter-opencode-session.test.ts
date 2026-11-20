@@ -220,35 +220,44 @@ describe("actual OpenCode proxy SDK session bridge", () => {
     );
   });
 
-  it.each([routes[1], routes[2]])(
-    "rejects stale or foreign %s %s associations before transport",
-    async (...route) => {
-      await fixture(route, async ({ model, plugin, requests }) => {
-        const stream = plugin.wrapStreamFn!({
-          provider: "clawrouter",
-          modelId: model.id,
-          streamFn: rawStream,
-        })!;
-        for (const patch of [
-          { providerId: "foreign" },
-          { modelId: "stale-model" },
-          { upstream: "stale-upstream" },
-          { api: "anthropic-messages" },
-          { baseUrl: "https://foreign.example" },
-          { url: "https://foreign.example/responses" },
-          { routeKind: "unknown" },
-        ]) {
-          const invalid = structuredClone(model);
-          const metadata = invalid.params?.clawrouterRoute as { openCode: Record<string, unknown> };
-          Object.assign(metadata.openCode, patch);
-          expect(() =>
-            stream(invalid, completionContext("Denied"), { apiKey: "synthetic-router-key" }),
-          ).toThrow("qualified Chat, Responses or Messages route");
-        }
-        expect(requests).toHaveLength(0);
-      });
-    },
-  );
+  it.each([
+    routes[1],
+    routes[2],
+    [
+      "opencode-go",
+      "kimi-k2.7-code",
+      "openai-completions",
+      "llm.chat",
+      "chat_completions",
+      "/chat/completions",
+      "openai.chat_completions",
+    ] as const,
+  ])("rejects stale or foreign %s %s associations before transport", async (...route) => {
+    await fixture(route, async ({ model, plugin, requests }) => {
+      const stream = plugin.wrapStreamFn!({
+        provider: "clawrouter",
+        modelId: model.id,
+        streamFn: rawStream,
+      })!;
+      for (const patch of [
+        { providerId: "foreign" },
+        { modelId: "stale-model" },
+        { upstream: "stale-upstream" },
+        { api: "anthropic-messages" },
+        { baseUrl: "https://foreign.example" },
+        { url: "https://foreign.example/responses" },
+        { routeKind: "unknown" },
+      ]) {
+        const invalid = structuredClone(model);
+        const metadata = invalid.params?.clawrouterRoute as { openCode: Record<string, unknown> };
+        Object.assign(metadata.openCode, patch);
+        expect(() =>
+          stream(invalid, completionContext("Denied"), { apiKey: "synthetic-router-key" }),
+        ).toThrow("qualified Chat, Responses or Messages route");
+      }
+      expect(requests).toHaveLength(0);
+    });
+  });
 
   it("isolates concurrent Console aliases and restores terminal error views", async (test) => {
     const releaseFirst = Promise.withResolvers<void>();

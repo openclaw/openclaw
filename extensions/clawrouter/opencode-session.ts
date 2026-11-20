@@ -9,7 +9,9 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
+  createPayloadPatchStreamWrapper,
   mapAssistantMessageStream,
+  stripReasoningReplayPayload,
   transformProviderStreamMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -172,10 +174,20 @@ export function wrapOpenCodeProxyStream(
 ): StreamFn {
   const provider = selectedOpenCode(model, ctx.sourceApi);
   const family = resolveOpenCodeProxyStreamFamily(provider, model, ctx.sourceApi);
-  const decorated = family
+  const familyStream = family
     ? (buildProviderStreamFamilyHooks(family).wrapStreamFn!({ ...ctx, streamFn: underlying }) ??
       underlying)
     : underlying;
+  const decorated =
+    provider === "opencode-go" &&
+    (ctx.sourceApi ?? model.api) === "openai-completions" &&
+    (model.id === "opencode-go/kimi-k2.5" ||
+      model.id === "opencode-go/kimi-k2.6" ||
+      model.id === "opencode-go/kimi-k2.7-code")
+      ? createPayloadPatchStreamWrapper(familyStream, ({ payload }) =>
+          stripReasoningReplayPayload(payload),
+        )
+      : familyStream;
   if (!provider) {
     return decorated;
   }

@@ -736,6 +736,12 @@ receives editable input when needed; its current requirements are checked per
 request, including live extension-handler registration and removal. This flag
 does not change callback order or the adapter's replacement/null policy.
 
+`stripReasoningReplayPayload` removes unsupported reasoning fields, blocks, and
+effort controls from a mutable outbound payload, retaining visible content and
+an empty-content placeholder. Native Go and qualified ClawRouter Go K2 Chat routes
+share it through `provider-stream-shared`; callers own model and route eligibility.
+Do not apply it to stored conversation history.
+
 `applyOpenAICompletionsToolReasoning` shares the native tools/reasoning wire
 policy with pass-through adapters through that private seam. Callers qualify
 the endpoint and normalize vendor-prefixed model IDs before applying it.
