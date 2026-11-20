@@ -2,9 +2,9 @@ import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { MiddleTruncated, splitTail } from "../../components/solid/middle-truncated.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import { MiddleTruncated, splitTail } from "../plugins/middle-truncated.tsx";
 import type { SkillsProps } from "./view-types.ts";
 
 /** A section of the reading column, labelled like the plugin page's README. */

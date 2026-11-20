@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { AgentToolModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { createMediaGenerationTerminalError } from "../media-generation/terminal-error.js";
 import type { VideoGenerationProvider, VideoGenerationRequest } from "./provider-types.js";
 import { generateVideo, type GenerateVideoParams } from "./runtime.js";
 import type {
@@ -106,6 +107,52 @@ it("falls through when a video provider returns an empty buffer", async () => {
   expect(result.videos[0]?.buffer).toEqual(Buffer.from("mp4-bytes"));
   expectSkipped(result, "empty", /empty video buffer at index 1/);
   expect(result.attempts[0]?.model).toBe("vid-v1");
+});
+
+it("propagates a marked nested cause before failure reporting or another provider", async () => {
+  const original = Object.freeze(new Error("synthetic uncertain submission"));
+  const wrapper = new Error("synthetic owner failure", {
+    cause: createMediaGenerationTerminalError(original),
+  });
+  let fallbacks = 0;
+  let reports = 0;
+  providers = [
+    {
+      id: "submitted",
+      capabilities: {},
+      generateVideo: async () => {
+        throw wrapper;
+      },
+    },
+    {
+      id: "next",
+      capabilities: {},
+      generateVideo: async () => {
+        fallbacks++;
+        return videoResult();
+      },
+    },
+  ];
+  await expect(
+    generateVideo(
+      {
+        cfg: videoConfig({ primary: "submitted/vid-v1", fallbacks: ["next/vid-v1"] }),
+        prompt: "synthetic",
+      },
+      {
+        ...runtimeDeps,
+        log: {
+          debug() {},
+          warn() {
+            reports++;
+          },
+        },
+      },
+    ),
+  ).rejects.toBe(wrapper);
+  expect(fallbacks).toBe(0);
+  expect(reports).toBe(0);
+  expect(wrapper.cause).toBe(original);
 });
 
 it("uses a provider URL when the same video asset has an empty buffer", async () => {

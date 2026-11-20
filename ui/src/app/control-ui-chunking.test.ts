@@ -1,56 +1,12 @@
 // @vitest-environment node
-import { build, type Rolldown } from "vite";
+import { build } from "vite";
 import { describe, expect, it } from "vitest";
 import {
   controlUiBootManifestKey,
   controlUiCodeSplitting,
   controlUiStableChunkName,
 } from "../../config/control-ui-chunking.ts";
-
-const modulePath = (relative: string) => new URL(relative, import.meta.url).pathname;
-
-function importClosure(importsFor: (file: string) => readonly string[]) {
-  return (fileName: string) => {
-    const visited = new Set<string>();
-    const visit = (file: string) => {
-      if (!visited.has(file)) {
-        visited.add(file);
-        importsFor(file).forEach(visit);
-      }
-    };
-    visit(fileName);
-    return visited;
-  };
-}
-
-function buildFixture(
-  entry: string,
-  sources: Map<string, string>,
-  codeSplitting: Rolldown.CodeSplittingOptions = controlUiCodeSplitting,
-) {
-  return build({
-    configFile: false,
-    publicDir: false,
-    logLevel: "silent",
-    plugins: [
-      {
-        name: entry.slice(1),
-        enforce: "pre",
-        resolveId: (id) => (sources.has(id) ? id : null),
-        load: (id) => sources.get(id) ?? null,
-      },
-    ],
-    build: {
-      write: false,
-      minify: false,
-      rolldownOptions: {
-        input: entry,
-        preserveEntrySignatures: "allow-extension",
-        output: { codeSplitting, strictExecutionOrder: true },
-      },
-    },
-  });
-}
+import { buildFixture, importClosure, modulePath } from "./control-ui-chunking.test-support.ts";
 
 describe("Control UI build chunking", () => {
   it("consolidates lazy Settings helpers while keeping validation behind the editor", async () => {
@@ -182,18 +138,34 @@ describe("Control UI build chunking", () => {
     const reader = modulePath("../pages/skills/clawhub-skill-page.tsx");
     const grid = modulePath("../pages/plugins/catalog-grid.tsx");
     const card = modulePath("../pages/plugins/plugin-card.tsx");
+    const skeleton = modulePath("../pages/plugins/catalog-skeleton.tsx");
+    const truncation = modulePath("../components/solid/middle-truncated.tsx");
+    const controls = modulePath("../components/solid/catalog-discovery.tsx");
+    const settings = modulePath("../components/solid/settings-ui.tsx");
+    const workshop = modulePath("../pages/skill-workshop/start-page.tsx");
     const markdown = modulePath("../../node_modules/markdown-it/dist/markdown-it.mjs");
     const entry = "\0catalog-reader-fixture";
     const result = await buildFixture(
       entry,
       new Map([
-        [entry, `export const open = () => import(${JSON.stringify(discovery)});`],
+        [
+          entry,
+          `export const open = () => import(${JSON.stringify(discovery)}); export const workshop = () => import(${JSON.stringify(workshop)});`,
+        ],
         [
           discovery,
-          `import { grid } from ${JSON.stringify(grid)}; import { card } from ${JSON.stringify(card)}; export const render = () => grid + card; export const read = () => import(${JSON.stringify(reader)});`,
+          `import { grid } from ${JSON.stringify(grid)}; import { card } from ${JSON.stringify(card)}; import { skeleton } from ${JSON.stringify(skeleton)}; import { controls } from ${JSON.stringify(controls)}; import { truncation } from ${JSON.stringify(truncation)}; export const render = () => grid + card + skeleton + controls + truncation; export const read = () => import(${JSON.stringify(reader)});`,
         ],
         [grid, "export const grid = 'catalog grid';"],
         [card, "export const card = 'catalog card';"],
+        [skeleton, "export const skeleton = 'catalog skeleton';"],
+        [truncation, "export const truncation = 'middle truncation';"],
+        [controls, "export const controls = 'discovery controls';"],
+        [settings, "export const settings = 'settings controls';"],
+        [
+          workshop,
+          `import { controls } from ${JSON.stringify(controls)}; import { settings } from ${JSON.stringify(settings)}; export const render = () => controls + settings;`,
+        ],
         [
           reader,
           `import { card } from ${JSON.stringify(card)}; import { markdown } from ${JSON.stringify(markdown)}; export const read = () => card + markdown;`,
@@ -211,7 +183,17 @@ describe("Control UI build chunking", () => {
     );
     const catalogChunk = chunkFor(grid);
     expect(catalogChunk.fileName).toContain("plugin-catalog-runtime");
-    expect(chunkFor(card)).toBe(catalogChunk);
+    for (const id of [card, skeleton, truncation]) {
+      expect(chunkFor(id)).toBe(catalogChunk);
+    }
+    const settingsChunk = chunkFor(settings);
+    expect(settingsChunk.fileName).toContain("settings-controls-runtime");
+    expect(chunkFor(controls)).toBe(settingsChunk);
+    const workshopImports = reachable(chunkFor(workshop).fileName);
+    expect(workshopImports.has(settingsChunk.fileName)).toBe(true);
+    for (const chunk of [catalogChunk, chunkFor(reader), chunkFor(markdown)]) {
+      expect(workshopImports.has(chunk.fileName)).toBe(false);
+    }
     const discoveryChunk = chunkFor(discovery);
     const readerChunk = chunkFor(reader);
     expect(discoveryChunk.dynamicImports).toContain(readerChunk.fileName);

@@ -24,6 +24,8 @@ export type ClawRouterCapabilityOffer = {
   methods: string[];
   requestFormat: string;
   responseFormat: string;
+  /** Present only when the selected offer and endpoint agree on the input contract. */
+  inputProfile?: string;
   model?: Record<string, unknown>;
 };
 
@@ -171,6 +173,9 @@ export function readClawRouterCapabilityOffers(
         methods: route.methods.filter((method): method is string => typeof method === "string"),
         requestFormat,
         responseFormat,
+        ...(typeof route.inputProfile === "string" && offer.inputProfile === route.inputProfile
+          ? { inputProfile: route.inputProfile }
+          : {}),
         ...(model ? { model } : {}),
       });
     }

@@ -1,0 +1,2 @@
+# Bounded PixVerse transport/fallback contracts require 634 net test lines; chunk, routed-reader, and UI recovery/navigation controls add 83.
+317

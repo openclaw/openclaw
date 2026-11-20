@@ -64,6 +64,7 @@ import {
 } from "./provider-policy-api.js";
 import { buildClawRouterSpeechProvider } from "./speech-provider.js";
 import { fetchClawRouterUsage } from "./usage.js";
+import { buildClawRouterVideoGenerationProvider } from "./video-generation-provider.js";
 import { createClawRouterWebSearchProvider } from "./web-search-provider.js";
 
 const PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
@@ -464,6 +465,7 @@ export default defineSingleProviderPluginEntry({
     api.registerMediaUnderstandingProvider(clawrouterMediaUnderstandingProvider);
     api.registerDecisionProvider(buildClawRouterDecisionProvider());
     api.registerImageGenerationProvider(buildClawRouterImageGenerationProvider());
+    api.registerVideoGenerationProvider(buildClawRouterVideoGenerationProvider());
     api.registerModelCatalogProvider({
       provider: "clawrouter",
       kinds: ["image_generation"],
