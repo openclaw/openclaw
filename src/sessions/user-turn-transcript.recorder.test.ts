@@ -17,11 +17,11 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
+import type { UserTurnInput } from "./user-turn-input.types.js";
 import { settleUserTurnPendingInput } from "./user-turn-transcript-processing.js";
 import {
   buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
-  type UserTurnInput,
 } from "./user-turn-transcript.js";
 import { persistUserTurnTranscript } from "./user-turn-transcript.test-support.js";
 

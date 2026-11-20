@@ -1,4 +1,4 @@
-import type { PersistedUserTurnMessage } from "./user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
 
 /**
  * Session-delivery ack ids carried on a user turn. A replacement set, once given,

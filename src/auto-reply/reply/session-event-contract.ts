@@ -28,10 +28,8 @@ import type {
 } from "../../infra/outbound/source-delivery-plan.types.js";
 import type { SystemEvent } from "../../infra/system-events.js";
 import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
-import type {
-  UserTurnInput,
-  UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.types.js";
+import type { UserTurnInput } from "../../sessions/user-turn-input.types.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
