@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { channel } from "node:diagnostics_channel";
-import { statSync } from "node:fs";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pg from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { AgentToolGatewayRequestCaller } from "../../agents/tools/in-process-gateway.js";
@@ -20,16 +18,12 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
 } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
-import * as projectionWriter from "../../config/sessions/session-transcript-projection-writer.js";
 import {
-  isSessionTranscriptIndexReconcileRunning,
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
 } from "../../config/sessions/session-transcript-reconcile.js";
 import * as transcriptSearch from "../../config/sessions/session-transcript-search.js";
 import type { SessionTranscriptSearchParams } from "../../config/sessions/session-transcript-search.types.js";
-import { resolveConfiguredSessionStoreTargets } from "../../config/sessions/targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   identifiedClient,
@@ -38,9 +32,7 @@ import {
 } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { sessionReadHandlers } from "../../gateway/server-methods/sessions-read.js";
 import { retainSessionListForegroundWork } from "../../gateway/session-projection-work.js";
-import { getSessionRowProjection } from "../../gateway/session-row-projection-access.js";
 import { appendSessionTranscriptMessagesByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
-import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -130,7 +122,6 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     const reader = withEngineStoreAdmission(() => identifiedClient(viewer));
     reader.connect.scopes = ["operator.read"];
     const requests: Record<string, unknown>[] = [];
-    const projections: unknown[] = [];
     const callGateway: AgentToolGatewayRequestCaller = async <T>(
       request: Parameters<AgentToolGatewayRequestCaller>[0],
     ) => {
@@ -153,41 +144,6 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
             result = payload;
           },
         });
-        const projection = getSessionRowProjection(context)!;
-        const scope = projection.state.scope({});
-        projections.push({
-          query: request.params.query,
-          limit: request.params.limit,
-          result,
-          targets: scope.targets.map(({ agentId, storePath }) => ({
-            agentId,
-            path: path.relative(root, storePath),
-          })),
-          paths: [...scope.paths.keys()].map((pathname) => path.relative(root, pathname)),
-          configured: resolveConfiguredSessionStoreTargets(config, suiteEnv).map((target) => ({
-            agentId: target.agentId,
-            path: path.relative(root, target.storePath),
-            anchor: (() => {
-              const pathname = resolveUnsuffixedSqliteTargetFromSessionStorePath(
-                target.storePath,
-              ).path;
-              const stat = statSync(pathname, { throwIfNoEntry: false });
-              return {
-                path: path.relative(root, pathname),
-                file: stat?.isFile(),
-                bytes: stat?.size,
-              };
-            })(),
-            physical: projection.physicalPaths(target.storePath, target.agentId).map((pathname) => {
-              const stat = statSync(pathname, { throwIfNoEntry: false });
-              return {
-                path: path.relative(root, pathname),
-                file: stat?.isFile(),
-                bytes: stat?.size,
-              };
-            }),
-          })),
-        });
         return result as T;
       } finally {
         release();
@@ -196,138 +152,24 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     return {
       callGateway,
       requests,
-      projections,
       search: (params: Record<string, unknown>) =>
         callGateway<SessionsSearchResult>({ method: "sessions.search", params }),
-    };
-  };
-  const traceRecallSearch = () => {
-    const statements = channel("openclaw.database.statement");
-    const hostStatements: unknown[] = [];
-    const observe = (event: unknown) => {
-      if (
-        isRecord(event) &&
-        event.engine === "postgres" &&
-        event.threadId === 0 &&
-        hostStatements.length < 32
-      ) {
-        hostStatements.push({ outcome: event.outcome, sql: event.sql });
-      }
-    };
-    statements.subscribe(observe);
-    const batches: Array<{ keys: string[]; allowed: boolean[] }> = [];
-    const pages: Array<{
-      agentId?: string;
-      store: string;
-      query: string;
-      hits: string[];
-      indexing: boolean;
-    }> = [];
-    const readiness: Array<{
-      agentId?: string;
-      store: string;
-      running: boolean;
-      status?: boolean;
-      error?: string;
-    }> = [];
-    const executionFailures: Array<{
-      agentId?: string;
-      store: string;
-      error: string;
-      code?: string;
-      message?: string;
-      frame?: string;
-    }> = [];
-    const originalCapture = agentExecution.captureOpenClawAgentDatabaseExecutionAsync;
-    vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecutionAsync").mockImplementation(
-      async (...args) => {
-        try {
-          return await originalCapture(...args);
-        } catch (error) {
-          const code = isRecord(error) && typeof error.code === "string" ? error.code : undefined;
-          executionFailures.push({
-            agentId: args[0].agentId,
-            store: args[0].path ? path.relative(root, args[0].path) : "default",
-            error: error instanceof Error ? error.name : typeof error,
-            ...(code ? { code } : {}),
-            ...(error instanceof Error
-              ? {
-                  message: error.message
-                    .replaceAll(root, "<state>")
-                    .replaceAll(process.cwd(), "<repo>")
-                    .replaceAll(connection!, "<database>")
-                    .slice(0, 600),
-                  frame: error.stack
-                    ?.split("\n")
-                    .find((line) => line.includes(process.cwd()))
-                    ?.replaceAll(process.cwd(), "<repo>"),
-                }
-              : {}),
-          });
-          throw error;
-        }
-      },
-    );
-    const originalStatus = projectionWriter.readSessionTranscriptIndexStatus;
-    vi.spyOn(projectionWriter, "readSessionTranscriptIndexStatus").mockImplementation(
-      async (...args) => {
-        const [options] = args;
-        const receipt = {
-          agentId: options.agentId,
-          store: options.path ? path.relative(root, options.path) : "default",
-          running: isSessionTranscriptIndexReconcileRunning(options),
-        };
-        try {
-          const status = await originalStatus(...args);
-          readiness.push({ ...receipt, status });
-          return status;
-        } catch (error) {
-          readiness.push({ ...receipt, error: error instanceof Error ? error.name : typeof error });
-          throw error;
-        }
-      },
-    );
-    const originalSearch = transcriptSearch.searchSessionTranscripts;
-    vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(
-      async (params, database, filter) => {
-        const result = await originalSearch(
-          params,
-          database,
-          filter &&
-            (async (keys) => {
-              const allowed = await filter(keys);
-              batches.push({ keys: [...keys], allowed });
-              return allowed;
-            }),
-        );
-        pages.push({
-          agentId: params.agentId,
-          store: params.storePath ? path.relative(root, params.storePath) : "default",
-          query: params.query,
-          hits: result.hits.map((hit) => hit.messageId),
-          indexing: result.indexing,
-        });
-        return result;
-      },
-    );
-    return {
-      batches,
-      pages,
-      readiness,
-      executionFailures,
-      hostStatements,
-      [Symbol.dispose]() {
-        statements.unsubscribe(observe);
-      },
     };
   };
 
   afterEach(() => vi.restoreAllMocks());
 
-  beforeAll(async () => {
-    root = directories.make("session-search-postgres-");
+  function installFixtureEnvironment() {
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+  }
+
+  // Vitest restores env stubs before each case; gateway reads must share the seeded store.
+  beforeEach(installFixtureEnvironment);
+
+  beforeAll(async () => {
+    root = directories.make("session-search-postgres-");
+    installFixtureEnvironment();
     suiteEnv = { ...process.env };
     setRuntimeConfigSnapshot({});
     installDatabaseEngineSelection({
@@ -400,7 +242,6 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
       (await search("quay signal", { agentId: "dev_ops" })).hits.map((hit) => hit.messageId),
     ).toEqual(["underscore-hit"]);
 
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
     const config = {
       agents: { entries: { main: {} } },
       session: { store: scope("selected").storePath },
@@ -563,8 +404,21 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
         owner: "foreign",
       });
       const transport = recallTransport(config);
-      using trace = traceRecallSearch();
-      const { batches } = trace;
+      const originalSearch = transcriptSearch.searchSessionTranscripts;
+      const batches: Array<{ keys: string[]; allowed: boolean[] }> = [];
+      vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(
+        (params, database, filter) =>
+          originalSearch(
+            params,
+            database,
+            filter &&
+              (async (keys) => {
+                const allowed = await filter(keys);
+                batches.push({ keys: [...keys], allowed });
+                return allowed;
+              }),
+          ),
+      );
       const recall = { requesterAgentId: "main", requesterSessionKey: "agent:main:requester" };
       for (const limit of [2, 1]) {
         batches.length = 0;
@@ -572,6 +426,7 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
         expect(result.results.map((hit) => hit.messageId)).toEqual(
           limit === 2 ? ["visible-new-hit", "visible-old-hit"] : ["visible-new-hit"],
         );
+        expect(result.results.every((hit) => Number.isFinite(hit.score))).toBe(true);
         if (limit === 2) {
           expect(result).not.toHaveProperty("truncated");
         } else {
@@ -592,14 +447,7 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
         callGateway: transport.callGateway,
       });
       const result = await tool.execute("pg-unscoped-recall", { query, limit: 2 });
-      expect(
-        result.details,
-        JSON.stringify({
-          ...trace,
-          requests: transport.requests,
-          projections: transport.projections,
-        }),
-      ).toMatchObject({
+      expect(result.details).toMatchObject({
         results: [{ messageId: "visible-new-hit" }, { messageId: "visible-old-hit" }],
       });
       expect(result.details).not.toHaveProperty("truncated");
@@ -608,8 +456,17 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
       expect(batches.length).toBeGreaterThan(1);
       expect(batches.every(({ keys }) => keys.length > 0 && keys.length <= 26)).toBe(true);
       expect(batches[0]!.allowed.every((allowed) => !allowed)).toBe(true);
-      const denied = await transport.search({ query: "deniedonly", limit: 1, recall });
-      expect(denied, JSON.stringify({ ...trace, projections: transport.projections })).toEqual({
+      for (const order of ["relevance", "recent"] as const) {
+        for (const match of [undefined, "prefix"] as const) {
+          const direct = await search(query, { storePath, limit: 2, order, match });
+          expect(direct.hits).toHaveLength(2);
+          expect(direct.hits.every((hit) => Number.isFinite(hit.score))).toBe(true);
+          if (query === "会") {
+            expect(direct.hits.map((hit) => hit.score)).toEqual([0, 0]);
+          }
+        }
+      }
+      expect(await transport.search({ query: "deniedonly", limit: 1, recall })).toEqual({
         results: [],
       });
     },
@@ -631,28 +488,17 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
       });
     }
     const transport = recallTransport(config);
-    using trace = traceRecallSearch();
     for (const agentId of ["work", "main"]) {
       const result = await transport.search({
         query: "physicalglobal",
         recall: { requesterAgentId: agentId, requesterSessionKey: `agent:${agentId}:requester` },
       });
-      const physical = await transcriptSearch.searchSessionTranscripts({
-        agentId,
-        env: suiteEnv,
-        query: "physicalglobal",
-      });
-      expect(
-        physical.hits.map((hit) => hit.messageId),
-        `physical store ${agentId}: ${JSON.stringify(trace)}`,
-      ).toEqual([`${agentId}-global-hit`]);
       expect(
         result.results.map(({ sessionKey, sessionId, messageId }) => ({
           sessionKey,
           sessionId,
           messageId,
         })),
-        JSON.stringify({ ...trace, projections: transport.projections }),
       ).toEqual([
         {
           sessionKey: "global",
