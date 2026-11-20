@@ -446,6 +446,9 @@ describe("fresh trial ownership", () => {
       const { deps } = fixture({ measure: true, firstMeasurement });
       const { trials } = await runTrials("stock", deps);
       const trial = trials[0];
+      if (!trial) {
+        throw new Error("Expected the measured stock trial");
+      }
       expect(trial.timing?.measurements[0]).toEqual({
         scheduledAtMs: 0,
         startedAtMs: 0,
@@ -515,9 +518,13 @@ describe("fresh trial ownership", () => {
         },
       }),
     });
-    expect(report.trials[0].timing?.measurements).toHaveLength(4096);
-    expect(report.trials[0].timing?.droppedMeasurements).toBe(4);
-    expect(report.trials[0].measurement?.samples).toHaveLength(4100);
+    const trial = report.trials[0];
+    if (!trial) {
+      throw new Error("Expected the cancelled stock trial");
+    }
+    expect(trial.timing?.measurements).toHaveLength(4096);
+    expect(trial.timing?.droppedMeasurements).toBe(4);
+    expect(trial.measurement?.samples).toHaveLength(4100);
     expect(maxActive).toBe(1);
     expect(cleaned).toBe(true);
     expect(report.complete).toBe(false);
