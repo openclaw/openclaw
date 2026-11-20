@@ -8,14 +8,18 @@ import { digestTemplateBytes } from "./digest.js";
 import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
 
 export type ClawHubTemplateCatalogPreview = {
-  kind: "instruction" | "skill";
+  kind: "instruction" | "skill" | "automation";
   name: string;
   content: string;
 };
 
+export type CatalogPreviewSelection = Pick<ClawHubTemplateCatalogPreview, "kind" | "name"> & {
+  automationIndex?: number;
+};
+
 export async function readClawHubCatalogPreview(input: {
   params: ClawHubFetchOptions & { packageName: string; version: string };
-  requested: Pick<ClawHubTemplateCatalogPreview, "kind" | "name"> | undefined;
+  requested: CatalogPreviewSelection | undefined;
   instructions: Array<{ name: string; source: string }>;
   skills: Array<
     | { name: string; source: "clawhub"; version: string }
@@ -25,6 +29,16 @@ export async function readClawHubCatalogPreview(input: {
   rootDir: string;
 }): Promise<ClawHubTemplateCatalogPreview | undefined> {
   const { requested, instructions, skills, verified, rootDir, params } = input;
+  if (requested?.kind === "automation") {
+    // The display inventory preserves manifest order. Verify both coordinates because display names need not be unique.
+    const job =
+      requested.automationIndex === undefined
+        ? undefined
+        : verified.manifest.automations[requested.automationIndex];
+    return job && (job.name || job.id) === requested.name
+      ? { kind: "automation", name: requested.name, content: job.message }
+      : undefined;
+  }
   if (requested?.kind === "instruction") {
     const instruction = instructions.find((file) => file.name === requested.name);
     if (!instruction) {

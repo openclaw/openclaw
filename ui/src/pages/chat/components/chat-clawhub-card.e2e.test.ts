@@ -215,8 +215,10 @@ describeControlUiE2e("Chat plugin installation status", () => {
           });
           expect(metrics.padding).toBeLessThanOrEqual(16);
           expect(metrics.buttonPadding).toBeLessThanOrEqual(12);
-          expect(metrics.buttonHeight).toBeGreaterThanOrEqual(32);
-          expect(metrics.buttonHeight).toBeLessThanOrEqual(34);
+          // Browser geometry can round CSS dimensions a few millionths below their size.
+          const buttonHeightRoundingTolerancePx = 0.01;
+          expect(metrics.buttonHeight).toBeGreaterThanOrEqual(32 - buttonHeightRoundingTolerancePx);
+          expect(metrics.buttonHeight).toBeLessThanOrEqual(34 + buttonHeightRoundingTolerancePx);
           expect(metrics.authorGap).toBeGreaterThanOrEqual(0);
           expect(metrics.authorGap).toBeLessThanOrEqual(4);
           expect(metrics.sameLine).toBe(true);
@@ -659,9 +661,20 @@ describeControlUiE2e("Chat plugin installation status", () => {
           await page.setViewportSize(mobileViewport);
           await waitForControlUiFrameLayout([surface]);
           await capture("connecting-mobile");
-          const actions = (await surface.locator(".chat-clawhub-card__actions").boundingBox())!;
-          const cardBounds = (await surface.boundingBox())!;
-          expect(actions.x + actions.width).toBeLessThanOrEqual(cardBounds.x + cardBounds.width);
+          // Read both edges together so a resize cannot split their layout measurements.
+          const geometry = await surface.evaluate((cardElement) => {
+            const actions = cardElement.querySelector(".chat-clawhub-card__actions");
+            if (!actions) {
+              throw new Error("Missing mounted wizard actions");
+            }
+            return {
+              viewportWidth: window.innerWidth,
+              actionsRight: actions.getBoundingClientRect().right,
+              cardRight: cardElement.getBoundingClientRect().right,
+            };
+          });
+          expect(geometry.viewportWidth).toBe(mobileViewport.width);
+          expect(geometry.actionsRight).toBeLessThanOrEqual(geometry.cardRight);
           await page.setViewportSize({ width: 1280, height: 900 });
           await surface.getByRole("button", { name: "Cancel", exact: true }).click();
           await surface.getByRole("button", { name: "Retry", exact: true }).waitFor();

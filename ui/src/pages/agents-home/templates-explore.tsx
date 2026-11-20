@@ -9,16 +9,15 @@ import {
   Repeat,
   Show,
 } from "solid-js";
-import type { IconName } from "../../components/icon-data.ts";
 import {
   CatalogDiscoveryChip,
   CatalogDiscoveryChips,
   CatalogDiscoverySearch,
   CatalogDiscoverySection,
 } from "../../components/solid/catalog-discovery.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
+import { TemplateCategoryIcon } from "../../components/solid/template-category-icon.tsx";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
@@ -27,38 +26,50 @@ import { createPageRequestDelay } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { templateCategories } from "../../lib/template-categories.ts";
 import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
 import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
-import { TemplateArtwork } from "./template-artwork.tsx";
+import { preloadTemplateArtwork, TemplateArtwork } from "./template-artwork.tsx";
 import { TemplateUpload } from "./template-upload.tsx";
 import "../../styles/templates-catalog.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import {
+  readTemplatesOverview,
   searchTemplates,
-  TEMPLATE_SEARCH_PAGE_SIZE,
   type TemplateCatalogEntry,
 } from "./templates-catalog-client.ts";
 
 registerEnglishCatalog(registerTemplatesEnglish);
 
-// ClawHub's current Template taxonomy. The "other" bucket is assigned by ClawHub.
-const templateCategories = [
-  ["", "templatesCatalog.categoryAll", "layoutGrid"],
-  ["personal", "templatesCatalog.categoryPersonal", "home"],
-  ["health", "templatesCatalog.categoryHealth", "heartPulse"],
-  ["travel", "templatesCatalog.categoryTravel", "plane"],
-  ["productivity", "templatesCatalog.categoryProductivity", "listTodo"],
-  ["research", "templatesCatalog.categoryResearch", "search"],
-  ["engineering", "templatesCatalog.categoryEngineering", "codeXml"],
-  ["governance", "templatesCatalog.categoryGovernance", "scale"],
-  ["operations", "templatesCatalog.categoryOperations", "workflow"],
-  ["finance", "templatesCatalog.categoryFinance", "coins"],
-  ["sales", "templatesCatalog.categorySales", "handshake"],
-  ["product", "templatesCatalog.categoryProduct", "lightbulb"],
-  ["people", "templatesCatalog.categoryPeople", "users"],
-  ["other", "templatesCatalog.categoryOther", "shapes"],
-] as const satisfies readonly (readonly [string, string, IconName])[];
+const SECTION_SIZE = 4;
+const OVERVIEW_FRESH_MS = 30_000;
+// Enough placeholders and decoded artwork to cover a tall first screen.
+const SKELETON_SECTIONS = 4;
+const FIRST_SCREEN_SIZE = 24;
+type TemplateCategory = (typeof templateCategories)[number];
+type TemplateSection = {
+  category: TemplateCategory;
+  entries: TemplateCatalogEntry[];
+  additionalEntries?: TemplateCatalogEntry[];
+};
+type TemplateCatalog = {
+  entries: TemplateCatalogEntry[];
+  featured: TemplateCatalogEntry[];
+  sections: TemplateSection[];
+  nextCursor?: string | null;
+};
+
+function firstScreenArtwork(catalog: TemplateCatalog): string[] {
+  const entries = [
+    ...catalog.featured,
+    ...catalog.sections.flatMap((section) => section.entries),
+    ...catalog.entries,
+  ];
+  const urls = new Set(entries.flatMap((entry) => (entry.iconUrl ? [entry.iconUrl] : [])));
+  return [...urls].slice(0, FIRST_SCREEN_SIZE);
+}
+
 type TemplateAddProps = {
   onAdd: (entry: TemplateCatalogEntry) => void;
   addingPackageName: string | null;
@@ -77,22 +88,22 @@ function TemplateCard(
     <article class="agents-home__template-card oc-card" data-templates-entry>
       <button
         type="button"
-        class="agents-home__template-card-link"
+        class="plugin-catalog-card__primary-link agents-home__template-card-link"
         aria-label={`${t("templatesCatalog.review")} ${props.entry.displayName}`}
         disabled={!props.entry.latestVersion}
         onClick={() => props.onSelect?.(props.entry)}
       />
-      <div class="agents-home__template-head">
-        <span class="agents-home__template-art" aria-hidden="true">
+      <header class="installed-plugins-card__head agents-home__template-head">
+        <span class="template-art agents-home__template-art" aria-hidden="true">
           <TemplateArtwork src={props.entry.iconUrl} />
         </span>
-        <div class="agents-home__template-content">
-          <div class="agents-home__template-identity">
+        <div class="plugin-catalog-card__content">
+          <div class="plugin-card-title-row agents-home__template-identity">
             <h3>{props.entry.displayName}</h3>
-            <span>{`@${props.entry.ownerHandle}`}</span>
+            <span class="plugin-card-author">{`@${props.entry.ownerHandle}`}</span>
           </div>
           {/* Reserve both lines even when a Template has no summary. */}
-          <p class="agents-home__template-summary">{props.entry.summary}</p>
+          <p class="installed-plugins-card__summary">{props.entry.summary}</p>
         </div>
         <button
           type="button"
@@ -114,7 +125,7 @@ function TemplateCard(
               : "templatesCatalog.add",
           )}
         </button>
-      </div>
+      </header>
       <Show when={props.addFailure?.entry.packageName === props.entry.packageName}>
         <p class="agents-home__template-error" role="alert">
           {props.addFailure?.message}
@@ -129,42 +140,56 @@ const placeholderBar = (width: string) => ({
   background: `linear-gradient(var(--bg-accent), var(--bg-accent)) 0 / ${width} 12px no-repeat`,
 });
 
-/** Reserve the same grid and card geometry while a page is pending. */
-function TemplateCatalogSkeleton() {
+/** Mirrors the loaded sections and cards so content arrives in place. */
+function TemplateCatalogSkeleton(props: { overview: boolean }) {
   return (
     <div
       class="plugin-catalog-results__body"
       role="status"
       aria-label={t("templatesCatalog.loading")}
     >
-      <section class="plugin-catalog-section" aria-hidden="true">
-        <header class="plugin-catalog-section__header">
-          <h2 style={{ width: "120px", ...placeholderBar("100%") }}>{"\u00a0"}</h2>
-        </header>
-        <div class="plugin-catalog-grid">
-          <Repeat count={TEMPLATE_SEARCH_PAGE_SIZE}>
-            {() => (
-              <div class="agents-home__template-card oc-card" data-templates-placeholder>
-                <div class="agents-home__template-head">
-                  <span class="agents-home__template-art" />
-                  <div class="agents-home__template-content">
-                    <div class="agents-home__template-identity">
-                      <h3 style={placeholderBar("70%")}>{"\u00a0"}</h3>
-                      <span style={placeholderBar("40%")}>{"\u00a0"}</span>
-                    </div>
-                    <p class="agents-home__template-summary">
-                      <span style={{ display: "block", ...placeholderBar("100%") }}>
-                        {"\u00a0"}
-                      </span>
-                      <span style={{ display: "block", ...placeholderBar("60%") }}>{"\u00a0"}</span>
-                    </p>
+      <Repeat count={props.overview ? SKELETON_SECTIONS : 1}>
+        {() => (
+          <section
+            class={[
+              "plugin-catalog-section",
+              { "plugin-catalog-section--expandable": props.overview },
+            ]}
+            aria-hidden="true"
+          >
+            <header class="plugin-catalog-section__header">
+              <h2 style={{ width: "120px", ...placeholderBar("100%") }}>{"\u00a0"}</h2>
+            </header>
+            <div class="plugin-catalog-grid">
+              <Repeat count={props.overview ? SECTION_SIZE : FIRST_SCREEN_SIZE}>
+                {() => (
+                  <div class="agents-home__template-card oc-card" data-templates-placeholder>
+                    <header class="installed-plugins-card__head agents-home__template-head">
+                      <span class="template-art agents-home__template-art" />
+                      <div class="plugin-catalog-card__content">
+                        <div class="plugin-card-title-row agents-home__template-identity">
+                          <h3 style={placeholderBar("70%")}>{"\u00a0"}</h3>
+                          <span class="plugin-card-author" style={placeholderBar("40%")}>
+                            {"\u00a0"}
+                          </span>
+                        </div>
+                        <p class="installed-plugins-card__summary">
+                          <span style={{ display: "block", ...placeholderBar("100%") }}>
+                            {"\u00a0"}
+                          </span>
+                          <span style={{ display: "block", ...placeholderBar("60%") }}>
+                            {"\u00a0"}
+                          </span>
+                        </p>
+                      </div>
+                    </header>
                   </div>
-                </div>
-              </div>
-            )}
-          </Repeat>
-        </div>
-      </section>
+                )}
+              </Repeat>
+            </div>
+          </section>
+        )}
+      </Repeat>
     </div>
   );
 }
@@ -180,6 +205,7 @@ export function TemplatesExplore(
     scope: GatewayConnectionScope;
     query: string;
     category: string;
+    expandedEntries?: TemplateCatalogEntry[];
     cursors: readonly string[];
     ready?: Promise<void>;
     isCurrent: () => boolean;
@@ -211,7 +237,11 @@ export function TemplatesExplore(
   function loadCatalog(
     category = view.category,
     query = view.query,
-    { delay = 0, cursors = [] }: { delay?: number; cursors?: readonly string[] } = {},
+    options: {
+      delay?: number;
+      expandedEntries?: TemplateCatalogEntry[];
+      cursors?: readonly string[];
+    } = {},
   ) {
     cancelSearch();
     const scope = gateway.capture();
@@ -219,13 +249,14 @@ export function TemplatesExplore(
       return;
     }
     loadedForConnection = true;
-    const { ready, isCancelled, cancel } = createPageRequestDelay(delay);
+    const { ready, isCancelled, cancel } = createPageRequestDelay(options.delay ?? 0);
     cancelSearch = cancel;
     setRequest({
       scope,
       query,
       category,
-      cursors,
+      expandedEntries: options.expandedEntries,
+      cursors: options.cursors ?? [],
       ready,
       isCurrent: () =>
         !isCancelled() &&
@@ -241,14 +272,14 @@ export function TemplatesExplore(
     loadCatalog(view.category, query, { delay: 150 });
   }
 
-  function selectCategory(category: string) {
+  function selectCategory(category: string, expandedEntries?: TemplateCatalogEntry[]) {
     if (category === view.category) {
       return;
     }
     setView((draft) => {
       draft.category = category;
     });
-    loadCatalog(category);
+    loadCatalog(category, view.query, { expandedEntries });
   }
 
   const unavailable = () => gateway.connected && !canSearch();
@@ -291,7 +322,7 @@ export function TemplatesExplore(
                   <CatalogDiscoveryChip
                     active={view.category === slug}
                     onClick={() => selectCategory(slug)}
-                    icon={<Icon name={icon} />}
+                    icon={<TemplateCategoryIcon icon={icon} />}
                   >
                     {t(label)}
                   </CatalogDiscoveryChip>
@@ -306,16 +337,81 @@ export function TemplatesExplore(
               </Show>
               <Show when={request()} keyed>
                 {(current) => {
-                  const result = createMemo(async () => {
+                  const overview = !current.query.trim() && !current.category;
+                  // Count read and artwork time too; a delayed response does not renew the shelf.
+                  const startedAt = Date.now();
+                  const readCatalog = async (): Promise<TemplateCatalog> => {
                     if (current.ready) {
                       await current.ready;
                     }
                     if (!current.isCurrent()) {
-                      return { entries: [], nextCursor: null };
+                      return { entries: [], featured: [], sections: [] };
                     }
-                    return searchTemplates(current.scope.client, current.query, {
-                      category: current.category || undefined,
-                      cursor: current.cursors.at(-1),
+                    if (!overview) {
+                      const page = await searchTemplates(current.scope.client, current.query, {
+                        category: current.category || undefined,
+                        cursor: current.cursors.at(-1),
+                      });
+                      return { ...page, featured: [], sections: [] };
+                    }
+                    {
+                      const catalog = await readTemplatesOverview(
+                        current.scope.client,
+                        SECTION_SIZE,
+                      );
+                      if (!current.isCurrent()) {
+                        return { entries: [], featured: [], sections: [] };
+                      }
+                      if (catalog) {
+                        return {
+                          entries: [],
+                          featured: catalog.featured,
+                          sections: templateCategories.slice(1).flatMap((category) => {
+                            const section = catalog.sections.find(
+                              (candidate) => candidate.category === category[0],
+                            );
+                            return section?.entries.length ? [{ ...section, category }] : [];
+                          }),
+                        };
+                      }
+                    }
+                    const [featured, sections] = await Promise.all([
+                      searchTemplates(current.scope.client, "", {
+                        limit: SECTION_SIZE,
+                        featured: true,
+                      }),
+                      Promise.all(
+                        templateCategories
+                          .slice(1)
+                          .map(async (category): Promise<TemplateSection> => ({
+                            category,
+                            entries: (
+                              await searchTemplates(current.scope.client, "", {
+                                limit: SECTION_SIZE,
+                                category: category[0],
+                              })
+                            ).entries,
+                          })),
+                      ),
+                    ]);
+                    return {
+                      entries: [],
+                      featured: featured.entries,
+                      sections: sections.filter((section) => section.entries.length > 0),
+                    };
+                  };
+                  const result = createMemo<TemplateCatalog>(() => {
+                    if (current.expandedEntries) {
+                      return { entries: current.expandedEntries, featured: [], sections: [] };
+                    }
+                    return readCatalog().then(async (catalog) => {
+                      // Category cards reserve their icon space. Reveal the complete list as soon
+                      // as it arrives; the browser loads the visible icons rather than blocking
+                      // every card on a second batch of up to 24 artwork decodes.
+                      if (overview) {
+                        await preloadTemplateArtwork(firstScreenArtwork(catalog));
+                      }
+                      return catalog;
                     });
                   });
                   return (
@@ -346,13 +442,17 @@ export function TemplatesExplore(
                         </InlineAlert>
                       )}
                     >
-                      <Loading fallback={<TemplateCatalogSkeleton />}>
+                      <Loading fallback={<TemplateCatalogSkeleton overview={overview} />}>
                         <Show
                           when={
-                            gateway.connected && !unavailable() && result().entries.length === 0
+                            gateway.connected &&
+                            !unavailable() &&
+                            result().entries.length === 0 &&
+                            result().featured.length === 0 &&
+                            result().sections.length === 0
                           }
                         >
-                          <p class="agents-home__template-empty">
+                          <p class="muted agents-home__template-empty">
                             {t(
                               view.query.trim() || view.category
                                 ? "templatesCatalog.empty"
@@ -360,7 +460,73 @@ export function TemplatesExplore(
                             )}
                           </p>
                         </Show>
-                        <Show when={result().entries.length > 0}>
+                        <Show when={overview && result().featured.length > 0}>
+                          <CatalogDiscoverySection
+                            id="featured"
+                            title={t("templatesCatalog.featured")}
+                          >
+                            <div class="plugin-catalog-grid" data-templates-featured>
+                              <For each={result().featured} keyed={(entry) => entry.packageName}>
+                                {(entry) => (
+                                  <TemplateCard
+                                    entry={entry()}
+                                    onSelect={props.onSelect}
+                                    onAdd={props.onAdd}
+                                    addingPackageName={props.addingPackageName}
+                                    addDisabled={props.addDisabled}
+                                    addFailure={props.addFailure}
+                                  />
+                                )}
+                              </For>
+                            </div>
+                          </CatalogDiscoverySection>
+                        </Show>
+                        <Show when={overview}>
+                          <For each={result().sections} keyed={(section) => section.category[0]}>
+                            {(section) => (
+                              <CatalogDiscoverySection
+                                id={section().category[0]}
+                                title={t(section().category[1])}
+                                onViewAll={() => {
+                                  const { category, entries, additionalEntries } = section();
+                                  const age = Date.now() - startedAt;
+                                  const canExpand =
+                                    additionalEntries &&
+                                    current.isCurrent() &&
+                                    age >= 0 &&
+                                    age < OVERVIEW_FRESH_MS;
+                                  selectCategory(
+                                    category[0],
+                                    canExpand ? [...entries, ...additionalEntries] : undefined,
+                                  );
+                                }}
+                                viewAllLabel={t("templatesCatalog.viewAll")}
+                              >
+                                <div
+                                  class="plugin-catalog-grid"
+                                  data-templates-category={section().category[0]}
+                                >
+                                  <For
+                                    each={section().entries}
+                                    keyed={(entry) => entry.packageName}
+                                  >
+                                    {(entry) => (
+                                      <TemplateCard
+                                        entry={entry()}
+                                        onSelect={props.onSelect}
+                                        onAdd={props.onAdd}
+                                        addingPackageName={props.addingPackageName}
+                                        addDisabled={props.addDisabled}
+                                        addFailure={props.addFailure}
+                                      />
+                                    )}
+                                  </For>
+                                </div>
+                              </CatalogDiscoverySection>
+                            )}
+                          </For>
+                        </Show>
+                        <Show when={!overview && result().entries.length > 0}>
                           <CatalogDiscoverySection
                             id={current.category || "results"}
                             title={

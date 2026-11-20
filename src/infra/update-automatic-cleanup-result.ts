@@ -89,6 +89,9 @@ export async function recordAutomaticRecoveryCleanup(
     }
   } catch (error) {
     const warning = automaticRecoveryCleanupWarning(error).advisory!.message;
+    if (result.warnings !== undefined) {
+      result.warnings = [...result.warnings, warning];
+    }
     result.advisory = {
       kind: "recoverable-maintenance",
       message: [result.advisory?.message, warning].filter(Boolean).join(" "),

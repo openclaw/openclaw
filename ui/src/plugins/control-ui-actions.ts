@@ -62,6 +62,8 @@ export async function runControlUiPluginAction(
     isCurrent?: () => boolean;
     /** Runs this action again, for a failed task's Try again. */
     retry?: () => void;
+    /** `attach` resumes earlier work when a composer shows the chat; it needs no enabled state. */
+    phase?: "run" | "attach";
   },
 ): Promise<void> {
   // The lazy native-plugin loader installs action copy before exposing registrations.
@@ -102,7 +104,11 @@ export async function runControlUiPluginAction(
   });
   // A resolver can synchronously withdraw its registration or remove the view.
   check();
-  if (state?.hidden || state?.disabled) {
+  const invoke = params.phase === "attach" ? entry.value.attach : entry.value.run;
+  if (!invoke) {
+    return;
+  }
+  if (state?.hidden || (state?.disabled && params.phase !== "attach")) {
     throw new Error(
       i18n.t(
         params.placement === "session"
@@ -123,7 +129,7 @@ export async function runControlUiPluginAction(
   const tasks: ReturnType<ComposerTasks["start"]>[] = [];
   const owner = composer ? await composer.loadTasks() : undefined;
   try {
-    await entry.value.run({
+    await invoke({
       ...context,
       host: scopeControlUiHost(entry.host, signal, params.isCurrent),
       signal,
@@ -137,9 +143,15 @@ export async function runControlUiPluginAction(
             checkComposer();
             composer.onDraftChange(text);
           },
-          startTask: ({ title }: { title: string }) => {
+          startTask: ({ title, startedAt }: { title: string; startedAt?: number }) => {
             checkComposer();
-            const task = owner.start({ title, signal, actionKey: entry.key, retry: params.retry });
+            const task = owner.start({
+              title,
+              startedAt,
+              signal,
+              actionKey: entry.key,
+              retry: params.retry,
+            });
             tasks.push(task);
             return task;
           },

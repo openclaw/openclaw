@@ -44,7 +44,7 @@ class TemplatesCatalogModel {
   selected: TemplateCatalogEntry | null = null;
   detail: TemplateCatalogDetail | null = null;
   preview: {
-    kind: "instruction" | "skill";
+    kind: "instruction" | "skill" | "automation";
     name: string;
     content: string | null;
     request: Promise<void>;
@@ -338,7 +338,11 @@ class TemplatesCatalogModel {
     this.preview = null;
   }
 
-  async openPreview(kind: "instruction" | "skill", name: string) {
+  async openPreview(
+    kind: "instruction" | "skill" | "automation",
+    name: string,
+    automationIndex?: number,
+  ) {
     this.cancelPreviewRead();
     const source = this.source();
     const scope = this.gateway.capture();
@@ -352,7 +356,11 @@ class TemplatesCatalogModel {
       return;
     }
     try {
-      const result = await readTemplatePreview(scope.client, source, { kind, name });
+      const result = await readTemplatePreview(scope.client, source, {
+        kind,
+        name,
+        ...(automationIndex !== undefined ? { automationIndex } : {}),
+      });
       if (this.gateway.isCurrent(scope) && revision === this.previewRevision && this.preview) {
         this.preview = { ...this.preview, content: result.content };
       }
@@ -378,7 +386,8 @@ class TemplatesCatalogModel {
       applying: this.applying,
       canAdd: this.canAdd(),
       consentWarning: this.consentWarning,
-      onOpenPreview: (kind, name) => void this.openPreview(kind, name),
+      onOpenPreview: (kind, name, automationIndex) =>
+        void this.openPreview(kind, name, automationIndex),
       onBack: () => this.back(),
       onRetryDetail: () => this.loadDetail(),
       onConfirm: () => {
@@ -524,7 +533,7 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
           </ModalDialog>
         </Show>
       </Show>
-      <Show when={!props.modal && preview()}>
+      <Show when={!props.modal && preview()?.kind !== "automation" && preview()}>
         {(current) => (
           <FilePreviewModal
             label={

@@ -9,6 +9,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
+import { createTemplateAutomationSummary } from "./template-automation-summary.ts";
 import { TemplatePluginIcon } from "./template-plugin-icon.tsx";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplateAddFeedback } from "./templates-detail-view.tsx";
@@ -27,7 +28,9 @@ const categories: Array<{ key: Category; labelKey: string; icon: IconName }> = [
 export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) {
   const [category, setCategory] = createSignal<Category | null>(null);
   const [selectedName, setSelectedName] = createSignal<string | null>(null);
+  const [automationIndex, setAutomationIndex] = createSignal<number>();
   const [allFiles, setAllFiles] = createSignal(false);
+  const automationSummary = createTemplateAutomationSummary();
   const identity = () => props.view.detail ?? props.view.selected;
   const contents = () => props.view.readDetail()?.contents;
   const items = (key: Category) => contents()?.[key] ?? [];
@@ -35,6 +38,10 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
     t("templatesCatalog." + categories.find((item) => item.key === category())?.labelKey);
   const selected = createMemo(() => {
     const key = category();
+    const index = automationIndex();
+    if (key === "automations" && index !== undefined) {
+      return props.view.detail?.contents.automations[index];
+    }
     return key
       ? props.view.detail?.contents[key].find((item) => item.name === selectedName())
       : undefined;
@@ -63,9 +70,12 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
       setCategory(null);
     }
   }
-  function open(name: string) {
+  function open(name: string, index?: number) {
     setSelectedName(name);
-    if (category() === "instructions" || category() === "skills") {
+    if (category() === "automations") {
+      setAutomationIndex(index);
+      props.view.onOpenPreview("automation", name, index);
+    } else if (category() === "instructions" || category() === "skills") {
       props.view.onOpenPreview(category() === "instructions" ? "instruction" : "skill", name);
     }
   }
@@ -79,17 +89,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
       return "";
     }
     if ("schedule" in item) {
-      return (
-        item.schedule +
-        " · " +
-        item.timezone +
-        " · " +
-        t(
-          item.enabled
-            ? "templatesCatalog.automationEnabled"
-            : "templatesCatalog.automationDisabled",
-        )
-      );
+      return automationSummary(item);
     }
     if ("source" in item && item.source === "bundled") {
       return t("templatesCatalog.dependencyBundled");
@@ -113,7 +113,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
         <Show
           when={category()}
           fallback={
-            <span class="template-package-art template-preview__art">
+            <span class="template-art template-package-art template-preview__art">
               <TemplateArtwork src={identity()?.iconUrl} />
             </span>
           }
@@ -183,7 +183,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                           {(item) => (
                             <button
                               type="button"
-                              class="template-package-row template-preview__row"
+                              class="row template-package-row template-preview__row"
                               onClick={() => setCategory(item.key)}
                             >
                               <Icon name={item.icon} />
@@ -219,8 +219,15 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                 {(item) => (
                                   <button
                                     type="button"
-                                    class="template-package-row template-preview__row"
-                                    onClick={() => open(item.name)}
+                                    class="row template-package-row template-preview__row"
+                                    onClick={() =>
+                                      open(
+                                        item.name,
+                                        category() === "automations"
+                                          ? items("automations").findIndex((row) => row === item)
+                                          : undefined,
+                                      )
+                                    }
                                   >
                                     {"kind" in item && item.kind === "plugin" ? (
                                       <span class="plugin-capability__icon">
@@ -240,15 +247,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                         {"excerpt" in item
                                           ? item.excerpt
                                           : "schedule" in item
-                                            ? item.schedule +
-                                              " · " +
-                                              item.timezone +
-                                              " · " +
-                                              t(
-                                                item.enabled
-                                                  ? "templatesCatalog.automationEnabled"
-                                                  : "templatesCatalog.automationDisabled",
-                                              )
+                                            ? automationSummary(item)
                                             : ""}
                                       </small>
                                     </span>
@@ -274,7 +273,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                     >
                       <div class="template-preview__detail">
                         <h3>{t("templatesCatalog.description")}</h3>
-                        <p>{description() || "—"}</p>
+                        <p>{(category() === "automations" ? metadata() : description()) || "—"}</p>
                         <h3>{t("templatesCatalog.content")}</h3>
                         <Show
                           when={props.view.preview}
@@ -289,7 +288,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                     <button
                                       type="button"
                                       class="btn"
-                                      onClick={() => open(selectedName()!)}
+                                      onClick={() => open(selectedName()!, automationIndex())}
                                     >
                                       {t("common.retry")}
                                     </button>
@@ -298,20 +297,32 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                               >
                                 <Loading fallback={<p role="status">{t("common.loading")}</p>}>
                                   {props.view.readPreview?.()}
-                                  <FilePreviewDocument
-                                    path={category() === "skills" ? "SKILL.md" : selectedName()!}
-                                    content={props.view.preview?.content ?? ""}
-                                    markdown
-                                    onClick={(event) => {
-                                      const path = filePreviewDocumentLink(event, selectedName()!);
-                                      if (
-                                        category() === "instructions" &&
-                                        items("instructions").some((file) => file.name === path)
-                                      ) {
-                                        open(path!);
-                                      }
-                                    }}
-                                  />
+                                  <Show
+                                    when={category() !== "automations"}
+                                    fallback={
+                                      <p class="template-automation-message">
+                                        {props.view.preview?.content}
+                                      </p>
+                                    }
+                                  >
+                                    <FilePreviewDocument
+                                      path={category() === "skills" ? "SKILL.md" : selectedName()!}
+                                      content={props.view.preview?.content ?? ""}
+                                      markdown
+                                      onClick={(event) => {
+                                        const path = filePreviewDocumentLink(
+                                          event,
+                                          selectedName()!,
+                                        );
+                                        if (
+                                          category() === "instructions" &&
+                                          items("instructions").some((file) => file.name === path)
+                                        ) {
+                                          open(path!);
+                                        }
+                                      }}
+                                    />
+                                  </Show>
                                 </Loading>
                               </Errored>
                             )}

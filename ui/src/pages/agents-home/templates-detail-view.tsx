@@ -1,5 +1,7 @@
-import { Errored, For, Loading, Show } from "solid-js";
+import { createSignal, Errored, For, Loading, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { ModalDialog } from "../../components/modal-dialog.tsx";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
@@ -13,6 +15,7 @@ import {
   renderPublisherIdentity,
 } from "../plugins/overview.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
+import { createTemplateAutomationSummary } from "./template-automation-summary.ts";
 import { TemplatePluginIcon } from "./template-plugin-icon.tsx";
 import type { TemplateCatalogDetail, TemplateCatalogEntry } from "./templates-catalog-client.ts";
 import "../../styles/templates-catalog.css";
@@ -73,7 +76,7 @@ function renderTemplateTrustWarning(warning: string) {
     <InlineAlert tone="warning" class="templates-trust-warning" role="alert">
       {audit ? (
         <>
-          <strong class="templates-trust-warning__title">{title}</strong>
+          <strong>{title}</strong>
           <p>{audit.overview}</p>
           {detailsUrl ? (
             <a href={detailsUrl} target="_blank" rel="noopener noreferrer">
@@ -82,7 +85,7 @@ function renderTemplateTrustWarning(warning: string) {
           ) : undefined}
         </>
       ) : (
-        <span class="templates-trust-warning__plain">{warning}</span>
+        <span>{warning}</span>
       )}
     </InlineAlert>
   );
@@ -90,6 +93,16 @@ function renderTemplateTrustWarning(warning: string) {
 
 function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
   const contents = () => props.view.readDetail()!.contents;
+  const automationSummary = createTemplateAutomationSummary();
+  const [automationIndex, setAutomationIndex] = createSignal<number>();
+  const automation = () => {
+    const index = automationIndex();
+    return index === undefined ? undefined : contents().automations[index];
+  };
+  const closeAutomation = () => {
+    props.view.onClosePreview?.();
+    setAutomationIndex(undefined);
+  };
   return (
     <>
       <TemplateWorkspaceFiles
@@ -140,25 +153,65 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
       )}
       {renderPluginCapabilitySection(
         t("templatesCatalog.automations"),
-        contents().automations.map((item) => ({
+        contents().automations.map((item, index) => ({
           name: item.name,
-          description: `${item.schedule} · ${item.timezone} · ${t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationDisabled")}`,
-          details: (
-            <p>
-              {item.schedule} · {item.timezone}
-              {" · "}
-              {t(
-                item.enabled
-                  ? "templatesCatalog.automationEnabled"
-                  : "templatesCatalog.automationDisabled",
-              )}
-            </p>
-          ),
+          description: automationSummary(item),
+          onOpen: () => {
+            setAutomationIndex(index);
+            props.view.onOpenPreview("automation", item.name, index);
+          },
         })),
         () => (
           <Icon name="clock" />
         ),
       )}
+      <Show when={automation()}>
+        {(item) => (
+          <ModalDialog label={item().name} open onModal-cancel={closeAutomation}>
+            <article class="oc-dialog">
+              <DialogHeader
+                title={
+                  <>
+                    <span class="plugin-capability__icon" aria-hidden="true">
+                      <Icon name="clock" />
+                    </span>
+                    {item().name}
+                  </>
+                }
+                description={automationSummary(item())}
+                onClose={closeAutomation}
+              />
+              <div class="oc-dialog__body template-automation-message">
+                <For each={[props.view.preview?.request]}>
+                  {() => (
+                    <Errored
+                      fallback={(error) => (
+                        <InlineAlert tone="danger" role="alert">
+                          {formatUiError(error())}
+                          <button
+                            type="button"
+                            class="btn"
+                            onClick={() =>
+                              props.view.onOpenPreview("automation", item().name, automationIndex())
+                            }
+                          >
+                            {t("common.retry")}
+                          </button>
+                        </InlineAlert>
+                      )}
+                    >
+                      <Loading fallback={<p role="status">{t("common.loading")}</p>}>
+                        {props.view.readPreview?.()}
+                        {props.view.preview?.content}
+                      </Loading>
+                    </Errored>
+                  )}
+                </For>
+              </div>
+            </article>
+          </ModalDialog>
+        )}
+      </Show>
     </>
   );
 }
@@ -259,10 +312,8 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                                 role="status"
                                 aria-label={t("templatesCatalog.contentsLoading")}
                               >
-                                <div class="templates-content-skeleton__title skeleton" />
-                                <For each={[0, 1, 2, 3]}>
-                                  {() => <div class="templates-content-skeleton__row skeleton" />}
-                                </For>
+                                <div class="skeleton-title skeleton" />
+                                <For each={[0, 1, 2, 3]}>{() => <div class="skeleton" />}</For>
                               </section>
                             }
                           >
@@ -306,9 +357,9 @@ export function TemplateAddFeedback(props: { view: TemplatesCatalogViewProps }) 
         </InlineAlert>
       </Show>
       <Show when={props.view.consentWarning}>
-        <section class="templates-add-consent" aria-label={t("templatesCatalog.trustReview")}>
+        <section class="templates-add-consent stack" aria-label={t("templatesCatalog.trustReview")}>
           {renderTemplateTrustWarning(props.view.consentWarning!)}
-          <div class="templates-add-consent__actions">
+          <div class="template-actions templates-add-consent__actions">
             <button type="button" class="btn" onClick={() => props.view.onCancelConsent()}>
               {t("common.cancel")}
             </button>

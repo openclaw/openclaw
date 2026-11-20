@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
-import type { ProviderPlugin } from "../types.js";
+import type { PluginWebFetchProviderEntry, ProviderPlugin } from "../types.js";
 
 afterEach(() => {
   vi.resetModules();
@@ -99,5 +99,43 @@ describe("plugin contract registry public artifacts", () => {
     ).toEqual(["gemini"]);
     expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifacts).toHaveBeenCalledTimes(1);
     expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
+  });
+
+  it("uses web fetch public artifacts before falling back to the bundled runtime registry", async () => {
+    const loadBundledCapabilityRuntimeRegistry = mockRuntimeFallback();
+    const provider: PluginWebFetchProviderEntry = {
+      pluginId: "firecrawl",
+      id: "firecrawl",
+      label: "Firecrawl",
+      hint: "Fetch with Firecrawl",
+      envVars: ["FIRECRAWL_API_KEY"],
+      placeholder: "FIRECRAWL_API_KEY",
+      signupUrl: "https://firecrawl.dev",
+      credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
+      getCredentialValue: () => undefined,
+      setCredentialValue() {},
+      createTool: () => null,
+    };
+    const resolveBundledExplicitWebFetchProvidersFromPublicArtifacts = vi.fn<
+      () => PluginWebFetchProviderEntry[] | null
+    >(() => [provider]);
+    vi.doMock("../web-provider-public-artifacts.explicit.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../web-provider-public-artifacts.explicit.js")>()),
+      resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
+    }));
+
+    const { resolveWebFetchProviderContractEntriesForPluginId } = await import("./registry.js");
+    expect(resolveBundledExplicitWebFetchProvidersFromPublicArtifacts).not.toHaveBeenCalled();
+    expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
+    expect(resolveWebFetchProviderContractEntriesForPluginId("firecrawl")).toEqual([
+      { pluginId: "firecrawl", provider, credentialValue: "firecrawl-test" },
+    ]);
+    expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
+
+    resolveBundledExplicitWebFetchProvidersFromPublicArtifacts.mockReturnValueOnce(null);
+    expect(() => resolveWebFetchProviderContractEntriesForPluginId("firecrawl")).toThrow(
+      "public artifact should not hit bundled runtime registry",
+    );
+    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,4 +1,4 @@
-import { PROVIDER_MODEL_INPUT } from "@openclaw/ai/provider-types";
+import { PROVIDER_DEFERRED_TOOL_NAMES, PROVIDER_MODEL_INPUT } from "@openclaw/ai/provider-types";
 import {
   isAnthropicServerToolClearingEnabled,
   isCompactionReplayCheckpoint,
@@ -357,6 +357,8 @@ export async function prepareEmbeddedAttemptTransport(input: {
   sandboxSessionKey: string;
   sandbox?: SandboxContext | null;
   codeModeControlsEnabled: boolean;
+  /** Hidden Tool Search directory entries that a direct call hydrates in this run. */
+  getDeferredToolEntries?: () => readonly { name: string }[] | undefined;
   providerPromptState: {
     state: ProviderPromptState;
     effectiveContextTokenBudget: number;
@@ -526,13 +528,21 @@ export async function prepareEmbeddedAttemptTransport(input: {
   })
     ? [...attempt.model.input, "video" as const]
     : undefined;
+  let deferredToolEntries: readonly { name: string }[] | undefined;
+  let deferredToolNames: ReadonlySet<string> | undefined;
   // A direct provider transport replaces the session SDK stream, so attach
   // turn-owned thinking provenance to the selected transport as well.
   session.agent.streamFn = (model, context, options) => {
+    const entries = input.getDeferredToolEntries?.();
+    if (entries !== deferredToolEntries) {
+      deferredToolEntries = entries;
+      deferredToolNames = entries && new Set(entries.map((entry) => entry.name));
+    }
     const providerOptions = {
       ...options,
       openclawThinkingExplicit: attempt.thinkingExplicit,
       ...(providerInput ? { [PROVIDER_MODEL_INPUT]: providerInput } : {}),
+      ...(deferredToolNames ? { [PROVIDER_DEFERRED_TOOL_NAMES]: deferredToolNames } : {}),
     };
     // Async payload preparation outlives stream admission; managed fetch rechecks Access at egress.
     return withGuardedFetchBeforeRequest(assertAccessCurrent, () =>

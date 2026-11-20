@@ -8,7 +8,6 @@ import {
 import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
-import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -52,6 +51,7 @@ import {
   prepareChatSendAcpRefresh,
 } from "./chat-send-admission-context.js";
 import {
+  createChatSessionRoutingAssertion,
   respondChatSendAdmissionError,
   respondChatSessionRoutingChanged,
 } from "./chat-send-admission-errors.js";
@@ -76,6 +76,7 @@ import {
 import { bindChatSendPreparedSession } from "./chat-send-session-binding.js";
 import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
 import { prepareChatSendSessionEntry } from "./chat-send-session.js";
+import { prepareActiveSteerInput } from "./chat-send-steer-target.js";
 import {
   admitChatSendUploads,
   assertChatSendExclusiveAdmission,
@@ -92,6 +93,10 @@ import {
 export async function admitChatSend(params: ChatSendAdmissionParams) {
   const { request, session, respond, context, client, diagnostics } = params;
   const { p, turnKind } = request;
+  const steer = prepareActiveSteerInput(request, session, respond);
+  if (!steer.ok) {
+    return steer;
+  }
   const requestIdentity = request.goalOperation?.requestFingerprint ?? request.requestIdentity;
   const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
   const {
@@ -111,11 +116,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     timeoutMs,
     expectedLeafEntryId,
   } = session;
-  const assertSessionTargetCurrent = () => {
-    if (session.sessionRoutingChanged(context.getRuntimeConfig())) {
-      throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
-    }
-  };
+  const assertSessionTargetCurrent = createChatSessionRoutingAssertion(session, context);
   const cachedMeta = { cached: true, runId: clientRunId };
   const { chatSendTraceAttributes, originatingRoute } = prepareChatSendAdmissionContext(params);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -356,8 +357,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         if (!replyTargetsCaptured) {
           // Retain original opaque targets, including absence, across placement waits.
           // A message to people never steers the active run.
-          messageInjectionTarget =
-            p.queueMode === "steer" && !request.humanAddressed
+          messageInjectionTarget = request.activeSteer
+            ? steer.target
+            : p.queueMode === "steer" && !request.humanAddressed
               ? captureCurrentReplyMessageInjectionTarget(
                   admittedRunAbort.entry?.input.mailbox.owner.id ?? activeRunScopeKey,
                 )
@@ -471,8 +473,8 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         admittedRunAbort.controller.abort(reason);
       },
     });
-    if (codexGoalAdmission && !capturedOperator.authority) {
-      throw new Error("Codex Goals require a current authenticated operator request.");
+    if ((codexGoalAdmission || request.activeSteer) && !capturedOperator.authority) {
+      throw new Error("This input requires a current authenticated operator request.");
     }
     admittedRunAbort.initializeTiming({ now: Date.now(), timeoutMs });
     workPhase?.finish();

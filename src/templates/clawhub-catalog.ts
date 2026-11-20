@@ -1,119 +1,24 @@
 // Read public Template catalog summaries; do not open or retain artifact file bodies.
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
-import { resolveClawHubImageUrl, type ClawHubFetchOptions } from "../infra/clawhub-client.js";
+import type { ClawHubFetchOptions } from "../infra/clawhub-client.js";
 import {
   fetchClawHubTemplatesOverview,
   listClawHubPackages,
   searchClawHubPackages,
-  type ClawHubPackageDetail,
-  type ClawHubPackageListItem,
+  type ClawHubTemplatesOverviewOptions,
 } from "../infra/clawhub-packages.js";
+import { projectPublicEntries, rankByInstalls } from "./clawhub-catalog-entry.js";
 import type {
   ClawHubTemplateCatalogEntry,
   ClawHubTemplateCatalogOverview,
 } from "./clawhub-catalog-types.js";
 import { fetchRankedTemplatePage, LEGACY_TEMPLATE_CURSOR_PREFIX } from "./clawhub-ranked-page.js";
 import { ClawHubSourceError } from "./clawhub-source-artifact.js";
-import { clawHubTemplateRef, isCanonicalClawHubPackageName } from "./schema-portability.js";
 const CATALOG_PAGE_SIZE = 20;
-
-type PublicTemplatePackage = ClawHubPackageListItem & { channel: "official" | "community" };
-type OwnedTemplatePackage = PublicTemplatePackage & { ownerHandle: string };
-
-function isPublicTemplatePackage(pkg: unknown): pkg is PublicTemplatePackage {
-  return (
-    isJsonObject(pkg) &&
-    typeof pkg.name === "string" &&
-    typeof pkg.displayName === "string" &&
-    typeof pkg.updatedAt === "number" &&
-    Number.isFinite(pkg.updatedAt) &&
-    (pkg.summary === undefined || pkg.summary === null || typeof pkg.summary === "string") &&
-    (pkg.latestVersion === undefined ||
-      pkg.latestVersion === null ||
-      typeof pkg.latestVersion === "string") &&
-    pkg.family === "template" &&
-    ((pkg.channel === "official" && pkg.isOfficial === true) ||
-      (pkg.channel === "community" && pkg.isOfficial === false)) &&
-    isCanonicalClawHubPackageName(pkg.name)
-  );
-}
-
-function matchesTemplatePublisher(name: string, ownerHandle: unknown): ownerHandle is string {
-  return (
-    typeof ownerHandle === "string" &&
-    ownerHandle.length > 0 &&
-    (!name.startsWith("@") || name.slice(1, name.indexOf("/")) === ownerHandle)
-  );
-}
-
-function isPublicTemplateListItem(pkg: unknown): pkg is OwnedTemplatePackage {
-  return isPublicTemplatePackage(pkg) && matchesTemplatePublisher(pkg.name, pkg.ownerHandle);
-}
-
-export function requirePublicTemplatePackage(
-  detail: ClawHubPackageDetail,
-  requestedName: string,
-): OwnedTemplatePackage {
-  const pkg = detail.package;
-  const ownerHandle = detail.owner?.handle;
-  if (
-    !isPublicTemplatePackage(pkg) ||
-    !matchesTemplatePublisher(pkg.name, ownerHandle) ||
-    (pkg.name !== requestedName && clawHubTemplateRef(pkg.name, ownerHandle) !== requestedName) ||
-    (pkg.ownerHandle !== undefined && pkg.ownerHandle !== null && pkg.ownerHandle !== ownerHandle)
-  ) {
-    throw new ClawHubSourceError(
-      "clawhub_identity_mismatch",
-      "ClawHub returned a different public Template package identity.",
-    );
-  }
-  return { ...pkg, ownerHandle, ownerOfficial: detail.owner?.official === true };
-}
-
-export function projectCatalogEntry(
-  pkg: OwnedTemplatePackage,
-  baseUrl?: string,
-): ClawHubTemplateCatalogEntry {
-  const iconUrl = resolveClawHubImageUrl(
-    typeof pkg.icon === "string" ? pkg.icon : undefined,
-    baseUrl,
-  );
-  const downloads = pkg.stats?.downloads;
-  const installs = pkg.stats?.installs;
-  return {
-    packageName: pkg.name,
-    ...(iconUrl ? { iconUrl } : {}),
-    displayName: pkg.displayName,
-    ...(pkg.summary ? { summary: pkg.summary } : {}),
-    ...(pkg.latestVersion ? { latestVersion: pkg.latestVersion } : {}),
-    channel: pkg.channel,
-    official: pkg.ownerOfficial === true,
-    ownerHandle: pkg.ownerHandle,
-    downloads:
-      typeof downloads === "number" && Number.isFinite(downloads) ? Math.max(0, downloads) : 0,
-    installs: typeof installs === "number" && Number.isFinite(installs) ? Math.max(0, installs) : 0,
-    ...(typeof pkg.featuredAt === "number" ? { featuredAt: pkg.featuredAt } : {}),
-    updatedAtMs: Math.max(0, pkg.updatedAt),
-  };
-}
-
-function projectPublicEntries(
-  packages: unknown[],
-  baseUrl?: string,
-): ClawHubTemplateCatalogEntry[] {
-  return packages.filter(isPublicTemplateListItem).map((pkg) => projectCatalogEntry(pkg, baseUrl));
-}
-
-function rankByInstalls(
-  left: ClawHubTemplateCatalogEntry,
-  right: ClawHubTemplateCatalogEntry,
-): number {
-  return right.installs - left.installs || left.packageName.localeCompare(right.packageName);
-}
 
 /** Only an unavailable endpoint or an explicitly incomplete overview uses legacy shelves. */
 export async function readClawHubTemplatesOverview(
-  params: ClawHubFetchOptions & { limit?: number } = {},
+  params: ClawHubTemplatesOverviewOptions = {},
 ): Promise<ClawHubTemplateCatalogOverview | undefined> {
   const result = await fetchClawHubTemplatesOverview(params);
   if (isJsonObject(result) && result.complete === false) {
@@ -136,15 +41,19 @@ export async function readClawHubTemplatesOverview(
       "ClawHub returned a malformed Template overview.",
     );
   }
-  const limit = params.limit ?? 8;
+  const { limit = 8, includeCategoryEntries } = params;
   return {
     featured: projectPublicEntries(result.featured, params.baseUrl).slice(0, limit),
-    sections: result.sections.map((section) => ({
-      category: section.category,
-      entries: projectPublicEntries(section.items, params.baseUrl)
-        .toSorted(rankByInstalls)
-        .slice(0, limit),
-    })),
+    sections: result.sections.map(({ category, items }) => {
+      const projected = projectPublicEntries(items, params.baseUrl);
+      if (includeCategoryEntries !== true || result.completeCategoryEntries !== true) {
+        return { category, entries: projected.toSorted(rankByInstalls).slice(0, limit) };
+      }
+      // Match the paginated category list: the last valid row for a package wins before ranking.
+      const unique = new Map(projected.map((entry) => [entry.packageName, entry]));
+      const ranked = [...unique.values()].toSorted(rankByInstalls);
+      return { category, entries: ranked.slice(0, limit), additionalEntries: ranked.slice(limit) };
+    }),
   };
 }
 

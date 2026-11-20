@@ -39,6 +39,8 @@ import { OperationError } from "./people-operation-error.js";
 import { observePeople } from "./people-refresh.js";
 import { Members, PendingRequests, type RemovedMemberNotice } from "./people-sections.js";
 import { RecoveryUses } from "./recovery-uses.js";
+import type { SandboxSetup } from "./sandbox-role-notice.js";
+import { askAgentToSetUpSandbox } from "./sandbox-setup.js";
 import type { Invite, Link, Member, MemberDevice, RemovalSummary, StatusResult } from "./types.js";
 
 // Canonical device fingerprints stay available in the request's details disclosure.
@@ -257,6 +259,27 @@ export function PeoplePage(props: {
       return true;
     })) === true;
 
+  // Sandbox setup goes to the owner's agent; the page only rechecks readiness afterwards.
+  const [sandboxStatus, setSandboxStatus] =
+    createSignal<ReturnType<SandboxSetup["status"]>>("idle");
+  const sandboxSetup: SandboxSetup = {
+    status: sandboxStatus,
+    ask: (roles) => {
+      if (sandboxStatus() === "asking") {
+        return;
+      }
+      setSandboxStatus("asking");
+      askAgentToSetUpSandbox(host, roles).then(
+        () => !disposed && setSandboxStatus("asked"),
+        () => !disposed && setSandboxStatus("failed"),
+      );
+    },
+    checkAgain: () => {
+      setSandboxStatus("idle");
+      void observer?.refresh();
+    },
+  };
+
   const canManage = () =>
     Boolean(latest(ownDevicePub)) && host.connection.canAdmin && !latest(busy);
 
@@ -314,7 +337,7 @@ export function PeoplePage(props: {
                   </h2>
                   <Show when={latest(ownDevicePub) && !props.params?.member}>
                     <InviteForm
-                      link={current().link}
+                      sandboxSetup={canManage() ? sandboxSetup : undefined}
                       motion={motion}
                       components={host.components}
                       roles={current().link.roles ?? []}
@@ -360,6 +383,7 @@ export function PeoplePage(props: {
                     />
                   </Show>
                   <Members
+                    sandboxSetup={canManage() ? sandboxSetup : undefined}
                     selectedMember={props.params?.member}
                     selectedDevice={props.params?.device}
                     navigation={host.navigation}

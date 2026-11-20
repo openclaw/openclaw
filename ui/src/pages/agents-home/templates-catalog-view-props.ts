@@ -17,14 +17,18 @@ export type TemplatesCatalogViewProps = {
   consentWarning: string | null;
   canAdd: boolean;
   preview?: {
-    kind: "instruction" | "skill";
+    kind: "instruction" | "skill" | "automation";
     name: string;
     content: string | null;
     request: Promise<void>;
   } | null;
   readPreview?: () => void;
   onClosePreview?: () => void;
-  onOpenPreview: (kind: "instruction" | "skill", name: string) => void;
+  onOpenPreview: (
+    kind: "instruction" | "skill" | "automation",
+    name: string,
+    automationIndex?: number,
+  ) => void;
   onBack: () => void;
   onRetryDetail: () => void;
   onConfirm: () => void | Promise<void>;
