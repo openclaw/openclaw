@@ -99,6 +99,10 @@ const loaders = {
   mentions: () => import("../gateway/mention-inbox.worker.js").then((m) => m.mentionReadOperations),
   skillLibrary: () =>
     import("../skills/library/read.kernel.js").then((m) => m.skillLibraryReadOperations),
+  templateClawHub: () =>
+    import("../secrets/store/secret-store-clawhub-template.worker.js").then(
+      (m) => m.templateClawHubReadOperations,
+    ),
   secrets: () =>
     import("../secrets/store/secret-store-metadata.kernel.js").then(
       (m) => m.secretStoreReadOperations,
