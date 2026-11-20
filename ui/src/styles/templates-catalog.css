@@ -8,6 +8,17 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   gap: 8px;
 }
 
+.template-plugin-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.template-plugin-name-placeholder {
+  --skeleton-base: var(--skeleton-base-raised);
+  max-width: 7rem;
+}
+
 .templates-content-skeleton {
   display: grid;
   gap: 10px;

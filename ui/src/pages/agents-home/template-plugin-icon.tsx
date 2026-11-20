@@ -4,7 +4,37 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
 
-export type TemplatePluginPresentation = { name: string; pluginId?: string; imageUrl?: string };
+export type TemplatePluginPresentation = {
+  name: string;
+  pluginId?: string;
+  imageUrl?: string;
+  installed?: true;
+};
+
+export function TemplatePluginName(props: {
+  name: string;
+  presentation: TemplatePluginPresentation | null | undefined;
+}) {
+  const name = () => props.presentation?.name ?? props.name;
+  return (
+    <Show
+      when={props.presentation !== null}
+      fallback={
+        <>
+          <span
+            class="plugin-metadata__placeholder skeleton template-plugin-name-placeholder"
+            aria-hidden="true"
+          />
+          <span class="sr-only">{props.name}</span>
+        </>
+      }
+    >
+      <span class="template-plugin-name" title={name()}>
+        {name()}
+      </span>
+    </Show>
+  );
+}
 
 function Artwork(props: { source: string; catalog: boolean }) {
   const context = useApplication();
