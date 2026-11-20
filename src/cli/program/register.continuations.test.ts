@@ -8,6 +8,9 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
+import { bindSubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.store.codec.js";
+import { writeSubagentRunValuesInDatabase } from "../../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { resetContinuationCustodyProjection } from "../../auto-reply/continuation/custody/custody-projection.js";
 import {
   createContinuationRecord,
@@ -29,7 +32,10 @@ import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadPendingSessionDeliveries } from "../../infra/session-delivery-queue-storage.js";
 import { isContinuationSessionDelivery } from "../../infra/session-delivery-queue.records.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { useLocalStateOwnerFixture } from "../local-state-owner.fixture.test-support.js";
 import { OpenClawCommand } from "./openclaw-command.js";
@@ -84,12 +90,12 @@ afterEach(async () => {
 });
 
 /** The command's exit code (0 when it never called exit) and its JSON output. */
-async function run(command: "fence-status" | "interrupt-fenced") {
+async function run(command: string, ...args: string[]) {
   world.runtime.log.mockReset();
   world.runtime.exit.mockReset();
   const program = new OpenClawCommand().enablePositionalOptions();
   registerContinuationsCommand(program);
-  await program.parseAsync(["continuations", command, "--json"], { from: "user" });
+  await program.parseAsync(["continuations", command, ...args, "--json"], { from: "user" });
   const exitCode = world.runtime.exit.mock.calls[0]?.[0] ?? 0;
   return { exitCode, output: JSON.parse(String(world.runtime.log.mock.lastCall?.[0])) };
 }
@@ -356,5 +362,75 @@ describe("openclaw continuations", () => {
       interrupted: 1,
       records: [expect.objectContaining({ recordId: drained.recordId, noticeDeliveryId: row?.id })],
     });
+  });
+
+  it("counts, settles and undoes pending shutdown quiet kills offline, by the commands' receipts", async () => {
+    // Rows as a pre-#201544 graceful shutdown left them; restore would re-owe each on boot.
+    const quietKill = (runId: string, endedAt: number) =>
+      bindSubagentRunRecord(
+        createSubagentRunRecord({
+          runId,
+          childSessionKey: `agent:main:subagent:${runId}`,
+          childAgentId: "main",
+          requesterAgentId: "main",
+          expectsCompletionMessage: true,
+          endedReason: "subagent-killed",
+          killReconciliation: { killedAt: endedAt, suppressTaskDelivery: true },
+          startedAt: endedAt - 1_000,
+          endedAt,
+          outcome: { status: "error", error: "Gateway stopped" },
+        }),
+      );
+    const cutoff = Date.parse("2026-11-12T00:00:00.000Z");
+    runOpenClawStateWriteTransaction((database) =>
+      writeSubagentRunValuesInDatabase(
+        database,
+        [quietKill("cli-older", cutoff - 60_000), quietKill("cli-recent", cutoff + 60_000)],
+        [],
+      ),
+    );
+    await closeOpenClawStateDatabaseAsync();
+    const stopped = storeFiles();
+
+    const counted = await run("shutdown-notices");
+    expect(counted).toMatchObject({
+      exitCode: 0,
+      output: {
+        reowed: 2,
+        rows: [{ runId: "cli-older", delegate: false }, { runId: "cli-recent" }],
+      },
+    });
+    expect(storeFiles()).toEqual(stopped);
+
+    const settled = await run("settle-shutdown-notices", "--ended-before", "2026-11-12T00:00:00Z");
+    expect(settled).toMatchObject({
+      exitCode: 0,
+      output: {
+        endedBefore: cutoff,
+        settled: [{ runId: "cli-older" }],
+        kept: [{ runId: "cli-recent" }],
+        changed: [],
+      },
+    });
+    expect(fs.existsSync(settled.output.backupPath)).toBe(true);
+    await closeOpenClawStateDatabaseAsync();
+    expect((await run("shutdown-notices")).output.rows).toEqual([
+      expect.objectContaining({ runId: "cli-recent" }),
+    ]);
+
+    const undone = await run("settle-shutdown-notices", "--undo", settled.output.backupPath);
+    expect(undone).toMatchObject({ exitCode: 0, output: { restored: ["cli-older"], changed: [] } });
+    await closeOpenClawStateDatabaseAsync();
+    expect((await run("shutdown-notices")).output.reowed).toBe(2);
+
+    // A settle needs exactly one valid instruction; a refusal changes nothing.
+    const before = storeFiles();
+    for (const args of [[], ["--ended-before", "last tuesday"]]) {
+      expect(await run("settle-shutdown-notices", ...args)).toMatchObject({
+        exitCode: 1,
+        output: { ok: false, error: { message: expect.stringMatching(/nothing was changed/) } },
+      });
+    }
+    expect(storeFiles()).toEqual(before);
   });
 });

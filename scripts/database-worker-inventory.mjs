@@ -443,6 +443,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/agents/subagents/registry/subagent-registry-shutdown-notices.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["settleShutdownNotices", "undoShutdownNoticeSettle"],
+        evidence:
+          "The one caller is the CLI one-shot `openclaw continuations settle-shutdown-notices` (register.continuations.ts), under runWithLocalStateOwner with onForeignOwner refuse: exclusive offline custody, no Gateway or embedded agent owning the state. No Gateway runtime path imports the module.",
+      },
+    ],
+  ],
+  [
     "src/auto-reply/continuation/custody/custody-store.kernel.ts",
     [
       {

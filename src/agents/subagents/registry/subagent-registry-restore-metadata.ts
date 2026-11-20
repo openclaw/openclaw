@@ -12,6 +12,19 @@ import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
+/** A pending `Gateway stopped` completion an older Gateway recorded as a quiet kill. */
+export function isUnrepairedShutdownQuietKill(entry: SubagentRunRecord): boolean {
+  return (
+    entry.expectsCompletionMessage === true &&
+    entry.delivery?.status === "pending" &&
+    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.execution.outcome?.status === "error" &&
+    entry.execution.outcome.error === "Gateway stopped" &&
+    entry.killReconciliation?.suppressTaskDelivery === true &&
+    entry.killReconciliation.taskCancellationAccepted !== true
+  );
+}
+
 export async function restoreSubagentRunMetadata(
   runs: Map<string, SubagentRunRecord>,
   context: OpenClawStateWorkerContext,
@@ -34,14 +47,7 @@ export async function restoreSubagentRunMetadata(
       if (ownerChanged) {
         draft.requesterAgentId = requesterAgentId;
       }
-      const interruptedShutdown =
-        draft.expectsCompletionMessage === true &&
-        draft.delivery?.status === "pending" &&
-        draft.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-        draft.execution.outcome?.status === "error" &&
-        draft.execution.outcome.error === "Gateway stopped" &&
-        draft.killReconciliation?.suppressTaskDelivery === true &&
-        draft.killReconciliation.taskCancellationAccepted !== true;
+      const interruptedShutdown = isUnrepairedShutdownQuietKill(draft);
       if (interruptedShutdown) {
         // Older shutdowns recorded interruption as a quiet kill. Restore the owed outcome;
         // requester recovery still admits delivery under its current authority.
