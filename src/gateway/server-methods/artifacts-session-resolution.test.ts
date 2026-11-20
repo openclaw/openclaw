@@ -68,6 +68,7 @@ it("waits for indirect artifact topology without waiting for unrelated row enric
     sharingTargetState: vi.fn(),
     readSource: vi.fn(),
     readMembership: vi.fn(),
+    memberAccess: vi.fn(),
     needsMembershipPreparation: vi.fn(),
     prepareMembership: vi.fn(),
     ensureMaterialized: vi.fn<Projection["ensureMaterialized"]>().mockRejectedValue(unavailable),

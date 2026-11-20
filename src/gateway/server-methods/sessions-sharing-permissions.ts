@@ -15,6 +15,7 @@ import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { operatorRoleSubject } from "../operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { prepareSessionCreatorProfile } from "../session-creator.js";
+import { resolveSessionMemberAccess } from "../session-member-access.js";
 import {
   authorizeOwnSessionMutation,
   authorizeSessionAgentRun,
@@ -35,7 +36,7 @@ export function projectSessionMemberPermissions(params: {
   profiles: ReturnType<typeof listResidentUserProfileDisplayFacts>;
 }): SessionMemberPermission[] {
   const visibility = resolveSessionVisibility(params.target.entry);
-  if (visibility === "shared" || visibility === "draft" || !params.client) {
+  if (visibility === "draft" || !params.client) {
     return [];
   }
   const pathname = profileCatalogPath({});
@@ -88,6 +89,29 @@ export function projectSessionMemberPermissions(params: {
       profile.githubLogin ?? null,
       operatorRoleSubject(profile),
     );
+    const ceiling =
+      policy?.sessions.others === "invited" ? policy.sessions.maxInvitedAccess : undefined;
+    if (ceiling) {
+      const levels = ["read", "suggest", "send"] as const;
+      const member = params.members.find((value) => value.identityId === profile.profileId);
+      const access = resolveSessionMemberAccess({
+        policy,
+        scopes: policy?.scopes ?? [],
+        creator: false,
+        admin: false,
+        member: { present: Boolean(member), access: member?.access },
+        visibility,
+      });
+      permissions.push({
+        identityId: profile.profileId,
+        level: access.access === "suggest" || access.access === "send" ? access.access : "read",
+        options: levels.slice(0, levels.indexOf(ceiling) + 1),
+      });
+      continue;
+    }
+    if (visibility === "shared") {
+      continue;
+    }
     // With no named policy, the profile has no configured scope ceiling. A device can still be narrower.
     const scopes = policy?.scopes ?? ["operator.read", "operator.write"];
     const client: GatewayClient = {
@@ -123,7 +147,7 @@ export function projectSessionMemberPermissions(params: {
     const canSuggest = authorizeOperatorScopesForMethod("session.suggestions.add", scopes).allowed;
     const level = (member: boolean): SessionMemberPermissionLevel => {
       const access = member ? sharing(true) : baseline;
-      if (canStart && !access.authorizeTarget(params.target)) {
+      if (canStart && !access.authorizeTarget(params.target, undefined, true)) {
         return "send";
       }
       if (

@@ -388,7 +388,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
     invalidate,
     prepare,
     membership,
-    access(storePath: string, sessionKey: string, identityId: string) {
+    access(this: void, storePath: string, sessionKey: string, identityId: string) {
       return !disposed
         ? aliases.get(storePath)?.facts.get(sessionKey)?.[5]?.[identityId]
         : undefined;

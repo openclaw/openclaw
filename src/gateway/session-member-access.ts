@@ -1,3 +1,4 @@
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type {
   SessionMemberPermissionLevel,
   SessionSharingRole,
@@ -25,6 +26,9 @@ export function resolveSessionMemberAccess(facts: SessionMemberAccessFacts): {
   canMutate: boolean;
   canSuggest: boolean;
   level: SessionMemberPermissionLevel;
+  invitedAccessCeiling: SessionMemberPermissionLevel | undefined;
+  canReact: boolean;
+  canType: boolean;
 } {
   const cap = facts.policy?.sessions.others;
   const ceiling = cap === "invited" ? facts.policy?.sessions.maxInvitedAccess : undefined;
@@ -74,6 +78,19 @@ export function resolveSessionMemberAccess(facts: SessionMemberAccessFacts): {
         ? "suggest"
         : "read";
   return {
+    invitedAccessCeiling: ceiling,
+    canReact:
+      ceiling && !privileged
+        ? canSuggest
+        : cap !== "none" &&
+          !(cap === "view" && role === "viewer") &&
+          (canMutate || (facts.visibility === "suggest" && cap !== "view")),
+    canType:
+      ceiling && !privileged
+        ? canSuggest
+        : !(role === "viewer" && cap === "view") &&
+          (facts.visibility !== "draft" || privileged) &&
+          (role !== "viewer" || facts.visibility === "shared" || facts.visibility === "suggest"),
     access: !canRead ? "none" : privileged ? role : ceiling ? (invitedLevel ?? "none") : level,
     role,
     canRead,
@@ -81,4 +98,23 @@ export function resolveSessionMemberAccess(facts: SessionMemberAccessFacts): {
     canSuggest,
     level,
   };
+}
+
+/** Validate a requested grant against the invitee's role, never the inviter's scopes. */
+export function resolveSessionInvitationAccess(
+  policy: Pick<GatewayOperatorRoleDefinition, "sessions"> | undefined,
+  requested: SessionMemberPermissionLevel | undefined,
+): Result<SessionMemberPermissionLevel | undefined, string> {
+  const ceiling =
+    policy?.sessions.others === "invited" ? policy.sessions.maxInvitedAccess : undefined;
+  if (!ceiling) {
+    return requested === undefined
+      ? ok(undefined)
+      : err("access is only supported for roles with sessions.maxInvitedAccess");
+  }
+  const access = requested ?? "read";
+  const levels = ["read", "suggest", "send"];
+  return levels.indexOf(access) <= levels.indexOf(ceiling)
+    ? ok(access)
+    : err(`access ${access} exceeds the invitee role ceiling ${ceiling}`);
 }
