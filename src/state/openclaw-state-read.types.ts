@@ -42,6 +42,7 @@ import type {
   RepositoryGitHubPublicationReceiptTarget,
 } from "./github-publication-read.types.js";
 import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import type {
   RegisteredStateReadCommand,
   RegisteredStateReadResult,
@@ -55,6 +56,16 @@ import type {
   UserChannelIdentitySelector,
   CachedGitHubIdentityBinding,
 } from "./user-profiles.types.js";
+
+export type StateReadScopeOptions = OpenClawStateDatabaseOptions & {
+  admissionTimeoutMs?: number;
+  /** Only startup may inspect a hot journal privately before guarded canonical recovery. */
+  allowStartupRollbackRecovery?: true;
+  /** Selected reports acquire shared bytes only when a reader actually needs them. */
+  lazy?: boolean;
+  /** Command owners may cancel preparation before the callback acquires its read scope. */
+  signal?: AbortSignal;
+};
 
 export type OpenClawStateReadLocation = {
   context: OpenClawStateWorkerContext;

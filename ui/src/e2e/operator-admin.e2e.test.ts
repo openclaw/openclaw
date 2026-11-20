@@ -257,6 +257,12 @@ suite.define(() => {
         .poll(() => page.locator(".sw-markdown").textContent())
         .toContain("Review without mutation access.");
       expect(await page.getByRole("button", { name: "Archive", exact: true }).count()).toBe(0);
+      // Learning mode and the learning session sit behind the start page's gear.
+      await page
+        .locator(".plugins-settings-breadcrumb")
+        .getByRole("link", { name: "Skill workshop", exact: true })
+        .click();
+      await page.getByRole("button", { name: "Skill Workshop learning mode", exact: true }).click();
       const learningOff = page.getByRole("button", { name: "Off", exact: true });
       await expectDenied(learningOff, gateway, "config.patch");
       expect(await gateway.getRequests("skills.workshop.restore")).toHaveLength(0);
