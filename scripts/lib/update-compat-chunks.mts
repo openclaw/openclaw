@@ -584,7 +584,7 @@ export function isInlineUpdateCompatibilityExport(origin: UpdateCompatibilityOri
 }
 
 /** Follow the old owner's current lexical binding when its implementation moves. */
-function currentOrigin(
+export function resolveUpdateCompatibilityOrigin(
   origin: UpdateCompatibilityOrigin,
   sourceDir: string,
   graph: ModuleGraph,
@@ -631,7 +631,7 @@ export function writeUpdateCompatibilityChunks(params: {
   const origins = new Map<string, UpdateCompatibilityOrigin>();
   for (const chunk of required) {
     for (const entry of chunk.exports) {
-      const origin = currentOrigin(entry.origin, params.sourceDir, sourceGraph);
+      const origin = resolveUpdateCompatibilityOrigin(entry.origin, params.sourceDir, sourceGraph);
       origins.set(`${entry.origin.module}:${entry.origin.symbol}`, origin);
     }
   }
