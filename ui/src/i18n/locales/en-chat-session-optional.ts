@@ -377,6 +377,16 @@ const catalog = {
       duration: "Duration",
     },
     sessionHeader: {
+      moveToProject: {
+        title: "Move to a project",
+        move: "Move",
+        moving: "Moving… this can take a minute",
+        noProjects: "No projects are available to move into.",
+        moved: "Moved into {project}. It opens on its own branch with your next message.",
+        movedWithWork:
+          "Moved into {project} with your work from {folder}. It opens on its own branch with your next message.",
+        failed: "Couldn’t move this conversation. Try again.",
+      },
       continueInTerminal: {
         title: "Continue in terminal",
         description:
