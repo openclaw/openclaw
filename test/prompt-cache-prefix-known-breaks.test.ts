@@ -54,6 +54,16 @@ describe("known prefix breaks", () => {
     expect(known("openai-completions", previous, request(["u1", merged, "tool-x", "u2"]))).toBe(
       false,
     );
+    // A call message with text of its own would lose it in the merge.
+    const withText = request([
+      "u1",
+      JSON.stringify(reply),
+      JSON.stringify({ ...call, content: "x" }),
+      "tool",
+    ]);
+    expect(known("openai-completions", withText, request(["u1", merged, "tool", "u2"]))).toBe(
+      false,
+    );
   });
 
   it("accepts the Gemini cron reply merge, which also drops the call ids", () => {
@@ -114,19 +124,36 @@ describe("known prefix breaks", () => {
   it("accepts the skill-list rebuild only when nothing else changed", () => {
     const skill = (name: string) => `\n  <skill>\n    <name>${name}</name>\n  </skill>`;
     const system = (...names: string[]) => `rules<available_skills>${names.map(skill).join("")}`;
-    const update = JSON.stringify({
-      role: "user",
-      content: [{ type: "text", text: "System prompt update. ## Skills" }],
-    });
-    const previous = { ...request(["u1", update, "a1"]), system: system("a", "c") };
+    const update = (...names: string[]) =>
+      JSON.stringify({
+        role: "user",
+        content: [{ type: "text", text: `System prompt update. ## Skills${names.map(skill)}` }],
+      });
+    const previous = { ...request(["u1", update("b"), "a1"]), system: system("a", "c") };
     const rebuilt = { ...request(["u1", "a1", "u2"]), system: system("a", "b", "c") };
     expect(skillListGrew(previous, rebuilt)).toBe(true);
+    // Growth without a dropped update.
+    expect(skillListGrew({ ...previous, messages: rebuilt.messages.slice(0, 2) }, rebuilt)).toBe(
+      false,
+    );
+    // A skill no dropped update named.
+    expect(
+      skillListGrew(
+        { ...previous, messages: request(["u1", update("x"), "a1"]).messages },
+        rebuilt,
+      ),
+    ).toBe(false);
+    // A tools change.
+    expect(skillListGrew(previous, { ...rebuilt, tools: JSON.stringify([{ name: "exec" }]) })).toBe(
+      false,
+    );
+    // A dropped message that is not a prompt update.
+    expect(skillListGrew(previous, { ...rebuilt, messages: request(["u1", "u2"]).messages })).toBe(
+      false,
+    );
+    // Any other system change.
     expect(skillListGrew(previous, { ...rebuilt, system: `${system("a", "b", "c")}x` })).toBe(
       false,
     );
-    expect(skillListGrew(previous, { ...rebuilt, messages: request(["u0", "a1"]).messages })).toBe(
-      false,
-    );
-    expect(skillListGrew(previous, { ...previous, messages: rebuilt.messages })).toBe(false);
   });
 });

@@ -3,10 +3,9 @@
 import { it } from "vitest";
 import { usePrefixRandomizedJourney } from "./prompt-cache-prefix-randomized.test-support.js";
 
-const runJourney = usePrefixRandomizedJourney();
-const SEEDS = (process.env.OPENCLAW_PREFIX_RANDOM_SEEDS ?? "1,2").split(",").map(Number);
+const { seeds, runJourney } = usePrefixRandomizedJourney("1,2");
 
-for (const seed of SEEDS) {
+for (const seed of seeds) {
   it(`keeps the session prefix append-only for journey seed ${seed}`, { timeout: 600_000 }, () =>
     runJourney("openai-responses", seed),
   );

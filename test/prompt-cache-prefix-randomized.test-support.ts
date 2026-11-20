@@ -188,28 +188,38 @@ const SILENT_MERGE = "silent-merge";
 // mid-session move into the system prompt's skill list, and the "System prompt update" messages that
 // carried them as appended deltas drop out of the history. Seen in seed 6: skills added at steps 9
 // and 12, a model switch at step 14 rebuilt without them (allowed: they arrive as deltas), and the
-// user turn at step 21 rebuilds. Owner: follow-up "skills refresh after config reload".
-const SKILL_AFTER_RELOAD = "skills-refresh-after-config-reload";
+// user turn at step 21 rebuilds.
+const SKILL_AFTER_RELOAD = "https://github.com/openclaw/openclaw/issues/202150";
 
 // One `<skill>` entry of the system prompt's skill list (newlines may be JSON-escaped there).
 const SKILL_ENTRY = /(?:\n|\\n) *<skill>(?:\n|\\n)[\s\S]*?<\/skill>/g;
 const PROMPT_UPDATE = /^\{"role":"user","content":\[\{"type":"text","text":"System prompt update\./;
 
 /**
- * True when `current` is `previous` with more skills in the system prompt and without some prompt
- * update messages, plus new messages. Everything else must match.
+ * True when `current` is `previous` with more skills in the system prompt and without the
+ * "System prompt update" messages that announced them, plus new messages: each added skill is named
+ * in a dropped update, and nothing else changed.
  */
 export function skillListGrew(previous: WireRequest, current: WireRequest): boolean {
   const known = new Set(previous.system.match(SKILL_ENTRY));
+  const added = (current.system.match(SKILL_ENTRY) ?? []).filter((entry) => !known.has(entry));
   const system = current.system.replace(SKILL_ENTRY, (entry) => (known.has(entry) ? entry : ""));
   const kept = new Set(current.messages);
-  const messages = previous.messages.filter(
-    (message) => kept.has(message) || !PROMPT_UPDATE.test(message),
-  );
+  const dropped = previous.messages.filter((message) => !kept.has(message));
+  const name = (entry: string) => `<name>${/<name>(.*?)<\/name>/.exec(entry)?.[1]}</name>`;
   return (
-    system !== current.system &&
+    added.length > 0 &&
+    dropped.length > 0 &&
+    dropped.every((message) => PROMPT_UPDATE.test(message)) &&
+    added.every((entry) => dropped.some((message) => message.includes(name(entry)))) &&
     system === previous.system &&
-    !prefixChange({ ...previous, messages }, { ...current, system })
+    !prefixChange(
+      { ...previous, messages: previous.messages.filter((m) => kept.has(m)) },
+      {
+        ...current,
+        system,
+      },
+    )
   );
 }
 
@@ -278,14 +288,20 @@ const STEP_EVIDENCE: Partial<Record<TurnKind, (requests: WireRequest[], api: Api
   imageToolResult: (requests) => requests.some((r) => IMAGE_BLOCK.test(lastMessage(r))),
 };
 
-export function usePrefixRandomizedJourney() {
+/** `defaultSeeds` run in CI; OPENCLAW_PREFIX_RANDOM_SEEDS replaces them. */
+export function usePrefixRandomizedJourney(defaultSeeds: string) {
   const createFixture = useRuntimeProofFixture(afterEach);
+  const seeds = (process.env.OPENCLAW_PREFIX_RANDOM_SEEDS ?? defaultSeeds).split(",").map(Number);
+  const completed = new Set<number>();
   // Known breaks matched across this file's seeds. A known break that no seed hits any more has
   // landed: remove its entry.
   const matched = new Set<string>();
   let surface: { api: Api; toolSearch: boolean } | undefined;
   afterAll(() => {
-    if (surface) {
+    // Only a full default run proves an entry stale.
+    const overridden =
+      process.env.OPENCLAW_PREFIX_RANDOM_SEEDS || process.env.OPENCLAW_PREFIX_RANDOM_JOURNEY;
+    if (surface && !overridden && completed.size === seeds.length) {
       const known = [
         ...KNOWN_TOOL_ADDITIONS.filter((entry) => entry.toolSearch === surface!.toolSearch).map(
           (entry) => entry.owner,
@@ -306,7 +322,7 @@ export function usePrefixRandomizedJourney() {
     process.env.OPENCLAW_PROMPT_CACHE_ASSERT = assertSetting;
   });
   /** `toolSearch: false` runs the opt-out surface; the default surface lists tools through it. */
-  return async (api: Api, seed: number, { toolSearch = true } = {}) => {
+  const runJourney = async (api: Api, seed: number, { toolSearch = true } = {}) => {
     surface = { api, toolSearch };
     const journey = process.env.OPENCLAW_PREFIX_RANDOM_JOURNEY
       ? (process.env.OPENCLAW_PREFIX_RANDOM_JOURNEY.split(",") as TurnKind[])
@@ -328,8 +344,8 @@ export function usePrefixRandomizedJourney() {
     const script = (request: WireRequest, thinkingEnabled: boolean): Reply => {
       const latest = lastMessage(request);
       const toolResult = hasToolResult(latest);
-      // The request's own session leads its system prompt; only a compaction summary has none.
-      const session = /session=([^\s"\\|]+)/.exec(request.text)?.[1];
+      // The request's own session is in its system prompt; only a compaction summary has none.
+      const session = /session=([^\s"\\|]+)/.exec(request.system)?.[1];
       if (!session) {
         return { text: "Summary: the session ran a randomized journey." };
       }
@@ -620,6 +636,7 @@ export function usePrefixRandomizedJourney() {
         // Each request is compared with the previous request of the same session; the first
         // request of each rebuild step may start a new prefix.
         const unexpected: Array<{ step: number; kind: TurnKind; change: string }> = [];
+        let excused = 0;
         for (let index = 1; index < target.length; index++) {
           const previous = target[index - 1]!;
           const current = target[index]!;
@@ -629,17 +646,25 @@ export function usePrefixRandomizedJourney() {
             // the change arrives as an appended directory and the prefix must still only grow.
             !toolSearch && current.kind === "toolsChanged" && firstOfStep
               ? historyChange(previous.request, current.request)
-              : unknownChange(previous.request, current.request, toolSearch, matched);
+              : unknownChange(
+                  previous.request,
+                  current.request,
+                  toolSearch,
+                  REBUILD_KINDS.has(current.kind) && firstOfStep ? undefined : matched,
+                );
           const rebuild = REBUILD_KINDS.has(current.kind) && firstOfStep;
           const silentMerge =
             SILENT_MERGE_APIS.has(api) &&
             journey.slice(0, current.step).includes("silent") &&
             isSilentTurnMerge(previous.request, current.request);
+          // At most one such rebuild per earlier reload.
           const skillAfterReload =
             api === "anthropic-messages" &&
             toolSearch &&
-            journey.slice(0, current.step).includes("toolsChanged") &&
-            skillListGrew(previous.request, current.request);
+            !rebuild &&
+            skillListGrew(previous.request, current.request) &&
+            ++excused <=
+              journey.slice(0, current.step).filter((kind) => kind === "toolsChanged").length;
           if (change && !rebuild && silentMerge) {
             matched.add(SILENT_MERGE);
           }
@@ -658,6 +683,7 @@ export function usePrefixRandomizedJourney() {
           JSON.stringify(unexpected, null, 1),
           `seed=${seed} journey=${journey.join(",")} breaks=${JSON.stringify(unexpected)}`,
         ).toBe("[]");
+        completed.add(seed);
       } catch (error) {
         throw new Error(`${String(error)}\n${seen.join("\n")}`, { cause: error });
       }
@@ -666,4 +692,5 @@ export function usePrefixRandomizedJourney() {
       transportEnv?.restore();
     }
   };
+  return { seeds, runJourney };
 }

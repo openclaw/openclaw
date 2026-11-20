@@ -110,8 +110,11 @@ function cronReplyMerged(previous: WireRequest, current: WireRequest): boolean {
   }
   const reply = JSON.parse(previous.messages[at]!) as Record<string, unknown>;
   const call = JSON.parse(previous.messages[at + 1] ?? "{}") as Record<string, unknown>;
+  // Chat Completions: the call message carries no text of its own, so the merge loses nothing.
   const merged = Array.isArray(call.tool_calls)
-    ? { ...reply, tool_calls: call.tool_calls }
+    ? call.content == null
+      ? { ...reply, tool_calls: call.tool_calls }
+      : undefined
     : Array.isArray(reply.parts) && Array.isArray(call.parts)
       ? { ...reply, parts: [...reply.parts, ...call.parts] }
       : undefined;
@@ -222,9 +225,9 @@ export function usePrefixStabilityJourney() {
     const script = (request: WireRequest): Reply => {
       const latest = lastMessage(request);
       const hasToolResult = containsToolResult(latest);
-      // The request's own session leads its system prompt; later text can name the child. Only a
-      // compaction summary request has none.
-      const session = /session=([^\s"\\|]+)/.exec(request.text)?.[1];
+      // The request's own session is in its system prompt; message text can name other sessions.
+      // Only a compaction summary request has none.
+      const session = /session=([^\s"\\|]+)/.exec(request.system)?.[1];
       if (!session) {
         return { text: "Summary: the session ran the probe journey." };
       }
