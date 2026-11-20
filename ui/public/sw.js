@@ -661,7 +661,7 @@ self.addEventListener("push", (event) => {
         const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
         for (const client of clients) {
           if (controlUiPathname(new URL(client.url)) !== null) {
-            client.postMessage({ type: "openclaw-completion-delivered" });
+            client.postMessage({ type: "openclaw-completion-delivered" }, []);
           }
         }
       } catch {

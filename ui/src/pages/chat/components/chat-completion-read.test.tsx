@@ -13,7 +13,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("admits a persisted final only when its source bubble is presented and intersecting", async () => {
+it("admits a persisted final only when its source bubble is presented and intersecting", () => {
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   const deliveries: Array<(visible: boolean) => void> = [];
   vi.stubGlobal(
@@ -81,10 +81,10 @@ it("admits a persisted final only when its source bubble is presented and inters
     </ApplicationProvider>
   ));
   try {
-    await flush();
+    flush();
     expect(deliveries).toHaveLength(0);
     setPresented(true);
-    await flush();
+    flush();
     expect(deliveries.length).toBeGreaterThan(0);
     deliveries.at(-1)!(false);
     expect(viewed).not.toHaveBeenCalled();
@@ -102,7 +102,7 @@ it("admits a persisted final only when its source bubble is presented and inters
     deliveries.at(-1)!(false);
     expect(stillPresented()).toBe(false);
     setPresented(false);
-    await flush();
+    flush();
     expect(stillPresented()).toBe(false);
     viewed.mockClear();
     setPresented(true);
@@ -113,21 +113,21 @@ it("admits a persisted final only when its source bubble is presented and inters
       { assistantMessageDisclosure: { expanded: false } },
     ]) {
       setRestrictions(restriction);
-      await flush();
+      flush();
       deliveries.forEach((deliver) => deliver(true));
       expect(viewed).not.toHaveBeenCalled();
     }
     setRestrictions({});
     visibility.mockReturnValue("hidden");
     document.dispatchEvent(new Event("visibilitychange"));
-    await flush();
+    flush();
     deliveries.forEach((deliver) => deliver(true));
     expect(viewed).not.toHaveBeenCalled();
     visibility.mockReturnValue("visible");
     document.dispatchEvent(new Event("visibilitychange"));
     setMessage({ ...message(), stopReason: "toolUse" });
     setPresented(true);
-    await flush();
+    flush();
     deliveries.forEach((deliver) => deliver(true));
     expect(viewed).not.toHaveBeenCalled();
   } finally {
