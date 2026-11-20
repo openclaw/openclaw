@@ -418,7 +418,12 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
       <Show when={props.defaultModelRecovery?.(createChatDefaultModelRecovery)}>
         {(recovery) => (
           <div class="chat-composer-neighbor-card chat-error chat-model-recovery" role="status">
-            <span>{t("chat.modelControls.switchOnlyHelp")}</span>
+            <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
+              <Icon name="info" />
+            </span>
+            <div class="chat-composer-neighbor-card__copy">
+              {t("chat.modelControls.switchOnlyHelp")}
+            </div>
             <button
               class="btn btn--sm chat-error__refresh"
               type="button"

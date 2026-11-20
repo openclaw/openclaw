@@ -222,4 +222,3 @@ it("keeps discard recovery below the full warning on mobile", async () => {
     await page.viewport(previous.width, previous.height);
   }
 });
-

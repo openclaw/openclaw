@@ -278,7 +278,7 @@ export function renderChatPaneComposerControls(params: {
   const snapshotReason = snapshot ? t("chat.modelControls.refreshingSettings") : undefined;
   return {
     defaultModelRecovery:
-      sessionReady && !historyLoading
+      state.connected && selectedSession && !cachedSessionStatePending && !historyLoading
         ? (createRecovery) =>
             createRecovery(state, {
               readAgentDefaultModel: () => agentDefaultModel,

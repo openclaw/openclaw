@@ -77,8 +77,7 @@ openclaw-pending-session-create {
 .task-suggestion__instructions-chevron svg,
 .chat-pr__checks-menu-header svg,
 .chat-pr__dismiss svg,
-.chat-annotation-editor__confirm svg,
-.agent-chat__disabled-banner-icon--eye svg {
+.chat-annotation-editor__confirm svg {
   width: 14px;
   height: 14px;
 }
@@ -341,9 +340,7 @@ openclaw-pending-session-create {
 .chat-pr[data-state="branch"] .chat-pr__icon,
 .chat-pr__checks,
 .chat-pr__checks-row-label,
-.agent-chat__disabled-banner-icon--archive,
-.agent-chat__disabled-banner-detail,
-.agent-chat__disabled-banner-icon--eye {
+.agent-chat__disabled-banner-detail {
   color: var(--muted);
 }
 
@@ -2747,6 +2744,16 @@ openclaw-chat-ci-details {
 .agent-chat__disabled-banner-icon svg {
   width: 18px;
   height: 18px;
+}
+
+.agent-chat__disabled-banner-icon--archive,
+.agent-chat__disabled-banner-icon--eye {
+  color: var(--muted);
+}
+
+.agent-chat__disabled-banner-icon--eye svg {
+  width: 14px;
+  height: 14px;
 }
 
 .agent-chat__disabled-banner-title {
