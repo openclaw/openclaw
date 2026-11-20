@@ -296,6 +296,14 @@ export function createUserTurnTranscriptRecorder(
     }
   };
 
+  // Steering resolves its message at enqueue; the target run is stamped on the committed row.
+  const stampPersistedSteerTargetRunId = async (targetRunId: string) =>
+    admissionReceipt &&
+    confirmPersistedSteerTargetRunId({ admission: admissionReceipt, targetRunId }).then(
+      (confirmed) => confirmed && refreshAdmission(confirmed.admission, confirmed.message),
+      handlePersistenceError,
+    );
+
   const waitForRuntimePersistence = async () => {
     if (runtimePersistencePromise) {
       try {
@@ -615,25 +623,8 @@ export function createUserTurnTranscriptRecorder(
       confirmedSteerTargetRunId = normalizedTargetRunId;
       message = applyMessageOverrides(message);
       resolvedMessagePromise = undefined;
-
-      const pendingSelfPersistence = selfPersistencePromise;
-      await waitForRuntimePersistence();
-      await pendingSelfPersistence?.catch(() => undefined);
-      if (!admissionReceipt) {
-        return;
-      }
-      try {
-        const confirmed = await confirmPersistedSteerTargetRunId({
-          admission: admissionReceipt,
-          targetRunId: normalizedTargetRunId,
-        });
-        if (!confirmed) {
-          return;
-        }
-        refreshAdmission(confirmed.admission, confirmed.message);
-      } catch (error) {
-        handlePersistenceError(error);
-      }
+      // Before the commit, the runtime commit chain stamps the row; acceptance never waits.
+      await stampPersistedSteerTargetRunId(normalizedTargetRunId);
     },
     getPersistedMessage: () =>
       admittedMessage ?? runtimePersistedMessage ?? persistedResult?.message,
@@ -669,7 +660,16 @@ export function createUserTurnTranscriptRecorder(
         if (persistence?.appended === true) {
           notifyOriginalInputCommitted({ message: persistedMessage, anchor: receipt });
         }
-        void recordAdmission(receipt, persistedMessage, true); // settled by waitForRuntimePersistence
+        // Settled by waitForRuntimePersistence.
+        const admission = recordAdmission(receipt, persistedMessage, true);
+        const targetRunId = confirmedSteerTargetRunId;
+        if (targetRunId && persistedMessage["__openclaw"]?.steerTargetRunId !== targetRunId) {
+          // The stamp joins the admission write that the turn owner already awaits.
+          admissionWrite = admission.then(() =>
+            runInDetachedAsyncContext(() => stampPersistedSteerTargetRunId(targetRunId)),
+          );
+          admissionWrite.catch(() => undefined);
+        }
       }
       if (persistedMessage && persistedResult) {
         persistedResult = {
