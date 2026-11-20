@@ -11240,7 +11240,7 @@ describe("package artifact reuse", () => {
       profiles: "full",
     });
     expect(openCodeGo.command).toContain(
-      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2,opencode-go/glm-5.3 ",
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3-flash,opencode-go/glm-5.3 ",
     );
     expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-flash");
     expect(openCodeGoSmoke.command).toContain(
@@ -11277,7 +11277,7 @@ describe("package artifact reuse", () => {
     expect(openRouter.command).toContain("OPENCLAW_LIVE_GATEWAY_THINKING=off");
   });
 
-  it("pins OpenCode Go MiMo live profiles to both current V2.5 model refs", () => {
+  it("pins OpenCode Go MiMo live profiles to both current V2.6 model refs", () => {
     const mimo = workflowMatrixEntry(
       LIVE_E2E_WORKFLOW,
       "validate_live_provider_suites",
@@ -11286,7 +11286,7 @@ describe("package artifact reuse", () => {
 
     expect(mimo).toMatchObject({
       command:
-        "OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
+        "OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.6-flash,opencode-go/mimo-v2.6-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
       profiles: "full",
       suite_group: "native-live-src-gateway-profiles-opencode-go",
     });
