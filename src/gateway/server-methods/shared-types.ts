@@ -679,6 +679,8 @@ export type GatewayBroadcastOpts = {
   sessionSubscriptionVerified?: boolean;
   /** Question owner authorizes ordinary own-run recipients without a broad question grant. */
   questionRecipient?: (client: GatewayClient) => boolean;
+  /** Host-only exact live exec binding; does not replace session disclosure checks. */
+  participationApprovalRecipient?: (client: GatewayClient) => boolean;
   stateVersion?: GatewayBroadcastStateVersion;
   /** Private live-text ownership; omitting coalesce flushes this group's progress. */
   liveText?: {

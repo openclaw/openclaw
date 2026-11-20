@@ -1,7 +1,10 @@
 import { expect, it } from "vitest";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
@@ -80,6 +83,7 @@ it("retires exact persisted participant inputs atomically before downgrade/remov
       } else {
         addSessionMember(scope, { identityId: "participant", addedBy: "creator", access: "send" });
       }
+      await closeOpenClawAgentDatabasesAsync();
       for (const row of read()) {
         expect(row.state).toBe(row.input_id.startsWith("own-") ? "cancelled" : "queued");
         expect(row.end_cause).toBe(row.input_id.startsWith("own-") ? "revoked" : null);
