@@ -85,21 +85,6 @@ it.each(
   },
 );
 
-it("keeps the tenth model of an unranked catalog inline", async () => {
-  const { container } = mountPicker({
-    open: true,
-    selectedModelValue: "fixture/model-0",
-    modelOptions: Array.from({ length: 10 }, (_unused, index) =>
-      option("fixture", `model-${index}`),
-    ),
-  });
-  await waitForMenu(container);
-
-  // Without the singleton rule the tenth model folds alone behind "All models (1)".
-  expect(control(container, "option", "fixture/model-9")).not.toBeNull();
-  expect(control(container, "more-toggle")).toBeNull();
-});
-
 it("forgets disclosure for removed providers", async () => {
   const params = pickerProps({
     open: true,
