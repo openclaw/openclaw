@@ -441,9 +441,10 @@ outputs reach GitHub can prevent automated cleanup; the provider expiry limits
 compute lifetime, but does not prove data deletion. An unconfirmed deletion
 reports its operation ID for reconciliation with `boat deletion status`.
 
-Mantis Discord and web UI actor authorization, request resolution, and ref
-validation use `ubuntu-24.04`. Their live proof jobs retain separate runtime
-placement and deadlines.
+Mantis Discord and web UI actor authorization, request resolution, ref validation,
+and ordinary proof orchestration use `ubuntu-24.04`. This preserves access for all
+authorized maintainers without requiring Boat account admission. Request-bound
+isolated proof jobs retain their separate runtime placement and deadlines.
 
 Mantis scenario dispatch and QA actor/ref validation also use `ubuntu-24.04`.
 The QA controls honor their `runner_group` input. Reusable live/E2E and QA
