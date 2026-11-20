@@ -44,8 +44,8 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
   if (xmlEntries.length > 0) {
     return xmlEntries;
   }
-  // Compact catalogs (`skills_read` sessions) render one `- name: description` line per skill.
-  return Array.from(skillsPrompt.matchAll(/^- ([^:\n]+).*$/gmu), ([line, name = ""]) => ({
+  // Compact catalogs (`skills_read` sessions) render `- name[: description][ (note)]`; names may contain ":".
+  return Array.from(skillsPrompt.matchAll(/^- (.+?)(?:: | \(|$).*$/gmu), ([line, name = ""]) => ({
     name: ` ${name.trim() || "(unknown)"}`.slice(1),
     blockChars: line.length,
   }));

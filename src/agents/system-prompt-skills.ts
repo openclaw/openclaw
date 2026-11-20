@@ -9,7 +9,8 @@ const CATALOG_INTRO =
   /^The following skills provide[^\n]*\n[^\n]*\nWhen a skill file references[^\n]*\n\n/mu;
 const CATALOG_ENTRY =
   /^ {2}<skill>\n {4}<name>(.*)<\/name>\n(?: {4}<description>([\s\S]*?)<\/description>\n)? {4}<location>.*<\/location>\n(?: {4}<location_note>(.*)<\/location_note>\n)? {2}<\/skill>$/gmu;
-const decode = (value: string) => decodeSkillXml(value).replace(/\s+/gu, " ").trim();
+// Names stay byte-exact: `skills_read` matches them with ===. Only prose is whitespace-folded.
+const prose = (value: string) => decodeSkillXml(value).replace(/\s+/gu, " ").trim();
 
 function compactCatalogForSkillRead(skillsPrompt: string): string {
   return skillsPrompt
@@ -17,7 +18,7 @@ function compactCatalogForSkillRead(skillsPrompt: string): string {
     .replace(
       CATALOG_ENTRY,
       (_match, name: string, desc?: string, note?: string) =>
-        `- ${decode(name)}${desc ? `: ${decode(desc)}` : ""}${note ? ` (${decode(note)})` : ""}`,
+        `- ${decodeSkillXml(name)}${desc ? `: ${prose(desc)}` : ""}${note ? ` (${prose(note)})` : ""}`,
     );
 }
 

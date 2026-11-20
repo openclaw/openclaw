@@ -3,6 +3,8 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { formatSkillsForPromptCore } from "../skills/loading/skill-contract.js";
+import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
@@ -237,5 +239,27 @@ describe("rendered skills diagnostics", () => {
     });
     expect(systemPrompt.includes(catalog)).toBe(included || workspaceCopy);
     expectSkills(systemPrompt, included ? catalog : "", skillsPrompt);
+  });
+
+  it("keeps exact skill identities in the compact skills_read catalog and its report", () => {
+    const skills = ["release  notes", "team:deploy", "plain"].map(
+      (name) => createFixtureSkillEntry(name).skill,
+    );
+    let rendered = "";
+    const systemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/workspace",
+      toolNames: ["skills_read"],
+      skillsPrompt: formatSkillsForPromptCore(skills),
+      onRenderedSkillsPrompt: (prompt) => (rendered = prompt),
+    });
+    expect(systemPrompt).toContain("- release  notes: release notes description");
+    expect(systemPrompt).toContain("- team:deploy: team:deploy description");
+    expect(systemPrompt).not.toContain("<location>");
+    const report = makeReport({ systemPrompt, skillsPrompt: rendered }).skills;
+    expect(report.entries.map(({ name }) => name)).toEqual([
+      "release  notes",
+      "team:deploy",
+      "plain",
+    ]);
   });
 });
