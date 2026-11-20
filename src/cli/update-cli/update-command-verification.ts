@@ -217,7 +217,9 @@ export async function verifyUpdatedGateway(
 ): Promise<{
   ok: boolean;
   summary: string;
-  stopReason?: string;
+  stopReason?: "still-starting" | "gateway-readiness-pending";
+  /** A terminal service/port observation, not a pending verification. */
+  serviceStoppedFree?: true;
   pluginWarnings?: PluginUpdateWarning[];
   serviceDefinitionRefusal?: SystemdServiceStartRefusal;
 }> {
@@ -525,7 +527,7 @@ export async function verifyUpdatedGateway(
     ...(health.waitOutcome === "stopped-free" &&
     health.runtime.status === "stopped" &&
     health.portUsage.status === "free"
-      ? { stopReason: "stopped-free" }
+      ? { serviceStoppedFree: true }
       : {}),
   };
 }

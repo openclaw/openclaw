@@ -478,7 +478,7 @@ export async function maybeRestartService(
     if (outcome) {
       return outcome;
     }
-    if (handoff.status !== "no-incumbent" && lastVerification?.stopReason !== "stopped-free") {
+    if (handoff.status !== "no-incumbent" && !lastVerification?.serviceStoppedFree) {
       return await failed("restart-health-failed");
     }
   }
