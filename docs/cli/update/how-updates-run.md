@@ -1598,6 +1598,13 @@ builds the target as a new release, switches the link, and arms a trial in
 which switches the link back to the trial's previous release after two failed starts.
 The trial ends once the Gateway on the new release is ready.
 
+If the old Gateway is still serving after its next maintenance check, the updater asks
+it to restart. A busy Gateway can defer that request for five minutes. The updater
+allows for that deferral and process replacement before checking the serving build;
+an explicit overall update timeout still applies. A queued restart is not a successful
+update until the new build passes verification. This behavior belongs to the installed
+updater, not the candidate it just built.
+
 The link alone does not show what serves. An update can fail after the link switched
 but before any Gateway started the new release. That leaves the link on a release that
 never started, with its trial still armed. When the trial's previous release is shown to

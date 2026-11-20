@@ -1,3 +1,4 @@
+import { isRestartEnabled } from "../../config/commands.flags.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import {
   readDaemonRuntimePin,
@@ -169,6 +170,8 @@ export async function prepareUpdateRestart(
     );
   }
   return {
+    allowGitReleaseRestartSignal:
+      restartConfigSnapshot.valid && isRestartEnabled(restartConfigSnapshot.config),
     refreshGatewayServiceEnv,
     gatewayServiceEnv,
     gatewayServiceInstallEnv,
