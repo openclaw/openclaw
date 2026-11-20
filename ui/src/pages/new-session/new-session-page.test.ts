@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createOverlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
@@ -6,6 +6,7 @@ import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { createMediaQueryList } from "../../test-helpers/media-query.ts";
 import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
 import type { ChatDetailPanel } from "../chat/components/chat-sidebar-view-types.ts";
+import { ComposerDictationOwner } from "../chat/composer-dictation.ts";
 import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import * as draftBody from "./draft-body.solid.tsx";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
@@ -241,7 +242,7 @@ describe("new session draft route ownership", () => {
       vi.stubGlobal("fetch", fetchMock);
       const paste = new Event("paste", { bubbles: true, cancelable: true });
       Object.defineProperty(paste, "clipboardData", {
-        value: { items: [], getData: () => original },
+        value: { items: [], files: [], getData: () => original },
       });
       page.querySelector("textarea")?.dispatchEvent(paste);
       expect(paste.defaultPrevented).toBe(true);
@@ -442,4 +443,35 @@ describe("new session draft route ownership", () => {
 
     expect(message(page)).toBe("");
   });
+});
+
+it("retains an earlier recording's error while the next microphone connects", async () => {
+  const errorMessage = "Transcription provider unavailable";
+  const observed = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
+  await mount(routeData("research"));
+  const owner = observed.mock.contexts[0];
+  assert.instanceOf(owner, NewSessionPageOwner);
+  const capture = new ComposerDictationOwner({
+    client: null,
+    connected: false,
+    enabled: false,
+    realtimeTalkActive: false,
+    onCommit: () => {},
+    onError: () => {},
+  });
+  const connecting = vi.spyOn(capture, "connecting", "get").mockReturnValue(true);
+  vi.spyOn(owner.dictation, "dictation", "get").mockReturnValue(capture);
+  owner.dictationError = "Prior error";
+  owner.dictation.dispatchEvent(new Event("change"));
+  expect(owner.dictationError).toBeNull();
+  // The older recording reports a result after the newer capture was admitted.
+  owner.dictationError = errorMessage;
+  owner.dictation.dispatchEvent(new Event("change"));
+  expect(owner.dictationError).toBe(errorMessage);
+  connecting.mockReturnValue(false);
+  owner.dictation.dispatchEvent(new Event("change"));
+  connecting.mockReturnValue(true);
+  owner.dictation.dispatchEvent(new Event("change"));
+  expect(owner.dictationError).toBeNull();
+  capture.dispose();
 });

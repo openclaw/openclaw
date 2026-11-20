@@ -11,7 +11,7 @@
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -22,6 +22,7 @@ import {
 } from "../../src/infra/exec-approvals-store.js";
 import { onWorkerRequestMetrics } from "../../src/infra/worker-request-diagnostics.js";
 import { closeOpenClawStateDatabaseAsync } from "../../src/state/openclaw-state-db.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -44,9 +45,6 @@ const stop = onWorkerRequestMetrics((kind, requestClass, phase) => {
     requests++;
   }
 });
-function allocationBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocationBytes(child), 0);
-}
 try {
   updateExecApprovalsForMaintenance(() => ({
     version: 1,
@@ -85,7 +83,7 @@ try {
   const used = process.threadCpuUsage(cpu);
   const allocated =
     values.mode === "allocation"
-      ? allocationBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+      ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
       : undefined;
   assert.equal(readExecApprovalsSnapshot().raw, initial.raw);
   console.log(

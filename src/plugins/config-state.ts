@@ -30,7 +30,6 @@ const BUILT_IN_PLUGIN_ALIAS_LOOKUP = new Map<string, string>([
 const RETIRED_PLUGIN_IDS = new Set([
   "google-antigravity-auth",
   "google-gemini-cli-auth",
-  "skill-workshop",
   "webhooks",
 ]);
 

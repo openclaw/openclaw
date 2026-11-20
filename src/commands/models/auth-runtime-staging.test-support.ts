@@ -1,4 +1,4 @@
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, type Mock } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObject } from "../../config/validation-core.js";
 import type { ProviderAuthResult } from "../../plugins/types.js";
@@ -170,8 +170,7 @@ export function registerModelsAuthRuntimeStagingTests(fixture: {
     );
   });
 
-  it("runs model-access consent after a profileless harness sign-in stages its runtime", async () => {
-    const onModelAccessRequested = vi.fn();
+  it("shows the provider's models after a profileless harness sign-in stages its runtime", async () => {
     fixture.setProviderAuthResult({
       profiles: [],
       defaultModel: "openai/gpt-5.5",
@@ -180,7 +179,14 @@ export function registerModelsAuthRuntimeStagingTests(fixture: {
     fixture.setConfig({
       agents: { defaults: { modelPolicy: { allow: ["other/current"] } } },
     });
-    await loginFlow({ credentialOnly: true, onModelAccessRequested });
-    expect(onModelAccessRequested).toHaveBeenCalled();
+    const result = await loginFlow({ credentialOnly: true });
+    expect(result).toMatchObject({
+      stagedRuntimePolicy: true,
+      modelAccess: { message: expect.stringContaining("Added openai/* to allowed models.") },
+    });
+    expect(fixture.getConfig().agents?.defaults?.modelPolicy?.allow).toEqual([
+      "other/current",
+      "openai/*",
+    ]);
   });
 }

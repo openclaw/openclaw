@@ -38,12 +38,12 @@ const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deep
 
 type ModelAuthStatusFacts = ReturnType<typeof buildModelAuthStatusFacts>;
 const authStatusFacts = new WeakMap<
-  OpenClawConfig,
+  PreparedGatewayModelCatalogSnapshot["isCurrent"],
   Map<
     string,
     {
       profiles: AuthProfileStore["profiles"];
-      owner: PreparedGatewayModelCatalogSnapshot["isCurrent"];
+      config: OpenClawConfig;
       metadata: PreparedGatewayModelCatalogSnapshot["metadataSnapshot"];
       agentDir: string;
       workspaceDir: string;
@@ -275,7 +275,7 @@ export function readModelAuthStatusFacts(
   refresh: boolean,
   now: number,
 ) {
-  const agents = getOrCreateWeakOwnerMap(authStatusFacts, snapshot.config);
+  const agents = getOrCreateWeakOwnerMap(authStatusFacts, snapshot.isCurrent);
   const revision = getRuntimeAuthProfileStoreSnapshotsRevision();
   const cached = agents.get(snapshot.agentId);
   if (
@@ -283,7 +283,7 @@ export function readModelAuthStatusFacts(
     cached &&
     cached.revision === revision &&
     cached.profiles === snapshot.authStore.profiles &&
-    cached.owner === snapshot.isCurrent &&
+    cached.config === snapshot.config &&
     cached.metadata === snapshot.metadataSnapshot &&
     cached.agentDir === snapshot.agentDir &&
     cached.workspaceDir === snapshot.workspaceDir &&
@@ -298,7 +298,7 @@ export function readModelAuthStatusFacts(
   const facts = buildModelAuthStatusFacts(snapshot, now);
   agents.set(snapshot.agentId, {
     profiles: snapshot.authStore.profiles,
-    owner: snapshot.isCurrent,
+    config: snapshot.config,
     metadata: snapshot.metadataSnapshot,
     agentDir: snapshot.agentDir,
     workspaceDir: snapshot.workspaceDir,

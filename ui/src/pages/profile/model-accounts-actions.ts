@@ -7,6 +7,7 @@ import {
   refresh,
 } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import type { ModelAccountsState } from "./model-accounts-state.ts";
 
 type Link = { provider: string; authProfileId: string };
@@ -84,7 +85,9 @@ export function createModelAccountsActions(readState: () => ModelAccountsState) 
     } catch (error) {
       if (isCurrent()) {
         const state = readState();
-        state.error = formatUiError(error);
+        state.error = [t("profilePage.modelAccounts.actionFailed"), formatUiError(error)]
+          .filter(Boolean)
+          .join(" ");
         state.publish();
       }
     }

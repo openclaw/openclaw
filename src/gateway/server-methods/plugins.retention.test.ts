@@ -1,17 +1,24 @@
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { PluginsInspectResultSchema } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { emptyInstalledPluginComponents } from "../../plugins/installed-plugin-components.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { withPluginRetentionOwner } from "../../plugins/plugin-retention-diagnostics.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   captureActivePluginRegistrySnapshot,
+  clearActivePluginRegistry,
+  createPluginRegistryOwner,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
+  waitForPluginRegistryRetirement,
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -23,7 +30,29 @@ vi.mock("../../plugins/management-service.js", () => ({
 }));
 
 const { pluginsHandlers } = await import("./plugins.js");
-const inspection = { plugin: { id: "retained-plugin", installed: true, enabled: true } };
+const inspection = {
+  ok: true,
+  plugin: { id: "retained-plugin", name: "Retention fixture", installed: true, enabled: true },
+  declared: {
+    channels: [],
+    providers: [],
+    tools: [],
+    contracts: [],
+    hooks: [],
+    mcpServers: [],
+    cliCommands: [],
+    cliBackends: [],
+    skills: [],
+    dangerousConfigFlags: [],
+  },
+  grants: {
+    hooks: {
+      allowPromptInjection: { effective: false },
+      allowConversationAccess: { effective: false },
+    },
+  },
+  components: emptyInstalledPluginComponents(),
+};
 const acquisitionOwner = {
   agentId: "fixture",
   sessionKey: "private-session",
@@ -66,7 +95,9 @@ async function inspect(
       }),
   );
   expect(respond).toHaveBeenCalledExactlyOnceWith(true, expect.any(Object), undefined);
-  return respond.mock.calls[0]![1];
+  const response = respond.mock.calls[0]![1];
+  expect(Value.Check(PluginsInspectResultSchema, response)).toBe(true);
+  return response;
 }
 
 beforeEach(() => inspectManagedPlugin.mockReset().mockResolvedValue(inspection));
@@ -96,6 +127,72 @@ describe("plugins.inspect runtime retention disclosure", () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(createPluginRecord({ id: inspection.plugin.id }));
     expect(await inspect(registry)).toMatchObject({ runtimeRetention: null });
+  });
+
+  it.each([false, true])(
+    "reports a retained predecessor with a current instance: %s",
+    async (hasCurrent) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const previous = captureActivePluginRegistrySnapshot();
+        const fixture = retainedPlugin();
+        const successor = createEmptyPluginRegistry();
+        const current = hasCurrent ? retainedPlugin(successor) : undefined;
+        const owner = createPluginRegistryOwner(fixture.registry);
+        setActivePluginRegistry(fixture.registry);
+        try {
+          setActivePluginRegistry(successor);
+          owner.publish(successor, async () => {});
+          expect(await inspect(successor)).toMatchObject({
+            runtimeRetention: {
+              predecessors: [{ pluginId: inspection.plugin.id, total: 1 }],
+            },
+          });
+          fixture.release();
+          await waitForPluginRegistryRetirement(fixture.registry);
+          const response = await inspect(successor);
+          expect(response).toMatchObject({
+            runtimeRetention: hasCurrent ? { pluginId: inspection.plugin.id, total: 1 } : null,
+          });
+          expect(response).not.toHaveProperty("runtimeRetention.predecessors");
+          expect(fixture.run).not.toHaveBeenCalled();
+        } finally {
+          fixture.release();
+          current?.release();
+          await owner.close();
+          restoreActivePluginRegistrySnapshot(previous);
+        }
+      });
+    },
+  );
+
+  it("does not disclose another Gateway's predecessor to owned or ownerless requests", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const previous = captureActivePluginRegistrySnapshot();
+      const fixture = retainedPlugin();
+      const successor = createEmptyPluginRegistry();
+      const owner = createPluginRegistryOwner(fixture.registry);
+      setActivePluginRegistry(fixture.registry);
+      let unrelatedOwner: ReturnType<typeof createPluginRegistryOwner> | undefined;
+      const unrelated = retainedPlugin();
+      try {
+        setActivePluginRegistry(successor);
+        owner.publish(successor, async () => {});
+        unrelatedOwner = createPluginRegistryOwner(unrelated.registry);
+        setActivePluginRegistry(unrelated.registry);
+
+        const response = await inspect(unrelated.registry);
+        expect(response).toMatchObject({ runtimeRetention: { total: 1 } });
+        expect(response).not.toHaveProperty("runtimeRetention.predecessors");
+        expect(await inspect(createEmptyPluginRegistry())).toMatchObject({
+          runtimeRetention: null,
+        });
+      } finally {
+        fixture.release();
+        unrelated.release();
+        await Promise.all([owner.close(), unrelatedOwner?.close()]);
+        restoreActivePluginRegistrySnapshot(previous);
+      }
+    });
   });
 
   it.each(["no client", "read-only operator", "remote package"])(
@@ -133,36 +230,43 @@ describe("plugins.inspect runtime retention disclosure", () => {
   });
 
   it("uses the request registry after another Gateway publishes during inventory", async () => {
-    const previous = captureActivePluginRegistrySnapshot();
-    const request = retainedPlugin();
-    const unrelated = retainedPlugin();
-    const entered = createDeferredCore();
-    const catalog = createDeferredCore<typeof inspection>();
-    inspectManagedPlugin.mockImplementationOnce(() => {
-      entered.resolve();
-      return catalog.promise;
-    });
-    setActivePluginRegistry(request.registry);
-    const pending = inspect(request.registry);
-    try {
-      await awaitGateBeforeSettlement(entered.promise, pending, "inspection skipped inventory");
-      // A colliding ID in the process projection cannot replace this request's owner.
-      setActivePluginRegistry(unrelated.registry);
-      unrelated.release();
-      catalog.resolve(inspection);
-      expect(await pending).toMatchObject({
-        runtimeRetention: {
-          pluginId: inspection.plugin.id,
-          total: 1,
-          references: [{ owner: acquisitionOwner }],
-        },
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const previous = captureActivePluginRegistrySnapshot();
+      const request = retainedPlugin();
+      const unrelated = retainedPlugin();
+      const entered = createDeferredCore();
+      const catalog = createDeferredCore<typeof inspection>();
+      inspectManagedPlugin.mockImplementationOnce(() => {
+        entered.resolve();
+        return catalog.promise;
       });
-    } finally {
-      catalog.resolve(inspection);
-      await Promise.allSettled([pending]);
-      request.release();
-      unrelated.release();
-      restoreActivePluginRegistrySnapshot(previous);
-    }
+      setActivePluginRegistry(request.registry);
+      const pending = inspect(request.registry);
+      try {
+        await awaitGateBeforeSettlement(entered.promise, pending, "inspection skipped inventory");
+        // A colliding ID in the process projection cannot replace this request's owner.
+        setActivePluginRegistry(unrelated.registry);
+        unrelated.release();
+        catalog.resolve(inspection);
+        expect(await pending).toMatchObject({
+          runtimeRetention: {
+            pluginId: inspection.plugin.id,
+            references: expect.arrayContaining([
+              expect.objectContaining({ owner: acquisitionOwner }),
+            ]),
+          },
+        });
+      } finally {
+        catalog.resolve(inspection);
+        await Promise.allSettled([pending]);
+        request.release();
+        unrelated.release();
+        try {
+          await clearActivePluginRegistry();
+        } finally {
+          restoreActivePluginRegistrySnapshot(previous);
+        }
+      }
+    });
   });
 });

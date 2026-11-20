@@ -2,6 +2,7 @@ import type { SessionParticipantIdentity } from "../../../packages/gateway-proto
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type { UserProfile } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { groupPresenceUsers, presenceUserKey } from "../../../src/shared/presence-user.ts";
+import { userProfileDisplayName } from "../../../src/shared/user-profile-display-name.js";
 import type { PresenceEntry } from "../api/types.ts";
 import {
   readPresenceEntries,
@@ -21,7 +22,7 @@ export function profilePresenceViewer(profile: UserProfile): PresenceViewer {
   return {
     id: profile.id,
     identity: { type: "profile", id: profile.id },
-    name: profile.displayName ?? undefined,
+    name: userProfileDisplayName(profile.id, profile.displayName, profile.githubIdentity?.login),
     avatarUrl: profileAvatarUrl(profile),
     watchedSessions: [],
     entries: [],
@@ -48,7 +49,7 @@ export function projectPresencePayload(value: unknown) {
 
 export function presenceUserLabel(
   user: Pick<PresenceViewer, "id" | "name" | "email">,
-  fallbackName = user.id,
+  fallbackName = t("presence.card.person"),
 ) {
   const isSharedOwner = user.id === GATEWAY_OWNER_PROFILE_ID;
   const ownerName = isSharedOwner ? user.name?.trim() : undefined;
@@ -57,7 +58,7 @@ export function presenceUserLabel(
       ? ownerName
         ? t("presence.sharedOwner.named", { name: ownerName })
         : t("presence.sharedOwner.name")
-      : (user.name ?? user.email ?? fallbackName),
+      : (user.name ?? fallbackName),
     isSharedOwner,
   };
 }

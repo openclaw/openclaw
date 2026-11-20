@@ -1,5 +1,6 @@
-import type { Browser, BrowserContext, BrowserContextOptions, Locator, Page } from "playwright";
-import { afterEach, expect } from "vitest";
+import type { BrowserContextOptions, Locator, Page } from "playwright";
+import { expect } from "vitest";
+import type { ControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   installMockGateway,
   pollLocatorText,
@@ -7,17 +8,24 @@ import {
   PICKED,
 } from "./new-session-page.test-support.ts";
 
-export function createPageOpener(suite: { readonly browser: Browser }) {
-  const contexts: BrowserContext[] = [];
-  afterEach(async () => {
-    for (const context of contexts.splice(0)) {
-      await context.close();
-    }
-  });
+export function createPageOpener(suite: Pick<ControlUiE2eSuite, "newBrowserContext">) {
   return async (options: BrowserContextOptions = { locale: "en-US", serviceWorkers: "block" }) => {
-    const context = await suite.browser.newContext(options);
-    contexts.push(context);
+    const context = await suite.newBrowserContext(options);
     return context.newPage();
+  };
+}
+
+// Playwright serializes this callback; keep its browser dependencies inside it.
+export function deferRecoveryScopeHydration() {
+  const digest = crypto.subtle.digest.bind(crypto.subtle);
+  const ready = new Promise<void>((resolve) => {
+    window.addEventListener("test-release-recovery-scope", () => resolve(), { once: true });
+  });
+  crypto.subtle.digest = async (algorithm, data) => {
+    if (new TextDecoder().decode(data) === "e2e-device-token") {
+      await ready;
+    }
+    return digest(algorithm, data);
   };
 }
 

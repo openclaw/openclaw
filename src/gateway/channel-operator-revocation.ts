@@ -1,3 +1,4 @@
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { onOperatorRolePolicyChanged } from "./operator-role-policy.js";
 
@@ -30,7 +31,9 @@ export function createChannelOperatorRevocation(params: {
       params.assertCurrent();
       params.signal?.throwIfAborted();
     } catch (error) {
-      revoke(error);
+      if (!isOperatorAuthorityUnavailable(error)) {
+        revoke(error);
+      }
       throw error;
     }
   };

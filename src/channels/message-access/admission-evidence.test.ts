@@ -111,7 +111,7 @@ function unreadableAfter<T extends object>(target: T, field: PropertyKey, after 
 
 it("keeps Gateway routing instance-bound when audit collection is disabled", async () => {
   const audit = createAudit(false);
-  const gatewayContext = { owner: "gateway-a" } as never;
+  const { gateway: gatewayContext } = createHostIngressFixture("test");
   let live = true;
   const source = await admittedContext(audit, "person:42", ["person:42"], () =>
     live ? gatewayContext : undefined,

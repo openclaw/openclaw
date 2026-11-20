@@ -22,6 +22,7 @@ import type { InternalSessionEntry, SessionEntry } from "../../../config/session
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { buildDashboardSessionTitleSource } from "../../../gateway/dashboard-session-title.js";
 import type { FreshChildSession } from "../../../gateway/in-process-session-run.js";
+import type { ProjectRequester } from "../../../gateway/project-access.js";
 import {
   normalizeTrustedGroupMetadata,
   resolveAgentSessionGroup,
@@ -45,7 +46,9 @@ import {
   type DeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
 import { captureDelegatedToolPolicyAssertion } from "../../delegated-tool-policy.js";
+import { getSessionToolUsageRanking } from "../../embedded-agent-runner/session-prompt-state.js";
 import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited-tool-deny.js";
+import { readSessionToolUsageRankingSnapshot } from "../../session-tool-usage-snapshot.js";
 import type { resolveSpawnAdmission } from "../../spawn-plan.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
 import { captureSpawnParentLineage } from "./spawn-parent-lineage.js";
@@ -68,6 +71,8 @@ type InitialSubagentSession = {
 
 export async function createInitialSubagentSession(input: {
   cfg: OpenClawConfig;
+  /** Operator (or creator role) the spawn acts for; bounds projectId and inherited sources. */
+  projectRequester: ProjectRequester;
   requesterAgentId: string;
   targetAgentId: string;
   childSessionKey: string;
@@ -160,6 +165,16 @@ export async function createInitialSubagentSession(input: {
           const parentTarget = params.parentTarget;
           // Request preparation joined participant writes and captured this complete row.
           const parentEntry = parentTarget.store[parentTarget.canonicalKey];
+          const toolUsageRankingSeed =
+            params.cfg.agents?.defaults?.experimental?.usageRankedToolIndex === true && parentEntry
+              ? (getSessionToolUsageRanking(parentEntry.sessionId) ??
+                (await readSessionToolUsageRankingSnapshot({
+                  agentId: params.requesterAgentId,
+                  sessionKey: params.requesterInternalKey,
+                  config: params.cfg,
+                  assertCurrent: () => params.assertActive?.(),
+                })))
+              : undefined;
           const assertDraftCreationAllowed = () => {
             if (
               parentEntry?.visibility === "draft" &&
@@ -241,7 +256,12 @@ export async function createInitialSubagentSession(input: {
               throw new Error("projectId cannot be combined with cwd");
             }
             const project = projectId
-              ? await resolveSessionProjectRoot(params.cfg, projectId, true)
+              ? await resolveSessionProjectRoot(
+                  params.cfg,
+                  projectId,
+                  true,
+                  params.projectRequester,
+                )
               : undefined;
             params.assertActive?.();
             if (project && !project.ok) {
@@ -261,6 +281,7 @@ export async function createInitialSubagentSession(input: {
                 !projectId && !params.spawnedCwd && parentTarget.agentId === params.targetAgentId
                   ? params.requesterInternalKey
                   : undefined,
+              projectRequester: params.projectRequester,
               name: params.worktree.worktreeName,
               baseRef: params.worktree.worktreeBaseRef,
               deferWorktree: true,
@@ -311,6 +332,7 @@ export async function createInitialSubagentSession(input: {
                       }
                     : {}),
                   ...childSessionIdentity,
+                  ...(toolUsageRankingSeed ? { toolUsageRankingSeed } : {}),
                   // Stamp after all request patches so model input cannot create a grant.
                   ...parentLineage,
                   ...(parentEntry?.visibility === "draft" ? { visibility: "draft" as const } : {}),

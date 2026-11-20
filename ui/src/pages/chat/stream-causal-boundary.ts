@@ -26,10 +26,14 @@ export function replaceChatStream(
   state: Pick<StreamRolloverState, "chatRunId" | "chatStream" | "chatStreamSegments">,
   text: string | null,
 ): void {
-  state.chatStreamSegments = state.chatStreamSegments?.filter(
+  const segments = state.chatStreamSegments?.filter(
     (segment) =>
       !state.chatRunId || segment.runId !== state.chatRunId || streamSegmentHasItemId(segment),
   );
+  // An unchanged history refresh must not invalidate the full transcript projection.
+  if (segments?.length !== state.chatStreamSegments?.length) {
+    state.chatStreamSegments = segments;
+  }
   state.chatStream = text;
 }
 
@@ -60,11 +64,11 @@ export function observedRunInputSendId(
   return readSessionMessageIdentity(input)?.sendId ?? undefined;
 }
 
-export function streamCausalInterval(
+export function knownStreamCausalInterval(
   messages: unknown[],
   part: { runId?: string },
   afterUserSendId?: string,
-): { start: number; end: number } {
+): { start: number; end: number } | null {
   const inputIndex = afterUserSendId
     ? messages.findIndex(
         (message) => readSessionMessageIdentity(message)?.sendId === afterUserSendId,
@@ -91,17 +95,34 @@ export function streamCausalInterval(
     // the first retained steer; an unanchored replay or tail does not.
     return { start: 0, end: startIndex };
   }
-  if (startIndex >= 0) {
+  const runOutputIndex =
+    startIndex < 0 && part.runId
+      ? messages.findIndex((message) => readSessionMessageIdentity(message)?.runId === part.runId)
+      : -1;
+  if (startIndex >= 0 || runOutputIndex >= 0 || afterUserSendId) {
+    const start = startIndex >= 0 ? startIndex + 1 : Math.max(runOutputIndex, 0);
     const end = messages.findIndex(
       (message, index) =>
-        index > startIndex &&
+        index >= start &&
         readSessionMessageIdentity(message)?.role === "user" &&
         (inputIndex >= 0 || persistedSteerTargetRunId(message) !== part.runId),
     );
-    return { start: startIndex + 1, end: end >= 0 ? end : messages.length };
+    return { start, end: end >= 0 ? end : messages.length };
   }
-  const end = messages.length;
-  return { start: lastUserMessageIndex(messages, end) + 1, end };
+  return null;
+}
+
+export function streamCausalInterval(
+  messages: unknown[],
+  part: { runId?: string },
+  afterUserSendId?: string,
+): { start: number; end: number } {
+  return (
+    knownStreamCausalInterval(messages, part, afterUserSendId) ?? {
+      start: lastUserMessageIndex(messages) + 1,
+      end: messages.length,
+    }
+  );
 }
 
 export function streamCausalInsertIndex(

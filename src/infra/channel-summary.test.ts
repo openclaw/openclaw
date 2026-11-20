@@ -57,6 +57,14 @@ type LinkedSummary = {
   allowFrom?: string[];
 };
 
+it("inspects each account once when source and resolved configuration are identical", async () => {
+  const plugin = makePlugin("Example", {}, { accountIds: ["primary", "secondary"] });
+  const inspect = vi.spyOn(plugin.config, "inspectAccount");
+  await summaryFor(plugin);
+  expect(inspect).toHaveBeenCalledTimes(2);
+  expect(inspect.mock.calls.map(([, accountId]) => accountId)).toEqual(["primary", "secondary"]);
+});
+
 it("preserves Slack HTTP signing-secret unavailable state from source config", async () => {
   const plugin = makePlugin(
     "Slack",

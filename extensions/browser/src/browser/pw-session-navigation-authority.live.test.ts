@@ -214,17 +214,24 @@ describe.skipIf(!isLiveTestEnabled())("navigation authority on redirects (real C
       } else {
         await operation;
         if (iframe) {
-          expect(
-            page
-              .frames()
-              .some((frame) => frame.url() === targetUrl.replace("127.0.0.1", "localhost")),
-          ).toBe(true);
+          // A nested frame that changes process commits in its new owner; the
+          // invocation's claim ends with the request, not with that commit.
+          await expect
+            .poll(
+              () =>
+                page
+                  .frames()
+                  .some((frame) => frame.url() === targetUrl.replace("127.0.0.1", "localhost")),
+              { timeout: 5_000 },
+            )
+            .toBe(true);
         } else {
           expect(page.url()).toBe(targetUrl);
         }
       }
       expect(sourceRequests).toBe(1);
       expect(targetRequests).toBe(revoke ? 0 : 1);
+      const guardedTargetRequests = targetRequests;
       if (revoke) {
         // A rejected operation must not poison the selected tab for its next owner.
         current = true;
@@ -237,6 +244,11 @@ describe.skipIf(!isLiveTestEnabled())("navigation authority on redirects (real C
         });
         expect(page.url()).toBe(targetUrl);
         expect(targetRequests).toBe(1);
+      }
+      if (process.env.OPENCLAW_LIVE_PROOF === "1") {
+        console.info(
+          `[browser-proof] redirects owner=${owner} revoke=${revoke} sourceRequests=${sourceRequests} guardedDestinationRequests=${guardedTargetRequests} subsequentOwner=${revoke ? "succeeded" : "not-needed"}`,
+        );
       }
     } finally {
       releaseRedirect?.resolve();

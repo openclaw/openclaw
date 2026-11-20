@@ -312,6 +312,36 @@ describe("fal image-generation provider", () => {
     expect(result.images.map((image) => image.buffer.toString())).toEqual(["first", "second"]);
   });
 
+  it.each([
+    ["application/json", '{"error":"quota exceeded"}'],
+    ["application/problem+json", '{"title":"unavailable"}'],
+    ["text/html", "<html>Sign in</html>"],
+    ["image/png", ""],
+  ])("rejects invalid generated image downloads (%s, %j)", async (contentType, body) => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(releasedJson({ images: [{ url: "https://v3.fal.media/out.png" }] }))
+      .mockResolvedValueOnce({
+        response: new Response(body, { headers: { "content-type": contentType } }),
+        release,
+      });
+
+    await expect(provider.generateImage(defaultRequest)).rejects.toThrow(
+      "fal generated image download: malformed image response",
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the image/png fallback for downloads without a content type", async () => {
+    const buffer = Buffer.from("png-data");
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(releasedJson({ images: [{ url: "https://v3.fal.media/out.png" }] }))
+      .mockResolvedValueOnce({ response: new Response(buffer), release: vi.fn(async () => {}) });
+
+    const result = await provider.generateImage(defaultRequest);
+    expect(result.images).toEqual([{ buffer, mimeType: "image/png", fileName: "image-1.png" }]);
+  });
+
   it("releases a timed-out generated image download", async () => {
     const releaseDownload = vi.fn(async () => {});
     fetchWithSsrFGuardMock

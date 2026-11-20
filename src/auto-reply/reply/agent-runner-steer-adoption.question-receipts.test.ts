@@ -116,6 +116,7 @@ it.each([
           { id, timeoutMs: 60_000, includeResolutionId: true },
         ) as Promise<QuestionWaitAnswerResult>;
         const answerOutcome = answer.catch(() => undefined);
+        const readback = vi.spyOn(answer, "catch");
         claim.setAnswer(answer);
         await fixture.waitStarted;
         const abandoned = vi.fn();
@@ -134,22 +135,20 @@ it.each([
         const nativeSteer = vi.fn(async () => {
           throw new Error("unexpected ordinary steering of an answered question");
         });
-        const subscribe = vi.fn(() => () => {});
-        const queue = async (
+        const queue = (
           message: string,
           options: QueueOptions,
           assertCurrent: () => void,
           kind: "run" | "source-bound",
-        ) => {
-          return await steerActiveSessionWithOptionalDeliveryWait(
-            { steer: nativeSteer, subscribe },
+        ) =>
+          steerActiveSessionWithOptionalDeliveryWait(
+            { steer: nativeSteer, subscribe: vi.fn(() => () => {}) },
             message,
             options,
             key,
             allowCurrent(assertCurrent),
             { kind, assertCurrent },
           );
-        };
         operation.attachBackend({
           kind: entrypoint === "reply" ? "cli" : "embedded",
           runId: "accepted-backing-work",
@@ -256,9 +255,9 @@ it.each([
           expect(operation).toMatchObject({ phase: "running", result: null });
           expect(cancel).not.toHaveBeenCalled();
           if (mode === "delayed-receipt") {
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, 1_200);
-            });
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+            await vi.waitUntil(() => readback.mock.calls.length > 0);
+            await vi.advanceTimersByTimeAsync(1_200); // Cross the former one-second receipt grace.
             expect(done).toBe(false);
             await expectPendingQuestionAnswerClaimable(key, false);
             expect(followup).not.toHaveBeenCalled();
@@ -309,6 +308,7 @@ it.each([
           }
           await answerOutcome;
           await adoption.catch(() => undefined);
+          vi.useRealTimers();
           claim.dispose();
           clearSessionQueues([key]);
           if (hidden) {

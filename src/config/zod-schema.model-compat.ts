@@ -1,7 +1,12 @@
 // Defines the per-model provider compatibility schema fragment and its
 // OpenRouter/Vercel AI Gateway routing sub-schemas.
+import type { ModelCatalogCompatConfig } from "@openclaw/model-catalog-core/model-catalog-types";
 import { z } from "zod";
-import type { OpenRouterRouting, VercelGatewayRouting } from "../llm/types.js";
+import type {
+  OpenAICompletionsCompat,
+  OpenRouterRouting,
+  VercelGatewayRouting,
+} from "../llm/types.js";
 import { MODEL_THINKING_FORMATS } from "./model-config-vocabulary.js";
 
 const RoutingPercentileCutoffsSchema = z.strictObject({
@@ -69,6 +74,8 @@ export const ModelCompatSchema = z
      * prompt in `input` unless set true here after verifying against that endpoint.
      */
     supportsInstructions: z.boolean().optional(),
+    /** Whether the model caches top-level `instructions`; false sends the system prompt as input. */
+    cachesInstructions: z.boolean().optional(),
     /**
      * Whether the provider supports `stream_options: { include_usage: true }` for token usage in
      * streaming responses. Default: true.
@@ -95,6 +102,16 @@ export const ModelCompatSchema = z
     supportedReasoningEfforts: z.array(z.string().min(1)).optional(),
     /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
     reasoningEffortMap: z.record(z.string().min(1), z.string().min(1)).optional(),
+    /** Thinking level a new session starts at. When set, this row owns the thinking profile. */
+    defaultThinkingLevel: z.string().min(1).optional(),
+    /** Offered thinking levels, in order. When set, this row owns the thinking profile. */
+    thinkingLevels: z.array(z.string().min(1)).optional(),
+    /** Offers the `adaptive` thinking level. */
+    adaptiveThinking: z.boolean().optional(),
+    /** Thinking stays on even when `reasoning` is false. */
+    thinkingRequired: z.boolean().optional(),
+    /** Display labels per thinking level, e.g. `{ low: "on" }`. */
+    thinkingLevelLabels: z.record(z.string().min(1), z.string().min(1)).optional(),
     /** Which field to use for max tokens. Default: auto-detected from URL. */
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
@@ -160,5 +177,12 @@ export const ModelCompatSchema = z
      * or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true.
      */
     supportsLongCacheRetention: z.boolean().optional(),
-  })
+  } satisfies Record<keyof ModelCatalogCompatConfig, z.ZodType>)
   .optional();
+
+/** Provider/model compatibility switches consumed by request builders and tool schema adapters. */
+export type ModelCompatConfig = Omit<
+  NonNullable<z.input<typeof ModelCompatSchema>>,
+  "openRouterRouting" | "vercelGatewayRouting"
+> &
+  Pick<OpenAICompletionsCompat, "openRouterRouting" | "vercelGatewayRouting">;

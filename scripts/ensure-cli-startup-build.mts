@@ -12,7 +12,7 @@ const entryCandidates = ["dist/entry.js", "dist/entry.mjs"];
 const startupMetadataPath = "dist/cli-startup-metadata.json";
 const DEFAULT_BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 
-type StartupBuildParams = Partial<{
+export type StartupBuildParams = Partial<{
   env: NodeJS.ProcessEnv;
   existsSync: typeof existsSync;
   killSignal: NodeJS.Signals;
@@ -34,19 +34,12 @@ export function hasCliStartupBuild(params: StartupBuildParams = {}) {
   return hasEntry && exists(path.join(rootDir, startupMetadataPath));
 }
 
-export function ensureCliStartupBuild(params: StartupBuildParams = {}) {
+export function runCliStartupBuild(params: StartupBuildParams = {}) {
   const rootDir = params.rootDir ?? repoRoot;
-  if (hasCliStartupBuild({ rootDir, existsSync: params.existsSync })) {
-    return { built: false };
-  }
-
   const nodeExecPath = params.nodeExecPath ?? process.execPath;
   const spawn = params.spawnSync ?? spawnSync;
   const buildScript = path.join(rootDir, "scripts", "build-all.mts");
 
-  console.error(
-    "[cli-startup-build] dist startup entry or metadata missing; running cliStartup build profile",
-  );
   const result = spawn(nodeExecPath, ["--import", "tsx", buildScript, "cliStartup"], {
     cwd: rootDir,
     env: params.env ?? process.env,
@@ -62,6 +55,17 @@ export function ensureCliStartupBuild(params: StartupBuildParams = {}) {
     throw new Error(`cliStartup build profile failed with exit code ${status}`);
   }
   return { built: true };
+}
+
+export function ensureCliStartupBuild(params: StartupBuildParams = {}) {
+  const rootDir = params.rootDir ?? repoRoot;
+  if (hasCliStartupBuild({ rootDir, existsSync: params.existsSync })) {
+    return { built: false };
+  }
+  console.error(
+    "[cli-startup-build] dist startup entry or metadata missing; running cliStartup build profile",
+  );
+  return runCliStartupBuild(params);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

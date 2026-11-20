@@ -151,6 +151,16 @@ exceptions with immediate enforcement and no compatibility aliases or window.
 The category does not enable channel docking or restore retired docking commands.
 New definitions should use `"tools"`.
 
+Bundled conversation-binding adapters can use `resolveThreadBindingTargetKind` from
+`openclaw/plugin-sdk/thread-bindings-session-runtime` to select their stored
+`"subagent"`, `"session"`, or `"acp"` kind. The helper preserves explicit subagents
+and recognizes ACP session keys without loading storage. Other session targets,
+including main/global aliases, use the canonical asynchronous ACP metadata reader;
+unreadable stores reject classification rather than defaulting to ordinary sessions.
+Pass the current config, optional agent owner, channel display name, and a required
+`assertCurrent` callback covering both manager and caller authority. Adapters must
+still recheck authority at their native-create and binding-commit boundaries.
+
 Bundled ACP integrations should await `readAcpSessionEntryAsync` from the local
 `openclaw/plugin-sdk/acp-runtime` facade for session metadata reads. This facade
 remains a JavaScript compatibility export; its declarations are excluded from

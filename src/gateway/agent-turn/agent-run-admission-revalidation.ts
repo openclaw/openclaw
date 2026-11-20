@@ -37,8 +37,15 @@ export async function releaseFailedAgentRunAdmission(
   userTurn: PreparedAgentRunUserTurn,
   error: unknown,
   cleanupPreaccept: () => Promise<void>,
+  signal: AbortSignal,
+  accepted: boolean,
 ): Promise<never> {
-  const failure = await releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
+  const failure = await releasePreparedAgentRunUserTurnAfterFailure(
+    userTurn,
+    error,
+    signal,
+    accepted,
+  );
   try {
     await cleanupPreaccept();
   } catch (cleanupError) {
@@ -107,7 +114,11 @@ export function createAgentRunAdmissionRevalidator(options: {
     } catch (err) {
       return (async () => {
         const failure = userTurn
-          ? await releasePreparedAgentRunUserTurnAfterFailure(userTurn, err)
+          ? await releasePreparedAgentRunUserTurnAfterFailure(
+              userTurn,
+              err,
+              activeRunAbort.controller.signal,
+            )
           : err;
         if (failure === err) {
           publishAborted();
@@ -121,7 +132,13 @@ export function createAgentRunAdmissionRevalidator(options: {
     return (async () => {
       try {
         if (userTurn) {
-          await releasePreparedAgentRunUserTurn(userTurn);
+          await releasePreparedAgentRunUserTurn(
+            userTurn,
+            "cancelled",
+            activeRunAbort.controller.signal,
+            undefined,
+            false,
+          );
         }
         // Abort replay must not publish before pending input has durably settled.
         publishAborted();

@@ -6,7 +6,11 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { errorShapeFromError } from "../../error-shape.js";
 import { NodeRegistry } from "../../node-registry.js";
+import { GatewayOperatorAccessUnavailableError } from "../../operator-access-policy.js";
+import { handleGatewayRequest as dispatchGatewayRequest } from "../../server-methods.js";
+import { createLazyCoreHandlers } from "../../server-methods/lazy-core-handlers.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
 import { dispatchProfile } from "../client-fixtures.test-support.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -110,6 +114,87 @@ function createDispatcher(
   return { socket, client, ...harness };
 }
 
+it.each(["admission", "preparation", "handler", "handler-response", "response"])(
+  "reports a policy error at %s without closing or promising a retry after execution",
+  async (phase) => {
+    const client = createOperatorWsClient();
+    const grant = new AbortController();
+    let failing = true;
+    let unavailable = phase === "admission";
+    const assertCurrent = () => {
+      grant.signal.throwIfAborted();
+      if (unavailable) {
+        throw new GatewayOperatorAccessUnavailableError();
+      }
+    };
+    client.internal = {
+      operatorAccessAuthority: {
+        signal: grant.signal,
+        assertCurrent,
+      },
+    };
+    let effects = 0;
+    const handler = vi.fn((options: GatewayRequestOptions) => {
+      if (!failing) {
+        options.respond(true, { recovered: true });
+        return;
+      }
+      effects++;
+      if (phase === "handler") {
+        throw new GatewayOperatorAccessUnavailableError();
+      }
+      if (phase === "handler-response") {
+        options.respond(
+          false,
+          undefined,
+          errorShapeFromError("UNAVAILABLE", new GatewayOperatorAccessUnavailableError()),
+        );
+        return;
+      }
+      unavailable = phase === "response";
+      options.respond(true, { privateResult: "must not disclose" });
+    });
+    const fixture = createDispatchTestHarness({
+      extraHandlers: createLazyCoreHandlers({
+        methods: ["health"],
+        loadHandlers: async () => {
+          unavailable = failing && phase === "preparation";
+          assertCurrent();
+          return { health: handler };
+        },
+      }),
+    });
+    handleGatewayRequest.mockImplementation(dispatchGatewayRequest);
+    await fixture.dispatcher.dispatch(requestFrame("failed", "health"), client);
+    const beforeExecution = phase === "admission" || phase === "preparation";
+    expect(await fixture.awaitResponseFrame("failed")).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        retryable: beforeExecution,
+        details: { code: "OPERATOR_ACCESS_UNAVAILABLE" },
+      },
+    });
+    expect(effects).toBe(beforeExecution ? 0 : 1);
+    if (!beforeExecution) {
+      expect((await fixture.awaitResponseFrame("failed")).error?.message).toContain(
+        "may have completed",
+      );
+    }
+    expect((await fixture.awaitResponseFrame("failed")).payload).toBeUndefined();
+    expect(fixture.close).not.toHaveBeenCalled();
+    expect(grant.signal.aborted).toBe(false);
+    unavailable = false;
+    failing = false;
+    await fixture.dispatcher.dispatch(requestFrame("recovered", "health"), client);
+    expect(await fixture.awaitResponseFrame("recovered")).toMatchObject({
+      ok: true,
+      payload: { recovered: true },
+    });
+    expect(fixture.close).not.toHaveBeenCalled();
+  },
+);
+
 describe("authenticated WebSocket request cancellation", () => {
   it.each([
     ["plugins.reload", { plugins: [{ pluginId: "demo" }] }, false],
@@ -137,6 +222,32 @@ describe("authenticated WebSocket request cancellation", () => {
       expect(socket.listenerCount("close")).toBe(0);
     },
   );
+
+  it.each([
+    ["after the connection closed", true],
+    ["while the connection is open", false],
+  ] as const)("logs a handler failure %s at the matching level", async (_state, disconnect) => {
+    const { client, dispatcher, logGateway, awaitResponseFrame } = createDispatcher(controlUi);
+    const connection = new AbortController();
+    client.connectionSignal = connection.signal;
+    const gate = createRequestGate();
+    handleGatewayRequest.mockImplementation(async () => {
+      await gate.wait();
+      throw new Error("Gateway requester profile changed");
+    });
+    const dispatch = dispatcher.dispatch(requestFrame("catalog", "models.list"), client);
+    await gate.during(dispatch, () => {
+      if (disconnect) {
+        connection.abort();
+      }
+    });
+    expect(logGateway.error).toHaveBeenCalledTimes(disconnect ? 0 : 1);
+    expect(logGateway.debug).toHaveBeenCalledTimes(disconnect ? 1 : 0);
+    expect(await awaitResponseFrame("catalog")).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "Error: Gateway requester profile changed" },
+    });
+  });
 
   it("cancels only access-bound work after a grant ends, including after ordinary disconnect", async () => {
     const { registry, frames, waitForFrameCount, complete } = createPairedNode();

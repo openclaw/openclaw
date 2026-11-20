@@ -274,7 +274,16 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
         'process.stdout.write("raw-out");process.stderr.write("raw-err");process.exitCode=7;',
         { code: 7, termination: "exit", stdout: "raw-out", stderr: "raw-err" },
       ],
-      ["signal", 'process.kill(process.pid,"SIGTERM");', {}],
+      [
+        "signal",
+        'process.kill(process.pid,"SIGTERM");',
+        {
+          code: 1,
+          termination: "signal",
+          stdout: "",
+          stderr: expect.stringContaining("Command was terminated by SIGTERM"),
+        },
+      ],
       ["timeout", "setInterval(()=>{},10);", { code: 124, termination: "timeout" }],
       ["missing binary", "", { code: 1, termination: "error", errorCode: "ENOENT" }],
     ] as const)(
@@ -286,8 +295,8 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
           timeout: name === "timeout" ? 1000 : 10000,
           missing: name === "missing binary",
         });
-        if (name === "signal") {
-          // A child-requested signal stays uncertain and must retain both roots.
+        if (name === "signal" && !fs.existsSync(fixture.outcome)) {
+          // Unconfirmed signal cleanup must retain both roots without reporting settlement.
           expect(result).toMatchObject({
             code: 1,
             stderr: expect.stringContaining(
@@ -303,6 +312,18 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
           expect(fs.existsSync(fixture.outcome), result.stderr).toBe(true);
           expect(readJson(fixture.outcome)).toMatchObject(expected);
           expect(result.code, result.stderr).toBe(1);
+          const store = leaseStore(fixture);
+          for (const root of [fixture.a, fixture.b]) {
+            await expect
+              .poll(
+                () => {
+                  const admitted = store.acquire(root, randomUUID(), { kind: "update" });
+                  return admitted.kind === "acquired" && store.release(admitted.lease);
+                },
+                { timeout: 5000 },
+              )
+              .toBe(true);
+          }
         }
       },
       20000,

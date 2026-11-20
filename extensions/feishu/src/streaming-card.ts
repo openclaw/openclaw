@@ -5,7 +5,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { getFeishuUserAgent } from "./client.js";
-import { requestFeishuApi } from "./comment-shared.js";
+import { sendFeishuMessage } from "./message-send.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
 import {
   createFeishuPartialReplyDeliveryError,
@@ -43,6 +43,9 @@ type StreamingStartOptions = {
 const STREAMING_UPDATE_THROTTLE_MS = 160;
 const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
 const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
+// CardKit closes streaming_mode ten minutes after it was last enabled, then rejects
+// element writes with 200850 (timed out) or 300309 (closed).
+const STREAMING_CLOSED_ERROR = /\(code=(200850|300309)\)$/;
 
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
@@ -94,7 +97,8 @@ async function assertSuccessfulCardKitResponse(
   auditContext: string,
   action: string,
 ): Promise<void> {
-  if (!response.ok) {
+  // CardKit reports business errors such as a closed streaming window as HTTP 400 with a code.
+  if (!response.ok && response.status !== 400) {
     cancelUnreadResponseBody(response);
     throw new Error(`${action} failed with HTTP ${response.status}`);
   }
@@ -276,28 +280,9 @@ export class FeishuStreamingSession {
     // reliably routes streaming cards into Feishu topics, whereas
     // message.create with root_id may silently ignore root_id for card
     // references (card_id format).
-    const sendOptions = options ?? {};
-    const sendRes = await requestFeishuApi(
-      () =>
-        sendOptions.replyToMessageId
-          ? this.client.im.message.reply({
-              path: { message_id: sendOptions.replyToMessageId },
-              data: {
-                msg_type: "interactive",
-                content: cardContent,
-                ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
-              },
-            })
-          : this.client.im.message.create({
-              params: { receive_id_type: receiveIdType },
-              data: {
-                receive_id: receiveId,
-                msg_type: "interactive",
-                content: cardContent,
-                // The SDK omits root_id from its types, but Feishu accepts it at runtime.
-                ...(sendOptions.rootId ? { root_id: sendOptions.rootId } : {}),
-              },
-            }),
+    const sendRes = await sendFeishuMessage(
+      { client: this.client, receiveId, receiveIdType },
+      { ...options, content: cardContent, msgType: "interactive" },
       "Send card failed",
     );
     if (sendRes.code !== 0) {
@@ -316,6 +301,60 @@ export class FeishuStreamingSession {
     this.log?.(`Started streaming: cardId=${cardId}${messageId ? `, messageId=${messageId}` : ""}`);
   }
 
+  // Re-enabling streaming_mode in card settings reopens a closed window on the same card.
+  // Setting it while already on does not restart the window, so turn it off first.
+  private async putElement(
+    element: string,
+    operation: string,
+    action: string,
+    body: (sequence: number) => Record<string, unknown>,
+    token?: string,
+  ): Promise<void> {
+    const state = this.state!;
+    const put = () => {
+      state.sequence += 1;
+      return this.requestCardKit(
+        `/${state.cardId}/elements/${element}`,
+        operation,
+        "PUT",
+        () => body(state.sequence),
+        (response, auditContext) => assertSuccessfulCardKitResponse(response, auditContext, action),
+        token,
+      );
+    };
+    try {
+      await put();
+    } catch (error) {
+      if (!STREAMING_CLOSED_ERROR.test(String(error))) {
+        throw error;
+      }
+      for (const streaming_mode of [false, true]) {
+        await this.updateSettings({ streaming_mode }, "reopen", "Reopen streaming card");
+      }
+      await put();
+    }
+  }
+
+  private async updateSettings(
+    config: Record<string, unknown>,
+    operation: string,
+    action: string,
+  ): Promise<void> {
+    const state = this.state!;
+    state.sequence += 1;
+    await this.requestCardKit(
+      `/${state.cardId}/settings`,
+      operation,
+      "PATCH",
+      () => ({
+        settings: JSON.stringify({ config }),
+        sequence: state.sequence,
+        uuid: `c_${state.cardId}_${state.sequence}`,
+      }),
+      (response, auditContext) => assertSuccessfulCardKitResponse(response, auditContext, action),
+    );
+  }
+
   private async writeCardContent(
     text: string,
     replace: boolean,
@@ -324,25 +363,18 @@ export class FeishuStreamingSession {
     if (!this.state) {
       return false;
     }
-    this.state.sequence += 1;
     try {
-      await this.requestCardKit(
-        `/${this.state.cardId}/elements/content${replace ? "" : "/content"}`,
+      await this.putElement(
+        replace ? "content" : "content/content",
         replace ? "replace" : "update",
-        "PUT",
-        () => ({
+        replace ? "Replace card content" : "Update card content",
+        (sequence) => ({
           ...(replace
             ? { element: JSON.stringify({ tag: "markdown", content: text, element_id: "content" }) }
             : { content: text }),
-          sequence: this.state!.sequence,
-          uuid: `${replace ? "r" : "s"}_${this.state!.cardId}_${this.state!.sequence}`,
+          sequence,
+          uuid: `${replace ? "r" : "s"}_${this.state!.cardId}_${sequence}`,
         }),
-        (response, auditContext) =>
-          assertSuccessfulCardKitResponse(
-            response,
-            auditContext,
-            replace ? "Replace card content" : "Update card content",
-          ),
       );
       return true;
     } catch (error) {
@@ -422,21 +454,17 @@ export class FeishuStreamingSession {
     if (!this.state || !this.state.hasNote) {
       return;
     }
-    this.state.sequence += 1;
-    const path = `/${this.state.cardId}/elements/note/content`;
     // Token failures propagate; only the note request itself is best effort.
     const token = await getToken(this.creds);
-    await this.requestCardKit(
-      path,
+    await this.putElement(
+      "note/content",
       "note-update",
-      "PUT",
-      () => ({
+      "Update card note",
+      (sequence) => ({
         content: `<font color='grey'>${note}</font>`,
-        sequence: this.state!.sequence,
-        uuid: `n_${this.state!.cardId}_${this.state!.sequence}`,
+        sequence,
+        uuid: `n_${this.state!.cardId}_${sequence}`,
       }),
-      (response, auditContext) =>
-        assertSuccessfulCardKitResponse(response, auditContext, "Update card note"),
       token,
     ).catch((e: unknown) => this.log?.(`Note update failed: ${String(e)}`));
   }
@@ -479,25 +507,12 @@ export class FeishuStreamingSession {
 
     // A rejected final write must not advertise content that CardKit never accepted.
     const acceptedText = this.state.sentText;
-    this.state.sequence += 1;
     let closeError: unknown;
     try {
-      await this.requestCardKit(
-        `/${this.state.cardId}/settings`,
+      await this.updateSettings(
+        { streaming_mode: false, summary: { content: truncateSummary(acceptedText) } },
         "close",
-        "PATCH",
-        () => ({
-          settings: JSON.stringify({
-            config: {
-              streaming_mode: false,
-              summary: { content: truncateSummary(acceptedText) },
-            },
-          }),
-          sequence: this.state!.sequence,
-          uuid: `c_${this.state!.cardId}_${this.state!.sequence}`,
-        }),
-        (response, auditContext) =>
-          assertSuccessfulCardKitResponse(response, auditContext, "Close streaming card"),
+        "Close streaming card",
       );
     } catch (error: unknown) {
       closeError = error;

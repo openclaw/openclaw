@@ -68,8 +68,8 @@ it.each(["access", "recovery", "session"])("retains the composer behind %s", asy
   expect(host.chatReplyTarget).toEqual(replyTarget);
   expect(host.request).not.toHaveBeenCalled();
   const error =
-    hold === "session" ? "The active session is unavailable; refresh and try again." : earlierError;
-  expect(host).toMatchObject({ chatError: error, lastError: error ?? null });
+    hold === "session" ? "Couldn’t open the active session. Refresh and try again." : earlierError;
+  expect([host.chatError, host.lastError]).toEqual([error, error ?? null]);
   if (hold === "recovery") {
     readiness!.mockReturnValue(true);
     await handleSendChat(host);
@@ -167,7 +167,7 @@ it.each(["initial-turn", "recovery-scope", "send-access"])(
     }
     if (hold === "recovery-scope") {
       expect(retained[0]?.sendError).toBe(
-        "Chat settings update was interrupted. Review and retry when ready.",
+        "Couldn’t update session settings. The update was interrupted. Review the settings before trying again.",
       );
       expect(host.chatQueue).toEqual([]);
       readiness.mockReturnValue(true);

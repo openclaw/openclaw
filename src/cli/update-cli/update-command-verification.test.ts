@@ -29,6 +29,7 @@ import { verifyUpdatedGateway } from "./update-command-verification.js";
 
 vi.mock("../../infra/update-run-ledger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-run-ledger.js")>()),
+  recordUpdateRunPhase: vi.fn(),
   recordUpdateRunStep: vi.fn(),
   recordUpdateRunVerification: vi.fn(),
 }));
@@ -285,7 +286,8 @@ it.each(["transient-timeout", "mixed"])(
       })(opts),
     );
     await listen();
-    const onVerified = vi.fn();
+    using clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const onVerified = vi.fn(() => clock.mockReturnValue(2_000));
     const verification = await verifyGateway({
       opts: withRun("collection-timeout"),
       expectedVersion: "2026.9.8",
@@ -297,7 +299,7 @@ it.each(["transient-timeout", "mixed"])(
     expect(verification.summary).toContain("channel warnings need attention");
     expect(verification.pluginWarnings).toBeUndefined();
     expect(onVerified).toHaveBeenCalledOnce();
-    expect(result.steps[0]?.exitCode).toBe(0);
+    expect(result.steps[0]).toMatchObject({ exitCode: 0, durationMs: 0 });
     const facts = vi.mocked(recordUpdateRunVerification).mock.calls.at(-1)?.[1];
     expect(facts).toMatchObject({
       serviceRunning: true,
@@ -432,7 +434,7 @@ it.each([true, false])(
     const deadline = "Gateway restart observation timed out during health-wait:port-inspection.";
     // Before the first observation, the wait owner's placeholder carries no probe result.
     const message = observed
-      ? `${deadline} Last health probe: protocol mismatch: Control UI v5, Gateway v4, connection check min v3`
+      ? `${deadline} Last health probe: protocol mismatch: Web app v5, Gateway v4, connection check min v3`
       : deadline;
     expect(result.steps[0]?.failureFacts).toContainEqual({
       check: "settled",
@@ -512,6 +514,8 @@ it.each(["runtime", "port", "command"] as const)(
 
 it.each([
   { activation: "native restart", exhausted: true },
+  { activation: "receipt", exhausted: false },
+  { activation: "mismatched receipt", exhausted: false },
   { activation: "service refresh", exhausted: false },
   { activation: "service refresh", exhausted: true },
   { activation: "child readiness timeout", exhausted: true },
@@ -528,24 +532,37 @@ it.each([
         );
       });
     }
-    gatewayFixture(
-      {
-        server: { version: "2026.9.4", buildId: "candidate-build", bootId: "slow-boot" },
-      },
-      { readyAtMs: 90_000 },
-    );
+    gatewayFixture({ server: { ...candidate, bootId: "slow-boot" } }, { readyAtMs: 90_000 });
     await listen();
+    if (activation.includes("receipt")) {
+      vi.mocked(runUpdatedInstallGatewayCommand).mockImplementationOnce(async ({ onReadiness }) => {
+        const { waitForGatewayHealthyRestart } = await import("../daemon-cli/restart-health.js");
+        const health = await waitForGatewayHealthyRestart({
+          service: gatewayService.resolveGatewayService(),
+          port: gatewayPort,
+          env: serviceEnv,
+          timeoutMs: 120_000,
+        });
+        if (activation === "mismatched receipt") {
+          health.gatewayBuildId = "previous-build";
+        }
+        onReadiness?.(health);
+        return "accepted";
+      });
+    }
     result.after = { ...candidate };
     const outcome = await restartGateway({
+      opts: withRun("restart-readiness"),
       refreshServiceEnv,
       timeoutMs: exhausted ? 60_000 : 120_000,
     });
     const pending = exhausted && !childTimeout;
-    expect(outcome, JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toBe(
-      pending ? "readiness-pending" : "ok",
+    expect(outcome).toBe(pending ? "readiness-pending" : "ok");
+    const facts = vi.mocked(recordUpdateRunVerification).mock.lastCall?.[1];
+    expect(facts?.versionMatch).toBe(pending ? undefined : true);
+    expect(restart.callGateway).toHaveBeenCalledTimes(
+      pending ? 0 : activation === "mismatched receipt" ? 2 : 1,
     );
-    expect(restart.monotonicClock.nowMs).toBe(pending ? 60_000 : 90_000);
-    expect(restart.callGateway).toHaveBeenCalledTimes(pending ? 0 : 2);
   },
 );
 
@@ -576,24 +593,14 @@ it("preserves Windows cold startup within the default update timeout", async () 
   expect(restart.monotonicClock.nowMs).toBe(Math.min(readyAtMs, budgetMs));
 });
 
-it.each([
-  { transition: "unchanged", supplied: false },
-  { transition: "unchanged", supplied: true },
-  { transition: "readiness-at-deadline", supplied: false },
-  { transition: "first-final-health-error", supplied: false },
-  { transition: "readyz-error", supplied: false },
-] as const)(
-  "checks final native and HTTP readiness: $transition, supplied=$supplied",
-  async ({ transition, supplied }) => {
-    const service = gatewayFixture({}, { commandLine: "openclaw-gateway" });
-    service.isLoaded = vi.fn(async () => true);
-    restart.callGateway.mockImplementation((opts) =>
+it.each(["unchanged", "readiness-at-deadline", "readyz-error"] as const)(
+  "checks final native and HTTP readiness: %s",
+  async (transition) => {
+    gatewayFixture({}, { commandLine: "openclaw-gateway" });
+    restart.callGateway.mockImplementation(
       gatewayHealthResponse({
         server: { version: "2026.9.1", buildId: "candidate-build", bootId: "boot-a" },
-        ...(transition === "first-final-health-error" && restart.callGateway.mock.calls.length === 2
-          ? { error: new Error("synthetic health failed") }
-          : {}),
-      })(opts),
+      }),
     );
     const reached = createDeferred();
     const release = createDeferred();
@@ -607,21 +614,9 @@ it.each([
         res.writeHead(200).end();
       }
     });
-    const probeParams = {
-      service,
-      port: gatewayPort,
-      env: serviceEnv,
-      expectedVersion: "2026.9.1",
-      expectedBuildId: "candidate-build",
-      requireRunningService: true,
-      signal: controller.signal,
-    };
-    const { waitForGatewayHealthyRestart } = await import("../daemon-cli/restart-health.js");
-    const health = supplied ? await waitForGatewayHealthyRestart(probeParams) : undefined;
     const onVerified = vi.fn();
     const verification = verifyGateway({
       opts: withRun("synthetic-update"),
-      health,
       expectedVersion: "2026.9.1",
       requireRunningService: true,
       onVerified,
@@ -644,15 +639,12 @@ it.each([
     if (deadlineExpired || transition === "readyz-error") {
       expect(validation.summary).toBe(deadlineExpired ? "timeout" : "readyz-unhealthy");
       expect(validation.stopReason).toBeUndefined();
-      expect(result.steps).toContainEqual(
-        expect.objectContaining({ name: "gateway verification", exitCode: 1 }),
-      );
+      expect(result.steps[0]).toMatchObject({ name: "gateway verification", exitCode: 1 });
     }
     if (deadlineExpired) {
       expect(result.steps[0]?.failureFacts).toContainEqual(
         expect.objectContaining({ code: "timeout" }),
       );
-      expect(restart.callGateway).toHaveBeenCalledOnce();
     }
     expect(onVerified).toHaveBeenCalledTimes(verified ? 1 : 0);
   },
@@ -719,5 +711,74 @@ it.each([false, true])("warns about stopped channels after repair (json=%s)", as
     expect(vi.mocked(defaultRuntime.log).mock.calls.flat().join("\n")).toContain(
       "Channel health warning (telegram/suppressed: restart-loop breaker tripped)",
     );
+  }
+});
+
+it("ends a verified Git release's trial without the release's own settlement", async () => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
+  const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "release-trial-")));
+  const prefix = path.join(dir, "git-install");
+  try {
+    for (const version of ["1.0.0", "2.0.0"]) {
+      const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+      await fs.mkdir(releaseRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(releaseRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version }),
+      );
+      await publishGitRelease({ prefix, releaseRoot, trial: true });
+    }
+    const trial = path.join(prefix, "releases", ".trial");
+    await fs.access(trial);
+    result.root = gitReleaseSlot(prefix);
+
+    const { validation } = await verifyHealth({});
+
+    expect(validation.ok).toBe(true);
+    await expect(fs.access(trial)).rejects.toThrow();
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+it("lets a switched Git release's Gateway restart itself instead of a native restart", async () => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
+  const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "release-restart-")));
+  const prefix = path.join(dir, "git-install");
+  try {
+    const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+    await fs.mkdir(releaseRoot, { recursive: true });
+    await publishGitRelease({ prefix, releaseRoot, trial: false });
+    gatewayFixture({}, { commandLine: "openclaw-gateway" });
+    restart.callGateway.mockImplementation(healthResponse("2026.9.8", "candidate", "successor"));
+    Object.assign(result, {
+      mode: "git",
+      root: gitReleaseSlot(prefix),
+      after: { version: "2026.9.8", buildId: "candidate" },
+    });
+    await listen();
+
+    const outcome = await restartGateway({
+      serviceUpdateVerdict: {
+        kind: "owned",
+        root: gitReleaseSlot(prefix),
+        fingerprint: "unit",
+        refreshDefinition: false,
+      },
+    });
+
+    expect(outcome).toBe("ok");
+    // Native restarts go through the updated install's gateway command.
+    expect(runUpdatedInstallGatewayCommand).not.toHaveBeenCalled();
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
   }
 });

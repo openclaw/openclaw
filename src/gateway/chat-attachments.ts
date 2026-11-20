@@ -241,7 +241,7 @@ type UnsupportedAttachmentReason =
   | "unsupported-non-image"
   | "non-image-too-large-for-sandbox";
 
-export class UnsupportedAttachmentError extends Error {
+class UnsupportedAttachmentError extends Error {
   readonly reason: UnsupportedAttachmentReason;
   constructor(reason: UnsupportedAttachmentReason, message: string) {
     super(message);

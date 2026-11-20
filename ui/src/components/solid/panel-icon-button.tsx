@@ -1,27 +1,31 @@
 import type { JSX } from "@solidjs/web";
+import { IconButton, type IconButtonProps } from "./icon-button.tsx";
 
+/** A panel header action: an IconButton at the rail's 28px box. */
 export function PanelIconButton(props: {
   label: string;
-  icon: JSX.Element;
+  icon: IconButtonProps["icon"];
   onClick: () => void;
-  class: JSX.IntrinsicElements["button"]["class"];
-  title?: string;
+  class: JSX.ClassValue;
+  /** Tooltip copy; `false` when the icon already says what the button does. */
+  title?: string | false;
   disabled?: boolean;
   busy?: boolean;
+  pressed?: boolean;
   newTab?: boolean;
 }) {
   return (
-    <button
+    <IconButton
+      size={28}
       class={props.class}
-      type="button"
+      icon={props.icon}
+      label={props.label}
+      tooltip={props.title ?? props.label}
       data-new-tab-action={props.newTab ? "" : undefined}
-      title={props.title ?? props.label}
-      aria-label={props.label}
-      aria-busy={props.busy === undefined ? undefined : props.busy ? "true" : "false"}
+      pressed={props.pressed}
       disabled={props.disabled}
+      busy={props.busy}
       onClick={() => props.onClick()}
-    >
-      {props.icon}
-    </button>
+    />
   );
 }

@@ -77,7 +77,7 @@ it("disables both close gestures without disabling selection", () => {
   tab.dispatchEvent(new MouseEvent("auxclick", { button: 1 }));
   tab.click();
   expect(onClose).not.toHaveBeenCalled();
-  expect(onSelect).toHaveBeenCalledExactlyOnceWith(second.id);
+  expect(onSelect).toHaveBeenCalledExactlyOnceWith(second.id, expect.any(MouseEvent));
   update([first, { ...second, label: "Renamed second" }], "b");
   expect(button("b")).toBe(tab);
   expect(tab).toMatchObject({ textContent: expect.stringContaining("Renamed second") });

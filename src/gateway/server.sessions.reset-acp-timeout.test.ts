@@ -88,15 +88,26 @@ describe("ACP reset", () => {
       runtimeOptions: { runtimeMode: "auto", timeoutSeconds: 30 },
     });
 
-  function accelerateAcpCleanupTimeout() {
-    const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
-    return vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation(((
-        callback: (...args: unknown[]) => void,
-        delay?: number,
-        ...args: unknown[]
-      ) => nativeSetTimeout(callback, delay === 15_000 ? 0 : delay, ...args)) as typeof setTimeout);
+  async function accelerateAcpCleanupTimeout() {
+    const acpCleanup = await import("./session-reset-acp.js");
+    const closeRuntime = acpCleanup.closeAcpRuntimeForSession;
+    return vi.spyOn(acpCleanup, "closeAcpRuntimeForSession").mockImplementation(async (params) => {
+      // Session preemption also uses 15 seconds; only shorten ACP's cleanup clock.
+      const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+      const timeout = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation(((
+          callback: (...args: unknown[]) => void,
+          delay?: number,
+          ...args: unknown[]
+        ) =>
+          nativeSetTimeout(callback, delay === 15_000 ? 0 : delay, ...args)) as typeof setTimeout);
+      try {
+        return await closeRuntime(params);
+      } finally {
+        timeout.mockRestore();
+      }
+    });
   }
 
   async function seedAcpSession() {
@@ -220,7 +231,7 @@ describe("ACP reset", () => {
       const stalled = createDeferredCore();
       const cleanup = acpManagerMocks[step];
       cleanup.mockImplementation(async () => await stalled.promise);
-      const timeoutSpy = accelerateAcpCleanupTimeout();
+      const timeoutSpy = await accelerateAcpCleanupTimeout();
 
       try {
         const reset = await directSessionReq<{ ok: true }>("sessions.reset", { key: "main" });
@@ -304,7 +315,7 @@ describe("ACP reset", () => {
       const before = readSession(storePath);
       const error =
         failure === "owner-repair" ? ownerRepairError() : new Error("force discard failed");
-      const timeoutSpy = accelerateAcpCleanupTimeout();
+      const timeoutSpy = await accelerateAcpCleanupTimeout();
       const stalled = createDeferredCore();
       try {
         if (failure === "owner-repair") {

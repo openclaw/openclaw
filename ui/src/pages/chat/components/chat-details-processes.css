@@ -13,7 +13,7 @@
 .chat-details-processes__row {
   position: relative;
   min-width: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
 
   &:is(:hover, :focus-within) {
     background: var(--bg-hover);
@@ -22,6 +22,16 @@
   > :where(button):focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
+  }
+
+  &[data-stopping] {
+    .chat-details-processes__badge {
+      visibility: hidden;
+    }
+
+    .chat-details-processes__stop {
+      background: none;
+    }
   }
 
   &:is(:hover, :focus-within, [data-stopping]) {
@@ -87,12 +97,11 @@
 }
 
 .chat-details-processes__spinner {
+  --spinner-art: var(--spinner-mask-small);
   display: block;
-  box-sizing: border-box;
   width: 8px;
   height: 8px;
-  border: 1.25px solid color-mix(in srgb, var(--accent) 30%, var(--details-surface, var(--card)));
-  border-top-color: var(--accent);
+  color: var(--accent);
   border-radius: 50%;
   corner-shape: round;
   animation: btn-spinner-spin 1.5s linear infinite;
@@ -100,6 +109,10 @@
   @media (prefers-reduced-motion: reduce) {
     animation: none;
   }
+}
+
+.chat-details-processes__stop .chat-details-processes__spinner {
+  color: var(--muted);
 }
 
 .chat-details-processes__name {
@@ -173,6 +186,12 @@
   font-variant-numeric: tabular-nums;
   padding: var(--details-row-padding-block, 4px) var(--details-row-padding, 4px);
   cursor: var(--cursor-action);
+}
+
+/* Text link: outranks the shared Details button hover background. */
+.chat-details .chat-details-processes__view-all:is(:hover, :focus-visible) {
+  background: none;
+  color: var(--text);
 }
 
 .chat-details-processes__envelope {

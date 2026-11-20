@@ -12,6 +12,7 @@ import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import { fileURLToPath } from "node:url";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const iterations = Number(process.argv[2] ?? 2000);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
@@ -45,12 +46,7 @@ for (let i = 0; i < 100; i++) {
 global.gc();
 const initialMemory = process.memoryUsage();
 const inspector = new Session();
-inspector.connect();
-await inspector.post("HeapProfiler.startSampling", {
-  samplingInterval: 32768,
-  includeObjectsCollectedByMajorGC: true,
-  includeObjectsCollectedByMinorGC: true,
-});
+await startCollectedHeapSampling(inspector, 32768);
 let copiedBytes = 0;
 let concatenatedBytes = 0;
 const allocate = Buffer.allocUnsafeSlow.bind(Buffer);

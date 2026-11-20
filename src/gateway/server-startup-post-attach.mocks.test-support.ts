@@ -2,6 +2,10 @@ import { vi } from "vitest";
 import type { PluginServicesHandle } from "../plugins/services.js";
 
 const postAttachMocks = vi.hoisted(() => {
+  const discoverResume: typeof import("./session-restart-resume.js").resumeMarkedSessions = async ({
+    onPrepared,
+  }) => onPrepared?.();
+  const resumeMarkedSessions = vi.fn(discoverResume);
   const commitInternalHooks = vi.fn(() => true);
   const startupHookEvent = { type: "gateway", action: "startup", sessionKey: "gateway:startup" };
   const updateCheck = {
@@ -32,7 +36,8 @@ const postAttachMocks = vi.hoisted(() => {
     createGatewayUpdateCheck: vi.fn(() => updateCheck),
     logGatewayStartup: vi.fn(),
     activateSubagentRegistry: vi.fn(async () => {}),
-    resumeMarkedSessions: vi.fn(async () => {}),
+    resumeMarkedSessions,
+    resetResume: () => resumeMarkedSessions.mockReset().mockImplementation(discoverResume),
     getAcpRuntimeBackend: vi.fn<(id?: string) => unknown>(() => null),
     reconcilePendingSessionIdentities: vi.fn(async () => ({ checked: 0, resolved: 0, failed: 0 })),
     isCliProvider: vi.fn(() => false),
@@ -47,7 +52,8 @@ const postAttachMocks = vi.hoisted(() => {
     refreshPreparedModelRuntimeSnapshots: vi.fn<
       typeof import("../agents/prepared-model-runtime.js").refreshPreparedModelRuntimeSnapshots
     >(async () => {}),
-    prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
+    loadEmbeddedAgentRuntime: vi.fn(async () => {}),
+    loadSessionUpdatesRuntime: vi.fn(async () => {}),
     scheduleGatewayHandlerPrewarm: vi.fn(() => ({ stop: vi.fn() })),
   };
 });
@@ -57,6 +63,12 @@ export { postAttachMocks };
 // mock-isolation: Keep persisted subagent restoration and registry timers outside startup ordering.
 vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   activateSubagentRegistry: postAttachMocks.activateSubagentRegistry,
+}));
+
+// mock-isolation: Durable persistence and observation own workers outside this startup fixture.
+vi.mock("../agents/bash-process-durable.js", () => ({
+  initializeDurableProcesses: vi.fn(async () => {}),
+  disposeDurableProcesses: vi.fn(async () => {}),
 }));
 
 // mock-isolation: This worker-free ordering fixture has no pending agent deletions.
@@ -128,7 +140,7 @@ vi.mock("./server-startup-log.js", () => ({
 }));
 
 // mock-isolation: Control update-check lifetime without network refreshes or persistent update campaigns.
-vi.mock("../infra/update-startup.js", () => ({
+vi.mock("../infra/update-startup-scheduler.js", () => ({
   createGatewayUpdateCheck: postAttachMocks.createGatewayUpdateCheck,
 }));
 
@@ -144,6 +156,7 @@ vi.mock("./server-startup-model-runtime.js", async (importOriginal) => {
 // mock-isolation: Sidecar scheduling does not own catalog or native-runtime preparation.
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  prewarmDefaultNativeModelCatalog: vi.fn(async () => {}),
   loadPreparedModelCatalogOwnerSnapshot: async (options: unknown) => ({
     modelCatalog: { entries: await postAttachMocks.loadModelCatalog(options) },
   }),
@@ -164,10 +177,18 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
 }));
 
 // mock-isolation: Observe reply prewarming without dispatching turns or loading a native agent runtime.
-vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
-  getReplyFromConfig: vi.fn(),
-  prewarmConfigDrivenReplyRuntime: postAttachMocks.prewarmConfigDrivenReplyRuntime,
+vi.mock("../auto-reply/reply/get-reply-run-helpers.js", () => ({
+  loadEmbeddedAgentRuntime: postAttachMocks.loadEmbeddedAgentRuntime,
+  loadSessionUpdatesRuntime: postAttachMocks.loadSessionUpdatesRuntime,
+  prewarmReplyRunRuntimes: () => {
+    throw new Error("channel reply runner prewarmed during Gateway startup");
+  },
 }));
+
+// mock-isolation: Agent RPC startup must not load the channel reply resolver to prewarm shared runtimes.
+vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => {
+  throw new Error("channel reply resolver loaded during Gateway startup");
+});
 
 // mock-isolation: Startup owns the import, not WebSocket request execution.
 vi.mock("./server/ws-connection/message-handler.js", () => ({

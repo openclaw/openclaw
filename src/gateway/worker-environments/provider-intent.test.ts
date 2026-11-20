@@ -45,6 +45,15 @@ describe("prepared worker intent admission", () => {
     return { owner, provider, projectPath, prepareNodeArtifacts, prepare, create };
   }
 
+  it("honors profile setup opt-out over an explicit preparation request", async () => {
+    const f = await fixture(true);
+    support.testState.config.cloudWorkers!.profiles!.development!.settings!.runSetupScript = false;
+    const intent = await f.prepare({ runSetupScript: true });
+    expect(intent.profileSnapshot.project).toMatchObject({
+      preparation: { runSetupScript: false },
+    });
+  });
+
   it("keeps empty workspaces cold on providers with only setup commands", async () => {
     const f = await fixture();
     f.provider.supportsProjectPreparation = () => false;
@@ -58,7 +67,12 @@ describe("prepared worker intent admission", () => {
   it("admits exact local source and OS without allocating, and retains reusable facts after caller abort", async () => {
     const f = await fixture();
     const controller = new AbortController();
-    const options = { machineClass: "large", os: "linux", signal: controller.signal };
+    const options = {
+      machineClass: "large",
+      os: "linux",
+      signal: controller.signal,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+    };
     const intent = await f.prepare(options);
     expect(intent.profileSnapshot.project?.preparation?.target).toMatchObject({
       machineClass: "large",

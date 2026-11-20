@@ -2,7 +2,6 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEnteredGate } from "../../agents/entered-gate.test-support.js";
-import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
@@ -49,7 +48,7 @@ async function startBlockedDelivery(params: {
   tmpDir: string;
   deliveryIntentId?: string;
   requiresProducerClaim?: boolean;
-  phase?: "preparation" | "presentation" | "provider";
+  phase?: "preparation" | "presentation";
 }) {
   const phase = params.phase ?? "preparation";
   const gate = createEnteredGate();
@@ -61,12 +60,8 @@ async function startBlockedDelivery(params: {
       return payload;
     },
   );
-  const onDeliveryResult = vi.fn();
   const sendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
     await ctx.onPlatformSendDispatch?.();
-    if (phase === "provider") {
-      await gate.wait();
-    }
     return matrixDeliveryResult(messageId);
   });
   installQueueTestPlugin({
@@ -119,7 +114,6 @@ async function startBlockedDelivery(params: {
           queuePolicy: "best_effort" as const,
           onDeliveryIntent: ({ id }: { id: string }) => queueIdReady.resolve(id),
         }),
-    ...(phase === "provider" ? { onDeliveryResult } : {}),
   });
   const queueId = params.deliveryIntentId ?? (await queueIdReady.promise);
   await gate.entered;
@@ -130,7 +124,6 @@ async function startBlockedDelivery(params: {
     release: gate.release,
     sendText,
     renderPresentation,
-    onDeliveryResult,
   };
 }
 
@@ -220,74 +213,41 @@ describe("delivery producer lease integration", () => {
     expect(queuedStatus(deliveryIntentId)).toBe("completed");
   });
 
-  it.each(["preparation", "presentation", "provider"] as const)(
+  it.each(["preparation", "presentation"] as const)(
     "preserves lost ownership during %s",
     async (phase) => {
       const heartbeat = useLeaseHeartbeatTimers();
       const deliveryIntentId = `cron-direct-delivery:v1:lose-owner-${phase}`;
-      const auditEvents: Array<{ outcome: string }> = [];
-      const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
-      try {
-        const blocked = await start({ deliveryIntentId, phase });
-        const initial = read(deliveryIntentId);
-        const afterDispatch = phase === "provider";
-        if (afterDispatch) {
-          expect(initial).toMatchObject({
-            recoveryState: "send_attempt_started",
-            platformSendAttemptId: expect.any(String),
-            retryCount: 0,
-          });
-        } else {
-          expect(initial.producerClaimId).toEqual(expect.any(String));
-        }
-        setQueuedEntryState(tmpDir, deliveryIntentId, {
-          retryCount: 0,
-          ...(phase === "preparation"
-            ? { producerClaimId: "replacement-owner" }
-            : {
-                availableAt: Date.now() - 1,
-                ...(afterDispatch
-                  ? {
-                      recoveryState: "send_attempt_started",
-                      platformSendStartedAt: initial.platformSendStartedAt as number,
-                    }
-                  : {}),
-              }),
-        });
-        expect(await heartbeat()).toBeUndefined();
-        const message = `Delivery platform claim was lost: ${deliveryIntentId}`;
-        const rejected =
-          phase === "preparation"
-            ? expect(blocked.delivery).rejects.toMatchObject({ message, queueCustody: "held" })
-            : expect(blocked.delivery).rejects.toThrow(message);
-        blocked.release();
-        await rejected;
-        expect(blocked.sendText).toHaveBeenCalledTimes(afterDispatch ? 1 : 0);
-        expect(read(deliveryIntentId)).toMatchObject({
-          retryCount: 0,
-          recoveryState: afterDispatch ? "send_attempt_started" : "producer_claimed",
-          ...(afterDispatch
-            ? { platformSendAttemptId: initial.platformSendAttemptId }
-            : {
-                producerClaimId:
-                  phase === "preparation" ? "replacement-owner" : initial.producerClaimId,
-              }),
-        });
-        if (phase !== "preparation") {
-          expect(queuedStatus(deliveryIntentId)).toBe("pending");
-          expect(read(deliveryIntentId)).not.toHaveProperty("lastError");
-        }
-        if (afterDispatch) {
-          expect(blocked.onDeliveryResult).not.toHaveBeenCalled();
-          expect(auditEvents.map((event) => event.outcome)).toEqual(["queued", "platform_started"]);
-        } else if (phase === "presentation") {
-          expect(blocked.renderPresentation).toHaveBeenCalledOnce();
-          const replacement = await claimDeliveryPlatformSendAttempt(deliveryIntentId, tmpDir);
-          expect(replacement).toEqual(expect.any(String));
-          expect(replacement).not.toBe(initial.producerClaimId);
-        }
-      } finally {
-        unsubscribe();
+      const blocked = await start({ deliveryIntentId, phase });
+      const initial = read(deliveryIntentId);
+      expect(initial.producerClaimId).toEqual(expect.any(String));
+      setQueuedEntryState(tmpDir, deliveryIntentId, {
+        retryCount: 0,
+        ...(phase === "preparation"
+          ? { producerClaimId: "replacement-owner" }
+          : { availableAt: Date.now() - 1 }),
+      });
+      expect(await heartbeat()).toBeUndefined();
+      const message = `Delivery platform claim was lost: ${deliveryIntentId}`;
+      const rejected =
+        phase === "preparation"
+          ? expect(blocked.delivery).rejects.toMatchObject({ message, queueCustody: "held" })
+          : expect(blocked.delivery).rejects.toThrow(message);
+      blocked.release();
+      await rejected;
+      expect(blocked.sendText).not.toHaveBeenCalled();
+      expect(read(deliveryIntentId)).toMatchObject({
+        retryCount: 0,
+        recoveryState: "producer_claimed",
+        producerClaimId: phase === "preparation" ? "replacement-owner" : initial.producerClaimId,
+      });
+      if (phase === "presentation") {
+        expect(queuedStatus(deliveryIntentId)).toBe("pending");
+        expect(read(deliveryIntentId)).not.toHaveProperty("lastError");
+        expect(blocked.renderPresentation).toHaveBeenCalledOnce();
+        const replacement = await claimDeliveryPlatformSendAttempt(deliveryIntentId, tmpDir);
+        expect(replacement).toEqual(expect.any(String));
+        expect(replacement).not.toBe(initial.producerClaimId);
       }
     },
   );

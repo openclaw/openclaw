@@ -1,5 +1,7 @@
 import type { ChildProcess } from "node:child_process";
+import childProcess from "node:child_process";
 import { EventEmitter, once } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,6 +14,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { executeGitCommand, executeGitCommandBuffered } from "../infra/git-exec.js";
+import { createMainThreadStallMonitor } from "../infra/main-thread-stall.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { spawnCommand } from "./exec-spawn.js";
 import { prepareOomScoreAdjustedSpawn } from "./linux-oom-score.js";
@@ -27,6 +30,40 @@ import {
 import { spawnProcess, spawnAndWait } from "./spawn-utils.js";
 
 describe("spawnAndWait", () => {
+  it("attributes native launch stalls without profiling or counting child lifetime", async () => {
+    let now = 0;
+    const monitor = createMainThreadStallMonitor(() => now);
+    const nativeSpawn = childProcess.spawn;
+    const delayedSpawn = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+      now += 1_500;
+      return nativeSpawn(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      const child = spawnProcess(process.execPath, ["-e", ""], { stdio: "ignore" }, (launch) => {
+        now += 5_000;
+        const result = launch();
+        now += 5_000;
+        return result;
+      });
+      now += 5_000;
+      expect((await once(child, "close"))[0]).toBe(0);
+      expect(monitor.drain().stalls).toEqual([
+        {
+          task: "process:spawn:native",
+          startedAt: 5_000,
+          endedAt: 6_500,
+          elapsedMs: 1_500,
+          taskMs: 1_500,
+        },
+      ]);
+    } finally {
+      delayedSpawn.mockRestore();
+      syncBuiltinESMExports();
+      monitor.stop();
+    }
+  });
+
   it("rejects ENOENT from a real missing executable", async () => {
     await withTempDir("openclaw-spawn-missing-", async (dir) => {
       await expect(
@@ -85,7 +122,10 @@ describe("child-process spawn diagnostics", () => {
     await Promise.all([
       executeGitCommand(process.cwd(), ["--version"], { operation: "project.clone" }),
       executeGitCommandBuffered(process.cwd(), ["--version"], { operation: "publication" }),
-      executeGitCommand(process.cwd(), ["--version"], { lowerPriority: true }),
+      executeGitCommand(process.cwd(), ["--version"], {
+        lowerPriority: true,
+        idleIoPriority: true,
+      }),
       once(spawnProcess("git", ["--version"], { stdio: "ignore" }), "close"),
       requireWorkspaceResultGit(process.cwd(), ["--version"]),
       withGitProcessOperation("workspace.result-cleanup", () =>
@@ -300,28 +340,35 @@ describe("child-process spawn diagnostics", () => {
     expect(JSON.stringify(events)).not.toContain("private");
   });
 
-  it("attributes owner-prepared OOM shims to their logical targets", () => {
-    for (const [command, args] of [
-      ["git", ["status"]],
-      ["node", ["-e", "private code"]],
-    ] as const) {
-      const prepared = prepareOomScoreAdjustedSpawn(command, args, {
-        platform: "linux",
-        env: {},
-        shellAvailable: () => true,
-      });
-      const child = new EventEmitter() as ChildProcess;
-      recordChildProcessSpawn(prepared.command, child, undefined, prepared.args);
-      child.emit("spawn");
-    }
-    now = 60_000;
-    emitChildProcessSpawnSample();
-    expect(events).toEqual([
-      expect.objectContaining({ family: "git", operation: "unscoped.status", count: 1 }),
-      expect.objectContaining({ family: "node", operation: "unscoped.runtime", count: 1 }),
-    ]);
-    expect(JSON.stringify(events)).not.toContain("private");
-  });
+  it.each([
+    ["git", ["status"]],
+    ["ionice", ["-c", "3", "nice", "-n", "10", "git", "status"]],
+    ["taskpolicy", ["-b", "nice", "-n", "10", "git", "status"]],
+  ] as const)(
+    "attributes owner-prepared OOM shims around %s to their logical targets",
+    (gitCommand, gitArgs) => {
+      for (const [command, args] of [
+        [gitCommand, gitArgs],
+        ["node", ["-e", "private code"]],
+      ] as const) {
+        const prepared = prepareOomScoreAdjustedSpawn(command, args, {
+          platform: "linux",
+          env: {},
+          shellAvailable: () => true,
+        });
+        const child = new EventEmitter() as ChildProcess;
+        recordChildProcessSpawn(prepared.command, child, undefined, prepared.args);
+        child.emit("spawn");
+      }
+      now = 60_000;
+      emitChildProcessSpawnSample();
+      expect(events).toEqual([
+        expect.objectContaining({ family: "git", operation: "unscoped.status", count: 1 }),
+        expect.objectContaining({ family: "node", operation: "unscoped.runtime", count: 1 }),
+      ]);
+      expect(JSON.stringify(events)).not.toContain("private");
+    },
+  );
 
   it.each([
     [

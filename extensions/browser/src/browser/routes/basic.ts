@@ -1,6 +1,7 @@
 import { redactCdpUrl } from "../cdp.helpers.js";
 import { snapshotAria } from "../cdp.js";
 import { getChromeMcpPid, takeChromeMcpSnapshot } from "../chrome-mcp.js";
+import { getBrowserExecutableError } from "../chrome.executable-probe.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { getCachedChromeGraphicsDiagnostics } from "../chrome.graphics.js";
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
@@ -17,10 +18,7 @@ import { handleRouteError, readBody, resolveProfileContext } from "./agent.share
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, runProfileRouteOperation, toBoolean, toStringOrEmpty } from "./utils.js";
 
-const STATUS_CDP_HTTP_TIMEOUT_MS = 300;
 const STATUS_CDP_TRANSPORT_TIMEOUT_MS = 600;
-const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = 7_000;
-const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
 
 async function sendBasicJsonResponse(res: BrowserResponse, run: () => Promise<unknown>) {
   try {
@@ -91,6 +89,7 @@ async function buildBrowserStatus(
   ctx: BrowserRouteContext,
   profileCtx: ProfileContext,
   signal: AbortSignal,
+  inspectGraphics = false,
 ) {
   signal.throwIfAborted();
   let current: ReturnType<typeof ctx.state>;
@@ -106,22 +105,14 @@ async function buildBrowserStatus(
   let cdpReady: boolean;
   let pageReady = false;
   if (capabilities.usesChromeMcp) {
-    const deadlineMs = performance.now() + STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS;
-    cdpReady = await profileCtx.isTransportAvailable(
-      STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS,
-      signal,
-      {
-        timeoutMs: () => Math.max(1, deadlineMs - performance.now()),
-        onResult: (tabCount) => (pageReady = tabCount !== null),
-      },
-    );
+    cdpReady = await profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS, signal, {
+      onResult: (tabCount) => (pageReady = tabCount !== null),
+    });
     cdpHttp = cdpReady;
   } else {
-    [cdpHttp, cdpReady] = await Promise.all([
-      profileCtx.isHttpReachable(STATUS_CDP_HTTP_TIMEOUT_MS, signal),
-      profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS, signal),
-    ]);
-    // Managed CDP transport checks already include a page WebSocket handshake.
+    cdpReady = await profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS, signal);
+    cdpHttp = cdpReady;
+    // Passive status observes HTTP/relay availability; deep doctor performs the live probe.
     pageReady = cdpReady;
   }
 
@@ -129,6 +120,7 @@ async function buildBrowserStatus(
   const lifecycle = profileState ? getProfileLifecycle(profileState) : null;
   const running = profileState?.running;
   const canInspectManagedGraphics =
+    inspectGraphics &&
     capabilities.mode === "local-managed" &&
     cdpReady &&
     running &&
@@ -137,7 +129,7 @@ async function buildBrowserStatus(
     running.cdpPort === profileCtx.profile.cdpPort;
   const graphics = canInspectManagedGraphics
     ? await getCachedChromeGraphicsDiagnostics(running, current.resolved.ssrfPolicy)
-    : null;
+    : (running?.graphicsDiagnostics ?? null);
   const configuredHeadlessMode = resolveManagedBrowserHeadlessMode(
     current.resolved,
     profileCtx.profile,
@@ -300,9 +292,19 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
           signal: req.signal,
           assertCurrent: req.assertCurrent,
           run: async (signal) => {
-            const status = await buildBrowserStatus(ctx, profileCtx, signal);
+            const live =
+              route === "/doctor" &&
+              (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true);
+            const status = await buildBrowserStatus(ctx, profileCtx, signal, live);
             if (route === "/") {
               return status;
+            }
+            const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+            if (capabilities.browserFilesystemLocal && status.detectedExecutablePath) {
+              status.detectError = await getBrowserExecutableError(
+                status.detectedExecutablePath,
+                signal,
+              );
             }
             const relay = ctx.state().extensionRelays?.get(profileCtx.profile.name);
             const identity =
@@ -314,7 +316,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
               extensionVersion:
                 status.transport === "extension" ? identity?.extensionVersion : undefined,
             });
-            if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
+            if (live) {
               report.checks.push(await runBrowserLiveProbe(profileCtx, signal));
               report.ok = report.checks.every((check) => check.status !== "fail");
             }

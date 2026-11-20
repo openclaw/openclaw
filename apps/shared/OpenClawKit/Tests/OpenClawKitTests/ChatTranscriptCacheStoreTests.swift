@@ -103,14 +103,15 @@ private final class OutboxReadCounter: @unchecked Sendable {
     }
 }
 
-private func outboxCommand(
+func outboxCommand(
     id: String = UUID().uuidString,
     sessionKey: String = "main",
     text: String,
     attachments: [OpenClawChatOutboxAttachment] = [],
     thinking: String = "off",
     createdAt: Double = Date().timeIntervalSince1970,
-    status: OpenClawChatOutboxCommand.Status = .queued) -> OpenClawChatOutboxCommand
+    status: OpenClawChatOutboxCommand.Status = .queued,
+    lastError: String? = nil) -> OpenClawChatOutboxCommand
 {
     OpenClawChatOutboxCommand(
         id: id,
@@ -124,7 +125,7 @@ private func outboxCommand(
         createdAt: createdAt,
         status: status,
         retryCount: 0,
-        lastError: nil)
+        lastError: lastError)
 }
 
 private func withRawDatabase(at url: URL, _ body: (OpaquePointer) throws -> Void) throws {
@@ -690,6 +691,26 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         #expect(cached.historyMarker == message.historyMarker)
     }
 
+    @Test
+    func `cache projection keeps patch input for a tool bridged over MCP`() throws {
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [
+                OpenClawChatMessageContent(
+                    type: "toolCall", id: "patch", name: "mcp__openclaw__apply_patch",
+                    arguments: AnyCodable(["input": "*** Begin Patch\n*** End Patch", "ignored": "drop"])),
+                OpenClawChatMessageContent(
+                    type: "toolCall", id: "exec", name: "mcp__openclaw__exec",
+                    arguments: AnyCodable(["command": "drop"])),
+            ],
+            timestamp: 1)
+
+        let cached = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
+        #expect(cached.content[0].name == "mcp__openclaw__apply_patch")
+        #expect(cached.content[0].arguments == AnyCodable(["input": "*** Begin Patch\n*** End Patch"]))
+        #expect(cached.content[1].arguments == nil)
+    }
+
     @Test(arguments: ["dispatch_action", "tool_call"])
     func `cache projection preserves dispatcher IDs and only inner patch input`(dispatcher: String) throws {
         let message = OpenClawChatMessage(
@@ -921,6 +942,7 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         try await databases.watchMessages.importLegacy(.init(messages: [
             .init(id: "watch-sensitive", gatewayStableID: "gw-a", text: sensitiveText, submittedAtMs: nil),
         ], recentMessageIDs: []), nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+        await storeA.saveComposerDraftText(key: "agent:main:main", text: sensitiveText, revision: 1)
         await storeB.storeSessions([cacheSessionEntry(key: "keep", updatedAt: 1)])
 
         try databases.removeGatewayData(gatewayID: "gw-a")
@@ -961,6 +983,7 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
             "client-state-watch-message-journal-v9",
             "client-state-watch-message-legacy-receipts-v1",
             "client-state-outbox-queue-mode-v10",
+            "client-state-composer-drafts-v11",
         ])
     }
 }
@@ -1016,6 +1039,43 @@ final class ClientDatabaseLegacyImportTests: TemporaryDatabaseTestSuite, @unchec
         #expect(attachment.data == bytes && attachment.fileName == "legacy.png" && attachment.mimeType == "image/png")
         let claimed = try #require(await store.claimNextCommand())
         #expect(claimed.id == "legacy-text" && claimed.queueMode == nil)
+    }
+
+    @Test func `v10 upgrade adds composer drafts and preserves queued commands`() async throws {
+        let stateURL = directory.appendingPathComponent(OpenClawClientDatabases.clientStateFilename)
+        let legacy = try DatabaseQueue(path: stateURL.path)
+        var migrator = DatabaseMigrator()
+        OpenClawClientDatabases.registerClientStateMigrationsV1ThroughV5(&migrator)
+        OpenClawClientDatabases.registerClientStateMigrationsV6ThroughV8(&migrator)
+        OpenClawClientDatabases.registerWatchMessageJournalMigration(&migrator)
+        OpenClawClientDatabases.registerOutboxQueueModeMigration(&migrator)
+        try migrator.migrate(legacy)
+        let bytes = Data("v10 attachment".utf8)
+        try await legacy.write { db in
+            try db.execute(sql: """
+            INSERT INTO outbox_commands(
+                gateway_id, client_uuid, session_key, delivery_session_key, routing_contract,
+                agent_id, text, thinking, created_at, status, attachment_bytes, queue_mode
+            ) VALUES ('gw-a', 'v10-steer', 'main', 'agent:main:main', 'per-sender|main|main',
+                'main', 'keep me', 'off', ?, 'queued', ?, 'steer')
+            """, arguments: [Date().timeIntervalSince1970, bytes.count])
+            try db.execute(sql: """
+            INSERT INTO outbox_attachments(
+                gateway_id, command_id, position, type, mime_type, file_name, payload
+            ) VALUES ('gw-a', 'v10-steer', 0, 'file', 'text/plain', 'note.txt', ?)
+            """, arguments: [bytes])
+        }
+        try legacy.close()
+
+        let upgraded = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? upgraded.close() }
+        let command = try #require(await upgraded.store(gatewayID: "gw-a").loadCommands().first)
+        #expect(command.id == "v10-steer" && command.text == "keep me" && command.queueMode == .steer)
+        #expect(command.attachments.map(\.data) == [bytes])
+        let draftTables = try await upgraded.stateQueue.read { db in
+            try ["composer_drafts", "composer_draft_attachments"].filter { try db.tableExists($0) }
+        }
+        #expect(draftTables == ["composer_drafts", "composer_draft_attachments"])
     }
 
     @Test func `legacy v1 cache is discarded`() async throws {
@@ -1711,13 +1771,21 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
                 counter.record(String(describing: event))
             }
         }
+        let statuses = await store.loadCommandStatusesIfAvailable()
+        let statusReadCount = counter.count
         let loaded = await store.loadCommandsIfAvailable()
         try await databases.stateQueue.writeWithoutTransaction { db in
             db.trace(options: [])
         }
         let commands = try #require(loaded)
-        #expect(counter.count > 0)
-        #expect(counter.count <= 2)
+        let observed = try #require(statuses)
+        #expect(statusReadCount == 1)
+        #expect(observed.map { Data($0.id.utf8) } == [
+            Data("earlier".utf8), Data("later".utf8), Data(composedID.utf8), Data(decomposedID.utf8),
+        ])
+        #expect(observed.map(\.status) == [.queued, .queued, .queued, .queued])
+        #expect(counter.count > statusReadCount)
+        #expect(counter.count - statusReadCount <= 2)
         #expect(commands.map { Data($0.id.utf8) } == [
             Data("earlier".utf8), Data("later".utf8), Data(composedID.utf8), Data(decomposedID.utf8),
         ])
@@ -1829,6 +1897,7 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
         await retired.retire()
 
         #expect(await retired.recoverInterruptedSends() == false)
+        #expect(await retired.loadCommandStatusesIfAvailable() == nil)
         let replacement = databases.store(gatewayID: "gw-a")
         #expect(await replacement.loadCommands().map(\.status) == [.sending])
     }
@@ -1867,6 +1936,8 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
                 arguments: [old, "gw-a", "old-ack"])
         }
 
+        let statuses = try #require(await store.loadCommandStatusesIfAvailable())
+        #expect(statuses.map(\.status) == [.failed, .failed])
         let commands = await store.loadCommands()
         let commandsByID = Dictionary(uniqueKeysWithValues: commands.map { ($0.id, $0) })
         #expect(commandsByID["old-queued"]?.status == .failed)

@@ -153,7 +153,7 @@ it("detects and completes startup columns in present lazy tables", async () => {
     using database = new DatabaseSync(pathname);
     database.exec("ALTER TABLE secret_store_entries DROP COLUMN allowed_hosts");
   }
-  expect(needsOpenClawStateDatabaseSchemaRepair(pathname)).toBe(true);
+  await expect(needsOpenClawStateDatabaseSchemaRepair(pathname)).resolves.toBe(true);
   const repaired = state.openOpenClawStateDatabase({ env });
   expect(repaired.db.prepare("SELECT allowed_hosts FROM secret_store_entries").all()).toEqual([]);
   expect(
@@ -161,7 +161,7 @@ it("detects and completes startup columns in present lazy tables", async () => {
       .prepare("SELECT name FROM sqlite_schema WHERE name = 'user_profile_identities'")
       .get(),
   ).toBeUndefined();
-  expect(needsOpenClawStateDatabaseSchemaRepair(pathname)).toBe(false);
+  await expect(needsOpenClawStateDatabaseSchemaRepair(pathname)).resolves.toBe(false);
 });
 
 it.each([

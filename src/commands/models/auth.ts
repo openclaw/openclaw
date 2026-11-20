@@ -1,10 +1,6 @@
 import { cancel } from "@clack/prompts";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
@@ -66,19 +62,21 @@ import {
   normalizeManualAuthProvider,
   readPipedStdin,
   resolveDefaultTokenProfileId,
+  resolveManualTokenExpiryMs,
   validateOpenAICodexApiKeyInput,
 } from "./auth-manual-input.js";
 import {
+  allowLoginProviderModels,
+  allowProviderModelsInConfig,
   applyProviderLoginDefaultModel,
-  completeProviderModelAccess,
-  prepareProviderModelAccess,
   withoutProviderModelPolicy,
-  type PreparedProviderModelAccess,
+  type ProviderModelAccess,
 } from "./auth-model-policy.js";
 import { promotePersistedAuthProfile } from "./auth-profile-promotion.js";
 import {
   refreshProviderAuthAfterLogin,
   refreshRunningGatewayAuthState,
+  refreshSavedAuthAfterSettingsFailure,
   type ModelAuthRefreshOutcome,
 } from "./auth-refresh.js";
 import {
@@ -86,24 +84,12 @@ import {
   snapshotReloginAuthProfiles,
 } from "./auth-relogin-identity.js";
 import { resolveLoginConnectionResult } from "./auth-runtime-staging.js";
+import { isSharedGatewayForCliLogin, showModelsAuthScopeNote } from "./auth-scope-note.js";
 import {
   loadValidConfigSnapshotOrThrow,
   resolveModelsTargetAgent,
   updateConfig,
 } from "./shared.js";
-
-function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
-  const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
-  if (!normalizedExpiresIn) {
-    return undefined;
-  }
-  const durationMs = parseDurationMs(normalizedExpiresIn, { defaultUnit: "d" });
-  const expires = resolveExpiresAtMsFromDurationMs(durationMs);
-  if (expires === undefined) {
-    throw new Error("Invalid expiry duration: resulting token expiry is outside Date range.");
-  }
-  return expires;
-}
 
 function requireManualAuthProvider(raw: string | undefined): string {
   const provider = normalizeOptionalString(raw);
@@ -280,12 +266,6 @@ async function runProviderAuthMethod(
 ) {
   params.signal?.throwIfAborted();
   params.assertCurrent?.();
-  const modelAccess = prepareProviderModelAccess({
-    config: params.config,
-    agentId: params.agentId,
-    provider: params.provider.id,
-    providerLabel: params.provider.label,
-  });
   const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir);
   const existingProfiles = Object.entries(store.profiles)
     .filter(
@@ -453,6 +433,9 @@ async function runProviderAuthMethod(
       await login.prompter.note(login.result.notes.join("\n"), "Provider notes");
     }
   } catch (error) {
+    if (error instanceof ProviderAuthConfigApplyError) {
+      await refreshSavedAuthAfterSettingsFailure(login);
+    }
     if (persistedProfiles.length > 0 && !(error instanceof ProviderCredentialsSavedError)) {
       throw new ProviderCredentialsSavedError(
         error instanceof Error
@@ -464,11 +447,12 @@ async function runProviderAuthMethod(
     throw error;
   }
   // Harness-owned logins save no credential profile; their staged runtime
-  // policy is the success signal that model-access consent should still run,
-  // or restricted model lists keep hiding the just-connected provider.
-  if (persistedProfiles.length > 0 || stagesRuntimePolicy) {
-    await completeLoginModelAccess(params, modelAccess);
-  }
+  // policy is the success signal that the provider's models should become
+  // visible, or restricted model lists keep hiding the just-connected provider.
+  const modelAccess =
+    persistedProfiles.length > 0 || stagesRuntimePolicy
+      ? await allowLoginProviderModels(params, params.agentId, params.provider.id)
+      : undefined;
   // Reported by the persistence owner once the staged policy is saved (or
   // already present): credential-only results drop the login's runtime
   // metadata, so callers cannot reconstruct it from the result.
@@ -477,29 +461,9 @@ async function runProviderAuthMethod(
     result: connectionResult,
     profiles: persistedProfiles,
     authRefresh,
+    modelAccess,
     stagedRuntimePolicy,
   };
-}
-
-function completeLoginModelAccess(
-  params: Pick<
-    ModelsAuthLoginFlowOptions,
-    "prompter" | "runtime" | "onModelAccessRequested" | "signal" | "assertCurrent"
-  >,
-  prepared: ReturnType<typeof prepareProviderModelAccess>,
-) {
-  return completeProviderModelAccess({
-    prepared,
-    prompter: params.prompter,
-    onRequested: params.onModelAccessRequested,
-    runtime: params.runtime,
-    assertCurrent: () => {
-      params.signal?.throwIfAborted();
-      params.assertCurrent?.();
-    },
-  }).catch((error: unknown) => {
-    throw new ProviderAuthConfigApplyError(error);
-  });
 }
 
 export async function modelsAuthSetupTokenCommand(
@@ -599,6 +563,7 @@ async function pasteManualAuthCredential(
   });
   let profileId = tokenProfileId;
   let warning: string | undefined;
+  let modelAccess: string | undefined;
   if (tokenProfileId !== undefined) {
     const token =
       provider === "anthropic"
@@ -610,14 +575,21 @@ async function pasteManualAuthCredential(
       credential: { type: "token", provider, token, ...(expires ? { expires } : {}) },
       agentDir,
     });
-    await updateConfig((cfg) =>
-      applyAuthProfileConfig(cfg, { profileId: tokenProfileId, provider, mode: "token" }),
-    );
+    await updateConfig((cfg) => {
+      const next = applyAuthProfileConfig(cfg, {
+        profileId: tokenProfileId,
+        provider,
+        mode: "token",
+      });
+      modelAccess = allowProviderModelsInConfig(next, agentId, provider);
+      return next;
+    });
   } else {
-    ({ profileId, warning } = await saveModelProviderApiKey({
+    ({ profileId, warning, modelAccess } = await saveModelProviderApiKey({
       config,
       provider,
       apiKey: input,
+      agentId,
       agentDir,
       profileId: normalizeOptionalString(opts.profileId),
     }));
@@ -628,6 +600,9 @@ async function pasteManualAuthCredential(
   }
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/${mode})`);
+  if (modelAccess) {
+    runtime.log(modelAccess);
+  }
   if (mode === "token" && provider === "anthropic") {
     runtime.log("Anthropic setup-token auth is supported in OpenClaw.");
     runtime.log("OpenClaw prefers Claude CLI reuse when it is available on the host.");
@@ -755,6 +730,8 @@ export type ModelsAuthLoginFlowResult = {
     provider: string;
     mode: "api_key" | "oauth" | "token";
   }>;
+  /** Set when saving the credential added the provider to the model allowlist. */
+  modelAccess?: ProviderModelAccess;
 };
 
 export type ModelsAuthLoginFlowOptions = LoginOptions & {
@@ -764,7 +741,6 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
   config?: OpenClawConfig;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
-  onModelAccessRequested?: (request: PreparedProviderModelAccess) => void;
   env?: NodeJS.ProcessEnv;
   isRemote?: boolean;
   signal?: AbortSignal;
@@ -778,18 +754,21 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
 export async function runModelsAuthLoginFlowCore(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
-  return runModelsAuthLoginFlow(opts, true);
+  return runModelsAuthLoginFlow(opts, () => true);
 }
 
 export async function runModelsAuthLoginFlowForGateway(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
-  return runModelsAuthLoginFlow(opts, opts.isRemote === false);
+  return runModelsAuthLoginFlow(
+    opts,
+    (config) => opts.isRemote === false && isSharedGatewayForCliLogin(config),
+  );
 }
 
 async function runModelsAuthLoginFlow(
   opts: ModelsAuthLoginFlowOptions,
-  showScopeNote: boolean,
+  showScopeNote: (config: OpenClawConfig) => boolean | Promise<boolean>,
 ): Promise<ModelsAuthLoginFlowResult> {
   const requestedProviderId = opts.provider
     ? normalizeManualAuthProvider(opts.provider)
@@ -830,16 +809,8 @@ async function runModelsAuthLoginFlow(
   } else if (requestedProviderId && !requestedProvider) {
     requestedProvider = resolveRequestedLoginProviderOrThrow(authProviders, requestedProviderId);
   }
-  if (showScopeNote) {
-    await prompter.note(
-      [
-        "Scope: System / agent",
-        `Agent: ${context.agentId}`,
-        "Location: the machine running OpenClaw",
-        `For personal model accounts on a Gateway, run ${formatCliCommand("openclaw models accounts login --help")}.`,
-      ].join("\n"),
-      "Provider sign-in",
-    );
+  if (await showScopeNote(context.config)) {
+    await showModelsAuthScopeNote(prompter, context.agentId);
   }
   const selectedProvider =
     requestedProvider ??
@@ -878,12 +849,6 @@ async function runModelsAuthLoginFlow(
     );
   }
 
-  const modelAccess = prepareProviderModelAccess({
-    config: context.config,
-    agentId: context.agentId,
-    provider: selectedProvider.id,
-    providerLabel: selectedProvider.label,
-  });
   // Snapshot before --force removes cached credentials. Provider-owned identity
   // matching may safely keep the old profile id for the same authenticated account.
   const existingProfiles = await snapshotReloginAuthProfiles({
@@ -919,11 +884,16 @@ async function runModelsAuthLoginFlow(
     opts.runtime.log(
       `Auth profile: ${imported.profileId} (${imported.provider}/${imported.mode}, imported)`,
     );
-    await completeLoginModelAccess(opts, modelAccess);
+    const modelAccess = await allowLoginProviderModels(
+      { ...opts, config: context.config },
+      context.agentId,
+      selectedProvider.id,
+    );
     return {
       providerId: selectedProvider.id,
       methodId: chosenMethod.id,
       authRefresh,
+      ...(modelAccess ? { modelAccess } : {}),
       imported: true,
       profiles: [
         { profileId: imported.profileId, provider: imported.provider, mode: imported.mode },
@@ -960,15 +930,16 @@ async function runModelsAuthLoginFlow(
     await refreshRunningGatewayAuthState(context.agentId, "logout", opts.runtime);
   }
 
-  const { result, profiles, authRefresh, stagedRuntimePolicy } = await runProviderAuthMethod({
-    ...opts,
-    ...context,
-    provider: selectedProvider,
-    method: chosenMethod,
-    prompter,
-    existingProfiles,
-    allowMissingReusedProfile: forceLogin,
-  });
+  const { result, profiles, authRefresh, modelAccess, stagedRuntimePolicy } =
+    await runProviderAuthMethod({
+      ...opts,
+      ...context,
+      provider: selectedProvider,
+      method: chosenMethod,
+      prompter,
+      existingProfiles,
+      allowMissingReusedProfile: forceLogin,
+    });
   if (selectedProvider.id === "openai") {
     opts.runtime.log(
       `Tip: Codex-capable models can use native Codex web search. Configure the \`web_search\` tool with \`${formatCliCommand("openclaw configure --section web")}\`. Docs: https://docs.openclaw.ai/tools/web`,
@@ -980,6 +951,7 @@ async function runModelsAuthLoginFlow(
     authRefresh,
     ...(stagedRuntimePolicy ? { stagedRuntimePolicy: true as const } : {}),
     ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
+    ...(modelAccess ? { modelAccess } : {}),
     profiles: profiles.map((profile) => ({
       profileId: profile.profileId,
       provider: profile.credential.provider,
@@ -995,10 +967,13 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  await runModelsAuthLoginFlowCore({
-    ...opts,
-    runtime,
-    prompter: createClackPrompter(),
-  });
+  await runModelsAuthLoginFlow(
+    {
+      ...opts,
+      runtime,
+      prompter: createClackPrompter(),
+    },
+    isSharedGatewayForCliLogin,
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

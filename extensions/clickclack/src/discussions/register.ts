@@ -3,13 +3,19 @@ import { registerSessionDiscussionProvider } from "openclaw/plugin-sdk/session-d
 import { createSessionVisibilityChecker } from "openclaw/plugin-sdk/session-visibility";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { PluginHookBeforeToolCallResult } from "openclaw/plugin-sdk/types";
+import type { CoreConfig, ResolvedClickClackAccount } from "../types.js";
 import {
   bindingMatchesActiveSessionIncarnation,
   getClickClackDiscussionBindingStore,
   type ClickClackDiscussionBinding,
 } from "./binding-store.js";
+import {
+  resolveDiscussionBindingAccount,
+  resolvePreparedDiscussionBindingAccount,
+} from "./eligibility.js";
 import { discussionSessionKey, isDiscussionSessionKey } from "./naming.js";
 import {
+  adoptLegacyMarkers,
   isClickClackDiscussionChannelRevoked,
   prepareClickClackDiscussionChannelRevocation,
 } from "./revoked-channel-store.js";
@@ -18,6 +24,19 @@ import { prepareDiscussionSessionEntry } from "./session-authority.js";
 
 const DEFAULT_MESSAGE_LIMIT = 30;
 const MAX_MESSAGE_LIMIT = 200;
+
+const DiscussionParameters = {
+  type: "object",
+  properties: {
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: MAX_MESSAGE_LIMIT,
+      description: `Maximum messages to return (default ${DEFAULT_MESSAGE_LIMIT}).`,
+    },
+  },
+  additionalProperties: false,
+};
 
 const TARGETED_SESSION_TOOLS = new Set(["sessions_history", "sessions_send", "session_status"]);
 
@@ -35,6 +54,7 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
   }
 
   const runtime = api.runtime;
+  void adoptLegacyMarkers(runtime);
   const service = new ClickClackDiscussionService(runtime);
   function isClickClackDiscussionSessionTarget(params: {
     requesterSessionKey: string;
@@ -72,15 +92,21 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
     binding: ClickClackDiscussionBinding | undefined,
     isRevoked: (binding: ClickClackDiscussionBinding) => boolean,
     isActiveSession: (binding: ClickClackDiscussionBinding) => boolean,
+    preparedAccount?: ResolvedClickClackAccount,
   ) {
     const { targetSessionKey } = params;
+    // SAFETY: The runtime exposes the registered channel schema-validated config.
+    const cfg = runtime.config.current() as CoreConfig;
     if (
       binding &&
       discussionSessionKey({ runtime, mainSessionKey: targetSessionKey, ...binding }) ===
         params.requesterSessionKey &&
       !isRevoked(binding) &&
       isActiveSession(binding) &&
-      service.resolveBindingAccount(binding).state === "active"
+      (preparedAccount
+        ? resolvePreparedDiscussionBindingAccount(cfg, binding, preparedAccount)
+        : resolveDiscussionBindingAccount(cfg, binding)
+      ).state === "active"
     ) {
       return { sessionKey: targetSessionKey, binding };
     }
@@ -112,6 +138,10 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
         runtime,
         ...binding,
       });
+      const resolved = await service.prepareBindingAccount(binding);
+      if (resolved.state !== "active") {
+        return undefined;
+      }
       session = await prepareDiscussionSessionEntry(runtime, params.targetSessionKey);
       session.source();
       const entry = session.entry;
@@ -120,6 +150,7 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
         facts.read(),
         revocation.isRevoked,
         (current) => entry?.sessionId === current.sessionId && entry.archivedAt === undefined,
+        resolved.account,
       );
     } catch {
       return undefined;
@@ -140,18 +171,7 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
     name: "discussion",
     label: "Discussion",
     description: "Read the latest messages from the ClickClack discussion bound to this session.",
-    parameters: {
-      type: "object",
-      properties: {
-        limit: {
-          type: "integer",
-          minimum: 1,
-          maximum: MAX_MESSAGE_LIMIT,
-          description: `Maximum messages to return (default ${DEFAULT_MESSAGE_LIMIT}).`,
-        },
-      },
-      additionalProperties: false,
-    },
+    parameters: DiscussionParameters,
     async execute(_toolCallId: string, input: unknown) {
       if (!sessionKey) {
         return textResult("No discussion is bound to this session.", { bound: false });

@@ -37,7 +37,9 @@ export async function prepareSystemdGatewayMaintenance(params: {
     assertCurrent();
     const audit = await auditGatewayServiceConfig({ env: state.env, command: state.command });
     assertCurrent();
-    const outdated = audit.definitionDrift?.some((fact) => fact.kind === "outdated");
+    const outdated = audit.definitionDrift?.some(
+      (fact) => fact.kind === "outdated" && !fact.key.startsWith("Service.Delegate"),
+    );
     if (!outdated && (timeout ?? 0) >= GATEWAY_SERVICE_STOP_TIMEOUT_MS) {
       return { kind: "unchanged" };
     }

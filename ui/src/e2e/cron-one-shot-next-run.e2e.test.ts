@@ -1,0 +1,111 @@
+import { writeFileSync } from "node:fs";
+import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
+import {
+  cronJob,
+  cronList,
+  cronRuns,
+  cronSidebarFeatureMethods,
+  editAutomation,
+  openAutomationActivity,
+} from "./cron-fixtures.test-support.ts";
+
+const suite = createControlUiE2eSuite({
+  name: "One-shot runtime schedule",
+  startServerBeforeBrowser: true,
+});
+suite.define(() => {
+  it("shows a rearmed one-shot deadline without replacing its authored occurrence on save", async () => {
+    const artifacts = createControlUiE2eArtifactDir("cron-one-shot-next-run");
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), timezoneId: "UTC", locale: "en-US" },
+      async ({ page }) => {
+        await page.clock.setFixedTime(new Date("2026-10-30T12:05:00Z"));
+        const job = cronJob("one-shot-proof", "Check the fictional build", {
+          configRevision: "one-shot-proof-revision",
+          schedule: { kind: "at", at: "2026-10-30T12:00:00.000Z" },
+          sessionTarget: "session:agent:main:build-proof",
+          wakeMode: "now",
+          payload: {
+            kind: "agentTurn",
+            message: "Check whether the fictional build has finished.",
+          },
+          deleteAfterRun: true,
+          state: {
+            lastRunAtMs: Date.parse("2026-10-30T12:00:00Z"),
+            lastRunStatus: "ok",
+            nextRunAtMs: Date.parse("2026-10-30T12:10:00Z"),
+          },
+        });
+        const gateway = await installMockGateway(page, {
+          featureMethods: cronSidebarFeatureMethods,
+          methodResponses: {
+            "cron.list": cronList([job], "one-shot-proof"),
+            "cron.get": job,
+            "cron.runs": cronRuns([]),
+            "cron.status": { enabled: true, jobs: 1, triggersEnabled: true },
+            "cron.update": { ...job, name: "Check the fictional build again" },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "cron");
+        await editAutomation(page, job.id);
+        const input = page.locator("#cron-schedule-at");
+        await input.waitFor({ state: "visible" });
+        expect(await input.inputValue()).toBe("2026-10-30T12:00");
+        const summary = page.locator('.cron-detail-header [data-test-id="cron-schedule-runtime"]');
+        const frame = await takeControlUiScreenshotFrame(page, summary, [summary, input], {
+          animations: "disabled",
+          scrollTo: summary,
+        });
+        writeFileSync(artifacts + "/schedule.png", frame.png);
+        const summaryText = await summary.textContent();
+        writeFileSync(artifacts + "/observed.txt", summaryText ?? "");
+        expect(summaryText).toBe("Next activity at 10/30/2026, 12:10 PM");
+        await page.locator("#cron-name").fill("Check the fictional build again");
+        await page.locator('[data-test-id="cron-submit"]').click();
+        await gateway.waitForRequest("cron.update");
+        const requests = await gateway.getRequests("cron.update");
+        expect(requests.at(-1)?.params).toMatchObject({ id: job.id });
+        expect(requests.at(-1)?.params).toHaveProperty("patch");
+        expect(requests.at(-1)?.params).not.toHaveProperty("patch.schedule");
+        expect(requests.at(-1)?.params).not.toHaveProperty("patch.state");
+        await input.waitFor({ state: "detached" });
+        await openAutomationActivity(page);
+        await editAutomation(page, job.id);
+        expect(await input.inputValue()).toBe("2026-10-30T12:00");
+        await expect
+          .poll(() => summary.textContent())
+          .toContain("Next activity at 10/30/2026, 12:10 PM");
+
+        await page.setViewportSize({ width: 700, height: 900 });
+        const reason = "Automation deferred while its agent is busy";
+        job.state = {
+          ...job.state,
+          admissionDeferred: {
+            reason,
+            sinceMs: Date.parse("2026-10-30T12:00:00Z"),
+            attempts: 2,
+            retryAtMs: Date.parse("2026-10-30T12:10:00Z"),
+          },
+        };
+        await gateway.setMethodResponse("cron.list", cronList([job], "one-shot-waiting"));
+        await gateway.setMethodResponse("cron.get", job);
+        await gateway.emitGatewayEvent("cron", { jobId: job.id, action: "updated" });
+        await expect.poll(() => summary.textContent()).toContain(reason);
+        await expect
+          .poll(async () => {
+            const timing = await page.locator(".cron-editor-schedule").boundingBox();
+            const runControls = await page.locator(".cron-prompt__run-controls").boundingBox();
+            return timing && runControls && Math.abs(runControls.y - timing.y) < 2;
+          })
+          .toBe(true);
+      },
+    );
+  });
+});

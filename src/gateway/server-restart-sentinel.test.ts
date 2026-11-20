@@ -162,7 +162,6 @@ const mocks = vi.hoisted(() => {
       vi.fn<
         typeof import("../auto-reply/reply/session-event-handoff.js").enqueueSessionEventForHost
       >(),
-    enqueueSessionDelivery: vi.fn(),
     deferSessionDelivery: vi.fn<DeferSessionDeliveryMock>(async () => {}),
     failSessionDelivery: vi.fn<FailSessionDeliveryMock>(async () => {}),
     mergeSessionDeliveryPreparedMediaBlocks: vi.fn<MergeSessionDeliveryPreparedMediaBlocksMock>(
@@ -251,7 +250,6 @@ vi.mock("../infra/restart-sentinel.js", async (importOriginal) => ({
 vi.mock("../infra/session-delivery-queue-storage.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../infra/session-delivery-queue-storage.js")>();
-  mocks.enqueueSessionDelivery.mockImplementation(actual.enqueueSessionDelivery);
   mocks.deferSessionDelivery.mockImplementation(async (id, delayMs, queueContext) => {
     if (await actual.loadPendingSessionDelivery(id, queueContext)) {
       await actual.deferSessionDelivery(id, delayMs, queueContext);
@@ -281,7 +279,6 @@ vi.mock("../infra/session-delivery-queue-storage.js", async (importOriginal) => 
     deferSessionDelivery: mocks.deferSessionDelivery,
     failSessionDelivery: mocks.failSessionDelivery,
     mergeSessionDeliveryPreparedMediaBlocks: mocks.mergeSessionDeliveryPreparedMediaBlocks,
-    enqueueSessionDelivery: mocks.enqueueSessionDelivery,
     loadPendingSessionDelivery: mocks.loadPendingSessionDelivery,
     markSessionDeliveryAttemptStarted: mocks.markSessionDeliveryAttemptStarted,
     markSessionDeliverySettlement: mocks.markSessionDeliverySettlement,
@@ -519,6 +516,7 @@ vi.mock("../logging/subsystem.js", async () => {
   };
 });
 
+const queueFixtures = await import("../infra/session-delivery-queue.test-helpers.js");
 const {
   deliverQueuedSessionDelivery,
   recoverPendingProducedSessionDeliveries,
@@ -552,14 +550,13 @@ let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 let testState: OpenClawTestState;
 let queueContext: OpenClawStateWorkerContext;
+let sessionDeliveryPublications: string[];
 
 function wakeRestartSentinel() {
   return scheduleRestartSentinelWake({ scheduler, signal: scheduler.signal, deps: {} });
 }
 
-function expectQueueContext(stateDir = testState.stateDir) {
-  return expectCapturedQueueContext(stateDir);
-}
+const expectQueueContext = (stateDir = testState.stateDir) => expectCapturedQueueContext(stateDir);
 
 function setNoticeOwner(owner: string) {
   mocks.getRuntimeConfig.mockReturnValue({ commands: { ownerAllowFrom: [owner] } });
@@ -577,6 +574,7 @@ describe("scheduleRestartSentinelWake", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    sessionDeliveryPublications = await queueFixtures.observeSessionDeliveryPublications();
     clock = createGatewaySchedulerClock();
     scheduler = createTestGatewayScheduler(clock.clock);
     vi.mocked(restartUpdateRun.finalizeRestartUpdateRun)
@@ -721,7 +719,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
-    expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
+    expect(sessionDeliveryPublications).toEqual([]);
     expect(mocks.enqueueSessionEvent).not.toHaveBeenCalled();
     expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
     expect(mocks.clearSentinel).toHaveBeenCalledWith(123, queueContext.environment);
@@ -917,7 +915,7 @@ describe("scheduleRestartSentinelWake", () => {
       const finishedRun = getUpdateRun(updateRun.runId)!;
       const report = renderUpdateRunSummary(finishedRun);
       expect.soft(finishedRun?.verification.noticeDelivered).toBe(true);
-      expect.soft(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
+      expect.soft(sessionDeliveryPublications).toEqual([]);
       expect.soft(mocks.enqueueSessionEvent).not.toHaveBeenCalled();
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -944,7 +942,7 @@ describe("scheduleRestartSentinelWake", () => {
         subscribers,
       });
       expect(mocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
-      expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
+      expect(sessionDeliveryPublications).toEqual([]);
       expect(mocks.logWarn).not.toHaveBeenCalled();
     } finally {
       mocks.mergeDeliveryContext.mockImplementation(originalMerge);
@@ -959,7 +957,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await wakeRestartSentinel();
 
-    expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
+    expect(sessionDeliveryPublications).toEqual([]);
     expect(mocks.enqueueDeliveryOnce).toHaveBeenCalledOnce();
     expect(mocks.enqueueSessionEvent).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
@@ -1005,7 +1003,7 @@ describe("scheduleRestartSentinelWake", () => {
       idempotencyKey: overrides.messageId,
       ...overrides,
     });
-    const id = await mocks.enqueueSessionDelivery(payload, queueContext);
+    const id = await queueFixtures.enqueueUnclaimedSessionDeliveryFixture(payload, queueContext);
     const entry = await mocks.loadPendingSessionDelivery(id, queueContext);
     if (entry?.kind !== "agentTurn") {
       throw new Error("expected queued generated media");
@@ -1026,6 +1024,7 @@ describe("scheduleRestartSentinelWake", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       expectedMediaUrls: ["/tmp/proof.png"],
     });
+    expect(sessionDeliveryPublications).toEqual(["sessionDelivery.enqueue"]);
 
     await deliverProducedMedia(entry);
 
@@ -1325,7 +1324,7 @@ describe("scheduleRestartSentinelWake", () => {
     await wakeRestartSentinel();
 
     expect(mocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
-    expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
+    expect(sessionDeliveryPublications).toEqual([]);
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.resolveSystemMainSessionTarget).not.toHaveBeenCalled();
     expect(mocks.clearSentinel).toHaveBeenCalledWith(123, queueContext.environment);
@@ -1344,7 +1343,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await wakeRestartSentinel();
 
-    expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
+    expect(sessionDeliveryPublications).toEqual([]);
     expect(mocks.clearSentinel).not.toHaveBeenCalled();
     expect(mocks.enqueueSessionEvent).not.toHaveBeenCalled();
     expect(mocks.logWarn).toHaveBeenCalledWith("startup task failed", {

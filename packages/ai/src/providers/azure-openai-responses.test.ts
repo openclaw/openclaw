@@ -30,6 +30,7 @@ const runSimple = (options: Parameters<typeof streamSimple>[2] = {}, target = mo
 
 type CapturedBody = {
   model?: unknown;
+  prompt_cache_key?: unknown;
   input?: unknown[];
   reasoning?: { effort?: unknown };
   temperature?: unknown;
@@ -72,6 +73,22 @@ describe("azure-openai-responses", () => {
     );
   });
 
+  it("rejects a malformed Azure resource name before sending a credentialed request", async () => {
+    vi.stubEnv("AZURE_OPENAI_BASE_URL", undefined);
+    vi.stubEnv("AZURE_OPENAI_RESOURCE_NAME", "evil.example/x");
+
+    const result = await run();
+    expect(requests).toHaveLength(0);
+    expect(result.errorMessage).toMatch(/Invalid Azure OpenAI resource name/);
+  });
+
+  it("keeps an explicitly configured base URL ahead of a malformed resource name", async () => {
+    vi.stubEnv("AZURE_OPENAI_RESOURCE_NAME", "evil.example/x");
+
+    await run({ azureBaseUrl: "https://aoai.internal/openai/v1" });
+    expect(requests[0]?.url.hostname).toBe("aoai.internal");
+  });
+
   it("sends a case-insensitively resolved deployment name", async () => {
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "gpt-5.5=Deployment-GPT-5.5");
     await runSimple({}, { ...model, id: "GPT-5.5", name: "GPT-5.5" });
@@ -104,6 +121,25 @@ describe("azure-openai-responses", () => {
     await runSimple({ maxTokens: 1 });
     expect(requests[0]?.body).toMatchObject({ max_output_tokens: 16, store: false });
   });
+
+  it.each([
+    [undefined, undefined, "azure-cache-session"],
+    [true, "short", "azure-cache-session"],
+    [false, "short", undefined],
+    [false, "long", undefined],
+    [true, "none", undefined],
+  ] as const)(
+    "serializes cache-key support %s with retention %s through both Azure clients",
+    async (supportsPromptCacheKey, cacheRetention, expected) => {
+      for (const baseUrl of [model.baseUrl, "https://project.services.ai.azure.com/openai/v1"]) {
+        await runSimple(
+          { sessionId: "azure-cache-session", cacheRetention },
+          { ...model, baseUrl, compat: { supportsPromptCacheKey } },
+        );
+      }
+      expect(requests.map(({ body }) => body.prompt_cache_key)).toEqual([expected, expected]);
+    },
+  );
 
   const declaredCompat: Model<"azure-openai-responses">["compat"] = {
     supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],

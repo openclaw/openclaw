@@ -77,6 +77,7 @@ describe("CLI config producer lifetime", () => {
           filename: "index.cjs",
           body: 'throw new Error("provider runtime must not load for config defaults");',
         });
+        writeJson(path.join(owner.dir, "package.json"), { type: "module" });
         writeJson(path.join(owner.dir, "openclaw.plugin.json"), {
           id: owner.id,
           providers: ["anthropic"],
@@ -164,7 +165,10 @@ describe("CLI config producer lifetime", () => {
       path.join(plugin.dir, "doctor-contract-api.cjs"),
       `module.exports = { legacyConfigRules: [${JSON.stringify(rule)}] };`,
     );
-    writeJson(configPath, pluginConfig(plugin, { config: { label: 17 } }));
+    writeJson(configPath, {
+      ...pluginConfig(plugin, { config: { label: 17 } }),
+      meta: { migrations: { skillWorkshopPlugin: true } },
+    });
     await withEnvAsync(env, async () => {
       const discover = vi.spyOn(discovery, "discoverOpenClawPlugins");
       const session = createPluginCliLoadSession();

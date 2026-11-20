@@ -202,6 +202,81 @@ const transactions = {
 };
 
 describe("sealed ClawHub recovery manifest", () => {
+  it("persists an accepted successor when native recovery times out", () => {
+    const directory = directories.make("clawhub-recovery-custody-");
+    const manifest = createClawHubRecoveryManifest(transactions, [pending]);
+    const manifestPath = join(directory, "manifest.json");
+    const runPath = join(directory, "run.json");
+    const outputPath = join(directory, "result.json");
+    const transport = join(directory, "transport.mjs");
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeFileSync(
+      runPath,
+      JSON.stringify({
+        repository: { full_name: "openclaw/openclaw" },
+        head_repository: { full_name: "openclaw/openclaw" },
+        id: 20,
+        run_attempt: 1,
+        path: transactions.identity.workflow,
+        head_sha: transactions.identity.sha,
+        head_branch: transactions.identity.ref,
+        event: "workflow_dispatch",
+      }),
+    );
+    writeFileSync(
+      transport,
+      `
+      let now = 0;
+      Date.now = () => now;
+      globalThis.fetch = async (_url, init) => {
+        if (init?.method === "POST") {
+          now = 1_800_001;
+          return Response.json({ name: ${JSON.stringify(pending.name)},
+            version: ${JSON.stringify(version)}, recoveredFromAttemptId: "attempt-1",
+            attemptId: "accepted-successor", publicationStatus: "pending" });
+        }
+        return Response.json({ name: ${JSON.stringify(pending.name)},
+          version: ${JSON.stringify(version)}, state: "failed",
+          attemptId: "attempt-1", recoverable: true });
+      };
+    `,
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        transport,
+        "scripts/plugin-clawhub-recovery.mjs",
+        "execute",
+        "--manifest",
+        manifestPath,
+        "--run-json",
+        runPath,
+        "--output",
+        outputPath,
+        "--reason",
+        "Recovery",
+      ],
+      { encoding: "utf8", env: { ...process.env, CLAWHUB_TOKEN: "fixture-token" } },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("ClawHub recovery timed out");
+    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
+      schemaVersion: 1,
+      complete: false,
+      recovered: [
+        {
+          name: pending.name,
+          version,
+          recoveredFromAttemptId: "attempt-1",
+          attemptId: "accepted-successor",
+          publicationStatus: "pending",
+        },
+      ],
+    });
+    expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toEqual(manifest);
+  });
+
   it("seals every available attempt when the complete manifest is unavailable", () => {
     const directory = directories.make("clawhub-cleanup-snapshot-");
     const recordPath = join(directory, "package-publish.json");
@@ -240,18 +315,90 @@ describe("sealed ClawHub recovery manifest", () => {
     );
   });
 
-  it("refuses an unavailable package before recovering any staged attempt", async () => {
-    const fetchImpl = vi.fn<typeof fetch>();
-    await expect(
-      executeClawHubRecoveryManifest({
-        manifest: createClawHubRecoveryManifest(transactions, []),
-        reason: "Parent failed after sealed staging",
-        token: "fixture-token",
-        fetchImpl,
-      }),
-    ).rejects.toThrow("was not staged and has no recoverable attempt");
-    expect(fetchImpl).not.toHaveBeenCalled();
+  it("observes a published missing receipt without submitting recovery", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ name: pending.name, version, state: "published" }));
+    const messages: string[] = [];
+    const result = await executeClawHubRecoveryManifest({
+      manifest: createClawHubRecoveryManifest(transactions, []),
+      reason: "Parent failed after sealed staging",
+      token: "fixture-token",
+      fetchImpl,
+      report: (message: string) => messages.push(message),
+    });
+    expect(result).toEqual({ schemaVersion: 1, complete: true, recovered: [] });
+    expect(fetchImpl.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+    expect(messages.at(-1)).toContain("Run postpublish verification for sealed-byte evidence");
   });
+
+  it.each(["pending", "failed", "absent", "legacy-not-found"])(
+    "recovers an independent sibling while preserving missing-receipt uncertainty (%s)",
+    async (state) => {
+      const sibling = { ...pending, name: "@openclaw/sibling", attemptId: "sibling-original" };
+      const manifest = createClawHubRecoveryManifest(
+        {
+          ...transactions,
+          packages: [
+            ...transactions.packages,
+            { ...transactions.packages[0], name: sibling.name, artifactName: "clawhub-sibling" },
+          ],
+        },
+        [sibling],
+      );
+      const mutations: string[] = [];
+      const messages: string[] = [];
+      const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+        const url = input instanceof Request ? input.url : input.toString();
+        if (init?.method === "POST") {
+          mutations.push(url);
+          return Response.json({
+            ...sibling,
+            recoveredFromAttemptId: sibling.attemptId,
+            attemptId: "sibling-recovered",
+            publicationStatus: "published",
+          });
+        }
+        if (url.includes(encodeURIComponent(sibling.name))) {
+          return Response.json({
+            name: sibling.name,
+            version,
+            attemptId: sibling.attemptId,
+            state: "failed",
+            recoverable: true,
+          });
+        }
+        return state === "legacy-not-found"
+          ? new Response("Not found", { status: 404 })
+          : Response.json({
+              name: pending.name,
+              version,
+              state,
+              ...(state === "failed"
+                ? { recoverable: true, attemptId: "unbound-attempt" }
+                : state === "pending"
+                  ? { stage: "finalization", attemptId: "unbound-attempt" }
+                  : {}),
+            });
+      });
+      await expect(
+        executeClawHubRecoveryManifest({
+          manifest,
+          reason: "Parent failed after sealed staging",
+          token: "fixture-token",
+          fetchImpl,
+          report: (message: string) => messages.push(message),
+        }),
+      ).rejects.toThrow(`Independent recoveries completed: ${sibling.name}@${version}`);
+      expect(mutations).toEqual([
+        "https://clawhub.ai/api/v1/publish/attempts/sibling-original/recover",
+      ]);
+      expect(messages.join("\n")).toContain("Cannot bind the original attempt");
+      expect(messages.join("\n")).toContain(
+        `registry state ${state === "legacy-not-found" ? "unpublished" : state}`,
+      );
+    },
+  );
 
   it.each(["pending", "published"])(
     "verifies a recorded %s receipt against public state",

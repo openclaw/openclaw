@@ -162,7 +162,9 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
         await helpButton.click();
         await expect.poll(tooltipIsOpen).toBe(true);
         await expect.poll(() => tooltip.textContent()).toContain("short background tasks");
-        await expect.poll(() => tooltip.textContent()).toContain("primary model provider");
+        await expect
+          .poll(() => tooltip.textContent())
+          .toContain("provider’s recommended small model");
         if (recordVisuals) {
           const labelBox = await utilityLabel.boundingBox();
           const tooltipBox = await tooltipBody.boundingBox();
@@ -208,16 +210,15 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
 
         for (const help of [
           {
-            button: "About thinking defaults",
-            text: "other models map unsupported levels to their closest supported option",
-            defaultText:
-              "Uses the selected model's thinking policy instead of saving a global thinking override.",
+            button: "About effort defaults",
+            text: "other models use the closest supported level",
+            defaultText: "Default: use the model’s own effort setting.",
           },
           {
-            button: "About fast mode defaults",
-            text: "Auto starts fast and returns to standard after the model's configured interval",
+            button: "About speed defaults",
+            text: "Auto: fast, then standard.",
             defaultText:
-              "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
+              "Default: use the model’s speed policy. Unlike Auto, this does not turn fast mode on.",
           },
         ]) {
           const behaviorRow = defaults

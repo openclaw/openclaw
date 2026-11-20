@@ -7,11 +7,9 @@ import type {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
-import {
-  disposeTerminalController,
-  replaceTerminalController,
-} from "./terminal-controller-lifecycle.ts";
+import { disposeTerminalController } from "./terminal-controller-lifecycle.ts";
 import { createTerminalController } from "./terminal-controller.test-support.ts";
+import { replaceTerminalController } from "./terminal-panel-session-rendering.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 
 const runtimeMocks = vi.hoisted(() => ({

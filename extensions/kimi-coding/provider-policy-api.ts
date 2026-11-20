@@ -3,20 +3,30 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-// K3.1 Pro shares K3's efforts and adaptive request shape, but Kimi Code rejects disabled thinking.
-const KIMI_K3_1_MODEL_IDS = ["k3.1-pro", "k3.1-pro-highspeed"] as const;
-export const KIMI_K3_MODEL_IDS = ["k3", "k3-256k", "kimi-k3", ...KIMI_K3_1_MODEL_IDS] as const;
-const KIMI_K3_LEGACY_MODEL_IDS = ["k3[1m]"] as const;
-// Kimi Code's K2.8 backend leaks reasoning when thinking is disabled; K3.1 Pro rejects it.
-const KIMI_CODE_ENABLED_ONLY_MODEL_IDS = [
+const MODELS = manifest.modelCatalog.providers.kimi.models;
+// Rows that list reasoning efforts use the K3 request shape. Self-hosted K3 serves `kimi-k3`
+// without a Kimi Code row, and retired `k3[1m]` still names K3 in shipped configs.
+const KIMI_K3_MODEL_IDS = new Set([
+  ...MODELS.flatMap((row) => (row.compat?.supportedReasoningEfforts ? [row.id] : [])),
+  "kimi-k3",
+  "k3[1m]",
+]);
+// Rows that map `off` to null cannot disable thinking. Kimi Code's K2.8 backend leaks reasoning
+// when thinking is disabled, but released readers still offer `off` for it, so its IDs stay here.
+const KIMI_CODE_ENABLED_ONLY_MODEL_IDS = new Set([
+  ...MODELS.flatMap((row) =>
+    row.thinkingLevelMap && "off" in row.thinkingLevelMap && row.thinkingLevelMap.off === null
+      ? [row.id]
+      : [],
+  ),
   "kimi-for-coding",
   "kimi-for-coding-highspeed",
   // Legacy aliases of kimi-for-coding.
   "kimi-code",
   "k2p5",
-  ...KIMI_K3_1_MODEL_IDS,
-] as const;
+]);
 
 export const KIMI_K3_THINKING_EFFORTS = {
   minimal: "low",
@@ -39,17 +49,12 @@ const KIMI_K3_THINKING_LEVELS = [
 ] as const satisfies ProviderThinkingProfile["levels"];
 
 export function isKimiK3ModelId(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  return (
-    KIMI_K3_MODEL_IDS.includes(normalized as (typeof KIMI_K3_MODEL_IDS)[number]) ||
-    KIMI_K3_LEGACY_MODEL_IDS.includes(normalized as (typeof KIMI_K3_LEGACY_MODEL_IDS)[number])
-  );
+  return KIMI_K3_MODEL_IDS.has(modelId.trim().toLowerCase());
 }
 
 /** Kimi Code models whose backend cannot honor disabled thinking. */
 export function isKimiCodeEnabledOnlyModelId(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  return KIMI_CODE_ENABLED_ONLY_MODEL_IDS.some((id) => id === normalized);
+  return KIMI_CODE_ENABLED_ONLY_MODEL_IDS.has(modelId.trim().toLowerCase());
 }
 
 export function resolveThinkingProfile({

@@ -1,4 +1,4 @@
-import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import type { WorkerProvider, WorkerRetentionPolicy } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildCrabboxAllocationArgs,
   type resolveCrabboxProvisionProfile,
@@ -18,6 +18,7 @@ import {
 } from "./crabbox-worker-warm-image-store.js";
 
 export type AllocationContext = CheckpointContext & {
+  retention?: WorkerRetentionPolicy;
   id: string;
   provider: string;
   reportStartStatus?: (status: WarmStartStatus) => void;

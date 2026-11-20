@@ -46,6 +46,12 @@ active local holders and recorded sibling workers remain protected. For an admit
 run, `lastRun` retains the failed step and lock reason code. A failure before run
 admission does not replace earlier history.
 
+On an installation that keeps releases behind a linked package path, status
+lists the active release and each retained release with its version and build,
+and marks releases a running Gateway still uses. JSON reports them as
+`packageReleases`. See
+[release directories](/cli/update/how-updates-run#release-directories-on-openclaw-owned-prefixes).
+
 When a package publication journal no longer matches its installation, status
 names the changed parent, control directory, or journal bindings with their
 recorded and current `dev:ino` values. It identifies device-number-only changes
@@ -137,6 +143,22 @@ printed during an earlier phase can remain in the terminal scrollback.
 Repeated warnings appear once in the final report. If update Doctor deferred
 agent database path repair to preserve the rollback inventory, its warning points
 to `openclaw doctor --fix` without telling you to wait for the completed update.
+
+Status shows each [owed step](/cli/update/how-updates-run#owed-steps) as a warning
+with its reason and what settles it. A successful update's headline counts it
+among its warnings. The step `id` is `shell-completion`, `service-definition`,
+`plugin-convergence`, or `post-plugin-doctor`. A plugin step also appears in the
+update's `postUpdate.plugins.warnings` with the step `id` as its `reason`. The
+newest of the last 50 runs that mentions a step decides whether it is still
+owed, so the warning stays visible after a later run that did not settle it.
+Failed and rolled-back runs owe nothing. JSON lists owed steps as `owedSteps`
+with `id`, `runId`, and `reason`; the field is absent when nothing is owed.
+`openclaw update repair --json` reports the steps it leaves owed in the same
+field, with `id` and `reason`. In the run record, an owed step is a
+`finalize:owed:<id>` step with status `skipped` and the reason in `detail`. The
+status becomes `completed` once the step is settled. A later run that still owes
+the step records its own row and leaves the earlier one unchanged, so the earlier
+run owes the step again if that later run fails.
 
 When the Gateway is reachable, status also reads its recorded channel warnings
 without checking channel services. JSON exposes these as `channelIssues`. This
@@ -408,8 +430,10 @@ When a history request needs a read-only snapshot, the Gateway prepares it
 asynchronously so other requests can continue. The snapshot preserves the source
 database and its sidecar files. The Gateway's `update.status` reads its two run
 records through the already-open database when available, avoiding full-database
-copies on each poll. Cold status reads prepare one private snapshot. When
-diagnostics are enabled, status requests lasting at least one second log phase
+copies on each poll. Ordinary status reads use a native read-only connection;
+explicit artifact-preserving inspection, including `openclaw update status`,
+retains private snapshots when required. When diagnostics are enabled, status
+requests lasting at least one second log phase
 durations for sentinel refresh, checkout refresh, install identity, reconciliation,
 history, and response.
 
@@ -443,6 +467,12 @@ version is not proof of the version currently serving requests. Optional Doctor
 diagnostic failures remain warnings, while refused config writes and incomplete
 required migrations remain errors. Historical runs cannot recover facts that
 their updater never recorded.
+
+Reviewed public failure reports keep known ledger diagnostics when a matching
+restart sentinel has no exit code or failure facts. Supplied errors use the same
+bounded public diagnostic redaction as failed steps; private paths, commands, and
+arbitrary error text remain excluded. The reporting Gateway or CLI must contain
+this fix; it does not repair the failed update itself.
 
 If a candidate check exits by signal, its failed step retains `termination`,
 `signal`, and a redacted `stderrTail` (up to 80 lines, 512 characters per line,

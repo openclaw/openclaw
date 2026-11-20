@@ -20,8 +20,8 @@ import {
   assertSessionFileReadPolicy,
   sessionFileWorkspaceMatches,
 } from "./server-methods/session-file-read-authority.js";
+import { prepareLocalSessionWorkspaceRoot } from "./server-methods/session-files-root.js";
 import { retainSessionScopedRead } from "./server-methods/session-scoped-read.js";
-import { prepareLocalSessionWorkspaceRoot } from "./server-methods/sessions-files.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   updateWorkspaceFile,

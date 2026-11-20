@@ -563,6 +563,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
     const turnId = readString(params.requestParams, "turnId");
     const payload: JsonObject = {
       hook_event_name: "PreToolUse",
+      session_id: readString(params.requestParams, "threadId") ?? "",
       openclaw_approval_mode: "report",
       tool_name: "exec_command",
       ...(params.context.approvalId ? { tool_use_id: params.context.approvalId } : {}),

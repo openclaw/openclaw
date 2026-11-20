@@ -439,12 +439,13 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       onWarn: (message) => logger.warn(message),
     });
   });
-  configureSystemProfileImportStateStore(
+  const releaseImportStateStore = configureSystemProfileImportStateStore(
     api.runtime.state.openKeyedStore<SystemProfileImportState>({
       namespace: "browser.system-profile-import",
       maxEntries: 1,
     }),
   );
+  api.lifecycle.onDispose?.(releaseImportStateStore);
   api.registerTool(
     (ctx: OpenClawPluginToolContext) => {
       const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;

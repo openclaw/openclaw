@@ -229,7 +229,13 @@ pr_operation_lock_owner_is_current() {
   local root="$1"
   local lock_ref="$2"
   local expected_oid="$3"
-  local current_oid ref_status=0
+  local current_oid ref_status=0 observation
+  # One observation proves a healthy direct owner. Git can omit damaged or
+  # dangling refs here; every other result retains the exact classifier below.
+  if observation=$(pr_git -C "$root" for-each-ref --format='%(refname) %(objectname) %(symref)' -- "$lock_ref" 2>/dev/null) &&
+    [ "$observation" = "$lock_ref $expected_oid " ]; then
+    return 0
+  fi
   if pr_git -C "$root" symbolic-ref -q "$lock_ref" >/dev/null 2>&1; then
     return 2
   fi

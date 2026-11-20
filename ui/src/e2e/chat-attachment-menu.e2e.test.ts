@@ -301,4 +301,49 @@ suite.define(() => {
       },
     ),
   );
+
+  it("reopens at its measured height instead of growing upward", async () => {
+    await withChat({ route: "chat" }, async (page) => {
+      const trigger = page.getByRole("button", { name: "Add attachment", exact: true });
+      const panel = page.locator(".agent-chat__capability-menu-panel");
+      await trigger.click();
+      // Opening can finish before the lazy menu content has loaded and been measured.
+      await page.getByRole("menuitem", { name: "Skills", exact: true }).waitFor();
+      await expect.poll(() => panel.evaluate((surface) => surface.style.height)).not.toBe("");
+      await expect.poll(() => panel.getAttribute("data-phase")).toBe("open");
+      await page.keyboard.press("Escape");
+      await expect.poll(() => panel.getAttribute("data-phase")).toBe("hidden");
+      // Sample every visible entry frame of the second open.
+      const heights = page.evaluate(
+        () =>
+          new Promise<string[]>((resolve) => {
+            const seen: string[] = [];
+            const tick = () => {
+              const surface = document.querySelector<HTMLElement>(
+                ".agent-chat__capability-menu-panel",
+              );
+              if (surface && Number(getComputedStyle(surface).opacity) > 0) {
+                seen.push(getComputedStyle(surface).height);
+              }
+              if (surface?.dataset.phase === "open") {
+                resolve(seen);
+              } else {
+                requestAnimationFrame(tick);
+              }
+            };
+            requestAnimationFrame(tick);
+          }),
+      );
+      await trigger.click();
+      expect(new Set(await heights).size).toBe(1);
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page
+        .getByRole("menuitem", { name: /Skills/ })
+        .first()
+        .click();
+      expect(await panel.evaluate((surface) => getComputedStyle(surface).transitionProperty)).toBe(
+        "none",
+      );
+    });
+  });
 });

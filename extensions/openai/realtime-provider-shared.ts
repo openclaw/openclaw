@@ -43,7 +43,7 @@ type OpenAIRealtimeClientSecretRequest = {
 };
 
 export function resolveOpenAIRealtimeRequestHeaders(
-  { resolveProviderRequestHeaders }: OpenAIRealtimeHost,
+  { resolveProviderRequestHeaders }: Pick<OpenAIRealtimeHost, "resolveProviderRequestHeaders">,
   baseUrl: string,
   defaultHeaders: Record<string, string> = {},
   transport: "http" | "websocket" = "http",

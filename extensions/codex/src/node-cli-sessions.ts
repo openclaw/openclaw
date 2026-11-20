@@ -18,6 +18,7 @@ import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   asNonArrayRecord,
   isRecord,
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
@@ -311,7 +312,8 @@ async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<st
     min: 1,
     max: MAX_SESSION_LIMIT,
   });
-  const filter = typeof params.filter === "string" ? params.filter.trim().toLowerCase() : "";
+  // Canonical forms compare equal here; sessions keep their original spelling.
+  const filter = normalizeLowercaseStringOrEmpty(params.filter).normalize("NFC");
   const codexHome = resolveCodexAppServerUserHomeDir();
   const summaries = await readHistorySessions(codexHome);
   await hydrateSessionsFromSessionFiles(codexHome, summaries);
@@ -321,7 +323,7 @@ async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<st
         return true;
       }
       return [session.sessionId, session.cwd, session.lastMessage].some((value) =>
-        value?.toLowerCase().includes(filter),
+        normalizeLowercaseStringOrEmpty(value).normalize("NFC").includes(filter),
       );
     })
     .toSorted((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))

@@ -3,6 +3,7 @@ import {
   normalizePromptCapabilityIds,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "@openclaw/ai/internal/shared";
+import { internalSessionEffectsBaseKey } from "../config/sessions/internal-session-key.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
@@ -79,9 +80,10 @@ export function buildRuntimeLine(
   runtimeCapabilities: string[] = [],
 ): string {
   const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
-  // Transcript ids rotate on rewind; isolated cron keys also carry per-run ids.
-  // Keep only stable session identity in the cached Runtime line.
-  const { baseSessionKey } = parseCronRunScopeSuffix(runtimeInfo?.sessionKey);
+  // Transcript ids rotate on rewind; isolated cron keys and hidden internal-effects runs also
+  // carry per-run ids. Keep only stable session identity in the cached Runtime line.
+  const { baseSessionKey: cronBaseKey } = parseCronRunScopeSuffix(runtimeInfo?.sessionKey);
+  const baseSessionKey = (cronBaseKey && internalSessionEffectsBaseKey(cronBaseKey)) ?? cronBaseKey;
   const fields = {
     name: runtimeInfo?.agentName,
     agent: runtimeInfo?.agentId,

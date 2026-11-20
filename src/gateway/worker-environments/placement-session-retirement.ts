@@ -48,11 +48,7 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
   ) => {
     const unsubscribeFacts = sessionChanges.subscribeFacts((change) => {
       if ("all" in change) {
-        if (
-          change.scope === "config" ||
-          change.scope === "worker-environments" ||
-          sessionChangeScopeAffectsStoredRows(change)
-        ) {
+        if (change.scope === "config" || sessionChangeScopeAffectsStoredRows(change)) {
           invalidateAll();
         }
       } else if (

@@ -386,6 +386,21 @@ describe("commands registry", () => {
 });
 
 describe("commands registry args", () => {
+  it("leaves bare ACP to its help handler instead of offering incomplete actions", () => {
+    const command = chatCommand("acp");
+    expect(resolveCommandArgMenu({ command, cfg: {} })).toBeNull();
+    expect(buildCommandTextFromArgs(command, parseCommandArgs(command, "spawn claude"))).toBe(
+      "/acp spawn claude",
+    );
+    const action = expectDefined(
+      command.args?.find((arg) => arg.name === "action"),
+      "ACP action",
+    );
+    expect(resolveCommandArgChoices({ command, arg: action })).toContainEqual({
+      value: "spawn",
+      label: "spawn",
+    });
+  });
   it("parses positional args and captureRemaining", () => {
     const command = commandFixture("debug", [
       commandArg("action"),
@@ -439,8 +454,11 @@ describe("commands registry args", () => {
       command: { key: "think" },
       arg: { name: "level" },
       agentRuntime: "codex",
-      catalog: [],
     });
+    // The default model's bundled row supplies its thinking facts.
+    expect(seenChoice.catalog).toEqual([
+      expect.objectContaining({ provider: seenChoice.provider, id: seenChoice.model }),
+    ]);
     expect(typeof seenChoice.provider).toBe("string");
     expect(seenChoice.provider?.trim().length).toBeGreaterThan(0);
     expect(typeof seenChoice.model).toBe("string");
@@ -460,6 +478,15 @@ describe("commands registry args", () => {
       agentRuntime,
     });
     expect(menu.choices.some((choice) => choice.value === "ultra")).toBe(true);
+  });
+  it("builds the /think menu for the configured default model's bundled row", () => {
+    const command = nativeCommand("think");
+    const menu = argMenu({
+      command,
+      cfg: { agents: { defaults: { model: { primary: "moonshot/kimi-k3" } } } },
+    });
+    expect(menuValues(menu)).toContain("max");
+    expect(menuValues(menu)).not.toContain("low");
   });
   it.each<[unknown, CommandArgChoiceContext["catalog"]]>([
     [modelConfig("ollama", ollamaModel), undefined],

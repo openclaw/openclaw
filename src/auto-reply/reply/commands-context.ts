@@ -72,6 +72,9 @@ export function buildCommandContext(
     senderIsOwner: auth.senderIsOwner,
     ...(auth.assertOwnerCurrent ? { assertOwnerCurrent: auth.assertOwnerCurrent } : {}),
     isAuthorizedSender: auth.isAuthorizedSender,
+    ...(auth.assertAuthorizedCurrent
+      ? { assertAuthorizedCurrent: auth.assertAuthorizedCurrent }
+      : {}),
     senderId: auth.senderId,
     abortKey,
     rawBodyNormalized,

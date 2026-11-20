@@ -403,6 +403,7 @@ test.each([
   ["sessions.delete", "snapshot-failed", false],
   ["sessions.delete", "snapshot-failed", true],
   ["sessions.delete", "finalized", false],
+  ["sessions.delete", "preserved", false],
   ["sessions.delete", "busy", false],
   ["sessions.delete", "owner-mismatch", false],
   ["sessions.reset", "removed", false],
@@ -441,12 +442,27 @@ test.each([
       removeSpy.mockClear();
     } else if (outcome === "busy") {
       runLease = await acquireWorktreeRunLease(worktree.id);
-    } else if (outcome === "snapshot-failed" || outcome === "finalized") {
+    } else if (
+      outcome === "snapshot-failed" ||
+      outcome === "finalized" ||
+      outcome === "preserved"
+    ) {
       removeSpy.mockImplementation(async function (this: ManagedWorktreeService, params) {
         if (params.id === worktree.id && params.reason === "session-delete") {
           if (outcome === "finalized") {
             await originalRemove(this, params);
             throw new WorktreeRemovalContentionError("finalized", "removed concurrently");
+          }
+          if (outcome === "preserved") {
+            return {
+              removed: false,
+              preserved: {
+                state: "preserved",
+                reason: "nested repository",
+                attempts: 1,
+                nextAttemptAt: null,
+              },
+            };
           }
           throw new WorktreeSnapshotError("simulated snapshot failure");
         }
@@ -486,7 +502,12 @@ test.each([
         ok: true,
         payload: {
           deleted: true,
-          worktreePreserved: { id, path: worktreePath, branch, reason: outcome },
+          worktreePreserved: {
+            id,
+            path: worktreePath,
+            branch,
+            reason: outcome === "preserved" ? "cleanup-failed" : outcome,
+          },
         },
       });
     } else {

@@ -1,4 +1,5 @@
 import { onTestFinished, vi } from "vitest";
+import type { UsersPrefsGetResult } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { createConfigCapabilityHarness } from "../lib/config/config-test-harness.ts";
@@ -97,8 +98,8 @@ export function holdProfileAppearanceRead(
   return { readStarted, reply };
 }
 
-type ProfileAppearanceReply = ReturnType<typeof profileAppearanceReply>;
+type ProfileAppearanceReply = UsersPrefsGetResult;
 
-export function profileAppearanceReply(accent: string) {
+export function profileAppearanceReply(accent: string): UsersPrefsGetResult {
   return { status: "ok", entries: { "ui.accent": accent, "ui.railShortcuts": [] } };
 }

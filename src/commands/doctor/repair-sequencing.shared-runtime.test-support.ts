@@ -82,8 +82,12 @@ const database = new (require("node:sqlite").DatabaseSync)(databasePath, { readO
 const fromInstall = require("node:module").createRequire(require("node:path").join(packageRoot, "index.cjs"));
 const mirror = require(modulePath);
 const version = () => database.prepare("PRAGMA user_version").get().user_version;
-process.on("disconnect", () => database.close());
-process.on("message", () => {
+process.on("message", (message) => {
+  if (message === "close") {
+    database.close();
+    process.disconnect();
+    return;
+  }
   process.send(["read", version(), fromInstall("fixture-runtime-dependency/late.cjs").value, mirror.readLater()]);
 });
 process.send(["ready", version(), fromInstall("fixture-runtime-dependency").value, mirror.value]);
@@ -119,7 +123,7 @@ process.send(["ready", version(), fromInstall("fixture-runtime-dependency").valu
         expect(await fs.readFile(unknownFile, "utf8")).toBe("another consumer's files\n");
       } finally {
         if (reader.connected) {
-          reader.disconnect();
+          reader.send("close");
         }
         await expect(closed).resolves.toEqual([0, null]);
       }

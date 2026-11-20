@@ -21,6 +21,7 @@ import {
   resetTelegramMessageCacheForTest,
 } from "./runtime.test-support.js";
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
+import { getTopicName, resolveTelegramDirectTopicNameCacheScope } from "./topic-name-cache.js";
 
 describe("Telegram registered action authority and input contracts", () => {
   const fixture = useTelegramHttpFixture();
@@ -73,19 +74,29 @@ describe("Telegram registered action authority and input contracts", () => {
     await state.cleanup();
   });
 
+  const pollInput = { question: "Ready?", answers: ["Yes", "No"] };
+  const sendInput = { to: "123", message: "Shipped" };
+  const nativeButtons = '[[{"text":"Yes","callback_data":"yes"}]]';
+  const conflictingPoll = { to: "123", ...pollInput, pollAnonymous: true, pollPublic: true };
+  const customEmojis = (length: number) =>
+    Array.from({ length }, (_, id) => ({
+      type: "custom_emoji",
+      custom_emoji_id: String(9000 + id),
+    }));
+  it.each([
+    { label: "true", params: { silent: true }, notification: { disable_notification: true } },
+    { label: "false", params: { silent: false }, notification: {} },
+    { label: "omitted", params: {}, notification: {} },
+  ])("preserves silent sticker delivery ($label)", async ({ params, notification }) => {
+    cfg.channels!.telegram!.actions = { sticker: true };
+    await invoke("sticker", { to: "-1001", stickerId: ["sticker-file"], ...params });
+    const fields = { chat_id: "-1001", sticker: "sticker-file", ...notification };
+    expect(requests).toEqual([{ method: "sendSticker", fields }]);
+  });
+
   it.for([
-    {
-      action: "poll",
-      params: { question: "Ready?", answers: ["Yes", "No"] },
-      method: "sendPoll",
-      revoke: false,
-    },
-    {
-      action: "poll",
-      params: { question: "Ready?", answers: ["Yes", "No"] },
-      method: "sendPoll",
-      revoke: true,
-    },
+    { action: "poll", params: pollInput, method: "sendPoll", revoke: false },
+    { action: "poll", params: pollInput, method: "sendPoll", revoke: true },
     { action: "sticker", params: { fileId: "fixture-sticker" }, revoke: true },
     { action: "topic-create", params: { name: "Guarded topic" }, revoke: true },
     { action: "topic-edit", params: { threadId: 77, name: "Guarded topic" }, revoke: true },
@@ -151,6 +162,34 @@ describe("Telegram registered action authority and input contracts", () => {
         }
         await pending.catch(() => undefined);
       }
+    },
+  );
+
+  it.each(["123", "-1001"])(
+    "records topic edits in the metadata owner's scope for %s",
+    async (chatId) => {
+      cfg.agents = { ownership: "explicit", entries: { main: {}, ops: {} } };
+      cfg.bindings = [{ agentId: "ops", match: { channel: "telegram", accountId: "alerts" } }];
+      cfg.channels!.telegram!.defaultAccount = "alerts";
+      cfg.channels!.telegram!.accounts = { alerts: { botToken: "654321:topic-edit-fixture" } };
+      cfg.channels!.telegram!.actions = { editForumTopic: true };
+      await invoke("topic-edit", { chatId, threadId: 77, name: "Explicit topic title" });
+      const ownerStore = resolveStorePath(cfg.session?.store, { agentId: "ops" });
+      const scope =
+        chatId === "123"
+          ? resolveTelegramDirectTopicNameCacheScope(ownerStore, "alerts")
+          : ownerStore;
+      expect(await getTopicName(chatId, 77, scope)).toBe("Explicit topic title");
+      expect(
+        await getTopicName(
+          chatId,
+          77,
+          resolveTelegramDirectTopicNameCacheScope(ownerStore, "other"),
+        ),
+      ).toBeUndefined();
+      expect(
+        await getTopicName(chatId, 77, resolveStorePath(cfg.session?.store, { agentId: "main" })),
+      ).toBeUndefined();
     },
   );
 
@@ -380,13 +419,7 @@ describe("Telegram registered action authority and input contracts", () => {
             id: 123,
             type: "private",
             first_name: "Fixture",
-            available_reactions: [
-              ...Array.from({ length: 25 }, (_, index) => ({
-                type: "custom_emoji",
-                custom_emoji_id: String(9000 + index),
-              })),
-              { type: "emoji", emoji: "👍" },
-            ],
+            available_reactions: [...customEmojis(25), { type: "emoji", emoji: "👍" }],
           }
         : undefined;
     const result = await invoke("react", { chatId: "123", messageId: 456, emoji: "✅" });
@@ -416,13 +449,7 @@ describe("Telegram registered action authority and input contracts", () => {
       id: -1001,
       type: "supergroup",
       title: "Fixture",
-      available_reactions: [
-        { type: "emoji", emoji: "👍" },
-        ...Array.from({ length: 120 }, (_, index) => ({
-          type: "custom_emoji",
-          custom_emoji_id: String(9000 + index),
-        })),
-      ],
+      available_reactions: [{ type: "emoji", emoji: "👍" }, ...customEmojis(120)],
     });
     for (const context of [
       { ...trusted, requesterAccountId: "other" },
@@ -436,14 +463,12 @@ describe("Telegram registered action authority and input contracts", () => {
       /exact current chat and account/,
     );
     expect(requests).toEqual([]);
+    const emojis = [
+      { name: "👍", identifier: "👍" },
+      { identifier: "9000", type: "custom_emoji" },
+    ];
     await expect(invoke("emoji-list", { limit: 2 }, trusted)).resolves.toMatchObject({
-      details: {
-        ok: true,
-        emojis: [
-          { name: "👍", identifier: "👍" },
-          { identifier: "9000", type: "custom_emoji" },
-        ],
-      },
+      details: { ok: true, emojis },
     });
     const capped = await invoke("emoji-list", { chatId: "-1002", limit: 200 });
     expect(capped.details).toMatchObject({
@@ -454,40 +479,23 @@ describe("Telegram registered action authority and input contracts", () => {
   });
 
   it.each([
-    { action: "send", params: { to: "123" }, error: /content required/i },
-    {
-      action: "poll",
-      params: {
-        to: "123",
-        question: "Ready?",
-        answers: ["Yes", "No"],
-        pollAnonymous: true,
-        pollPublic: true,
-      },
-      error: /mutually exclusive/i,
-    },
-    {
-      action: "send",
-      params: {
+    ["send", { to: "123" }, /content required/i],
+    ["poll", conflictingPoll, /mutually exclusive/i],
+    [
+      "send",
+      {
         to: "123",
         location: { latitude: 1, longitude: 2 },
         presentation: { blocks: [{ type: "text", text: "caption" }] },
       },
-      error: /cannot be combined/,
-    },
-    {
-      action: "send",
-      params: { to: "123", message: "choose", buttons: '[[{"text":"Yes","callback_data":"yes"}]]' },
-      error: /native "buttons" is unsupported/,
-    },
-  ] as const)(
-    "rejects invalid external $action input before network delivery: $error",
-    async ({ action, params, error }) => {
-      cfg.channels!.telegram!.actions = { sticker: true };
-      await expect(invoke(action, params)).rejects.toThrow(error);
-      expect(requests).toEqual([]);
-    },
-  );
+      /cannot be combined/,
+    ],
+    ["send", { ...sendInput, buttons: nativeButtons }, /native "buttons" is unsupported/],
+  ] as const)("rejects invalid %s input %j", async (action, params, error) => {
+    cfg.channels!.telegram!.actions = { sticker: true };
+    await expect(invoke(action, params)).rejects.toThrow(error);
+    expect(requests).toEqual([]);
+  });
 
   it("preserves structured missing-topic-name validation", async () => {
     cfg.channels!.telegram!.actions = { createForumTopic: true };

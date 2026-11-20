@@ -5,6 +5,7 @@ import type { GitHubIdentityFacts } from "../../packages/gateway-protocol/src/in
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseWithLimit } from "../infra/http-response-body.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { getRepositoryIntegration } from "../plugins/repository-integration-runtime.js";
 import type { GitHubAppSelection, GitHubCredentialReader } from "./github-credential-reader.js";
 import { resolveGitHubHost, resolveGitHubApiBaseUrl } from "./github-host-runtime.js";
 import { GitHubIdentityError, type GitHubIdentityPreparation } from "./github-read-identity.js";
@@ -117,9 +118,12 @@ export async function prepareAppGitHubIdentity(
     throw new GitHubIdentityError("unavailable");
   }
   const identitySnapshot = structuredClone(selection);
+  const integration = getRepositoryIntegration(params.config);
   const assertCurrent = () => {
     params.assertCurrent?.();
+    params.readNativeCredential?.assertCurrent?.();
     if (
+      getRepositoryIntegration(params.config) !== integration ||
       resolveGitHubHost() !== host ||
       resolveGitHubApiBaseUrl() !== apiBaseUrl ||
       !isDeepStrictEqual(selection, identitySnapshot)
@@ -141,7 +145,7 @@ export async function prepareAppGitHubIdentity(
     // and broker receipt are narrowed to the repository this request reads.
     requestedSelection = { ...selection, app: { ...selection.app, repositories: [repository] } };
   }
-  if (process.env.FACTORY_AUTH_MODE === "github") {
+  if (integration || process.env.FACTORY_AUTH_MODE === "github") {
     if (!params.readNativeCredential) {
       throw new GitHubIdentityError("unavailable");
     }
@@ -422,13 +426,10 @@ export function configuredAppGitHubOptionsIdentity(
   selection: GitHubAppSelection,
   source: "system-configured" | "agent-override",
 ) {
-  const metadata = readGitHubAppInstallationMetadata(
-    selection,
-    resolveGitHubHost(),
-    resolveGitHubApiBaseUrl(),
-  );
+  const host = resolveGitHubHost();
+  const metadata = readGitHubAppInstallationMetadata(selection, host, resolveGitHubApiBaseUrl());
   if (!metadata) {
     throw new GitHubIdentityError("unavailable");
   }
-  return { source, account: metadata.account, stale: undefined };
+  return { source, host, account: metadata.account, stale: undefined };
 }

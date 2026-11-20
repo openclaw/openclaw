@@ -7,16 +7,20 @@ import { resolveStateDir } from "../config/paths.js";
 import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import { renderCmdSetAssignment } from "../daemon/cmd-set.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { AGENT_GIT_SHIM } from "./agent-git-shim.js";
 import { writeTextAtomic } from "./json-files.js";
 import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
+import { resolveStableNodePath } from "./stable-node-path.js";
 
 const AGENT_CLI_BIN_DIR = path.join("tmp", "agent-cli");
+const AGENT_GIT_BIN_DIR = path.join("tmp", "agent-git");
 const GATEWAY_AGENT_CLI_STATE_KEY = Symbol.for("openclaw.gatewayAgentCliShim");
 const gatewayAgentCliState = resolveGlobalSingleton(
   GATEWAY_AGENT_CLI_STATE_KEY,
-  () => ({ binDir: undefined as string | undefined }),
+  (): { binDir?: string; gitBinDir?: string } => ({}),
   (state) => {
     state.binDir = undefined;
+    state.gitBinDir = undefined;
   },
 );
 
@@ -28,6 +32,10 @@ export async function prepareGatewayAgentCliShim(): Promise<void> {
   const env = process.env;
   const platform = process.platform;
   const invocation = resolveCurrentOpenClawCliInvocation([]);
+  // The launcher outlives this process: a version-pinned interpreter (Homebrew
+  // Cellar) is removed by the next runtime upgrade and strands every shim call
+  // until the Gateway restarts, so prefer an upgrade-stable path when one exists.
+  const command = await resolveStableNodePath(invocation.command);
   const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
   const binDir = path.join(resolveStateDir(env), AGENT_CLI_BIN_DIR);
   const executablePath = path.join(binDir, platform === "win32" ? "openclaw.cmd" : "openclaw");
@@ -45,13 +53,13 @@ export async function prepareGatewayAgentCliShim(): Promise<void> {
           "@echo off",
           "setlocal DisableDelayedExpansion",
           ...environment,
-          `${[invocation.command, ...args].map((arg) => quoteCmdScriptArg(arg, context)).join(" ")} %*`,
+          `${[command, ...args].map((arg) => quoteCmdScriptArg(arg, context)).join(" ")} %*`,
           "",
         ].join("\r\n")
       : `#!/bin/sh
 set -eu
 ${environment.join("\n")}
-exec ${[invocation.command, ...args].map(quoteCliArg).join(" ")} "$@"
+exec ${[command, ...args].map(quoteCliArg).join(" ")} "$@"
 `;
 
   await fs.mkdir(binDir, { recursive: true, mode: 0o700 });
@@ -63,17 +71,32 @@ exec ${[invocation.command, ...args].map(quoteCliArg).join(" ")} "$@"
     tempPrefix: "openclaw-agent-cli",
   });
   gatewayAgentCliState.binDir = binDir;
+  if (platform !== "win32") {
+    const gitBinDir = path.join(resolveStateDir(env), AGENT_GIT_BIN_DIR);
+    await writeTextAtomic(path.join(gitBinDir, "git"), AGENT_GIT_SHIM, {
+      mode: 0o755,
+      dirMode: 0o755,
+      durable: false,
+      tempPrefix: "openclaw-agent-git",
+    });
+    gatewayAgentCliState.gitBinDir = gitBinDir;
+  }
 }
+
+/** Contains only the portable Git tool; safe to mount read-only inside a sandbox. */
+export const getGatewayAgentGitBinDir = () => gatewayAgentCliState.gitBinDir;
 
 /** Clear a prepared launcher after startup failure; normal Gateway close resets it globally. */
 export function clearGatewayAgentCliShim(): void {
   gatewayAgentCliState.binDir = undefined;
+  gatewayAgentCliState.gitBinDir = undefined;
 }
 
 /** Prepend the prepared Gateway CLI ahead of operator-configured exec PATH entries. */
 export function mergeGatewayAgentCliPath(configured?: string[]): string[] | undefined {
   const merged = normalizeUniqueStringEntries([
     ...(gatewayAgentCliState.binDir ? [gatewayAgentCliState.binDir] : []),
+    ...(gatewayAgentCliState.gitBinDir ? [gatewayAgentCliState.gitBinDir] : []),
     ...(configured ?? []),
   ]);
   return merged.length > 0 ? merged : undefined;
@@ -81,6 +104,7 @@ export function mergeGatewayAgentCliPath(configured?: string[]): string[] | unde
 
 /** Drop the Gateway-local CLI shim, e.g. before judging operator PATH entries for remote hosts. */
 export function omitGatewayAgentCliPath(entries: readonly string[]): string[] {
-  const binDir = gatewayAgentCliState.binDir;
-  return entries.filter((entry) => entry !== binDir);
+  return entries.filter(
+    (entry) => entry !== gatewayAgentCliState.binDir && entry !== gatewayAgentCliState.gitBinDir,
+  );
 }

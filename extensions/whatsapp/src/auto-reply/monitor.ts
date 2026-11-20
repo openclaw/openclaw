@@ -30,6 +30,7 @@ import {
   type WhatsAppBaileysMessageCache,
 } from "../inbound/baileys-cache.js";
 import type { WhatsAppGroupMetadataCache } from "../inbound/group-metadata-cache.js";
+import { WHATSAPP_APPEND_REPLY_MAX_AGE_MS } from "../inbound/message-delivery.js";
 import { attachWebInboxToSocket } from "../inbound/monitor.js";
 import type { WebInboundCallbackMessage } from "../inbound/types.js";
 import {
@@ -77,7 +78,6 @@ function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnst
 }
 
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 5 * 60 * 1000;
-const WHATSAPP_RECONNECT_CATCH_UP_MAX_MS = 20 * 60_000;
 
 export async function monitorWebChannel(
   verbose: boolean,
@@ -140,9 +140,9 @@ export async function monitorWebChannel(
 
   const transportTimeoutMs = tuning.transportTimeoutMs ?? DEFAULT_TRANSPORT_TIMEOUT_MS;
   const messageTimeoutMs = tuning.messageTimeoutMs ?? 30 * 60 * 1000;
-  const reconnectCatchUpWindowMs = Math.min(
+  const appendReplyMaxAgeMs = Math.min(
     Math.max(messageTimeoutMs, 60_000),
-    WHATSAPP_RECONNECT_CATCH_UP_MAX_MS,
+    WHATSAPP_APPEND_REPLY_MAX_AGE_MS,
   );
   const watchdogCheckMs = tuning.watchdogCheckMs ?? 60 * 1000;
   const controller = new WhatsAppConnectionController({
@@ -222,13 +222,7 @@ export async function monitorWebChannel(
               sendReadReceipts: account.sendReadReceipts,
               socketTiming,
               debounceMs: tuning.debounceMs,
-              appendReplyWindow: connectionLocal.openedAfterRecentInbound
-                ? {
-                    afterMs: connectionLocal.startedAt - reconnectCatchUpWindowMs,
-                    untilMs: connectionLocal.startedAt + reconnectCatchUpWindowMs,
-                    maxAgeMs: reconnectCatchUpWindowMs,
-                  }
-                : undefined,
+              appendReplyMaxAgeMs,
               shouldDebounce,
               socketRef: controller.socketRef,
               shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),
@@ -408,11 +402,18 @@ export async function monitorWebChannel(
         channel: "whatsapp",
         accountId: account.accountId,
       });
-      enqueueSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
-        sessionKey: connectRoute.sessionKey,
-      });
-
       const normalizedAccountId = normalizeReconnectAccountId(account.accountId);
+      // Keep only the latest connection state so reconnects cannot fill the session queue.
+      const connectionNotice = {
+        sessionKey: connectRoute.sessionKey,
+        contextKey: `whatsapp:connection:${normalizedAccountId}`,
+        replace: true,
+      };
+      enqueueSystemEvent(
+        `WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`,
+        connectionNotice,
+      );
+
       const drainDeliveries = (mode: "reconnect" | "periodic") => {
         void drainPendingDeliveries({
           drainKey: `whatsapp:${normalizedAccountId}`,
@@ -505,9 +506,7 @@ export async function monitorWebChannel(
 
       enqueueSystemEvent(
         `WhatsApp gateway disconnected (status ${decision.normalized.statusLabel})`,
-        {
-          sessionKey: connectRoute.sessionKey,
-        },
+        connectionNotice,
       );
 
       if (decision.action === "stop") {

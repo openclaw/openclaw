@@ -48,7 +48,7 @@ vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
       },
     };
     const captureSource = args[4] ?? storage.forbidden;
-    captureSource(context, context.admission.identity);
+    captureSource({ context, identity: context.admission.identity });
     storage.held = true;
     storage.expiresAt = Date.now() + storage.remainingMs;
     return { kind: "acquired", expiresAt: storage.expiresAt };

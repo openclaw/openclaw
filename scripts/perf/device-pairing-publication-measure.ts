@@ -18,7 +18,7 @@ import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promi
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { PairedDevice } from "../../src/infra/device-pairing.types.js";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -62,15 +62,10 @@ const warmup = integer("warmup", 0);
 const deviceCount = integer("devices", 1);
 const publicationsPerMinute = integer("publications-per-minute", 1);
 const profilePath = path.resolve(`${values.output}.heapprofile`);
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
 if (values.mode === "promotion") {
-  marker("identify-start");
+  writeGatewayGcTraceMarker("identify-start", profilePath);
   global.gc();
-  marker("identify-stop");
+  writeGatewayGcTraceMarker("identify-stop", profilePath);
 }
 
 const publicationUrl = new URL("../../src/infra/device-pairing-publication.ts", import.meta.url);
@@ -307,13 +302,13 @@ try {
     const startedAt = Date.now();
     const cpu = process.threadCpuUsage();
     const processCpu = process.cpuUsage();
-    marker("diagnostics-start");
+    writeGatewayGcTraceMarker("diagnostics-start", profilePath);
     const started = performance.now();
     await run(operations, latencies, readLatencies);
     const ended = performance.now();
     const usedCpu = process.threadCpuUsage(cpu);
     const usedProcessCpu = process.cpuUsage(processCpu);
-    marker("diagnostics-stop");
+    writeGatewayGcTraceMarker("diagnostics-stop", profilePath);
     loop.disable();
     await nextTurn();
     for (const entry of observer.takeRecords()) {

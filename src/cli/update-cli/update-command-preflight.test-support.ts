@@ -5,7 +5,6 @@ import { withinTest } from "../../../test/helpers/promise.js";
 import { readRestartSentinelReadOnly } from "../../infra/restart-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
-import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
@@ -41,33 +40,24 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
   const diskSpace = (bavail: number) =>
     vi.spyOn(fsSync, "statfsSync").mockReturnValue(f.statfsFixture({ bavail, bsize: 1024 * 1024 }));
 
-  it("reports low disk space before target lookup and persists it after admission", async () => {
+  it("refuses a package update whose install volume cannot hold the staged package", async () => {
     await f.mockPackageInstallAtCaseDir();
-    const historyBefore = f.listUpdateRuns();
+    vi.mocked(f.fetchNpmPackageTargetStatus).mockImplementation(async ({ target }) => ({
+      version: /^\d/u.test(target) ? target : "9999.0.0",
+      nodeEngine: ">=22.19.0",
+      unpackedSize: 100 * 1024 * 1024,
+    }));
     diskSpace(256);
-    const targetLookups: Array<{ output: string; history: UpdateRunRecord[] }> = [];
-    const resolveTag = vi.mocked(f.resolveNpmChannelTag).getMockImplementation()!;
-    vi.mocked(f.resolveNpmChannelTag).mockImplementation(async (...args) => {
-      targetLookups.push({
-        output: f.getLogOutput(),
-        history: f.listUpdateRuns(),
-      });
-      return await resolveTag(...args);
-    });
 
-    await f.updateCommand({ yes: true });
+    await expect(f.updateCommand({ yes: true, json: true })).rejects.toMatchObject({ code: 1 });
 
-    expect(targetLookups).toContainEqual({
-      output: expect.stringContaining("Low disk space near"),
-      history: historyBefore,
+    expect(f.lastWriteJsonCall()).toMatchObject({
+      status: "error",
+      reason: "preflight-insufficient-space",
+      run: { origin: { cause: "disk-full" } },
     });
-    expectLatestStep({
-      step: "warning:disk-space-preflight",
-      status: "completed",
-      detail: expect.stringContaining("256 MiB available"),
-    });
-    f.expectPackageInstallSpec("openclaw@9999.0.0");
-    expect(f.defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(latestRun()).toMatchObject({ status: "failed", reason: "preflight-insufficient-space" });
+    expect(f.packageInstallCommandCall()).toBeUndefined();
   });
 
   it("records runtime retention while it runs and settles its outcome", async () => {
@@ -111,9 +101,9 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
     const entered = createDeferredCore<Parameters<RetainUpdateRuntime>[0]>();
     const release = createDeferredCore();
     const leases = createManagedHandoffLeaseStore();
-    const sharedArtifacts = ["update-reports", "logs/support"].map(
-      (relative) => `${f.profileStateDir()}/${relative}`,
-    );
+    const reportDirectory = `${f.profileStateDir()}/update-reports`;
+    const supportDirectory = `${f.profileStateDir()}/logs/support`;
+    const sharedArtifacts = [reportDirectory, supportDirectory];
     let retentionSettled = false;
     f.retainUpdateRuntime.mockImplementationOnce(async (options) => {
       options.assertCurrent();
@@ -125,7 +115,7 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
         retentionSettled = true;
       }
     });
-    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
     const work = f
       .updateCommand({ yes: true, json: true, timeout: "60" })
       .catch((error: unknown) => {
@@ -147,31 +137,50 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
         expect(fsSync.existsSync(artifact)).toBe(false);
       }
       await vi.advanceTimersByTimeAsync(60_000);
-      await vi.waitFor(() => expect(f.lastWriteJsonCall()).toMatchObject({ status: "error" }));
+      await vi.waitFor(() => expect(retentionSettled).toBe(true));
       expect(await work).toMatchObject({ code: 1 });
-      expect(retentionSettled).toBe(true);
       expect(signal?.aborted).toBe(true);
       expect(signal?.reason).toMatchObject({ reason: "update-activation-timeout" });
       expect(assertCurrent).toThrow(UpdateActivationTimeoutError);
+      const runId = before[0]?.runId;
+      const terminalRuns = f.listUpdateRuns();
+      expect(terminalRuns, JSON.stringify({ result: f.lastWriteJsonCall(), terminalRuns })).toEqual(
+        [
+          expect.objectContaining({
+            runId,
+            status: "failed",
+            phase: "finished",
+            reason: "update-activation-timeout",
+          }),
+          ...before.slice(1),
+        ],
+      );
+      const reportPath = `${reportDirectory}/${runId}.md`;
       expect(f.defaultRuntime.writeJson).toHaveBeenCalledOnce();
       expect(f.lastWriteJsonCall()).toMatchObject({
         status: "error",
         reason: "update-activation-timeout",
-        runId: before[0]?.runId,
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        runId,
+        reportPath,
       });
-      // The initiating timeout diagnostic precedes the final custody outcome.
-      expect(vi.mocked(f.defaultRuntime.error).mock.calls).toEqual([
-        [expect.stringContaining("60-second budget")],
-        [expect.stringContaining("Update recovery remains pending (update-activation-timeout)")],
-      ]);
+      expect(f.getErrorOutput()).toContain("60-second budget");
+      expect(f.getErrorOutput()).not.toContain("Update recovery remains pending");
       await vi.waitFor(() => expect(leases.read(packageRoot)).toEqual({ kind: "absent" }));
-      // Cancellation revokes the original writer. A future owner may reconcile
-      // this row after driver death; the still-live test driver cannot finish it.
-      expect(f.listUpdateRuns()).toEqual(before);
       expect(await readRestartSentinelReadOnly()).toEqual(sentinelBefore);
-      for (const artifact of sharedArtifacts) {
-        expect(fsSync.existsSync(artifact)).toBe(false);
+      // Joined preparation may publish failure receipts without changing the installed runtime.
+      expect(await fs.readdir(reportDirectory)).toEqual([`${runId}.md`]);
+      expect(await fs.readFile(reportPath, "utf8")).toContain(
+        "update failed: update-activation-timeout",
+      );
+      const diagnostics = await fs.readdir(supportDirectory);
+      expect(diagnostics).not.toHaveLength(0);
+      for (const filename of diagnostics) {
+        expect(filename).toMatch(/^openclaw-update-failure-[a-f0-9_]+\.json$/);
+        expect(
+          JSON.parse(await fs.readFile(`${supportDirectory}/${filename}`, "utf8")),
+        ).toMatchObject({
+          result: { runId, status: "error", reason: "update-activation-timeout" },
+        });
       }
       expect(await fs.readFile(`${packageRoot}/package.json`, "utf8")).toBe(manifest);
     } finally {
@@ -207,10 +216,6 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
     const snapshotFailure = expect.objectContaining({
       name: "snapshot-space-preflight",
       exitCode: 1,
-      snapshotCapacity: expect.objectContaining({
-        pluginBytes: null,
-        candidates: containingStep({ availableBytes: 32 * 1024 * 1024 }),
-      }),
     });
     expect(f.lastWriteJsonCall()).toMatchObject({
       runId: record?.runId,
@@ -234,9 +239,8 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
       }),
       ...historyBefore,
     ]);
-    expect(f.getErrorOutput()).toContain("MiB needed");
-    expect(f.getErrorOutput()).toContain("32 MiB free");
-    expect(f.getErrorOutput()).toContain("Free space on a reported filesystem or set TMPDIR");
+    expect(f.getErrorOutput()).toContain("Update refused: ");
+    expect(f.getErrorOutput()).toContain("(33554432 bytes) is available");
     expect(f.getErrorOutput()).toContain("SQLite family");
   });
 }

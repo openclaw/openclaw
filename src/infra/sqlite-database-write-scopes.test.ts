@@ -2,8 +2,12 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   readSqliteDatabaseScopedWriteToken,
+  readSqliteDatabasePendingWriteToken as pendingToken,
+  readSqliteDatabaseWriteTokenForPath as pathToken,
+  retireSqliteDatabaseAdmissionForPath as retireAdmission,
   readSqliteDatabasePendingScopedWriteToken,
   withSqliteDatabaseWriteScope,
+  prepareSqliteDatabaseScopedWriteRevisionForPath,
 } from "./sqlite-database-admission.js";
 import { withSqlitePreparedNativeMutation } from "./sqlite-native-observer.js";
 import {
@@ -16,6 +20,121 @@ import { hasSqliteWorkerOutcomeUnknown } from "./sqlite-worker-error.js";
 
 describe("scoped SQLite write receipts", () => {
   const { openDatabase, tempDirs } = useSqliteSchemaTestFixture();
+
+  it.each([false, true])("rejects thenables and restores write scope (tracked=%s)", (tracked) => {
+    const database = openDatabase();
+    if (tracked) {
+      readSqliteDatabaseScopedWriteToken(database, "entry");
+    }
+    const then = vi.fn();
+    // oxlint-disable-next-line unicorn/no-thenable -- Exercise rejection of structural thenables.
+    for (const value of [Promise.resolve(), { then }, Object.assign(() => {}, { then })]) {
+      expect(() =>
+        runSqliteImmediateTransactionSync(database, () => {
+          // Discarding the result must not hide it from the write-scope owner.
+          void withSqliteDatabaseWriteScope(database, ["entry"], () => {
+            database.exec("INSERT INTO original VALUES (1)");
+            return value;
+          });
+        }),
+      ).toThrow("SQLite write scopes cannot await work");
+      expect(database.prepare("SELECT id FROM original").all()).toEqual([]);
+    }
+    expect(then).not.toHaveBeenCalled();
+    const before = readSqliteDatabaseScopedWriteToken(database, "entry");
+    const sibling = readSqliteDatabaseScopedWriteToken(database, "sibling");
+    runSqliteImmediateTransactionSync(database, () => {
+      database.exec("INSERT INTO original VALUES (2)");
+    });
+    expect(readSqliteDatabaseScopedWriteToken(database, "entry")).not.toBe(before);
+    expect(readSqliteDatabaseScopedWriteToken(database, "sibling")).not.toBe(sibling);
+  });
+
+  it("prepares the actual autocommit receipt before one scoped statement and publishes it after settlement", () => {
+    const location = path.join(tempDirs.make("sqlite-prepared-receipt-"), "proof.sqlite");
+    const database = openDatabase(
+      "CREATE TABLE proof(value INTEGER); INSERT INTO proof VALUES(42)",
+      true,
+      location,
+    );
+    try {
+      const before = readSqliteDatabaseScopedWriteToken(database, "entry");
+      const statement = database.prepare("INSERT INTO proof VALUES (?)");
+      let pending: string | undefined;
+      let pendingDatabase: string | undefined;
+      let installed: { scoped: string | undefined; database: string | undefined } | undefined;
+      withSqlitePostCommitPublications(database, () =>
+        withSqliteDatabaseWriteScope(database, ["entry"], () =>
+          withSqlitePreparedNativeMutation(
+            database,
+            () => {
+              expect(database.isTransaction).toBe(false);
+              pending = readSqliteDatabasePendingScopedWriteToken(database, "entry");
+              pendingDatabase = pendingToken(database);
+              stageSqliteTransactionState(database, {
+                commit: () => {
+                  installed = {
+                    scoped: readSqliteDatabaseScopedWriteToken(database, "entry"),
+                    database: pathToken(location),
+                  };
+                },
+              });
+            },
+            () => statement.run(43),
+          ),
+        ),
+      );
+      expect(installed).toEqual({ scoped: pending, database: pendingDatabase });
+      expect(pending).not.toBe(before);
+      expect(pendingDatabase).toBeTypeOf("string");
+      expect(pendingToken(database)).toBeUndefined();
+      expect(database.prepare("SELECT value FROM proof").all()).toEqual([
+        { value: 42 },
+        { value: 43 },
+      ]);
+    } finally {
+      if (database.isOpen) {
+        database.close();
+      }
+      retireAdmission(location);
+    }
+  });
+
+  it("keeps prepared epochs settled, scoped, and bounded by their retained owner", () => {
+    const location = path.join(tempDirs.make("prepared-write-revision-"), "state.sqlite");
+    const database = openDatabase(undefined, true, location);
+    const prepared = prepareSqliteDatabaseScopedWriteRevisionForPath(location, ["entry"])!;
+    try {
+      const initial = prepared.read();
+      expect(initial).toBeDefined();
+      withSqliteDatabaseWriteScope(database, ["sibling"], () =>
+        database.exec("INSERT INTO original VALUES (1)"),
+      );
+      expect(prepared.read()).toBe(initial);
+      runSqliteImmediateTransactionSync(database, () => {
+        database.exec("INSERT INTO original VALUES (2)");
+        expect(prepared.read()).toBeUndefined();
+      });
+      const changed = prepared.read();
+      expect(changed).toBeDefined();
+      expect(changed).not.toBe(initial);
+      expect(() =>
+        runSqliteImmediateTransactionSync(database, () => {
+          database.exec("INSERT INTO original VALUES (3)");
+          expect(prepared.read()).toBeUndefined();
+          throw new Error("rollback");
+        }),
+      ).toThrow("rollback");
+      expect(prepared.read()).toBeDefined();
+      expect(database.prepare("SELECT id FROM original ORDER BY id").all()).toEqual([
+        { id: 1 },
+        { id: 2 },
+      ]);
+    } finally {
+      prepared.release();
+    }
+    expect(prepared.read()).toBeUndefined();
+  });
 
   it.each(["commit", "rollback", "savepoint rollback", "nested rollback", "temp"])(
     "predicts the committed data and schema generation after %s",

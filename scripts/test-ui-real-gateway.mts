@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createPrebuiltUiE2eVitestConfig } from "../test/vitest/vitest.ui-e2e-prebuilt.config.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
+import {
+  runManagedCommand,
+  signalExitCode,
+  type RunManagedCommandOptions,
+} from "./lib/managed-child-process.mts";
 import { createVitestCacheSlots, resolveVitestCacheRoot } from "./lib/vitest-cache-slots.mts";
 import { mergeVitestExitCodes } from "./lib/vitest-outcome.mts";
 import { resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
@@ -45,10 +49,8 @@ export async function runRealGatewayUiTests(
         if (receivedSignal) {
           return { code: signalExitCode(receivedSignal), groupJoined: true };
         }
-        const completion = Promise.withResolvers<number>();
-        let borrower: Promise<number> | undefined;
-        try {
-          const code = await runManagedCommand({
+        const launch = (onReady?: RunManagedCommandOptions["onReady"]) =>
+          runManagedCommand({
             bin: process.execPath,
             args: workerRun
               ? [
@@ -60,25 +62,13 @@ export async function runRealGatewayUiTests(
               : args,
             env: assignedEnv,
             stdio: workerRun ? ["inherit", "inherit", "inherit", "ipc"] : "inherit",
-            onReady(child) {
-              if (workerRun) {
-                borrower = workerRun.borrow(child, completion.promise);
-              }
-            },
+            onReady,
             onSignal,
             requireProcessTreeExit: true,
             waitForCleanupRelease: true,
           });
-          completion.resolve(code);
-          return { code, groupJoined: true };
-        } catch (error) {
-          if (borrower) {
-            completion.reject(error);
-          }
-          throw error;
-        } finally {
-          await borrower;
-        }
+        const code = await (workerRun ? workerRun.withBorrower(launch) : launch());
+        return { code, groupJoined: true };
       },
     ).then(({ code }) => code);
   };

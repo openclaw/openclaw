@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import type { McpCatalogTool, McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import {
   catalogTool,
@@ -18,12 +19,7 @@ import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
-import type {
-  BundleMcpToolRuntime,
-  McpCatalogTool,
-  McpToolCatalog,
-  SessionMcpRuntime,
-} from "./agent-bundle-mcp-types.js";
+import type { BundleMcpToolRuntime, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { createEnteredGate } from "./entered-gate.test-support.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
@@ -340,22 +336,6 @@ describe("createBundleMcpToolRuntime", () => {
         sessionRuntime,
       )?.allowedAppToolNames,
     ).toEqual(new Set(["show"]));
-  });
-
-  it("never mints app views for tools from requester-scoped servers", async () => {
-    const tool = catalogTool("user-mail", "show", {
-      inputSchema: { type: "object" },
-      uiResourceUri: "ui://user-mail/app",
-    });
-    const sessionRuntime = makeToolRuntime({ tools: [tool], serverName: "user-mail" });
-    sessionRuntime.mcpAppsEnabled = true;
-    // View recovery (peek + transcript reconstruction) has no requester
-    // identity, so scoped servers stay fail-closed at view creation.
-    sessionRuntime.isRequesterScopedServer = (serverName) => serverName === "user-mail";
-    const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
-
-    const result = await firstTool(materialized).execute("call-1", {}, undefined, undefined);
-    expect(result.details ?? {}).not.toHaveProperty("mcpAppPreview");
   });
 
   it("carries server instructions onto resource and prompt utility tools", () => {

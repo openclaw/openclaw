@@ -21,7 +21,10 @@ import { createInitializationContext } from "../chat-application-context.test-su
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import type { NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
-import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
+import {
+  createActivityGroupHarness,
+  createMessageGroupHarness,
+} from "./chat-message-native.test-support.tsx";
 import { createAssistantMessage, createMessageGroup } from "./chat-message.test-support.ts";
 import { createReplyPreviewResolver, type LoadedReplySource } from "./chat-reply-preview.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
@@ -89,6 +92,7 @@ function renderFrame(
         frame: input.kind === "group" ? { ...completedFrame, parts: [input] } : input,
         options: {
           streamOptions: {},
+          partDependencies: (part) => [part],
           renderGroupOptions: () => ({ showReasoning: true, ...options }),
           isWorkExpanded: () => true,
           onToggleWork: () => {},
@@ -161,9 +165,19 @@ function narration(content: unknown, timestamp: number, overrides: Record<string
   };
 }
 
-async function renderToolFiles(group: MessageGroup, frame: boolean) {
+async function renderToolFiles(group: MessageGroup, frame: boolean | "activity") {
   const onOpenWorkspaceFile = vi.fn();
-  (frame ? renderFrame : renderGroup)(group, { onOpenWorkspaceFile, ...expanded });
+  if (frame === "activity") {
+    const activity = createActivityGroupHarness(container);
+    activity.render([group], {
+      showReasoning: true,
+      showToolCalls: true,
+      onOpenWorkspaceFile,
+      ...expanded,
+    });
+  } else {
+    (frame ? renderFrame : renderGroup)(group, { onOpenWorkspaceFile, ...expanded });
+  }
   await settleToolBridges(container);
   return onOpenWorkspaceFile;
 }
@@ -186,6 +200,8 @@ it.each([
   { frame: true, forwarded: false },
   { frame: false, forwarded: true },
   { frame: true, forwarded: true },
+  { frame: "activity" as const, forwarded: false },
+  { frame: "activity" as const, forwarded: true },
 ])(
   "routes nested tool files to their message owner (frame=$frame, forwarded=$forwarded)",
   async ({ frame, forwarded }) => {
@@ -212,6 +228,38 @@ it.each([
   },
 );
 
+it.each([
+  { senderSession: undefined, available: true },
+  { senderSession: mainSession, available: true },
+  { senderSession: { sessionKey, agentId: "research" }, available: false },
+  { senderSession: { sessionKey: mainSession.sessionKey, agentId: "research" }, available: false },
+])(
+  "keeps Files search in its owning session ($senderSession)",
+  async ({ senderSession, available }) => {
+    const onFindWorkspaceFile = vi.fn();
+    renderGroup(
+      createGroup(senderSession, {
+        phase: "final_answer",
+        content: [
+          {
+            type: "attachment_error",
+            attachment: { code: "file-too-large", kind: "document", label: "orders-large.zip" },
+          },
+        ],
+      }),
+      { sessionKey: mainSession.sessionKey, agentId: "main", onFindWorkspaceFile },
+    );
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() => expect(container.textContent).toContain("Too large to attach."));
+    const find = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Find in Files",
+    );
+    expect(Boolean(find)).toBe(available);
+    find?.click();
+    expect(onFindWorkspaceFile).toHaveBeenCalledTimes(available ? 1 : 0);
+  },
+);
+
 it("keeps the sender on narrated file links in a run frame", () => {
   const groups = groupMessages([
     narration([{ type: "text", text: reportLink }, readCall("read-report", reportPath)], 1_000, {
@@ -223,6 +271,26 @@ it("keeps the sender on narrated file links in a run frame", () => {
   renderFrame(expectDefined(frame, "narrated tool run frame"));
   openReport();
 });
+
+it.each([{ phase: "final_answer" }, { stopReason: "stop" }])(
+  "keeps an explicit mixed forwarded answer visible with file and reply actions (%j)",
+  (terminal) => {
+    const [group] = groupMessages([
+      narration([{ type: "text", text: reportLink }, readCall("read-report", reportPath)], 1_000, {
+        senderSession: { sessionKey },
+        ...terminal,
+      }),
+    ]);
+    if (group?.kind !== "group") {
+      throw new Error("Missing forwarded answer group");
+    }
+    expect(group.role).toBe("assistant");
+    renderGroup(group, { onReply: vi.fn() });
+    openReport();
+    expect(query('button[aria-label="Reply to message"]')).not.toBeNull();
+    expect(query('button[aria-label="Copy as markdown"]')).not.toBeNull();
+  },
+);
 
 it.each([false, true])("preserves sender attribution (forwarded=%s)", async (forwarded) => {
   const group = createGroup(forwarded ? mainSession : undefined, {}, "Forwarded from main");

@@ -1,4 +1,5 @@
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
+import { valid as validSemver } from "semver";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver } from "./semver.js";
 
@@ -20,26 +21,19 @@ export function isPackageVersionDowngrade(
   return comparePackageUpdateVersions(nextVersion, currentVersion) < 0;
 }
 
+export function isPinnedRegistrySpec(spec: string): boolean {
+  const value = spec.trim();
+  const at = value.lastIndexOf("@");
+  // Match npm-package-arg's loose SemVer rules: version-like tags can move,
+  // while loose exact versions must retain their recorded integrity.
+  return at > 0 && validSemver(value.slice(at + 1).trim(), true) !== null;
+}
+
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
   integrity: string | undefined,
 ): string | undefined {
-  if (!integrity || !spec) {
-    return undefined;
-  }
-  const value = spec.trim();
-  if (!value) {
-    return undefined;
-  }
-  const at = value.lastIndexOf("@");
-  if (at <= 0 || at >= value.length - 1) {
-    return undefined;
-  }
-  const version = value.slice(at + 1).trim();
-  if (!/^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
-    return undefined;
-  }
-  return integrity;
+  return integrity && spec && isPinnedRegistrySpec(spec) ? integrity : undefined;
 }
 
 export function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {

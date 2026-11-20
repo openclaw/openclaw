@@ -88,6 +88,7 @@ on:
           - windows-node
           - live-e2e
           - package
+          - qualified-package
           - qa
           - qa-parity
           - qa-live
@@ -203,7 +204,7 @@ jobs:
     steps:
       - name: Report release runner routing
         if: vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'
-        run: echo "::notice title=Release runner routing::OPENCLAW_CI_RUNNER_BACKEND=github moves hosted-proven release lanes to ubuntu-24.04; QA Lab runtime-pair stays pinned to Blacksmith and queues during an outage."
+        run: echo "::notice title=Release runner routing::OPENCLAW_CI_RUNNER_BACKEND=github moves hosted-proven release lanes to ubuntu-24.04; QA Lab runtime-pair stays on its dedicated runtime backend and queues during an outage."
       - name: Require trusted workflow ref for release checks
         env:
           RELEASE_REF: ${{ inputs.ref }}
@@ -616,23 +617,25 @@ jobs:
             fi
           fi
 
-          selection="$(RUN_RELEASE_SOAK="$run_release_soak" QA_FILTER_SEEN="$qa_filter_seen" \
+          while IFS='=' read -r key value; do
+            printf -v "$key" '%s' "$value"
+          done < <(RUN_RELEASE_SOAK="$run_release_soak" QA_FILTER_SEEN="$qa_filter_seen" \
             REPO_LIVE_SUITE_FILTER="$repo_live_suite_filter" node --input-type=module <<'NODE'
           import { createReleaseCheckSelection } from './workflow/scripts/plan-release-workflow-matrix.mjs';
-          console.log(JSON.stringify(createReleaseCheckSelection({
+          const selection = createReleaseCheckSelection({
             phase: process.env.RELEASE_PHASE_INPUT,
             rerunGroup: process.env.RELEASE_RERUN_GROUP_INPUT,
             runReleaseSoak: process.env.RUN_RELEASE_SOAK,
             qaFilterSeen: process.env.QA_FILTER_SEEN,
             repoLiveSuiteFilter: process.env.REPO_LIVE_SUITE_FILTER,
-          })));
+          });
+          for (const [key, value] of Object.entries(selection)) {
+            console.log(`${key}=${value}`);
+          }
           NODE
-          )"
-          for key in release_check_groups_json install_smoke_scheduled cross_os_scheduled windows_node_scheduled \
-            live_e2e_scheduled package_acceptance_scheduled qa_parity_scheduled \
-            qa_live_scheduled docker_required package_required package_acceptance_lanes; do
-            printf -v "$key" '%s' "$(jq -r --arg key "$key" '.[$key]' <<< "$selection")"
-          done
+          )
+          # Process substitution does not propagate the selector's failure to the loop.
+          wait "$!"
           if [[ "$phase" == "candidate" ]]; then run_maturity_scorecard=false; fi
           if [[ "$phase" == "candidate" && -z "$candidate_artifact_json" ]]; then
             candidate_artifact_required=false
@@ -933,6 +936,15 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
+      - name: Materialize release package source
+        if: needs.resolve_target.outputs.package_mode == 'source'
+        env:
+          PACKAGE_REF: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --no-recurse-submodules --depth=1 --refetch --no-filter origin "$PACKAGE_REF"
+          git rev-parse --verify "$PACKAGE_REF^{commit}" >/dev/null
+
       - name: Validate release package source metadata
         if: needs.resolve_target.outputs.package_mode == 'source'
         env:
@@ -1074,6 +1086,7 @@ jobs:
         if: needs.resolve_target.outputs.package_mode != 'artifact'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: ${{ steps.artifact.outputs.name }}
           path: |
             .artifacts/docker-e2e-package/${{ steps.artifact.outputs.file_name }}
@@ -1086,6 +1099,7 @@ jobs:
         if: needs.resolve_target.outputs.package_mode != 'artifact' && steps.package.outputs.plugin_registry_manifest_sha256 != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: docker-e2e-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/prepublish-plugin-registry/
           retention-days: 14
@@ -1374,6 +1388,7 @@ jobs:
         if: steps.windows_node_candidate.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: windows-node-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .artifacts/windows-node-candidate/openclaw-current.tgz
@@ -1622,7 +1637,7 @@ jobs:
       actions: read
       contents: read
       id-token: write
-    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@fb45902950fd4f62d20a37dbbafac27e916917f2
+    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@76a48a68607d8cb7cc0ae607dbc46c920f07495a
     with:
       candidate_artifact_name: ${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}
       candidate_artifact_run_id: ${{ github.run_id }}
@@ -1630,7 +1645,7 @@ jobs:
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       windows_node_source: release
       windows_node_source_sha: ${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_release_sha }}
-      windows_node_workflow_sha: fb45902950fd4f62d20a37dbbafac27e916917f2
+      windows_node_workflow_sha: 76a48a68607d8cb7cc0ae607dbc46c920f07495a
       windows_node_release_tag: ${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_tag }}
       windows_node_release_asset_name: ${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_asset_name }}
       windows_node_release_asset_sha256: ${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_asset_sha256 }}
@@ -1644,7 +1659,7 @@ jobs:
       actions: read
       contents: read
       id-token: write
-    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@fb45902950fd4f62d20a37dbbafac27e916917f2
+    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@76a48a68607d8cb7cc0ae607dbc46c920f07495a
     with:
       candidate_artifact_name: ${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}
       candidate_artifact_run_id: ${{ github.run_id }}
@@ -1652,7 +1667,7 @@ jobs:
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       windows_node_source: release
       windows_node_source_sha: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_release_sha }}
-      windows_node_workflow_sha: fb45902950fd4f62d20a37dbbafac27e916917f2
+      windows_node_workflow_sha: 76a48a68607d8cb7cc0ae607dbc46c920f07495a
       windows_node_release_tag: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_tag }}
       windows_node_release_asset_name: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_asset_name }}
       windows_node_release_asset_sha256: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_asset_sha256 }}
@@ -1666,7 +1681,7 @@ jobs:
       actions: read
       contents: read
       id-token: write
-    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@fb45902950fd4f62d20a37dbbafac27e916917f2
+    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@76a48a68607d8cb7cc0ae607dbc46c920f07495a
     with:
       candidate_artifact_name: ${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}
       candidate_artifact_run_id: ${{ github.run_id }}
@@ -1674,7 +1689,7 @@ jobs:
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       windows_node_source: main
       windows_node_source_sha: ${{ needs.resolve_windows_node_main_source.outputs.main_source_sha }}
-      windows_node_workflow_sha: fb45902950fd4f62d20a37dbbafac27e916917f2
+      windows_node_workflow_sha: 76a48a68607d8cb7cc0ae607dbc46c920f07495a
       allow_protocol_mismatch: false
 
   live_repo_e2e_release_checks:
@@ -2226,7 +2241,7 @@ jobs:
     if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
     # Pinned: hosted ubuntu-24.04 failed the core lane in both runs after a backend flip
     # (36639549086, 36639978260). An outage queues this lane instead of failing it.
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat' || 'blacksmith-2vcpu-ubuntu-2404'))) || vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat' || 'blacksmith-2vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false

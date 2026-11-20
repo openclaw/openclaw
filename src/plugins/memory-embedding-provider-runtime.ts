@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getEmbeddingProvider, listEmbeddingProviders } from "./embedding-provider-runtime.js";
 import { listRegisteredEmbeddingProviders } from "./embedding-providers.js";
-import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "./registry-contribution-types.js";
 
 /** Lists registered memory embedding provider adapters without registry metadata. */
 export function listRegisteredMemoryEmbeddingProviderAdapters(): MemoryEmbeddingProviderAdapter[] {

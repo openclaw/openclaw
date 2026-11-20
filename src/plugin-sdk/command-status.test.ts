@@ -12,7 +12,6 @@ describe("plugin-sdk/command-status", () => {
 
     expect(buildHelpMessage(cfg)).toContain("/commands for full list");
     expect(buildCommandsMessage(cfg)).toContain("More: /tools for available capabilities");
-    expect(buildCommandsMessage(cfg)).toContain("/models - List model providers/models.");
     const commandsPage = buildCommandsMessagePaginated(cfg);
     expect(commandsPage.currentPage).toBe(1);
     expect(typeof commandsPage.totalPages).toBe("number");

@@ -25,11 +25,7 @@ import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { readSessionSharingMemoryFacts } from "./session-sharing-incognito.js";
-import {
-  hiddenSessionNotFound,
-  resolveIncognitoSessionSharingTarget,
-  type SessionSharingTarget,
-} from "./session-sharing-policy.js";
+import { hiddenSessionNotFound, type SessionSharingTarget } from "./session-sharing-policy.js";
 import {
   captureSessionMutationRouting,
   prepareSessionMutationFacts,
@@ -83,6 +79,9 @@ export async function prepareSessionSharingRead(params: {
       return prepareSessionMutationFacts({ ...params, allowMissing: true });
     }
     const { cfg, projection } = params;
+    if (!projection) {
+      return prepareSessionMutationFacts({ ...params, allowMissing: true });
+    }
     const query = { key: params.sessionKey, agentId: params.agentId };
     const resident = projection?.sharingTarget(query);
     const source = resident && projection?.readSource({ ...query, storePath: resident.storePath });
@@ -101,7 +100,7 @@ export async function prepareSessionSharingRead(params: {
       source.path === configuredSource.physicalPath
         ? { ...resident, readSource: source }
         : undefined;
-    if (!captured || !projection) {
+    if (!captured) {
       return prepareSessionMutationFacts({ ...params, allowMissing: true });
     }
     const assertRouting = captureSessionMutationRouting(cfg, undefined, [params]);
@@ -288,24 +287,9 @@ export function readSessionMutationTarget(params: {
           : null,
       };
     }
-    if (!isIncognitoSessionKey(params.targetRef.sessionKey)) {
-      return {
-        error: errorShape(
-          ErrorCodes.UNAVAILABLE,
-          "Session facts are unavailable; retry the request",
-        ),
-      };
-    }
-    let preparedReadSource: SessionSharingTarget["readSource"];
-    const target = resolveIncognitoSessionSharingTarget({
-      cfg: params.cfg,
-      sessionKey: params.targetRef.sessionKey,
-      agentId: input.value,
-      onReadSource: (source) => {
-        preparedReadSource = source;
-      },
-    });
-    return { target, preparedReadSource };
+    return {
+      error: errorShape(ErrorCodes.UNAVAILABLE, "Session facts are unavailable; retry the request"),
+    };
   } catch (error) {
     if (error instanceof AgentSelectionRequiredError) {
       return {

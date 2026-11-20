@@ -1,7 +1,10 @@
 /** Input contracts shared by manual token/API-key commands and the API-key writer. */
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { parseDurationMs } from "../../cli/parse-duration.js";
 import { decodeUtf8Input } from "../../infra/utf8-input.js";
 
 const MODELS_AUTH_STDIN_MAX_BYTES = 1024 * 1024;
@@ -18,6 +21,19 @@ export async function readPipedStdin(
 
 export function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
+}
+
+export function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
+  const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
+  if (!normalizedExpiresIn) {
+    return undefined;
+  }
+  const durationMs = parseDurationMs(normalizedExpiresIn, { defaultUnit: "d" });
+  const expires = resolveExpiresAtMsFromDurationMs(durationMs);
+  if (expires === undefined) {
+    throw new Error("Invalid expiry duration: resulting token expiry is outside Date range.");
+  }
+  return expires;
 }
 
 export function normalizeManualAuthProvider(provider: string): string {

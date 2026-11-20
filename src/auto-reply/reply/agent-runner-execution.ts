@@ -16,6 +16,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { leaseMcpAppModelContextForSessionTurn } from "../../agents/mcp-ui-resource.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
+import { prepareChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -316,6 +317,10 @@ async function executeAgentTurnInternalLoop(
       ) {
         params.mcpAppContextLease?.commit();
       }
+      if (info.phase === "before_agent_reply") {
+        // A dispatched hook can accept external work even when it declines the reply.
+        params.followupRun.run.internalEventExecution?.onStarted(runId);
+      }
       const isUserVisibleExecutionActivity =
         info.phase === "turn_accepted" ||
         info.phase === "process_spawned" ||
@@ -381,6 +386,8 @@ async function executeAgentTurnInternalLoop(
   let subagentContinuationPrepared = false;
   while (true) {
     try {
+      // Settle a memoized preflight refusal here, before continuation or model work.
+      await prepareChildSessionPublication(params.followupRun.run);
       if (!subagentContinuationPrepared) {
         await prepareReplySubagentContinuation(params, runId, runtimeConfig, preparedRunAdmission);
         subagentContinuationPrepared = true;
@@ -581,7 +588,7 @@ async function executeAgentTurnOutcome(
   // Keep committed facts outside cleanup so a restart cannot erase them.
   const compaction: AgentTurnCompaction = { count: 0, durable: [] };
   const completedCompaction = () =>
-    compaction.count > 0
+    compaction.count > 0 || compaction.durable.length > 0
       ? { compaction: { count: compaction.count, durable: [...compaction.durable] } }
       : {};
   let terminalOutcomeCommitted = false;
@@ -620,9 +627,11 @@ async function executeAgentTurnOutcome(
             run.workspaceDir = workspace.workspaceDir;
             run.cwd = workspace.cwd;
           }
-          const binding = run.scheduledAutomation?.job.inferenceBinding;
-          if (binding) {
+          const scheduledJob = run.scheduledAutomation?.job;
+          const binding = scheduledJob?.inferenceBinding;
+          if (scheduledJob && binding) {
             scheduledInference = await prepareCronRunInference({
+              job: scheduledJob,
               binding,
               cfg: selectLiveRuntimeConfig(executionParams.followupRun.run.config),
               agentDir: executionParams.followupRun.run.agentDir,

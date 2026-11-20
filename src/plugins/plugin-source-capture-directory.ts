@@ -6,7 +6,9 @@ import path from "node:path";
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { PluginCaptureReclaimCandidate } from "../infra/fs-safe-copy-worker-contract.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -14,23 +16,27 @@ import {
   SQLITE_STAGING_TOKEN_FILES,
   type SqliteStagingToken,
 } from "../infra/sqlite-staging-token.js";
-import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import {
   pluginSourceCaptureMaintenance,
+  pluginSourceCaptureOwnedRoots,
   resolvePluginSourceCaptureStorage,
 } from "./plugin-source-capture-context.js";
 import {
   createPluginNativeCaptureCustody,
+  reclaimLegacyPluginCapture,
   type NativeCaptureMaintenance,
 } from "./plugin-source-capture-native-loads.js";
 import {
   isLegacyPluginSourceCaptureName,
   mkdtempPluginCaptureSync,
   PLUGIN_SOURCE_CAPTURE_PREFIX,
+  PLUGIN_SOURCE_SNAPSHOT_PREFIX,
+  PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX,
   resolvePluginSourceCaptureFallbackPrefix,
+  resolvePluginSourceCaptureFallbackPrefixAsync,
   resolvePluginSourceCapturesDirectory,
 } from "./plugin-source-capture-path.js";
 
@@ -52,14 +58,15 @@ const {
   instances,
   ownedRoots,
   reclaimInstance,
+  reclaimPluginCaptureSweep,
   isPluginSourceCaptureRetained,
   retainLoadedPluginSourceCapture,
   retainPluginNativeCapturePath,
   sweeps,
 } = resolveGlobalSingleton(Symbol.for("openclaw.pluginSourceCaptureInstances"), () => {
-  const instanceRoots = new Set<string>();
+  const instanceRoots = pluginSourceCaptureOwnedRoots;
   const nativeCustody = createPluginNativeCaptureCustody(instanceRoots);
-  process.once("exit", () => {
+  registerProcessExitCleanup(() => {
     for (const [key, instance] of instances) {
       retireInstanceForExit(key, instance);
     }
@@ -147,6 +154,7 @@ async function reclaimInstances(
   legacy = false,
   nativeMaintenance?: NativeCaptureMaintenance,
   fallbackPrefix?: string,
+  collect?: (candidate: PluginCaptureReclaimCandidate) => void,
 ): Promise<void> {
   let entries: fs.Dirent[];
   try {
@@ -161,8 +169,11 @@ async function reclaimInstances(
   const cutoff = Date.now() - CAPTURE_GRACE_MS;
   const lstatIfPresent = (file: string) => fsPromises.lstat(file).catch(ignoreMissingPath);
   for (const entry of entries) {
+    const snapshotStage =
+      !legacy && !fallbackPrefix && entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX);
     if (
       !entry.isDirectory() ||
+      (entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX) && !snapshotStage) ||
       (legacy && !isLegacyPluginSourceCaptureName(entry.name)) ||
       (fallbackPrefix && !entry.name.startsWith(fallbackPrefix))
     ) {
@@ -189,6 +200,9 @@ async function reclaimInstances(
         continue;
       }
       if (!tokenStat) {
+        if (snapshotStage) {
+          continue;
+        }
         // A qualified name selects the state; only its token proves released custody.
         if (fallbackPrefix || changed > cutoff) {
           continue;
@@ -197,21 +211,28 @@ async function reclaimInstances(
         if (nativeStat) {
           continue;
         }
-        await nativeMaintenance?.assertCurrent();
-        const current = fs.lstatSync(canonical);
-        if (
-          current.isDirectory() &&
-          current.dev === stat.dev &&
-          current.ino === stat.ino &&
-          current.uid === stat.uid &&
-          (!process.getuid || current.uid === process.getuid())
-        ) {
-          // Legacy producers surviving the grace period are best effort; managed captures retain tokens.
-          await fsPromises.rm(canonical, { recursive: true, force: true });
+        const candidate: PluginCaptureReclaimCandidate = {
+          directory: canonical,
+          identity: { dev: stat.dev, ino: stat.ino, uid: stat.uid },
+          kind: "legacy",
+        };
+        if (collect) {
+          collect(candidate);
+        } else {
+          await nativeMaintenance?.assertCurrent();
+          await reclaimLegacyPluginCapture(candidate);
         }
         continue;
       }
-      await reclaimInstance(canonical, stat, nativeMaintenance);
+      if (collect) {
+        collect({
+          directory: canonical,
+          identity: { dev: stat.dev, ino: stat.ino, uid: stat.uid },
+          kind: "managed",
+        });
+      } else {
+        await reclaimInstance(canonical, stat, nativeMaintenance);
+      }
     } catch (error) {
       if (!hasErrnoCode(error, "ENOENT") && !isSqliteLockError(error)) {
         recordFailure(error);
@@ -234,7 +255,12 @@ export async function hasPluginNativeCaptureCleanupCandidates(stateDir: string):
       continue;
     }
     for (const entry of entries) {
-      if (!entry.isDirectory() || (prefix && !entry.name.startsWith(prefix))) {
+      if (
+        !entry.isDirectory() ||
+        (entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX) &&
+          (prefix || !entry.name.startsWith(PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX))) ||
+        (prefix && !entry.name.startsWith(prefix))
+      ) {
         continue;
       }
       try {
@@ -289,15 +315,18 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
         firstFailure = error;
       }
     };
-    sweep = reclaimInstances(root, recordFailure)
+    const candidates: PluginCaptureReclaimCandidate[] = [];
+    const collect = (candidate: PluginCaptureReclaimCandidate) => candidates.push(candidate);
+    sweep = reclaimInstances(root, recordFailure, false, undefined, undefined, collect)
       .catch(recordFailure)
-      .then(() =>
+      .then(async () =>
         reclaimInstances(
           tmpdir(),
           recordFailure,
           false,
           undefined,
-          resolvePluginSourceCaptureFallbackPrefix(stateDir),
+          await resolvePluginSourceCaptureFallbackPrefixAsync(stateDir),
+          collect,
         ),
       )
       .catch(recordFailure)
@@ -308,7 +337,7 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
             const directory = await fsPromises.realpath(candidate);
             if (!visited.has(directory)) {
               visited.add(directory);
-              await reclaimInstances(directory, recordFailure, true);
+              await reclaimInstances(directory, recordFailure, true, undefined, undefined, collect);
             }
           } catch (error) {
             if (!hasErrnoCode(error, "ENOENT")) {
@@ -317,6 +346,14 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
           }
         }
       })
+      .then(() => reclaimPluginCaptureSweep(candidates))
+      .then((result) => {
+        if (result.failures > 0) {
+          firstFailure ??= result.firstFailure;
+          failures += result.failures;
+        }
+      })
+      .catch(recordFailure)
       .then(() => {
         if (failures === 0) {
           return;
@@ -587,7 +624,7 @@ export function createPluginNativeCaptureRoot(
     let disposed = false;
     return {
       directory: root.directory,
-      commit() {
+      commit(): void {
         if (disposed) {
           throw new Error("Plugin native capture has been disposed");
         }
@@ -604,6 +641,7 @@ export function createPluginNativeCaptureRoot(
         }
       },
       async disposeAsync() {
+        const { removeTemporaryArtifacts } = await import("../infra/temp-artifact-cleanup.js");
         if (!disposed) {
           if (!committed && !retainLoadedPluginSourceCapture(root.directory)) {
             await removeTemporaryArtifacts(root.directory, "Plugin native capture");
@@ -632,6 +670,7 @@ export function createPluginSourceCaptureRoot(
       directory,
       managedRoot: instance.managedRoot,
       release: async () => {
+        const { removeTemporaryArtifacts } = await import("../infra/temp-artifact-cleanup.js");
         if (!retainLoadedPluginSourceCapture(directory)) {
           await removeTemporaryArtifacts(directory, "Plugin source worker");
         }

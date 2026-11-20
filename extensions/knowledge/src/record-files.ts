@@ -42,7 +42,7 @@ export function fileDetails(ui: Page, r: RecordDetail, id: string, n: number) {
     async function read() {
       more.disabled = true;
       try {
-        const page = await feature.invoke("record", {
+        const page = await feature.invoke("record_detail", {
           id,
           view: "raw",
           metadataView: "none",

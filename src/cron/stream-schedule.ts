@@ -38,7 +38,8 @@ export function ownsStreamSource(
 ): boolean {
   return (
     job.schedule.kind === "stream" &&
-    cronStreamScheduleKey(job.schedule, job.streamSandbox) === scheduleKey &&
+    cronStreamScheduleKey(job.schedule, job.streamSandbox, job.streamOperatorSource) ===
+      scheduleKey &&
     job.state.streamSourceIdentity === sourceIdentity
   );
 }
@@ -71,6 +72,7 @@ export function resolveCronStreamBatching(schedule: CronStreamSchedule): {
 export function cronStreamScheduleKey(
   schedule: CronStreamSchedule,
   sandbox?: CronStreamSandboxTarget,
+  streamOperatorSource?: CronStoredJob["streamOperatorSource"],
 ): string {
   const batching = resolveCronStreamBatching(schedule);
   const streamSandbox = parseCronStreamSandboxTarget(sandbox);
@@ -85,6 +87,7 @@ export function cronStreamScheduleKey(
     batchMs: batching.batchMs,
     maxBatchBytes: batching.maxBatchBytes,
     ...(streamSandbox ? { streamSandbox } : {}),
+    ...(streamOperatorSource ? { streamOperatorSource } : {}),
   });
 }
 

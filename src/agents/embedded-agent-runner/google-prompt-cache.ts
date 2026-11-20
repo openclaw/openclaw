@@ -1,9 +1,12 @@
 import {
-  sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
-import { mergeTransportHeaders, sanitizeTransportPayloadText } from "@openclaw/ai/transports";
+import {
+  convertGoogleTools,
+  mergeTransportHeaders,
+  sanitizeTransportPayloadText,
+} from "@openclaw/ai/transports";
 import { stableStringify } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
@@ -231,17 +234,7 @@ export async function prepareGooglePromptCacheStreamFn(
     if (!split || !systemPrompt.trim()) {
       return inner(model, context, options);
     }
-    const tools = context.tools?.length
-      ? [
-          {
-            functionDeclarations: sortPromptCacheToolsByName(context.tools).map((tool) => ({
-              name: tool.name,
-              description: tool.description,
-              parametersJsonSchema: tool.parameters,
-            })),
-          },
-        ]
-      : undefined;
+    const tools = convertGoogleTools(context.tools ?? []);
     const toolChoice = tools
       ? mapManagedGoogleToolChoice((options as { toolChoice?: unknown } | undefined)?.toolChoice)
       : undefined;
@@ -437,7 +430,6 @@ export async function prepareGooglePromptCacheStreamFn(
       {
         ...context,
         systemPrompt: undefined,
-        tools: undefined,
         // Only a ready cache owns the stable system instructions. Keep fallback
         // requests intact, and never persist this per-request suffix projection.
         messages: prependRuntimeContextForModel(
@@ -449,6 +441,10 @@ export async function prepareGooglePromptCacheStreamFn(
       // must not rotate to another project's API key while referencing it.
       { ...options, headers },
       (payload) => {
+        // Retain canonical schemas for argument decoding and replay, but the
+        // cache resource owns their wire declarations and calling config.
+        delete payload.tools;
+        delete payload.toolConfig;
         payload.cachedContent = cachedContent;
       },
     );

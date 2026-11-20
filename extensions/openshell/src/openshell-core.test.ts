@@ -238,66 +238,54 @@ describe("openshell backend manager", () => {
     },
   );
 
-  it("does not execute a registered legacy sandbox that is no longer ready", async () => {
-    const scopeKey = "agent:main";
-    const legacyRuntimeId = "openclaw-agent-main-25bffc4d";
-    cliMocks.runOpenShellCli
-      .mockResolvedValueOnce({
+  it.each<[string, string, string | undefined]>([
+    ["Ready", JSON.stringify({ phase: "Ready" }), undefined],
+    ["Error", JSON.stringify({ phase: "Error" }), 'OpenShell reports phase "Error".'],
+    ["missing phase", "{}", "OpenShell did not report a lifecycle phase for this sandbox."],
+    [
+      "malformed detail",
+      "not json",
+      "OpenShell did not report a lifecycle phase for this sandbox.",
+    ],
+  ])(
+    "checks a registered legacy sandbox lifecycle from get: %s",
+    async (_name, stdout, message) => {
+      const legacyRuntimeId = "openclaw-agent-main-25bffc4d";
+      cliMocks.runOpenShellCli.mockResolvedValueOnce({ code: 0, stdout, stderr: "" });
+      sandboxMocks.runSshSandboxCommand.mockResolvedValue({
         code: 0,
-        stdout: "sandbox detail",
-        stderr: "",
-      })
-      .mockResolvedValueOnce({
-        code: 0,
-        stdout: JSON.stringify(
-          Array.from({ length: 100 }, (_, index) => ({
-            name: `other-${index}`,
-            phase: "Ready",
-          })),
-        ),
-        stderr: "",
-      })
-      .mockResolvedValueOnce({
-        code: 0,
-        stdout: JSON.stringify([{ name: legacyRuntimeId, phase: "Error" }]),
-        stderr: "",
+        stdout: Buffer.from("ready"),
+        stderr: Buffer.alloc(0),
       });
-    const factory = createOpenShellSandboxBackendFactory({
-      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
-    });
-    const backend = await factory({
-      sessionKey: `${scopeKey}:turn`,
-      scopeKey,
-      registeredRuntimeIds: [legacyRuntimeId],
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
-      cfg: createOpenShellBackendSandboxConfig(),
-    });
+      const factory = createOpenShellSandboxBackendFactory({
+        pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
+      });
+      const backend = await factory({
+        sessionKey: "agent:main:turn",
+        scopeKey: "agent:main",
+        registeredRuntimeIds: [legacyRuntimeId],
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg: createOpenShellBackendSandboxConfig(),
+      });
 
-    await expect(backend.runShellCommand({ script: "true" })).rejects.toThrow(
-      'OpenShell reports phase "Error".',
-    );
-    expect(cliMocks.runOpenShellCli).toHaveBeenNthCalledWith(2, {
-      context: expect.objectContaining({
-        sandboxName: legacyRuntimeId,
-      }),
-      args: ["sandbox", "list", "--limit", "100", "--offset", "0", "--output", "json"],
-      cwd: "/tmp/workspace",
-    });
-    expect(cliMocks.runOpenShellCli).toHaveBeenNthCalledWith(3, {
-      context: expect.objectContaining({
-        sandboxName: legacyRuntimeId,
-      }),
-      args: ["sandbox", "list", "--limit", "100", "--offset", "100", "--output", "json"],
-      cwd: "/tmp/workspace",
-    });
-    expect(cliMocks.runOpenShellCli).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: expect.arrayContaining(["create"]),
-      }),
-    );
-    expect(cliMocks.createOpenShellSshSession).not.toHaveBeenCalled();
-  });
+      if (message) {
+        await expect(backend.runShellCommand({ script: "printf ready" })).rejects.toThrow(message);
+        expect(cliMocks.createOpenShellSshSession).not.toHaveBeenCalled();
+      } else {
+        await expect(backend.runShellCommand({ script: "printf ready" })).resolves.toMatchObject({
+          code: 0,
+        });
+        expect(cliMocks.createOpenShellSshSession).toHaveBeenCalled();
+      }
+      expect(cliMocks.runOpenShellCli).toHaveBeenCalledOnce();
+      expect(cliMocks.runOpenShellCli).toHaveBeenCalledWith({
+        context: expect.objectContaining({ sandboxName: legacyRuntimeId }),
+        args: ["sandbox", "get", legacyRuntimeId, "--output", "json"],
+        cwd: "/tmp/workspace",
+      });
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "clears the materialized skills directory through the remote backend boundary",

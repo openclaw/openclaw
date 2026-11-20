@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createUpdateDatabaseFamilyAdmission } from "../cli/update-cli/update-command-candidate-validation.js";
+import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-command-execution-guards.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 const version = "2026.10.16";
@@ -47,6 +48,7 @@ it.each(["legacy", "global-postgres", "family-refusal", "family-compatible"])(
     );
     const before = await fs.readFile(source);
     let activated = false;
+    const opts = { json: true };
     const familyAdmission = createUpdateDatabaseFamilyAdmission({
       root,
       updateInstallKind: "package",
@@ -54,7 +56,8 @@ it.each(["legacy", "global-postgres", "family-refusal", "family-compatible"])(
       channel: "stable",
       tag: version,
       packageInstallSpec: null,
-      opts: { json: true },
+      opts,
+      executionGuards: createUpdateCommandExecutionGuards(opts, root),
       shouldRestart: false,
     });
     const env = { OPENCLAW_CONFIG_PATH: source, OPENCLAW_STATE_DIR: root };
