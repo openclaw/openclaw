@@ -682,6 +682,7 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
 type HostWorkspaceMutationOptions = {
   containmentRoot?: string;
   workspaceOnly?: boolean;
+  abortSignal?: AbortSignal;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
 };
 
@@ -908,13 +909,7 @@ async function statHostFile(absolutePath: string) {
   }
 }
 
-function createHostMutationOperations(
-  root: string,
-  options?: {
-    workspaceOnly?: boolean;
-    memoryWriteProvenance?: MemoryWriteProvenanceObserver;
-  },
-) {
+function createHostMutationOperations(root: string, options?: HostWorkspaceMutationOptions) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
@@ -923,9 +918,11 @@ function createHostMutationOperations(
       {
         mkdir: async (dir: string) => {
           const resolved = resolveHostPath(dir);
+          options?.abortSignal?.throwIfAborted();
           await fs.mkdir(resolved, { recursive: true });
         },
-        writeFile: (filePath: string, content: string) => writeHostFile(filePath, content),
+        writeFile: (filePath: string, content: string) =>
+          writeHostFile(filePath, content, options?.abortSignal),
         readFile: async (absolutePath: string) => fs.readFile(resolveHostPath(absolutePath)),
         statFile: (absolutePath: string) => statHostFile(resolveHostPath(absolutePath)),
         access: async (absolutePath: string) => {
@@ -964,7 +961,9 @@ function createHostMutationOperations(
         if (ancestor && ancestor !== resolved.rootCanonicalPath) {
           const ancestorRoot = await fsRoot(ancestor);
           // mkdir requires a relative path; the prefix preserves literal tilde names.
-          await ancestorRoot.mkdir(`./${path.relative(ancestor, resolved.rootCanonicalPath)}`);
+          await ancestorRoot.mkdir(`./${path.relative(ancestor, resolved.rootCanonicalPath)}`, {
+            assertBeforeMutation: () => options?.abortSignal?.throwIfAborted(),
+          });
         }
         const rootHandle = await getRoot(selectedRoot);
         const canonicalRelative = toRelativeWorkspacePath(
@@ -975,6 +974,7 @@ function createHostMutationOperations(
         const mutationOptions = {
           mutationSymlinks: "reject" as const,
           assertBeforeMutation: () => {
+            options?.abortSignal?.throwIfAborted();
             toRelativeWorkspacePath(resolveHostWorkspaceRoot(root, dir), dir, { allowRoot: true });
           },
         };
@@ -985,7 +985,7 @@ function createHostMutationOperations(
         }
       },
       writeFile: (absolutePath: string, content: string) =>
-        writeHostWorkspaceFile(root, getRoot, absolutePath, content),
+        writeHostWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),
       readFile: async (absolutePath: string) => {
         // Reads retain the workspace contract of following only symlink parents.
         const selectedRoot = await resolveHostRootAsync(root, absolutePath);

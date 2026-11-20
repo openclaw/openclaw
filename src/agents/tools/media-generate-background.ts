@@ -277,7 +277,10 @@ export async function prepareMediaGenerationTask<
     requesterRunSessionKey: options?.requesterRunSessionKey,
     generationLabel: params.generationLabel,
     resources,
-    assertAdmissionCurrent: resources ? () => resources.assertOpen() : undefined,
+    assertAdmissionCurrent: () => {
+      signal?.throwIfAborted();
+      resources?.assertOpen();
+    },
   });
 }
 

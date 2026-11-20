@@ -203,10 +203,13 @@ export function createSessionsSpawnTool(
             senderIsOwner = false;
           }
         }
-        const assertSourceActive = composeSessionSourceAssertion([
-          operatorSelection.assertCurrent,
-          assertSenderOwner,
-        ]);
+        const assertSourceActive = composeSessionSourceAssertion(
+          [operatorSelection.assertCurrent, assertSenderOwner],
+          (assertSource) => {
+            executionSignal?.throwIfAborted();
+            assertSource();
+          },
+        );
         const params = args as Record<PropertyKey, unknown>;
         if (opts?.swarmCollector && params.collect !== true) {
           throw new ToolInputError(

@@ -67,9 +67,11 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
     return withPatchMemoryWriteProvenance(options.memoryWriteProvenance, {
       readFile: async (filePath) => {
         const buf = await bridge.readFile({ filePath, cwd: root });
+        options.signal?.throwIfAborted();
         return decodeUtf8Input(buf, `File ${filePath}`);
       },
       writeFile: async (filePath, content) => {
+        options.signal?.throwIfAborted();
         await bridge.writeFile({ filePath, cwd: root, data: content, signal: options.signal });
       },
       createFileExclusive: async (filePath, content) => {
@@ -78,6 +80,7 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
             "Sandbox filesystem bridge does not support atomic file creation; refusing to overwrite an existing path.",
           );
         }
+        options.signal?.throwIfAborted();
         return await bridge.createFileExclusive({
           filePath,
           cwd: root,
@@ -87,6 +90,7 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
         });
       },
       remove: async (filePath) => {
+        options.signal?.throwIfAborted();
         await bridge.remove({ filePath, cwd: root, force: false, signal: options.signal });
       },
     });
@@ -96,13 +100,15 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
     return withPatchMemoryWriteProvenance(options.memoryWriteProvenance, {
       readFile: async (filePath) => {
         const buffer = await fs.readFile(filePath);
+        options.signal?.throwIfAborted();
         return decodeUtf8Input(buffer, `File ${filePath}`);
       },
       writeFile: async (filePath, content) => {
-        await writeHostFile(filePath, content);
+        await writeHostFile(filePath, content, options.signal);
       },
       createFileExclusive: async (filePath, content) => {
         try {
+          options.signal?.throwIfAborted();
           await fs.writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
           return "created";
         } catch (error) {
@@ -113,26 +119,33 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
         }
       },
       remove: async (filePath) => {
+        options.signal?.throwIfAborted();
         await fs.rm(filePath);
       },
       mkdirp: async (dir) => {
+        options.signal?.throwIfAborted();
         await fs.mkdir(dir, { recursive: true });
       },
     });
   }
 
   const containmentRoot = options.root ?? options.cwd;
-  const initialRoot = await fsRoot(containmentRoot);
+  const initialRoot = await fsRoot(containmentRoot, {
+    assertBeforeMutation: () => options.signal?.throwIfAborted(),
+  });
   const roots = new Map([[path.resolve(containmentRoot), initialRoot]]);
   const resolveTarget = async (filePath: string) => {
     const selectedRoot = await resolveHostRootAsync(containmentRoot, filePath);
     const relative = toRelativeSandboxPath(selectedRoot, filePath);
     let root = roots.get(selectedRoot);
     if (!root) {
-      root = await fsRoot(selectedRoot);
+      root = await fsRoot(selectedRoot, {
+        assertBeforeMutation: () => options.signal?.throwIfAborted(),
+      });
       roots.set(selectedRoot, root);
     }
     const assertBeforeMutation = () => {
+      options.signal?.throwIfAborted();
       toRelativeSandboxPath(resolveHostWorkspaceRoot(containmentRoot, filePath), filePath);
     };
     return { root, relative, assertBeforeMutation };
@@ -150,7 +163,9 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
       });
       assertBoundaryRead(opened, filePath);
       try {
+        options.signal?.throwIfAborted();
         const buffer = await readFileDescriptor(opened.fd);
+        options.signal?.throwIfAborted();
         return decodeUtf8Input(buffer, `File ${filePath}`);
       } finally {
         await closeFileDescriptor(opened.fd);

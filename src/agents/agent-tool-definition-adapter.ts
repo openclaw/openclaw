@@ -219,9 +219,11 @@ export function toToolDefinitions(
               if (decision && !decision.launch) {
                 return { content: [], details: { status: "skipped" } };
               }
+              signal?.throwIfAborted();
               decision?.start?.();
               recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
             }
+            signal?.throwIfAborted();
             return await tool.execute(toolCallId, executeParams, signal, onUpdate);
           },
         });
@@ -285,7 +287,11 @@ export function toToolDefinitions(
       return {
         kind: "ready",
         args: ready.args,
-        execute: (onImplementationStart) => settle(() => ready.execute(onImplementationStart)),
+        execute: (onImplementationStart) =>
+          settle(() => {
+            signal?.throwIfAborted();
+            return ready.execute(onImplementationStart);
+          }),
         dispose: ready.dispose,
       };
     });
@@ -375,6 +381,7 @@ export function toClientToolDefinitions(
             recorder?.discard?.(toolCallId, func.name);
             return { content: [], details: { status: "skipped" } };
           }
+          signal?.throwIfAborted();
           decision?.start?.();
           if (typeof onClientToolCall === "function") {
             onClientToolCall(func.name, paramsRecord);

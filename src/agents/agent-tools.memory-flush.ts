@@ -211,9 +211,11 @@ async function appendMemoryFlushContent(params: {
   const sandbox = params.sandbox;
   if (!sandbox) {
     const root = await fsRoot(params.root);
+    params.signal?.throwIfAborted();
     await root.append(params.relativePath, params.content, {
       mkdir: true,
       prependNewlineIfNeeded: true,
+      assertBeforeMutation: () => params.signal?.throwIfAborted(),
     });
     return;
   }
@@ -230,6 +232,7 @@ async function appendMemoryFlushContent(params: {
       existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n")
         ? "\n"
         : "";
+    params.signal?.throwIfAborted();
     await sandbox.bridge.writeFile({
       filePath: params.relativePath,
       cwd: sandbox.root,
@@ -286,6 +289,7 @@ function wrapToolMemoryFlushAppendOnlyWrite(
         sandbox: options.sandbox,
         signal,
       });
+      signal?.throwIfAborted();
       assertNewMemoryFlushContent(contentBefore, content);
       const separator =
         contentBefore.length > 0 && !contentBefore.endsWith("\n") && !content.startsWith("\n")

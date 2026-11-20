@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -9,6 +10,30 @@ import { hostFileTools } from "./agent-tools.mutation.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("workspace mutations", () => {
+  afterEach(() => __setFsSafeTestHooksForTest());
+
+  it("preserves a workspace file when cancelled during native write preparation", async () => {
+    const root = tempDirs.make("openclaw-workspace-cancelled-");
+    const filePath = path.join(root, "memory.md");
+    await fs.writeFile(filePath, "original\n");
+    const canonicalPath = await fs.realpath(filePath);
+    const controller = new AbortController();
+    const cancelled = new Error("Workspace write cancelled");
+    __setFsSafeTestHooksForTest({
+      beforePinnedWriteParentAdmission: async (targetPath) => {
+        if (targetPath === canonicalPath) {
+          controller.abort(cancelled);
+        }
+      },
+    });
+    const { write } = hostFileTools(root, {
+      workspaceOnly: true,
+      abortSignal: controller.signal,
+    });
+    await expect(write("memory.md", "replacement\n")).rejects.toThrow(cancelled.message);
+    expect(await fs.readFile(filePath, "utf8")).toBe("original\n");
+  });
+
   it("creates a missing workspace and writes and edits inside its literal tilde directory", async () => {
     const fixture = tempDirs.make("openclaw-workspace-tilde-");
     const root = path.join(fixture, "workspace");

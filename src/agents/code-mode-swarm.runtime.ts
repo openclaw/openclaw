@@ -109,6 +109,7 @@ async function runAgentSpawnBridge(params: {
   }
   const spawnTool = spawnEntry.tool;
   const assertCurrent = () => {
+    params.signal?.throwIfAborted();
     params.ctx.abortSignal?.throwIfAborted();
     if (
       params.ctx.catalogRef?.current !== catalog ||
@@ -153,6 +154,8 @@ async function runAgentSpawnBridge(params: {
     if (existing.swarmLaunchPending === true && !isSubagentRunQueued(existing)) {
       throw new ToolInputError("agents.run launch is no longer active; start a new request.");
     }
+    params.signal?.throwIfAborted();
+    params.ctx.abortSignal?.throwIfAborted();
     return replayedSpawnResult(existing);
   }
   Object.defineProperty(spawnInput, SWARM_CODE_MODE_IDEMPOTENCY_KEY, {

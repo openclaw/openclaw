@@ -190,6 +190,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           }
           return policy;
         }));
+      signal?.throwIfAborted();
       // Capture settings and cancellation per execution; unused reviewers must not load model runtime.
       let autoReviewer: ExecAutoReviewer | undefined = defaults?.autoReviewer;
       if (!autoReviewer) {
@@ -404,6 +405,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         const resolvedExecEnvState = requestPreparation.getResolvedExecEnvPreparedState(params);
         const storeEnv = await resolveStoreEnv();
         const subagentExecution = await resolveSubagentExecution();
+        signal?.throwIfAborted();
         const storeBindings = storeEnv.secretEgressBindings ?? [];
         const useSecretEgress = secretEgressEnabled && host === "gateway" && !params.durable;
         const secretEgressBindings = useSecretEgress ? storeBindings : undefined;
@@ -546,6 +548,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           );
         }
 
+        signal?.throwIfAborted();
         run = await runExecProcess({
           command: params.command,
           execCommand: execCommandOverride,

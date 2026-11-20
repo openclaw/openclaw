@@ -70,6 +70,30 @@ describe.each(["host", "sandbox"] as const)("%s append", (backend) => {
   });
 });
 
+it("does not append when cancelled during provenance preparation", async () => {
+  await seed("seed\n");
+  const controller = new AbortController();
+  const cancelled = new Error("Memory append cancelled");
+  const wrapped = wrap({
+    memoryWriteProvenance: {
+      classifies: async () => true,
+      write: async ({ commit }) => {
+        controller.abort(cancelled);
+        await commit();
+      },
+      clearAfterDelete: async () => {},
+    },
+  });
+  await expect(
+    wrapped.execute(
+      "cancelled-append",
+      { path: RELATIVE_PATH, content: "new\n" },
+      controller.signal,
+    ),
+  ).rejects.toThrow(cancelled.message);
+  expect(await read()).toBe("seed\n");
+});
+
 it("returns the write schema only for the allowed file", async () => {
   await seed("seed");
   const wrapped = wrap();

@@ -9,6 +9,7 @@ export async function writeHostWorkspaceFile(
   getRoot: (root: string) => ReturnType<typeof fsRoot>,
   absolutePath: string,
   content: string,
+  abortSignal?: AbortSignal,
 ) {
   const selectedRoot = await resolveHostRootAsync(root, absolutePath);
   // Reject lexical escapes before opening the lazily created workspace root.
@@ -19,6 +20,7 @@ export async function writeHostWorkspaceFile(
     mkdir: true,
     mutationSymlinks: "follow-parents-within-root",
     assertBeforeMutation: () => {
+      abortSignal?.throwIfAborted();
       toRelativeWorkspacePath(resolveHostWorkspaceRoot(root, absolutePath), absolutePath);
     },
   });

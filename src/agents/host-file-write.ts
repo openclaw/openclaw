@@ -14,16 +14,24 @@ async function openHostFileForUpdate(resolved: string) {
   }
 }
 
-export async function writeHostFile(absolutePath: string, content: string) {
+export async function writeHostFile(
+  absolutePath: string,
+  content: string,
+  abortSignal?: AbortSignal,
+) {
   const resolved = path.resolve(expandOsHomePrefix(absolutePath));
+  abortSignal?.throwIfAborted();
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   const handle = await openHostFileForUpdate(resolved);
   if (!handle) {
+    abortSignal?.throwIfAborted();
     await fs.writeFile(resolved, content, "utf-8");
     return;
   }
   try {
-    await overwriteFileHandle(handle, Buffer.from(content, "utf-8"));
+    await overwriteFileHandle(handle, Buffer.from(content, "utf-8"), {
+      beforeWrite: () => abortSignal?.throwIfAborted(),
+    });
   } finally {
     await handle.close().catch(() => undefined);
   }

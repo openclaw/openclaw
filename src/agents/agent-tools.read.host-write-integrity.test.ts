@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hostFileTools, interceptOpen } from "./agent-tools.mutation.test-support.js";
 import type { createHostWorkspaceWriteTool } from "./agent-tools.read.js";
+import { createApplyPatchTool } from "./apply-patch.js";
 
 describe("unrestricted host tool writes", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -33,6 +34,35 @@ describe("unrestricted host tool writes", () => {
       ? tools.write(filePath, content)
       : tools.edit(filePath, "original", "replacement");
   }
+
+  it.each(["write", "apply_patch"] as const)(
+    "preserves the original when %s is cancelled during rollback preparation",
+    async (kind) => {
+      const filePath = await createFile("original content\n");
+      const controller = new AbortController();
+      const cancelled = new Error("File operation cancelled");
+      interceptOpen(filePath, (handle) => {
+        const read = handle.read.bind(handle);
+        handle.read = (async (...args: Parameters<typeof read>) => {
+          const result = await read(...args);
+          controller.abort(cancelled);
+          return result;
+        }) as typeof handle.read;
+      });
+      const pending =
+        kind === "write"
+          ? mutate(kind, filePath, "replacement content\n", { abortSignal: controller.signal })
+          : createApplyPatchTool({ cwd: tempDir, workspaceOnly: false }).execute(
+              "cancelled-patch",
+              {
+                input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-original content\n+replacement content\n*** End Patch`,
+              },
+              controller.signal,
+            );
+      await expect(pending).rejects.toThrow(cancelled.message);
+      expect(await fs.readFile(filePath, "utf8")).toBe("original content\n");
+    },
+  );
 
   function failWrites(filePath: string, originalByteLength: number, prefix = false) {
     interceptOpen(filePath, (handle) => {

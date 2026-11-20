@@ -638,6 +638,7 @@ export async function runExecProcess({
       onStdout: handleOutput("stdout", sanitizeStdout),
       onStderr: handleOutput("stderr", sanitizeStderr),
     };
+    startupSignal?.throwIfAborted();
     await launchLifecycle.prepare(beforeSpawn);
     if (spawnSpec.mode === "pty") {
       try {
@@ -652,6 +653,7 @@ export async function runExecProcess({
           throw err;
         }
         launchLifecycle.release("retry");
+        startupSignal?.throwIfAborted();
         const warning = `Warning: PTY spawn failed (${String(err)}); retrying without PTY for \`${opts.command}\`.`;
         logWarn(
           `exec: PTY spawn failed (${String(err)}); retrying without PTY for "${opts.command}".`,
