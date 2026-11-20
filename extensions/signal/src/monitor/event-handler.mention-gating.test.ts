@@ -183,6 +183,177 @@ it("records a structured fact for skipped attachment-only group messages", async
   });
 });
 
+it("passes an unquoted image from another group member into the next mentioned turn", async () => {
+  const fetchAttachment = vi.fn(async () => ({ path: "/tmp/group-image.jpg" }));
+  const handler = createMentionHandler({
+    historyLimit: 2,
+    ignoreAttachments: false,
+    fetchAttachment,
+  });
+  const sendPhoto = (id: string, timestamp: number, groupId = "g1") =>
+    handler(
+      groupEvent(
+        id,
+        { groupInfo: { groupId }, attachments: [{ id, contentType: "image/jpeg" }] },
+        { timestamp },
+      ),
+    );
+  await sendPhoto("outside-window", 1700000000000);
+  await sendPhoto("other-group", 1700000000001, "g2");
+  await sendPhoto("recent-image", 1700000000002);
+  await handler(groupEvent("intervening message", {}, { timestamp: 1700000000003 }));
+  expect(fetchAttachment).not.toHaveBeenCalled();
+  expect(capturedCtx).toBeUndefined();
+
+  await handler(
+    groupEvent(
+      "@bot what is in the photo above?",
+      {},
+      {
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000004,
+      },
+    ),
+  );
+
+  expect(fetchAttachment).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      groupId: "g1",
+      attachment: { id: "recent-image", contentType: "image/jpeg" },
+    }),
+  );
+  expect(getCapturedCtx().InboundHistory).toEqual([
+    {
+      sender: "Alice",
+      body: "recent-image",
+      timestamp: 1700000000002,
+      messageId: "1700000000002",
+      media: [{ kind: "image", contentType: "image/jpeg" }],
+    },
+    {
+      sender: "Alice",
+      body: "intervening message",
+      timestamp: 1700000000003,
+      messageId: "1700000000003",
+    },
+  ]);
+  expect(getCapturedCtx().media).toEqual([
+    expect.objectContaining({
+      kind: "image",
+      contentType: "image/jpeg",
+      path: "/tmp/group-image.jpg",
+      messageId: "1700000000002",
+    }),
+  ]);
+});
+
+it("keeps deleted, disappearing, view-once, and missing images out of model inputs", async () => {
+  const fetchAttachment = vi.fn(async () => null);
+  const handler = createMentionHandler({
+    historyLimit: 10,
+    ignoreAttachments: false,
+    fetchAttachment,
+  });
+  const images = [
+    { id: "view-once", viewOnce: true },
+    { id: "disappearing", expiresInSeconds: 60 },
+    { id: "deleted" },
+    { id: "deleted-by-admin" },
+    { id: "missing" },
+  ];
+  for (const [index, { id, ...options }] of images.entries()) {
+    await handler(
+      groupEvent(
+        "",
+        { ...options, attachments: [{ id, contentType: "image/jpeg" }] },
+        {
+          timestamp: 1700000000000 + index,
+        },
+      ),
+    );
+  }
+  await handler(
+    groupEvent(
+      "",
+      { remoteDelete: { targetTimestamp: 1700000000002 } },
+      { timestamp: 1700000000005 },
+    ),
+  );
+  await handler(
+    groupEvent(
+      "",
+      { adminDelete: { targetTimestamp: 1700000000003 } },
+      { timestamp: 1700000000006 },
+    ),
+  );
+  await handler(groupEvent("@bot what was the photo?", {}, { timestamp: 1700000000007 }));
+  expect(fetchAttachment).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ attachment: { id: "missing", contentType: "image/jpeg" } }),
+  );
+  expect(getCapturedCtx().InboundHistory?.flatMap((entry) => entry.media ?? [])).toEqual(
+    images.map(() => ({ kind: "image", contentType: "image/jpeg" })),
+  );
+  expect(getCapturedCtx().media ?? []).toEqual([]);
+});
+
+it("filters history senders and bounds Signal image fetches before reading bytes", async () => {
+  const fetchAttachment = vi.fn<SignalEventHandlerDeps["fetchAttachment"]>(
+    async ({ attachment }) => ({
+      path: `/tmp/${attachment.id}.jpg`,
+    }),
+  );
+  const groupAllowFrom = ["group:g1", "+15550002222"];
+  const handler = createMentionHandler({
+    historyLimit: 10,
+    ignoreAttachments: false,
+    fetchAttachment,
+    groupPolicy: "allowlist",
+    groupAllowFrom,
+    cfg: {
+      messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
+      channels: {
+        signal: {
+          contextVisibility: "allowlist",
+          groupPolicy: "allowlist",
+          groupAllowFrom,
+          groups: { g1: { requireMention: true } },
+        },
+      },
+    },
+  });
+  const photo = (id: string) => ({ id, contentType: "image/jpeg" });
+  const bob = { sourceNumber: "+15550002222", sourceName: "Bob" };
+  await handler(
+    groupEvent("", { attachments: [photo("stale")] }, { ...bob, timestamp: 1699990000000 }),
+  );
+  await handler(
+    groupEvent(
+      "",
+      { attachments: Array.from({ length: 5 }, (_, index) => photo(`visible-${index}`)) },
+      {
+        ...bob,
+        timestamp: 1700000000000,
+      },
+    ),
+  );
+  await handler(groupEvent("", { attachments: [photo("hidden")] }, { timestamp: 1700000000001 }));
+  await handler(groupEvent("@bot any photos?", {}, { ...bob, timestamp: 1700000000002 }));
+
+  expect(fetchAttachment.mock.calls.map(([{ attachment }]) => attachment.id)).toEqual([
+    "visible-1",
+    "visible-2",
+    "visible-3",
+    "visible-4",
+  ]);
+  expect(getCapturedCtx().media?.map(({ path }) => path)).toEqual([
+    "/tmp/visible-1.jpg",
+    "/tmp/visible-2.jpg",
+    "/tmp/visible-3.jpg",
+    "/tmp/visible-4.jpg",
+  ]);
+});
+
 it("summarizes multiple skipped attachments with stable file count wording", async () => {
   await expectSkippedGroupHistory(
     groupEvent("", { attachments: [{ id: "a1" }, { id: "a2" }] }),
