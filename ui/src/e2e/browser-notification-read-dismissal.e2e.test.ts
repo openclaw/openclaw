@@ -12,7 +12,7 @@ const message = {
   __openclaw: { id: "answer-row", runId: "proof-run", idempotencyKey: "proof-final" },
 };
 const tags = (page: Page) => page.evaluate(async () =>
-  (await (await navigator.serviceWorker.ready).getNotifications()).map((item) => item.tag).sort(),
+  (await (await navigator.serviceWorker.ready).getNotifications()).map((item) => item.tag).toSorted(),
 );
 
 // Exercise actual Chromium push delivery, showNotification/getNotifications/close,

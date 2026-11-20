@@ -26,8 +26,8 @@ it.each(["stable", "client", "unresolved-profile", "url", "dispose"])(
   "binds a visibility receipt before lazy runtime admission: %s",
   async (change) => {
     vi.stubGlobal("navigator", { userAgent: "", serviceWorker: {} });
-    vi.stubGlobal("PushManager", class {});
-    vi.stubGlobal("Notification", class { static permission = "granted"; });
+    vi.stubGlobal("PushManager", {});
+    vi.stubGlobal("Notification", { permission: "granted" });
     const h = createApplicationGateway(createApplicationGatewaySnapshot({
       phase: "connected", client: {} as GatewayBrowserClient, selfUser: null,
     }));
