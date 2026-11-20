@@ -12,7 +12,7 @@ const continuationDeclarationGrowth = {
   previousRatchetBytes: 5_320_000,
   varianceBytes: 64 * 1024,
   upstreamBytes: 5_382_601, // upstream 1129d4c071
-  candidateBytes: 5_403_979, // continuation candidate c93c9485e7
+  candidateBytes: 5_403_948, // continuation candidate aa67d24e3b
   // Public roots that publish the continuation contracts, and the bundled plugins reading them.
   consumers: {
     "agent-harness": ["extensions/codex (disableContinuationTools)"],
