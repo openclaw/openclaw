@@ -293,7 +293,7 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
     const target: Array<{ step: number; kind: TurnKind; request: WireRequest; model: string }> = [];
     // Numbered so a rebuild excuse can require the newest summary, not an older one.
     let summaries = 0;
-    // The model a request names: in the body, or in the URL (Gemini, Bedrock).
+    // The model id a request names: in the body, or in the URL (Gemini, Bedrock).
     let requestModel = "";
     const seen: string[] = [];
     // Sessions the journey does not expect; every request must belong to a known lineage.
@@ -375,7 +375,9 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
       request.on("end", () => {
         const parsed = JSON.parse(body) as Record<string, unknown>;
         requestModel =
-          typeof parsed.model === "string" ? parsed.model : decodeURIComponent(request.url ?? "");
+          typeof parsed.model === "string"
+            ? parsed.model
+            : (/\/models?\/([^/:]+)/.exec(decodeURIComponent(request.url ?? ""))?.[1] ?? "");
         const wire = readWireRequest(api, parsed);
         const thinking = parsed.thinking as { type?: string } | undefined;
         const reply = script(wire, Boolean(thinking?.type && thinking.type !== "disabled"));
@@ -391,7 +393,8 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
       const provider = buildFakeProvider(api, origin, { reasoning: true });
       // A second provider on the same transport for the provider-switch step.
       // Its own model id, so a request shows which provider served it.
-      const alternateModel = `${provider.modelRef.split("/").slice(1).join("/")}-alt`;
+      const baseModel = provider.modelRef.split("/").slice(1).join("/");
+      const alternateModel = `${baseModel}-alt`;
       const alternate = {
         ...provider,
         providerId: `${provider.providerId}-alt`,
@@ -601,10 +604,13 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
               });
               await send(TARGET, `TARGET after model switch ${step}`);
               // The rebuild excuse needs a real switch: the next turn comes from the selected model.
-              expect(
-                target.slice(before).map(({ model }) => model.includes(alternateModel)),
-                `step ${step} modelSwitch`,
-              ).toEqual(target.slice(before).map(() => switched));
+              {
+                const models = target.slice(before).map(({ model }) => model);
+                expect(models.length, `step ${step} modelSwitch sent nothing`).toBeGreaterThan(0);
+                expect(new Set(models), `step ${step} modelSwitch`).toEqual(
+                  new Set([switched ? alternateModel : baseModel]),
+                );
+              }
               break;
           }
           const evidence = STEP_EVIDENCE[kind];
