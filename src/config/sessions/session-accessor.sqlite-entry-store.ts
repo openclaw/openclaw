@@ -64,10 +64,6 @@ export function deleteSessionEntryRows(
     preparedReferenceOwners?: () => Map<string, string> | undefined;
   } = {},
 ): boolean {
-  // Continuation: deletion is a generation edge of recipient authority. Every deletion owner
-  // advances it here, in its own transaction, so a binding captured before the deletion stays
-  // stale when the key is recreated (the authority row deliberately outlives the session).
-  advanceSessionRecipientAuthorityInTransaction(database, sessionKey);
   // Lifecycle deletion reuses its transaction snapshot; Doctor also supplies validated legacy rows.
   const previousEntry =
     options.validatedEntry ?? readExactSessionEntryRow(database, sessionKey)?.entry;
@@ -88,6 +84,11 @@ export function deleteSessionEntryRows(
       new Set([sessionKey]),
       windows.map((window) => window.session_id),
     );
+  // Continuation: deletion is a generation edge of recipient authority. Every deletion owner
+  // advances it here, in its own transaction, so a binding captured before the deletion stays
+  // stale when the key is recreated (the authority row deliberately outlives the session).
+  // Any write retires the prepared owners above, so the advance waits until they are read.
+  advanceSessionRecipientAuthorityInTransaction(database, sessionKey);
   const survivingNodes = new Map(
     [...new Set(survivingOwners.values())].map((key) => [
       key,

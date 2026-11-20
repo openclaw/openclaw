@@ -12,6 +12,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { captureSessionRecipientAuthority } from "./session-accessor.js";
 import * as archive from "./session-accessor.sqlite-archive.js";
 import { readLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-store.js";
 import {
@@ -23,6 +24,7 @@ import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sql
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { deleteSessionEntryInAgentWorker } from "./session-entry-deletion.worker.js";
 import { readSessionEntryInWorker as read } from "./session-entry-read-writable.js";
+import { isSessionRecipientAuthorityCurrentInWorker } from "./session-recipient-authority-current.js";
 import { loadSessionTranscriptEvents as transcript } from "./session-transcript-events.js";
 
 // mock-isolation: Background maintenance must not race exact deletion fixtures.
@@ -118,6 +120,7 @@ it.each([
 
 it("rolls back deletion when cleanup authority is lost at native commit", async () => {
   const { scope, remove } = await fixture();
+  const recipientAuthority = await captureSessionRecipientAuthority(scope);
   let authorityCurrent = true;
   const createAdmission = admission.createSqliteWorkerOperationAdmission;
   const interception = vi
@@ -142,6 +145,8 @@ it("rolls back deletion when cleanup authority is lost at native commit", async 
   interception.mockRestore();
   expect(authorityCurrent).toBe(false);
   await expect(read(scope)).resolves.toMatchObject({ sessionId: "original", label: "initial" });
+  // The recipient-authority advance rolls back with the deletion it belongs to.
+  expect(await isSessionRecipientAuthorityCurrentInWorker(scope, recipientAuthority)).toBe(true);
 });
 
 it("deletes empty transcripts without starting an archive worker", async () => {
@@ -190,17 +195,24 @@ it.each([false, true])(
       materializedPlans: [],
     };
     const scans: boolean[] = [];
+    const advances: Array<{ inTransaction: boolean; scans: number; deletionWrites: number }> = [];
+    let deletionWrites = 0;
     const statements = channel("openclaw.database.statement");
     const observe = (event: unknown) => {
-      if (
-        event &&
-        typeof event === "object" &&
-        "sql" in event &&
-        typeof event.sql === "string" &&
-        event.sql.startsWith('with "projected_nodes"') &&
-        event.sql.includes('order by "session_key"')
-      ) {
+      const sql = isRecord(event) ? event.sql : undefined;
+      if (typeof sql !== "string") {
+        return;
+      }
+      if (sql.startsWith('with "projected_nodes"') && sql.includes('order by "session_key"')) {
         scans.push(database.db.isTransaction);
+      } else if (sql.startsWith('insert into "session_recipient_authority"')) {
+        advances.push({
+          inTransaction: database.db.isTransaction,
+          scans: scans.length,
+          deletionWrites,
+        });
+      } else if (sql.startsWith('update "session_windows"') || sql.startsWith("delete from ")) {
+        deletionWrites += 1;
       }
     };
     statements.subscribe(observe);
@@ -251,6 +263,9 @@ it.each([false, true])(
       statements.unsubscribe(observe);
     }
     expect(scans).toEqual(changed ? [false, true] : [false]);
+    // Deletion advances recipient authority once, in its transaction: after the survivor
+    // owners are revalidated (the advance would retire a prepared scan) and before it writes.
+    expect(advances).toEqual([{ inTransaction: true, scans: changed ? 2 : 1, deletionWrites: 0 }]);
     expect(
       database.db
         .prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
