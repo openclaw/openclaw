@@ -301,6 +301,11 @@ Cloud-worker sessions also require worker setup to admit that input. Other exter
 runtimes remain unsupported. Goals are not queued or steered into another run.
 The UI reports unsupported or busy sessions rather than creating an inactive Goal.
 
+Visible spawned work sessions support Goal start, Resume, and replacement under
+the same runtime and lifecycle requirements. Start and Resume still require an
+idle session. Parent links and spawn depths stay intact. Hidden subagents remain
+unsupported by these direct chat controls.
+
 Codex worker Goals use the same OpenClaw Goal ID, history, budgets, accounting,
 and continuation queue. Codex's separate autonomous Goal engine stays disabled;
 the core `get_goal`, `create_goal`, and `update_goal` tools remain available when

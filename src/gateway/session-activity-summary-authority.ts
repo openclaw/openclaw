@@ -5,6 +5,7 @@ import {
   captureResidentUserProfileAccess,
   prepareUserProfileCatalog,
 } from "../state/user-profile-list.js";
+import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { captureChannelOperatorRunAuthority } from "./operator-run-authority.js";
 
@@ -58,6 +59,7 @@ export function createActivitySummaryAuthority({
         profileId: canonicalProfileId,
         assignedRole,
         githubLogin,
+        openclawIdAccountIds: original.openclawIdAccountIds,
         scopes: [],
         gatewayAccessGrant: null,
         getRuntimeConfig: getConfig,
@@ -76,6 +78,7 @@ export function createActivitySummaryAuthority({
             assignedRole,
             getConfig(),
             githubLogin,
+            operatorRoleSubject(profile),
           );
           if (role && role.agents !== "*" && !role.agents.includes(agentId)) {
             throw new Error("Activity recap operator role cannot access this agent");

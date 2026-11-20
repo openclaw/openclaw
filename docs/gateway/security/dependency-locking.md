@@ -57,9 +57,9 @@ Neither path publishes a lockfile:
 
 ### Archive compression
 
-OpenClaw's runtime builds bundle `tar` so installed packages carry the same archive implementation as source builds. The pinned `minizlib` dependency is patched to let Node's zlib concatenate its output without temporarily replacing the global `Buffer.concat` function. This preserves gzip backup and artifact support in runtimes with read-only built-ins, and avoids a process-wide patch on Node and Bun.
+OpenClaw imports the public `tar/raw` entry and bundles it so installed packages carry the same archive implementation as source builds. The pinned `minizlib` dependency is patched to let Node's zlib concatenate its output without temporarily replacing the global `Buffer.concat` function. This preserves gzip backup and artifact support in runtimes with read-only built-ins, and avoids a process-wide patch on Node and Bun.
 
-The `tar` patch selects its published unbundled entry points so its embedded copy of `minizlib` cannot bypass that repair. Remove both patches when an upstream release provides the same behavior; keep the runtime bundling until the published dependency also contains the fix.
+The `tar/raw` entry uses the separate `minizlib` dependency instead of the copy embedded in tar's default minified entry. This removes the need to patch tar's package manifest. Keep the `minizlib` patch and runtime bundling until an upstream release provides the same behavior.
 
 ## Validate npm dependency graphs
 

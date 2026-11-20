@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as configIo from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { channelToNpmTag, resolveEffectiveUpdateChannel } from "../infra/update-channels.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
@@ -108,7 +109,10 @@ it.each([
       ...(unknown ? { unknownSetting: true } : {}),
     });
     mocks.readPackageVersion.mockResolvedValue(VERSION);
-    f.primeNpmChannelTag(channel ?? "latest", VERSION);
+    const effectiveChannel =
+      channel ??
+      resolveEffectiveUpdateChannel({ currentVersion: VERSION, installKind: "package" }).channel;
+    f.primeNpmChannelTag(channelToNpmTag(effectiveChannel), VERSION);
     const { createConfigIO } = await import("../config/io.js");
     const { repairLegacyConfigForUpdateChannel } = await vi.importActual<
       typeof import("../commands/doctor/legacy-config-repair.js")
@@ -168,7 +172,7 @@ it.each([
     checks.expectNoSideEffects(mocks.serviceStop, mocks.serviceRestart, mocks.candidateCheck);
     expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledOnce();
     expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({ coreVersion: VERSION, updateChannel: channel ?? "stable" }),
+      expect.objectContaining({ coreVersion: VERSION, updateChannel: effectiveChannel }),
     );
     expect(checks.packageInstallCommandCall()).toBeUndefined();
     expect(checks.doctorCommandCall()).toBeUndefined();

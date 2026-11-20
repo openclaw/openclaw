@@ -27,6 +27,7 @@ import {
   expectUsageFields,
 } from "./event-projector.test-harness.js";
 import { prepareCodexServerNotification } from "./protocol-validators.js";
+import { resolveCodexPromptError } from "./usage-limit-error.js";
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector terminal errors", () => {
@@ -164,6 +165,127 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     },
   );
 
+  it.each(["modelNotFound", "policyCapacityUnavailable", "inferenceHookDenied"])(
+    "surfaces %s from both error notifications and failed terminal snapshots",
+    async (codexErrorInfo) => {
+      for (const completed of [false, true]) {
+        const projector = await createProjector();
+        const message = "The requested model could not run.";
+        await fail(projector, { message, codexErrorInfo }, completed);
+        expectTerminal(fixture.result(projector), message, "prompt");
+        expect(projector.getCompletedTurnStatus()).toBe(completed ? "failed" : undefined);
+      }
+    },
+  );
+
+  it("explains outdated Codex only for ChatGPT model-not-found failures", async () => {
+    const nativeMessage =
+      "The 'gpt-6.2-sol' model is not supported when using Codex with a ChatGPT account.";
+    const body = {
+      detail: nativeMessage,
+      error: { type: "invalid_request_error", code: "model_not_found", message: nativeMessage },
+    };
+    const update =
+      'Update your global Codex with "npm i -g @openai/codex", then restart the Gateway. Or choose another model.';
+    const httpMessage = `unexpected status 400 Bad Request: ${JSON.stringify(body)}`;
+    for (const testCase of [
+      {
+        message: nativeMessage,
+        codexErrorInfo: "modelNotFound",
+        version: "0.164.0",
+        expected: `gpt-6.2-sol needs a newer Codex than 0.164.0. ${update}`,
+      },
+      {
+        message: httpMessage,
+        codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 400 } },
+        version: "0.164.0",
+        expected: `gpt-6.2-sol needs a newer Codex than 0.164.0. ${update}`,
+      },
+      {
+        message: nativeMessage,
+        codexErrorInfo: "modelNotFound",
+        version: undefined,
+        expected: `gpt-6.2-sol needs a newer Codex. ${update}`,
+      },
+      {
+        message: "The requested model does not exist.",
+        codexErrorInfo: "modelNotFound",
+        version: "0.164.0",
+        expected: "The requested model does not exist.",
+      },
+      {
+        message: nativeMessage,
+        codexErrorInfo: "badRequest",
+        version: "0.164.0",
+        expected: nativeMessage,
+      },
+    ]) {
+      for (const completed of [false, true]) {
+        const params = { ...(await createParams()), modelId: "gpt-6.2-sol" };
+        const projector = await createProjector(params, {
+          codexRuntime: { serverVersion: testCase.version },
+        });
+        await fail(
+          projector,
+          { message: testCase.message, codexErrorInfo: testCase.codexErrorInfo },
+          completed,
+        );
+        const terminal = readAttemptTerminal(fixture.result(projector));
+        if (testCase.expected !== testCase.message) {
+          expect(terminal.promptError).toMatchObject({
+            message: testCase.expected,
+            nativeMessage: testCase.message,
+            // Clients key the "Start a new session" action on this host code.
+            code: "harness_update_required",
+          });
+        } else {
+          expect(terminal.promptError).toBe(testCase.message);
+        }
+        expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
+      }
+    }
+  });
+
+  it("points the update at the Codex install the turn ran", () => {
+    const source = {
+      message: "The 'gpt-6.2-sol' model is not supported when using Codex with a ChatGPT account.",
+      codexErrorInfo: "modelNotFound" as const,
+    };
+    // Configured commands and remote app-servers win over PATH Codex after a restart.
+    for (const [facts, instruction] of [
+      [
+        { source: "config", command: "/opt/codex/bin/codex" },
+        "Update the Codex at /opt/codex/bin/codex (set by plugins.entries.codex.config.appServer.command), then restart the Gateway.",
+      ],
+      [
+        { source: "env", command: "/opt/codex/bin/codex" },
+        "Update the Codex at /opt/codex/bin/codex (set by OPENCLAW_CODEX_APP_SERVER_BIN), then restart the Gateway.",
+      ],
+      [
+        { source: "remote" },
+        "Update the Codex app-server this Gateway connects to, then restart it.",
+      ],
+      ...(["ChatGPT", "Codex"] as const).map(
+        (app) =>
+          [
+            { source: "desktop", command: app },
+            `Update the ${app} desktop app, which provides this Codex, then restart the Gateway.`,
+          ] as const,
+      ),
+    ] as const) {
+      expect(
+        resolveCodexPromptError(source, {
+          model: "gpt-6.2-sol",
+          serverVersion: "0.164.0",
+          ...facts,
+        }),
+      ).toMatchObject({
+        message: `gpt-6.2-sol needs a newer Codex than 0.164.0. ${instruction} Or choose another model.`,
+        code: "harness_update_required",
+      });
+    }
+  });
+
   const denialBody = {
     error: "middleware_denied",
     reason_code: "request_credential_denied",
@@ -274,6 +396,33 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       } else {
         expect(error).toMatchObject({ status: 401, message: "ordinary refusal" });
       }
+    },
+  );
+
+  it.each([
+    undefined,
+    {
+      message: "The 'gpt-6.2-sol' model is not supported when using Codex with a ChatGPT account.",
+    },
+  ])(
+    "keeps the update-required error when the failed snapshot adds nothing: %j",
+    async (laterError) => {
+      const params = { ...(await createParams()), modelId: "gpt-6.2-sol" };
+      const projector = await createProjector(params, {
+        codexRuntime: { serverVersion: "0.164.0" },
+      });
+      await fail(projector, {
+        message:
+          "The 'gpt-6.2-sol' model is not supported when using Codex with a ChatGPT account.",
+        codexErrorInfo: "modelNotFound",
+      });
+      await fixture.notify(projector, "turn/completed", {
+        turn: { id: TURN_ID, status: "failed", items: [], error: laterError },
+      });
+      // Losing the code would drop Control UI's "Start a new session" action.
+      expect(readAttemptTerminal(fixture.result(projector)).promptError).toMatchObject({
+        code: "harness_update_required",
+      });
     },
   );
 
@@ -537,7 +686,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       );
       const terminal = readAttemptTerminal(fixture.result(projector));
       const { message } = expectUsageLimitPromptError(terminal.promptError);
-      expect(message).toContain("You've reached your Codex subscription usage limit.");
+      expect(message).toContain("Codex reported a usage or quota limit.");
       expect(message).toContain(
         recent ? "Next reset in" : "Codex says to try again at May 11th, 2026 9:00 AM.",
       );

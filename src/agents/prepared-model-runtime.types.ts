@@ -116,6 +116,8 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     ) => Promise<ModelCatalogSnapshot>;
     /** Full static models for configured refs, resolved once at the lifecycle boundary. */
     configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
+    /** Configured fallback health routes, normalized once in the owning plugin generation. */
+    fallbackRateLimitModels?: ReadonlyMap<string, Model | undefined>;
     /** Exact logical IDs precede static equivalence within this policy generation. */
     findConfiguredRuntimeModel: (
       provider: string,
@@ -131,6 +133,7 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     inlineProviderModels: readonly InlineModelEntry[];
     createStores: (
       publishedModels?: ReadonlyMap<string, readonly Model[]>,
+      selectedModel?: { provider: string; modelId: string },
     ) => PreparedModelRuntimeStores;
     /** Bounded metadata shared by runs; replacing the model/auth generation drops the memo. */
     routeModelResolutionMemo?: Map<string, Promise<Model>>;

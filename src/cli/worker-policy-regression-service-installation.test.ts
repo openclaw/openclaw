@@ -41,8 +41,8 @@ vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRoot: async () => "/cli",
 }));
-vi.mock("../infra/boundary-path.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/boundary-path.js")>()),
+vi.mock("../infra/path-existence.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/path-existence.js")>()),
   resolveIdentityPathViaExistingAncestorSync: (p: string) => p,
 }));
 vi.mock("../infra/npm-registry-spec.js", async (importOriginal) => ({

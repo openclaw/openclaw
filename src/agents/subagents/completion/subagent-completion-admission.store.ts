@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { appendSessionTranscriptReport } from "../../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
 import type { QueuedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
@@ -49,36 +50,37 @@ import type {
 } from "./subagent-completion-mutation.types.js";
 
 export class SubagentCompletionSourceChangedError extends SubagentRegistryMutationRejectedError {}
-export class SubagentRequesterWakeProgressChangedError extends SubagentCompletionSourceChangedError {}
+class SubagentRequesterWakeProgressChangedError extends SubagentCompletionSourceChangedError {}
 
 type AdmissionReceipt =
   SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
 type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
 
-async function recordRequiredCompletionFailure(
+export async function recordRequiredCompletionNotice(
   entry: SubagentRunRecord,
   reason: string,
   batch: readonly SubagentRunRecord[] = [entry],
+  kind: "failed" | "delayed" = "failed",
 ): Promise<void> {
-  if (subagentRuns.get(entry.runId)?.delivery?.status === "delivered") {
+  const wake = entry.requesterSettleWake;
+  if (
+    subagentRuns.get(entry.runId)?.delivery?.status === "delivered" &&
+    (kind === "delayed" || !wake?.requesterYieldBatch)
+  ) {
     return;
   }
-  subagentRegistryLog.warn("Subagent completion delivery failed", {
+  subagentRegistryLog.warn(`Subagent completion delivery ${kind}`, {
     runId: entry.runId,
     requesterSessionKey: entry.requesterSessionKey,
     reason,
   });
   if (
     entry.expectsCompletionMessage !== true ||
-    entry.completionTarget !== "parent" ||
     entry.execution.status !== "terminal" ||
-    entry.pauseReason === "sessions_yield" ||
-    !entry.completionRequesterSessionId ||
-    !entry.completionRequesterLifecycleRevision
+    entry.pauseReason === "sessions_yield"
   ) {
     return;
   }
-  const wake = entry.requesterSettleWake;
   // Share the yielded requester's failure identity with its lifecycle settlement.
   const runId =
     wake?.requesterYieldBatch || batch.length > 1
@@ -94,36 +96,50 @@ async function recordRequiredCompletionFailure(
           }:delivery-failure`,
         ))
       : `subagent-delivery-failure:${entry.taskRunId ?? entry.runId}:${entry.delivery?.generation ?? 1}`;
-  // This records a failed obligation, without borrowing its retired execution authority.
-  // A deleted/reset requester refuses the append; never redirect it to a replacement.
-  await runWithoutOwnedSessionTranscriptWrites(() =>
+  // Report delivery state without borrowing its retired execution authority.
+  // Address the current chat, including a compaction successor; deletion and Stop get no notice.
+  const requester = {
+    agentId: entry.requesterAgentId,
+    sessionKey: entry.requesterSessionKey,
+    storePath: entry.requesterStorePath,
+  };
+  const current = await readSessionEntryReadOnlyInWorker(requester);
+  if (!current?.sessionId || current.status === "killed") {
+    return;
+  }
+  const customType = kind === "delayed" ? "subagent-delivery-delayed" : "run-failed-before-reply";
+  const result = await runWithoutOwnedSessionTranscriptWrites(() =>
     appendSessionTranscriptReport(
       {
-        agentId: entry.requesterAgentId,
-        sessionKey: entry.requesterSessionKey,
-        storePath: entry.requesterStorePath,
-        sessionId: entry.completionRequesterSessionId,
-        expectedLifecycleRevision: entry.completionRequesterLifecycleRevision,
+        ...requester,
+        sessionId: current.sessionId,
+        expectedLifecycleRevision: current.lifecycleRevision,
       },
       {
         kind: "custom",
-        customTypes: ["run-failed-before-reply"],
+        customTypes: [customType],
         selectReport: (latest) =>
           isRecord(latest?.details) && latest.details.runId === runId
             ? undefined
             : {
-                customType: "run-failed-before-reply",
+                customType,
                 display: true,
                 excludeFromContext: true,
-                content: expectDefined(
-                  renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
-                  "child completion failure notice",
-                ),
-                details: { runId, childRunId: entry.runId },
+                content:
+                  kind === "delayed"
+                    ? "Automatic delivery of a child result timed out. The result is still saved and may still arrive automatically."
+                    : expectDefined(
+                        renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
+                        "child completion failure notice",
+                      ),
+                details: { runId, childRunId: entry.runId, error: reason },
               },
       },
     ),
   );
+  if (!result.ok) {
+    throw new Error(`Child result failure notice could not be appended: ${result.error.code}`);
+  }
 }
 
 function parseAcknowledgedRecord(value: unknown): SubagentCompletionRecord {
@@ -473,10 +489,6 @@ export async function blockSubagentCompletionDelivery(
     requesterBatch: _requesterBatch,
     ...request
   } = params;
-  if (params.storeReplaced) {
-    const current = currentCompletionOwner(subagentRuns, params.subagent);
-    subagentRuns.retireCompletionAuthority(current);
-  }
   const result = await mutateCompletion(
     [params.subagent],
     (rows) => {
@@ -495,7 +507,6 @@ export async function blockSubagentCompletionDelivery(
           applied === true &&
           (params.suspendedReason ||
             params.operatorAuthorityUnavailable ||
-            params.storeReplaced ||
             params.disposition === "permanent_failure")
         ) {
           // The durable outcome precedes releasing the completion input.
@@ -504,13 +515,13 @@ export async function blockSubagentCompletionDelivery(
       },
     },
   );
-  if (
-    result.applied &&
-    (params.storeReplaced ||
-      params.suspendedReason === "permanent_failure" ||
-      params.disposition === "permanent_failure")
-  ) {
-    await recordRequiredCompletionFailure(params.subagent, params.reason, params.requesterBatch);
+  if (result.applied && (params.suspendedReason || params.disposition === "permanent_failure")) {
+    await recordRequiredCompletionNotice(
+      params.subagent,
+      params.reason,
+      params.requesterBatch,
+      params.suspendedReason === "expiry" ? "delayed" : "failed",
+    );
   }
   return result.applied === true;
 }
@@ -557,6 +568,12 @@ function currentRequesterEntries(
       operation === "transition" && !committed
         ? currentCompletionOwner(rows, expected)
         : rows.get(expected.runId);
+    // A pause notice belongs to this child, even when a resumed sibling rekeys the cohort.
+    const settlesPauseNotice =
+      operation === "settle" &&
+      current?.pauseReason === "sessions_yield" &&
+      expected.pauseReason === "sessions_yield" &&
+      current.requesterSettleWake?.pauseNotice;
     if (
       !current ||
       !isSameSubagentRunOwner(current, expected) ||
@@ -566,10 +583,11 @@ function currentRequesterEntries(
         (!current.requesterSettleWake ||
           current.requesterSettleWake.rearmGeneration !==
             expected.requesterSettleWake?.rearmGeneration ||
-          !isDeepStrictEqual(
-            current.requesterSettleWake.batchRunIds?.toSorted(),
-            expected.requesterSettleWake?.batchRunIds?.toSorted(),
-          ) ||
+          (!settlesPauseNotice &&
+            !isDeepStrictEqual(
+              current.requesterSettleWake.batchRunIds?.toSorted(),
+              expected.requesterSettleWake?.batchRunIds?.toSorted(),
+            )) ||
           !isDeepStrictEqual(
             current.requesterSettleWake.pauseNotice,
             expected.requesterSettleWake?.pauseNotice,
@@ -648,7 +666,7 @@ export async function mutateRequesterCompletionBatch(
     !params.operation.outcome.delivered
   ) {
     for (const entry of params.entries) {
-      await recordRequiredCompletionFailure(
+      await recordRequiredCompletionNotice(
         entry,
         params.operation.outcome.error ?? params.operation.outcome.disposition ?? "not delivered",
         params.entries,

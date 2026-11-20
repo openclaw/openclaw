@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
+import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeScopedGatewayHttpRequestOrReply as authorizeHttpRequest } from "./http-auth-utils.js";
@@ -377,7 +378,7 @@ describe("POST /tools/invoke request cancellation", () => {
     });
   });
 
-  it("executes an HTTP member under its membership role and revokes retained work with that device", async () => {
+  it("keeps an HTTP member's admitted work after membership removal but refuses another start", async () => {
     await withOpenClawTestState({ label: "http-tool-membership" }, async () => {
       const cfg: OpenClawConfig = {
         gateway: {
@@ -406,6 +407,7 @@ describe("POST /tools/invoke request cancellation", () => {
         const person = await ensureCanonicalUserProfileForOpenClawIdIdentity({
           accountId: principal.accountId,
         });
+        await setCanonicalUserProfileRole(person.id, "operator");
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const context = createGatewayRequestContext(makeContextParams());
         resolveGatewayContext = () => context;
@@ -461,9 +463,10 @@ describe("POST /tools/invoke request cancellation", () => {
         expect(authority).toBeDefined();
         expect(() => authority?.assertCurrent()).not.toThrow();
         membership.delete(principal.peerKey);
-        expect(() => authority?.assertCurrent()).toThrow(
-          /OpenClaw ID membership authority changed/,
-        );
+        expect(() => authority?.assertCurrent()).not.toThrow();
+        expect(() => authority?.reauthorize?.()).toThrow();
+        admission?.close();
+        expect(() => authority?.assertCurrent()).toThrow(/no longer active/);
       } finally {
         admission?.close();
         resolveGatewayContext = undefined;

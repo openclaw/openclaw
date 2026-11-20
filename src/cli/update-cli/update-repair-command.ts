@@ -9,7 +9,10 @@ import { resolveGatewayPort } from "../../config/paths.js";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import { readPackageVersion } from "../../infra/package-json.js";
-import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
+import {
+  readPackageActivationRepairLease,
+  settlePendingPackageActivation,
+} from "../../infra/package-update-activation.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   normalizeUpdateChannel,
@@ -190,11 +193,20 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
       throw new Error("Plugin cohort repair selected a different installation before custody.");
     }
     try {
+      const packageLease = await readPackageActivationRepairLease(root);
       const repair = await (
-        await prepareManagedHandoffLeaseStore()
+        await prepareManagedHandoffLeaseStore(
+          packageLease
+            ? {
+                databasePath: packageLease.databasePath,
+                existingIdentity: packageLease,
+                serviceManagerEnv: resolveServiceManagerEnv(),
+              }
+            : undefined,
+        )
       ).prepareRepair(root, env, timeoutMs);
       const legacy = resolveLegacyGatewayManagedUpdateLeaseDatabasePath();
-      if (repair || !legacy || !fs.existsSync(legacy)) {
+      if (packageLease || repair || !legacy || !fs.existsSync(legacy)) {
         return repair;
       }
       // An earlier macOS Gateway's handoff stays in its own store until repaired.
@@ -299,7 +311,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
               trigger: "cli",
               settlement: {
                 reason: settled.reason,
-                detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+                detail: `${settled.detail} Operation ${settled.operationId}${settled.retained ? `; evidence retained at ${settled.retained}` : ""}.`,
               },
             },
             options,

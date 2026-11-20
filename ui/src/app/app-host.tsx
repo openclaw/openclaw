@@ -493,14 +493,10 @@ export class ShellOwner
       this.syncConnectionFeedback(state.gatewayStatus.kind);
       if ((!state.settingsTakeover || state.railAvailable) && !state.nativeEmbed) {
         Object.assign(this.navigationSidebar, state.sidebarProperties, {
-          gatewayStatus: state.gatewayStatus,
+          gatewayStatus: state.chromeGatewayStatus,
           connectionRecovery: this.connectionRecovery,
           connectionFlagVisible: this.connectionFlagVisible,
-          // The floating refresh notice speaks for the collapsed sidebar.
-          connectionFlagAllowed:
-            state.navCollapsed &&
-            !state.mobileNavLayout &&
-            !state.floatingUpdateCard.refreshRequired,
+          connectionFlagAllowed: state.navCollapsed && !state.mobileNavLayout,
         });
       }
       this.syncNavigationPresentation(state);

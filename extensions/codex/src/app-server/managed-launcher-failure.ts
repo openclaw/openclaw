@@ -10,6 +10,7 @@ export function observeManagedCodexLauncherFailure(
 ): void {
   let prefix = "";
   let launchCode: string | undefined;
+  let execveAbortCode: string | undefined;
   const complete = () => {
     child.stderr.off("data", onData);
     child.off("exit", onExit);
@@ -23,9 +24,21 @@ export function observeManagedCodexLauncherFailure(
     }
     // Retain the error fields, not the potentially large spawnargs printed after them.
     prefix = (prefix + stripVTControlCharacters(chunk.toString())).slice(0, 16_384);
+    // Node 24 aborts on execve failure without printing the native path or error fields.
+    execveAbortCode =
+      /^process\.execve failed with error code (ENOENT|EACCES|EBADARCH|Unknown system error -86)\r?$/mu.exec(
+        prefix,
+      )?.[1];
     if (
       /\bError: spawn\b/u.test(prefix) &&
       /syscall: ['"]spawn(?: [^'"\r\n]*)?['"]/u.test(prefix)
+    ) {
+      launchCode = /\bcode: ['"](ENOENT|EACCES|EBADARCH|Unknown system error -86)['"]/u.exec(
+        prefix,
+      )?.[1];
+    } else if (
+      /syscall: ['"]execve['"]/u.test(prefix) &&
+      /^\s+path: (['"])([^\r\n]*)\1,?\r?$/mu.exec(prefix)?.[2] === nativeCommand
     ) {
       launchCode = /\bcode: ['"](ENOENT|EACCES|EBADARCH|Unknown system error -86)['"]/u.exec(
         prefix,
@@ -44,22 +57,24 @@ export function observeManagedCodexLauncherFailure(
         launchCode = bunError[1];
       }
     }
-    if (child.exitCode !== null) {
-      onExit(child.exitCode);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      onExit(child.exitCode, child.signalCode);
     }
   };
-  const onExit = (code: number | null) => {
+  const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    const failureCode =
+      code === null && signal === "SIGABRT" ? execveAbortCode : code === 1 ? launchCode : undefined;
     // Exit can precede pipe data; registration already drains that data before
     // choosing its failure. Keep observing until the diagnostic or pipe close.
-    if (code === 1 && !launchCode) {
+    if ((code === 1 || (code === null && signal === "SIGABRT")) && !failureCode) {
       return;
     }
     startupFailure.complete();
-    if (code !== 1 || !launchCode) {
+    if (!failureCode) {
       return;
     }
     const described = recordCodexAppServerSpawnFailure(
-      Object.assign(new Error(`spawn ${launchCode}`), { code: launchCode, syscall: "spawn" }),
+      Object.assign(new Error(`spawn ${failureCode}`), { code: failureCode, syscall: "spawn" }),
       nativeCommand,
       nativeCommand,
     );

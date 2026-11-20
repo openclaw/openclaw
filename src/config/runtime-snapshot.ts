@@ -212,7 +212,9 @@ function publishRuntimeConfigSnapshot(
     (runtimeConfigSnapshot !== config || isDeeplyFrozenPlainData(config)) &&
     runtimeConfigSnapshotMetadata?.fingerprint === configFact.fingerprint &&
     isDeepStrictEqual(runtimeConfigValueFact?.facts, facts);
+  // An equal frozen revision must replace an earlier mutable publication.
   if (
+    (!isDeeplyFrozenPlainData(config) || isDeeplyFrozenPlainData(runtimeConfigSnapshot)) &&
     !previousEditedInPlace &&
     !previousSourceEditedInPlace &&
     sourceMatchesPublished &&
@@ -245,6 +247,13 @@ function publishRuntimeConfigSnapshot(
       : null;
   prepareRuntimePluginsConfig(config);
   clearExecutablePathCache();
+  if (
+    config.gateway?.sessionControl?.publicationReadEnabled !== true ||
+    runtimeConfigSnapshot?.gateway?.sessionControl?.publicationReadEnabled !== true
+  ) {
+    // The outgoing mutable snapshot may already expose a disable before replacement.
+    runtimeConfigPublication.publicationReadDisableEpoch = {};
+  }
   runtimeConfigSnapshot = config;
   runtimeConfigCapturedSnapshot = captured;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
@@ -357,6 +366,7 @@ export function resetConfigRuntimeState(options: { preserveConfigEnv?: boolean }
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;
   runtimeModelConfigCacheKey = null;
+  runtimeConfigPublication.publicationReadDisableEpoch = {};
   runtimeConfigPublication.current = undefined;
   runtimeConfigValueFact = null;
   runtimeSourceConfigValueFact = null;

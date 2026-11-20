@@ -635,13 +635,6 @@ function prepareStream(
       return {
         model: attempt.model,
         promptCacheKey: attempt.promptCacheKey,
-        systemPrompt: activeSession.systemPrompt,
-        tools: activeSession.agent.state.tools,
-        messages: activeSession.messages,
-        projectMessages: input.projectSessionForkMessages,
-        sessionVersion: activeSession.sessionManager.getHeader()?.version,
-        boundary: input.readSessionForkBoundary?.(),
-        blockImages: activeSession.settingsManager.getBlockImages(),
         preparedRequest: readPreparedProviderRequest(attempt.runId),
       };
     },

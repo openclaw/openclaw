@@ -39,11 +39,13 @@ it.each([
   "sse-progress",
   "sse-error-progress",
   "sse-compaction",
+  "sse-failed-snapshot",
   "http-error",
   "websocket-cached",
   "websocket-progress",
   "websocket-error-progress",
   "websocket-compaction",
+  "websocket-failed-snapshot",
   "provider",
   "degenerate-abort",
 ] as const)(
@@ -71,9 +73,9 @@ it.each([
           argumentDelta(partial.id, " ".repeat(4096)),
         ];
       }
-      // Model a stored item's immutable identity, not a fixed failure count.
+      // Model a rejected saved identity, not a fixed failure count.
       const input = server.requests.at(-1)?.input as Array<Record<string, unknown>>;
-      if (input.some((item) => item.id === call.id && item.arguments !== call.arguments)) {
+      if (input.some((item) => item.call_id === call.call_id)) {
         return mode === "http-error"
           ? { status: 400, body: { error: conflict.response.error } }
           : [
@@ -124,7 +126,15 @@ it.each([
                         ],
                       },
                     }
-                  : conflict,
+                  : mode.endsWith("-failed-snapshot")
+                    ? {
+                        ...conflict,
+                        response: {
+                          ...conflict.response,
+                          output: [reasoning, wireMessage("msg_rejected", "")],
+                        },
+                      }
+                    : conflict,
             ];
       }
       return [completedResponse(`resp_${turn}`, [wireMessage(`msg_${turn}`, "Recovered.")])];
@@ -150,7 +160,8 @@ it.each([
     if (tool?.type !== "toolCall") {
       throw new Error("Missing fixture tool call");
     }
-    // Parsed arguments retain their meaning, but cold replay loses the provider's JSON bytes.
+    // Legacy transcripts have parsed arguments but no exact-byte replay signature.
+    delete tool.argumentsSignature;
     expect(tool.arguments).toEqual({ n: 1 });
     messages.push(first, makeTextToolResult(tool.id, tool.name, "tool failed", true, 2));
     if (mode === "degenerate-abort") {
@@ -193,6 +204,92 @@ it.each([
   },
 );
 
+it.each([
+  ['{ "n": 1 }', false, "same"],
+  ['{"n":9007199254740993}', false, "same"],
+  ['{ "n": 9007199254740993 }', true, "same"],
+  ['{"n":9007199254740993}', false, "provider"],
+  ['{"n":9007199254740993}', false, "api"],
+  ['{"n":9007199254740993}', false, "model"],
+] as const)(
+  "retains completed tool argument bytes across a cold reopen: %s (streamed=%s, identity=%s)",
+  async (argumentsText, streamed, identity) => {
+    const host = getAiTransportHost();
+    configureAiTransportHost({});
+    onTestFinished(() => configureAiTransportHost(host));
+    const call = wireCall("exact", "record_value", argumentsText);
+    const server = await createResponsesLoopbackServer((turn) =>
+      turn === 1
+        ? [
+            outputItem("added", reasoning),
+            outputItem("done", reasoning),
+            ...(streamed
+              ? [
+                  outputItem("added", { ...call, arguments: "", status: "in_progress" }, 1),
+                  argumentDelta(call.id, argumentsText, 1),
+                  outputItem("done", { ...call, arguments: '{"n":0}' }, 1),
+                ]
+              : []),
+            completedResponse("resp_exact", [reasoning, call]),
+          ]
+        : [completedResponse("resp_next", [wireMessage("msg_next", "Continued.")])],
+    );
+    onTestFinished(() => server.close());
+    const options = {
+      apiKey: "synthetic-replay-key",
+      sessionId: "exact-replay",
+      transport: "sse",
+      replayResponsesItemIds: true,
+    } satisfies Parameters<typeof streamOpenAIResponses>[2];
+    const messages: Context["messages"] = [userMessage("Record one.")];
+    const respond = async () =>
+      (
+        await createOpenAIResponsesTransportStreamFn()(
+          responsesLoopbackModel,
+          { messages },
+          options,
+        )
+      ).result();
+    const first = await respond();
+    const tool = first.content.find((block) => block.type === "toolCall");
+    assert(tool);
+    messages.push(first, makeTextToolResult(tool.id, tool.name, "recorded", false, 2));
+    const storedTranscript = JSON.stringify(messages);
+    const reloaded: Context["messages"] = JSON.parse(storedTranscript);
+    messages.splice(0, messages.length, ...reloaded);
+    const saved = messages[1];
+    assert(saved?.role === "assistant");
+    if (identity === "provider") {
+      saved.provider = "other-responses-provider";
+    }
+    if (identity === "api") {
+      saved.api = "openai-completions";
+    }
+    if (identity === "model") {
+      saved.model = "other-model";
+    }
+    cleanupSessionResources();
+    expect((await respond()).stopReason).toBe("stop");
+    expect(server.requests).toHaveLength(2);
+    expect(server.requests[1]?.previous_response_id).toBeUndefined();
+    expect(server.requests[1]?.input).toContainEqual(
+      expect.objectContaining({
+        type: "function_call",
+        arguments: identity === "same" ? argumentsText : '{"n":"9007199254740993"}',
+      }),
+    );
+    // A real argument edit must not resurrect the original provider bytes.
+    const edited = saved.content.find((block) => block.type === "toolCall");
+    assert(edited);
+    edited.arguments = { n: 2 };
+    cleanupSessionResources();
+    expect((await respond()).stopReason).toBe("stop");
+    expect(server.requests[2]?.input).toContainEqual(
+      expect.objectContaining({ type: "function_call", arguments: '{"n":2}' }),
+    );
+  },
+);
+
 it.each(["sse", "websocket-cached"] as const)(
   "stops after one failed self-heal over %s and records the outcome",
   async (transport) => {
@@ -222,10 +319,8 @@ it.each(["library", "gateway"])(
   "does not replay a degenerate aborted function item through %s",
   async (owner) => {
     const host = getAiTransportHost();
-    if (owner === "gateway") {
-      configureAiTransportHost({ transformTransportMessages });
-      onTestFinished(() => configureAiTransportHost(host));
-    }
+    configureAiTransportHost(owner === "gateway" ? { transformTransportMessages } : {});
+    onTestFinished(() => configureAiTransportHost(host));
     const call = wireCall("partial", "record_value");
     const server = await createResponsesLoopbackServer((turn) => {
       if (turn === 1) {
@@ -260,7 +355,9 @@ it.each(["library", "gateway"])(
 
 it.each(
   (["sse", "websocket-cached"] as const).flatMap((transport) =>
-    (["text", "function", "hosted-tool"] as const).map((output) => ({ transport, output })),
+    (["text", "function", "hosted-tool", "function-snapshot", "hosted-tool-snapshot"] as const).map(
+      (output) => ({ transport, output }),
+    ),
   ),
 )(
   "defers a conflict after $output output over $transport without duplicating work",
@@ -279,7 +376,23 @@ it.each(
         ];
       }
       const input = server.requests.at(-1)?.input as Array<Record<string, unknown>>;
-      if (input.some((item) => item.id === "msg_poisoned")) {
+      // The repair drops the rejected reasoning; stored IDs are no longer replayed.
+      if (input.some((item) => item.encrypted_content === reasoning.encrypted_content)) {
+        if (output.endsWith("-snapshot")) {
+          return [
+            {
+              ...conflict,
+              response: {
+                ...conflict.response,
+                output: [
+                  output === "function-snapshot"
+                    ? wireCall("partial", "record_value", "")
+                    : { type: "web_search_call", id: "ws_active", status: "searching" },
+                ],
+              },
+            },
+          ];
+        }
         if (output === "function") {
           return [outputItem("added", wireCall("partial", "record_value", "")), conflict];
         }
@@ -338,5 +451,90 @@ it.each(
     messages.push(failed, userMessage("Continue after the interruption.", 2));
     expect((await respond()).stopReason).toBe("stop");
     expect(server.requests).toHaveLength(3);
+  },
+);
+
+it.each(["sse", "websocket-cached"] as const)(
+  "replays reasoning from an unstored response without a conflicting ID over %s",
+  async (transport) => {
+    const host = getAiTransportHost();
+    configureAiTransportHost({});
+    onTestFinished(() => configureAiTransportHost(host));
+    // Real Responses behavior: stored output may be replayed by ID. Ciphertext from an
+    // unstored response is recorded under its ID by the first stored replay; the next
+    // stored replay then fails after output has streamed.
+    const storedOutput = new Set<string>();
+    const recorded = new Set<string>();
+    const server = await createResponsesLoopbackServer((turn) => {
+      const request = server.requests.at(-1);
+      const input = request?.input;
+      assert(Array.isArray(input));
+      const ids = input.flatMap((item) =>
+        item.encrypted_content && typeof item.id === "string" && !storedOutput.has(item.id)
+          ? [item.id]
+          : [],
+      );
+      // A stored message ID also requires its reasoning ID in the same input.
+      const orphan = input.find(
+        (item) => item.type === "message" && storedOutput.has(String(item.id)),
+      );
+      if (orphan && !input.some((item) => item.id === String(orphan.id).replace("msg_", "rs_"))) {
+        return [{ type: "error", error: { message: "Missing required reasoning item." } }];
+      }
+      const conflicts = request?.store === true && ids.some((id) => recorded.has(id));
+      const thought = { ...reasoning, id: `rs_${turn}` };
+      const text = wireMessage(`msg_${turn}`, "Done.");
+      if (request?.store === true) {
+        ids.forEach((id) => recorded.add(id));
+        storedOutput.add(thought.id).add(text.id);
+      }
+      return [
+        outputItem("added", thought),
+        outputItem("done", thought),
+        outputItem("added", { ...text, content: [] }, 1),
+        {
+          type: "response.output_text.delta",
+          item_id: text.id,
+          output_index: 1,
+          content_index: 0,
+          delta: "Done.",
+        },
+        conflicts ? conflict : completedResponse(`resp_${turn}`, [thought, text]),
+      ];
+    });
+    onTestFinished(() => server.close());
+    const messages: Context["messages"] = [userMessage("Start.")];
+    // A compacted or side request runs with store:false; later turns store again.
+    const respond = async (store: boolean) => {
+      cleanupSessionResources();
+      const options = {
+        apiKey: "synthetic-unstored-key",
+        sessionId: `unstored-reasoning-${transport}`,
+        transport,
+        replayResponsesItemIds: true,
+        onPayload: (payload: unknown) => ({ ...(payload as object), store }),
+      } satisfies Parameters<typeof streamOpenAIResponses>[2];
+      const result = await (
+        await createOpenAIResponsesTransportStreamFn()(
+          responsesLoopbackModel,
+          { messages },
+          options,
+        )
+      ).result();
+      messages.push(result, userMessage("Continue.", messages.length + 1));
+      return result;
+    };
+    await respond(false);
+    for (const _ of [1, 2]) {
+      expect(await respond(true)).toMatchObject({ stopReason: "stop" });
+    }
+    const last = server.requests.at(-1)?.input;
+    assert(Array.isArray(last));
+    const replayed = last.filter((item) => item.type === "reasoning");
+    expect(replayed).toHaveLength(2);
+    for (const item of replayed) {
+      expect(item).toMatchObject({ encrypted_content: reasoning.encrypted_content });
+      expect(item).not.toHaveProperty("id");
+    }
   },
 );

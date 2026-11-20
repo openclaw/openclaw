@@ -52,6 +52,7 @@ import {
   AssistantAttachments,
   ChatClawHubCard,
   ChatTemplatePluginCards,
+  AutomationCreationCard,
   MessageAttachment,
 } from "./chat-message-deferred.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
@@ -391,6 +392,9 @@ function BubbleContents(props: ContentProps) {
   return (
     <>
       <Show when={props.state().sourceRole === "assistant"}>
+        <Show when={props.state().automationPlan}>
+          {(plan) => <AutomationCreationCard plan={plan()} />}
+        </Show>
         <ChatTemplatePluginCards notices={props.state().templatePluginCards} />
         <For each={props.state().clawHubCards} keyed={(card) => card.id}>
           {(card) => <ChatClawHubCard recommendation={card()} agentId={props.options.agentId} />}

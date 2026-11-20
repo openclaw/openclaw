@@ -49,7 +49,9 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill(retainedText);
         await page.locator(".agent-chat__file-input").setInputFiles(file);
         await page.getByText(file.name, { exact: true }).first().waitFor();
-        const oldAssets = /\/assets\/private-composer-recovery-content-[^/]+\.js(?:\?.*)?$/u;
+        // The refresh notice chunks are old-build assets this tab has not requested yet too.
+        const oldAssets =
+          /\/assets\/(?:private-composer-recovery-content|sidebar-update-runtime|sidebar-notification-card|en-update-actions)-[^/]+\.(?:js|css)(?:\?.*)?$/u;
         expect(
           await page.evaluate(() =>
             performance
@@ -110,7 +112,10 @@ suite.define(() => {
           },
           retryable: false,
         });
-        const refresh = page.getByRole("button", { name: /Server updated/u });
+        const refresh = page
+          .getByRole("status")
+          .filter({ hasText: "OpenClaw was updated" })
+          .getByRole("button", { name: "Reload", exact: true });
         const blocked = page.getByText(
           "This pending message is only saved in this tab. Keep it open until the message is sent, or copy it before discarding and reloading.",
           { exact: true },

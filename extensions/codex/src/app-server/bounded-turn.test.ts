@@ -207,7 +207,10 @@ it.each([
     });
     await expect(runRestricted(fake)).rejects.toMatchObject({
       ...(status === undefined ? {} : { status }),
-      message: status === 429 ? expect.stringContaining("subscription usage limit") : message,
+      message:
+        status === 429
+          ? expect.stringContaining(`Codex reported a usage or quota limit. ${message}`)
+          : message,
     });
   },
 );

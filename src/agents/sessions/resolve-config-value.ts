@@ -17,11 +17,13 @@ const commandResultCache = new Map<string, string | undefined>();
 export async function resolveConfigValue(
   config: string,
   beforeCommand?: () => void,
+  prepareCommand?: () => void | Promise<void>,
 ): Promise<string | undefined> {
   if (!config.startsWith("!")) {
     return resolveConfigValueUncached(config);
   }
   const shellUtils = process.platform === "win32" ? await import("../shell-utils.js") : undefined;
+  await prepareCommand?.();
   beforeCommand?.();
   // Nothing awaits between this lookup and publication, including concurrent Windows imports.
   if (!commandResultCache.has(config)) {

@@ -1,10 +1,22 @@
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { normalizeCommandBody } from "../../auto-reply/commands-registry-normalize.js";
 import { parseSlashCommandOrNull } from "../../auto-reply/reply/commands-slash-parse.js";
 import { parseConfigCommand } from "../../auto-reply/reply/config-commands.js";
 import { parseDebugCommand } from "../../auto-reply/reply/debug-commands.js";
 import { logVerbose } from "../../globals.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isSessionRunActiveForKey,
+  resolveActiveSessionRunId,
+} from "../../sessions/session-controller.queries.js";
+import {
+  captureSessionTarget,
+  type SessionTarget,
+} from "../../sessions/session-controller.target.js";
+import { waitForSessionRunIdle } from "../../sessions/session-controller.wait.js";
 import { getConfigValueAtPath, parseConfigPath, setConfigValueAtPath } from "../config-paths.js";
 import { REDACTED_SENTINEL } from "../redact-sentinel.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
 
 export function scopeCommandTranscriptId(
@@ -117,8 +129,54 @@ export function recordCommittedCommandExchange(params: CommandExchangeParams) {
   return recordCommandExchange(params);
 }
 
-/** Records only settled command output; callers must first confirm delivery. */
-export async function recordDeliveredCommandExchange(params: CommandExchangeParams) {
+/** Bounds how often a deferred exchange re-waits when follow-up turns keep the session busy. */
+const MAX_DEFERRED_COMMAND_EXCHANGE_WAITS = 8;
+
+/**
+ * A started turn owns the session's model-context fence until it commits. A context-bearing
+ * exchange appended inside that window invalidates the turn's prepared answer, so it waits
+ * until no turn is executing. Rows coordinated with a writer run or kept out of context
+ * cannot move the fence.
+ */
+function resolveExchangeTarget(params: CommandExchangeParams): SessionTarget | undefined {
+  const sessionKey = params.sessionKey.trim();
+  try {
+    // Same physical owner the recorder writes to; a logical key can span several stores.
+    const agentId =
+      params.agentId?.trim() ||
+      resolveAgentIdFromSessionKey(
+        sessionKey,
+        params.config ? resolveDefaultAgentId(params.config) : undefined,
+      );
+    const storeScope =
+      params.storePath ?? resolveSessionStorePathCore(params.config?.session?.store, { agentId });
+    return captureSessionTarget({ storeScope, sessionKey, agentId });
+  } catch {
+    return undefined;
+  }
+}
+
+function shouldDeferUntilActiveTurnSettles(
+  params: CommandExchangeParams,
+  target: SessionTarget | undefined,
+): boolean {
+  if (params.contextFreeCommand === true || params.expectedWriterRunId) {
+    return false;
+  }
+  const sessionKey = params.sessionKey.trim();
+  try {
+    if (target) {
+      return (
+        resolveActiveSessionRunId(sessionKey, target, { executionStartedOnly: true }) !== undefined
+      );
+    }
+  } catch {
+    // Unresolvable ownership must not fail a delivered command; fall through.
+  }
+  return isSessionRunActiveForKey(sessionKey);
+}
+
+async function recordDeliveredCommandExchangeNow(params: CommandExchangeParams) {
   try {
     return await recordCommandExchange(params);
   } catch {
@@ -126,6 +184,37 @@ export async function recordDeliveredCommandExchange(params: CommandExchangePara
     logVerbose("Command transcript recording failed after delivery");
     return { ok: false as const, reason: "transcript recording failed" };
   }
+}
+
+async function recordAfterActiveTurnSettles(
+  params: CommandExchangeParams,
+  target: SessionTarget | undefined,
+) {
+  for (let attempt = 0; attempt < MAX_DEFERRED_COMMAND_EXCHANGE_WAITS; attempt += 1) {
+    // Only the receiving physical session's turn gates this write.
+    await waitForSessionRunIdle(params.sessionKey, undefined, target ? { target } : undefined);
+    if (!shouldDeferUntilActiveTurnSettles(params, target)) {
+      return await recordDeliveredCommandExchangeNow(params);
+    }
+  }
+  logVerbose("Command transcript recording skipped: session stayed busy after delivery");
+  return { ok: false as const, reason: "session stayed busy" };
+}
+
+/**
+ * Records only settled command output; callers must first confirm delivery. During an active
+ * turn the exchange is recorded after that turn settles, so it still enters later model context
+ * without cancelling the running answer.
+ */
+export async function recordDeliveredCommandExchange(params: CommandExchangeParams) {
+  const target = resolveExchangeTarget(params);
+  if (shouldDeferUntilActiveTurnSettles(params, target)) {
+    void recordAfterActiveTurnSettles(params, target).catch(() => {
+      logVerbose("Command transcript recording failed after delivery");
+    });
+    return { ok: false as const, reason: "deferred until the active turn settles" };
+  }
+  return await recordDeliveredCommandExchangeNow(params);
 }
 
 async function recordCommandExchange(params: CommandExchangeParams) {

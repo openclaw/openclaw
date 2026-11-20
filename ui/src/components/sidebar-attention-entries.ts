@@ -32,7 +32,8 @@ export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system
   action:
     | { kind: "navigate"; routeId: NavigationRouteId; search?: string }
     | { kind: "askCustodian"; alert: CustodianAlert }
-    | { kind: "openClawIdRecovery"; label: string };
+    | { kind: "openClawIdRecovery"; label: string }
+    | { kind: "openClawIdBrowserApproval"; remote: boolean; label: string };
   inlineAction?: { label: string; routeId: NavigationRouteId };
   signature: string;
 };
@@ -56,7 +57,11 @@ export type SidebarInboxEntry =
       held: boolean;
       command: boolean;
     })
-  | (SidebarInboxEntryBase<"system"> & { type: "update" });
+  | (SidebarInboxEntryBase<"system"> & {
+      type: "update";
+      /** A stored dismissal kept while the row is shown without offering it. */
+      retainedDismissal?: SidebarAttentionDismissal | null;
+    });
 
 export function buildScopeUpgradeInboxEntry(params: {
   scopes: readonly string[] | undefined;

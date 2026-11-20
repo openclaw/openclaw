@@ -7,11 +7,8 @@ import { captureRequesterOrigin } from "../agents/requester-origin.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { normalizeInputProvenance } from "./input-provenance.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnInput,
-  UserTurnMessagePersistenceParams,
-} from "./user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage, UserTurnInput } from "./user-turn-input.types.js";
+import type { UserTurnMessagePersistenceParams } from "./user-turn-transcript.types.js";
 
 const REPLY_PREVIEW_TEXT_MAX_CHARS = 2000;
 const REPLY_PREVIEW_SENDER_MAX_CHARS = 200;
@@ -67,6 +64,9 @@ export function buildPersistedUserTurnMetadata(
     : undefined;
   return {
     ...(requesterOrigin ? { requesterOrigin } : {}),
+    ...(input.subagentCompletions?.length
+      ? { subagentCompletions: input.subagentCompletions.map((completion) => ({ ...completion })) }
+      : {}),
     // Privileged synthetic handoffs may execute owner tools but never author trusted memory.
     ...(input.senderIsOwner === undefined
       ? {}

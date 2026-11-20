@@ -191,11 +191,15 @@ Do not remove existing data to switch engines.
 Before porting SQLite stores to PostgreSQL, run `openclaw doctor --fix` while
 those stores still use SQLite. The port preflight refuses pending declared
 legacy migrations and names the repairs required before retrying the port.
-A scoped `--family` port checks only migrations declared for that family.
+A scoped `--family` port checks for pending migrations only in that family.
 This includes native Codex task assignments, Matrix inbound dedupe, and legacy
 memory index sidecars.
 Fresh Matrix account roots without legacy inbound-dedupe rows do not need a
 migration completion receipt before porting.
+
+If a selected plugin's Doctor migration contract fails to load, preflight stops
+before copying any stores and reports the plugin and the load error. Fix or
+remove the named plugin, then retry the port.
 
 These migrations are SQLite-only. On PostgreSQL, Doctor records that they are
 not applicable instead of opening the local engine anchor as an application
@@ -572,7 +576,9 @@ user-backup sanitizer. Config captures include the root file and its includes.
 Keep this directory private and retain the complete set. Former PostgreSQL
 namespaces are not dropped automatically.
 
-All destination stores are privately migrated and verified before publication.
+All destination stores are verified before publication. SQLite sources are
+privately migrated first. PostgreSQL sources already use the current schema, so a
+reverse port copies their rows, including schema metadata, without migrating them.
 Migration, checkpointing, and materialization read a private local working copy,
 not the durable recovery image. The command uses the existing private cache root;
 set `XDG_CACHE_HOME` to a local filesystem if the cache is network-backed or cannot

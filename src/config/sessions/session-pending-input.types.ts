@@ -1,10 +1,11 @@
 import type { Selectable } from "kysely";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import type {
   SessionPendingInputs,
   SessionInputCompletions,
 } from "../../state/openclaw-agent-db.generated.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import type { SessionPendingInputState } from "./session-pending-input-receipt.types.js";
 import type { SessionMentionInvitation } from "./session-sharing-authority.types.js";
 
@@ -14,6 +15,7 @@ export type SessionPendingInput = {
   message: PersistedUserTurnMessage;
   acceptedAt: number;
   state: SessionPendingInputState;
+  endCause?: SessionPendingInputEndCause;
 };
 export type SessionPendingInputPage = {
   items: SessionPendingInput[];

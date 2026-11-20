@@ -7,7 +7,10 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
 import { getFailoverErrorCode } from "../../agents/failover/error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
-import { AgentHarnessModelRequestPolicyError } from "../../agents/harness/errors.js";
+import {
+  AgentHarnessModelRequestPolicyError,
+  AgentHarnessRuntimeUpdateRequiredError,
+} from "../../agents/harness/errors.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -168,6 +171,11 @@ export function createAgentLifecycleTerminalBackstop(params: {
           ...(isRecord(data.errorObservation) ? data.errorObservation : {}),
           providerErrorCode: terminalValue.code,
           httpStatus: terminalValue.status,
+        };
+      } else if (terminalValue instanceof AgentHarnessRuntimeUpdateRequiredError) {
+        data.errorObservation = {
+          ...(isRecord(data.errorObservation) ? data.errorObservation : {}),
+          providerErrorCode: terminalValue.code,
         };
       }
       Object.assign(data, terminationFields);
