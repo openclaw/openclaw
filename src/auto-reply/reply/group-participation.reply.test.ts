@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { TOOL_CALL_RAW_TOOL_NAME } from "../../agents/tool-catalog.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import {
@@ -120,9 +121,20 @@ it.each([
     const prefix = systemMessages(first);
     expect(prefix).toHaveLength(1);
     fixture.respond(answer("NO_REPLY"));
-    await fixture.reply("Please check again.", "ordinary-mention", "-10001", undefined, {
-      WasMentioned: true,
-    });
+    const settled = createDeferred();
+    const ordinary = await fixture.dispatch(
+      "Please check again.",
+      "ordinary-mention",
+      "-10001",
+      {
+        onQueuedFollowupSettled: () => settled.resolve(),
+      },
+      { WasMentioned: true },
+    );
+    if (ordinary.deferredToActiveRun) {
+      await settled.promise;
+    }
+    expect(fixture.requests).toHaveLength(2);
     expect(systemMessages(fixture.requests.at(-1))).toEqual(prefix);
     expect(JSON.stringify(fixture.requests.at(-1))).toContain("NO_REPLY");
     expect(JSON.stringify(fixture.requests.at(-1))).toContain("mostly lurk");
