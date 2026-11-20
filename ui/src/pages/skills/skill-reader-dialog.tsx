@@ -16,14 +16,65 @@ import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginReadmeWell } from "../plugins/detail-shell.tsx";
 import { renderPluginOfficialBadge } from "../plugins/plugin-card.tsx";
-import {
-  SkillPageSection,
-  SkillSecurityFact,
-  SkillTile,
-  type SkillSecurityTone,
-} from "./skill-page-parts.tsx";
-import { installedReference } from "./skill-status.tsx";
+import { installedReference, SkillTile } from "./skill-status.tsx";
 import type { SkillsProps } from "./view-types.ts";
+
+/** A section of the reading column: a small muted label over its content. */
+export function SkillPageSection(props: { title: JSX.Element; children: JSX.Element }) {
+  return (
+    <section class="skill-page__section">
+      <h3 class="skill-page__label">{props.title}</h3>
+      {props.children}
+    </section>
+  );
+}
+
+export type SkillSecurityTone = "pass" | "warning" | "danger" | "unknown";
+
+/** Security state as plain text with three bars, and the report as one quiet link beside it. */
+export function SkillSecurityFact(props: {
+  label: string;
+  tone: SkillSecurityTone;
+  auditHref?: string | null;
+  note?: JSX.Element;
+}) {
+  const bars = () => ({ pass: 3, warning: 2, danger: 1, unknown: 0 })[props.tone];
+  return (
+    <div
+      class={["plugin-catalog-detail__security", `plugin-catalog-detail__security--${props.tone}`]}
+    >
+      <dt>{t("skillsPage.securityCheck")}</dt>
+      <dd>
+        <span class="plugin-catalog-detail__security-score">
+          <span class="plugin-catalog-detail__security-verdict">{props.label}</span>
+          <span class="plugin-catalog-detail__security-bars" aria-hidden="true">
+            <For each={[0, 1, 2]}>
+              {(index) => <span class={{ "is-filled": index < bars() }} />}
+            </For>
+          </span>
+        </span>
+        <Show when={props.auditHref}>
+          {(href) => (
+            <a
+              class="plugin-metadata__audit-link"
+              href={href()}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={t("skillsPage.fullSecurityReport")}
+              title={t("skillsPage.fullSecurityReport")}
+            >
+              <span>{t("pluginsPage.detailSecurityAuditLink")}</span>
+              <Icon name="arrowUpRight" />
+            </a>
+          )}
+        </Show>
+        <Show when={props.note}>
+          <span class="skill-page__fact-note">{props.note}</span>
+        </Show>
+      </dd>
+    </div>
+  );
+}
 
 export function MarkdownContent(props: {
   content: string;

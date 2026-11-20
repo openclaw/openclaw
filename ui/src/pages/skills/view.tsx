@@ -22,8 +22,7 @@ import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
 import { isSkillAvailable } from "../../lib/skills-shared.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
 import { SkillDialogBoundary } from "./skill-dialog-boundary.tsx";
-import { SkillTile } from "./skill-page-parts.tsx";
-import { SkillStateStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
+import { SkillStateStatus, SkillTile, verdictForSkill, verdictStatus } from "./skill-status.tsx";
 import type { SkillsProps, SkillsStatusFilter } from "./view-types.ts";
 
 registerSkillsBrowserEnglish();
