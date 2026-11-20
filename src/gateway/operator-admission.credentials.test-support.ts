@@ -217,15 +217,16 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
       const c = fixture.current;
       if (
         c?.original &&
-        [
-          "narrowed-grant",
-          "narrowed-token",
-          "narrowed-ingress",
-          "widened-grant",
-          "narrowed-role",
-          "legacy-tailscale",
-          "legacy-tailscale-narrowed",
-        ].includes(c.scenario) &&
+        (c.row.credential === "live-grant" ||
+          [
+            "narrowed-grant",
+            "narrowed-token",
+            "narrowed-ingress",
+            "widened-grant",
+            "narrowed-role",
+            "legacy-tailscale",
+            "legacy-tailscale-narrowed",
+          ].includes(c.scenario)) &&
         params.attempt.sessionKey === c.sessionKey
       ) {
         const authority = readAdmittedRunOperatorAuthority(params.attempt.admittedRunContext);

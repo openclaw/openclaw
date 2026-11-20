@@ -7,9 +7,6 @@ import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { captureOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { publicKeyRawBase64UrlFromPem } from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
-import { removePairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
@@ -18,7 +15,6 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import {
   checkGatewayHttpRequestAuth,
@@ -32,9 +28,18 @@ import {
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdTunnelPrincipalResolver,
 } from "./openclaw-id/tunnel-principal.js";
-import { PROXY_USER, WRITER, proxyHeaders } from "./operator-admission.credentials.test-support.js";
+import { PROXY_USER, WRITER } from "./operator-admission.credentials.test-support.js";
 import { runCronAdmissionCase } from "./operator-admission.cron.test-support.js";
 import * as admission from "./operator-admission.js";
+import {
+  isLiveCredentialKind,
+  prepareLiveCredentialProducer,
+  type LiveCredentialKind,
+} from "./operator-admission.live-credentials.test-support.js";
+import {
+  prepareRemoteIngressProducer,
+  type RemoteLiveKind,
+} from "./operator-admission.remote.test-support.js";
 import type { AdmissionFixture } from "./operator-admission.table.test-support.js";
 import * as operatorRun from "./operator-run-authority.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
@@ -58,8 +63,8 @@ export type LiveAdmissionKind =
   | "plugin-in-process"
   | "recorded-person"
   | "recorded-system-turn"
-  | "live-device"
-  | "live-proxy"
+  | LiveCredentialKind
+  | RemoteLiveKind
   | "live-ingress"
   // These are separate run/receipt capabilities, not operator admission.
   | "cron-standing-grant"
@@ -73,7 +78,7 @@ type History = {
     items: Array<{ runId: string; state: string; endCause?: string; message: unknown }>;
   };
 };
-type Producer = {
+export type LiveAdmissionProducer = {
   client?: GatewayClient;
   send?: (params: Record<string, unknown>) => Promise<{ runId: string }>;
   authority?: AdmittedRunOperatorAuthority;
@@ -89,7 +94,13 @@ async function prepareLiveProducer(
     "cron-standing-grant" | "cron-management-grant" | "cron-operator-source"
   >,
   fixture: AdmissionFixture,
-): Promise<Producer> {
+): Promise<LiveAdmissionProducer> {
+  if (isLiveCredentialKind(kind)) {
+    return prepareLiveCredentialProducer(kind, fixture);
+  }
+  if (kind === "live-remote-ingress") {
+    return prepareRemoteIngressProducer(fixture);
+  }
   const c = fixture.current;
   assert(c && fixture.kernel);
   const context = fixture.kernel.gatewayRequestContext;
@@ -105,61 +116,7 @@ async function prepareLiveProducer(
     agents: [],
     sessions: { others: "none" },
   };
-  const proxyCredential = kind === "live-device" || kind === "live-proxy";
-  if (proxyCredential) {
-    assert(
-      next.gateway.auth?.mode === "trusted-proxy",
-      "The live proxy credential rows belong in the identified proxy pool",
-    );
-    // Valid live role policy, deliberately beyond the durable codec's 256-ref bound.
-    // Every denied pattern is unrelated to the fixture's actual provider.
-    next.gateway.roles.definitions.operator.modelPolicy = {
-      deny: Array.from({ length: 257 }, (_, index) => `unrelated-${index}/*`),
-    };
-  }
   await fixture.publish(next, c.signal);
-  if (proxyCredential) {
-    const pending = await requestDevicePairing({
-      deviceId: c.identity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(c.identity.publicKeyPem),
-      role: "operator",
-      scopes: WRITER,
-    });
-    await approveDevicePairing(pending.request.requestId, { callerScopes: ["operator.admin"] });
-    const operator = await fixture.connect(
-      {
-        deviceIdentity: c.identity,
-        clientName: GATEWAY_CLIENT_NAMES.TEST,
-        mode: GATEWAY_CLIENT_MODES.TEST,
-        scopes: WRITER,
-        edgeAuthHeaders: proxyHeaders(PROXY_USER),
-      },
-      c.signal,
-    );
-    const self = await operator.request<{ profile: { id: string } }>("users.self", {});
-    c.profileId = self.profile.id;
-    await setCanonicalUserProfileRole(c.profileId, "operator");
-    await replaceSessionEntry(c.target, {
-      sessionId: c.target.sessionId,
-      updatedAt: Date.now(),
-      createdActor: { type: "human", source: "profile", id: c.profileId },
-    });
-    return {
-      send: (params) => operator.request("chat.send", params),
-      revoke: async () => {
-        if (kind === "live-proxy") {
-          const revoked = structuredClone(fixture.config);
-          assert(revoked.gateway?.auth?.trustedProxy?.allowUsers);
-          revoked.gateway.auth.trustedProxy.allowUsers =
-            revoked.gateway.auth.trustedProxy.allowUsers.filter((user) => user !== PROXY_USER);
-          await fixture.publish(revoked, c.signal);
-        } else {
-          await removePairedDevice(c.identity.deviceId);
-        }
-      },
-      release: () => operator.stopAndWait(),
-    };
-  }
   await setCanonicalUserProfileRole(profile.id, "operator");
   await replaceSessionEntry(c.target, {
     sessionId: c.target.sessionId,
@@ -425,8 +382,10 @@ export async function runLiveAdmissionCase(
     return await runCronAdmissionCase(kind, scenario, fixture);
   }
   const producer = await prepareLiveProducer(kind, fixture);
-  const proxyCredential = kind === "live-device" || kind === "live-proxy";
-  const liveCredential = proxyCredential || kind === "live-ingress";
+  const credentialKind = isLiveCredentialKind(kind);
+  const proxyCredential = credentialKind && kind !== "live-token" && kind !== "live-fallback";
+  const remoteCredential = kind === "live-remote-ingress";
+  const liveCredential = credentialKind || kind === "live-ingress" || remoteCredential;
   let liveStartDecisions = 0;
   const decide = admission.decideOperatorAdmission;
   const decisionObserver = vi
@@ -538,30 +497,45 @@ export async function runLiveAdmissionCase(
       expect(Object.isFrozen(authority)).toBe(true);
       expect(captureQueuedOperatorRecoverySource(authority)).toEqual({
         kind: "unavailable",
-        reason: proxyCredential ? "decode-failed" : "remote-ingress-no-source",
+        reason: credentialKind ? "decode-failed" : "remote-ingress-no-source",
       });
-      if (proxyCredential) {
+      if (credentialKind) {
         expect(authority.authPolicy).toMatchObject({
-          authMethod: "trusted-proxy",
-          verifiedIdentity: PROXY_USER,
+          authMethod:
+            kind === "live-token"
+              ? "token"
+              : kind === "live-fallback"
+                ? "password"
+                : "trusted-proxy",
+          ...(proxyCredential ? { verifiedIdentity: PROXY_USER } : {}),
         });
-        expect(authority.sharedGeneration).toBeUndefined();
-        expect(authority.device).toEqual({
-          deviceId: c.identity.deviceId,
-          key: expect.any(String),
-        });
-        expect(Object.isFrozen(authority.device)).toBe(true);
-        expect(
-          captureOperatorModelPolicySnapshot(authority.modelPolicy)?.denied.wildcards,
-        ).toHaveLength(257);
+        expect(authority.sharedGeneration).toEqual(expect.any(String));
+        if (kind === "live-grant") {
+          expect(authority.device).toBeUndefined();
+        } else {
+          expect(authority.device).toEqual({
+            deviceId: c.identity.deviceId,
+            key: expect.any(String),
+          });
+          expect(Object.isFrozen(authority.device)).toBe(true);
+        }
+        if (proxyCredential) {
+          expect(
+            captureOperatorModelPolicySnapshot(authority.modelPolicy)?.denied.wildcards,
+          ).toHaveLength(257);
+        }
       } else {
         expect(authority.ingress).toMatchObject({
           bindingId: expect.any(String),
-          pluginId: `live-admission-${c.id}`,
-          audienceId: c.id,
+          pluginId: remoteCredential ? expect.any(String) : `live-admission-${c.id}`,
+          audienceId: expect.any(String),
           principal: { kind: "owner" },
           scopeCeiling: WRITER,
         });
+        if (remoteCredential) {
+          expect(authority.authPolicy?.authMethod).toBe("remote-ingress");
+          expect(authority.sharedGeneration).toBeUndefined();
+        }
         expect(Object.isFrozen(authority.ingress)).toBe(true);
         expect(Object.isFrozen(authority.ingress?.principal)).toBe(true);
         expect(Object.isFrozen(authority.ingress?.scopeCeiling)).toBe(true);
@@ -574,11 +548,15 @@ export async function runLiveAdmissionCase(
     if (producer.predecessor) {
       await c.wait(producer.predecessor.completion);
     }
-    if (scenario === "before-start" && kind !== "http-bearer") {
+    if (
+      scenario === "before-start" &&
+      !["http-bearer", "live-grant", "live-remote-ingress"].includes(kind)
+    ) {
       await expect(c.wait(c.original.controllerInput.settlement.promise)).rejects.toBeInstanceOf(
         GatewayOperatorRecoveryAuthorizationError,
       );
-      const history = await admin.request<History>("chat.history", { sessionKey: c.sessionKey });
+      const observer = await fixture.admin(c.signal);
+      const history = await observer.request<History>("chat.history", { sessionKey: c.sessionKey });
       const refused = history.pendingInputs.items.find((input) => input.runId === c.queuedRunId);
       expect(refused).toMatchObject({ state: "cancelled", endCause: "policy-refused" });
       expect(JSON.stringify(refused?.message)).toContain(c.queuedText);
@@ -586,6 +564,14 @@ export async function runLiveAdmissionCase(
     } else {
       await c.wait(c.recoveredReached.promise);
       assert(c.latestRunId);
+      if (kind === "live-grant") {
+        expect(c.observedRunScopes.length).toBeGreaterThan(0);
+        for (const scopes of c.observedRunScopes) {
+          expect(scopes.toSorted()).toEqual(
+            (scenario === "before-start" ? WRITER : [...WRITER, "operator.approvals"]).toSorted(),
+          );
+        }
+      }
       const running = c.latestRunId;
       if (scenario === "stop") {
         expect(await admin.request("chat.abort", { sessionKey: c.sessionKey })).toMatchObject({
@@ -594,11 +580,14 @@ export async function runLiveAdmissionCase(
         expect(await c.wait(c.terminal(running).promise)).toBe("aborted");
         c.releaseRecovered.resolve();
       } else {
-        await producer.revoke();
+        if (scenario === "after-start") {
+          await producer.revoke();
+        }
         c.releaseRecovered.resolve();
         expect(await c.wait(c.terminal(running).promise)).toBe("final");
       }
-      const history = await admin.request<History>("chat.history", { sessionKey: c.sessionKey });
+      const observer = await fixture.admin(c.signal);
+      const history = await observer.request<History>("chat.history", { sessionKey: c.sessionKey });
       if (scenario === "stop") {
         expect(JSON.stringify(history.messages)).not.toContain(c.answer);
       } else {

@@ -75,12 +75,26 @@ const rows: Record<Kind, Row> = {
   "live-device": { credential: "live-device", ingress: "live" },
   "live-proxy": { credential: "live-proxy", ingress: "live" },
   "live-ingress": { credential: "live-ingress", ingress: "live" },
+  "live-remote-ingress": { credential: "live-remote-ingress", ingress: "live" },
+  "live-grant": { credential: "live-grant", ingress: "live" },
+  "live-token": { credential: "live-token", ingress: "live" },
+  "live-fallback": { credential: "live-fallback", ingress: "live" },
+  "live-device-revoked": { credential: "live-device-revoked", ingress: "live" },
+  "live-device-key-changed": { credential: "live-device-key-changed", ingress: "live" },
 };
 
 const modeFor = (row: Row): Mode =>
-  ["trusted-proxy", "proxy-device", "fallback", "live-device", "live-proxy"].includes(
-    row.credential,
-  )
+  [
+    "trusted-proxy",
+    "proxy-device",
+    "fallback",
+    "live-device",
+    "live-proxy",
+    "live-grant",
+    "live-fallback",
+    "live-device-revoked",
+    "live-device-key-changed",
+  ].includes(row.credential)
     ? "trusted-proxy"
     : row.credential === "password"
       ? "password"

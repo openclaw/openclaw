@@ -105,9 +105,10 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
         ? resolveGatewayAuthPolicyGrant(params.config, sourcePolicy).fallbackCredentialGeneration
         : undefined,
   };
-  const sharedGeneration = client.usesSharedGatewayAuth
-    ? client.sharedGatewaySessionGeneration
-    : undefined;
+  const sharedGeneration =
+    !client.internal?.remoteIngressPrincipal && client.usesSharedGatewayAuth
+      ? client.sharedGatewaySessionGeneration
+      : undefined;
   const sourceDevice = client.connect.device;
   const tokenDevice = client.internal?.operatorDeviceTokenIdentity;
   let device: AdmittedRunOperatorAuthority["device"];
