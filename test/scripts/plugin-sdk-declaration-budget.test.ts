@@ -10,6 +10,7 @@ import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries
 // #129388 continuation public surface, measured by check-plugin-sdk-exports on clean `pnpm build`s.
 const continuationDeclarationGrowth = {
   previousRatchetBytes: 5_320_000,
+  varianceBytes: 64 * 1024,
   upstreamBytes: 5_376_289, // upstream 41bdde2111
   candidateBytes: 5_397_222, // continuation candidate 04b22c0682
   // Public roots that publish the continuation contracts, and the bundled plugins reading them.
@@ -59,20 +60,19 @@ describe("plugin SDK declaration budget", () => {
   });
 
   it("raises only the ratchet, by the measured continuation growth", () => {
-    const { previousRatchetBytes, upstreamBytes, candidateBytes, consumers } =
+    const { previousRatchetBytes, varianceBytes, upstreamBytes, candidateBytes, consumers } =
       continuationDeclarationGrowth;
     const fits = (declarationBytes: number) =>
       !evaluatePluginSdkDeclarationBudget({ declarationBytes }).shouldFail;
     // Unrelated growth keeps exactly the headroom upstream had before the continuation surface.
-    const upstreamHeadroomBytes =
-      previousRatchetBytes + PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES - upstreamBytes;
+    const upstreamHeadroomBytes = previousRatchetBytes + varianceBytes - upstreamBytes;
     expect(fits(candidateBytes)).toBe(true);
     expect(fits(candidateBytes + upstreamHeadroomBytes)).toBe(true);
     expect(fits(candidateBytes + upstreamHeadroomBytes + 1)).toBe(false);
     expect(MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES).toBe(
       previousRatchetBytes + candidateBytes - upstreamBytes,
     );
-    expect(PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES).toBe(64 * 1024);
+    expect(PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES).toBe(varianceBytes);
     expect(
       Object.keys(consumers).filter((root) => !publicPluginSdkEntrypoints.includes(root)),
     ).toEqual([]);
