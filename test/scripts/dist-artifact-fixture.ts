@@ -29,7 +29,6 @@ export function installDistArtifactScripts(
   }
   for (const file of [
     "scripts/lib",
-    "node-runtime-env.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",

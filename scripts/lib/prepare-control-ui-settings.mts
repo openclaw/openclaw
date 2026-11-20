@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { isNodeCompilerArg } from "../../node-runtime-env.mjs";
 
 /** Keep the alias-aware native builder outside Vite's configuration bundle. */
 export async function prepareControlUiSettings(
@@ -20,7 +21,8 @@ export async function prepareControlUiSettings(
     repoRoot,
     path.join(scripts, "build-plugin-control-ui.mts"),
     ["--prepare-settings", repoRoot],
-    { signal },
+    // The child starts on this runtime, past any PATH node shim: keep its compiler flags.
+    { signal, execArgv: process.execArgv.filter(isNodeCompilerArg) },
   );
   if (status !== 0) {
     throw new Error(`Control UI Settings preparation failed (exit ${status})`);

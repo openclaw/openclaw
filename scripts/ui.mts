@@ -395,6 +395,7 @@ async function buildAndPublishUi(
       env: call.options.env,
       signal,
       native,
+      execArgv: process.execArgv.filter(isNodeCompilerArg),
     }),
     signal: null,
   });
