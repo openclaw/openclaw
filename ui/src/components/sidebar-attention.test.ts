@@ -67,6 +67,9 @@ function selection(selectedId: string, scopeId: string | null = selectedId) {
 
 function respond(responses: Record<string, unknown>) {
   return vi.fn(async (method: string) => {
+    if (method === "users.prefs.get") {
+      return { status: "ok", entries: {} };
+    }
     if (!Object.hasOwn(responses, method)) {
       throw new Error(`Unexpected request: ${method}`);
     }
@@ -77,6 +80,12 @@ function respond(responses: Record<string, unknown>) {
 
 function queuedResponses(responses: Record<string, unknown[]>) {
   return vi.fn((method: string) => {
+    if (method === "users.prefs.get") {
+      return Promise.resolve({ status: "ok", entries: {} });
+    }
+    if (method === "cron.acknowledgeFailure") {
+      return Promise.resolve({ acknowledgedAtMs: 0 });
+    }
     const response = responses[method]?.shift();
     if (!response) {
       throw new Error(`Unexpected request: ${method}`);
@@ -810,9 +819,13 @@ describe("sidebar attention refresh ownership", () => {
 
       now = 200_000;
       emit("cron");
+      const healthReads = () =>
+        request.mock.calls.filter(([method]) =>
+          ["cron.list", "cron.status", "models.authStatus"].includes(method),
+        );
       invalidateModelAuthStatusRequests(client);
       emit("chat.metadata.changed");
-      await waitForFast(() => expect(request).toHaveBeenCalledTimes(6));
+      await waitForFast(() => expect(healthReads()).toHaveLength(6));
 
       selectionState.selectedId = "writer";
       for (const listener of selectionListeners) {

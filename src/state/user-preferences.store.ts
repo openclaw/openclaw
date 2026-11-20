@@ -7,6 +7,10 @@ import {
   USER_BACKGROUND_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
 import {
+  CRON_FAILURE_DISMISSALS_KEY,
+  readCronFailureDismissals,
+} from "../../packages/gateway-protocol/src/schema/cron-failure-dismissals.js";
+import {
   normalizeGitCoauthorOrganizationIdentity,
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
@@ -162,8 +166,12 @@ function readPreferenceKeys(database: EngineConnection, profileId: string): Set<
 }
 
 function userPreferenceKeyCount(keys: ReadonlySet<string>): number {
-  // One protected, bounded proxy-metadata pair cannot consume a user's preference allowance.
-  return keys.size - Number(keys.has(GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY));
+  // Gateway-owned profile records do not consume the generic preference allowance.
+  return (
+    keys.size -
+    Number(keys.has(GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY)) -
+    Number(keys.has(CRON_FAILURE_DISMISSALS_KEY))
+  );
 }
 
 /** Moves one retired profile's preferences without overwriting the merge target's choices. */
@@ -187,6 +195,14 @@ export function mergeUserPreferences(
       .orderBy("pref_key", "asc"),
   ).rows;
   for (const row of rows) {
+    if (row.pref_key === CRON_FAILURE_DISMISSALS_KEY) {
+      const receipts = readCronFailureDismissals(JSON.parse(row.value_json));
+      for (const [id, at] of readProfileCronFailureDismissals(database, targetProfileId)) {
+        receipts.set(id, Math.max(receipts.get(id) ?? 0, at));
+      }
+      saveProfileCronFailureDismissals(database, targetProfileId, receipts);
+      continue;
+    }
     if (targetKeys.has(row.pref_key)) {
       continue;
     }
@@ -244,6 +260,46 @@ export function readUserPreferences(
       JSON.parse(row.value_json) as unknown,
     ]),
   );
+}
+
+function readProfileCronFailureDismissals(db: EngineConnection, profileId: string) {
+  const entries = readUserPreferences(db, profileId, [CRON_FAILURE_DISMISSALS_KEY]);
+  return readCronFailureDismissals(entries[CRON_FAILURE_DISMISSALS_KEY]);
+}
+
+function saveProfileCronFailureDismissals(
+  db: EngineConnection,
+  profileId: string,
+  receipts: ReadonlyMap<string, number>,
+) {
+  const value = {
+    value_json: JSON.stringify(Object.fromEntries(receipts)),
+    updated_at_ms: Date.now(),
+  };
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<UserPreferencesDatabase>(db)
+      .insertInto("user_preferences")
+      .values({ profile_id: profileId, pref_key: CRON_FAILURE_DISMISSALS_KEY, ...value })
+      .onConflict((conflict) => conflict.columns(["profile_id", "pref_key"]).doUpdateSet(value)),
+  );
+  publishUserPreferencesChange(db);
+}
+
+/** Called inside the profile worker transaction. A late browser import never replaces a reviewed run. */
+export function acknowledgeProfileCronFailure(
+  db: EngineConnection,
+  profileId: string,
+  failure: NonNullable<PreparedUserPreferenceUpdate["cronFailure"]>,
+): number {
+  const receipts = readProfileCronFailureDismissals(db, profileId);
+  const previous = receipts.get(failure.jobId);
+  if (previous !== undefined && (failure.adopt || previous >= failure.failedAtMs)) {
+    return previous;
+  }
+  receipts.set(failure.jobId, failure.failedAtMs);
+  saveProfileCronFailureDismissals(db, profileId, receipts);
+  return failure.failedAtMs;
 }
 
 export function writeUserPreferences(

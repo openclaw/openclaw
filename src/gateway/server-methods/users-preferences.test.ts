@@ -1,5 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { CRON_FAILURE_DISMISSALS_KEY } from "../../../packages/gateway-protocol/src/schema/cron-failure-dismissals.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withGatewayPersonalToolUser } from "../../agents/tools/gateway-caller-context.js";
@@ -822,4 +823,49 @@ test("allows fallback consent after hiding inactive metadata without reviving it
       (await preferences.getCanonicalUserPreferences(owner.id))?.entries["git.coauthor.enabled"],
     ).toBe(false);
   }, true);
+});
+
+test("merges concurrent failure receipts for the operator and never advances one on legacy adoption", async () => {
+  await withPreferenceState(async () => {
+    const operator = ensureProfileForEmail("operator@example.test").id;
+    const other = ensureProfileForEmail("other@example.test").id;
+    const acknowledge = (jobId: string, failedAtMs: number, adopt = false) =>
+      preferences.setCanonicalUserPreferences(
+        operator,
+        {},
+        { cronFailure: { jobId, failedAtMs, adopt } },
+      );
+    await Promise.all([acknowledge("a", 10), acknowledge("b", 12)]);
+    expect(await acknowledge("a", 20, true)).toMatchObject({
+      ok: true,
+      value: { acknowledgedAtMs: 10 },
+    });
+    await acknowledge("a", 20);
+    await acknowledge("a", 10);
+    expect(
+      (await preferences.getCanonicalUserPreferences(operator, [CRON_FAILURE_DISMISSALS_KEY]))
+        ?.entries,
+    ).toEqual({ [CRON_FAILURE_DISMISSALS_KEY]: { a: 20, b: 12 } });
+    expect(
+      (await preferences.getCanonicalUserPreferences(other, [CRON_FAILURE_DISMISSALS_KEY]))
+        ?.entries,
+    ).toEqual({});
+    expect(
+      await preferences.setCanonicalUserPreferences(operator, {
+        [CRON_FAILURE_DISMISSALS_KEY]: null,
+      }),
+    ).toMatchObject({ ok: false, error: { code: "invalid-key" } });
+    await preferences.setCanonicalUserPreferences(
+      other,
+      {},
+      {
+        cronFailure: { jobId: "b", failedAtMs: 30, adopt: false },
+      },
+    );
+    mergeProfiles(operator, other);
+    expect(
+      (await preferences.getCanonicalUserPreferences(other, [CRON_FAILURE_DISMISSALS_KEY]))
+        ?.entries,
+    ).toEqual({ [CRON_FAILURE_DISMISSALS_KEY]: { a: 20, b: 30 } });
+  });
 });

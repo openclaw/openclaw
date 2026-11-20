@@ -22,7 +22,11 @@ const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
 ] as const;
 
 export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_DISMISSAL_KINDS)[number];
-export type SidebarAttentionDismissal = { kind: SidebarAttentionKind; signature: string };
+export type SidebarAttentionDismissal = {
+  kind: SidebarAttentionKind;
+  signature: string;
+  failedAtMs?: number;
+};
 
 export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string[]>>;
 
@@ -179,7 +183,8 @@ export function reconcileSidebarAttentionDismissals(params: {
     const current = stored.filter((signature) => {
       // A recovery use is an immutable event, not a nag that can recur. Other inventories
       // and a pending owner history read cannot re-arm an already dismissed event.
-      if (kind === "openClawIdRecoveryUse") {
+      // A v2 failure ID is pending migration. Only the authenticated gateway can retire it.
+      if (kind === "openClawIdRecoveryUse" || kind === "cronFailed") {
         return true;
       }
       // Selected-agent responses are partial: they may re-arm their own auth
@@ -192,7 +197,7 @@ export function reconcileSidebarAttentionDismissals(params: {
               (!signature.startsWith("agent:") ||
                 signature.startsWith(`agent:${scope.modelAuthAgentId}\n`)),
             )
-          : kind === "cronFailed" || kind === "cronOverdue"
+          : kind === "cronOverdue"
             ? scope.cronInventoryComplete
             : true);
       return (
@@ -212,6 +217,20 @@ export function reconcileSidebarAttentionDismissals(params: {
     saveDismissals(params.key, pruned);
   }
   return pruned;
+}
+
+/** Remove only an imported v2 job ID. Another tab may have saved unrelated alerts. */
+export function retireLegacyCronDismissal(key: string, id: string): SidebarAttentionDismissals {
+  const stored = loadDismissals(key);
+  if (!stored.cronFailed?.includes(id)) {
+    return stored;
+  }
+  stored.cronFailed = stored.cronFailed.filter((candidate) => candidate !== id);
+  if (!stored.cronFailed.length) {
+    delete stored.cronFailed;
+  }
+  saveDismissals(key, stored);
+  return stored;
 }
 
 export function clearSidebarAttentionDismissal(

@@ -298,6 +298,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["node.invoke.progress", "nodes", "node", "<=2026.7"],
   ["node.invoke.result", "nodes", "node", "<=2026.7"],
   ["node.event", "nodes", "node", "<=2026.7"],
+  ["cron.acknowledgeFailure", "cron", "operator.read", "2026.11"],
   ["cron.get", "cron", "operator.read", "<=2026.7"],
   [
     "cron.list",
