@@ -12,6 +12,7 @@ import {
   isTrustedReservedCommandOwner,
   type RegisteredPluginCommand,
 } from "./command-registry-state.js";
+import { createPluginConversationBindingScope } from "./conversation-binding-authority.js";
 import {
   detachPluginConversationBinding,
   getCurrentPluginConversationBinding,
@@ -210,6 +211,7 @@ export async function executeRegisteredPluginCommand(
   scheduled?: { abortSignal: AbortSignal },
 ): Promise<PluginCommandResult> {
   const assertAdmittedOwner = params.assertOwnerCurrent;
+  const assertAdmittedSender = params.assertAuthorizedCurrent;
   scheduled?.abortSignal.throwIfAborted();
   const refuse = (text: string): PluginCommandResult => {
     if (scheduled) {
@@ -317,6 +319,35 @@ export async function executeRegisteredPluginCommand(
             conversation: bindingConversation,
           })
         : { removed: false },
+    ...(params.isAuthorizedSender && assertAdmittedSender
+      ? {
+          withCurrentConversationBinding: createPluginConversationBindingScope({
+            pluginId: command.pluginId,
+            pluginRoot: command.pluginRoot,
+            senderId,
+            conversation: bindingConversation,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            storePath: params.sessionTarget?.storePath,
+            config,
+            assertCurrent: (() => {
+              const pluginCurrent = capturePluginLifecycleAuthority(
+                registry,
+                registry.plugins.find((entry) => entry.id === command.pluginId),
+                { scopedRuntime: true },
+              );
+              return () => {
+                invocationSignal.throwIfAborted();
+                if (!pluginCurrent?.()) {
+                  throw new Error("Plugin command runtime is no longer active");
+                }
+                assertAdmittedSender();
+              };
+            })(),
+          }),
+        }
+      : {}),
     getCurrentConversationBinding: async () =>
       command.pluginRoot && bindingConversation
         ? getCurrentPluginConversationBinding({

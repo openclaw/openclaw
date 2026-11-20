@@ -16,6 +16,7 @@ import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import type { PluginConversationBindingCurrentSource } from "../plugins/conversation-binding-current.js";
 import { runPluginSharedStateWork } from "../plugins/plugin-shared-state-admission.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
@@ -77,6 +78,7 @@ type HostAdmission = {
   assertCurrent?: () => void;
   signal?: AbortSignal;
   sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck;
+  conversationBindingsCurrent?: readonly PluginConversationBindingCurrentSource[];
 };
 type Input<Key extends keyof PluginStateWorkerOperations> =
   PluginStateWorkerOperations[Key]["input"] & HostAdmission;
@@ -94,7 +96,14 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
 }
 
 async function executeAdmitted<Key extends keyof PluginStateWorkerOperations>(
-  { env, assertActive, sessionEntryCurrent, context: capturedContext, signal }: HostAdmission,
+  {
+    env,
+    assertActive,
+    sessionEntryCurrent,
+    conversationBindingsCurrent,
+    context: capturedContext,
+    signal,
+  }: HostAdmission,
   command: { type: Key; input: PluginStateWorkerOperations[Key]["input"] },
   missing?: () => PluginStateWorkerRequests[Key]["output"],
   checks: {
@@ -130,6 +139,13 @@ async function executeAdmitted<Key extends keyof PluginStateWorkerOperations>(
   try {
     const context =
       capturedContext ?? captureOpenClawStateWorkerContext({ path: databasePath, env });
+    if (
+      conversationBindingsCurrent?.some(
+        (binding) => binding.databaseIdentity !== context.admission.identity.key,
+      )
+    ) {
+      throw new Error("Plugin conversation binding and state require the same physical store");
+    }
     if (checks.readDependency) {
       const identity = context.admission.identity.key;
       recordPluginStateReadDependency({
@@ -433,6 +449,7 @@ async function executeAdmitted<Key extends keyof PluginStateWorkerOperations>(
         input: {
           ...typedCommand.input,
           sessionEntryCurrentSources: currentEntries?.sources,
+          conversationBindingsCurrent,
         },
       });
       if (!result.ok) {
@@ -523,9 +540,17 @@ export function executePluginStateOperationInWorker(
     onCommitted: (facts: PluginStateOperationCommit["pluginStateOperation"]) => void;
   },
 ): Promise<PluginStateOperationResult> {
-  const { env, assertActive, assertCurrent, sessionEntryCurrent, context, ...input } = params;
+  const {
+    env,
+    assertActive,
+    assertCurrent,
+    sessionEntryCurrent,
+    conversationBindingsCurrent,
+    context,
+    ...input
+  } = params;
   return execute(
-    { env, assertActive, sessionEntryCurrent, context },
+    { env, assertActive, sessionEntryCurrent, conversationBindingsCurrent, context },
     { type: "pluginState.executeOperation", input },
     input.writeStores.length === 0
       ? (options.missing ??
@@ -553,15 +578,24 @@ function createOperation<Key extends keyof PluginStateWorkerOperations>(
   return (params: Input<Key>): Promise<PluginStateWorkerRequests[Key]["output"]> => {
     // Host authority stays in the broker admission; only data crosses to the worker.
     const input = { ...params };
-    const { env, assertActive, assertCurrent, sessionEntryCurrent, context, signal } = input;
+    const {
+      env,
+      assertActive,
+      assertCurrent,
+      sessionEntryCurrent,
+      conversationBindingsCurrent,
+      context,
+      signal,
+    } = input;
     delete input.context;
     delete input.env;
     delete input.assertActive;
     delete input.assertCurrent;
     delete input.sessionEntryCurrent;
+    delete input.conversationBindingsCurrent;
     delete input.signal;
     return execute(
-      { env, assertActive, sessionEntryCurrent, context, signal },
+      { env, assertActive, sessionEntryCurrent, conversationBindingsCurrent, context, signal },
       { type, input },
       missing,
       {
@@ -609,13 +643,21 @@ export const lookupPluginStateInWorker = createOperation(
 export async function lookupManyPluginStateInWorker(
   params: Input<"pluginState.lookupMany">,
 ): Promise<Array<Result<unknown, PluginStateStoreError>>> {
-  const { env, assertActive, sessionEntryCurrent, context, signal, ...input } = params;
+  const {
+    env,
+    assertActive,
+    sessionEntryCurrent,
+    conversationBindingsCurrent,
+    context,
+    signal,
+    ...input
+  } = params;
   params.assertActive?.();
   if (input.keys.length === 0) {
     return [];
   }
   const results = await execute(
-    { env, assertActive, sessionEntryCurrent, context, signal },
+    { env, assertActive, sessionEntryCurrent, conversationBindingsCurrent, context, signal },
     { type: "pluginState.lookupMany", input },
     () => input.keys.map(() => ok<unknown, PluginStateWorkerFailure>(undefined)),
     { readDependency: { pluginId: input.pluginId, namespace: input.namespace, keys: input.keys } },
@@ -635,10 +677,18 @@ export const clearPluginStateInWorker = createOperation("pluginState.clear");
 export function clearRuntimeHealthInWorker(
   params: Input<"pluginState.clearRuntimeHealth"> & { assertCurrent?: () => void },
 ): Promise<void> {
-  const { env, assertActive, assertCurrent, sessionEntryCurrent, context, signal, ...input } =
-    params;
+  const {
+    env,
+    assertActive,
+    assertCurrent,
+    sessionEntryCurrent,
+    conversationBindingsCurrent,
+    context,
+    signal,
+    ...input
+  } = params;
   return execute(
-    { env, assertActive, sessionEntryCurrent, context, signal },
+    { env, assertActive, sessionEntryCurrent, conversationBindingsCurrent, context, signal },
     { type: "pluginState.clearRuntimeHealth", input },
     undefined,
     { assertCurrent, existingOnly: { missing: () => undefined } },

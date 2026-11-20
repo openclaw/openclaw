@@ -1,5 +1,10 @@
-import { assertPluginToolInvocationSourceCurrent } from "../agents/agent-tool-source-execution-guard.js";
+import {
+  assertPluginToolInvocationSourceCurrent,
+  capturePluginToolInvocationAssertion,
+} from "../agents/agent-tool-source-execution-guard.js";
 import type { PluginToolExecutionCapabilities } from "../agents/plugin-tool-execution.js";
+import { resolveCommandConversationResolution } from "../channels/conversation-resolution.js";
+import { createPluginConversationBindingScope } from "./conversation-binding-authority.js";
 import { assertMemoryAudienceSession } from "./memory-audience.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
@@ -71,6 +76,51 @@ export function createPluginToolFactoryContext(params: {
           agentAccountId: continuation.accountId,
         }
       : {}),
+    // Never inherit a caller-supplied capability, including on legacy factory contexts.
+    withCurrentConversationBinding:
+      entry.contextVersion === 2
+        ? async (action) => {
+            const assertToolCallCurrent = capturePluginToolInvocationAssertion();
+            assertInvocationCurrent();
+            const channel = continuation?.channel ?? context.messageChannel;
+            const plugin = registry.channels.find(
+              (candidate) => candidate.plugin.id === channel,
+            )?.plugin;
+            const config =
+              context.getRuntimeConfig?.() ?? context.runtimeConfig ?? context.config ?? {};
+            const senderId = continuation?.senderId ?? context.requesterSenderId;
+            const conversation = plugin
+              ? resolveCommandConversationResolution({
+                  cfg: config,
+                  plugin,
+                  channel,
+                  senderId,
+                  accountId:
+                    continuation?.accountId ??
+                    context.agentAccountId ??
+                    context.deliveryContext?.accountId,
+                  nativeChannelId: context.nativeChannelId,
+                  originatingTo: context.deliveryContext?.to,
+                  threadId: context.deliveryContext?.threadId,
+                  sessionKey: context.sessionKey,
+                })
+              : null;
+            return createPluginConversationBindingScope({
+              pluginId: entry.pluginId,
+              pluginRoot: entry.rootDir ?? record?.rootDir,
+              senderId,
+              conversation,
+              config,
+              agentId: context.agentId,
+              sessionKey: context.sessionKey,
+              sessionId: context.sessionId,
+              assertCurrent: () => {
+                assertInvocationCurrent();
+                assertToolCallCurrent();
+              },
+            })(action);
+          }
+        : undefined,
     get senderIsOwner() {
       return continuation ? continuation.isCurrent() : context.senderIsOwner;
     },

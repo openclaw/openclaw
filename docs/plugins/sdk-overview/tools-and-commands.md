@@ -104,6 +104,78 @@ after the handler returns. Already accepted operations still finish their
 settlement and cleanup. Ordinary authorized read commands and explicit Gateway
 scope checks retain their existing behavior.
 
+### Effects tied to a plugin conversation assignment
+
+Commands and version-2 tool contexts expose the optional
+`withCurrentConversationBinding` capability on supporting hosts. It runs one
+async callback with a version-1 `PluginConversationBindingAuthority`: the
+host-authenticated channel requester, canonical conversation/account/thread,
+session incarnation, plugin binding, synchronous `assertCurrent`, and an opaque
+`conversationBindingCurrent` restriction for the V2 state writer.
+
+A binding snapshot from `getCurrentConversationBinding()`, an allowlist boolean,
+owner status, session-key text, or model-supplied actor ID is not this capability.
+The capability does not grant owner privileges or application membership.
+For a linked requester, command admission retains the original host profile and
+its current role authority before awaiting command preparation. Unlinking or
+reassigning the same transport sender ID during that preparation invalidates the
+original admission even if the sender string remains allowlisted; a stale linked
+requester does not become an invocation with no linked profile. Native
+command adapters keep their own command-policy checks while sharing this
+requester-current restriction.
+
+```typescript
+if (!ctx.withCurrentConversationBinding) {
+  throw new Error("This host cannot guard conversation-bound effects");
+}
+return ctx.withCurrentConversationBinding(async (authority) => {
+  const actionStore = api.runtime.state.openKeyedStoreV2<GameState>(
+    { namespace: "games", retention: "retained" },
+    {
+      ...authority,
+      assertCurrent: () => {
+        authority.assertCurrent();
+        assertPlayerAllowed(authority.requester);
+      },
+    },
+  );
+  const observed = await actionStore.observe("current-game");
+  const next = prepareMove(observed.value, authority.requester);
+  return actionStore.compareAndApply("current-game", observed.comparison, {
+    operation: "update",
+    action: "set",
+    value: next,
+  });
+});
+```
+
+Keep the opaque restriction and session-entry predicate when composing authority;
+passing only an earlier snapshot or a replacement no-op assertion is insufficient.
+Application membership and actor ownership must be checked against current state
+inside the application owner's conditional mutation or worker operation. On a
+comparison conflict, reread all preparation inputs and recheck authority; never
+retry an unknown or already committed mutation.
+
+This first contract supports authenticated channel participants with a live host
+command/tool assertion, an existing session, and a core/native binding owner.
+Binding and plugin-state effects must use the same physical shared-state store.
+Custom/legacy adapter snapshots, missing identities, background owner
+continuations without an exact conversation, and Control UI/guest principals
+without a native channel requester are refused. No channel allowlist, mention
+policy, owner-only command gate, or plugin permission is changed.
+
+The assertion fails after detach/rebind, session replacement, revocation,
+plugin retirement, callback return, or invocation closure. A detach followed by
+reattachment cannot revive an old callback even when the binding ID is reused.
+The native writer also compares the exact binding and expiry inside its write
+transaction after the final host commit grant. Unsupported storage owners do
+not fall back to a preliminary read. Host authority retains V2's existing
+[commit-grant ordering](/plugins/sdk-runtime/state-and-system): a later revocation
+does not undo an already accepted write. Await accepted work before leaving the
+callback, preserve its receipt, and recheck authority before another external
+effect. This is SDK boundary coverage, not proof of any application's multiplayer
+behavior.
+
 For native Discord commands, OpenClaw lowercases the selected command name and
 skips names longer than 32 characters with a diagnostic. Use
 `nativeNames: { discord: "short-name" }` when the primary name is longer. Slack

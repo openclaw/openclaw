@@ -383,6 +383,16 @@ capability must refuse when it is absent. The V2 opener binds the plugin lifetim
 without requiring a separate action; its optional authority adds the action's
 revocation checks. Worker completion includes committed fact installation.
 
+For effects tied to an exact plugin conversation assignment, preserve the
+`conversationBindingCurrent` restriction from the invocation
+[conversation-binding capability](/plugins/sdk-overview/tools-and-commands#effects-tied-to-a-plugin-conversation-assignment)
+when composing the action authority. The host refuses copied tokens, another
+plugin, or another physical state source. The existing state worker rechecks the
+exact native binding row and expiry in its mutation transaction, after the commit
+grant; registered worker operations carry the restrictions of their source stores
+as well. An asynchronous binding inspection alone does not establish this
+condition. This adds no schema, retained membership, or permission grant.
+
 `observe` and a comparison conflict return observations without committing the
 requested mutation; they also require current authority when returning that data.
 

@@ -106,3 +106,9 @@ export type * from "./provider-plugin.types.js";
 export type * from "./provider-replay.types.js";
 export type * from "./provider-runtime.types.js";
 export type * from "./provider-transport.types.js";
+
+export type {
+  PluginConversationBindingAuthority,
+  PluginConversationBindingCurrent,
+  WithCurrentPluginConversationBinding,
+} from "./conversation-binding-authority.types.js";

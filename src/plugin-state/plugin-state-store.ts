@@ -4,6 +4,10 @@ import type {
   SessionEntryCurrentCheck,
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
+import {
+  capturePluginConversationBindingCurrent,
+  type PluginConversationBindingCurrentSource,
+} from "../plugins/conversation-binding-current.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -112,6 +116,27 @@ export {
   pluginStateDoctorEntriesInKeyRange,
 } from "./plugin-state-store.sqlite.js";
 
+/** Preserve the original action callback while adding the host-minted binding restriction. */
+function capturePluginStateActionAuthority(
+  pluginId: string,
+  authority: PluginStateActionAuthority,
+) {
+  const { assertCurrent, conversationBindingCurrent } = authority;
+  if (typeof assertCurrent !== "function") {
+    throw invalidInput("Plugin state action authority requires assertCurrent.");
+  }
+  const binding = capturePluginConversationBindingCurrent(conversationBindingCurrent, pluginId);
+  return {
+    binding: binding?.source,
+    assertCurrent: binding
+      ? () => {
+          binding.assertCurrent();
+          assertCurrent();
+        }
+      : assertCurrent,
+  };
+}
+
 function createReadAvailabilityAssertion(
   options: PreparedKeyedStoreOptions,
   assertCurrent?: () => void,
@@ -158,21 +183,20 @@ function createKeyedStoreForPluginId<T>(
       undefined,
       moduleSource,
     ),
-    withCurrent: ({ assertCurrent, sessionEntryCurrent }) => {
-      if (typeof assertCurrent !== "function") {
-        throw invalidInput("Plugin state action authority requires assertCurrent.");
-      }
+    withCurrent: (authority) => {
+      const action = capturePluginStateActionAuthority(pluginId, authority);
       const assertBoundCurrent = () => {
         assertActive?.();
-        assertCurrent();
+        action.assertCurrent();
       };
       assertBoundCurrent();
       return createAsyncKeyedStore<T>(
         prepared,
         assertBoundCurrent,
         assertBoundCurrent,
-        sessionEntryCurrent,
+        authority.sessionEntryCurrent,
         moduleSource,
+        action.binding,
       );
     },
     /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
@@ -196,6 +220,7 @@ function createAsyncKeyedStore<T>(
   assertRangeActive = assertActive,
   sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck,
   moduleSource?: PluginStateOperationModuleSource,
+  conversationBindingCurrent?: PluginConversationBindingCurrentSource,
 ): Required<PluginStateKeyedStore<T, 2>> {
   const scope = {
     pluginId: prepared.pluginId,
@@ -203,6 +228,9 @@ function createAsyncKeyedStore<T>(
     env: prepared.env,
     assertActive,
     sessionEntryCurrent,
+    conversationBindingsCurrent: conversationBindingCurrent
+      ? [conversationBindingCurrent]
+      : undefined,
   };
 
   const store: Required<PluginStateKeyedStore<T, 2>> = {
@@ -418,6 +446,7 @@ function createAsyncKeyedStore<T>(
     assertRangeActive,
     sessionEntryCurrent,
     moduleSource,
+    conversationBindingCurrent,
   );
 }
 
@@ -444,16 +473,15 @@ export function createPluginStateKeyedStoreV2<T>(
   if (pluginId.startsWith("core:")) {
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }
-  if (typeof authority.assertCurrent !== "function") {
-    throw invalidInput("Plugin state action authority requires assertCurrent.");
-  }
-  authority.assertCurrent();
+  const action = capturePluginStateActionAuthority(pluginId, authority);
+  action.assertCurrent();
   return createAsyncKeyedStore<T>(
     prepareKeyedStoreOptions(pluginId, options),
-    authority.assertCurrent,
-    authority.assertCurrent,
+    action.assertCurrent,
+    action.assertCurrent,
     authority.sessionEntryCurrent,
     moduleSource,
+    action.binding,
   );
 }
 
@@ -492,6 +520,7 @@ export function createPluginStateRuntimeStores(
             authority?.assertCurrent();
           },
           sessionEntryCurrent: authority?.sessionEntryCurrent,
+          conversationBindingCurrent: authority?.conversationBindingCurrent,
         },
         captureModuleSource?.(),
       ),
@@ -623,15 +652,15 @@ export function createCorePluginStateKeyedStoreV2<T>(
   options: OpenAsyncKeyedStoreOptions & { ownerId: `core:${string}` },
   authority: PluginStateActionAuthority,
 ): PluginStateKeyedStore<T, 2> {
-  if (typeof authority.assertCurrent !== "function") {
-    throw invalidInput("Plugin state action authority requires assertCurrent.");
-  }
-  authority.assertCurrent();
+  const action = capturePluginStateActionAuthority(options.ownerId, authority);
+  action.assertCurrent();
   return createAsyncKeyedStore<T>(
     prepareKeyedStoreOptions(options.ownerId, options),
-    authority.assertCurrent,
-    authority.assertCurrent,
+    action.assertCurrent,
+    action.assertCurrent,
     authority.sessionEntryCurrent,
+    undefined,
+    action.binding,
   );
 }
 

@@ -56,6 +56,7 @@ it("preserves the native authorization result contract", async () => {
     isAuthorizedSender: boolean;
     assertOwnerCurrent?: () => void;
     assertAuthorizedCurrent?: () => void;
+    assertRequesterCurrent?: () => void;
     from?: string;
     to?: string;
   };

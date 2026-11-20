@@ -24,6 +24,7 @@ export function buildPluginCommandContext(params: HandleCommandsParams) {
     isAuthorizedSender: command.isAuthorizedSender,
     senderIsOwner: command.senderIsOwner,
     assertOwnerCurrent: command.assertOwnerCurrent,
+    assertAuthorizedCurrent: command.assertAuthorizedCurrent,
     gatewayClientScopes: ctx.GatewayClientScopes,
     agentId: params.agentId,
     sessionKey: params.sessionKey,

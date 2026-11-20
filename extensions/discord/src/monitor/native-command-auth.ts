@@ -60,7 +60,8 @@ export async function createDiscordNativeCommandAuthority(params: {
   commandName: string;
   pluginCommand: boolean;
 }) {
-  const assertAdmittedOwner = (await resolveCommandAuthorizationAsync(params)).assertOwnerCurrent;
+  const { assertOwnerCurrent: assertAdmittedOwner, assertRequesterCurrent } =
+    await resolveCommandAuthorizationAsync(params);
   const readAuthorization = () => {
     const cfg = getRuntimeConfigSnapshot() ?? params.cfg;
     const owners = resolveDiscordCommandOwnerAllowFrom(cfg);
@@ -91,6 +92,7 @@ export async function createDiscordNativeCommandAuthority(params: {
   };
   const assertActive = () => {
     assertAdmittedOwner?.();
+    assertRequesterCurrent?.();
     if (params.isPolicyCurrent?.() === false || !readAuthorization().allowed) {
       throw new Error("Discord command authority changed; send a new request.");
     }

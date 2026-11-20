@@ -13,6 +13,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { resolveChannelAllowFrom } from "../account-resolution.js";
 import type { ChannelPlugin } from "../plugins/types.public.js";
 import { createHostIngressFixture, withTestChannelRegistry } from "./host-ingress.test-support.js";
 import { createCommandOwnerTestRoles } from "./operator-authority.test-support.js";
@@ -54,7 +55,7 @@ function createAutocompleteInteraction() {
   };
 }
 
-async function createFixture(state: OpenClawTestState) {
+async function createFixture(state: OpenClawTestState, commandThreadBindings?: object) {
   const cfg: OpenClawConfig = {
     commands: { ownerAllowFrom: ["discord:999999999999999999"] },
     channels: {
@@ -117,7 +118,11 @@ async function createFixture(state: OpenClawTestState) {
   );
   const createCommand = (name: string, candidate?: PluginCommandNativeCandidate) =>
     createDiscordNativeCommand(
-      createCommandOptions(createNoopThreadBindingManager("default"), name, candidate),
+      createCommandOptions(
+        commandThreadBindings ?? createNoopThreadBindingManager("default"),
+        name,
+        candidate,
+      ),
     );
   const run = async (
     options: {
@@ -155,14 +160,29 @@ async function createFixture(state: OpenClawTestState) {
 
 export async function withDiscordNativeAdminFixture(
   test: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
+  options: { beforeResolveAllowFrom?: () => Promise<void>; threadBindings?: object } = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { discordPlugin } = await loadBundledPluginFacade<{ discordPlugin: ChannelPlugin }>({
       pluginId: "discord",
       artifactBasename: "api.js",
     });
-    await withTestChannelRegistry(discordPlugin, async () => {
-      const fixture = await createFixture(state);
+    // Delay only channel-owned preparation; native policy and host identity admission stay real.
+    const beforeResolveAllowFrom = options.beforeResolveAllowFrom;
+    const plugin: ChannelPlugin = beforeResolveAllowFrom
+      ? {
+          ...discordPlugin,
+          config: {
+            ...discordPlugin.config,
+            resolveAllowFromAsync: async (input) => {
+              await beforeResolveAllowFrom();
+              return resolveChannelAllowFrom({ ...input, plugin: discordPlugin });
+            },
+          },
+        }
+      : discordPlugin;
+    await withTestChannelRegistry(plugin, async () => {
+      const fixture = await createFixture(state, options.threadBindings);
       using _ = { [Symbol.dispose]: () => fixture.close() };
       await test(fixture);
     });

@@ -126,6 +126,7 @@ export async function prepareSessionBindingSelection(
       }
     }
     return {
+      native: groups.size === 0 && native.length === conversations.length,
       inspect() {
         if (!active) {
           throw new Error("Conversation binding inspection is no longer active");
