@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect } from "vitest";
+import { listDirectoryTreeStrict } from "../src/infra/directory-walk.js";
+import { hasErrnoCode } from "../src/infra/errno.js";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
 // Literal commands have no shell quoting; retain argv arrays for empty or spaced values.
@@ -35,6 +37,26 @@ export const expectCliError = (stdout: string, message: unknown) =>
 export async function expectMissing(...paths: string[]) {
   for (const file of paths) {
     await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+}
+
+export async function expectOnlyDiagnosticLogs(stateDir: string) {
+  // Default diagnostics use the selected state directory; other artifacts remain forbidden.
+  const entries = await listDirectoryTreeStrict(stateDir).catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return [];
+    }
+    throw error;
+  });
+  for (const { relativePath, dirent: entry } of entries) {
+    const relative = relativePath.split(path.sep).join("/");
+    const allowed = entry.isDirectory()
+      ? /^(?:logs|tmp|tmp\/openclaw(?:-\d+)?)$/u.test(relative)
+      : entry.isFile() &&
+        /^(?:logs|tmp\/openclaw(?:-\d+)?)\/openclaw(?:-[a-z0-9-]+)?-\d{4}-\d{2}-\d{2}(?:\.\d+)?\.log$/u.test(
+          relative,
+        );
+    expect(allowed, "Unexpected CLI state artifact: " + relative).toBe(true);
   }
 }
 
