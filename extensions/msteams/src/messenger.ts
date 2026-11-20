@@ -26,7 +26,6 @@ import {
   extractFilename,
   extractMessageId,
   getMimeType,
-  isLocalPath,
   MSTEAMS_MAX_MEDIA_BYTES,
 } from "./media-helpers.js";
 import {
@@ -206,7 +205,9 @@ export async function sendMSTeamsMessages(
         let contentType = await getMimeType(msg.mediaUrl);
         let fileName = await extractFilename(msg.mediaUrl);
 
-        if (isLocalPath(msg.mediaUrl)) {
+        // Proactive sends already prepare inline image data. Load every other
+        // source before handing bytes or an upload card to the connector.
+        if (!msg.mediaUrl.startsWith("data:")) {
           const maxBytes = mediaMaxBytes ?? MSTEAMS_MAX_MEDIA_BYTES;
           const media = await loadWebMedia(msg.mediaUrl, maxBytes);
           contentType = media.contentType ?? contentType;

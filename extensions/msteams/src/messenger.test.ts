@@ -2,10 +2,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { withServer } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { requestUrl, withServer } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../runtime-api.js";
 import { teamsMarkdownDeliveryCases } from "./format.test-fixtures.js";
 const graphUploadMockState = vi.hoisted(() => ({
@@ -28,6 +29,7 @@ import {
   sendMSTeamsMessages,
 } from "./messenger.js";
 import { createMockApp, createStoredReference } from "./messenger.test-helpers.js";
+import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const chunkMarkdownText = (text: string, limit: number) => {
@@ -79,6 +81,11 @@ const createRecordedSendActivity = (
 };
 
 const baseRef = createStoredReference();
+const remoteOrigin = "https://93.184.216.34";
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+  "base64",
+);
 type SendParams = Parameters<typeof sendMSTeamsMessages>[0];
 function send(params: Partial<SendParams> & Pick<SendParams, "messages">) {
   return sendMSTeamsMessages({
@@ -122,6 +129,7 @@ describe("msteams messenger", () => {
     graphUploadMockState.uploadAndShareSharePoint.mockReset();
     graphUploadMockState.getDriveItemProperties.mockReset();
   });
+  afterEach(() => vi.restoreAllMocks());
 
   describe("renderReplyPayloadsToMessages", () => {
     it.each([
@@ -232,10 +240,6 @@ describe("msteams messenger", () => {
     );
 
     it("loads uppercase file URLs before sending personal images", async () => {
-      const png = Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-        "base64",
-      );
       await withFile("café image.png", png, async (localFile) => {
         const mediaUrl = pathToFileURL(localFile).href.replace(/^file:/u, "FILE:");
         const { activities } = await captureSend({
@@ -260,6 +264,134 @@ describe("msteams messenger", () => {
       });
     });
 
+    it.each(["http://169.254.169.254/metadata.png", "ftp://example.com/file.pdf"])(
+      "rejects an unsafe reply source before connector dispatch: %s",
+      async (mediaUrl) => {
+        const fetchMedia = vi
+          .spyOn(globalThis, "fetch")
+          .mockRejectedValue(new Error("unexpected fetch"));
+        const sendActivity = vi.fn(async () => ({ id: "unexpected" }));
+        await expect(
+          send({ context: { sendActivity }, messages: [{ mediaUrl }] }),
+        ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+        expect(sendActivity).not.toHaveBeenCalled();
+        expect(fetchMedia).not.toHaveBeenCalled();
+        expect(graphUploadMockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["redirect", "size"])(
+      "rejects remote media %s failures without sending",
+      async (mode) => {
+        const fetchMedia = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+          mode === "redirect"
+            ? new Response(null, {
+                status: 302,
+                headers: { location: "http://127.0.0.1/private" },
+              })
+            : new Response("%PDF-1.7\nfixture", {
+                headers: { "content-type": "application/pdf" },
+              }),
+        );
+        const sendActivity = vi.fn(async () => ({ id: "unexpected" }));
+        const mediaUrl = `${remoteOrigin}/report.pdf`;
+        await expect(
+          send({ context: { sendActivity }, messages: [{ mediaUrl }], mediaMaxBytes: 4 }),
+        ).rejects.toThrow(mode === "redirect" ? /private|internal|blocked/i : /exceed/i);
+        expect(fetchMedia.mock.calls.map(([input]) => requestUrl(input))).toEqual([mediaUrl]);
+        expect(sendActivity).not.toHaveBeenCalled();
+        expect(graphUploadMockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["personal", "groupChat", "channel"])(
+      "delivers loaded remote documents through the %s file flow",
+      async (conversationType) => {
+        const buffer = Buffer.from("%PDF-1.7\nfixture");
+        vi.spyOn(globalThis, "fetch").mockImplementation(
+          async () =>
+            new Response(buffer, {
+              headers: {
+                "content-type": "application/pdf",
+                "content-disposition": 'attachment; filename="report.pdf"',
+              },
+            }),
+        );
+        graphUploadMockState.uploadAndShareSharePoint.mockResolvedValue({ itemId: "item123" });
+        graphUploadMockState.getDriveItemProperties.mockResolvedValue({
+          eTag: '"{ITEM-123},1"',
+          webDavUrl: "https://sharepoint.example.com/report.pdf",
+          name: "report.pdf",
+        });
+        const { activities } = await captureSend({
+          conversationRef: createStoredReference({
+            conversation: { id: "chat", conversationType },
+          }),
+          messages: [{ mediaUrl: `${remoteOrigin}/download` }],
+          tokenProvider: { getAccessToken: async () => "token" },
+          sharePointSiteId: "site-123",
+        });
+        if (conversationType === "personal") {
+          expect(activities).toMatchObject([
+            {
+              attachments: [
+                {
+                  name: "report.pdf",
+                  contentType: "application/vnd.microsoft.teams.card.file.consent",
+                },
+              ],
+            },
+          ]);
+          const activity = expectDefined(activities[0], "consent activity");
+          const attachment = expectDefined(
+            (
+              activity.attachments as Array<{ content: { acceptContext: { uploadId: string } } }>
+            )[0],
+            "consent attachment",
+          );
+          const uploadId = attachment.content.acceptContext.uploadId;
+          try {
+            expect(getPendingUpload(uploadId)).toMatchObject({
+              buffer,
+              filename: "report.pdf",
+              contentType: "application/pdf",
+              consentCardActivityId: "created",
+            });
+          } finally {
+            removePendingUpload(uploadId);
+          }
+          expect(graphUploadMockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
+        } else {
+          expect(graphUploadMockState.uploadAndShareSharePoint).toHaveBeenCalledWith(
+            expect.objectContaining({
+              buffer,
+              filename: "report.pdf",
+              contentType: "application/pdf",
+              usePerUserSharing: conversationType === "groupChat",
+            }),
+          );
+          expect(activities).toMatchObject([
+            {
+              attachments: [
+                {
+                  contentType: "application/vnd.microsoft.teams.card.file.info",
+                  contentUrl: "https://sharepoint.example.com/report.pdf",
+                },
+              ],
+            },
+          ]);
+        }
+      },
+    );
+
+    it("preserves prepared inline image data from proactive sends", async () => {
+      const mediaUrl = `data:image/png;base64,${png.toString("base64")}`;
+      const { activities } = await captureSend({ messages: [{ mediaUrl }] });
+      expect(activities).toMatchObject([
+        { attachments: [{ contentType: "image/png", contentUrl: mediaUrl }] },
+      ]);
+    });
+
     it("marks invalid proactive conversation references as never dispatched", async () => {
       await expect(
         send({
@@ -273,56 +405,76 @@ describe("msteams messenger", () => {
       ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
     });
 
-    it("retries media preparation but reuses it after provider dispatch starts", async () => {
-      await withFile("retry.txt", "hello", async (localFile) => {
-        const attempts: string[] = [];
-        const providerPayloads: string[] = [];
-        const retryEvents: Array<{ nextAttempt: number; delayMs: number }> = [];
-        let uploadAttempts = 0;
-        graphUploadMockState.uploadAndShareSharePoint.mockImplementation(async () => {
-          uploadAttempts += 1;
-          if (uploadAttempts === 1) {
-            throw Object.assign(new Error("transient upload failure"), {
-              statusCode: 429,
-              retryAfterMs: 0,
-            });
-          }
-          return {
-            itemId: "item123",
+    it.each(["local", "remote"])(
+      "retries %s media preparation but reuses it after provider dispatch starts",
+      async (source) => {
+        await withFile("retry.txt", "hello", async (localFile) => {
+          const fetchMedia =
+            source === "remote"
+              ? vi
+                  .spyOn(globalThis, "fetch")
+                  .mockImplementation(
+                    async () =>
+                      new Response("hello", { headers: { "content-type": "text/plain" } }),
+                  )
+              : undefined;
+          const attempts: string[] = [];
+          const providerPayloads: string[] = [];
+          const retryEvents: Array<{ nextAttempt: number; delayMs: number }> = [];
+          let uploadAttempts = 0;
+          graphUploadMockState.uploadAndShareSharePoint.mockImplementation(async () => {
+            uploadAttempts += 1;
+            if (uploadAttempts === 1) {
+              throw Object.assign(new Error("transient upload failure"), {
+                statusCode: 429,
+                retryAfterMs: 0,
+              });
+            }
+            return {
+              itemId: "item123",
+            };
+          });
+          graphUploadMockState.getDriveItemProperties.mockResolvedValue({
+            eTag: '"{ITEM-123},1"',
+            webDavUrl: "https://sharepoint.example.com/item123",
+            name: "retry.txt",
+          });
+
+          const sendActivity = createRecordedSendActivity(attempts, 429);
+          const ctx = {
+            sendActivity: async (activity: unknown) => {
+              providerPayloads.push(JSON.stringify(activity));
+              return await sendActivity(activity);
+            },
           };
-        });
-        graphUploadMockState.getDriveItemProperties.mockResolvedValue({
-          eTag: '"{ITEM-123},1"',
-          webDavUrl: "https://sharepoint.example.com/item123",
-          name: "retry.txt",
-        });
+          const ids = await send({
+            conversationRef: channelReference(),
+            context: ctx,
+            messages: [
+              {
+                text: "one",
+                mediaUrl: source === "remote" ? `${remoteOrigin}/retry.txt` : localFile,
+              },
+            ],
+            tokenProvider: { getAccessToken: async () => "token" },
+            sharePointSiteId: "site-123",
+            onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
+          });
 
-        const sendActivity = createRecordedSendActivity(attempts, 429);
-        const ctx = {
-          sendActivity: async (activity: unknown) => {
-            providerPayloads.push(JSON.stringify(activity));
-            return await sendActivity(activity);
-          },
-        };
-        const ids = await send({
-          conversationRef: channelReference(),
-          context: ctx,
-          messages: [{ text: "one", mediaUrl: localFile }],
-          tokenProvider: { getAccessToken: async () => "token" },
-          sharePointSiteId: "site-123",
-          onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
+          expect(uploadAttempts).toBe(2);
+          if (fetchMedia) {
+            expect(fetchMedia).toHaveBeenCalledTimes(2);
+          }
+          expect(attempts).toEqual(["one", "one"]);
+          expect(providerPayloads[1]).toBe(providerPayloads[0]);
+          expect(ids).toEqual(["id:one"]);
+          expect(retryEvents).toEqual([
+            { nextAttempt: 2, delayMs: 0 },
+            { nextAttempt: 3, delayMs: 0 },
+          ]);
         });
-
-        expect(uploadAttempts).toBe(2);
-        expect(attempts).toEqual(["one", "one"]);
-        expect(providerPayloads[1]).toBe(providerPayloads[0]);
-        expect(ids).toEqual(["id:one"]);
-        expect(retryEvents).toEqual([
-          { nextAttempt: 2, delayMs: 0 },
-          { nextAttempt: 3, delayMs: 0 },
-        ]);
-      });
-    });
+      },
+    );
 
     it("does not retry thread sends on client errors (4xx)", async () => {
       const ctx = {
@@ -404,58 +556,71 @@ describe("msteams messenger", () => {
   });
 
   describe("buildActivity AI metadata", () => {
-    const personalRef = createStoredReference({
-      conversation: { id: "conv123", conversationType: "personal" },
-    });
+    it.each(["personal", "groupChat", "channel"])(
+      "sends loaded image bytes and decoded filenames over the %s HTTP transport",
+      async (conversationType) => {
+        const receivedAttachments: Array<{ name: string; contentUrl: string }> = [];
+        const realFetch = globalThis.fetch;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) =>
+          requestUrl(input).startsWith(remoteOrigin)
+            ? new Response(png, { headers: { "content-type": "image/png" } })
+            : realFetch(input, init),
+        );
 
-    it("sends decoded attachment filenames over the Bot Framework HTTP transport", async () => {
-      const receivedAttachments: Array<{ name: string; contentUrl: string }> = [];
+        await withServer(
+          (request, response) => {
+            const chunks: Buffer[] = [];
+            request.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+            request.on("end", () => {
+              const activity = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+                attachments?: Array<{ name: string; contentUrl: string }>;
+              };
+              receivedAttachments.push(
+                ...(activity.attachments ?? []).map(({ name, contentUrl }) => ({
+                  name,
+                  contentUrl,
+                })),
+              );
+              response.writeHead(200, { "content-type": "application/json" });
+              response.end(JSON.stringify({ id: `message-${receivedAttachments.length}` }));
+            });
+          },
+          async (baseUrl) => {
+            const app = createMockApp({
+              createFn: async (activity) => {
+                const response = await fetch(`${baseUrl}/v3/conversations/test/activities`, {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify(activity),
+                });
+                return await response.json();
+              },
+            });
+            const encodedNames = ["My%20image.png", "r%C3%A9sum%C3%A9.png", "100%25.png"];
 
-      await withServer(
-        (request, response) => {
-          const chunks: Buffer[] = [];
-          request.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
-          request.on("end", () => {
-            const activity = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
-              attachments?: Array<{ name: string; contentUrl: string }>;
-            };
-            receivedAttachments.push(
-              ...(activity.attachments ?? []).map(({ name, contentUrl }) => ({ name, contentUrl })),
+            await send({
+              replyStyle: "top-level",
+              app,
+              conversationRef: createStoredReference({
+                conversation: { id: "conv123", conversationType },
+              }),
+              sharePointSiteId: "site-123",
+              messages: encodedNames.map((name) => ({
+                mediaUrl: `${remoteOrigin}/files/${name}`,
+              })),
+            });
+
+            expect(receivedAttachments).toEqual(
+              ["My image.png", "résumé.png", "100%.png"].map((name) => ({
+                name,
+                contentUrl: `data:image/png;base64,${png.toString("base64")}`,
+              })),
             );
-            response.writeHead(200, { "content-type": "application/json" });
-            response.end(JSON.stringify({ id: `message-${receivedAttachments.length}` }));
-          });
-        },
-        async (baseUrl) => {
-          const app = createMockApp({
-            createFn: async (activity) => {
-              const response = await fetch(`${baseUrl}/v3/conversations/test/activities`, {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify(activity),
-              });
-              return await response.json();
-            },
-          });
-          const encodedNames = ["My%20report.pdf", "r%C3%A9sum%C3%A9.pdf", "100%25.png"];
-
-          await send({
-            replyStyle: "top-level",
-            app,
-            conversationRef: personalRef,
-            messages: encodedNames.map((name) => ({
-              mediaUrl: `${baseUrl}/files/${name}`,
-            })),
-          });
-
-          expect(receivedAttachments).toEqual([
-            { name: "My report.pdf", contentUrl: `${baseUrl}/files/My%20report.pdf` },
-            { name: "résumé.pdf", contentUrl: `${baseUrl}/files/r%C3%A9sum%C3%A9.pdf` },
-            { name: "100%.png", contentUrl: `${baseUrl}/files/100%25.png` },
-          ]);
-        },
-      );
-    });
+            expect(graphUploadMockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
+          },
+        );
+      },
+    );
   });
 
   describe("buildConversationReference tenant/aad forwarding (#58774)", () => {
