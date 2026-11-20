@@ -145,7 +145,7 @@ describe("automations output contract", () => {
       runUntilCompleted({ execTool: harness.tools[0]!, waitTool: harness.tools[1]!, code });
     const composed =
       await run(`const plan = await automations({action:"plan",names:["Invoice check"]});
-      const result = await automations({action:"add",job:${JSON.stringify(createJob)}});
+      const result = await automations({action:"add",showCard:true,job:${JSON.stringify(createJob)}});
       return {plan, receipt:result.automationCreation};`);
     expect(composed).toMatchObject({
       status: "completed",
@@ -156,6 +156,7 @@ describe("automations output contract", () => {
           slotId: "1",
           jobId: job.id,
           status: "created",
+          showCard: true,
         },
       },
     });
@@ -172,14 +173,18 @@ describe("automations output contract", () => {
         toolName: tool.name,
         input: { action: "add", job: { name: job.name } },
         isError: false,
-        result: { details: { automationCreation: { jobId: job.id, status: "created" } } },
+        result: {
+          details: { automationCreation: { jobId: job.id, status: "created", showCard: true } },
+        },
       },
     ]);
     expect(lifecycle.filter((e) => e.phase === "result")).toMatchObject([
       { isError: false, result: { details: { type: "automation_creation_plan" } } },
       {
         isError: false,
-        result: { details: { automationCreation: { jobId: job.id, status: "created" } } },
+        result: {
+          details: { automationCreation: { jobId: job.id, status: "created", showCard: true } },
+        },
       },
     ]);
   });

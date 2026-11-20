@@ -3,6 +3,7 @@ import {
   readAutomationCreationEvent,
   type AutomationCreationEvent,
   type AutomationCreationPlan,
+  type AutomationCreationResult,
 } from "../../../../src/shared/automation-creation.js";
 import {
   AutomationCreationCardBlock,
@@ -13,6 +14,7 @@ import { automationCreationToolEvents } from "./chat-created-automation-receipts
 
 type MessageItem = Extract<ChatItem, { kind: "message" }>;
 type Declared = { plan: AutomationCreationPlan; source: unknown; runId?: string };
+type SavedSlot = Extract<AutomationCreationResult, { status: "created" }>;
 
 /** The installer uses display-only assistant injections; never accept a plan from user/model text. */
 function installerEvent(message: unknown) {
@@ -33,7 +35,7 @@ export function projectAutomationCreationCards(
   firstSources?: Map<string, unknown>,
 ) {
   const declarations = new Map<string, Declared>();
-  const savedSlots = new Map<string, Map<string, string>>();
+  const savedSlots = new Map<string, Map<string, SavedSlot>>();
   const consumed = new Set<unknown>();
   const add = (scope: string, source: unknown, event: AutomationCreationEvent, runId?: string) => {
     const key = "automation-creation:" + JSON.stringify([scope, event.planId]);
@@ -58,7 +60,7 @@ export function projectAutomationCreationCards(
     }
     // A retry can fill a failed slot; a duplicate cannot replace a saved ID.
     if (!slots.has(event.slotId)) {
-      slots.set(event.slotId, event.jobId);
+      slots.set(event.slotId, event);
     }
   };
   for (const m of history) {
@@ -84,11 +86,13 @@ export function projectAutomationCreationCards(
     }
     const saved = new Set<string>();
     const rows: AutomationCreationRow[] = [];
+    let legacyCard = false;
     for (const slot of plan.slots) {
-      const jobId = slots.get(slot.slotId);
-      if (jobId && !saved.has(jobId)) {
-        saved.add(jobId);
-        rows.push({ ...slot, jobId });
+      const result = slots.get(slot.slotId);
+      if (result && result.showCard !== false && !saved.has(result.jobId)) {
+        legacyCard ||= result.showCard === undefined;
+        saved.add(result.jobId);
+        rows.push({ ...slot, jobId: result.jobId });
       }
     }
     if (!rows.length) {
@@ -102,7 +106,13 @@ export function projectAutomationCreationCards(
         id: key,
         runId,
         timestamp: asOptionalRecord(source)?.timestamp,
-        content: [new AutomationCreationCardBlock({ grouped: plan.slots.length > 1, rows })],
+        content: [
+          new AutomationCreationCardBlock({
+            // Historical/installer plans used the declared size even with only one saved row.
+            grouped: rows.length > 1 || (legacyCard && plan.slots.length > 1),
+            rows,
+          }),
+        ],
       },
     };
     const existing = cards.get(source);

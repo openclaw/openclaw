@@ -186,6 +186,7 @@ const automationCreation = Type.Optional(
       slotId: Type.String(),
       status: Type.Literal("created"),
       jobId: Type.String(),
+      showCard: Type.Optional(Type.Boolean()),
     }),
     closedObject({
       type: Type.Literal("automation_creation_result"),

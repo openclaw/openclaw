@@ -38,8 +38,8 @@ export function buildCronToolDescription(params: {
     : "";
   const watcherSetup = params.triggersEnabled
     ? `
-WATCH OUTPUT: for continuous log monitoring and future alerts, plan and add one saved stream. Example (replace the path with the requested log):
-{action:"add",job:{name:"Application errors",schedule:{kind:"stream",command:["tail","-n","0","-F","<log path>"],mode:"match",match:"ERROR"},sessionTarget:"current",payload:{kind:"agentTurn",message:"Report the matching application errors."}}}
+WATCH OUTPUT: for continuous log monitoring and future alerts, plan and add one saved stream. Example when the user asks for a watcher (replace the path with the requested log):
+{action:"add",showCard:true,job:{name:"Application errors",schedule:{kind:"stream",command:["tail","-n","0","-F","<log path>"],mode:"match",match:"ERROR"},sessionTarget:"current",payload:{kind:"agentTurn",message:"Report the matching application errors."}}}
 Use built-in match mode for a simple condition; no custom trigger script or separate background exec watcher is needed. Inspect finitely if needed before proposing it.
 
 STREAM CONSENT: creation, source changes and reactivation require current creator exec authority. When exec asks, add/update waits for user approval through the native client before saving the persistent watcher and its automatic restarts. A saved add/update result means any required approval has already completed. Say "Approved by an operator" when streamExecutionApproval is present; it records human approval but does not identify the person. Do not ask again or disable the saved stream solely because no user approval reply is visible in chat. A saved:false result ends that proposal: clean up temporary monitoring, explain the recorded outcome, and wait for a new user instruction before retrying or starting a substitute.
@@ -66,7 +66,7 @@ To pause a saved watcher without deleting its record, update job:{enabled:false}
 
 SCOPE: ${scopeDescription}: an empty list or failed list/get/update/remove (including not-found) does not establish global absence, even for IDs from your history. Never recreate or replace a known automation for update/remove/reconciliation based on these results; report the visibility limit and ${adminRecovery}. New requested automations may still be created.
 
-ADD: First call {action:"plan",names:["Morning brief"]} (or ALL requested names in order). Then call {action:"add",job:{...}} for one, or set position:1, position:2, etc. for several. The plan needs no internal IDs from the user. Planning alone does not schedule anything. Each job requires name+schedule+payload.
+ADD: First call {action:"plan",names:["Morning brief"]} (or ALL requested names in order). Then call {action:"add",job:{...}} for one, or set position:1, position:2, etc. for several. Set showCard:true on each add the user asked to schedule in this turn; omit it for agent follow-ups. The plan needs no internal IDs from the user. Planning alone does not schedule anything. Each job requires name+schedule+payload.
 ${watcherSetup}
 
 SCHEDULE:
