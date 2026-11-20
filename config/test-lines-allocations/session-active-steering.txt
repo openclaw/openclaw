@@ -4,6 +4,5 @@
 # Removed the keyed transformed-text unit replay: the Gateway hook-redaction case covers
 # matching and changed input through the Gateway handler. Remaining cases guard distinct
 # target, authority, persistence, default-off, and legacy-data contracts; no duplicate suite.
-# Request-entry regression retains accepted custody across off/on and rejects new disabled
-# requests; these replace the obsolete revocation expectations, not another delivery suite.
-439
+# Revocation-only off/on tests were deleted; no replacement reload-race suite.
+398

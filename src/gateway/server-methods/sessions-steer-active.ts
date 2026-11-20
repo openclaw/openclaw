@@ -22,7 +22,7 @@ export const sessionSteerActiveHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    // The opt-in admits this request; later config changes apply to the next one.
+    // Check once per request, including retries. Work admitted just before off may still deliver.
     if (readRuntimeConfig().gateway?.sessionControl?.steeringEnabled !== true) {
       respond(
         false,
