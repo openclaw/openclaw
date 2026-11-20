@@ -28,6 +28,8 @@ type GuestGatewayOptions = {
   origin?: string;
   others?: "none" | "view" | "invited";
   approvalOwnership?: boolean;
+  invitedScopes?: OperatorScope[];
+  maxInvitedAccess?: "read" | "suggest" | "send";
 };
 
 async function startInvitedGuestGateway(
@@ -100,7 +102,7 @@ async function startInvitedGuestGateway(
   const guestScopes: OperatorScope[] = options.approvalOwnership
     ? ["operator.read", "operator.write", "operator.approvals"]
     : ["operator.sessions.read", "operator.sessions.write"];
-  const invitedScopes: OperatorScope[] = [
+  const invitedScopes: OperatorScope[] = options.invitedScopes ?? [
     "operator.read",
     "operator.write",
     "operator.questions",
@@ -195,7 +197,10 @@ async function startInvitedGuestGateway(
             invited: {
               agents: ["main"],
               scopes: invitedScopes,
-              sessions: { others: options.others ?? "invited" },
+              sessions: {
+                others: options.others ?? "invited",
+                maxInvitedAccess: options.maxInvitedAccess,
+              },
             },
             guest: {
               agents: ["main"],

@@ -51,6 +51,7 @@ import {
   createSessionListEntryFilter,
   createSessionSharingInputAuthority,
   createSessionSharingConsumption,
+  type PreparedSessionSharingTargetFacts,
 } from "./session-sharing-read.js";
 import {
   captureSessionSharingTalkAuthority,
@@ -366,9 +367,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     preparedPolicy,
   });
   // Reentrant source assertions must consume the committing facts, not an older publication.
-  let committingFacts:
-    | { target: SessionSharingTarget | null; members: readonly string[] }
-    | undefined;
+  let committingFacts: PreparedSessionSharingTargetFacts | undefined;
   const assertTargetCurrent = (
     targetRef: SessionMutationTarget,
     expected: AuthorizedSessionMutationTarget | undefined,
@@ -472,7 +471,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     }
     // Each boundary revalidates authority; unchanged facts retain the prepared policy.
     const policyConfig = params.context.getCommittedRuntimeConfig?.() ?? currentCfg;
-    const policy = preparedPolicy(policyConfig, prepared?.members);
+    const policy = preparedPolicy(policyConfig, prepared?.members, prepared?.memberAccess);
     const ownershipError = authorizeOwnSessionMutation({
       client: params.client,
       target: current,
