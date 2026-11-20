@@ -61,6 +61,28 @@ describe("renderPluginCatalogResults", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["", "tool"])("replaces results while disconnected (query: %j)", async (query) => {
+    const props = baseProps({ query });
+    const { container, ui } = await mount(props);
+    const search = container.querySelector<HTMLInputElement>('input[type="search"]');
+    ui.node('[data-plugin-id="tool"]').not.toBeNull();
+
+    update(container, { ...props, connected: false, remoteError: "ClawHub unavailable" });
+    await waitForSolid(() => {
+      ui.content('[role="status"]').toContain("Plugin catalog unavailable");
+      ui.all(".plugin-catalog-card").toHaveLength(0);
+      ui.node('[role="alert"]').toBeNull();
+    });
+    expect(container.querySelector('input[type="search"]')).toBe(search);
+    expect(search?.value).toBe(query);
+
+    update(container, props);
+    await waitForSolid(() => {
+      ui.node('[data-plugin-id="tool"]').not.toBeNull();
+      ui.node('[role="status"]').toBeNull();
+    });
+  });
+
   it("keeps first installed catalog matches current without replacing their cards", async () => {
     const installed: PluginCatalogItem = {
       id: "installed",

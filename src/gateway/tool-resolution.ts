@@ -136,10 +136,8 @@ export async function resolveGatewayScopedTools(
   },
   assertPreparationCurrent?: () => void,
 ) {
-  const { assertCurrent, assertInvocationCurrent } = captureGatewayToolResolutionAuthority(
-    params,
-    assertPreparationCurrent,
-  );
+  const { assertCurrent, assertInvocationCurrent, prepareHostFileMutation } =
+    captureGatewayToolResolutionAuthority(params, assertPreparationCurrent);
   assertCurrent();
   const runtimePolicySessionKey = params.runtimePolicySessionKey?.trim() || params.sessionKey;
   const sessionAgentId = resolveSessionAgentIds({
@@ -343,6 +341,7 @@ export async function resolveGatewayScopedTools(
   };
   const swarmCollectorContext = resolveSwarmCollectorToolContext(swarmCollectorAdmission);
   const commonToolOptions = () => ({
+    prepareHostFileMutation,
     requesterOrigin: params.requesterOrigin,
     operatorProfileId: params.operatorProfileId,
     conversationId: params.conversationId,

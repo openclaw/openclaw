@@ -666,3 +666,59 @@ openclaw-templates-detail-view .plugin-capabilities .settings-row__text {
     padding-block: 7px;
   }
 }
+
+/* An automation's prompt opens under its row: the row's text column and description type. */
+openclaw-templates-detail-view .plugin-capability__details > .template-automation-message {
+  margin: -6px 28px 0 46px;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+/* The whole soul reads as the plugin page's Readme does; status lines sit under the excerpt. */
+.templates-personality__markdown {
+  max-width: 680px;
+  font-size: 14.5px;
+  line-height: 1.65;
+  & > :first-child {
+    margin-top: 0;
+  }
+}
+/* Headings inside the soul stay at reading size: no page-title type, no rules. */
+.templates-personality__markdown.sidebar-markdown h1,
+.templates-personality__markdown.sidebar-markdown h2,
+.templates-personality__markdown.sidebar-markdown h3,
+.templates-personality__markdown.sidebar-markdown h4,
+.templates-personality__markdown.sidebar-markdown h5,
+.templates-personality__markdown.sidebar-markdown h6 {
+  margin: 18px 0 6px;
+  padding: 0;
+  border: 0;
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.templates-personality__markdown.sidebar-markdown h1 {
+  font-size: 16px;
+}
+.templates-personality__markdown.sidebar-markdown .lit-content > :first-child {
+  margin-top: 0;
+}
+.templates-personality__markdown.sidebar-markdown li {
+  font-size: inherit;
+  line-height: inherit;
+}
+.templates-personality__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@container (max-width: 560px) {
+  openclaw-templates-detail-view .plugin-capability__details > .template-automation-message {
+    margin: -6px 26px 0 42px;
+  }
+}
