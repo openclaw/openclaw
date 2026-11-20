@@ -487,6 +487,8 @@ class SkillWorkshopPageState {
     return {
       context,
       agentId: this.scope?.agentId ?? null,
+      // The sidebar's Show All mode clears the shared agent filter, like Sessions reads it.
+      allAgentsScope: context.agentSelection.state.scopeId === null,
       access: resolveWorkshopAccess(context.gateway.snapshot),
       plugin: this.plugin.state,
       onEnablePlugin: () => void this.plugin.enable(),
