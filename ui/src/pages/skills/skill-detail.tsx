@@ -25,9 +25,8 @@ import {
 } from "../../lib/skills/api-key-source.ts";
 import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 import { PluginReadmeWell } from "../plugins/detail-shell.tsx";
+import { MiddleTruncated, splitTail } from "../plugins/middle-truncated.tsx";
 import {
-  SkillLinkFact,
-  SkillMonoFact,
   SkillPageSection,
   SkillSecurityFact,
   SkillTile,
@@ -36,6 +35,36 @@ import {
 import { MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
 import { verdictForSkill, verdictStatus } from "./skill-status.tsx";
 import type { SkillsProps } from "./view-types.ts";
+
+/** A long id or path on one line: the start gives way, the identifying end stays whole. */
+function SkillMonoFact(props: { value: string; segments?: number }) {
+  // Keep the last folder with the file name only while that end stays short enough to show whole.
+  const parts = () => {
+    const wide = splitTail(props.value, props.segments);
+    return wide.tail.length > 24 ? splitTail(props.value) : wide;
+  };
+  return (
+    <span class="skill-page__mono">
+      <MiddleTruncated {...parts()} />
+    </span>
+  );
+}
+
+/** A link that leaves the app, shown as its host and path with the leaving arrow. */
+function SkillLinkFact(props: { href: string }) {
+  const text = () => {
+    const url = new URL(props.href);
+    return `${url.hostname}${url.pathname.replace(/\/$/u, "")}`;
+  };
+  return (
+    <dd class="plugin-metadata__link-value">
+      <a class="plugin-metadata__link" href={props.href} target="_blank" rel="noopener noreferrer">
+        <MiddleTruncated {...splitTail(text())} />
+        <Icon name="arrowUpRight" />
+      </a>
+    </dd>
+  );
+}
 
 type BinRow = { kind: "bin"; names: string[]; missing: boolean; install: boolean };
 type FactRow = { kind: "env" | "config" | "os"; name: string; missing: boolean };

@@ -2,7 +2,6 @@ import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import { MiddleTruncated, splitTail } from "../plugins/middle-truncated.tsx";
 
 /** A skill's own mark: its image, else its emoji, else the default skill icon. */
 export function SkillTile(props: {
@@ -87,35 +86,5 @@ export function SkillSecurityFact(props: {
         </Show>
       </dd>
     </div>
-  );
-}
-
-/** A long id or path on one line: the start gives way, the identifying end stays whole. */
-export function SkillMonoFact(props: { value: string; segments?: number }) {
-  // Keep the last folder with the file name only while that end stays short enough to show whole.
-  const parts = () => {
-    const wide = splitTail(props.value, props.segments);
-    return wide.tail.length > 24 ? splitTail(props.value) : wide;
-  };
-  return (
-    <span class="skill-page__mono">
-      <MiddleTruncated {...parts()} />
-    </span>
-  );
-}
-
-/** A link that leaves the app, shown as its host and path with the leaving arrow. */
-export function SkillLinkFact(props: { href: string }) {
-  const text = () => {
-    const url = new URL(props.href);
-    return `${url.hostname}${url.pathname.replace(/\/$/u, "")}`;
-  };
-  return (
-    <dd class="plugin-metadata__link-value">
-      <a class="plugin-metadata__link" href={props.href} target="_blank" rel="noopener noreferrer">
-        <MiddleTruncated {...splitTail(text())} />
-        <Icon name="arrowUpRight" />
-      </a>
-    </dd>
   );
 }
