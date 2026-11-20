@@ -363,14 +363,14 @@ suite.define(() => {
       }
       for (const [section, expected] of [
         ["models", ["Novita", "Z.AI"]],
-        ["media", ["fal", "Novita", "Z.AI"]],
+        ["media", ["Novita", "Z.AI", "fal"]],
       ] as const) {
         const headings = page.locator(
           `[data-catalog-section="${section}"] .plugin-catalog-card h3`,
         );
         await expect
           .poll(async () => (await headings.allTextContents()).toSorted())
-          .toEqual(expected.toSorted());
+          .toEqual(expected);
       }
       if (captureUiProof) {
         const priorModels = (
