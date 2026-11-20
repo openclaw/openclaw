@@ -1,6 +1,6 @@
 .chat-subagent-avatar {
   position: relative;
-  display: grid;
+  display: inline-grid;
   flex: none;
   place-items: center;
   width: 20px;
@@ -15,22 +15,9 @@
   height: 14px;
 }
 
-.chat-subagent-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 100%;
-  vertical-align: bottom;
-}
-
-.chat-subagent-name > .chat-subagent-avatar {
+.chat-subagent-avatar--inline {
   width: 18px;
   height: 18px;
-}
-
-.chat-subagent-name__text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  margin-inline-end: 4px;
+  vertical-align: text-bottom;
 }

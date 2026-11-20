@@ -23,9 +23,11 @@ export function SubagentAvatarBadge(props: {
 
 export function SubagentName(props: { name: string; sessionKey?: string }) {
   return (
-    <span class="chat-subagent-name">
-      <Show when={props.sessionKey}>{(key) => <SubagentAvatarBadge sessionKey={key()} />}</Show>
-      <span class="chat-subagent-name__text">{props.name}</span>
-    </span>
+    <>
+      <Show when={props.sessionKey}>
+        {(key) => <SubagentAvatarBadge class="chat-subagent-avatar--inline" sessionKey={key()} />}
+      </Show>
+      {props.name}
+    </>
   );
 }

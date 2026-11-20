@@ -131,7 +131,7 @@
   padding-inline-end: 2px;
 }
 
-.chat-details-subagents__stack > .chat-details-subagents__avatar + .chat-details-subagents__avatar {
+.chat-details-subagents__stack > :not(:first-child) {
   margin-inline-start: -6px;
 }
 
