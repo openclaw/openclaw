@@ -1,0 +1,3 @@
+164
+# Prove exact native archive handoff at the real isolated launcher pre-container boundary.
+# Covers missing/mismatched refusal, excluded unrelated cache bytes, and offline worker consumption.

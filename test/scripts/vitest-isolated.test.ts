@@ -1,6 +1,12 @@
+import { ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { PassThrough } from "node:stream";
+import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as nativeAssets from "../../scripts/lib/fs-safe-worker-native-assets.mts";
+import * as managed from "../../scripts/lib/managed-child-process.mts";
 import {
   copyIsolatedVitestSource as copySource,
   prepareIsolatedVitestDependencies as prepareDependencies,
@@ -412,3 +418,161 @@ describe("isolated container lifecycle", () => {
     expect(fixture.onAbsent).toHaveBeenCalledTimes(absent ? 1 : 0);
   });
 });
+
+describe.skipIf(process.platform !== "linux" || process.getuid?.() === 0)(
+  "isolated runtime build inputs",
+  () => {
+    function nativeFixture() {
+      const source = sourceFixture();
+      const packageRoot = scratch();
+      write(packageRoot, "package/fs-safe-native.node", "synthetic native addon");
+      const archive = tar.c({ sync: true, gzip: true, cwd: packageRoot }, ["package"]);
+      const bytes = archive.read() as Buffer;
+      const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+      const digest = createHash("sha256").update(integrity).digest("hex");
+      const targets = ["darwin-arm64", "darwin-x64"];
+      const files = targets.map((target) => `${target}-1.0.0-${digest}.tgz`);
+      const manifest = "node_modules/@openclaw/fs-safe/package.json";
+      source.write(
+        manifest,
+        JSON.stringify({
+          optionalDependencies: Object.fromEntries(
+            targets.map((target) => [`@openclaw/fs-safe-${target}`, "1.0.0"]),
+          ),
+        }),
+      );
+      source.write(
+        "pnpm-lock.yaml",
+        JSON.stringify({
+          packages: Object.fromEntries(
+            targets.map((target) => [
+              `@openclaw/fs-safe-${target}@1.0.0`,
+              { resolution: { integrity } },
+            ]),
+          ),
+        }),
+      );
+      source.copy(["pnpm-lock.yaml"]);
+      for (const archiveName of files) {
+        const destination = path.join(source.root, ".artifacts/worker-native-assets", archiveName);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.writeFileSync(destination, bytes);
+      }
+      return { source, files, bytes, manifest: path.join(source.root, manifest) };
+    }
+
+    async function launchFixture(
+      fixture: ReturnType<typeof nativeFixture>,
+      onCreate: (snapshot: string) => Promise<void>,
+    ) {
+      const { source } = fixture;
+      const buildConfig = "test/vitest/vitest.ui-e2e.config.ts";
+      const tracked = [
+        file,
+        buildConfig,
+        "scripts/lib/vitest-isolated-entry.mts",
+        "package.json",
+        "pnpm-lock.yaml",
+      ];
+      for (const entry of tracked.slice(0, 3)) {
+        source.write(entry);
+      }
+      source.write("package.json", JSON.stringify({ packageManager: "pnpm@12.15.0" }));
+      source.write("node_modules/.pnpm/.keep");
+      fs.symlinkSync(process.execPath, path.join(source.root, "pnpm"));
+      const cwd = vi.spyOn(process, "cwd").mockReturnValue(source.root);
+      const command = vi.spyOn(managed, "runManagedCommand").mockImplementation(async (options) => {
+        const args = options.args ?? [];
+        let stdout: string;
+        if (options.bin === "git") {
+          stdout = tracked.join("\0") + "\0";
+        } else if (args.includes("info")) {
+          stdout = JSON.stringify({ rootless: true, selinuxEnabled: false });
+        } else if (args.includes("image")) {
+          stdout = JSON.stringify([{ Id: image, Config: {} }]);
+        } else if (args.includes("exists")) {
+          return 1;
+        } else if (args.includes("create")) {
+          const mount = args.find((arg) => arg.includes("dst=/workspace,"));
+          if (!mount) {
+            throw new Error("source mount missing");
+          }
+          await onCreate(mount.split("src=")[1]!.split(",dst=")[0]!);
+          throw new Error("prepared container boundary reached");
+        } else {
+          throw new Error("unexpected command " + args.join(" "));
+        }
+        const child = new ChildProcess();
+        Object.defineProperty(child, "stdout", { value: new PassThrough() });
+        options.onReady?.(child);
+        child.stdout?.emit("data", stdout);
+        return 0;
+      });
+      try {
+        await isolatedVitest.runIsolatedVitest(
+          source.root,
+          image,
+          ["run", "--config", buildConfig, file],
+          {
+            HOME: source.root,
+            npm_execpath: path.join(source.root, "pnpm"),
+          },
+        );
+      } finally {
+        cwd.mockRestore();
+        command.mockRestore();
+      }
+    }
+
+    it("copies only lock-qualified archives before container creation and the worker consumes them offline", async () => {
+      const fixture = nativeFixture();
+      const { source, files, bytes, manifest } = fixture;
+      source.write(".artifacts/worker-native-assets/unrelated.tgz", "private");
+      let observed = false;
+      await expect(
+        launchFixture(fixture, async (snapshot) => {
+          expect(
+            fs.readdirSync(path.join(snapshot, ".artifacts/worker-native-assets")).toSorted(),
+          ).toEqual(files.toSorted());
+          for (const archiveName of files) {
+            expect(
+              fs.readFileSync(path.join(snapshot, ".artifacts/worker-native-assets", archiveName)),
+            ).toEqual(bytes);
+          }
+          const assets = await nativeAssets.prepareWorkerDarwinNativeAssets(snapshot, manifest);
+          expect(assets.map((asset) => asset.source.toString())).toEqual([
+            "synthetic native addon",
+            "synthetic native addon",
+          ]);
+          observed = true;
+        }),
+      ).rejects.toThrow("prepared container boundary reached");
+      expect(observed).toBe(true);
+    });
+
+    it.each(["absent", "mismatched"])(
+      "refuses %s input without downloading or repairing the host cache",
+      async (state) => {
+        const fixture = nativeFixture();
+        const { source, files } = fixture;
+        const archivePath = path.join(source.root, ".artifacts/worker-native-assets", files[0]!);
+        if (state === "absent") {
+          fs.unlinkSync(archivePath);
+        } else {
+          fs.writeFileSync(archivePath, "wrong archive");
+        }
+        await expect(
+          launchFixture(fixture, async () => {
+            throw new Error("unprepared container reached");
+          }),
+        ).rejects.toThrow(
+          state === "absent" ? "Missing prepared worker native package" : "integrity mismatch",
+        );
+        expect(fs.existsSync(archivePath)).toBe(state !== "absent");
+        if (state === "mismatched") {
+          expect(fs.readFileSync(archivePath, "utf8")).toBe("wrong archive");
+        }
+      },
+    );
+  },
+);

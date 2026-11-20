@@ -14,8 +14,7 @@ const assetsByIdentity = new Map<string, Promise<WorkerNativeAsset[]>>();
 const nativeLoad =
   "const loaded = runNativeInitialization(() => require(nativePackageForTarget(target)));";
 
-/** Use the dependency's existing exact pins; no package installation or host-native lookup. */
-export async function prepareWorkerDarwinNativeAssets(rootDir: string, manifestPath: string) {
+async function resolveWorkerNativePins(rootDir: string, manifestPath: string) {
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
     optionalDependencies: Record<string, string>;
   };
@@ -32,17 +31,62 @@ export async function prepareWorkerDarwinNativeAssets(rootDir: string, manifestP
         `Worker native asset is not pinned in the installed manifest and lock: ${name}`,
       );
     }
-    return { target, fileName, name, version, integrity };
+    const digest = createHash("sha256").update(integrity).digest("hex");
+    return { fileName, name, version, integrity, archive: `${target}-${version}-${digest}.tgz` };
   });
+  return pins;
+}
+
+function verifyWorkerNativeArchive(bytes: Buffer, name: string, integrity: string): void {
+  if (`sha512-${createHash("sha512").update(bytes).digest("base64")}` !== integrity) {
+    throw new Error(`Worker native package archive integrity mismatch: ${name}`);
+  }
+}
+
+/** Copy only verified build inputs; never download or mutate the prepared host cache. */
+export async function copyWorkerDarwinNativeAssetCache(
+  rootDir: string,
+  snapshotDir: string,
+  manifestPath: string,
+): Promise<void> {
+  const pins = await resolveWorkerNativePins(snapshotDir, manifestPath);
+  const archives = await Promise.all(
+    pins.map(async (pin) => {
+      const source = path.join(rootDir, ".artifacts", "worker-native-assets", pin.archive);
+      let bytes: Buffer;
+      try {
+        bytes = await fs.readFile(source);
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+          throw new Error(
+            `Missing prepared worker native package ${pin.name}@${pin.version}; prepare its archive before isolated runtime tests.`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      verifyWorkerNativeArchive(bytes, pin.name, pin.integrity);
+      return { archive: pin.archive, bytes };
+    }),
+  );
+  const destination = path.join(snapshotDir, ".artifacts", "worker-native-assets");
+  await fs.mkdir(destination, { recursive: true });
+  for (const { archive, bytes } of archives) {
+    await fs.writeFile(path.join(destination, archive), bytes, { flag: "wx", mode: 0o600 });
+  }
+}
+
+/** Use the dependency's existing exact pins; no package installation or host-native lookup. */
+export async function prepareWorkerDarwinNativeAssets(rootDir: string, manifestPath: string) {
+  const pins = await resolveWorkerNativePins(rootDir, manifestPath);
   const identity = JSON.stringify([path.resolve(rootDir), pins]);
   let pending = assetsByIdentity.get(identity);
   if (!pending) {
     pending = Promise.all(
-      pins.map(async ({ target, fileName, name, version, integrity }) => {
+      pins.map(async ({ archive, fileName, name, version, integrity }) => {
         const cache = path.join(rootDir, ".artifacts", "worker-native-assets");
         await fs.mkdir(cache, { recursive: true });
-        const digest = createHash("sha256").update(integrity).digest("hex");
-        const cached = path.join(cache, `${target}-${version}-${digest}.tgz`);
+        const cached = path.join(cache, archive);
         let bytes: Buffer | undefined;
         try {
           bytes = await fs.readFile(cached);
@@ -75,9 +119,7 @@ export async function prepareWorkerDarwinNativeAssets(rootDir: string, manifestP
           }
           bytes = Buffer.concat(downloaded);
         }
-        if (`sha512-${createHash("sha512").update(bytes).digest("base64")}` !== integrity) {
-          throw new Error(`Worker native package archive integrity mismatch: ${name}`);
-        }
+        verifyWorkerNativeArchive(bytes, name, integrity);
         if (cacheMiss) {
           const staging = `${cached}.${randomUUID()}`;
           try {

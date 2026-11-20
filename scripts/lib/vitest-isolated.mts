@@ -541,6 +541,12 @@ export async function runIsolatedVitest(
       throw new Error("Stage the isolated adapter's new source files before running it.");
     }
     const mounts = prepareIsolatedVitestDependencies(root, snapshot, source.copied);
+    if (resolveIsolatedVitestBuild(argv, CONTAINER_ENV)) {
+      const { copyWorkerDarwinNativeAssetCache } =
+        await import("./fs-safe-worker-native-assets.mts");
+      const { resolveFsSafePackageManifest } = await import("./fs-safe-windows-helper-asset.mts");
+      await copyWorkerDarwinNativeAssetCache(root, snapshot, resolveFsSafePackageManifest(root));
+    }
     const name = `openclaw-vitest-${randomUUID()}`;
     console.error(
       `[vitest:isolated] source sha256:${source.digest}; ${source.copied.size} working-tree files; network=none; container=${name}`,
