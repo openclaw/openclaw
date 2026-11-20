@@ -413,11 +413,11 @@ that would exceed the budget.
 { gateway: { resources: { profile: "lean", memoryBudgetMiB: 1024 } } }
 ```
 
-| Limit source                  | Default budget   | Memory use compared with it       |
-| ----------------------------- | ---------------- | --------------------------------- |
-| cgroup v2 `memory.max`        | 85% of the limit | The limiting cgroup's working set |
-| Host RAM (no container limit) | 40% of host RAM  | The Gateway process RSS           |
-| `memoryBudgetMiB` set         | That many MiB    | As above, by limit source         |
+| Limit source                  | Default budget   | Memory use compared with it                      |
+| ----------------------------- | ---------------- | ------------------------------------------------ |
+| cgroup v2 `memory.max`        | 85% of the limit | The limiting cgroup's working set                |
+| Host RAM (no container limit) | 40% of host RAM  | The Gateway process RSS, not its child processes |
+| `memoryBudgetMiB` set         | That many MiB    | As above, by limit source                        |
 
 A container limit is usually sized for OpenClaw alone, so the budget keeps a 15%
 margin. Without one, the Gateway shares the machine with everything else and keeps
