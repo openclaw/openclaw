@@ -96,7 +96,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/plugins/plugin-card.tsx":
     case "ui/src/pages/plugins/catalog-skeleton.tsx":
     case "ui/src/components/solid/middle-truncated.tsx":
-      // Keep catalog presentation together without acquiring the lazy reader or tooltip.
+      // Catalogs load their grid, cards, and loading state together.
       return "plugin-catalog-runtime";
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
@@ -426,6 +426,20 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "devices-page";
     case "ui/src/pages/plugins/plugins-page.tsx":
       return "plugins-page";
+    case "ui/src/lib/skills-shared.ts":
+    case "ui/src/lib/skills-grouping.ts":
+    case "ui/src/lib/skills/index.ts":
+    case "ui/src/i18n/locales/en-skill-library.ts":
+    case "ui/src/i18n/locales/en-skills-browser.ts":
+    case "ui/src/pages/skills/skill-status.tsx":
+      // Skills and Agents already load this presentation and its shared dependencies together.
+      return "skills-shared";
+    case "ui/src/pages/skills/skills-page.tsx":
+    case "ui/src/pages/skills/view.tsx":
+    case "ui/src/pages/skills/discovery-view.tsx":
+    case "ui/src/pages/skills/skill-page-boundary.tsx":
+      // Lists already load these together; skill detail pages keep their lazy imports.
+      return "skills-page";
     case "src/config/cron-limits.ts":
     case "src/cron/store/delivery-codec.ts":
     case "src/cron/stagger.ts":

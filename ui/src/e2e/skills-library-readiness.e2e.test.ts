@@ -16,7 +16,9 @@ suite.define(() => {
   it("waits for personal library knowledge and preserves error and reload recovery", () =>
     suite.withPage({ viewport: { width: 1280, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["skills.search", "skills.library.list"],
+        // This scenario observes the page while its initial library read is still pending.
+        awaitInitialRoster: false,
+        deferredMethods: ["skills.library.list", "skills.search"],
         methodResponses: {
           "skills.status": {
             workspaceDir: "/synthetic/workspace",
@@ -32,10 +34,10 @@ suite.define(() => {
       await page.getByRole("searchbox", { name: "Search skills", exact: true }).waitFor();
       await gateway.waitForRequest("skills.status");
       await gateway.waitForRequest("skills.search");
-      const searchSkeleton = page.locator(".skill-discovery .plugin-catalog-grid--skeleton");
-      await searchSkeleton.waitFor({ state: "visible" });
-      await gateway.resolveDeferred("skills.search", { results: [] });
-      await searchSkeleton.waitFor({ state: "hidden" });
+      const searching = page.getByRole("status", { name: "Searching…", exact: true });
+      await searching.waitFor();
+      await gateway.resolveDeferred("skills.search");
+      await searching.waitFor({ state: "hidden" });
       const empty = page.getByText("No skills yet. Search ClawHub to add one.", { exact: true });
       expect
         .soft(await empty.count(), "pending library does not establish empty discovery")
@@ -60,7 +62,7 @@ suite.define(() => {
       await page.reload();
       await gateway.waitForRequest("skills.library.list");
       await gateway.waitForRequest("skills.search");
-      await gateway.resolveDeferred("skills.search", { results: [] });
+      await gateway.resolveDeferred("skills.search");
       await gateway.resolveDeferred("skills.library.list", accepted);
       await page.locator(".skill-installed-shelf").click();
       await page
@@ -70,7 +72,7 @@ suite.define(() => {
       await page.reload();
       await gateway.waitForRequest("skills.library.list");
       await gateway.waitForRequest("skills.search");
-      await gateway.resolveDeferred("skills.search", { results: [] });
+      await gateway.resolveDeferred("skills.search");
       await gateway.resolveDeferred("skills.library.list", { ...accepted, entries: [] });
       await empty.waitFor();
       expect(await gateway.getRequests("skills.install")).toHaveLength(0);
