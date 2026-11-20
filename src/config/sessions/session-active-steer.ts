@@ -2,7 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { captureReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.state.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 
 /** The session owner binds steering to one existing backend, never its successor. */

@@ -151,8 +151,9 @@ a terminal result no longer blocks a new request.
 
 This surface is disabled by default. Set `gateway.sessionControl.steeringEnabled`
 to `true` to admit authenticated human steering. Publication-reader access does
-not enable it. Disabling the setting retires pending steering admissions, even
-if it is reenabled before they resume.
+not enable it. The opt-in is checked when each request starts. Disabling the
+setting denies new requests; it does not revoke a request already admitted.
+Retries pass through the same admission check and retain the original message ID.
 
 If a hook redacts accepted input and no keyed request fingerprint is available,
 the original delivery cannot be established. Keep the original message ID; a
