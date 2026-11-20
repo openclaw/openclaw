@@ -13,13 +13,13 @@ import {
   type PreparedSessionSourceEffect,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
-import { resolveStateDir } from "../../config/state-dir.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { idleIoPriorityArgv } from "../../process/idle-io-priority.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
+import { localWorkspaceProjectionRoot } from "./local-workspace-paths.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { captureInitialLocalWorkspaceManifest } from "./workspace-manifest-worker.js";
@@ -112,10 +112,6 @@ async function configureProjectionFetch(
       options,
     );
   }
-}
-
-export async function localWorkspaceProjectionRoot(env?: NodeJS.ProcessEnv) {
-  return path.join(await fs.realpath(resolveStateDir(env)), "worktree-projections");
 }
 
 export async function localWorkspaceProjectionPath(

@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
+import { setImmediate } from "node:timers/promises";
 import { listAgentIds } from "../../agents/agent-scope-config.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
-import { recentWorktreeTemplates } from "../../agents/worktrees/run-end-lifecycle.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { localWorkspaceProjectionRoot } from "./local-workspace-paths.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -19,9 +20,6 @@ export async function prewarmLocalWorkspaceTemplates(params: {
   const { prewarmRecentManagedTemplates } =
     await import("../../agents/worktrees/template-prewarm.js");
   const managedBases = await prewarmRecentManagedTemplates(params);
-  if (await params.shouldDefer?.()) {
-    return;
-  }
   const { signal } = params;
   const commitGuard = () => {
     signal.throwIfAborted();
@@ -30,13 +28,18 @@ export async function prewarmLocalWorkspaceTemplates(params: {
     }
   };
   const env = process.env;
+  const { recentWorktreeTemplates } = await import("../../agents/worktrees/run-end-lifecycle.js");
   const recipes = [...recentWorktreeTemplates(env).values()].filter(
     (recipe) => recipe.request.sourceOnly,
   );
   if (!recipes.length) {
     return;
   }
-  const { localWorkspaceProjectionRoot } = await import("./local-workspace-checkout.js");
+  // Keep discovery and sandbox preparation on separate event-loop turns.
+  await setImmediate();
+  if (await params.shouldDefer?.()) {
+    return;
+  }
   const templateRoot = await localWorkspaceProjectionRoot(env);
   const visited = new Set<string>();
   for (const agentId of listAgentIds(config)) {
