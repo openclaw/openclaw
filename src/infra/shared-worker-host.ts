@@ -370,8 +370,13 @@ export class HostedWorkerEndpoint extends EventEmitter implements RetainedNative
   }
 
   stop() {
-    if (this.stopped.operation.read().status === "rejected") {
+    const status = this.stopped.operation.read().status;
+    if (status === "rejected" || (this.executionStopped && status !== "fulfilled")) {
       this.stopped = createRetainedOperation<void>(() => this.service());
+      if (this.executionStopped) {
+        // A retry after the physical join has nothing left to stop.
+        this.stopped.resolve();
+      }
     }
     if (!this.stopRequested && !this.executionStopped) {
       this.stopRequested = true;

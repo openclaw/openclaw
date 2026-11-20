@@ -191,3 +191,16 @@ it("fails endpoints and frees the slot when the host constructor is refused", as
   expect(outcome.error?.message).toMatch(/^Shared worker host failed:/);
   expect(claimsSharedHostSlot(sqliteStore, "sqlite-store:agent")).toBe(true);
 });
+
+it("settles a retried stop that was rejected before the host joined", async () => {
+  initializeGatewayResourceProfile({ profile: "lean" });
+  const agent = carrier("sqlite-store:agent");
+  await agent.started;
+  // The supervisor could not confirm exit, then the physical join arrived later.
+  agent.endpoint.retiring("cancelled");
+  const first = agent.endpoint.stop();
+  agent.endpoint.rejectStop(new Error("synthetic supervisor loss"));
+  expect(first.read().status).toBe("rejected");
+  agent.endpoint.finish(1, new Error("synthetic join"));
+  expect(agent.endpoint.stop().read().status).toBe("fulfilled");
+});
