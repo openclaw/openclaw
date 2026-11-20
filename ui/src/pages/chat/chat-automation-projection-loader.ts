@@ -17,7 +17,9 @@ function scheduler(value: unknown) {
 /** Dispatch only: the deferred projector independently authenticates the call and its terminal result. */
 export function hasAutomationActivity(message: unknown): boolean {
   const m = asOptionalRecord(message);
-  if (!m) return false;
+  if (!m) {
+    return false;
+  }
   const cached = getMessageDerivations(m);
   return (cached.automationActivity ??=
     scheduler(m) ||

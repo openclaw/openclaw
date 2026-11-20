@@ -67,7 +67,9 @@ export async function applyOlderHistoryPage({
     readerIntent && messages.some(hasAutomationActivity)
       ? await loadAutomationProjection()
       : undefined;
-  if (!isCurrent()) return undefined;
+  if (!isCurrent()) {
+    return undefined;
+  }
   const projection = getChatSessionProjection(state);
   const pendingRunIds = projection.entries.flatMap((entry) =>
     entry.pending && entry.identity?.role === "user" && entry.pendingRunId

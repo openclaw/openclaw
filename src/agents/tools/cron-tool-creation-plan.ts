@@ -136,7 +136,7 @@ export function createCronCreationPlans(onePlanPerTurn = false) {
       return {
         // An evicted plan is never restored; release only the original reservation.
         release: () => slots.add(slotId),
-        result(result: unknown): AutomationCreationResult {
+        result: (result: unknown): AutomationCreationResult => {
           const jobId = automationJobResultId(result);
           return {
             type: "automation_creation_result",

@@ -89,7 +89,9 @@ const compactCronJobsProjection: CronJobsProjection<CronCompactJob> = {
   read: (client, params, options) =>
     readCronInventory(client, { ...params, compact: true }, options),
   applyRuntime: (state, index, event) => {
-    if (state.cronJobsSortBy !== "name") return false;
+    if (state.cronJobsSortBy !== "name") {
+      return false;
+    }
     state.cronJobs = state.cronJobs.with(
       index,
       applyCompactCronRuntime(state.cronJobs[index]!, event),

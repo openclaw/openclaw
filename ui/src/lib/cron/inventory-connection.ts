@@ -114,8 +114,9 @@ export function readCronRuntimeEvent(payload: unknown): Omit<Runtime, "revision"
     typeof payload.job.id !== "string" ||
     payload.jobId !== payload.job.id ||
     typeof payload.job.updatedAtMs !== "number"
-  )
+  ) {
     return undefined;
+  }
   // SAFETY: The authenticated cron publisher owns these bounded runtime fields.
   const event = payload as Omit<Runtime, "revision">;
   return {
@@ -135,7 +136,9 @@ export function receiveCronInventoryEvent(client: GatewayBrowserClient, event: G
     invalidateCronInventory(client);
   } else if (owner.supported && event.event === "cron") {
     const parsed = readCronRuntimeEvent(event.payload);
-    if (!parsed) return;
+    if (!parsed) {
+      return;
+    }
     const runtime = { ...parsed, revision: ++owner.runtimeRevision };
     owner.runtime.delete(runtime.jobId);
     owner.runtime.set(runtime.jobId, runtime);
