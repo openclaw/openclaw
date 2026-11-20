@@ -1,10 +1,14 @@
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { restoreOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
-import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
+import {
+  isPairedDeviceTokenIdentityCurrent,
+  listApprovedPairedDeviceRoles,
+} from "../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
@@ -155,13 +159,29 @@ async function restoreGatewayOperatorSnapshot(params: {
           )
         : [];
     if (snapshot.device) {
-      if (!isPairedDeviceTokenIdentityCurrent(paired ?? null, "operator", snapshot.device, [])) {
+      const tokenCurrent = isPairedDeviceTokenIdentityCurrent(
+        paired ?? null,
+        "operator",
+        snapshot.device,
+        [],
+      );
+      const pairedProxyCurrent =
+        !principal &&
+        snapshot.authPolicy?.authMethod === "trusted-proxy" &&
+        paired &&
+        paired.deviceId === snapshot.device.deviceId &&
+        snapshot.device.key === sha256Hex(paired.publicKey) &&
+        listApprovedPairedDeviceRoles(paired).includes("operator") &&
+        !paired.tokens?.operator?.revokedAtMs;
+      if (!tokenCurrent && !pairedProxyCurrent) {
         throw new GatewayOperatorRecoveryAuthorizationError();
       }
-      scopes = intersectOperatorScopes(scopes, [
-        ...(paired?.tokens?.operator?.scopes ?? []),
-        ...identityScopes,
-      ]);
+      if (tokenCurrent) {
+        scopes = intersectOperatorScopes(scopes, [
+          ...(paired?.tokens?.operator?.scopes ?? []),
+          ...identityScopes,
+        ]);
+      }
     } else if (snapshot.authPolicy?.authMethod === "tailscale") {
       scopes = intersectOperatorScopes(scopes, identityScopes);
     }

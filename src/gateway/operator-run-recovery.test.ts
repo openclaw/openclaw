@@ -501,13 +501,15 @@ describe("scheduled authenticated operator source", () => {
   it("does not adopt an incidental paired token for tokenless trusted-proxy ingress", () =>
     withRecovery(
       async (fixture) => {
-        expect(fixture.snapshot.device).toBeUndefined();
+        expect(fixture.snapshot.device).toMatchObject({ deviceId: "recovery-device" });
         using restored = await restoreFixture(fixture);
 
         expect(
           (await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" })).ok,
         ).toBe(true);
         expectCurrent(restored.authority);
+        using next = await restoreFixture(fixture);
+        expectCurrent(next.authority);
       },
       { tokenlessDevice: true },
     ));

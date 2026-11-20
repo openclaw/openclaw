@@ -481,7 +481,7 @@ export async function prepareGatewayOperatorRunAuthority(
       assertCurrent,
     };
     const { snapshot: recoverySnapshot, unavailableReason: recoverySnapshotUnavailableReason } =
-      captureGatewayOperatorRecoverySnapshot({
+      await captureGatewayOperatorRecoverySnapshot({
         client,
         authority: admission,
         modelPolicy,

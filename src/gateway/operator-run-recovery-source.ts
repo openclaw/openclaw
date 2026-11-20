@@ -1,3 +1,4 @@
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -5,6 +6,7 @@ import {
 import { captureOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
 import type { PreparedOperatorModelPolicy } from "../agents/operator-model-policy.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import type { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import { isBrowserOperatorUiClient } from "../utils/message-channel.js";
@@ -68,7 +70,7 @@ export function captureQueuedOperatorRecoverySource(
 }
 
 /** Capture only handshake-attested input; internal callers cannot manufacture a durable source. */
-export function captureGatewayOperatorRecoverySnapshot(params: {
+export async function captureGatewayOperatorRecoverySnapshot(params: {
   client: GatewayClient;
   authority: Pick<
     AdmittedRunOperatorAuthority,
@@ -77,9 +79,10 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
   modelPolicy: PreparedOperatorModelPolicy | undefined;
   identity: Awaited<ReturnType<typeof prepareUserProfileIdentity>>;
   config: OpenClawConfig;
-}):
+}): Promise<
   | { snapshot: OperatorRunRecoverySnapshot; unavailableReason?: undefined }
-  | { snapshot?: undefined; unavailableReason: OperatorRecoveryUnavailableReason } {
+  | { snapshot?: undefined; unavailableReason: OperatorRecoveryUnavailableReason }
+> {
   const { client, authority, identity } = params;
   const remote = client.internal?.remoteIngressPrincipal;
   if (remote) {
@@ -133,9 +136,18 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
   if (authority.gatewayAccessGrant === undefined) {
     return { unavailableReason: "no-grant" };
   }
-  const device = client.internal?.operatorDeviceTokenIdentity ?? undefined;
-  if (client.connect.device && client.internal?.operatorDeviceTokenIdentity === undefined) {
+  const sourceDevice = client.connect.device;
+  const tokenDevice = client.internal?.operatorDeviceTokenIdentity;
+  let device = tokenDevice ?? undefined;
+  if (sourceDevice && tokenDevice === undefined) {
     return { unavailableReason: "device-no-token" };
+  }
+  if (sourceDevice && tokenDevice === null && !ocid && authPolicy.authMethod === "trusted-proxy") {
+    const paired = await loadPairedDevicePairingStoreRecordReadOnly(sourceDevice.id);
+    if (paired) {
+      // Proxy authentication may not issue a token, but an existing pairing still bounds later work.
+      device = { deviceId: sourceDevice.id, key: sha256Hex(paired.publicKey) };
+    }
   }
   const sharedGeneration = client.usesSharedGatewayAuth
     ? client.sharedGatewaySessionGeneration
