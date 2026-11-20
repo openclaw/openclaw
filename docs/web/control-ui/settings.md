@@ -352,7 +352,9 @@ editor with plugin configuration and editable **Permissions** controls; Back ret
 to the overview.
 Existing `#configuration` links still open the editor. Local controls and the
 installed README remain available when optional ClawHub metadata cannot load.
-The catalog shows featured plugins and category shelves. Within each category,
+The **Featured** shelf and its **View all** list keep ClawHub’s curated order.
+Plugins already on this Gateway show **Installed** instead of **Install**, even
+when disabled. Within each category,
 ClawHub's selected priorities appear first, followed by remaining plugins in
 download order. **View all** preserves that order. Computer use groups interactive
 desktop and browser control. Other and uncategorized plugins remain available
