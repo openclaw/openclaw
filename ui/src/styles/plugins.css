@@ -2696,7 +2696,6 @@
     grid-column: 1 / -1;
   }
 
-  .plugin-catalog-detail--rail .plugin-catalog-detail__icon,
   .plugin-catalog-detail--rail .plugin-catalog-detail__icon > span {
     width: 64px;
     height: 64px;
@@ -2785,7 +2784,6 @@
   }
 
   .plugin-catalog-detail--rail .plugin-catalog-detail__summary {
-    font-size: 15px;
     line-height: 1.55;
   }
 
@@ -2803,11 +2801,6 @@
   }
 
   /* Touch: small text links keep their look and gain a finger-sized area. */
-  .plugin-catalog-detail--rail .plugins-settings-breadcrumb__parent {
-    margin-block: -8px;
-    padding-block: 8px;
-  }
-
   .plugin-catalog-detail__readme-toggle {
     margin: -2px 0 -8px;
     padding: 8px 14px 8px 0;
@@ -2821,16 +2814,14 @@
     margin-inline: -4px;
   }
 
-  .plugin-metadata__audit-link {
-    margin-block: -8px;
-    padding-block: 8px;
-  }
-
   .plugin-metadata__link {
     margin-block: -7px;
     padding-block: 7px;
   }
 
+  /* Keep the existing touch area for short links and the switch. */
+  .plugin-catalog-detail--rail .plugins-settings-breadcrumb__parent,
+  .plugin-metadata__audit-link,
   .plugin-catalog-detail__enabled {
     margin-block: -8px;
     padding-block: 8px;
