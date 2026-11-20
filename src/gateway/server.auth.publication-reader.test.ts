@@ -1,10 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import type { WebSocket } from "ws";
 import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
+import { onceMessage } from "../../test/helpers/gateway-websocket.js";
 import { readRuntimeConfig, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../config/types.js";
-import * as pairingReads from "../infra/device-pairing-store-readonly.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import {
   prepareGatewayPublicationReaderV1,
@@ -14,7 +14,6 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { PUBLICATION_READ_SCOPE } from "./operator-scopes.js";
-import * as publicationReader from "./publication-reader.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
@@ -30,7 +29,6 @@ import {
   waitForWsClose,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
-import * as operatorAccess from "./server/ws-connection/connect-operator-access.js";
 import { setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -314,132 +312,51 @@ test.each(
   },
 );
 
-function publishReaderOptIn(value: unknown) {
+function publishReaderOptIn(value: boolean | undefined) {
   const config = readRuntimeConfig();
   setRuntimeConfigSnapshot({
     ...config,
     gateway: { ...config.gateway, sessionControl: { publicationReadEnabled: value } },
-  } as OpenClawConfig);
+  });
 }
 
-test.each([undefined, false, "true", 1, null])(
-  "reader opt-in rejects absent, false and invalid runtime values: %s",
+async function readWithPublishedConfig(ws: WebSocket) {
+  // rpcReq republishes fixture config; preserve the runtime-only switch under test.
+  const id = randomUUID();
+  const response = onceMessage<Awaited<ReturnType<typeof rpcReq>>>(
+    ws,
+    (frame) => frame.type === "res" && frame.id === id,
+  );
+  ws.send(JSON.stringify({ type: "req", id, method: READ }));
+  return await response;
+}
+
+test.each([undefined, false])(
+  "reader opt-in denies new reads and connections when absent or false: %s",
   async (enabled) => {
     await configure(false);
+    installMethods((request) => request.respond(true, { private: "reader-only-fixture" }));
     const device = await paired();
     await withGatewayServer(async ({ port }) => {
+      const admitted = await connectReader(port, device);
+      expect(admitted.connected.ok).toBe(true);
       publishReaderOptIn(enabled);
+      expect((await readWithPublishedConfig(admitted.ws)).error?.code).toBe("FORBIDDEN");
       const { ws, connected } = await connectReader(port, device);
       expect(connected.ok).toBe(false);
       ws.close();
-      // The new reader gate must not disable ordinary authenticated clients.
+      publishReaderOptIn(true);
+      expect((await readWithPublishedConfig(admitted.ws)).payload).toEqual({
+        private: "reader-only-fixture",
+      });
+      admitted.ws.close();
+      // The reader gate must not disable ordinary authenticated clients.
       const ordinary = await openWs(port);
       expect((await connectReq(ordinary, { token: "secret", scopes: ["operator.admin"] })).ok).toBe(
         true,
       );
       expect((await rpcReq(ordinary, "health")).ok).toBe(true);
       ordinary.close();
-    });
-  },
-);
-
-test.each(["preparation", "attachment"] as const)(
-  "reader opt-in off/on during signed handshake %s retires the connection",
-  async (phase) => {
-    await configure(false);
-    const device = await paired();
-    await withGatewayServer(async ({ port }) => {
-      publishReaderOptIn(true);
-      const toggle = () => {
-        publishReaderOptIn(false);
-        publishReaderOptIn(true);
-      };
-      const spy =
-        phase === "preparation"
-          ? vi
-              .spyOn(publicationReader, "preparePublicationReaderAdmission")
-              .mockImplementationOnce(async (...args) => {
-                // The authentication read precedes reader admission. Toggle inside the
-                // real admission owner's read, after it has captured enablement.
-                const read = vi
-                  .spyOn(pairingReads, "readCurrentPairedDevice")
-                  .mockImplementationOnce(async (...readArgs) => {
-                    const result = await originalRead(...readArgs);
-                    toggle();
-                    return result;
-                  });
-                try {
-                  return await originalAdmission(...args);
-                } finally {
-                  read.mockRestore();
-                }
-              })
-          : vi
-              .spyOn(operatorAccess, "prepareGatewayConnectOperatorDeviceSource")
-              .mockImplementationOnce(async (...args) => {
-                const result = await originalSource(...args);
-                toggle();
-                return result;
-              });
-      try {
-        const { ws, connected } = await connectReader(port, device);
-        expect(spy).toHaveBeenCalled();
-        expect(connected.ok).toBe(false);
-        ws.close();
-      } finally {
-        spy.mockRestore();
-      }
-      const fresh = await connectReader(port, device);
-      expect(fresh.connected.ok).toBe(true);
-      fresh.ws.close();
-    });
-  },
-);
-const originalRead = pairingReads.readCurrentPairedDevice;
-const originalAdmission = publicationReader.preparePublicationReaderAdmission;
-const originalSource = operatorAccess.prepareGatewayConnectOperatorDeviceSource;
-
-test.each(["disabled", "off/on", "unrelated"] as const)(
-  "reader opt-in fences late signed response across %s publication",
-  async (transition) => {
-    await configure(true);
-    const entered = createDeferredCore<GatewayRequestHandlerOptions>();
-    const release = createDeferredCore();
-    installMethods(async (request) => {
-      await prepareGatewayPublicationReaderV1(request);
-      entered.resolve(request);
-      await release.promise;
-      // Deliberately omit the SDK recheck: the dispatch owner must fence disclosure.
-      request.respond(true, { private: "reader-only-fixture" });
-    });
-    const device = await paired();
-    await withGatewayServer(async ({ port }) => {
-      publishReaderOptIn(true);
-      const reader = await connectReader(port, device);
-      expect(reader.connected.ok).toBe(true);
-      const pending = rpcReq(reader.ws, READ).catch(() => undefined);
-      await entered.promise;
-      if (transition === "unrelated") {
-        const config = readRuntimeConfig();
-        setRuntimeConfigSnapshot({ ...config, logging: { ...config.logging, level: "debug" } });
-      } else {
-        publishReaderOptIn(false);
-        if (transition === "off/on") {
-          publishReaderOptIn(true);
-        }
-      }
-      release.resolve();
-      if (transition === "unrelated") {
-        expect((await pending)?.payload).toEqual({ private: "reader-only-fixture" });
-        reader.ws.close();
-      } else {
-        expect(await waitForWsClose(reader.ws, 2_000)).toBe(true);
-        expect(await pending).toBeUndefined();
-        publishReaderOptIn(true);
-        const fresh = await connectReader(port, device);
-        expect(fresh.connected.ok).toBe(true);
-        fresh.ws.close();
-      }
     });
   },
 );

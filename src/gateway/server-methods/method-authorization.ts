@@ -4,6 +4,7 @@ import {
   missingScopeErrorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import {
   resolveSessionMethodScope,
@@ -72,6 +73,7 @@ export function authorizeGatewayMethod(
   ) {
     const admission = client.internal?.publicationReader;
     const allowed =
+      readRuntimeConfig().gateway?.sessionControl?.publicationReadEnabled === true &&
       isPublicationReaderCurrent(admission) &&
       !client.invalidated &&
       client.isDeviceTokenAuth === true &&
