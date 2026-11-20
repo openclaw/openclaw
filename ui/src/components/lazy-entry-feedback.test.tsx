@@ -4,6 +4,7 @@ import { onCleanup } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { showToast } from "../lib/toast.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
@@ -78,7 +79,14 @@ it("reports an agent creation import failure after closing the picker", async ()
     onCleanup(() => menus.dispose());
     menus.openAgentCreateDialog();
     const projection = projectOwner(menus, (owner) => owner);
-    return <SidebarMenusRenderer menus={menus} host={host} revision={projection.revision} />;
+    return (
+      <SidebarMenusRenderer
+        menus={menus}
+        host={host}
+        avatars={createIdentityAvatars()}
+        revision={projection.revision}
+      />
+    );
   });
   await waitForSolid(() => expect(view.container.querySelector("button")).not.toBeNull());
   view.container.querySelector<HTMLButtonElement>("button")!.click();

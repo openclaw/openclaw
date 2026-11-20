@@ -42,7 +42,7 @@ import type { AgentSettingsAccess } from "../../lib/agents/settings-access.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { thinkingLevelLabel } from "../../lib/chat/thinking-level-label.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { createIdentityAvatars } from "../../lib/identity-avatar-leases.ts";
+import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
 import {
   modelSettingFallbacks,
   modelSettingPrimary,
