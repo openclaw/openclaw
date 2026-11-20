@@ -31,7 +31,20 @@ const toolSchemaStatsCache = new WeakMap<
 >();
 
 function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChars: number }> {
-  const xmlEntries = Array.from(skillsPrompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi), (match) => {
+  // Compact catalogs (`skills_read` sessions) render one `- "<JSON name>"[: description]` line per
+  // skill, with decoded descriptions that may quote XML. XML catalogs keep descriptions escaped on
+  // their tag line, so no XML line starts with `- "`: the line shape selects the parser.
+  const compactEntries = Array.from(
+    skillsPrompt.matchAll(/^- ("(?:[^"\\\n]|\\.)*").*$/gmu),
+    ([line, quoted = '""']) => {
+      const name = (JSON.parse(quoted) as string) || "(unknown)";
+      return { name: ` ${name}`.slice(1), blockChars: line.length };
+    },
+  );
+  if (compactEntries.length > 0) {
+    return compactEntries;
+  }
+  return Array.from(skillsPrompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi), (match) => {
     const block = match[0];
     const nameStart = block.search(/<name>\s*[^<]+?\s*<\/name>/i);
     const name =
@@ -41,17 +54,6 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
     // Flatten a name-sized string before slicing so captures cannot retain the whole catalog.
     return { name: ` ${name}`.slice(1), blockChars: block.length };
   });
-  if (xmlEntries.length > 0) {
-    return xmlEntries;
-  }
-  // Compact catalogs (`skills_read` sessions) render one `- "<JSON name>"[: description]` line per skill.
-  return Array.from(
-    skillsPrompt.matchAll(/^- ("(?:[^"\\\n]|\\.)*").*$/gmu),
-    ([line, quoted = '""']) => {
-      const name = (JSON.parse(quoted) as string) || "(unknown)";
-      return { name: ` ${name}`.slice(1), blockChars: line.length };
-    },
-  );
 }
 
 function buildToolSchemaStats(

@@ -244,6 +244,11 @@ describe("rendered skills diagnostics", () => {
   it("keeps exact skill identities in the compact skills_read catalog and its report", () => {
     const names = ["release  notes", "team:deploy", "deploy (prod)", "deploy (stage)", 'say "hi"'];
     const skills = names.map((name) => createFixtureSkillEntry(name).skill);
+    // A description quoting catalog XML must not be mistaken for catalog structure.
+    skills[1] = {
+      ...skills[1]!,
+      description: "Explain <skill><name>example</name></skill> elements",
+    };
     let rendered = "";
     const systemPrompt = buildAgentSystemPrompt({
       workspaceDir: "/workspace",
@@ -253,6 +258,9 @@ describe("rendered skills diagnostics", () => {
     });
     expect(systemPrompt).toContain('- "release  notes": release notes description');
     expect(systemPrompt).toContain('- "deploy (prod)": deploy (prod) description');
+    expect(systemPrompt).toContain(
+      '- "team:deploy": Explain <skill><name>example</name></skill> elements',
+    );
     expect(systemPrompt).not.toContain("<location>");
     const report = makeReport({ systemPrompt, skillsPrompt: rendered }).skills;
     expect(report.entries.map(({ name }) => name)).toEqual(names);
