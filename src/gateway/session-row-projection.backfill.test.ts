@@ -13,6 +13,7 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { derivePersistedSessionLifecyclePatch } from "../config/sessions/session-run-lifecycle-projection.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
@@ -775,9 +776,11 @@ it("backfills terminal fallback models and clears previews when the newest messa
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot(cfg);
     const { target, query } = seedTranscriptRow("fallback", {
+      ...derivePersistedSessionLifecyclePatch({
+        event: { runId: "execution", clientRunId: " terminal-run ", ts: 1, data: { phase: "end" } },
+        currentLifecycleGeneration: "test",
+      }),
       displayName: "Existing title",
-      status: "done",
-      lastRunId: "terminal-run",
       providerOverride: "unit-test",
       modelOverride: "selected",
       fallbackNotice: {
