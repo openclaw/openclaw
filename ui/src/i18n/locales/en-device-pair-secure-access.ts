@@ -12,7 +12,7 @@ const enDevicePairSecureAccess = {
           "Your phone can’t reach OpenClaw yet. Right now it only accepts connections from this computer.",
         tailscaleTitle: "Use Tailscale (recommended)",
         tailscaleSteps:
-          "Encrypted from anywhere, and OpenClaw stays private to this computer. Install Tailscale on this computer and your phone and sign in on both. Then run this command and restart the Gateway.",
+          "The Gateway still listens only on this computer. Tailscale Serve gives permitted devices on your tailnet encrypted access. Install Tailscale on this computer and your phone and sign in on both. Then run this command and restart the Gateway.",
         tailscaleGuide: "Tailscale setup guide",
         lanTitle: "Use your home Wi‑Fi instead",
         lanWarning:
