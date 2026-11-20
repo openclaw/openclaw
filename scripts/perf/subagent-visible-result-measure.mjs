@@ -46,7 +46,7 @@ registerHooks({
 });
 const stores = await Promise.all([...sources.keys()].map((url) => import(url)));
 const { settleConsumedRequesterDelivery } =
-  await import("../../src/agents/subagents/completion/subagent-completion-notice.ts");
+  await import("../../src/agents/subagents/completion/subagent-completion-admission.store.ts");
 const { resolveRequesterDeliveryOutcome } =
   await import("../../src/agents/subagents/registry/subagent-delivery-state.ts");
 const { subagentRuns } =
@@ -186,7 +186,9 @@ try {
           createHash("sha256").update(source).digest("hex"),
         ),
         noticeHash: createHash("sha256")
-          .update(readFileSync("src/agents/subagents/completion/subagent-completion-notice.ts"))
+          .update(
+            readFileSync("src/agents/subagents/completion/subagent-completion-admission.store.ts"),
+          )
           .digest("hex"),
         results,
       },

@@ -7,7 +7,7 @@ import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { reserveSubagentCompletionControllerSource } from "../announce/subagent-announce-controller-source.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
-import { settleConsumedRequesterDelivery } from "../completion/subagent-completion-notice.js";
+import { settleConsumedRequesterDelivery } from "../completion/subagent-completion-admission.store.js";
 import {
   matchesSubagentChildSessionOwner,
   resolveRecordedRequester,

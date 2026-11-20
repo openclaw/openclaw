@@ -1,5 +1,5 @@
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { recordRequiredCompletionNotice } from "../completion/subagent-completion-notice.js";
+import { recordRequiredCompletionNotice } from "../completion/subagent-completion-admission.store.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import {

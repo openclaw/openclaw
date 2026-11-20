@@ -74,9 +74,12 @@ export function registerLifecycleDeliveryReceiptCases({
         requesterDelivery: { state: "consumed", runId: "requester-continuation", at: Date.now() },
       },
     });
+    subagentRuns.set(entry.runId, entry);
+    onTestFinished(() => subagentRuns.clear());
     const runSubagentAnnounceFlow = vi.fn<AnnounceFlow>(async () => "delivered");
     const controller = createLifecycleController({
       entry,
+      runs: subagentRuns,
       runSubagentAnnounceFlow,
       maybeWakeRequesterAfterAllChildrenSettled: async () => false,
     });
@@ -125,6 +128,8 @@ export function registerLifecycleDeliveryReceiptCases({
     "records private transcript consumption before cancellation (consumed: %s)",
     async (consumed) => {
       const entry = createRunEntry({ completionTarget: "parent", expectsCompletionMessage: true });
+      subagentRuns.set(entry.runId, entry);
+      onTestFinished(() => subagentRuns.clear());
       const releaseRequester = createDeferredCore();
       const receiptStarted = createDeferredCore();
       const releaseReceipt = createDeferredCore();
@@ -166,6 +171,7 @@ export function registerLifecycleDeliveryReceiptCases({
       });
       const controller = createLifecycleController({
         entry,
+        runs: subagentRuns,
         beforeWrite: async ({ postimages }) => {
           if (
             postimages.get(entry.runId)?.delivery?.requesterDelivery?.state === "consumed" &&
