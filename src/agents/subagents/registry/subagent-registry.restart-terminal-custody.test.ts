@@ -772,41 +772,84 @@ it("7: after a crash, a delegate whose child session entry is missing gets one l
   expect(durable?.delivery).toMatchObject({ status: "delivered" });
 });
 
-it("7: with no requester binding left, a missing child session entry is recorded unresolved: no notice, no root resume", async () => {
+const UNBOUND = [
   // The requester's session is gone too: the row names a requester nothing can admit.
-  const delegate = productionDelegate("unbound");
+  { reason: "requester-session-missing", requester: {}, writesParent: false },
+  // The row never recorded its requester's agent, so no requester admission can match it.
+  {
+    reason: "requester-agent-unresolved",
+    requester: { requesterAgentId: undefined },
+    writesParent: true,
+  },
+] as const;
+
+it.each(UNBOUND)(
+  "7: with no requester binding left ($reason), a missing child session entry is recorded unresolved: no notice, no root resume",
+  async ({ reason, requester, writesParent }) => {
+    if (writesParent) {
+      await writeParentSession();
+    }
+    const delegate = productionDelegate(`unbound-${reason}`);
+    const child = await addRunningChild(delegate.runId, {
+      childSessionKey: delegate.childSessionKey,
+      ...requester,
+    });
+    await removeChildSession(child);
+    await shutDownGracefully([child]);
+    const messages = recordRequesterMessages();
+    const registryWarn = vi.spyOn(subagentRegistryLog, "warn");
+
+    await restartGateway();
+    await resumeRoots();
+
+    expect(messages).toEqual([]);
+    expect(fixture.announce).not.toHaveBeenCalled();
+    expect(fixture.gateway).not.toHaveBeenCalled();
+    const durable = loadSubagentRegistryFromSqlite().get(delegate.runId);
+    expectGracefullyStopped(durable);
+    expect(durable).toMatchObject({
+      continuationLineageMissing: { recordedAt: expect.any(Number), unresolved: reason },
+      cleanupCompletedAt: expect.any(Number),
+      delivery: { status: "not_required", disposition: "intentional_non_delivery" },
+    });
+    expect(registryWarn).toHaveBeenCalledWith(
+      "continuation delegate restart lineage missing; outcome left unresolved",
+      {
+        runId: delegate.runId,
+        electionId: delegate.electionId,
+        childSessionKey: delegate.childSessionKey,
+        requesterSessionKey: parent,
+        reason,
+      },
+    );
+  },
+);
+
+it("7: a delegate whose delivery already failed for good keeps that outcome: no lineage decision, no notice", async () => {
+  await writeParentSession();
+  const delegate = productionDelegate("given-up");
+  const endedAt = Date.now() - 500;
   const child = await addRunningChild(delegate.runId, {
     childSessionKey: delegate.childSessionKey,
+    endedReason: "subagent-error",
+    completion: { required: true, resultText: null, capturedAt: endedAt },
+    delivery: { status: "failed", lastError: "requester unreachable" },
+    execution: {
+      status: "terminal",
+      startedAt: endedAt - 1_000,
+      endedAt,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      outcome: { status: "error", error: "Gateway stopped" },
+    },
   });
   await removeChildSession(child);
-  await shutDownGracefully([child]);
   const messages = recordRequesterMessages();
-  const registryWarn = vi.spyOn(subagentRegistryLog, "warn");
 
   await restartGateway();
   await resumeRoots();
 
   expect(messages).toEqual([]);
-  expect(fixture.announce).not.toHaveBeenCalled();
-  expect(fixture.gateway).not.toHaveBeenCalled();
   const durable = loadSubagentRegistryFromSqlite().get(delegate.runId);
-  expectGracefullyStopped(durable);
-  expect(durable).toMatchObject({
-    continuationLineageMissing: {
-      recordedAt: expect.any(Number),
-      unresolved: "requester-session-missing",
-    },
-    cleanupCompletedAt: expect.any(Number),
-    delivery: { status: "not_required", disposition: "intentional_non_delivery" },
-  });
-  expect(registryWarn).toHaveBeenCalledWith(
-    "continuation delegate restart lineage missing; outcome left unresolved",
-    {
-      runId: delegate.runId,
-      electionId: delegate.electionId,
-      childSessionKey: delegate.childSessionKey,
-      requesterSessionKey: parent,
-      reason: "requester-session-missing",
-    },
-  );
+  expect(durable?.continuationLineageMissing).toBeUndefined();
+  expect(durable?.delivery).toMatchObject({ status: "failed" });
 });

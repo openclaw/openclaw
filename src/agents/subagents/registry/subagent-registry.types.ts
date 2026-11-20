@@ -272,10 +272,7 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
    */
   continuationLineageMissing?: {
     recordedAt: number;
-    unresolved?:
-      | "requester-agent-unresolved"
-      | "requester-session-missing"
-      | "requester-session-archived";
+    unresolved?: "requester-agent-unresolved" | "requester-session-missing";
   };
   /** Continuation: producer span carrier available to child completion paths. */
   traceparent?: string;

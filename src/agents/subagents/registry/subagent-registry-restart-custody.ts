@@ -134,18 +134,24 @@ async function settleOwnerlessContinuationChildren(): Promise<SubagentRunRecord[
 
 type LineageMissing = NonNullable<SubagentRunRecord["continuationLineageMissing"]>;
 
-/** A delegate a Gateway restart ended whose owed outcome has no lineage decision yet. */
+/**
+ * A delegate a Gateway restart ended whose owed outcome has no lineage decision yet. The delivery
+ * states are those restart discovery admits (session-restart-resume-discovery.ts); a delivery that
+ * already failed for good keeps that recorded outcome.
+ */
 function owesRestartOutcome(entry: SubagentRunRecord): boolean {
   const { outcome } = entry.execution;
   const error = outcome?.status === "error" ? outcome.error : undefined;
-  const delivery = entry.delivery?.status;
+  const delivery = entry.delivery;
   return (
     entry.drainsContinuationDelegateQueue === true &&
     entry.continuationLineageMissing === undefined &&
     !entry.suppressCompletionDelivery &&
     entry.execution.status === "terminal" &&
     (error === SUBAGENT_GATEWAY_STOPPED_ERROR || error === SUBAGENT_RESTART_INTERRUPTED_ERROR) &&
-    (delivery === "pending" || delivery === "in_progress" || delivery === "failed")
+    (delivery?.status === "pending" ||
+      delivery?.status === "in_progress" ||
+      delivery?.disposition === "retryable")
   );
 }
 
@@ -156,8 +162,11 @@ function resolveStorePath(agentId: string, recorded?: string): string {
 }
 
 /**
- * Undefined while the child session entry exists. Otherwise the binding restart completion
- * recovery admits through: the recorded requester agent and its current, unarchived session.
+ * Undefined while the child session entry exists. Otherwise whether the row still binds its
+ * requester: the recorded requester agent resolves and its session exists. Accepted edge: an
+ * archived requester, or one outside the restart's resume scope, stays bound; restart completion
+ * recovery defers its outcome as it does every child's, and a later restart that admits the
+ * requester delivers the lineage notice.
  */
 async function checkRestartLineage(
   entry: SubagentRunRecord,
@@ -185,11 +194,7 @@ async function checkRestartLineage(
     storePath: resolveStorePath(requesterAgentId, entry.requesterStorePath),
     projection: "list",
   });
-  return !requester
-    ? { unresolved: "requester-session-missing" }
-    : requester.archivedAt !== undefined
-      ? { unresolved: "requester-session-archived" }
-      : {};
+  return requester ? {} : { unresolved: "requester-session-missing" };
 }
 
 /** Records each owed restart outcome whose lineage is missing, once per row. */
@@ -200,7 +205,7 @@ async function recordMissingContinuationLineage(): Promise<SubagentRunRecord[]> 
       try {
         return { entry, lineage: await checkRestartLineage(entry) };
       } catch (error) {
-        // Undecided: the outcome keeps its ordinary wording, and the next activation checks again.
+        // Undecided: the owed outcome goes out with its ordinary wording.
         log.warn("failed to check a continuation delegate's restart lineage", {
           runId: entry.runId,
           error,
@@ -248,14 +253,19 @@ async function recordMissingContinuationLineage(): Promise<SubagentRunRecord[]> 
   });
   for (const entry of recorded) {
     const reason = entry.continuationLineageMissing?.unresolved;
+    const facts = {
+      runId: entry.runId,
+      electionId: parseContinuationChildRunId(entry.runId)?.recordId,
+      childSessionKey: entry.childSessionKey,
+      requesterSessionKey: entry.requesterSessionKey,
+    };
     if (reason) {
       log.warn("continuation delegate restart lineage missing; outcome left unresolved", {
-        runId: entry.runId,
-        electionId: parseContinuationChildRunId(entry.runId)?.recordId,
-        childSessionKey: entry.childSessionKey,
-        requesterSessionKey: entry.requesterSessionKey,
+        ...facts,
         reason,
       });
+    } else {
+      log.info("continuation delegate restart lineage missing; its outcome says so", facts);
     }
   }
   return recorded;
@@ -263,8 +273,9 @@ async function recordMissingContinuationLineage(): Promise<SubagentRunRecord[]> 
 
 /**
  * Runs on Gateway activation, before restart resume discovers what each requester is owed and
- * before any delivery starts. Best effort: a failed read or write is logged and the rows wait
- * for the next activation, so it never blocks the restart resume.
+ * before any delivery starts. Best effort, never blocking the restart resume: a failed settle
+ * write is logged and those rows wait for the next activation; a failed lineage read or write is
+ * logged and the outcome keeps its ordinary wording.
  */
 export async function settleContinuationRestartCustody(
   startSubagentAnnounceCleanupFlow: (entry: SubagentRunRecord) => boolean,
