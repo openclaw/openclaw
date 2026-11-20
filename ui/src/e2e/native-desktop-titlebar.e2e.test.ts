@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   dockChatSidePanel,
   focusChatSidePanel,
@@ -288,6 +292,46 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
   await namedButton(caption, "Minimize window").click({ trial: true });
 }
 
+async function keepsHomeActionsClearOfCaption(page: Page, platform: "linux" | "windows") {
+  await installWindowChrome(page, platform);
+  // Home opens the side dock from a conversation, and stays disabled until the
+  // Gateway advertises chat history.
+  const sessionKey = "agent:main:work";
+  await installMockGateway(page, {
+    sessionKey,
+    sessions: [{ key: sessionKey, label: "Main", kind: "direct", updatedAt: Date.now() }],
+    featureMethods: [
+      "chat.metadata",
+      "chat.startup",
+      "chat.history",
+      "chat.send",
+      "sessions.companion.state",
+      "sessions.create",
+    ],
+    historyMessages: [{ role: "assistant", content: "Home panel caption regression." }],
+  });
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+  await page.locator(".chat-pane__header").waitFor();
+  await page.locator(".sidebar-footer-bar__home").click();
+  await page.locator(".assistant-panel--right").waitFor();
+  const actions = page.locator(".assistant-panel-actions button:visible");
+  const caption = page.locator(".openclaw-window-controls");
+  await Promise.all([actions.first().waitFor(), caption.waitFor()]);
+  const captionBox = (await caption.boundingBox())!;
+  for (const action of await actions.all()) {
+    const box = (await action.boundingBox())!;
+    const label = await action.getAttribute("aria-label");
+    const overlaps =
+      box.x < captionBox.x + captionBox.width &&
+      box.x + box.width > captionBox.x &&
+      box.y < captionBox.y + captionBox.height &&
+      box.y + box.height > captionBox.y;
+    expect(overlaps, `${label} overlaps the window controls`).toBe(false);
+    // A trial click fails when another element, such as a caption button, receives the pointer.
+    await action.click({ trial: true });
+  }
+}
+
 async function alignsNativeHeaders(
   page: Page,
   host: "web" | "macos" | "tauri-linux" | "tauri-macos",
@@ -466,6 +510,14 @@ suite.define(() => {
       { viewport: { width, height: 900 }, locale: "en-US", serviceWorkers: "block" },
       ({ page }) => keepsWindowControlsClear(page, platform, width),
     ),
+  );
+  it.each(["linux", "windows"] as const)(
+    "keeps the right-docked Home actions clear of the %s window controls",
+    (platform) =>
+      suite.withPage(
+        { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers: "block" },
+        ({ page }) => keepsHomeActionsClearOfCaption(page, platform),
+      ),
   );
   it.each(["web", "macos", "tauri-linux", "tauri-macos"] as const)(
     "aligns the %s rail, panel header, and content history row",
