@@ -63,9 +63,11 @@ export function oweServiceDefinitionRefresh(
   result: UpdateRunResult,
   serviceEnv: NodeJS.ProcessEnv,
   assertCurrent: () => void,
+  failure?: string,
 ): void {
   const warning =
     `Gateway service still points outside the updated install ${result.root}. ` +
+    (failure ? `Automatic service staging failed: ${failure}. ` : "") +
     `Run \`${formatCliCommand("openclaw gateway install --force", serviceEnv)}\`, then \`${formatCliCommand("openclaw gateway restart", serviceEnv)}\`.`;
   recordServiceReconciliationWarning(result, serviceEnv, warning);
   assertCurrent();

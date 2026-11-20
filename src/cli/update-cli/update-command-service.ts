@@ -47,6 +47,7 @@ import {
   GatewayRestartHealthError,
   isPackageManagerUpdateMode,
   runUpdatedInstallGatewayCommand,
+  stageUpdatedInstallGatewayService,
 } from "./update-command-service-command.js";
 import type { UpdateServiceRestartParams } from "./update-command-service-context-types.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
@@ -450,12 +451,11 @@ export async function maybeRestartService(
         );
       }
     }
-    // A service that still starts the checkout never selects a pending release (launchd starts
-    // what it loads, so --no-restart leaves the definition alone).
+    // Rebind the next start without activating it or replacing the serving checkout's files.
     const pendingRelease =
       activation.result.mode === "git" && readPackageReleaseSlotSync(activation.result.root ?? "");
     if (pendingRelease && (await serviceUsesUpdatedRoot()) === false) {
-      oweServiceDefinitionRefresh(run, activation.result, activation.serviceEnv, assertCurrent);
+      await stageUpdatedInstallGatewayService(activation, preserveDefinition);
     }
     return "ok";
   }

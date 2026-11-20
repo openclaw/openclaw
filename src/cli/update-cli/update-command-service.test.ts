@@ -910,8 +910,8 @@ describe("maybeRestartService", () => {
     expect(errorSpy).toHaveBeenCalledWith("service management skipped: ownership conflict");
   });
 
-  it.for(["checkout", "launcher"] as const)(
-    "owes the service refresh when --no-restart leaves the service on the %s",
+  it.for(["checkout", "launcher", "stage-failed"] as const)(
+    "stages the release launcher without restarting when --no-restart leaves the service on the %s",
     async (serviceStarts, { onTestFinished }) => {
       const home = await fs.realpath(tempDirs.make("update-git-no-restart-"));
       const prefix = path.join(home, ".openclaw", "git-install");
@@ -927,18 +927,26 @@ describe("maybeRestartService", () => {
       }
       await publishGitRelease({ prefix, releaseRoot, trial: true, pending: true });
       const entry =
-        serviceStarts === "checkout"
-          ? path.join(checkout, "dist", "index.js")
-          : path.join(prefix, "openclaw-launcher.mjs");
-      const service = vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(
-        createMockGatewayService({
-          isLoaded: async () => true,
-          readCommand: async () => ({
-            programArguments: [process.execPath, entry, "gateway"],
-            environment: { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
-          }),
+        serviceStarts === "launcher"
+          ? path.join(prefix, "openclaw-launcher.mjs")
+          : path.join(checkout, "dist", "index.js");
+      const managedService = createMockGatewayService({
+        isLoaded: async () => true,
+        readCommand: async () => ({
+          programArguments: [process.execPath, entry, "gateway"],
+          environment: { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
         }),
-      );
+        ...(serviceStarts === "stage-failed"
+          ? {
+              stage: vi.fn(async () => {
+                throw new Error("definition is read-only");
+              }),
+            }
+          : {}),
+      });
+      const service = vi
+        .spyOn(gatewayService, "resolveGatewayService")
+        .mockReturnValue(managedService);
       onTestFinished(() => service.mockRestore());
       const result: UpdateRunResult = {
         status: "ok",
@@ -960,8 +968,27 @@ describe("maybeRestartService", () => {
         }),
       ).resolves.toBe("ok");
 
+      if (serviceStarts === "launcher") {
+        expect(managedService.stage).not.toHaveBeenCalled();
+      } else {
+        expect(managedService.stage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            programArguments: expect.arrayContaining([
+              path.join(prefix, "openclaw-launcher.mjs"),
+              "gateway",
+              "--port",
+              "18789",
+            ]),
+            preserveAutoStart: true,
+          }),
+        );
+      }
+      expect(managedService.install).not.toHaveBeenCalled();
+      expect(managedService.restart).not.toHaveBeenCalled();
+      expect(managedService.start).not.toHaveBeenCalled();
+      expect(mocks.runUpdatedInstallGatewayCommand).not.toHaveBeenCalled();
       expect(JSON.stringify(result).includes("still points outside the updated install")).toBe(
-        serviceStarts === "checkout",
+        serviceStarts === "stage-failed",
       );
     },
   );
