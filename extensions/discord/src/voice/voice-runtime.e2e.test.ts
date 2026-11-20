@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough, type Readable } from "node:stream";
+import { PassThrough } from "node:stream";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
@@ -647,17 +647,12 @@ defineDiscordVoiceTests(
       const decodeReady = new Promise<void>((resolve) => {
         resolveDecode = resolve;
       });
-      decodeOpusStreamChunksMock.mockImplementationOnce(
-        async (
-          input: Readable,
-          callbacks: { onChunk: (pcm: Buffer, packet: Buffer) => void | Promise<void> },
-        ) => {
-          for await (const packet of input) {
-            await decodeReady;
-            await callbacks.onChunk(Buffer.alloc(96_000), packet);
-          }
-        },
-      );
+      decodeOpusStreamChunksMock.mockImplementationOnce(async (input, callbacks) => {
+        for await (const packet of input) {
+          await decodeReady;
+          await callbacks.onChunk(Buffer.alloc(96_000), packet);
+        }
+      });
       const manager = createManager(
         makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-speaker"] }),
       );

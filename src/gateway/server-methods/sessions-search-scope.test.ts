@@ -29,6 +29,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import * as sessionLists from "../session-utils-list.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
@@ -152,6 +153,21 @@ test.each(["needle", "会"])(
       }
       const client = identifiedClient(viewer);
       client.connect.scopes = ["operator.read"];
+      const prepare = vi.spyOn(sessionLists, "prepareProjectedSessionList");
+      const originalSearch = transcriptSearch.searchSessionTranscripts;
+      let batches = 0;
+      vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(
+        (params, database, filter) =>
+          originalSearch(
+            params,
+            database,
+            filter &&
+              ((keys) => {
+                batches++;
+                return filter(keys);
+              }),
+          ),
+      );
       const result = await search(requestContext(cfg), client, {
         query,
         limit: 1,
@@ -160,9 +176,152 @@ test.each(["needle", "会"])(
       expect(result.ok, result.error?.message).toBe(true);
       expect(result.payload?.results.map((hit) => hit.sessionKey)).toEqual([visible]);
       expect(result.payload).not.toHaveProperty("truncated");
+      expect(batches).toBeGreaterThan(0);
+      expect(prepare).toHaveBeenCalledTimes(batches);
     });
   },
 );
+
+test("recall batch verdicts match singleton checks over mixed physical owners", async () => {
+  await withSearchState(async () => {
+    const viewer = ensureProfileForEmail("recall-mixed@example.test").id;
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: { main: {}, work: {} },
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+      },
+      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
+      gateway: {
+        roles: {
+          default: "reader",
+          definitions: {
+            reader: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const requester = "agent:main:requester";
+    const own = await seed("main", "requester", viewer);
+    const archived = await seed("main", "archived", viewer, undefined, { archivedAt: 1 });
+    const child = await seed("main", "subagent:child", viewer, undefined, { spawnedBy: requester });
+    const foreignChild = await seed("work", "subagent:child", viewer, undefined, {
+      spawnedBy: requester,
+    });
+    const foreign = await seed("work", "visible", viewer);
+    const hidden = await seed("main", "hidden", "other-profile");
+    const cron = await seed("main", "cron:job:run:execution", viewer);
+    const incognito = await seed("main", "private", viewer, undefined, { incognito: true });
+    const phantom = "agent:main:sessions";
+    // Legacy phantom metadata has neither a durable session ID nor an update timestamp.
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: phantom },
+      JSON.parse('{"sessionId":""}'),
+    );
+    for (const agentId of ["main", "work"]) {
+      replaceSessionEntrySync(
+        { agentId, sessionKey: "global" },
+        {
+          sessionId: `${agentId}-global`,
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: viewer },
+        },
+      );
+    }
+    const keys = [
+      own,
+      archived,
+      child,
+      foreignChild,
+      foreign,
+      hidden,
+      cron,
+      incognito,
+      phantom,
+      "agent:main:incognito:absent",
+      "unknown",
+      "legacy",
+      "global",
+      "agent:main:missing",
+    ];
+    const context = requestContext(cfg);
+    const client = identifiedClient(viewer);
+    client.connect.scopes = ["operator.read"];
+    let singleton = false;
+    let targetAgentId = "main";
+    const prepare = sessionLists.prepareProjectedSessionList;
+    vi.spyOn(sessionLists, "prepareProjectedSessionList").mockImplementation((params) => {
+      if (!singleton || !params.candidateKeys) {
+        return prepare(params);
+      }
+      // Preserve the old exact-key preparation, including its scoped global selection.
+      const [key] = params.candidateKeys;
+      return prepare({
+        ...params,
+        candidateKeys: undefined,
+        key,
+        opts: { ...params.opts, ...(key === "global" ? { agentId: targetAgentId } : {}) },
+      });
+    });
+    const verdicts: Record<string, boolean[]> = {};
+    vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(
+      async (params, _database, filter) => {
+        expect(filter).toBeDefined();
+        targetAgentId = params.agentId;
+        const allowed: boolean[] = [];
+        for (const batch of singleton ? keys.map((key) => [key]) : [keys]) {
+          allowed.push(...(await filter!(batch)));
+        }
+        verdicts[params.agentId] = allowed;
+        return { hits: [], indexing: false, truncated: false };
+      },
+    );
+    for (const restriction of [
+      {},
+      { restrictToSpawned: true },
+      { sandboxed: true },
+      { visibility: "tree" as const },
+      { visibility: "self" as const },
+      { visibility: "agent" as const },
+      { visibility: "all" as const, agentToAgent: { enabled: false } },
+    ]) {
+      const recall = { requesterAgentId: "main", requesterSessionKey: requester, ...restriction };
+      singleton = true;
+      expect((await search(context, client, { query: "synthetic", recall })).ok).toBe(true);
+      const expected = JSON.stringify(verdicts);
+      singleton = false;
+      expect((await search(context, client, { query: "synthetic", recall })).ok).toBe(true);
+      expect(JSON.stringify(verdicts)).toBe(expected);
+      const childrenOnly =
+        "restrictToSpawned" in restriction ||
+        "sandboxed" in restriction ||
+        restriction.visibility === "tree";
+      const allowed =
+        restriction.visibility === "self"
+          ? [own]
+          : childrenOnly
+            ? [own, child, foreignChild]
+            : restriction.visibility === "agent"
+              ? [own, archived, child, "global"]
+              : [
+                  own,
+                  archived,
+                  child,
+                  foreignChild,
+                  "global",
+                  ...("agentToAgent" in restriction ? [] : [foreign]),
+                ];
+      for (const agentId of ["main", "work"]) {
+        expect(
+          keys.filter((_, index) => verdicts[agentId]![index]),
+          JSON.stringify(recall),
+        ).toEqual(
+          keys.filter((key) => allowed.includes(key) && (key !== "global" || agentId === "main")),
+        );
+      }
+    }
+  });
+});
 
 test("CJK recall finishes the text pass and retains timestamp-ordered top-N", async () => {
   await withSearchState(async () => {

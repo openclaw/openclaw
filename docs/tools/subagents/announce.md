@@ -23,6 +23,13 @@ have no terminal non-delivery disposition. Once the transcript owner commits the
 input, it immediately records `state: "consumed"` and the consuming run in the
 registry, before the requester source settles. Registry readers use that stored
 fact directly.
+An ordinary requester run ending or a later follow-up taking over does not discard
+the waiting results. An accepted completion turn keeps its delivery; findings not
+yet accepted remain pending for the requester's next turn.
+Public completion delivery resolves the requester's current session admission.
+If that turn is still preparing its backend after recovery, delivery waits for
+readiness before steering, rather than queuing the result behind the waiting parent.
+An idle requester receives a fresh completion input.
 Consumption is distinct from sending a reply to the user. A later cancellation
 does not turn a consumed private result into failed delivery; restart recovery
 and the existing completion retention window remain unchanged.
@@ -141,8 +148,9 @@ record history without closing an open keyed input; ordinary final replies still
 close the turn. Mirrors remain best-effort bookkeeping after a successful send.
 
 Completion failures retain the concrete delivery error in the run's delivery state.
-A required parent completion that permanently fails also records a visible failure
-notice in the original requester conversation, without starting another agent turn.
+When automatic delivery expires, a visible delay notice explains that the saved result
+may still arrive through requester settlement. Failed settlement, permanent failure, or
+final discard records a failure notice, without starting another agent turn.
 The notice goes to the requester chat as it is now, also after a reset; a deleted requester gets none.
 A confirmed handoff remains delivered even if its receipt
 callback fails; cleanup must not replay an already consumed result. A completion

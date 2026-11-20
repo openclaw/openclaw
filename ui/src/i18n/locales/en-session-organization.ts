@@ -261,6 +261,11 @@ const enSessionOrganization = {
     archiveSessionNestedOffline:
       'Archive only "{session}"? Its directly nested sessions move to the top level. Reconnect to archive the complete subtree.',
     archiveAllSessions: "Archive all ({count})",
+    archiveGroupPrompt: "Are you sure you want to archive?",
+    archiveGroupSessionOne: "1 session",
+    archiveGroupSessionOther: "{count} sessions",
+    archiveGroupEmpty: "There are no unarchived sessions in this group.",
+    archiveGroupListFailed: "Couldn’t load all sessions in the group. Try again.",
     automationPauseArchiveOne: 'Archiving "{session}" pauses its automations.',
     automationPauseArchiveOther:
       "Automations are bound to {count} of these conversations. Archiving a conversation pauses its automations.",

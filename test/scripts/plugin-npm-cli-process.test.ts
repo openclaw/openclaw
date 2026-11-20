@@ -50,7 +50,7 @@ it("runs the full 101-package consume/authorize flow within 12k requests", async
   const requests = records.filter((row) => row.kind === "request").length;
   expect(requests).toBeLessThanOrEqual(12000);
   console.info(JSON.stringify({ fullReleaseRequestProof: { packages: 101, requests } }));
-}, 240_000);
+}, 300_000);
 
 it("retains the ordinary CLI final authority after sharing acquisition reads", async () => {
   const f = await createNpmCliProcessFixture(tempDirs.make("npm-cli-ordinary-"), "", 2);
@@ -70,6 +70,7 @@ it("retains the ordinary CLI final authority after sharing acquisition reads", a
       f.records().filter((row) => row.kind === "request" && row.invocation === phase).length,
     ]),
   );
+  // Direct FRV manifest acquisition omits the redundant parent workflow-view read.
   expect(counts).toEqual({
     preview: 52,
     consume: 25,

@@ -11,6 +11,7 @@ import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import {
   loadPluginDiscoveryDetail,
+  type PluginInstallRequest,
   type PluginsInspectResult,
 } from "../../../lib/plugins/index.ts";
 import { useApplication } from "../../../lib/reactive/context.ts";
@@ -20,7 +21,9 @@ import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
 import { pluginInstallOperations } from "../../plugins/install-progress.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../../plugins/plugin-icon-owner.ts";
 import { createPluginMcpLogin } from "../../plugins/plugin-mcp-login.ts";
-import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
+import { installRequestForDiscoveryDetail } from "../../plugins/plugins-page-model.ts";
+import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.tsx";
+import { installPluginFromChatCard } from "./chat-clawhub-card-install.ts";
 import { subscribeClawHubCardUpdates } from "./chat-clawhub-card-updates.ts";
 import type { ChatClawHubCardProps } from "./chat-clawhub-card.tsx";
 
@@ -39,6 +42,8 @@ type CardPresentation = Pick<
 type CardStatus = CardPresentation & {
   installed: boolean;
   canInstall: boolean;
+  /** Official plugins install from this card; the plugin page installs every other one. */
+  install?: PluginInstallRequest;
   restricted: boolean;
   disabled: boolean;
   connection?: "connected" | "connecting" | "sign-in";
@@ -206,9 +211,11 @@ export function ChatClawHubCardBody(
                   disabled: false,
                 };
               }
-              const { plugin } = await loadPluginDiscoveryDetail(client, card.id, signal);
+              const detail = await loadPluginDiscoveryDetail(client, card.id, signal);
+              const { plugin } = detail;
               signal.throwIfAborted();
               const pluginId = plugin.local.installed ? plugin.local.pluginId : undefined;
+              const admin = hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
               // The plugin page owns sign-in; only offer it where that page can start it.
               const inspection =
                 pluginId && canCallGatewayMethod(snapshot, "mcp.authLogin", "operator.admin")
@@ -229,10 +236,11 @@ export function ChatClawHubCardBody(
                 official: plugin.catalog.official,
                 inspection,
                 installed: plugin.local.installed,
-                canInstall:
-                  plugin.local.action === "install" &&
-                  hasOperatorAdminAccess(snapshot.hello?.auth ?? null),
-                restricted: !hasOperatorAdminAccess(snapshot.hello?.auth ?? null),
+                canInstall: plugin.local.action === "install" && admin,
+                install:
+                  (admin && plugin.catalog.official && installRequestForDiscoveryDetail(detail)) ||
+                  undefined,
+                restricted: !admin,
                 disabled: plugin.local.installed && plugin.local.state === "disabled",
                 // These are configured MCP server connections, not universal plugin accounts.
                 connection: inspection?.mcpAuth?.length
@@ -369,6 +377,22 @@ export function ChatClawHubCardBody(
       void (authFailure() ? mcpLogin.retry(server.serverName) : mcpLogin.start(server.serverName));
     }
   };
+  let installAdmission = false;
+  async function install(request: PluginInstallRequest) {
+    const scope = connection.capture();
+    const id = props.recommendation?.id;
+    if (!scope || !id || installAdmission) {
+      return;
+    }
+    // The config queue admits the request later; a second click must not queue another.
+    // A click is the request: scrolling the card away does not withdraw it.
+    installAdmission = true;
+    const review = await installPluginFromChatCard(context, scope.client, request, id);
+    installAdmission = false;
+    if (review && connection.isCurrent(scope)) {
+      props.onOpenListing();
+    }
+  }
   const statusLabel = () => {
     if (installing()) {
       return t("chat.clawhub.installing");
@@ -452,6 +476,12 @@ export function ChatClawHubCardBody(
       return;
     }
     const progress = installProgress();
+    const result = readyStatus();
+    // A finished attempt that cannot be retried, such as a policy review, continues on the page.
+    if (result?.install && !result.installed && online() && progress?.canRetry !== false) {
+      void install(result.install);
+      return;
+    }
     if (progress?.failure) {
       props.onOpenListing(progress.canRetry === true);
       return;
@@ -463,7 +493,6 @@ export function ChatClawHubCardBody(
       load(true);
       return;
     }
-    const result = readyStatus();
     if (result?.installed && result.connection === "sign-in" && !result.disabled) {
       connect();
     } else {

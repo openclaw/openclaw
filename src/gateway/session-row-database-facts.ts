@@ -108,9 +108,11 @@ export async function withSessionRowDatabaseFacts(
         path: group.database.path,
         sessionKey: row.key,
       });
-      if (facts) {
+      if (facts?.transcriptHasMessages !== undefined) {
         actorFacts.set(identity(row), facts);
       } else {
+        // Entry-only actor receipts do not cover history presence. Prepare that
+        // required row fact here rather than publishing it later as enrichment.
         group.rows.push(row);
       }
     }

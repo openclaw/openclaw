@@ -27,6 +27,7 @@ import { readPendingWorktrees } from "./pending-slots.js";
 import { captureWorktreeRegistryReadGuard, readRegistryWorktrees } from "./registry-read.js";
 import { worktreeGcRevision } from "./registry-read.kernel.js";
 import { isWorktreePermissionError } from "./removal-errors.js";
+import { deleteRetiredCheckout, isRetiredCheckoutDeletionPending } from "./removal-git.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { retireExpiredManagedWorktreeSnapshot } from "./snapshot-host.js";
 import { WORKTREE_TEMPLATE_DIRECTORY } from "./template-cache.js";
@@ -335,7 +336,10 @@ async function reconcileOrphans(
     const fingerprintPath = path.join(defaultRoot, fingerprint.name);
     // A root entry can be a checkout, not a fingerprint container; descending
     // before applying the same preservation rule would expose its contents to deletion.
-    if (await shouldPreserveOrphanCandidate(fingerprintPath, managedPaths, customRoots)) {
+    if (
+      isRetiredCheckoutDeletionPending(fingerprintPath) ||
+      (await shouldPreserveOrphanCandidate(fingerprintPath, managedPaths, customRoots))
+    ) {
       continue;
     }
     const names = await fs
@@ -361,7 +365,10 @@ async function reconcileOrphans(
         continue;
       }
       let candidate = path.join(fingerprintPath, name.name);
-      if (await shouldPreserveOrphanCandidate(candidate, managedPaths, customRoots)) {
+      if (
+        isRetiredCheckoutDeletionPending(candidate) ||
+        (await shouldPreserveOrphanCandidate(candidate, managedPaths, customRoots))
+      ) {
         continue;
       }
       candidates.add(candidate);
@@ -411,7 +418,7 @@ async function reconcileOrphans(
         candidates.add(candidate);
         assertCurrent();
         try {
-          await fs.rm(candidate, { recursive: true, force: true });
+          await deleteRetiredCheckout(candidate);
         } catch (error) {
           if (!isWorktreePermissionError(error)) {
             throw error;
@@ -425,7 +432,7 @@ async function reconcileOrphans(
           await restoreOrphanDirectoryWriteAccess(candidate, assertCurrent);
           assertCurrent();
           // One repair and one retry; an unrepaired orphan must not block its siblings.
-          await fs.rm(candidate, { recursive: true, force: true });
+          await deleteRetiredCheckout(candidate);
         }
         orphanFailures.delete(candidate);
         deleted += 1;

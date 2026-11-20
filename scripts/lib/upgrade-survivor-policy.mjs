@@ -48,6 +48,7 @@ const scenarioMinimumBaselines = new Map([
 // These black-box scenarios are implemented entirely by the current trusted
 // release harness and treat the selected tree only as the package under test.
 const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
+  "git-release",
   "mobile-pairing-reconnect",
   "abandoned-update",
   "projects-doctor",
@@ -70,6 +71,7 @@ export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
 const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
     scenario !== "abandoned-update" &&
+    scenario !== "git-release" &&
     scenario !== "backup-schedule" &&
     scenario !== "session-share" &&
     scenario !== "missing-configured-plugin-migration" &&
@@ -237,6 +239,9 @@ function comparePublishedReleaseVersion(a, b) {
 }
 
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
+  if (scenario === "git-release") {
+    return baselineSpec === "openclaw@2026.11.5";
+  }
   if (isPackageRecoveryScenario(scenario)) {
     return packageRecoveryBaselines(scenario).includes(baselineSpec);
   }

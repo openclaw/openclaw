@@ -697,6 +697,21 @@ describe("scripts/lib/docker-e2e-plan", () => {
     }
   });
 
+  it("plans the plugin publication cell as a bare npm service lane", () => {
+    const plan = planFor({ selectedLaneNames: ["published-driver-plugin-publication"] });
+    expect(plan.lanes).toHaveLength(1);
+    expect(plan.lanes[0]).toMatchObject({
+      name: "published-driver-plugin-publication",
+      command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-driver-plugin-publication",
+      imageKind: "bare",
+      live: false,
+      resources: ["docker", "npm", "service"],
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+    });
+    expect(plan.needs).toMatchObject({ bareImage: true, package: true });
+  });
+
   it.each(["older-runtime", "live-gateway", "owed-plugin-retry"])(
     "keeps packaged %s recovery independent of survivor baseline expansion",
     (cut) => {

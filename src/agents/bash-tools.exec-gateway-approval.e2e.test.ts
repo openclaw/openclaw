@@ -262,7 +262,7 @@ describe("gateway-hosted exec approvals", () => {
       expect((await approved).details).toMatchObject({
         status: "completed",
         exitCode: 0,
-        aggregated: "approved",
+        aggregated: "approved\n",
       });
 
       const revoked = tool.execute("dynamic-predicate-revoked", {

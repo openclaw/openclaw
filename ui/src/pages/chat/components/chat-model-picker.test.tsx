@@ -40,6 +40,7 @@ function accountSection(
   selectionKind: "automatic" | "personal" = "automatic",
 ) {
   return {
+    prefetch: undefined,
     onClose() {},
     viewProps: (startIndex: number) => ({
       selectionKind,
@@ -49,6 +50,8 @@ function accountSection(
       currentValue: "current",
       open,
       error: null,
+      loading: null,
+      onNextPage: undefined,
       startIndex,
       onToggle() {},
       onSelect,
