@@ -30,5 +30,7 @@
 # WebSocket admission fixtures emit real lifecycle events for prepared authority.
 # CI repairs retain publication catalogs and give scheduled-owner fixtures current
 # canonical facts, preserving revocation checks rather than bypassing admission.
-# Measured against merged PR base 87e11d62: 4006 net test lines; 400 + 3606 allocated.
-3606
+# Offline Doctor diagnostics distinguish inactive nonmembers from active catalog members,
+# covering disabled ID, removed membership and the installation-wide default boundary.
+# CI merge measurement: 4019 net test lines; 400 + 3619 allocated.
+3619
