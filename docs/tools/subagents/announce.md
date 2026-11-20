@@ -36,6 +36,11 @@ metadata updates coexist with child follow-ups and completion turns. It does not
 renew an active turn's retained authority: session replacement, policy revocation,
 and closed owners still fail their existing checks.
 
+A retained `sessions_send` follow-up can still return to the same requester
+session after its lifecycle revision advances. Each attempt rechecks current
+access. A replacement requester or a changed target lifecycle still blocks the
+continuation.
+
 The requester turn's captured origin owns completion routing, including after
 `sessions_yield` and for child pause notices. A WebChat origin does not inherit a
 previous external destination from the session. Without a captured origin, the

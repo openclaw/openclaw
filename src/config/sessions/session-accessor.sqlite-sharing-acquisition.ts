@@ -27,6 +27,7 @@ export type SessionSharingAcquisition = {
 };
 
 export type PreparedSessionSharingRead = {
+  followLifecycle?: boolean;
   predicate?: PreparedSessionEntryPredicate;
   pending: Set<object>;
   facts: CommittedSessionSharingFacts | undefined;
@@ -46,11 +47,30 @@ export type PreparedSessionSharingRead = {
 export type SessionSharingRetentionRequest = {
   databaseIdentity: string;
   sessionKey: string;
+  /** Let an established reader follow known revisions of this same session ID. */
+  followLifecycle?: boolean;
   predicate?: PreparedSessionEntryPredicate;
 } & (
   | { acquiring: true }
   | (CommittedSessionSharingFacts & { generation?: PreparedSessionSharingRead["generation"] })
 );
+
+/** An opt-in follows a contiguous committed reset, never another session ID. */
+export function followsSessionSharingPostimage(
+  read: PreparedSessionSharingRead,
+  entry: SessionSharingEntry,
+  previous: Pick<SessionSharingEntry, "sessionId" | "lifecycleRevision"> | undefined,
+): boolean {
+  const retained = read.facts?.entry;
+  return (
+    retained !== undefined &&
+    retained.sessionId === entry.sessionId &&
+    (retained.lifecycleRevision === entry.lifecycleRevision ||
+      (read.followLifecycle === true &&
+        previous?.sessionId === retained.sessionId &&
+        previous.lifecycleRevision === retained.lifecycleRevision))
+  );
+}
 
 /** Unknown postimages require a fresh read; observed mismatches cannot be restored. */
 export function publishRetainedSessionEntryPredicate(

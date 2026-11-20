@@ -32,6 +32,7 @@ import {
   publishSessionEntryMaintenanceAgeChanges,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import {
+  followsSessionSharingPostimage,
   publishRetainedSessionEntryPredicate,
   publishRetainedSessionGeneration,
   revokePreparedSessionEntryPredicate,
@@ -267,9 +268,7 @@ export function retainSessionEntryWorkerPublication(params: {
               params.databaseIdentity,
               record.sessionKey,
               projectSessionSharingEntry(entry),
-              facts.previousSessionId && !facts.lifecycleChanged
-                ? { sessionId: facts.previousSessionId, lifecycleRevision: entry.lifecycleRevision }
-                : undefined,
+              facts.clearMembers ? undefined : record.value.previous,
               true,
               entry,
             );
@@ -450,16 +449,19 @@ export function retainSessionEntryWorkerPublication(params: {
             sharingEntry,
             known || (!unknown && placeholder !== undefined),
           );
-          const previous = read.facts;
           read.facts =
             !unknown && placeholder
               ? { entry: undefined, placeholder, membership: new Set() }
               : !unknown &&
                   sharingProjection &&
                   sharingEntry &&
-                  previous?.entry &&
-                  previous.entry.sessionId === sharingEntry.sessionId &&
-                  previous.entry.lifecycleRevision === sharingEntry.lifecycleRevision
+                  followsSessionSharingPostimage(
+                    read,
+                    sharingEntry,
+                    membershipInvalidated.has(sessionKey)
+                      ? undefined
+                      : replacement?.previous.get(sessionKey),
+                  )
                 ? {
                     entry: sharingEntry,
                     membership: new Set(sharingProjection.membership[2]),

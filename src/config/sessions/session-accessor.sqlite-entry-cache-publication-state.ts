@@ -22,6 +22,7 @@ import {
   type SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import {
+  followsSessionSharingPostimage,
   projectSessionEntryPredicateChange,
   publishRetainedSessionEntryPredicate,
   publishRetainedSessionGeneration,
@@ -226,9 +227,8 @@ export function publishRetainedSessionEntryChange(
     const previous = read.facts;
     read.facts =
       entry &&
-      previous?.entry &&
-      previous.entry.sessionId === entry.sessionId &&
-      previous.entry.lifecycleRevision === entry.lifecycleRevision
+      previous &&
+      followsSessionSharingPostimage(read, entry, known ? previousIdentity : undefined)
         ? { entry, membership: previous.membership }
         : undefined;
   }
@@ -239,6 +239,7 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
   const key = `${params.databaseIdentity}\0${params.sessionKey}`;
   const initial = "acquiring" in params ? undefined : params;
   const read: PreparedSessionSharingRead = {
+    followLifecycle: params.followLifecycle,
     predicate: params.predicate,
     pending: new Set(),
     facts: initial && {

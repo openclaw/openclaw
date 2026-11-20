@@ -108,6 +108,7 @@ export async function prepareSessionMutationFacts(
           databaseIdentity: identity.key,
           sessionKey,
           acquiring: true,
+          followLifecycle: params.followLifecycle,
         });
         acquiringReads.set(key, retained);
         releases.push(retained.release);
@@ -255,7 +256,15 @@ export async function prepareSessionMutationFacts(
     onSessionIdentityMutation((change) => {
       if (
         change.agentId === agentId &&
-        change.previous.sessionKeys.some((key) => initialStoreKeys.includes(key))
+        change.previous.sessionKeys.some((key) => initialStoreKeys.includes(key)) &&
+        !(
+          params.followLifecycle &&
+          change.kind === "reset" &&
+          facts?.target?.readSource?.databaseIdentity === change.databaseIdentity &&
+          change.previous.sessionId !== undefined &&
+          change.previous.sessionId === change.current.sessionId &&
+          change.current.sessionKeys.includes(facts.target.storeKey)
+        )
       ) {
         invalidate();
       }

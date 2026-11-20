@@ -37,6 +37,8 @@ export type SessionFactsRequest = {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
+  /** Keep established facts across same-ID reset receipts, not across replacement. */
+  followLifecycle?: boolean;
   preserveQualifiedAddress?: boolean;
   storageReady?: Promise<void>;
 };
