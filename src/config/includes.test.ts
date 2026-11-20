@@ -217,7 +217,7 @@ it("allows depth 10 but rejects depth 11", () => {
 });
 
 const INCLUDE_LOAD_LIMIT_ERROR =
-  /^Maximum include file loads \(1024\) exceeded at: \.\/\w+\.json\. Each repeated \$include entry loads its file again\. Remove repeated \$include references to the same file or merge those files, then rerun openclaw config validate\.$/;
+  /^Maximum include file loads \(1024\) exceeded at: \.\/\w+\.json\. Each repeated \$include entry loads its file again, and arrays from every load are concatenated\. Combine the included files into fewer files that give the same merged config, keeping array entries from every load in order, then rerun openclaw config validate\.$/;
 
 it("allows the include file load budget but rejects one more load", () => {
   const files = { [configPath("leaf.json")]: { leaf: true } };
@@ -229,6 +229,13 @@ it("allows the include file load budget but rejects one more load", () => {
     () => resolve(includeLeaf(MAX_INCLUDE_FILE_LOADS + 1), files),
     INCLUDE_LOAD_LIMIT_ERROR,
   );
+});
+
+it("concatenates arrays from each load of a repeated include", () => {
+  const files = { [configPath("args.json")]: { args: ["mcp-server-fetch"] } };
+  expect(resolve({ $include: ["./args.json", "./args.json"] }, files)).toEqual({
+    args: ["mcp-server-fetch", "mcp-server-fetch"],
+  });
 });
 
 it("rejects repeated includes that multiply across levels", () => {

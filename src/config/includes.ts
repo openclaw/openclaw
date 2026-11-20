@@ -404,8 +404,9 @@ class IncludeProcessor {
     if (this.fileLoads >= MAX_INCLUDE_FILE_LOADS) {
       throw new ConfigIncludeError(
         `Maximum include file loads (${MAX_INCLUDE_FILE_LOADS}) exceeded at: ${includePath}. ` +
-          "Each repeated $include entry loads its file again. Remove repeated $include " +
-          "references to the same file or merge those files, then rerun openclaw config validate.",
+          "Each repeated $include entry loads its file again, and arrays from every load are " +
+          "concatenated. Combine the included files into fewer files that give the same merged " +
+          "config, keeping array entries from every load in order, then rerun openclaw config validate.",
         includePath,
       );
     }
