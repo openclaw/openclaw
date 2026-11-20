@@ -151,6 +151,11 @@ suite.define(() => {
           expect(readerRequests).toBe(0);
         }
         if (route === "skills") {
+          await page.getByRole("button", { name: "Installed", exact: true }).click();
+          await page
+            .getByRole("button", { name: "Open Data skill 0000 details", exact: true })
+            .waitFor({ state: "visible" });
+          expect(readerRequests).toBe(0);
           const held = await holdModuleResponse(page, reader);
           try {
             await page

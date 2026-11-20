@@ -877,15 +877,19 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   skills: {
-    ready: ".skill-discovery [data-skill-id]",
-    rows: {
-      selector: ".skill-discovery [data-skill-id]",
-      minimum: 1000,
-      totalSelector: ".skill-discovery [aria-setsize]",
-    },
+    ready: ".skill-discovery .skill-installed-shelf",
     action: {
-      label: "Filter discovered skills to one installed skill",
+      label: "Open 1,000 installed skills and filter to one skill",
       run: async (page) => {
+        await page.getByRole("button", { name: "Installed", exact: true }).click();
+        await ready(page, "skills", {
+          ready: ".skill-discovery [data-skill-id]",
+          rows: {
+            selector: ".skill-discovery [data-skill-id]",
+            minimum: quantity.catalog,
+            totalSelector: ".skill-discovery [aria-setsize]",
+          },
+        });
         await page.locator(".skill-discovery input[type=search]").fill("Data skill 0999");
         await page.waitForFunction(() => {
           const rows = document.querySelectorAll(".skill-discovery [data-skill-id]");
