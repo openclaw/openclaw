@@ -257,7 +257,19 @@ it("binds request approvals from registered host authority and canonical creatio
           operationalRunInstance: admittedRunContext.operationalRunInstance,
           delegatedAuthority: { ...delegated, kind: "local" },
         };
+        const runtimeClient = {
+          ...client(participant.id, ["operator.sessions.read"]),
+          internal: { agentRuntimeIdentity: identity },
+        };
+        const authorize = (method: string, id?: string, who = runtimeClient) =>
+          authorizeParticipationExecApprovalMethod({
+            method,
+            params: { id, sessionKey, runId: attempt.runId },
+            client: who,
+            manager: fixture.manager,
+          });
         expect(captureActiveEmbeddedRunParticipation(identity)).toBeUndefined();
+        expect(authorize("exec.approval.request")).toBeUndefined();
         await withPreparedEmbeddedRunToolAuthority(
           { admittedRunContext },
           {
@@ -295,6 +307,8 @@ it("binds request approvals from registered host authority and canonical creatio
                 }),
               ).toThrow();
               expect(await prepareExecApprovalParticipation(identity, {})).toEqual(expectedBinding);
+              expect(authorize("exec.approval.request")).toBe(true);
+              expect(authorize("exec.approval.waitDecision", "missing")).toBeUndefined();
               const handlers = createExecApprovalHandlers(fixture.manager);
               const context = {
                 ...createContext(),
@@ -336,6 +350,36 @@ it("binds request approvals from registered host authority and canonical creatio
                   "requested record",
                 );
                 expect(record.participation).toEqual(runtime ? expectedBinding : undefined);
+                expect(authorize("exec.approval.waitDecision", record.id)).toBe(
+                  runtime ? true : undefined,
+                );
+                expect(
+                  authorize("exec.approval.waitDecision", record.id.slice(0, 8)),
+                ).toBeUndefined();
+                for (const method of [
+                  "exec.approval.get",
+                  "exec.approval.list",
+                  "plugin.approval.request",
+                ]) {
+                  expect(authorize(method, record.id)).toBeUndefined();
+                }
+                if (runtime) {
+                  expect(authorize("exec.approval.resolve", record.id)).toBe(false);
+                  expect(authorize("approval.resolve", record.id)).toBe(false);
+                  const foreign = {
+                    ...runtimeClient,
+                    internal: {
+                      agentRuntimeIdentity: {
+                        ...identity,
+                        delegatedAuthority: { ...identity.delegatedAuthority, claimId: "forged" },
+                      },
+                    },
+                  };
+                  expect(() => authorize("exec.approval.request", undefined, foreign)).toThrow();
+                  expect(() =>
+                    authorize("exec.approval.waitDecision", record.id, foreign),
+                  ).toThrow();
+                }
                 await fixture.manager.resolve(record.id, "deny", "cleanup");
                 await pending;
               };
@@ -344,6 +388,7 @@ it("binds request approvals from registered host authority and canonical creatio
               detachActiveEmbeddedRun(sessionId, handle, sessionKey);
               expect(() => capture.assertCurrent()).toThrow();
               expect(captureActiveEmbeddedRunParticipation(identity)).toBeUndefined();
+              expect(authorize("exec.approval.request")).toBeUndefined();
             } finally {
               detachActiveEmbeddedRun(sessionId, handle, sessionKey);
             }
