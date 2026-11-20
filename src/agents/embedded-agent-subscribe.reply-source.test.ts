@@ -7,7 +7,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { readLatestTranscriptAssistantTextAsync } from "../config/sessions/session-transcript-assistant-read.js";
-import type { PersistedUserTurnMessage } from "../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../sessions/user-turn-input.types.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   resolveAssistantReplySource,
