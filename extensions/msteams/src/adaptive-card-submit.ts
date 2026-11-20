@@ -1,3 +1,4 @@
+import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   isRecord,
   normalizeOptionalLowercaseString,
@@ -35,6 +36,10 @@ export function serializeMSTeamsAdaptiveCardActionValue(value: unknown): string 
   if (typeof submittedValue === "string") {
     const trimmed = submittedValue.trim();
     return trimmed ? trimmed : null;
+  }
+  const agentText = agentControlText(isRecord(submittedValue) ? submittedValue.value : undefined);
+  if (agentText) {
+    return agentText;
   }
   const imBackValue = readMSTeamsImBackValue(submittedValue);
   if (imBackValue) {

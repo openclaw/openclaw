@@ -281,6 +281,32 @@ describe("provider attribution", () => {
     },
   );
 
+  it.each([
+    ["2026.11.5", "2026.11.5"],
+    ["2026.11.5-beta.1", "2026.11.5"],
+    ["2026.11.5-1+build.abc", "2026.11.5"],
+    ["unknown", "99.0.0"],
+    ["0.0.0-dev", "99.0.0"],
+  ])(
+    "sends ChatGPT the numeric OpenClaw release %s as %s and keeps the build in User-Agent",
+    (runtime, sent) => {
+      const policy = resolveProviderRequestPolicy(
+        {
+          provider: "openai",
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          transport: "stream",
+          capability: "llm",
+        },
+        { OPENCLAW_VERSION: runtime },
+      );
+      expect(policy.attributionHeaders).toMatchObject({
+        version: sent,
+        "User-Agent": `openclaw/${runtime}`,
+      });
+    },
+  );
+
   it("authorizes hidden xAI attribution on api.x.ai and the default xAI route", () => {
     const native = requestPolicy({ provider: "xai", baseUrl: "https://api.x.ai/v1" });
     expect(native).toMatchObject({

@@ -41,7 +41,7 @@ function publishCommittedRecords(row: SubagentRunRecord): void {
 }
 
 it.each(["delivered", "failed", "error-failed"] as const)(
-  "records an expired completion failure only after requester settlement (%s)",
+  "records an expiry delay and a failure only after failed settlement (%s)",
   async (route) => {
     const { subagent } = records();
     const target = {
@@ -79,7 +79,12 @@ it.each(["delivered", "failed", "error-failed"] as const)(
         suspendedReason: "expiry",
       }),
     ).toBe(true);
-    expect(await loadTranscriptEvents(target)).toEqual([]);
+    const delayed = (await loadTranscriptEvents(target)).filter(
+      (event) => isRecord(event) && event.type === "custom_message",
+    );
+    expect(delayed).toEqual([
+      expect.objectContaining({ customType: "subagent-delivery-delayed", display: true }),
+    ]);
     await mutateRequesterCompletionBatch({
       entries: [subagent],
       assertCurrent: () => {},
@@ -94,7 +99,14 @@ it.each(["delivered", "failed", "error-failed"] as const)(
     const notices = (await loadTranscriptEvents(target)).filter(
       (event) => isRecord(event) && event.type === "custom_message",
     );
-    expect(notices).toHaveLength(route === "delivered" ? 0 : 1);
+    expect(notices).toEqual(
+      route === "delivered"
+        ? delayed
+        : [
+            ...delayed,
+            expect.objectContaining({ customType: "run-failed-before-reply", display: true }),
+          ],
+    );
     expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.delivery?.disposition).toBe(
       route === "delivered" ? "delivered" : "permanent_failure",
     );

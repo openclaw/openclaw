@@ -603,7 +603,6 @@ export async function executeSessionsSend(
           captureReplyAdmission: communication.captureReplyAdmission,
           runId,
           mode,
-          callDurableGateway: communication.callDurableGateway,
           sendParams,
           sourceOrigin: sameSession ? requesterOrigin : undefined,
           sessionKey: resolvedKey,

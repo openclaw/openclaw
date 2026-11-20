@@ -14,7 +14,10 @@ import {
 } from "./exec-approval-ios-push.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
-import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
+import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+} from "./openclaw-id/tunnel-principal.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import type { PreparedSessionMutationFacts } from "./session-sharing-target.types.js";
 
@@ -123,12 +126,14 @@ function mockIdMemberIosDevice() {
     accountId: "member-account",
     role: "member",
   }));
+  setOpenClawIdMemberAccountLookup((accountId) => accountId === "member-account");
   mocks.linkedProfiles.mockResolvedValue({
     "member-account": { id: "member-profile", displayName: null, email: null },
   });
   const profile: UserProfileIdentity = {
     profileId: "member-profile",
-    role: "admin",
+    role: "member",
+    openclawIdAccountIds: ["member-account"],
     aliases: new Set(["member-profile", "member-profile-alias"]),
   };
   mocks.profiles.mockResolvedValue({
@@ -305,12 +310,14 @@ describe("createExecApprovalIosPushDelivery", () => {
   afterEach(() => {
     setDeviceTokenBindingOwner(undefined);
     setOpenClawIdTunnelPrincipalLookup(undefined);
+    setOpenClawIdMemberAccountLookup(undefined);
     clearRuntimeConfigSnapshot();
   });
 
   it("caps an ID device's fresh approval pushes without reducing independent local grants", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
+        openclawId: { enabled: true },
         roles: {
           definitions: {
             member: { scopes: ["operator.admin"], sessions: { others: "write" }, agents: "*" },
@@ -350,6 +357,7 @@ describe("createExecApprovalIosPushDelivery", () => {
   it("rechecks ID policy after APNs preparation while preserving local delivery and cleanup", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
+        openclawId: { enabled: true },
         roles: {
           definitions: {
             member: { scopes: approvalScopes, sessions: { others: "write" }, agents: "*" },
@@ -423,6 +431,7 @@ describe("createExecApprovalIosPushDelivery", () => {
     async ({ creatorId, withSession, visible }) => {
       setRuntimeConfigSnapshot({
         gateway: {
+          openclawId: { enabled: true },
           roles: {
             definitions: {
               member: { scopes: approvalScopes, sessions: { others: "none" }, agents: "*" },

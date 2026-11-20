@@ -169,11 +169,17 @@ async function probeCodexBwrapNamespaces(
   }
 }
 
-/** Resolves the enabled sandbox backend and its local container engine, when it has one. */
+/**
+ * Resolves the enabled sandbox backend and its local container engine, when it has one.
+ * A role that requires a sandbox enables it for that role's sessions even when mode is off.
+ */
 function resolveEnabledSandboxBackend(cfg: OpenClawConfig) {
-  const sandbox = cfg.agents?.defaults?.sandbox;
-  const mode = sandbox?.mode ?? "off";
-  if (!sandbox || mode === "off") {
+  const sandbox = cfg.agents?.defaults?.sandbox ?? {};
+  const mode = sandbox.mode ?? "off";
+  const roleRequired = Object.values(cfg.gateway?.roles?.definitions ?? {}).some(
+    (role) => role.sandbox === "required",
+  );
+  if (mode === "off" && !roleRequired) {
     return undefined;
   }
   const backend = (sandbox.backend?.trim() || "docker").toLowerCase();
@@ -190,7 +196,8 @@ export async function noteCodexBwrapNamespaceWarnings(
   cfg: OpenClawConfig,
   options: SandboxHealthOptions = {},
 ): Promise<void> {
-  const containerEngine = resolveEnabledSandboxBackend(cfg)?.containerEngine;
+  const enabled = resolveEnabledSandboxBackend(cfg);
+  const containerEngine = enabled?.mode === "off" ? undefined : enabled?.containerEngine;
   if (process.platform !== "linux" || !containerEngine) {
     return;
   }
@@ -321,7 +328,9 @@ export async function maybeRepairSandboxImages(
   if (!engineAvailable) {
     const name = containerEngine.displayName;
     const lines = [
-      `Sandbox mode is enabled (mode: "${mode}") but ${name} is not available.`,
+      mode === "off"
+        ? `A gateway role requires a sandbox but ${name} is not available.`
+        : `Sandbox mode is enabled (mode: "${mode}") but ${name} is not available.`,
       containerEngine.id === "docker"
         ? "Docker is required for sandbox mode to function."
         : "Podman is required by the selected sandbox backend.",
@@ -329,7 +338,9 @@ export async function maybeRepairSandboxImages(
       "",
       "Options:",
       `- Install ${name} and restart the gateway`,
-      "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
+      mode === "off"
+        ? "- Stop requiring a sandbox: set gateway.roles.definitions.<role>.sandbox to inherit"
+        : "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
     ];
     note(lines.join("\n"), "Sandbox");
     return [lines.join("\n")];

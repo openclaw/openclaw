@@ -586,6 +586,15 @@
   margin-top: 8px;
 }
 
+.row.chat-img {
+  flex-wrap: wrap;
+  margin: 0;
+}
+
+.chat-img > div {
+  width: auto;
+}
+
 .chat-activity-group__body .chat-tool-msg-collapse.is-open {
   margin-bottom: 8px;
 }

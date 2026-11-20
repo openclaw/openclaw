@@ -20,7 +20,10 @@ import {
 } from "../config/sessions/transcript-lease.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "../gateway/operator-role-enforcement.js";
+import {
+  isOperatorRoleEnforcedFor,
+  operatorRoleSubject,
+} from "../gateway/operator-role-enforcement.js";
 import { resolveCreatorSandbox } from "../gateway/operator-role-policy.js";
 import { decodeGatewayOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
 import { chatRef } from "../sessions/chat-ref.js";
@@ -128,8 +131,10 @@ export async function checkRequesterOwner(
           return false;
         }
         return (
-          !isNamedOperatorRoleEnforcementEnabled(current) ||
-          requester.profileId === GATEWAY_OWNER_PROFILE_ID
+          !isOperatorRoleEnforcedFor(
+            current,
+            operatorRoleSubject(profileAccess.readCurrentFacts()),
+          ) || requester.profileId === GATEWAY_OWNER_PROFILE_ID
         );
       });
     }

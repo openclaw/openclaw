@@ -19,6 +19,7 @@ export function prepareInstalledSkillCatalog(params: {
   workspaceDir: string;
   sandbox?: SandboxContext | null;
   assertCurrent?: () => void;
+  instructionDelivery?: InstalledSkill["instructionDelivery"];
 }): InstalledSkill[] {
   const { snapshot, sandbox } = params;
   if (!snapshot) {
@@ -118,6 +119,7 @@ export function prepareInstalledSkillCatalog(params: {
           ? resource?.contentHash
           : skill.contentHash;
       return {
+        instructionDelivery: params.instructionDelivery,
         catalogRevision: contentHash,
         name: skill.name,
         promptListed: promptListed.has(skill.name),

@@ -31,7 +31,7 @@ export function TemplateWorkspaceFiles(props: {
                   <Icon name={fileRole(file.name)[0]} />
                 </span>
                 <div class="settings-row__text oc-settings-row-content">
-                  <div class="templates-workspace-file__title">
+                  <div class="row templates-workspace-file__title">
                     <button
                       type="button"
                       class="templates-workspace-file__open"
@@ -45,7 +45,7 @@ export function TemplateWorkspaceFiles(props: {
                     >
                       <button
                         type="button"
-                        class="templates-workspace-file__info"
+                        class="template-art templates-workspace-file__info"
                         aria-label={t("templatesCatalog.aboutFile", { name: file.name })}
                       >
                         <Icon name="info" />

@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -374,5 +375,63 @@ it.each([
     expect(loadNativeModelCatalog.mock.calls).toEqual(
       acquired ? [[{ provider: entry.provider, modelId: entry.id, runtime }]] : [],
     );
+  },
+);
+
+it.each<{
+  name: string;
+  config: OpenClawConfig;
+  authModes: PreparedModelRuntimeSnapshot["authModes"];
+  acquired: boolean;
+}>([
+  { name: "no credentials", config: {}, authModes: {}, acquired: false },
+  { name: "unrelated credentials", config: {}, authModes: { acme: "api_key" }, acquired: false },
+  { name: "API-key default", config: {}, authModes: { openai: "api_key" }, acquired: true },
+  {
+    name: "native sign-in default",
+    config: {},
+    authModes: { openai: { source: "native", mode: "oauth" } },
+    acquired: true,
+  },
+  {
+    name: "explicit runtime without a primary",
+    config: {
+      agents: { defaults: { models: { "openai/*": { agentRuntime: { id: "codex" } } } } },
+    },
+    authModes: {},
+    acquired: true,
+  },
+])(
+  "does not mistake the fallback model for configured demand: $name",
+  async ({ config, authModes, acquired }) => {
+    const native: ModelCatalogEntry = {
+      provider: DEFAULT_PROVIDER,
+      id: DEFAULT_MODEL,
+      name: "Default model",
+      nativeRuntime: "codex",
+    };
+    const loadNativeModelCatalog = vi.fn(async () => catalog([native]));
+    publishedSnapshotMock.mockReturnValue({
+      ...owner(config, [
+        { ...native, api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+      ]),
+      authModes,
+      loadNativeModelCatalog,
+    });
+    const { prewarmDefaultNativeModelCatalog, loadProviderScopedThinkingCatalog } =
+      await import("./prepared-model-catalog.js");
+    await prewarmDefaultNativeModelCatalog(config);
+    expect(loadNativeModelCatalog).toHaveBeenCalledTimes(acquired ? 1 : 0);
+
+    // Skipping speculative startup must not disable discovery on the first native turn.
+    expect(
+      await loadProviderScopedThinkingCatalog({
+        config,
+        provider: DEFAULT_PROVIDER,
+        model: DEFAULT_MODEL,
+        agentRuntime: "codex",
+      }),
+    ).toEqual([native]);
+    expect(loadNativeModelCatalog).toHaveBeenCalledTimes(acquired ? 2 : 1);
   },
 );

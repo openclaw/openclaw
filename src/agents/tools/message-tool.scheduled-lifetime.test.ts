@@ -376,7 +376,7 @@ it.for([
       } else {
         await expect(pending).rejects.toThrow(
           viaGateway && revokeAt !== "unconfirmed-action"
-            ? "message action authority is no longer active"
+            ? "The message turn has ended. Start a new turn to retry."
             : revokedError,
         );
       }
