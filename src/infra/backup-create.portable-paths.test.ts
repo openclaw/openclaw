@@ -12,13 +12,13 @@ import { hasErrnoCode } from "./errno.js";
 const nowMs = Date.UTC(2026, 10, 20, 8, 0, 0);
 
 async function writeCaseOnlyPair(
-  state: OpenClawTestState,
+  dir: string,
   skip: (note: string) => never,
+  names = ["Example_0.json", "example_0.json"],
 ): Promise<{ upper: string; lower: string }> {
-  const dir = path.join(state.workspaceDir, "artifacts");
   await fs.mkdir(dir, { recursive: true });
-  const upper = path.join(dir, "Example_0.json");
-  const lower = path.join(dir, "example_0.json");
+  const upper = path.join(dir, names[0]);
+  const lower = path.join(dir, names[1]);
   await fs.writeFile(upper, '{"variant":"upper"}\n');
   try {
     await fs.writeFile(lower, '{"variant":"lower"}\n', { flag: "wx" });
@@ -31,11 +31,16 @@ async function writeCaseOnlyPair(
   return { upper, lower };
 }
 
-function withWorkspaceState(run: (state: OpenClawTestState, outputDir: string) => Promise<void>) {
+function withWorkspaceState(
+  run: (state: OpenClawTestState, outputDir: string) => Promise<void>,
+  workspaceDir = (state: OpenClawTestState) => state.workspaceDir,
+) {
   return withIsolatedBackupState(
     { layout: "split", prefix: "openclaw-backup-portable-", scenario: "minimal" },
     async (state) => {
-      await state.writeConfig({ agents: { entries: { main: { workspace: state.workspaceDir } } } });
+      await state.writeConfig({
+        agents: { entries: { main: { workspace: workspaceDir(state) } } },
+      });
       const outputDir = state.path("backups");
       await fs.mkdir(outputDir, { recursive: true });
       await run(state, outputDir);
@@ -47,7 +52,10 @@ it("rejects included case-only path collisions before capture or archive writes"
   skip,
 }) => {
   await withWorkspaceState(async (state, outputDir) => {
-    const { upper, lower } = await writeCaseOnlyPair(state, skip);
+    const { upper, lower } = await writeCaseOnlyPair(
+      path.join(state.workspaceDir, "artifacts"),
+      skip,
+    );
     using snapshots = vi.spyOn(backupSqliteSnapshot, "createBackupSqliteSnapshotPlan");
     using walk = vi.spyOn(backupTarWalk, "walkBackupTar");
 
@@ -93,7 +101,7 @@ it("rejects names that differ only by Unicode normalization", async () => {
 
 it("does not reject collisions inside excluded workspaces", async ({ skip }) => {
   await withWorkspaceState(async (state, outputDir) => {
-    await writeCaseOnlyPair(state, skip);
+    await writeCaseOnlyPair(path.join(state.workspaceDir, "artifacts"), skip);
 
     const result = await createBackupArchive({
       output: outputDir,
@@ -104,5 +112,34 @@ it("does not reject collisions inside excluded workspaces", async ({ skip }) => 
     await expect(verifyBackupArchive(result.archivePath)).resolves.toMatchObject({
       ok: true,
     });
+  });
+});
+
+it("suggests --no-include-workspace for a workspace nested in the state directory", async ({
+  skip,
+}) => {
+  await withWorkspaceState(
+    async (state, outputDir) => {
+      await writeCaseOnlyPair(state.statePath("workspace", "artifacts"), skip);
+
+      await expect(
+        createBackupArchive({ output: outputDir, includeWorkspace: true, nowMs }),
+      ).rejects.toThrow(/Rename or move one of them or pass --no-include-workspace/u);
+      expect(await fs.readdir(outputDir)).toEqual([]);
+    },
+    (state) => state.statePath("workspace"),
+  );
+});
+
+it("ignores collisions between transient SQLite files the archive omits", async ({ skip }) => {
+  await withWorkspaceState(async (state, outputDir) => {
+    await writeCaseOnlyPair(state.statePath("memory"), skip, [
+      "main.sqlite.reindex-lock.sqlite",
+      "Main.sqlite.reindex-lock.sqlite",
+    ]);
+
+    const result = await createBackupArchive({ output: outputDir, includeWorkspace: true, nowMs });
+
+    await expect(verifyBackupArchive(result.archivePath)).resolves.toMatchObject({ ok: true });
   });
 });

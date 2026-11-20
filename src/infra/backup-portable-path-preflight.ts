@@ -10,6 +10,7 @@ import {
   resolvePortableArchivePathKey,
 } from "./backup-archive-path-policy.js";
 import { isLegacyAuditMigrationBackupPath } from "./backup-audit-paths.js";
+import { isExcludedBackupSqliteSourceName } from "./backup-sqlite-classified-path.js";
 import { ignoreMissingPath } from "./errno.js";
 import { isUpdateCapturePath } from "./update-capture-paths.js";
 
@@ -106,13 +107,16 @@ async function findBackupSourcePortablePathCollision(params: {
 // Verification rejects case- or normalization-only path collisions; find them
 // before database capture and compression rather than after a full archive write.
 export async function assertNoPortableSourcePathCollision(
-  plan: { resources: BackupResourcePlan; stateDir: string },
+  plan: { resources: BackupResourcePlan; stateDir: string; workspaceDirs: readonly string[] },
   archiveRoot: string,
   assets: readonly BackupAsset[],
   signal?: AbortSignal,
 ): Promise<void> {
   const stateAsset = assets.find((asset) => asset.kind === "state");
   const gatewayLockDir = resolveGatewayLockDir(plan.stateDir);
+  // Mirrors the archive filter: the resource plan owns privacy admission unless
+  // a linked state root has a distinct configured capture sibling.
+  const checkConfiguredCaptureRoot = plan.stateDir !== plan.resources.stateDir;
   const collision = await findBackupSourcePortablePathCollision({
     archiveRoot,
     sourcePaths: [...new Set(assets.map((asset) => asset.sourcePath))],
@@ -121,12 +125,13 @@ export async function assertNoPortableSourcePathCollision(
     include: (sourcePath, kind) => {
       const resolved = path.resolve(sourcePath);
       return (
+        !(checkConfiguredCaptureRoot && isUpdateCapturePath(resolved, plan.stateDir)) &&
         (kind === "file"
           ? plan.resources.isIncluded(resolved)
           : plan.resources.isTraversable(resolved)) &&
-        !isUpdateCapturePath(resolved, plan.stateDir) &&
         !isPathInside(gatewayLockDir, resolved) &&
-        !(stateAsset && isLegacyAuditMigrationBackupPath(resolved, stateAsset.sourcePath))
+        !(stateAsset && isLegacyAuditMigrationBackupPath(resolved, stateAsset.sourcePath)) &&
+        !isExcludedBackupSqliteSourceName(resolved, plan.resources)
       );
     },
   });
@@ -134,9 +139,7 @@ export async function assertNoPortableSourcePathCollision(
     return;
   }
   const inWorkspace = (sourcePath: string) =>
-    assets.some(
-      (asset) => asset.kind === "workspace" && isPathInside(asset.sourcePath, sourcePath),
-    );
+    plan.workspaceDirs.some((workspaceDir) => isPathInside(workspaceDir, sourcePath));
   const workspaceHint =
     inWorkspace(collision.first) && inWorkspace(collision.second)
       ? " or pass --no-include-workspace"
