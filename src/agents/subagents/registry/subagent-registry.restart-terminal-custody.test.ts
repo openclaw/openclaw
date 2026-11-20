@@ -143,7 +143,8 @@ it("2: a crash-restored delegate with no execution owner settles interrupted and
   expect(unsettled.map((child) => child.runId)).not.toContain("crashed-delegate");
 });
 
-it("2: a crash-restored delegate whose kill never finished settles interrupted", async () => {
+it("2: a crash-restored delegate whose requester had asked to stop it settles interrupted and quietly", async () => {
+  await writeParentSession();
   // The kill owner committed its intent, then the process died before termination.
   await addRunningChild("crashed-killing", {
     killIntent: {
@@ -152,15 +153,20 @@ it("2: a crash-restored delegate whose kill never finished settles interrupted",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
     },
   });
+  const messages = recordRequesterMessages();
 
   await restartGateway();
-  await testing.sweepOnceForTests();
-  await fixture.settle();
+  await resumeRoots();
 
+  // The requester's election to stop it stands: no outcome follows, as for the finished kill.
   const settled = loadSubagentRegistryFromSqlite().get("crashed-killing");
   expectInterrupted(settled);
   expect(settled?.killIntent).toBeUndefined();
-  expect(settled?.delivery).toEqual({ status: "pending" });
+  expect(settled).toMatchObject({
+    cleanupCompletedAt: expect.any(Number),
+    delivery: { status: "not_required", disposition: "intentional_non_delivery" },
+  });
+  expect(messages).toEqual([]);
   expect(fixture.gateway).not.toHaveBeenCalled();
   expect(fixture.announce).not.toHaveBeenCalled();
 });

@@ -7,7 +7,8 @@
 // and no child-session effects. The interruption is the delegate's one outcome, owed to its
 // requester like the shutdown's own (upstream #201544): startup's restart completion recovery
 // admits it under current authority and delivers it through the delegate's return mode. The
-// sweeper never adds a second outcome for it.
+// sweeper never adds a second outcome for it. A delegate its requester had already asked to stop
+// keeps that election and closes quietly, as the finished kill would have.
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
@@ -89,12 +90,19 @@ export async function settleOwnerlessContinuationChildren(
         entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
         // A kill the earlier lifecycle never finished has no owner either. Recording it as a
         // kill would retire the row at cleanup; the interruption keeps it inspectable.
+        const stoppedByRequester = entry.killIntent !== undefined;
         entry.killIntent = undefined;
         // An error outcome freezes no result text, as the canonical completion does.
         const completion = ensureCompletionState(entry);
         completion.resultText = null;
         completion.capturedAt = endedAt;
-        ensureDeliveryState(entry);
+        if (stoppedByRequester) {
+          entry.suppressCompletionDelivery = true;
+          ensureDeliveryState(entry).disposition = "intentional_non_delivery";
+        } else {
+          // Owed to the requester: pending, unless the row expects no completion.
+          ensureDeliveryState(entry);
+        }
         postimages.set(entry.runId, entry);
       }
       return { value: [...postimages.values()], postimages };
@@ -116,6 +124,7 @@ export async function settleOwnerlessContinuationChildren(
     // admit the owed outcome; live custody (an in-process restart) delivers it now, and a row
     // that owes none finishes cleanup now.
     if (
+      entry.suppressCompletionDelivery ||
       entry.delivery?.status === "not_required" ||
       !subagentRuns.isCompletionAuthorityRetired(entry)
     ) {
