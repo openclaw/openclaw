@@ -133,7 +133,6 @@ const realSignInError =
 
 function installGateway(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
   return installMockGateway(page, {
-    agentModel: null,
     ...scenario,
     featureMethods: [
       ...defaultControlUiFeatureMethods,

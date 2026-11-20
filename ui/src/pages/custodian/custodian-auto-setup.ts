@@ -77,8 +77,12 @@ export class CustodianAutoSetup {
     return this.epoch;
   }
 
+  /**
+   * Done once a pick is activated here or the Gateway reports a configured model. A fresh
+   * Gateway's agent always names an implicit default model, so that alone proves nothing.
+   */
   get ready(): boolean {
-    return this.connected || Boolean(this.selectedAgent()?.model?.primary?.trim());
+    return this.connected || this.detection?.setupComplete === true;
   }
 
   private selectedAgent() {

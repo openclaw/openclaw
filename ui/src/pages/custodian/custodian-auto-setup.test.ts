@@ -276,7 +276,9 @@ it("shows detection failures briefly and checks again", async () => {
 });
 
 it("shows a configured Gateway as done without testing anything", async () => {
-  const request = setupRequest();
+  // The Gateway reports configured setup; an agent's model alone is not proof (fresh
+  // Gateways always name an implicit default).
+  const request = setupRequest(() => ({ ...detection(), setupComplete: true }));
   const configured = makeBootRoster({
     agents: [{ id: "main", model: { primary: "openai/gpt-5.5" } }],
   });
