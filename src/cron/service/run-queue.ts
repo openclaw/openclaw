@@ -28,7 +28,7 @@ import { CRON_ADMISSION_DEFERRED_RECEIPT_ERROR } from "./admission-deferred.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { locked } from "./locked.js";
 import { resolveCurrentDefaultAgentId } from "./ops-shared.js";
-import { cronRunCeilingAfterPushback } from "./provider-backoff.js";
+import { blockedCronExtraRunProviders } from "./provider-backoff.js";
 import type { ManualRunOptions } from "./run-options.js";
 import { skipCronJobsWithoutOwners } from "./run-owner.js";
 import { launchCronRun, type CronLaunchContext } from "./run-queue-execution.js";
@@ -369,7 +369,7 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
             preparingAgentIds: preparingCronAgentIds(state.deps.env),
             busyConversationJobIds: busyConversationCronJobIds(state),
             memoryAllowsExtraRun: cronMemoryAllowsExtraRun(),
-            runCeilingAfterPushback: cronRunCeilingAfterPushback(),
+            blockedExtraRunProviders: blockedCronExtraRunProviders(),
             requests: getCronRunQueueRequests(state, { includePendingEvents: true }),
             hostProcessId: currentPluginCommandHostProcessId(),
             pluginCommandHosts: state.deps.resolvePluginCommandScheduleHosts?.(),

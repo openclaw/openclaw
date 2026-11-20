@@ -54,11 +54,8 @@ export type CronRunQueueOperations = {
       maxConcurrentRuns: number;
       /** At least 1 GiB was free when the host read memory: see `cronMemoryAllowsExtraRun`. */
       memoryAllowsExtraRun?: boolean;
-      /**
-       * The most runs automation may hold after provider pushback, when it has pushed back: see
-       * `cronRunCeilingAfterPushback`. It only limits runs past the default slots.
-       */
-      runCeilingAfterPushback?: number;
+      /** Providers whose parked receipts can only take a default slot on this drain. */
+      blockedExtraRunProviders?: string[];
       requests: CronRunRequestContext[];
       schedulingPaused?: boolean;
       preparingAgentIds?: string[];
@@ -92,12 +89,12 @@ export type CronRunQueueOperations = {
     output: { skipped: CronSkippedRequest[] };
   };
   /**
-   * A fired condition stops counting as a check. A timed check then waits, holding neither a
-   * check nor a run slot, until the queue drain hands it a slot in due order; `runSlot` is false
-   * until then, and the host asks again each time the queue moves.
+   * Settle a fired condition or return a provisional extra slot after provider selection.
+   * The receipt keeps its place in the queue without holding a slot. The host asks again
+   * after each drain until another slot is granted.
    */
-  "cron.settleConditionCheck": {
-    input: { storeKey: string; jobId: string; receiptId: string };
+  "cron.reconcileRunSlot": {
+    input: { storeKey: string; jobId: string; receiptId: string; parkProvider?: string };
     /** `stale`: the receipt no longer owns the job's running marker. */
     output: { job?: CronStoredJob; runSlot: boolean; stale?: true };
   };

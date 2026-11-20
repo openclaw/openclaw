@@ -1,7 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import { withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import {
   admitModelTurn,
   completionConfig,
@@ -22,14 +26,22 @@ import { listSessionPendingInputs } from "../../config/sessions/session-pending-
 import { resolveAdmittedCronCompletionStatus } from "../../cron/completion-status.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { resolveCronRunErrorReason } from "../../cron/run-error-reason.js";
-import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
+import {
+  TEST_SCHEDULED_OCCURRENCE,
+  TEST_SCHEDULED_TURN,
+} from "../../cron/scheduled-occurrence.test-support.js";
 import type { DeferredCronNotifications } from "../../cron/service/state.js";
 import { applyJobResult } from "../../cron/service/timer-outcomes.js";
+import { runCronSessionTurn } from "../../cron/session-run.js";
 import { createChatAbortSignalReason } from "../../gateway/chat-abort.js";
 import { runGatewayCronSessionEvent } from "../../gateway/server-cron-event-dispatch.js";
 import { createGatewayCronTargetResolver } from "../../gateway/server-cron-targets.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
-import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
+import {
+  peekDeliverableSystemEventEntries,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -49,6 +61,7 @@ import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "./session-event-handoff.js";
+import { configureEventState } from "./session-event.test-support.js";
 
 // mock-isolation: Only model decisions are synthetic; tool, controller and storage owners stay real.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -115,6 +128,96 @@ it("records operation-only Stop for a staged event before execution", async ({ s
     },
   );
 });
+
+it.for(["resume", "cancel"] as const)(
+  "lets a conversational turn pass a parked automation before %s",
+  async (action, { signal }) => {
+    await withOpenClawTestState(
+      { label: "session-event-provider-wait", env: { OPENCLAW_TEST_FAST: "0" } },
+      async (state) => {
+        const config = completionConfig(state.workspaceDir);
+        await configureEventState(state, config);
+        const scope = { agentId: "main", sessionKey: "agent:main:provider-wait" };
+        await replaceSessionEntry(scope, {
+          sessionId: "provider-wait",
+          lifecycleRevision: "original",
+          permissionMode: "full",
+          updatedAt: Date.now(),
+        });
+        const stopWaiting = new AbortController();
+        const parked = createDeferred();
+        const release = createDeferred();
+        let allowed = false;
+        const prompts: string[] = [];
+        model.mockReset().mockImplementation(async (params) => {
+          prompts.push(params.prompt);
+          await admitModelTurn(params);
+          return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+        });
+        const scheduledText = "Run the scheduled report on the selected provider";
+        const scheduled = runCronSessionTurn({
+          ...TEST_SCHEDULED_TURN,
+          ...scope,
+          cfg: config,
+          job: makeCronJob({ sessionTarget: `session:${scope.sessionKey}` }),
+          text: scheduledText,
+          abortSignal: AbortSignal.any([signal, stopWaiting.signal]),
+          providerRunSlot: {
+            tryStart: () => allowed,
+            wait: async (provider, parkedSignal) => {
+              expect(provider).toBe("mock-openai");
+              parked.resolve();
+              await withinTest(release.promise, parkedSignal);
+            },
+          },
+        });
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(parked.promise, scheduled, "automation never parked"),
+            signal,
+          );
+          expect(peekDeliverableSystemEventEntries(scope.sessionKey)).toEqual([]);
+          const other = enqueueSessionEventForHost("Unrelated conversation turn", {
+            ...scope,
+            source: "task",
+            expectedTarget: await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey),
+            abortSignal: signal,
+            deliver: false,
+          });
+          await expect(withinTest(other.settled, signal)).resolves.toMatchObject({
+            status: "completed",
+          });
+          expect(prompts).toHaveLength(1);
+          expect(prompts[0]).not.toContain(scheduledText);
+          if (action === "cancel") {
+            stopWaiting.abort();
+            await expect(withinTest(scheduled, signal)).resolves.toMatchObject({
+              status: "error",
+              executionStarted: false,
+            });
+            expect(prompts).toHaveLength(1);
+            expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
+          } else {
+            allowed = true;
+            release.resolve();
+            await expect(withinTest(scheduled, signal)).resolves.toMatchObject({
+              status: "ok",
+              executionStarted: true,
+            });
+            expect(prompts).toHaveLength(2);
+            expect(prompts[1]).toContain(scheduledText);
+          }
+        } finally {
+          allowed = true;
+          release.resolve();
+          await scheduled;
+          await drainGlobalSingletonLifecycleState("restart");
+          resetSystemEventsForTest();
+        }
+      },
+    );
+  },
+);
 
 // Queue/readmission is covered by session-event-config-readmission.test.ts's
 // queued Gmail and scheduled destination cases; result settlement is admission-independent.

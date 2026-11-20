@@ -36,6 +36,7 @@ import {
   prepareScheduledAutomationStart,
   resolveSessionEventReplyOptions,
   settleSessionEventTurn,
+  withScheduledSessionProviderAdmission,
   type ScheduledAutomationAdmission,
 } from "./session-event-automation.js";
 import {
@@ -65,9 +66,8 @@ import {
   prepareSessionEventTargetForHost,
 } from "./session-event-target.js";
 import {
-  readmitSessionEventOccurrence,
+  settleSessionEventAttempt,
   resolveSessionEventTerminalOutcome,
-  waitForSessionEventReadmission,
 } from "./session-event-terminal.js";
 
 export { assertSessionEventTargetCurrent, captureSessionEventTargetForHost };
@@ -94,6 +94,7 @@ function enqueueSessionEventAttempt(
   text: string,
   { assertAcceptanceCurrent, ...options }: SessionEventOptions,
   readmissionAttempt: number,
+  configReadmissions = readmissionAttempt,
 ): SessionEventReceipt {
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
@@ -140,6 +141,7 @@ function enqueueSessionEventAttempt(
   let started = false;
   let admissionStarted = false;
   let deferred = false;
+  let waitingProvider: string | undefined;
   const automationAdmission: ScheduledAutomationAdmission = { admissionDeferred: false };
   let adopted = false;
   const configPolicy = captureSessionEventConfigPolicy(
@@ -323,64 +325,45 @@ function enqueueSessionEventAttempt(
       // carries the still-live assertion so revoked ingress rejects the retry.
       const pendingAcceptanceAssertion = accepted ? undefined : acceptanceAssertion;
       acceptanceAssertion = undefined;
-      // Producers never retry, so a policy publication that rejected an unstarted
-      // occurrence re-admits it under the current policy instead of destroying it.
-      // Stop, abort and abandonment still settle terminally.
-      const retainForConfigChange = () =>
-        configPolicy.changed &&
-        !started &&
-        !delivery.deliveryAttempted &&
-        !signal.aborted &&
-        !abandoned;
-      if (retainForConfigChange() && configPolicy.canReadmit(readmissionAttempt)) {
-        await waitForSessionEventReadmission(readmissionAttempt, signal);
-      }
-      settlement = "finished";
-      const canReadmit = retainForConfigChange() && configPolicy.canReadmit(readmissionAttempt);
-      const terminal = resolveSessionEventTerminalOutcome({
-        operation,
-        signal,
-        failure,
-        genericFailure,
-        terminalOutcome,
-      });
-      ({ failure, terminalOutcome } = terminal);
-      const { status } = terminal;
-      if (status === "failed" && !canReadmit) {
-        log.error("session event execution failed", {
-          source: options.source,
+      const readmission = await settleSessionEventAttempt({
+        text: eventText,
+        options: {
+          ...options,
           agentId,
           sessionKey,
-          eventId: occurrenceId,
-          error: String(failure),
-        });
-      }
-      signal.removeEventListener("abort", onAbort);
-      generationLease?.release();
-      if (canReadmit) {
-        ownership.release();
-        const readmission = readmitSessionEventOccurrence({
-          text: eventText,
-          options: {
-            ...options,
-            agentId,
-            sessionKey,
-            assertAcceptanceCurrent: pendingAcceptanceAssertion,
-            occurrences,
-          },
-          attempt: readmissionAttempt + 1,
-          adopted,
-          occurrenceId,
-          enqueue: enqueueSessionEventAttempt,
-          log,
-        });
-        readmittedReceipt = readmission.receipt;
-        failure = readmission.failure ?? failure;
-      } else if (options.preserveOccurrenceOnRejection && !adopted && !started) {
-        ownership.release();
-      } else {
-        ownership.cancel();
-      }
+          occurrences,
+          assertAcceptanceCurrent: pendingAcceptanceAssertion,
+        },
+        signal,
+        adopted,
+        occurrenceId,
+        ownership,
+        configReadmissions,
+        dispatchAttempt: readmissionAttempt,
+        canResume: () => !started && !delivery.deliveryAttempted && !signal.aborted && !abandoned,
+        canRetryConfig: () => configPolicy.changed && configPolicy.canReadmit(configReadmissions),
+        waitingProvider,
+        onSettling(error) {
+          settlement = "finished";
+          signal.removeEventListener("abort", onAbort);
+          generationLease?.release();
+          generationLease = undefined;
+          return resolveSessionEventTerminalOutcome({
+            operation,
+            signal,
+            failure: error ?? failure,
+            genericFailure,
+            terminalOutcome,
+          });
+        },
+        preserveOccurrence: options.preserveOccurrenceOnRejection === true && !adopted && !started,
+        enqueue: enqueueSessionEventAttempt,
+        log,
+      });
+      const { terminal, receipt } = readmission;
+      readmittedReceipt = receipt;
+      ({ terminalOutcome } = terminal);
+      failure = readmission.failure ?? terminal.failure;
       releaseOperatorAuthority?.();
       if (!accepted) {
         acceptance.resolve(
@@ -395,6 +378,7 @@ function enqueueSessionEventAttempt(
         resolve(readmittedReceipt.settled);
         return;
       }
+      const { status } = terminal;
       resolve({
         status,
         executionStarted: started,
@@ -517,7 +501,12 @@ function enqueueSessionEventAttempt(
           !options.scheduledAutomation &&
           !isCronSessionKey(sessionKey) &&
           !hasSessionEventOriginatingCaller(target),
-        scheduledAutomation: options.scheduledAutomation,
+        scheduledAutomation: withScheduledSessionProviderAdmission(
+          options.scheduledAutomation,
+          (provider) => {
+            waitingProvider = provider;
+          },
+        ),
         ...resolveSessionEventReplyOptions(options),
         operatorAuthority: options.scheduledAutomation?.operatorAuthority ?? operatorAuthority,
         admittedSessionSettings: settings,
@@ -694,7 +683,7 @@ function enqueueSessionEventAttempt(
       // onDeferred precedes queue insertion; only the dispatch result proves acceptance.
       accept();
     } else {
-      if (!started) {
+      if (!started && waitingProvider === undefined) {
         genericFailure ??= "Session event was not admitted; retry against the current session";
       }
       finish();

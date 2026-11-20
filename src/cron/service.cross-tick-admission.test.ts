@@ -19,7 +19,7 @@ import * as clocks from "../test-utils/gateway-scheduler-clock.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
 import { handOver, start, stop } from "./service/ops-lifecycle.js";
 import {
-  cronRunCeilingAfterPushback,
+  blockedCronExtraRunProviders,
   watchCronProviderPushback,
 } from "./service/provider-backoff.js";
 import { waitForCronRunQueue } from "./service/run-queue.js";
@@ -467,80 +467,153 @@ it("starts one run past the eight default slots per drain while 1 GiB is free", 
   }
 });
 
-const rateLimited = () =>
+const rateLimited = (provider = "stand-in") =>
   emitAgentEvent({
     runId: "attempt",
     stream: "lifecycle",
     data: {
       phase: "error",
-      errorObservation: { provider: "stand-in", failoverReason: "rate_limit" },
+      errorObservation: { provider, failoverReason: "rate_limit" },
     },
   });
 
-it("stops runs past the default slots on a provider rate limit and adds one back each minute", async () => {
-  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+it("parks a fired condition's payload once and lets another provider use the extra slot", async () => {
+  let nowMs = Date.now();
   const dueAtMs = nowMs + 1_000;
-  const store = await seedJobs(
-    Array.from({ length: 16 }, (_, index) => dueJob(`job-${index}`, nowMs, dueAtMs)),
-  );
-  const release = createDeferred();
+  const waits = dueJob("waits", nowMs, dueAtMs);
+  waits.schedule = { kind: "every", everyMs: 300_000, anchorMs: dueAtMs };
+  waits.trigger = { script: "return { fire: true }" };
+  const healthy = dueJob("healthy", nowMs, dueAtMs + 1_000);
+  const store = await seedJobs([
+    ...Array.from({ length: 8 }, (_, index) => dueJob(`base-${index}`, nowMs, dueAtMs)),
+    waits,
+    healthy,
+  ]);
   const finish = createDeferred();
+  const started: string[] = [];
+  const evaluateCronTrigger = vi.fn(async () => ({ kind: "evaluated" as const, fire: true }));
+  const state = cron.createCronRegressionState({
+    storePath: store.storePath,
+    nowMs: () => nowMs,
+    cronConfig: { triggers: { enabled: true } },
+    evaluateCronTrigger,
+    runIsolatedAgentJob: async ({ job, providerRunSlot, abortSignal }) => {
+      const provider = job.id === waits.id ? "stand-in" : "healthy";
+      if (providerRunSlot && !providerRunSlot.tryStart(provider)) {
+        await providerRunSlot.wait(provider, expectDefined(abortSignal, "cron run abort signal"));
+      }
+      started.push(job.id);
+      await finish.promise;
+      return { status: "ok" as const };
+    },
+  });
+  const sessions = holdCronSessions(finish.promise);
+  const { wake } = await captureCronSchedulerWakeForTest(() => start(state));
+  try {
+    nowMs = dueAtMs;
+    await wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(8));
+    rateLimited();
+    vi.spyOn(process, "availableMemory").mockReturnValue(1024 ** 3);
+    await wake(state);
+    let parkedReceipt: string | undefined;
+    await vi.waitFor(async () => {
+      const job = (await loadCronStore(store.storePath)).jobs.find(({ id }) => id === waits.id);
+      parkedReceipt = job?.state.runSlotWaitReceiptId;
+      expect(parkedReceipt).toEqual(expect.any(String));
+      expect(job?.state.runningReceiptId).toBe(parkedReceipt);
+    });
+    nowMs += 1_000;
+    await wake(state);
+    await vi.waitFor(() => expect(started).toContain(healthy.id));
+    expect(started).not.toContain(waits.id);
+    vi.setSystemTime(Date.now() + 60_000);
+    await wake(state);
+    await vi.waitFor(() => expect(started).toContain(waits.id));
+    expect(store.receipt(waits)?.receiptId).toBe(parkedReceipt);
+    expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+  } finally {
+    finish.resolve();
+    stop(state);
+    await Promise.all(sessions);
+    await state.schedulerDrain;
+  }
+});
+
+function holdCronSessions(until: Promise<unknown>) {
+  setCommandLaneConcurrency(CommandLane.CronNested, 16);
+  return Array.from({ length: 9 }, () =>
+    enqueueCommandInLane(CommandLane.CronNested, async () => await until),
+  );
+}
+
+it("moves an extra slot to the fallback provider and limits new runs on that provider", async () => {
+  let nowMs = Date.now();
+  const dueAtMs = nowMs + 1_000;
+  const store = await seedJobs([
+    ...Array.from({ length: 8 }, (_, index) => dueJob(`base-${index}`, nowMs, dueAtMs)),
+    dueJob("switches", nowMs, dueAtMs + 1_000),
+    dueJob("waiting-destination", nowMs, dueAtMs + 2_000),
+    dueJob("fresh-source", nowMs, dueAtMs + 2_000),
+  ]);
+  const finish = createDeferred();
+  const switched = createDeferred();
+  const fallBack = createDeferred();
+  const finishFallback = createDeferred();
   const started: string[] = [];
   const state = cron.createCronRegressionState({
     storePath: store.storePath,
     nowMs: () => nowMs,
-    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
-      await (started.push(job.id) <= 2 ? release : finish).promise;
-      return { status: "ok" as const, summary: job.id };
+    runIsolatedAgentJob: async ({ job, providerRunSlot, onExecutionStarted, abortSignal }) => {
+      const provider = job.id === "waiting-destination" ? "destination" : "source";
+      if (providerRunSlot && !providerRunSlot.tryStart(provider)) {
+        await providerRunSlot.wait(provider, expectDefined(abortSignal, "cron run abort signal"));
+      }
+      started.push(job.id);
+      if (job.id === "switches") {
+        await fallBack.promise;
+        onExecutionStarted?.({
+          jobId: job.id,
+          provider: "destination",
+          isFallback: true,
+        });
+        switched.resolve();
+        await finishFallback.promise;
+      } else {
+        await finish.promise;
+      }
+      return { status: "ok" as const };
     },
   });
-  vi.spyOn(process, "availableMemory").mockReturnValue(1024 ** 3);
-  // The stubbed runner starts no agent turns, so parked tasks stand for ten of them in the lane
-  // automation's turns run in.
-  setCommandLaneConcurrency(CommandLane.CronNested, 16);
-  const sessions = Array.from({ length: 10 }, () =>
-    enqueueCommandInLane(CommandLane.CronNested, async () => await finish.promise),
-  );
-  const running = await captureCronSchedulerWakeForTest(() => start(state));
-  const tickAfter = async (ms: number) => {
-    vi.setSystemTime(Date.now() + ms);
-    await running.wake(state);
+  const sessions = holdCronSessions(finish.promise);
+  const { wake } = await captureCronSchedulerWakeForTest(() => start(state));
+  const advance = async (ms: number) => {
+    nowMs += ms;
+    await wake(state);
   };
-  const jobs = async () => (await loadCronStore(store.storePath)).jobs;
   try {
-    nowMs = dueAtMs;
-    await tickAfter(0);
-    await vi.waitFor(() => expect(started).toHaveLength(9));
-    await tickAfter(0);
-    await vi.waitFor(() => expect(started).toHaveLength(10));
-
-    // A model attempt reports that its provider rate-limited it: no runs past the default eight.
-    rateLimited();
-    // Those sessions keep retrying; their pushback holds the limit where it is.
-    rateLimited();
-
-    // Two runs end: their slots are not handed to queued runs.
-    release.resolve();
-    await vi.waitFor(async () =>
-      expect((await jobs()).filter((job) => job.state.lastRunStatus === "ok")).toHaveLength(2),
-    );
-    await tickAfter(0);
-    expect(started).toHaveLength(10);
-
-    // One more run a minute, but not within a minute of pushback.
-    await tickAfter(60_000);
-    await vi.waitFor(() => expect(started).toHaveLength(11));
-    rateLimited();
-    await tickAfter(30_000);
-    expect(started).toHaveLength(11);
-    await tickAfter(30_000);
-    await vi.waitFor(() => expect(started).toHaveLength(12));
+    await advance(1_000);
+    await vi.waitFor(() => expect(started).toHaveLength(8));
+    rateLimited("source");
+    rateLimited("destination");
+    vi.setSystemTime(Date.now() + 60_000);
+    vi.spyOn(process, "availableMemory").mockReturnValue(1024 ** 3);
+    await advance(1_000);
+    await vi.waitFor(() => expect(started).toContain("switches"));
+    fallBack.resolve();
+    await switched.promise;
+    await advance(1_000);
+    await vi.waitFor(() => expect(started).toContain("fresh-source"));
+    expect(started).not.toContain("waiting-destination");
+    finishFallback.resolve();
+    await vi.waitFor(() => expect(started).toContain("waiting-destination"));
   } finally {
-    release.resolve();
+    fallBack.resolve();
+    finishFallback.resolve();
     finish.resolve();
-    await Promise.all(sessions);
-    await waitForCronRunQueue(state);
     stop(state);
+    await Promise.all(sessions);
+    await state.schedulerDrain;
   }
 });
 
@@ -557,7 +630,7 @@ it("counts hook sessions sharing automation's budget when a provider pushes back
     );
     // Eight automation runs and eight hook turns are in flight: pushback limits automation.
     rateLimited();
-    expect(cronRunCeilingAfterPushback()).toBe(8);
+    expect(blockedCronExtraRunProviders()).toEqual(["stand-in"]);
   } finally {
     stopWatch();
     end.resolve();
@@ -578,19 +651,17 @@ it("starts the quiet minute again on pushback that cannot lower the limit", asyn
     await vi.waitFor(() => expect(inFlight()).toBe(9));
     // Nine automation sessions and a rate limit: automation drops to its eight default slots.
     rateLimited();
-    expect(cronRunCeilingAfterPushback()).toBe(8);
+    expect(blockedCronExtraRunProviders()).toEqual(["stand-in"]);
     ends[0]?.resolve();
     await sessions[0];
-    expect(inFlight()).toBe(8);
-
     // Another rate limit at eight sessions cannot lower the limit, but the next run still
     // needs a full minute without pushback.
     after(50_000);
     rateLimited();
     after(10_000);
-    expect(cronRunCeilingAfterPushback()).toBe(8);
+    expect(blockedCronExtraRunProviders()).toEqual(["stand-in"]);
     after(50_000);
-    expect(cronRunCeilingAfterPushback()).toBe(9);
+    expect(blockedCronExtraRunProviders()).toEqual([]);
   } finally {
     stopWatch();
     ends.forEach((end) => end.resolve());

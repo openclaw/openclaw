@@ -22,7 +22,7 @@ export type CronSchedulerConfig = {
   /** See `cron.drainQueue`. */
   memoryAllowsExtraRun?: boolean;
   /** See `cron.drainQueue`. */
-  runCeilingAfterPushback?: number;
+  blockedExtraRunProviders?: string[];
   cronConfig?: CronConfig;
   defaultAgentId?: string;
   configuredChannels?: string[];

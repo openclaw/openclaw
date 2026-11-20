@@ -52,6 +52,8 @@ type CronCoreRunOptions = {
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
   onConditionFired?: ExecuteJobCoreOptions["onConditionFired"];
+  providerRunSlot?: ExecuteJobCoreOptions["providerRunSlot"];
+  onProviderAttempt?: (provider: string) => void;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
 } & (
   | { runReceipt: CronRunReceiptHandle; runReceiptContext: OpenClawStateWorkerContext }
@@ -378,6 +380,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
       watchdog?.noteLaneWait();
     };
     const noteRunnerStarted = (info?: CronAgentExecutionStarted) => {
+      if (info?.provider) {
+        opts?.onProviderAttempt?.(info.provider);
+      }
       if (watchdog) {
         watchdog.noteRunnerStarted(info);
       } else {
@@ -386,6 +391,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
     };
     const trackExecution = !watchdog || deferTimeoutUntilExecutionStart;
     const executionIdentity = opts?.executionIdentity;
+    const providerRunSlot = opts?.providerRunSlot;
     const coreOptions: ExecuteJobCoreOptions = {
       migrationPending: opts?.migrationPending,
       idleAdmission: opts?.idleAdmission,
@@ -399,6 +405,17 @@ async function executeJobCoreWithTimeoutUnfinalized(
       onLaneWait: watchdog && deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
       assertRunCurrent,
       onConditionFired: opts?.onConditionFired,
+      providerRunSlot: providerRunSlot && {
+        tryStart: providerRunSlot.tryStart,
+        wait: async (provider, signal) => {
+          noteLaneState({ waiting: true });
+          try {
+            await providerRunSlot.wait(provider, signal);
+          } finally {
+            noteLaneState({ waiting: false });
+          }
+        },
+      },
       executionIdentity: executionIdentity && {
         ...executionIdentity,
         onPostAdmission: (context) => {

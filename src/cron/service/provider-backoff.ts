@@ -1,5 +1,8 @@
 import { sanitizeForConsole } from "../../agents/console-sanitize.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import {
+  DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+  MAX_CRON_CONCURRENT_RUNS,
+} from "../../config/cron-limits.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
@@ -7,81 +10,116 @@ import { CommandLane } from "../../process/lanes.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { readRunFailureCause } from "../../shared/run-failure-notice.js";
 
-/** After pushback the ceiling climbs back by one run per this much time without pushback. */
 const STEP_UP_MS = 60_000;
-
+const MAX_EXTRA_RUNS = MAX_CRON_CONCURRENT_RUNS - DEFAULT_CRON_MAX_CONCURRENT_RUNS;
 const log = createSubsystemLogger("cron");
 
-type Reduction = { ceiling: number; atMs: number };
+type Reduction = { slots: number; atMs: number };
 
-// Process-wide, like the provider limits it reacts to. Not persisted: a restart starts with the
-// extra runs open and backs off again on the first pushback.
-const pushback = resolveGlobalSingleton(
+const backoff = resolveGlobalSingleton(
   Symbol.for("openclaw.cronProviderBackoff"),
-  (): { reduction?: Reduction } => ({}),
+  () => ({ reductions: new Map<string, Reduction>(), charges: new Map<string, number>() }),
   () => resetCronProviderBackoff(),
 );
 
-/** Forgets every reduction: an in-process restart starts with the extra runs open. */
 export function resetCronProviderBackoff(): void {
-  delete pushback.reduction;
+  backoff.reductions.clear();
+  backoff.charges.clear();
 }
 
-/**
- * The most runs automation may hold after provider pushback, or undefined when nothing has pushed
- * back. Pushback takes away the runs past the eight default slots; each minute without pushback
- * gives one back. The default slots never count against it; see `cron.drainQueue`.
- */
-export function cronRunCeilingAfterPushback(nowMs = Date.now()): number | undefined {
-  const { reduction } = pushback;
-  return reduction && reduction.ceiling + Math.floor((nowMs - reduction.atMs) / STEP_UP_MS);
+function extraSlots(provider: string, nowMs: number): number {
+  const reduction = backoff.reductions.get(provider);
+  if (!reduction) {
+    return MAX_EXTRA_RUNS;
+  }
+  const slots = reduction.slots + Math.max(0, Math.floor((nowMs - reduction.atMs) / STEP_UP_MS));
+  if (slots >= MAX_EXTRA_RUNS) {
+    backoff.reductions.delete(provider);
+    return MAX_EXTRA_RUNS;
+  }
+  return slots;
 }
 
-/**
- * Pushback while automation and the hook turns sharing its budget hold more agent sessions than
- * the eight default slots: automation stops adding runs past them. The sessions already in flight
- * keep retrying, so while they exceed the ceiling their pushback holds it where it is; pushback
- * once they have come down to it drops it to eight again. Pushback that cannot lower a reduced
- * ceiling, at eight sessions or fewer, also holds it, so each step up follows a quiet minute.
- */
-function reduceCronRuns(cause: string): void {
+function extraRuns(provider: string): number {
+  return backoff.charges.get(provider) ?? 0;
+}
+
+function blocksExtraRun(provider: string, nowMs: number): boolean {
+  const slots = extraSlots(provider, nowMs);
+  return slots < MAX_EXTRA_RUNS && extraRuns(provider) >= slots;
+}
+
+/** Worker drains use the snapshot to pass over parked runs during extra-slot selection. */
+export function blockedCronExtraRunProviders(nowMs = Date.now()): string[] {
+  return [...backoff.reductions.keys()].filter((provider) => blocksExtraRun(provider, nowMs));
+}
+
+/** One charge follows a run's extra slot. A fallback can move an existing charge unconditionally. */
+export function createCronExtraRunCharge() {
+  let provider: string | undefined;
+  const move = (next: string | undefined) => {
+    if (provider === next) {
+      return;
+    }
+    if (provider !== undefined) {
+      const remaining = extraRuns(provider) - 1;
+      if (remaining > 0) {
+        backoff.charges.set(provider, remaining);
+      } else {
+        backoff.charges.delete(provider);
+      }
+    }
+    provider = next;
+    if (next !== undefined) {
+      backoff.charges.set(next, extraRuns(next) + 1);
+    }
+  };
+  return {
+    tryCharge(next: string): boolean {
+      if (provider !== next && blocksExtraRun(next, Date.now())) {
+        return false;
+      }
+      move(next);
+      return true;
+    },
+    move,
+  };
+}
+
+function reduceCronRuns(provider: string, reason: "rate_limit" | "overloaded"): void {
   const nowMs = Date.now();
-  const ceiling = cronRunCeilingAfterPushback(nowMs);
-  // Hook turns run in their own lane but share automation's budget and its providers; while
-  // hooks are on, the group's count includes them.
+  const slots = extraSlots(provider, nowMs);
   const automation = getCommandLaneSnapshot(CommandLane.CronNested);
   const inFlight = automation.groupActive ?? automation.activeCount;
+  const charged = extraRuns(provider);
   if (
-    ceiling !== undefined &&
-    (inFlight > ceiling || inFlight <= DEFAULT_CRON_MAX_CONCURRENT_RUNS)
+    slots < MAX_EXTRA_RUNS &&
+    (charged === 0 || charged > slots || inFlight <= DEFAULT_CRON_MAX_CONCURRENT_RUNS)
   ) {
-    pushback.reduction = { ceiling, atMs: nowMs };
+    backoff.reductions.set(provider, { slots, atMs: nowMs });
     return;
   }
   if (inFlight <= DEFAULT_CRON_MAX_CONCURRENT_RUNS) {
     return;
   }
-  pushback.reduction = { ceiling: DEFAULT_CRON_MAX_CONCURRENT_RUNS, atMs: nowMs };
+  backoff.reductions.set(provider, { slots: 0, atMs: nowMs });
   log.warn(
-    `automation limited to ${DEFAULT_CRON_MAX_CONCURRENT_RUNS} runs at once after ${cause}; it adds one a minute while nothing pushes back`,
+    `automation paused extra runs for provider ${sanitizeForConsole(provider)} after it ${reason === "rate_limit" ? "rate-limited a request" : "reported an overload"}; it adds one a minute without pushback`,
   );
 }
 
-/**
- * Listens for pushback while a scheduler runs. A model attempt of the embedded runtime or of a
- * plugin harness that a provider rate-limits or turns away as overloaded reports it on the
- * agent event bus, for a conversation or a job and whether or not a retry later succeeds.
- */
+/** Retries can hide a failed attempt from the final outcome of a conversation or automation. */
 export function watchCronProviderPushback(): () => void {
   return onAgentEvent((event) => {
     if (event.stream !== "lifecycle") {
       return;
     }
     const cause = readRunFailureCause(event.data?.errorObservation);
-    if (cause?.failoverReason === "rate_limit" || cause?.failoverReason === "overloaded") {
-      reduceCronRuns(
-        `provider ${sanitizeForConsole(cause.provider) ?? "unknown"} ${cause.failoverReason === "rate_limit" ? "rate-limited a request" : "reported an overload"}`,
-      );
+    if (
+      cause?.provider &&
+      (cause.failoverReason === "rate_limit" || cause.failoverReason === "overloaded")
+    ) {
+      reduceCronRuns(cause.provider, cause.failoverReason);
     }
   });
 }

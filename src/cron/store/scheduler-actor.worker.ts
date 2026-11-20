@@ -30,7 +30,7 @@ import { hasMissedCronSlotSinceLastRun, isRunnableJob } from "../service/timer-r
 import type { CronJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
-import { requestAndDrainCronRunsInWorker } from "./run-queue.worker.js";
+import { requestAndDrainCronRunsInWorker, waitsForCronRunSlot } from "./run-queue.worker.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
 import { createCronScheduledRunId } from "./run-request-id.js";
@@ -549,7 +549,7 @@ export function runCronSchedulerInWorker(
       command.type !== "cron.schedulerRefresh" &&
       (owned.length > 0 ||
         (input.requests?.length ?? 0) > 0 ||
-        currentJobs().some((job) => job.state.queuedAtMs !== undefined))
+        currentJobs().some((job) => job.state.queuedAtMs !== undefined || waitsForCronRunSlot(job)))
     ) {
       currentJobs();
       for (const job of owned) {
@@ -579,7 +579,7 @@ export function runCronSchedulerInWorker(
           preparingAgentIds: snapshot.config.preparingAgentIds,
           busyConversationJobIds: snapshot.config.busyConversationJobIds,
           memoryAllowsExtraRun: snapshot.config.memoryAllowsExtraRun,
-          runCeilingAfterPushback: snapshot.config.runCeilingAfterPushback,
+          blockedExtraRunProviders: snapshot.config.blockedExtraRunProviders,
           hostProcessId: snapshot.config.hostProcessId,
           pluginCommandHosts: snapshot.config.pluginCommandHosts,
         },

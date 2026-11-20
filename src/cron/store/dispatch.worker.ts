@@ -48,7 +48,7 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
       "cron.requestRuns",
       "cron.drainQueue",
       "cron.cancelRequests",
-      "cron.settleConditionCheck",
+      "cron.reconcileRunSlot",
     ].includes(String(type)) &&
     !queue
   ) {
@@ -126,7 +126,7 @@ export function isCronStateWorkerCommand(command: {
     case "cron.requestRuns":
     case "cron.drainQueue":
     case "cron.cancelRequests":
-    case "cron.settleConditionCheck":
+    case "cron.reconcileRunSlot":
     case "cron.provisionDefaultProactive":
     case "cron.recordSkippedRuns":
     case "cron.mutateExternalState":
@@ -171,7 +171,7 @@ export function executeCronStateCommand(
     case "cron.requestRuns":
     case "cron.drainQueue":
     case "cron.cancelRequests":
-    case "cron.settleConditionCheck":
+    case "cron.reconcileRunSlot":
       if (!queue) {
         throw new Error("Cron queue worker is not prepared");
       }
@@ -182,8 +182,8 @@ export function executeCronStateCommand(
           return queue.drainCronQueueInWorker(database, command.input);
         case "cron.cancelRequests":
           return queue.cancelCronRequestsInWorker(database, command.input);
-        case "cron.settleConditionCheck":
-          return queue.settleCronConditionCheckInWorker(database, command.input);
+        case "cron.reconcileRunSlot":
+          return queue.reconcileCronRunSlotInWorker(database, command.input);
       }
     case "cron.provisionDefaultProactive":
       if (!proactive) {

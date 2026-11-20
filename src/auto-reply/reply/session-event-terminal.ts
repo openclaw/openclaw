@@ -77,16 +77,7 @@ export function resolveSessionEventTerminalOutcome(params: {
   return { failure, terminalOutcome, status };
 }
 
-export async function waitForSessionEventReadmission(attempt: number, signal: AbortSignal) {
-  // Yield before fresh authority; cancellation can end retention during the wait.
-  await delay(100 * 2 ** attempt, undefined, { signal }).catch((error: unknown) => {
-    if (!signal.aborted) {
-      throw error;
-    }
-  });
-}
-
-export function readmitSessionEventOccurrence(params: {
+function readmitSessionEventOccurrence(params: {
   text: string;
   options: SessionEventOptions &
     Required<Pick<SessionEventOptions, "agentId" | "sessionKey" | "occurrences">>;
@@ -122,4 +113,98 @@ export function readmitSessionEventOccurrence(params: {
     });
     return { failure };
   }
+}
+
+/** A policy or provider wait can retain only an occurrence that has done no work. */
+type SessionEventTerminal = ReturnType<typeof resolveSessionEventTerminalOutcome>;
+
+export async function settleSessionEventAttempt(params: {
+  text: string;
+  options: SessionEventOptions &
+    Required<Pick<SessionEventOptions, "agentId" | "sessionKey" | "occurrences">>;
+  signal: AbortSignal;
+  adopted: boolean;
+  occurrenceId: string;
+  ownership: { release: () => void; cancel: () => void };
+  dispatchAttempt: number;
+  configReadmissions: number;
+  canResume: () => boolean;
+  canRetryConfig: () => boolean;
+  waitingProvider?: string;
+  onSettling: (error?: Error | string) => SessionEventTerminal;
+  preserveOccurrence: boolean;
+  enqueue: (
+    text: string,
+    options: SessionEventOptions,
+    attempt: number,
+    configReadmissions: number,
+  ) => SessionEventReceipt;
+  log: Pick<SubsystemLogger, "error">;
+}): Promise<{
+  terminal: SessionEventTerminal;
+  receipt?: SessionEventReceipt;
+  failure?: Error | string;
+}> {
+  const { signal, ownership, options } = params;
+  const finish = (terminal: SessionEventTerminal) => {
+    if (terminal.status === "failed") {
+      params.log.error("session event execution failed", {
+        source: options.source,
+        agentId: options.agentId,
+        sessionKey: options.sessionKey,
+        eventId: params.occurrenceId,
+        error: String(terminal.failure),
+      });
+    }
+    return { terminal };
+  };
+  const retryConfig = () => params.canResume() && params.canRetryConfig();
+  if (retryConfig()) {
+    await delay(100 * 2 ** params.configReadmissions, undefined, { signal }).catch(
+      (error: unknown) => {
+        if (!signal.aborted) {
+          throw error;
+        }
+      },
+    );
+  }
+  const config = retryConfig();
+  const provider = !config && params.canResume() ? params.waitingProvider : undefined;
+  const terminal = params.onSettling();
+  if (provider !== undefined) {
+    // The reply owner has settled. Keep the event claimed while other turns use the session.
+    try {
+      await options.scheduledAutomation?.providerRunSlot?.wait(provider, signal);
+    } catch (error) {
+      const stopped = params.onSettling(error instanceof Error ? error : String(error));
+      ownership.cancel();
+      return finish(stopped);
+    }
+  }
+  if (config || provider !== undefined) {
+    ownership.release();
+    const readmitted = readmitSessionEventOccurrence({
+      text: params.text,
+      options,
+      attempt: params.dispatchAttempt + 1,
+      occurrenceId: params.occurrenceId,
+      adopted: params.adopted,
+      enqueue: (text, nextOptions, attempt) =>
+        params.enqueue(text, nextOptions, attempt, params.configReadmissions + (config ? 1 : 0)),
+      log: params.log,
+    });
+    return {
+      ...readmitted,
+      terminal:
+        provider !== undefined && readmitted.failure !== undefined
+          ? params.onSettling(readmitted.failure)
+          : terminal,
+    };
+  }
+  if (params.preserveOccurrence) {
+    ownership.release();
+  } else {
+    ownership.cancel();
+  }
+  return finish(terminal);
 }

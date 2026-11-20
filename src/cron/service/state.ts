@@ -246,6 +246,7 @@ export type CronServiceDeps = {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
     onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
     onLaneWait?: (info?: { waiting?: boolean }) => void;
+    providerRunSlot?: import("./timer-execution-timeout.js").CronProviderRunSlot;
     executionIdentity?: CronExecutionIdentityAdmission;
   }) => Promise<
     CronRunOutcome &
@@ -267,6 +268,7 @@ export type CronServiceDeps = {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
     onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
     onLaneWait?: (info?: { waiting?: boolean }) => void;
+    providerRunSlot?: import("./timer-execution-timeout.js").CronProviderRunSlot;
     executionIdentity?: CronExecutionIdentityAdmission;
     job: CronStoredJob;
     text: string;
