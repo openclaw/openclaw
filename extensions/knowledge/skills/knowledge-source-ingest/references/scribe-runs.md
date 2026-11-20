@@ -24,21 +24,31 @@ direct messages and group DMs are included.
    resume notes, plans or instructions for a later run on the page. Create the
    page with `knowledge_save_page` (type `note`) on the first run, writing the
    prompt's start date.
-3. **Channels.** List with `channel-list` and follow its cursor until it
-   returns none:
-   - With the bot token, every channel the bot is a member of
-     (`public_channel` and `private_channel`).
-   - Only when the settings allow the user token and a user token is
-     configured, also every channel the user token can access. Without that
-     setting, never list or read a channel the bot is not a member of.
-   - Only when the settings include direct messages, also `im` and `mpim`.
+3. **Channels.** Every `channel-list` and `read` call passes `readAs`
+   explicitly; never omit it, since the default reads with the user token
+   whenever one is configured. Call `channel-list` with `limit: 200` and, while
+   a result has `nextPageToken`, again with it as `pageToken`. A page can be
+   short or empty and still have a `nextPageToken`. Archived conversations are
+   left out (don't pass `includeArchived`).
+   - With `readAs: "bot"`: every channel the bot is a member of. Read these
+     with `readAs: "bot"`.
+   - Only when the settings allow the user token: also list with
+     `readAs: "user"`. If that call says no user token is configured, go on
+     with the bot's channels only. Read channels found only in this listing
+     with `readAs: "user"`. Without the setting, never list or read with
+     `readAs: "user"`, and never read a channel the bot is not a member of.
+   - Only when the settings include direct messages: pass
+     `types: ["public_channel", "private_channel", "im", "mpim"]` to the
+     listings above. Read each DM with the `readAs` of the listing that
+     returned it. Otherwise keep the default types (channels only).
 
-   Archived channels are left out. Record each channel's workspace (team) ID
-   from the listing; the source key is `slack:<team>/<channel>`.
+   Each listing's top-level `teamId` is the workspace of its channel IDs; the
+   source key is `slack:<teamId>/<channel id>`.
 
 4. **Order.** Channels whose checkpoint is oldest go first, then channels the
    checkpoint does not have yet, so every channel gets its turn across runs.
-5. **Read.** For one channel, `read` with `after` set to its newest ingested
+5. **Read.** For one channel, `read` with its `readAs` from step 3 (on every
+   call below) and `after` set to its newest ingested
    `ts`, or for a new channel to midnight of `Start` in the owner's time zone
    (ISO 8601 with its offset). A page holds the newest
    messages first: while `hasMore` is true, `read` again with `before` set to
@@ -50,7 +60,8 @@ direct messages and group DMs are included.
    messages or replies gets its checkpoint line and does not count toward the
    run's channels.
 6. **Normalize.** Run `scripts/slack-read-normalize.mjs` over the saved
-   results of the channel, with `--team` and `--channel`. Item IDs are
+   results of the channel, with `--team` set to the listing's `teamId` and
+   `--channel`. Item IDs are
    `<channel>/<ts>`. Use `member-info` for display names worth resolving and
    pass them with `--users`. Run `scripts/chat-transcript.mjs` with the source
    key for a line-stable transcript.

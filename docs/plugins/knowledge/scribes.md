@@ -120,8 +120,11 @@ The start dialog offers:
 - **Direct messages and group DMs** (off by default): also reads the direct
   messages and group DMs the token can read.
 
-Archived channels are skipped. Each channel is one source in Knowledge, keyed
-`slack:<team>/<channel>`, with retained snapshot manifests, so later runs
+The scribe always names the token it reads with (the actions' `readAs`): the
+bot token for channels the bot is in, and the user token only for channels
+found through it when that option is on. A direct message is read with the
+token whose listing returned it. Archived channels are skipped. Each channel is
+one source in Knowledge, keyed `slack:<team>/<channel>`, with retained snapshot manifests, so later runs
 reconcile edited messages instead of saving them twice. A message missing from
 a later read is never treated as deleted unless that read covered the whole
 interval.
