@@ -95,6 +95,7 @@ const log = createSubsystemLogger("gateway/resources");
 const state = resolveGlobalSingleton<{
   budget?: ReturnType<typeof createWorkerMemoryBudget>;
   hosted: HostedSlotPredicate;
+  floorOnlyPublished?: true;
 }>(
   Symbol.for("openclaw.workerMemoryBudget"),
   () => ({ hosted: () => false }),
@@ -102,9 +103,20 @@ const state = resolveGlobalSingleton<{
     current.budget?.retire();
     current.budget = undefined;
     current.hosted = () => false;
-    setEnvironmentData(FLOOR_ONLY_KEY, undefined);
+    publishFloorOnly(current, false);
   },
 );
+
+// Only a lean Gateway publishes the flag, so other processes never touch environment data.
+function publishFloorOnly(current: { floorOnlyPublished?: true }, floorOnly: boolean): void {
+  if (floorOnly) {
+    setEnvironmentData(FLOOR_ONLY_KEY, true);
+    current.floorOnlyPublished = true;
+  } else if (current.floorOnlyPublished) {
+    setEnvironmentData(FLOOR_ONLY_KEY, undefined);
+    current.floorOnlyPublished = undefined;
+  }
+}
 
 /** The lean shared host claims slots it serves; claimed slots need no isolate reservation. */
 export function registerHostedSlotPredicate(predicate: HostedSlotPredicate): void {
@@ -344,7 +356,7 @@ export function initializeWorkerMemoryBudget(
   state.budget?.retire();
   state.budget = undefined;
   // Workers created from here on inherit this Gateway's choice, never a previous one.
-  setEnvironmentData(FLOOR_ONLY_KEY, profile.profile === "lean" ? true : undefined);
+  publishFloorOnly(state, profile.profile === "lean");
   if (profile.profile !== "lean") {
     return;
   }
