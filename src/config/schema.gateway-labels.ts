@@ -45,6 +45,7 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.uploads.enabled": "Uploads Enabled",
   "gateway.sessionControl": "Session Control Opt-ins",
   "gateway.sessionControl.publicationReadEnabled": "Publication Reads Enabled",
+  "gateway.sessionControl.steeringEnabled": "Active Steering Enabled",
   "gateway.cliAgents": "CLI Agents",
   "gateway.cliAgents.enabled": "CLI Agents Enabled",
   "gateway.terminal": "Operator Terminal",

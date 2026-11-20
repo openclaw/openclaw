@@ -103,6 +103,7 @@ function CatalogDetailContent(props: {
       onBack={props.state.onBack}
       icon={
         <PluginArtTile
+          neutralFallback
           registerIcon={props.state.registerIcon}
           slug={plugin().id}
           name={plugin().catalog.name}
@@ -115,8 +116,13 @@ function CatalogDetailContent(props: {
           )}
         />
       }
+      rail
       titleAction={
         <>
+          {renderPluginAskAction(
+            props.state.onAskPlugin,
+            plugin().local.action !== "install" && !installing(),
+          )}
           {plugin().local.action === "install" || installing() ? (
             <ReasonedDisabledControl
               reason={props.state.installBlockedReason}
@@ -135,10 +141,6 @@ function CatalogDetailContent(props: {
               />
             </ReasonedDisabledControl>
           ) : undefined}
-          {renderPluginAskAction(
-            props.state.onAskPlugin,
-            plugin().local.action !== "install" && !installing(),
-          )}
         </>
       }
       identity={renderPluginPublisher(props.value)}
@@ -156,12 +158,12 @@ function CatalogDetailContent(props: {
           onSelect={props.state.onSelectPrompt}
         />
       }
+      notices={renderPluginRowMessage(props.state.message, {
+        busy: props.state.busy,
+        onContinue: props.state.canInstall ? props.state.onContinueInstall : undefined,
+      })}
       panel={
         <>
-          {renderPluginRowMessage(props.state.message, {
-            busy: props.state.busy,
-            onContinue: props.state.canInstall ? props.state.onContinueInstall : undefined,
-          })}
           {renderPluginContentCapabilities({
             contracts: detail().contracts,
             uiCapabilities: detail().uiCapabilities,
@@ -181,7 +183,7 @@ function CatalogDetailContent(props: {
 function CatalogDetailLoading() {
   return (
     <section
-      class="plugin-catalog-detail plugin-catalog-detail--loading"
+      class="plugin-catalog-detail plugin-catalog-detail--rail plugin-catalog-detail--loading"
       aria-label={t("pluginsPage.detailLoading")}
     >
       <div class="plugin-catalog-detail__back skeleton" />

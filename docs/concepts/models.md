@@ -531,9 +531,11 @@ Gateway to publish the new prices.
 
 OpenClaw can refresh the model metadata shipped by installed provider plugins
 without waiting for a new OpenClaw release. The Gateway makes one background
-JSON `GET` at startup and then checks at most every six hours. The request sends
-no prompts, credentials, model usage, or configuration payload beyond the
-normal HTTP user agent and conditional cache headers.
+JSON `GET` at startup and then checks at most every six hours. Changing
+`models.catalogRefresh.url` or `models.catalogRefresh.enabled` on a running
+Gateway checks the new source at once. The request sends no prompts,
+credentials, model usage, or configuration payload beyond the normal HTTP user
+agent and conditional cache headers.
 
 On memory-constrained hosts, automatic checks wait while available memory is at
 or below 20% of the process limit and retry after one minute. The current catalog

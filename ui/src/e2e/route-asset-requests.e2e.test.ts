@@ -121,9 +121,7 @@ suite.define(() => {
     "bounds %s ready-window asset requests at 100 ms from a settled New Session",
     (route) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const reader = controlUiE2eBuiltModuleRequest(
-          "ui/src/pages/skills/skill-reader-dialog.tsx",
-        );
+        const reader = controlUiE2eBuiltModuleRequest("ui/src/pages/skills/skill-detail.tsx");
         const tooltip = controlUiE2eBuiltModuleRequest("ui/src/components/solid/tooltip.tsx");
         let readerRequests = 0;
         let tooltipRequests = 0;
@@ -142,15 +140,18 @@ suite.define(() => {
         }
         const readyAssets = observation.assets.filter((asset) => asset.completedByReady);
         expect(readyAssets.length).toBeGreaterThan(0);
-        expect(
-          readyAssets.length,
-          readyAssets.map((asset) => asset.name).join("\n"),
-        ).toBeLessThanOrEqual(readyWindowRequestLimits[route]);
+        expect
+          .soft(readyAssets.length, readyAssets.map((asset) => asset.name).join("\n"))
+          .toBeLessThanOrEqual(readyWindowRequestLimits[route]);
 
         if (route === "skills" || route === "skill-settings") {
           expect(readerRequests).toBe(0);
         }
         if (route === "skills") {
+          await page.locator(".skill-installed-shelf").click();
+          expect(readerRequests, "Opening the installed list still does not load its reader").toBe(
+            0,
+          );
           const held = await holdModuleResponse(page, reader);
           try {
             await page
@@ -158,11 +159,16 @@ suite.define(() => {
               .click();
             await held.request;
             expect(held.requests()).toBeGreaterThan(0);
-            expect(await page.locator(".skill-reader-dialog").count()).toBe(0);
+            const title = page.getByRole("heading", {
+              level: 1,
+              name: "Data skill 0000",
+              exact: true,
+            });
+            await page.locator('.skill-page[aria-busy="true"]').waitFor({ state: "visible" });
+            expect(await title.count()).toBe(0);
             held.release();
-            const dialog = page.locator("openclaw-modal-dialog .skill-reader-dialog");
-            await dialog.waitFor({ state: "visible" });
-            expect(await dialog.locator(".oc-dialog__title").textContent()).toBe("Data skill 0000");
+            await title.waitFor({ state: "visible" });
+            expect(new URL(page.url()).pathname).toContain("/skills/installed/");
           } finally {
             held.release();
           }

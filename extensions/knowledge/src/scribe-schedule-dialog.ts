@@ -9,7 +9,7 @@ import {
 } from "./scribes-catalog.js";
 
 /** A cron schedule in a time zone, as Change schedule sets it. */
-export type CronSchedule = { kind: "cron"; expr: string; tz: string };
+type CronSchedule = { kind: "cron"; expr: string; tz: string };
 
 /** What Change schedule needs from the page. */
 export type ScheduleDialogInput = {

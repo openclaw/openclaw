@@ -36,7 +36,6 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
-import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import type { RequiredCompletionTerminalResult } from "../completion-result.js";
 import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import {
@@ -178,10 +177,9 @@ export function captureMediaGenerationAdmission(
 ): SessionSourceAssertion {
   const generation = getAgentRunLifecycleGeneration();
   const env = captureSessionTranscriptStorageEnvironment(process.env);
-  const assertInvocationCurrent = captureAgentToolSourceExecutionGuard();
   const assertGatewayCallerCurrent = captureGatewayToolCallerAssertion();
   return composeSessionSourceAssertion(
-    [assertInvocationCurrent, assertGatewayCallerCurrent, assertSourceCurrent],
+    [assertGatewayCallerCurrent, assertSourceCurrent],
     (assertSource) => {
       assertSource();
       if (
@@ -337,7 +335,7 @@ async function createMediaGenerationTaskRun(
     touchMediaGenerationTaskRunContext(handle);
     return handle;
   } catch (error) {
-    // A revoked invocation cannot become an untracked foreground provider call.
+    // A stale admission owner cannot become an untracked foreground provider call.
     assertCurrent();
     log.warn("Failed to admit media generation", {
       sessionKey,
