@@ -318,9 +318,10 @@ describe("Control UI service worker notification scope", () => {
     displayed.resolve();
     const result = await pending;
     expect(result.options.data.completion).toEqual(completion);
-    expect(worker.windowClients[0].postMessage).toHaveBeenCalledWith({
-      type: "openclaw-completion-delivered",
-    });
+    expect(worker.windowClients[0].postMessage).toHaveBeenCalledWith(
+      { type: "openclaw-completion-delivered" },
+      [],
+    );
     expect(worker.windowClients[1].postMessage).not.toHaveBeenCalled();
     expect(worker.windowClients[2].postMessage).not.toHaveBeenCalled();
   });
