@@ -5,8 +5,12 @@ import {
 import { requiredWorkerHelperError } from "../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { supportsDecisionInput } from "../decisions/capabilities.js";
-import type { DecisionEvaluateOptionsV2 } from "../decisions/execution-types.js";
+import type {
+  DecisionEvaluateOptionsV2,
+  PrepareDecisionState,
+} from "../decisions/execution-types.js";
 import type { PreparedDecisionBillingFacts } from "../decisions/host-billing.js";
+import { validateDecisionBatchV2 } from "../decisions/input-validation.js";
 import type { DecisionProviderContextV2 } from "../decisions/provider-context.js";
 import { evaluatePreparedDecisionProvider } from "../decisions/provider-execution.js";
 import type { ProviderDecisionOutcomeV2 } from "../decisions/provider-outcomes.js";
@@ -63,6 +67,7 @@ export async function executePreparedDecision(params: {
   deadlineMonotonicMs: number;
   isAdmissible: () => boolean;
   onPreparedBilling?: (facts: PreparedDecisionBillingFacts) => void;
+  prepareState?: PrepareDecisionState;
 }): Promise<ProviderDecisionOutcomeV2> {
   const assertCurrent = () => {
     params.signal.throwIfAborted();
@@ -152,7 +157,24 @@ export async function executePreparedDecision(params: {
           supplemental?.find((entry) => entry.provider === row?.provider && entry.id === modelId) ??
           row;
       }
-      if (!supportsDecisionInput(row.inference?.decision, params.batch, params.options.reasoning)) {
+      let batch = params.batch;
+      if (params.prepareState) {
+        const state = await params.prepareState(row.inference?.decision?.limits, params.signal);
+        if (!assertPrepared() || state === undefined) {
+          return { status: "unavailable", reason: "unsupported-input" };
+        }
+        batch = {
+          ...batch,
+          state:
+            typeof state === "string"
+              ? { type: "text", text: state }
+              : { type: "json", value: state },
+        };
+        if (!validateDecisionBatchV2(batch)) {
+          return { status: "unavailable", reason: "unsupported-input" };
+        }
+      }
+      if (!supportsDecisionInput(row.inference?.decision, batch, params.options.reasoning)) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
       const normalized = route
@@ -292,7 +314,7 @@ export async function executePreparedDecision(params: {
         const { billing: _billing, ...decision } = model.inference.decision;
         model.inference = { ...model.inference, decision };
       }
-      const offered = structuredClone(params.batch);
+      const offered = structuredClone(batch);
       const egressModel = unwrapModelHeaderSentinelsForProviderEgress(
         model,
         "decision provider handoff",
@@ -338,7 +360,7 @@ export async function executePreparedDecision(params: {
       });
       return evaluatePreparedDecisionProvider({
         provider: params.provider,
-        batch: params.batch,
+        batch,
         offered,
         context: providerContext,
         capabilities: model.inference?.decision,

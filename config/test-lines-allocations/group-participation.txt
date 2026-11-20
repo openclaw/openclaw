@@ -1,2 +1,2 @@
-# Native reply and queue tests cover participation, persistence, source settlement, and delivery.
-129
+# Existing native reply, queue, and prepared-state tests cover participation, model limits, persistence, and delivery.
+180

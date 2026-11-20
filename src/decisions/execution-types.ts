@@ -1,4 +1,12 @@
+import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
+import type { DecisionEntry } from "./input-types.js";
 import type { DecisionReasoning } from "./input-types.js";
+
+/** Core-owned evidence preparation inside the admitted provider/model lifetime. */
+export type PrepareDecisionState = (
+  limits: ModelDecisionCapabilities["limits"] | undefined,
+  signal: AbortSignal,
+) => Promise<DecisionEntry | undefined>;
 
 export type DecisionExecutionLifetime = {
   /** Composed by host from caller, per-call deadline, and retirement. */

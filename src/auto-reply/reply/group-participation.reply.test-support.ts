@@ -44,7 +44,18 @@ const decisionMock = vi.hoisted(() =>
 export const decision = decisionMock;
 vi.mock("../../decisions/runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../decisions/runtime.js")>()),
-  evaluateDecision: decisionMock,
+  evaluateDecision: async (
+    batch: Parameters<typeof decisionMock>[0],
+    options: Parameters<typeof decisionMock>[1],
+    prepareState?: Parameters<typeof decisionMock>[2],
+  ) => {
+    const state = prepareState
+      ? await prepareState({ maxStateAndQuestionTokens: 32000 }, options.signal)
+      : batch.state;
+    return state === undefined
+      ? { status: "unavailable" as const, reason: "unsupported-input" as const }
+      : decisionMock({ ...batch, state }, options);
+  },
 }));
 export function judgment(choice: "reply" | "silent"): DecisionOutcome {
   return {
