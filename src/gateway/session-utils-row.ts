@@ -2,9 +2,8 @@ import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
-import { omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
+import { readAgentConfigEntry } from "../agents/agent-scope-config.js";
 import { countRunningBackgroundProcesses } from "../agents/bash-process-observation.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
@@ -52,7 +51,12 @@ import { sessionClassificationForRow } from "./session-classification.js";
 import { projectSessionRowProfiles } from "./session-identity-projection.js";
 import { sessionModelRevision } from "./session-model-revision.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
-import { freezeSessionRow } from "./session-row-identity.js";
+import {
+  definedSessionRowField,
+  definedSessionRowFields,
+  freezeSessionRow,
+  freezeSessionRowPatch,
+} from "./session-row-identity.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { projectSessionRowProviderReview } from "./session-row-provider-review.js";
 import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
@@ -396,163 +400,191 @@ export function materializeSessionRow(
       entry?.label ?? "",
     );
 
-  const row = omitUndefinedFields<GatewaySessionRow>({
+  const row: GatewaySessionRow = {
     key,
     sessionModelRevision: sessionModelRevision(entry, undefined, input.preparedRuntimeOwnership),
     // Only explicitly requested summaries may clear swarm state in event merges.
-    ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
-    visibility: entry ? (entry.visibility ?? "shared") : undefined,
-    incognito: entry?.incognito,
-    swarmGroupId: entry?.swarmGroupId,
-    spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
-    spawnedCwd: entry?.spawnedCwd,
-    workspaceDir: entry?.spawnedCwd ?? entry?.spawnedWorkspaceDir,
-    projectId: entry?.projectId,
-    permissionMode: entry?.permissionMode,
-    communication: entry?.communication,
+    ...definedSessionRowField("swarm", input.includeSwarmSummary ? input.swarm : undefined),
+    ...definedSessionRowField("visibility", entry ? (entry.visibility ?? "shared") : undefined),
+    ...definedSessionRowField("incognito", entry?.incognito),
+    ...definedSessionRowField("swarmGroupId", entry?.swarmGroupId),
+    ...definedSessionRowField("spawnedWorkspaceDir", entry?.spawnedWorkspaceDir),
+    ...definedSessionRowField("spawnedCwd", entry?.spawnedCwd),
+    ...definedSessionRowField("workspaceDir", entry?.spawnedCwd ?? entry?.spawnedWorkspaceDir),
+    ...definedSessionRowField("projectId", entry?.projectId),
+    ...definedSessionRowField("permissionMode", entry?.permissionMode),
+    ...definedSessionRowField("communication", entry?.communication),
     effectiveCommunication: resolveSessionCommunicationPolicy({ config: input.cfg, entry }),
-    sandboxMode: entry?.sandboxMode,
-    nativeRuntimeConsent: entry?.nativeRuntimeConsent,
+    ...definedSessionRowField("sandboxMode", entry?.sandboxMode),
+    ...definedSessionRowField("nativeRuntimeConsent", entry?.nativeRuntimeConsent),
     permissionModePending: input.permissionModePending,
     ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined
       ? { sessionRoot: entry.sessionRoot }
       : {}),
-    worktree: entry?.worktree,
-    deviceFolder: entry?.deviceFolder,
-    repositoryWorkspaceId: entry?.repositoryWorkspaceId,
+    ...definedSessionRowField("worktree", entry?.worktree),
+    ...definedSessionRowField("deviceFolder", entry?.deviceFolder),
+    ...definedSessionRowField("repositoryWorkspaceId", entry?.repositoryWorkspaceId),
     ...(input.repository ? { repository: input.repository } : {}),
-    execNode: entry?.execNode,
-    execCwd: entry?.execCwd,
-    forkedFromParent: sessionEntryForkedFromParent(entry) ? true : undefined,
-    spawnDepth: entry?.spawnDepth,
-    subagentRole: entry?.subagentRole,
-    subagentControlScope: entry?.subagentControlScope,
-    createdVia: entry?.createdVia,
-    createdSurface: entry?.createdSurface,
-    ...projectSessionRowProfiles(input),
-    createdAt: entry?.createdAt,
-    forkSource: entry?.forkSource,
-    previousSessionId: entry?.previousSessionId,
+    ...definedSessionRowField("execNode", entry?.execNode),
+    ...definedSessionRowField("execCwd", entry?.execCwd),
+    ...definedSessionRowField(
+      "forkedFromParent",
+      sessionEntryForkedFromParent(entry) ? true : undefined,
+    ),
+    ...definedSessionRowField("spawnDepth", entry?.spawnDepth),
+    ...definedSessionRowField("subagentRole", entry?.subagentRole),
+    ...definedSessionRowField("subagentControlScope", entry?.subagentControlScope),
+    ...definedSessionRowField("createdVia", entry?.createdVia),
+    ...definedSessionRowField("createdSurface", entry?.createdSurface),
+    ...definedSessionRowFields(projectSessionRowProfiles(input)),
+    ...definedSessionRowField("createdAt", entry?.createdAt),
+    ...definedSessionRowField("forkSource", entry?.forkSource),
+    ...definedSessionRowField("previousSessionId", entry?.previousSessionId),
     kind: resolveGatewaySessionKind(key, entry),
-    label: generatedPublicationLabel ? undefined : entry?.label,
-    autoLabel: entry?.autoLabel,
-    icon: entry?.icon,
-    color: entry?.color,
-    channelAvatarUrl: avatar
-      ? buildControlUiChannelAvatarUrl(controlUiBasePath, key, channelAvatarRevision(avatar))
-      : undefined,
-    category: entry?.category,
-    boardFace: entry?.boardFace,
-    boardPresentation: entry?.boardPresentation,
+    ...definedSessionRowField("label", generatedPublicationLabel ? undefined : entry?.label),
+    ...definedSessionRowField("autoLabel", entry?.autoLabel),
+    ...definedSessionRowField("icon", entry?.icon),
+    ...definedSessionRowField("color", entry?.color),
+    ...definedSessionRowField(
+      "channelAvatarUrl",
+      avatar
+        ? buildControlUiChannelAvatarUrl(controlUiBasePath, key, channelAvatarRevision(avatar))
+        : undefined,
+    ),
+    ...definedSessionRowField("category", entry?.category),
+    ...definedSessionRowField("boardFace", entry?.boardFace),
+    ...definedSessionRowField("boardPresentation", entry?.boardPresentation),
     ...classification,
-    displayName: generatedPublicationLabel
-      ? (normalizeOptionalString(entry?.displayName) ?? "GitHub publication")
-      : input.displayName,
-    derivedTitle: input.derivedTitle,
-    lastMessagePreview: input.lastMessagePreview,
-    hasMessages: input.hasMessages,
-    lastAssistantMessage: input.lastAssistantMessage,
-    channel,
-    subject: entry?.subject,
-    groupChannel: entry?.groupChannel,
-    space: entry?.space,
-    chatType: entry?.chatType,
-    origin: storedOrigin
-      ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin)
-      : undefined,
+    ...definedSessionRowField(
+      "displayName",
+      generatedPublicationLabel
+        ? (normalizeOptionalString(entry?.displayName) ?? "GitHub publication")
+        : input.displayName,
+    ),
+    ...definedSessionRowField("derivedTitle", input.derivedTitle),
+    ...definedSessionRowField("lastMessagePreview", input.lastMessagePreview),
+    ...definedSessionRowField("hasMessages", input.hasMessages),
+    ...definedSessionRowField("lastAssistantMessage", input.lastAssistantMessage),
+    ...definedSessionRowField("channel", channel),
+    ...definedSessionRowField("subject", entry?.subject),
+    ...definedSessionRowField("groupChannel", entry?.groupChannel),
+    ...definedSessionRowField("space", entry?.space),
+    ...definedSessionRowField("chatType", entry?.chatType),
+    ...definedSessionRowField(
+      "origin",
+      storedOrigin ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin) : undefined,
+    ),
     updatedAt: entry?.updatedAt ?? null,
     archived: entry?.archivedAt !== undefined,
-    archivedAt: entry?.archivedAt,
-    archiveReason: entry?.archiveReason,
+    ...definedSessionRowField("archivedAt", entry?.archivedAt),
+    ...definedSessionRowField("archiveReason", entry?.archiveReason),
     pinned: pinnedAt !== undefined,
     sidebarRoot: entry?.sidebarRoot === true,
-    pinnedAt,
-    snoozedUntil: pinnable ? entry?.snoozedUntil : undefined,
-    snoozedAt: pinnable ? entry?.snoozedAt : undefined,
+    ...definedSessionRowField("pinnedAt", pinnedAt),
+    ...definedSessionRowField("snoozedUntil", pinnable ? entry?.snoozedUntil : undefined),
+    ...definedSessionRowField("snoozedAt", pinnable ? entry?.snoozedAt : undefined),
     unread: deriveSessionUnread(entry),
-    lastReadAt: entry?.lastReadAt,
-    markedUnreadAt: entry?.markedUnreadAt,
-    observerDigest: observerDigest
-      ? {
-          ...(observerDigest.agentId ? { agentId: observerDigest.agentId } : {}),
-          runId: observerDigest.runId,
-          headline: observerDigest.headline,
-          health: observerDigest.health,
-          updatedAt: observerDigest.updatedAt,
-          revision: observerDigest.revision,
-        }
-      : undefined,
-    lastInteractionAt: entry?.lastInteractionAt,
-    lastActivityAt: entry?.lastActivityAt,
-    sessionId: entry?.sessionId,
-    lifecycleRevision: entry?.lifecycleRevision,
-    systemSent: entry?.systemSent,
-    abortedLastRun: entry?.abortedLastRun,
-    thinkingLevel: input.thinkingProjection.thinkingLevel,
-    contextWindow: input.contextWindowProfile.contextWindow,
-    contextWindows: input.contextWindowProfile.contextWindows,
-    contextWindowDefault: input.contextWindowProfile.contextWindowDefault,
-    thinkingLevels: input.thinkingProjection.thinkingLevels,
-    thinkingOptions: input.thinkingProjection.thinkingOptions,
-    thinkingDefault: input.thinkingProjection.thinkingDefault,
-    cyberAccessProgram: entry?.cyberAccessProgram,
-    fastMode: entry?.fastMode,
-    toolOverrides: entry?.toolOverrides,
-    effectiveFastMode: input.fastModeState.mode,
-    effectiveFastModeSource: input.fastModeState.source,
-    fastAutoOnSeconds: input.fastModeState.fastAutoOnSeconds,
-    verboseLevel: entry?.verboseLevel,
-    traceLevel: entry?.traceLevel,
-    reasoningLevel: entry?.reasoningLevel,
-    reasoningDefault:
-      resolveAgentConfig(cfg, input.agentId)?.reasoningDefault ??
-      cfg.agents?.defaults?.reasoningDefault,
-    elevatedLevel: entry?.elevatedLevel,
-    sendPolicy: entry?.sendPolicy,
-    inputTokens: entry?.inputTokens,
-    outputTokens: entry?.outputTokens,
-    usageReport: entry?.usageReport,
-    providerReview: projectSessionRowProviderReview(key, entry),
-    lastRunId: entry?.lastRunId,
-    hasAutomation: input.hasAutomation,
-    // Navigation lineage is persisted; runtime control is exposed separately above.
-    parentSessionKey: entry?.parentSessionKey,
-    parentSessionId: entry?.parentSessionId,
-    responseUsage: entry?.responseUsage,
-    effectiveResponseUsage: resolveEffectiveResponseUsage(
-      entry?.responseUsage,
-      cfg.messages?.responseUsage,
-      channel,
+    ...definedSessionRowField("lastReadAt", entry?.lastReadAt),
+    ...definedSessionRowField("markedUnreadAt", entry?.markedUnreadAt),
+    ...definedSessionRowField(
+      "observerDigest",
+      observerDigest
+        ? {
+            ...(observerDigest.agentId ? { agentId: observerDigest.agentId } : {}),
+            runId: observerDigest.runId,
+            headline: observerDigest.headline,
+            health: observerDigest.health,
+            updatedAt: observerDigest.updatedAt,
+            revision: observerDigest.revision,
+          }
+        : undefined,
     ),
-    queueMode: entry?.queueMode,
+    ...definedSessionRowField("lastInteractionAt", entry?.lastInteractionAt),
+    ...definedSessionRowField("lastActivityAt", entry?.lastActivityAt),
+    ...definedSessionRowField("sessionId", entry?.sessionId),
+    ...definedSessionRowField("lifecycleRevision", entry?.lifecycleRevision),
+    ...definedSessionRowField("systemSent", entry?.systemSent),
+    ...definedSessionRowField("abortedLastRun", entry?.abortedLastRun),
+    ...definedSessionRowField("thinkingLevel", input.thinkingProjection.thinkingLevel),
+    ...definedSessionRowField("contextWindow", input.contextWindowProfile.contextWindow),
+    ...definedSessionRowField("contextWindows", input.contextWindowProfile.contextWindows),
+    ...definedSessionRowField(
+      "contextWindowDefault",
+      input.contextWindowProfile.contextWindowDefault,
+    ),
+    ...definedSessionRowField("thinkingLevels", input.thinkingProjection.thinkingLevels),
+    ...definedSessionRowField("thinkingOptions", input.thinkingProjection.thinkingOptions),
+    ...definedSessionRowField("thinkingDefault", input.thinkingProjection.thinkingDefault),
+    ...definedSessionRowField("cyberAccessProgram", entry?.cyberAccessProgram),
+    ...definedSessionRowField("fastMode", entry?.fastMode),
+    ...definedSessionRowField("toolOverrides", entry?.toolOverrides),
+    ...definedSessionRowField("effectiveFastMode", input.fastModeState.mode),
+    ...definedSessionRowField("effectiveFastModeSource", input.fastModeState.source),
+    ...definedSessionRowField("fastAutoOnSeconds", input.fastModeState.fastAutoOnSeconds),
+    ...definedSessionRowField("verboseLevel", entry?.verboseLevel),
+    ...definedSessionRowField("traceLevel", entry?.traceLevel),
+    ...definedSessionRowField("reasoningLevel", entry?.reasoningLevel),
+    ...definedSessionRowField(
+      "reasoningDefault",
+      readAgentConfigEntry(cfg, input.agentId)?.reasoningDefault ??
+        cfg.agents?.defaults?.reasoningDefault,
+    ),
+    ...definedSessionRowField("elevatedLevel", entry?.elevatedLevel),
+    ...definedSessionRowField("sendPolicy", entry?.sendPolicy),
+    ...definedSessionRowField("inputTokens", entry?.inputTokens),
+    ...definedSessionRowField("outputTokens", entry?.outputTokens),
+    ...definedSessionRowField("usageReport", entry?.usageReport),
+    ...definedSessionRowField("providerReview", projectSessionRowProviderReview(key, entry)),
+    ...definedSessionRowField("lastRunId", entry?.lastRunId),
+    ...definedSessionRowField("hasAutomation", input.hasAutomation),
+    // Navigation lineage is persisted; runtime control is exposed separately above.
+    ...definedSessionRowField("parentSessionKey", entry?.parentSessionKey),
+    ...definedSessionRowField("parentSessionId", entry?.parentSessionId),
+    ...definedSessionRowField("responseUsage", entry?.responseUsage),
+    ...definedSessionRowField(
+      "effectiveResponseUsage",
+      resolveEffectiveResponseUsage(entry?.responseUsage, cfg.messages?.responseUsage, channel),
+    ),
+    ...definedSessionRowField("queueMode", entry?.queueMode),
     effectiveQueueMode: resolveQueueSettingsCore({
       cfg,
       channel: INTERNAL_MESSAGE_CHANNEL,
       sessionEntry: entry,
     }).mode,
-    modelProvider: input.rowModelIdentity.provider,
-    model: input.rowModelIdentity.model,
-    modelOverrideSource:
+    ...definedSessionRowField("modelProvider", input.rowModelIdentity.provider),
+    ...definedSessionRowField("model", input.rowModelIdentity.model),
+    ...definedSessionRowField(
+      "modelOverrideSource",
       input.selectedModel.storedOverrideSource === "parent"
         ? "inherited"
         : resolveSessionModelOverrideSource(entry),
-    modelSelectionLocked: entry?.modelSelectionLocked,
-    runtimeSelectionLocked: input.thinkingProjection.runtimeSelectionLocked,
-    agentRuntime: input.agentRuntime,
-    contextTokens: input.contextTokens,
-    contextBudgetStatus: resolveProjectedSessionContextBudgetStatus({
-      entry,
-      provider: input.selectedModel.provider,
-      model: input.selectedModel.model,
-      contextTokens: input.contextTokens,
-    }),
-    deliveryContext: deliveryFields.deliveryContext,
-    lastChannel: deliveryFields.lastChannel,
-    lastTo: deliveryFields.lastTo,
-    lastAccountId: deliveryFields.lastAccountId,
-    lastThreadId: deliveryFields.lastThreadId,
-    pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
-  });
+    ),
+    ...definedSessionRowField("modelSelectionLocked", entry?.modelSelectionLocked),
+    ...definedSessionRowField(
+      "runtimeSelectionLocked",
+      input.thinkingProjection.runtimeSelectionLocked,
+    ),
+    ...definedSessionRowField("agentRuntime", input.agentRuntime),
+    ...definedSessionRowField("contextTokens", input.contextTokens),
+    ...definedSessionRowField(
+      "contextBudgetStatus",
+      resolveProjectedSessionContextBudgetStatus({
+        entry,
+        provider: input.selectedModel.provider,
+        model: input.selectedModel.model,
+        contextTokens: input.contextTokens,
+      }),
+    ),
+    ...definedSessionRowField("deliveryContext", deliveryFields.deliveryContext),
+    ...definedSessionRowField("lastChannel", deliveryFields.lastChannel),
+    ...definedSessionRowField("lastTo", deliveryFields.lastTo),
+    ...definedSessionRowField("lastAccountId", deliveryFields.lastAccountId),
+    ...definedSessionRowField("lastThreadId", deliveryFields.lastThreadId),
+    ...definedSessionRowField(
+      "pluginExtensions",
+      input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
+    ),
+  };
   return Object.freeze({
     publicationIdentity: previous?.publicationIdentity ?? {},
     row: freezeSessionRow(row, previous?.row),
@@ -600,9 +632,7 @@ export function replaceSessionRowFacts(
   freezeTrustedJsonSnapshot(source?.childLinks);
   return Object.freeze({
     publicationIdentity: materialized.publicationIdentity,
-    row: row
-      ? freezeSessionRow({ ...materialized.row, ...row }, materialized.row, Object.keys(row))
-      : materialized.row,
+    row: row ? freezeSessionRowPatch(materialized.row, row) : materialized.row,
     source: Object.freeze(nextSource),
   });
 }

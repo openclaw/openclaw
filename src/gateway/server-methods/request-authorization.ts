@@ -180,9 +180,13 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         params.methodRegistry.requiresAuthenticatedProfile(params.method) ||
         resolveDirectIncognitoTargets(params.method, params.requestParams).length > 0 ||
         (sessionMutationTargetFields(params.method).length > 0 &&
-          isNamedOperatorRoleEnforcementEnabled(
+          (isNamedOperatorRoleEnforcementEnabled(
             (params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig)(),
-          )),
+          ) ||
+            Boolean(
+              params.context.getRuntimeConfig().gateway?.openclawId?.enabled &&
+              params.context.getRuntimeConfig().gateway?.roles,
+            ))),
     });
     if (profileError) {
       return { error: profileError };

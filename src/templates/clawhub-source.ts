@@ -15,8 +15,8 @@ import {
 } from "../infra/clawhub-packages.js";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
 import { projectTemplateCatalogDependencies } from "./catalog-dependencies.js";
+import { projectCatalogEntry, requirePublicTemplatePackage } from "./clawhub-catalog-entry.js";
 import type { ClawHubTemplateCatalogDetail } from "./clawhub-catalog-types.js";
-import { projectCatalogEntry, requirePublicTemplatePackage } from "./clawhub-catalog.js";
 import {
   countTemplateContents,
   readTemplateDisplayInventory,
@@ -24,6 +24,7 @@ import {
 import { parseTemplateManifestSummary } from "./clawhub-manifest-summary.js";
 import {
   readClawHubCatalogPreview,
+  type CatalogPreviewSelection,
   type ClawHubTemplateCatalogPreview,
 } from "./clawhub-preview-content.js";
 import {
@@ -230,11 +231,7 @@ function projectDetail(
 }
 
 export async function readClawHubTemplatePreview(
-  params: ClawHubFetchOptions &
-    ClawHubCoordinate & {
-      kind: ClawHubTemplateCatalogPreview["kind"];
-      name: string;
-    },
+  params: ClawHubFetchOptions & ClawHubCoordinate & CatalogPreviewSelection,
 ): Promise<ClawHubTemplateCatalogPreview> {
   requireTemplateName(params.packageName);
   requireExactVersion(params.version);
@@ -243,7 +240,7 @@ export async function readClawHubTemplatePreview(
   const pkg = requirePublicTemplatePackage(detail, params.packageName);
   const { preview } = await readClawHubTemplateContents(
     { ...params, packageName: pkg.name },
-    { kind: params.kind, name: params.name },
+    { kind: params.kind, name: params.name, automationIndex: params.automationIndex },
   );
   if (!preview) {
     throw new ClawHubSourceError(
@@ -256,7 +253,7 @@ export async function readClawHubTemplatePreview(
 
 async function readClawHubTemplateContents(
   params: ClawHubFetchOptions & ClawHubCoordinate,
-  requestedPreview?: Pick<ClawHubTemplateCatalogPreview, "kind" | "name">,
+  requestedPreview?: CatalogPreviewSelection,
   prepared?: {
     download: ClawHubDownloadResult;
     artifact: TemplateArtifactResponse;
@@ -359,19 +356,22 @@ async function readClawHubTemplateContents(
 
 type PersistClawHubSource = () => Promise<ResolvedClawHubSource>;
 
-export async function withResolvedClawHubSource<T>(
-  params: ClawHubFetchOptions & {
-    coordinate: { packageName: string; version?: string };
-    mode: "preview" | "apply";
-    acknowledgeClawHubRisk?: boolean;
-    stateDir?: string;
-    run: (
-      source: ResolvedClawHubSource,
-      trust: ClawHubTemplateTrust,
-      persistSource: PersistClawHubSource,
-    ) => Promise<T>;
-  },
-): Promise<{ value: T } & ClawHubTemplateTrust> {
+type ClawHubSourceRequest = ClawHubFetchOptions & {
+  coordinate: { packageName: string; version?: string };
+  mode: "preview" | "apply";
+  acknowledgeClawHubRisk?: boolean;
+};
+
+type FetchedClawHubSource = {
+  packageName: string;
+  version: string;
+  resolvedArtifact: ReturnType<typeof readExactTemplateArtifact>;
+  trust: ClawHubTemplateTrust;
+  download: ClawHubDownloadResult;
+};
+
+/** Registry reads for one exact release: identity, then trust, then the archive. */
+async function fetchClawHubSource(params: ClawHubSourceRequest): Promise<FetchedClawHubSource> {
   const requestedName = params.coordinate.packageName;
   requireTemplateName(requestedName);
   if (params.coordinate.version !== undefined) {
@@ -408,13 +408,12 @@ export async function withResolvedClawHubSource<T>(
   const artifact =
     exactArtifact ?? (await fetchClawHubPackageArtifact({ ...params, name: packageName, version }));
   const resolvedArtifact = readExactTemplateArtifact(artifact, { packageName, version });
-  const expectedSha256 = resolvedArtifact.sha256;
   const trust = await measureTemplateAddStage("source.trust", () =>
     checkClawHubPackageTrust({
       subject: { kind: "template", packageName },
       version,
       expectedTemplateArtifact: {
-        sha256: expectedSha256,
+        sha256: resolvedArtifact.sha256,
         npmIntegrity: resolvedArtifact.npmIntegrity,
         ...(resolvedArtifact.npmShasum !== undefined
           ? { npmShasum: resolvedArtifact.npmShasum }
@@ -437,12 +436,6 @@ export async function withResolvedClawHubSource<T>(
       trust.warning,
     );
   }
-  const trustProjection: ClawHubTemplateTrust = {
-    ...(trust.warning ? { trustWarning: trust.warning } : {}),
-    riskAcknowledgementRequired,
-    trustRecord: trust.trustInstallRecordFields,
-  };
-
   const download = await measureTemplateAddStage("source.download", () =>
     downloadClawHubPackageArchive({
       name: packageName,
@@ -451,8 +444,81 @@ export async function withResolvedClawHubSource<T>(
       baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
+      ...(params.signal ? { signal: params.signal } : {}),
     }),
   );
+  return {
+    packageName,
+    version,
+    resolvedArtifact,
+    trust: {
+      ...(trust.warning ? { trustWarning: trust.warning } : {}),
+      riskAcknowledgementRequired,
+      trustRecord: trust.trustInstallRecordFields,
+    },
+    download,
+  };
+}
+
+/** Registry reads started ahead of their consumer, which owns the downloaded archive. */
+export type PrefetchedClawHubSource = {
+  /** The one consumer takes the fetched release; its cleanup then belongs to that consumer. */
+  claim: () => Promise<FetchedClawHubSource>;
+  /** Cancel an unclaimed fetch and remove anything it downloaded. */
+  discard: () => Promise<void>;
+};
+
+/**
+ * Start the registry reads of an Add before its other preparation finishes. The archive
+ * is only downloaded here: `withResolvedClawHubSource` still verifies and extracts it.
+ */
+export function prefetchClawHubSource(params: ClawHubSourceRequest): PrefetchedClawHubSource {
+  const abort = new AbortController();
+  const fetched = fetchClawHubSource({
+    ...params,
+    signal: params.signal ? AbortSignal.any([params.signal, abort.signal]) : abort.signal,
+  });
+  fetched.catch(() => undefined);
+  let claimed = false;
+  return {
+    claim: () => {
+      claimed = true;
+      return fetched;
+    },
+    discard: async () => {
+      if (claimed) {
+        return;
+      }
+      claimed = true;
+      abort.abort();
+      await fetched.then(
+        (source) => source.download.cleanup(),
+        () => undefined,
+      );
+    },
+  };
+}
+
+export async function withResolvedClawHubSource<T>(
+  params: ClawHubSourceRequest & {
+    stateDir?: string;
+    /** Registry reads this request already started; used instead of fetching again. */
+    prefetched?: PrefetchedClawHubSource;
+    run: (
+      source: ResolvedClawHubSource,
+      trust: ClawHubTemplateTrust,
+      persistSource: PersistClawHubSource,
+    ) => Promise<T>;
+  },
+): Promise<{ value: T } & ClawHubTemplateTrust> {
+  const {
+    packageName,
+    version,
+    resolvedArtifact,
+    trust: trustProjection,
+    download,
+  } = await (params.prefetched ? params.prefetched.claim() : fetchClawHubSource(params));
+  const expectedSha256 = resolvedArtifact.sha256;
   try {
     assertClawHubDownloadIntegrity(download, resolvedArtifact);
     const artifactByteLength = (await fs.stat(download.archivePath)).size;

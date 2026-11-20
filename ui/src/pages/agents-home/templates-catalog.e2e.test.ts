@@ -6,46 +6,25 @@ import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
 import { iconData } from "../../components/icon-data.ts";
 import { LINK_READER_HOVERCARD_OPEN_DELAY_MS } from "../../components/link-reader-target.ts";
 import { inspection } from "../../e2e/plugins-settings-admin.test-support.ts";
-import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
-import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
-  createControlUiMockSameOriginGatewayScript,
-  installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
+import { capture, proofDir } from "./templates-catalog-capture.test-support.ts";
 import {
   agentsList,
   auditUrl,
+  installTemplateCatalogGateway,
   publishedAtMs,
   researchTemplate,
+  summaryFreeTemplate,
   skillExcerpt,
   soulExcerpt,
-  summaryFreeTemplate,
-  templateCatalogReplies,
   workflowOperator,
-} from "./templates-catalog.e2e.test-support.ts";
-
-const proofDir = createControlUiE2eArtifactDir("templates-catalog");
-const capture = async (page: Page, name: string, content: Locator, scrollTo?: Locator) => {
-  const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [content], {
-    animations: "disabled",
-    elements: name === "after-catalog" ? [content] : [],
-    scrollTo,
-  });
-  await writeFile(`${proofDir}/${name}.png`, frame.png);
-  await writeFile(
-    `${proofDir}/${name}.json`,
-    JSON.stringify({
-      viewport: page.viewportSize(),
-      scale: await page.evaluate(() => devicePixelRatio),
-      elements: frame.elements.map(({ bounds }) => ({ bounds })),
-    }),
-  );
-};
+} from "./templates-catalog-gateway.test-support.ts";
 
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const browserAvailable = canRunPlaywrightChromium(executablePath);
@@ -86,31 +65,12 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     });
     onTestFinished(() => context.close());
     const page = await context.newPage();
-    await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
-    const gateway = await installMockGateway(page, {
-      automaticallyFetchFavicons: linkPreviews,
-      historyMessages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "Try [Workflow Operator](/templates/packages/%40openclaw%2Fworkflow-operator) or [another reference](/templates/packages/%40openclaw%2Fworkflow-operator).",
-            },
-          ],
-        },
-      ],
-      heldMethods: loading ? ["templates.catalog.search"] : [],
-      featureMethods: [
-        "openclaw.chat",
-        "templates.catalog.search",
-        "templates.catalog.detail",
-        "templates.catalog.preview",
-        "templates.add.apply",
-        "plugins.list",
-        "plugins.catalog.get",
-      ],
-      methodResponses: templateCatalogReplies(entry, detailPublisher, catalogEntries),
+    const gateway = await installTemplateCatalogGateway(page, {
+      entry,
+      detailPublisher,
+      loading,
+      linkPreviews,
+      catalogEntries,
     });
     await page.goto(`${server.baseUrl}templates`);
     return { page, gateway };
@@ -151,7 +111,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       ).toBeGreaterThanOrEqual(1024);
       await capture(page, "loading-resized-tablet", loading);
     }
-    // The results header and first card arrive exactly where their placeholders were.
+    // The first shelf and card arrive exactly where their placeholders were.
     const placeholderHeader = await loading
       .locator(".plugin-catalog-section__header")
       .first()
@@ -516,7 +476,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await capture(page, "after-labs", row, row);
   });
 
-  it("lays out the directory grid and switches to filtered results", async () => {
+  it("lays out featured cards and switches category shelves to filtered results", async () => {
     const { page, gateway } = await fixture(
       undefined,
       undefined,
@@ -541,18 +501,21 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         },
       ],
     );
-    const grid = page.locator("[data-templates-results]");
-    await grid.locator("[data-templates-entry]").first().waitFor();
+    await page.locator("[data-templates-featured] [data-templates-entry]").first().waitFor();
+    await page
+      .locator('[data-templates-category="research"] [data-templates-entry]')
+      .first()
+      .waitFor();
     expect(
       await page
         .locator(".plugin-catalog-chips")
         .evaluate((element) => getComputedStyle(element).flexWrap),
     ).toBe("wrap");
-    // Each category chip needs its own glyph; Personal and People once shared one.
+    // All and the eleven category filters each have a distinct glyph.
     const chipIcons = await page
       .locator(".plugin-catalog-chips .plugin-catalog-chip svg")
       .evaluateAll((icons) => icons.map((icon) => icon.innerHTML));
-    expect(chipIcons).toHaveLength(14);
+    expect(chipIcons).toHaveLength(12);
     expect(new Set(chipIcons).size).toBe(chipIcons.length);
     const searchWidth = await page
       .locator(".plugin-catalog-search")
@@ -561,54 +524,60 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       .locator(".plugin-catalog-results__body")
       .evaluate((element) => element.getBoundingClientRect().width);
     expect(Math.abs(searchWidth - bodyWidth)).toBeLessThan(2);
-    await capture(page, "after-catalog", grid.locator("[data-templates-entry]").first());
+    await capture(
+      page,
+      "after-catalog",
+      page.locator("[data-templates-featured] [data-templates-entry]").first(),
+    );
     await page.setViewportSize({ width: 390, height: 844 });
-    await capture(page, "catalog-mobile", grid);
+    await capture(page, "catalog-mobile", page.locator("[data-templates-featured]"));
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,
     );
     await page.setViewportSize({ width: 1440, height: 900 });
-    const cards = grid.locator("[data-templates-entry]");
-    expect(await cards.count()).toBe(4);
-    const boxes = await cards.evaluateAll((elements) =>
-      elements.map((card) => {
-        const { x, y } = card.getBoundingClientRect();
-        return { x, y };
-      }),
-    );
-    expect(boxes[0]!.y).toBe(boxes[1]!.y);
-    expect(boxes[2]!.y).toBe(boxes[3]!.y);
-    expect(boxes[0]!.x).toBe(boxes[2]!.x);
-    expect(boxes[1]!.x).toBeGreaterThan(boxes[0]!.x);
-    expect(boxes[2]!.y).toBeGreaterThan(boxes[0]!.y);
-    const rows = await cards.evaluateAll((elements) =>
-      elements.map((card) => {
-        const art = card.querySelector(".agents-home__template-art")!;
-        const body = card.querySelector(".agents-home__template-head")!.getBoundingClientRect();
-        const image = art.getBoundingClientRect();
-        const add = card.querySelector(".agents-home__template-add")!.getBoundingClientRect();
-        const name = card.querySelector("h3")!.getBoundingClientRect();
-        const owner = card
-          .querySelector(".agents-home__template-identity span")!
-          .getBoundingClientRect();
-        return {
-          background: getComputedStyle(art).backgroundColor,
-          artworkHeight: image.height,
-          bodyHeight: body.height,
-          centerDelta: Math.abs(add.y + add.height / 2 - (body.y + body.height / 2)),
-          identityDelta: Math.abs(name.y - owner.y),
-        };
-      }),
-    );
-    for (const row of rows) {
-      expect(row.background).toBe("rgba(0, 0, 0, 0)");
-      expect(row.artworkHeight).toBe(row.bodyHeight);
-      expect(row.centerDelta).toBeLessThan(1);
-      // Different font sizes share a baseline, with a one-pixel top offset.
-      expect(row.identityDelta).toBeLessThanOrEqual(1);
+    for (const selector of ["[data-templates-featured]", '[data-templates-category="research"]']) {
+      const cards = page.locator(`${selector} [data-templates-entry]`);
+      expect(await cards.count()).toBe(4);
+      const boxes = await cards.evaluateAll((elements) =>
+        elements.map((card) => {
+          const { x, y } = card.getBoundingClientRect();
+          return { x, y };
+        }),
+      );
+      expect(boxes[0]!.y).toBe(boxes[1]!.y);
+      expect(boxes[2]!.y).toBe(boxes[3]!.y);
+      expect(boxes[0]!.x).toBe(boxes[2]!.x);
+      expect(boxes[1]!.x).toBeGreaterThan(boxes[0]!.x);
+      expect(boxes[2]!.y).toBeGreaterThan(boxes[0]!.y);
+      const rows = await cards.evaluateAll((elements) =>
+        elements.map((card) => {
+          const art = card.querySelector(".agents-home__template-art")!;
+          const body = card.querySelector(".agents-home__template-head")!.getBoundingClientRect();
+          const image = art.getBoundingClientRect();
+          const add = card.querySelector(".agents-home__template-add")!.getBoundingClientRect();
+          const name = card.querySelector("h3")!.getBoundingClientRect();
+          const owner = card
+            .querySelector(".agents-home__template-identity span")!
+            .getBoundingClientRect();
+          return {
+            background: getComputedStyle(art).backgroundColor,
+            artworkHeight: image.height,
+            bodyHeight: body.height,
+            centerDelta: Math.abs(add.y + add.height / 2 - (body.y + body.height / 2)),
+            identityDelta: Math.abs(name.y - owner.y),
+          };
+        }),
+      );
+      for (const row of rows) {
+        expect(row.background).toBe("rgba(0, 0, 0, 0)");
+        expect(row.artworkHeight).toBe(row.bodyHeight);
+        expect(row.centerDelta).toBeLessThan(1);
+        // Different font sizes share a baseline, with a one-pixel top offset.
+        expect(row.identityDelta).toBeLessThanOrEqual(1);
+      }
     }
     await gateway.waitForRequest("templates.catalog.search", {
-      match: { limit: 20 },
+      match: { overview: true, limit: 4 },
     });
     expect(await gateway.getRequests("templates.catalog.search")).toHaveLength(1);
 
@@ -616,11 +585,12 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       entries: [researchTemplate, workflowOperator],
     });
     await page.getByRole("button", { name: "Research", exact: true }).click();
-    await gateway.waitForRequest("templates.catalog.search", { match: { category: "research" } });
-    const categoryCards = page.locator(
-      '[data-catalog-section="research"] [data-templates-results] [data-templates-entry]',
-    );
-    await categoryCards.first().waitFor();
+    await gateway.waitForRequest("templates.catalog.search", {
+      match: { category: "research", limit: 20 },
+    });
+    await page.locator("[data-templates-results] [data-templates-entry]").first().waitFor();
+    expect(await page.locator("[data-templates-featured]").count()).toBe(0);
+    const categoryCards = page.locator("[data-templates-results] [data-templates-entry]");
     expect(await categoryCards.count()).toBe(2);
     expect(await categoryCards.first().textContent()).toContain("Release Scout");
     expect(await categoryCards.nth(1).textContent()).toContain("Workflow Operator");
@@ -682,8 +652,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     },
   );
 
-  it("shows disabled automation declarations in details and the inline preview", async () => {
-    const { page, gateway } = await fixture();
+  it("opens automation instructions from the template row and describes the schedule in both views", async () => {
+    const { page, gateway } = await fixture(undefined, undefined, undefined, false, "dark");
     await gateway.setMethodResponse("templates.catalog.detail", {
       detail: {
         ...workflowOperator,
@@ -694,24 +664,68 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
           skills: [],
           integrations: [],
           automations: [
-            { name: "Weekly brief", schedule: "0 9 * * 1", timezone: "UTC", enabled: false },
+            {
+              name: "Weekly brief",
+              schedule: "0 9 * * 1",
+              timezone: "UTC",
+              enabled: false,
+            },
+            {
+              name: "Midweek nudge",
+              schedule: "0 21 * * 3",
+              timezone: "UTC",
+              enabled: false,
+            },
           ],
         },
       },
     });
     const detail = await openDetail(page);
-    const automation = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
-    await capture(page, "paused-automation-detail", automation);
-    expect.soft(await automation.textContent()).toContain("Disabled");
+    const automations = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
+    const row = automations.getByRole("button", { name: /Weekly brief/ });
+    await row.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await capture(page, "paused-automation-detail", automations);
+    expect(await gateway.getRequests("templates.catalog.preview")).toHaveLength(0);
+    const setPreview = (name: string, content: string) =>
+      gateway.setMethodResponse("templates.catalog.preview", {
+        preview: { kind: "automation", name, content },
+      });
+    const weekly = "Summarize last week's work.\n\nList anything still waiting on a decision.";
+    await setPreview("Weekly brief", weekly);
+    await row.click();
+    await gateway.waitForRequest("templates.catalog.preview", {
+      match: {
+        packageName: workflowOperator.packageName,
+        version: "1.2.0",
+        kind: "automation",
+        name: "Weekly brief",
+        automationIndex: 0,
+      },
+    });
+    const dialog = page.getByRole("dialog", { name: "Weekly brief", exact: true });
+    await dialog.getByText("List anything still waiting on a decision.").waitFor();
+    await dialog.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await capture(page, "paused-automation-dialog", dialog);
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await dialog.waitFor({ state: "hidden" });
+    await setPreview("Midweek nudge", "Remind me of anything due before Friday.");
+    await automations.getByRole("button", { name: /Midweek nudge/ }).click();
+    await page.getByText("Remind me of anything due before Friday.", { exact: true }).waitFor();
+    await page
+      .getByRole("dialog", { name: "Midweek nudge", exact: true })
+      .getByText("Wednesday at 9:00 PM · UTC · Disabled", { exact: true })
+      .waitFor();
     await page.goto(`${server.baseUrl}chat/main`);
     await page.locator("a.markdown-template-link").first().click();
     const shell = page.getByRole("dialog", { name: "Template details", exact: true });
     await shell.getByRole("button", { name: /Automations/ }).click();
-    const row = shell.getByRole("button", { name: /Weekly brief/ });
-    expect.soft(await row.textContent()).toContain("Disabled");
-    await row.click();
+    const previewRow = shell.getByRole("button", { name: /Weekly brief/ });
+    await previewRow.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await setPreview("Weekly brief", weekly);
+    await previewRow.click();
+    await shell.getByText("List anything still waiting on a decision.").waitFor();
+    await shell.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
     await capture(page, "paused-automation-preview", shell);
-    expect.soft(await shell.textContent()).toContain("Disabled");
     expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
   });
 
@@ -719,6 +733,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     const { page, gateway } = await fixture();
     await gateway.setMethodResponse("templates.catalog.preview", {
       preview: {
+        kind: "instruction",
+        name: "SOUL.md",
         content: "Long file content. ".repeat(2000) + "\n\n[Agent instructions](AGENTS.md)",
       },
     });
@@ -749,7 +765,11 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     });
     expect(await shell.locator("header").boundingBox()).toEqual(header);
     expect(await shell.locator("footer").boundingBox()).toEqual(footer);
+    await gateway.setMethodResponse("templates.catalog.preview", {
+      preview: { kind: "instruction", name: "AGENTS.md", content: "Second selected document." },
+    });
     await shell.getByRole("link", { name: "Agent instructions", exact: true }).click();
+    await shell.getByText("Second selected document.", { exact: true }).waitFor();
     await shell.getByRole("heading", { name: "AGENTS.md", exact: true }).waitFor();
     expect(await page.getByRole("dialog").count()).toBe(1);
     const back = shell.getByRole("button", { name: "Back to Workspace files", exact: true });
@@ -770,7 +790,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
 
   it("distinguishes an empty catalog from no matching templates", async () => {
     const { page, gateway } = await fixture();
-    await page.locator("[data-templates-results] [data-templates-entry]").first().waitFor();
+    await page.locator("[data-templates-featured] [data-templates-entry]").first().waitFor();
     await gateway.setMethodResponse("templates.catalog.search", { entries: [] });
     const search = page.getByPlaceholder("Search templates");
     await search.fill("unmatched");

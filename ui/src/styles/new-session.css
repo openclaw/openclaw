@@ -121,6 +121,35 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   padding: clamp(44px, 5vh, 52px) clamp(6px, 1vw, 12px) 6px;
 }
 
+/* Fit the draft's commands inside the scroll pane, below the native titlebar.
+   Short landscape retains the shared composer's in-flow sticky list. */
+@media not ((max-width: 932px) and (max-height: 500px) and (orientation: landscape)) {
+  .new-session-page__scroll {
+    contain: layout;
+    anchor-scope: --draft-input;
+
+    .agent-chat__input {
+      anchor-name: --draft-input;
+    }
+
+    .slash-menu--commands {
+      --oc-overlay-max-height: var(--slash-menu-max-height);
+      position: fixed;
+      position-anchor: --draft-input;
+      position-area: top;
+      position-try-fallbacks:
+        --chat-picker-fit,
+        --chat-picker-fit flip-block,
+        --chat-picker-fill;
+      inset: auto;
+      width: anchor-size(width);
+      display: flex;
+      flex-direction: column;
+      margin-block: 8px;
+    }
+  }
+}
+
 /* Content-size the shared welcome and top-anchor it inside the page scroll.
    Auto vertical margins would re-center the identity as the textarea grows. */
 .new-session-page .agent-chat__welcome {
@@ -755,27 +784,6 @@ span.new-session-page__select {
   --oc-overlay-max-width: min(320px, calc(100dvw - 24px));
 }
 
-.new-session-page__environment-layout {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.new-session-page__environment-picker {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  max-height: min(360px, calc(var(--oc-overlay-available-height, 70vh) - 2px));
-  overflow: hidden;
-}
-
-.new-session-page__environment-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  overscroll-behavior: contain;
-  overflow-y: auto;
-}
-
 .new-session-page__environment-option {
   min-height: 28px;
   gap: 8px;
@@ -792,13 +800,6 @@ span.new-session-page__select {
 .new-session-page__submenu-chevron svg {
   width: 14px;
   height: 14px;
-}
-
-.new-session-page__environment-empty {
-  padding: 24px 12px;
-  color: var(--muted);
-  text-align: center;
-  font-size: var(--control-ui-text-sm);
 }
 
 .new-session-page__menu-chevron {
@@ -1976,11 +1977,6 @@ span.new-session-page__select {
   height: 1px;
   margin: 0 var(--picker-row-inset) 6px;
   background: var(--border);
-}
-
-.new-session-page__picker-foot .new-session-page__menu-chevron svg {
-  width: 13px;
-  height: 13px;
 }
 
 .new-session-page__checkout-popover .new-session-page__picker-root {

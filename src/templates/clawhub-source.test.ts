@@ -57,17 +57,21 @@ vi.mock("./reader.js", () => ({
 }));
 
 import {
+  officialPackage,
+  communityPackage,
+  packageName,
+  personalPackageName,
+  version,
+} from "./clawhub-catalog.test-support.js";
+import {
+  prefetchClawHubSource,
   readClawHubTemplateDetail as loadDetail,
   readClawHubTemplatePreview,
-  readClawHubTemplatesOverview,
   searchClawHubTemplates,
   withResolvedClawHubSource,
 } from "./clawhub-source.js";
 import type { TemplateManifest } from "./types.js";
 
-const packageName = "@openclaw/research-briefing";
-const personalPackageName = "@alice/research-briefing";
-const version = "1.0.0";
 const archiveBytes = Buffer.alloc(321);
 const digest = createHash("sha256").update(archiveBytes).digest("hex");
 const tempDirs = createTrackedTempDirs();
@@ -124,26 +128,6 @@ const matchingSecurity = {
     stale: false,
   },
 };
-
-const officialPackage = (name = packageName) => ({
-  name,
-  displayName: "Research Briefing",
-  family: "template",
-  channel: "official",
-  isOfficial: true,
-  ownerHandle: "openclaw",
-  ownerOfficial: true,
-  updatedAt: 2,
-  latestVersion: version,
-});
-
-const communityPackage = () => ({
-  ...officialPackage(personalPackageName),
-  channel: "community",
-  isOfficial: false,
-  ownerHandle: "alice",
-  ownerOfficial: false,
-});
 
 async function selectPackage(pkg: ReturnType<typeof officialPackage>) {
   mocks.detail.mockResolvedValue({
@@ -296,60 +280,6 @@ afterEach(async () => {
 });
 
 describe("public ClawHub Template catalog", () => {
-  it("projects an overview in one HTTP read, retaining featured order and category ranking", async () => {
-    const official = { ...officialPackage(), stats: { installs: 20 } };
-    const community = { ...communityPackage(), stats: { installs: 1 } };
-    const impostor = officialPackage("@other/impostor");
-    const fetch = vi.fn(async (_input: unknown) =>
-      Response.json({
-        complete: true,
-        featured: [community, impostor, official],
-        sections: [{ category: "research", items: [community, impostor, official] }],
-      }),
-    );
-    vi.stubGlobal("fetch", fetch);
-    const overview = await readClawHubTemplatesOverview({
-      baseUrl: "https://registry.example",
-      limit: 8,
-      timeoutMs: 1234,
-    });
-    expect(overview?.featured.map((entry) => entry.packageName)).toEqual([
-      personalPackageName,
-      packageName,
-    ]);
-    expect(overview?.sections[0]?.entries.map((entry) => entry.packageName)).toEqual([
-      packageName,
-      personalPackageName,
-    ]);
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(String(fetch.mock.calls[0]?.[0])).toBe(
-      "https://registry.example/api/v1/templates/overview?limit=8",
-    );
-    expect(mocks.list).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { status: 404, body: {}, fallback: true },
-    { status: 200, body: { complete: false }, fallback: true },
-    { status: 200, body: { complete: true, featured: [] }, fallback: false },
-    ...[401, 403, 429, 500].map((status) => ({ status, body: {}, fallback: false })),
-  ])(
-    "uses legacy shelves only for 404/incomplete, not $status failures ($fallback)",
-    async ({ status, body, fallback }) => {
-      const fetch = vi.fn(async () =>
-        Response.json(body, { status, headers: { "retry-after": "61" } }),
-      );
-      vi.stubGlobal("fetch", fetch);
-      const result = readClawHubTemplatesOverview({ baseUrl: "https://registry.example" });
-      if (fallback) {
-        await expect(result).resolves.toBeUndefined();
-      } else {
-        await expect(result).rejects.toThrow();
-      }
-      expect(fetch).toHaveBeenCalledTimes(1);
-      expect(mocks.list).not.toHaveBeenCalled();
-    },
-  );
   it.each([
     {
       params: { featured: true },
@@ -436,6 +366,50 @@ describe("public ClawHub Template catalog", () => {
         automations: [{ name: "Daily briefing", enabled: false }],
       },
     });
+  });
+
+  it("reads an automation message only from its selected verified release", async () => {
+    const result = await readClawHubTemplateDetail({ packageName, version });
+    expect(result.contents.automations[0]).not.toHaveProperty("message");
+    mocks.download.mockClear();
+    const preview = (name: string, automationIndex: number) =>
+      readClawHubTemplatePreview({
+        packageName,
+        version,
+        kind: "automation",
+        name,
+        automationIndex,
+      });
+    await expect(preview("Daily briefing", 0)).resolves.toEqual({
+      kind: "automation",
+      name: "Daily briefing",
+      content: "Prepare the briefing",
+    });
+    expect(mocks.download).toHaveBeenCalledOnce();
+    await expectCode(preview("Unknown", 0), "clawhub_preview_unavailable");
+    await expectCode(preview("Daily briefing", 1), "clawhub_preview_unavailable");
+    const job = {
+      name: "Same name",
+      enabled: false,
+      schedule: { cron: "0 9 * * *", timezone: "UTC" },
+      session: "isolated",
+    };
+    await fs.writeFile(
+      path.join(fixtureRoot, "CLAW.md"),
+      [
+        "---",
+        JSON.stringify({
+          ...emptyManifest,
+          automations: [
+            { ...job, id: "first", message: "First message" },
+            { ...job, id: "second", message: "Second message" },
+          ],
+        }),
+        "---",
+        "",
+      ].join("\n"),
+    );
+    await expect(preview("Same name", 1)).resolves.toMatchObject({ content: "Second message" });
   });
 
   it("reuses only verified metadata with matching live download permission", async () => {
@@ -831,6 +805,52 @@ describe("verified ClawHub Template source", () => {
     }
     expect(mocks.trust).toHaveBeenCalledTimes(1);
     expect(mocks.download).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves from registry reads an Add started earlier, without reading them again", async () => {
+    const { stateDir } = await prepareResolverFixture();
+    const prefetched = prefetchClawHubSource({
+      coordinate: { packageName, version },
+      mode: "apply",
+    });
+    await prefetched.claim();
+    const reads = [mocks.detail, mocks.artifact, mocks.trust, mocks.download].map(
+      (read) => read.mock.calls.length,
+    );
+    expect(reads).toEqual([1, 1, 1, 1]);
+    expect(mocks.extract).not.toHaveBeenCalled();
+
+    await expect(
+      resolveSource({
+        mode: "apply",
+        stateDir,
+        prefetched,
+        run: async (source) => source.source.name,
+      }),
+    ).resolves.toMatchObject({ value: packageName });
+    expect(
+      [mocks.detail, mocks.artifact, mocks.trust, mocks.download].map(
+        (read) => read.mock.calls.length,
+      ),
+    ).toEqual(reads);
+    expect(mocks.extract).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes the archive of registry reads that no Add went on to use", async () => {
+    await prepareResolverFixture();
+    const cleanup = vi.fn(async () => undefined);
+    const archive = await mocks.download();
+    mocks.download.mockClear();
+    mocks.download.mockResolvedValue({ ...archive, cleanup });
+    const prefetched = prefetchClawHubSource({
+      coordinate: { packageName, version },
+      mode: "apply",
+    });
+
+    await prefetched.discard();
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(mocks.extract).not.toHaveBeenCalled();
   });
 
   it("keeps preview ephemeral and persists only after an approved apply asks for it", async () => {

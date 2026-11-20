@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { searchClawHubTemplates } from "./clawhub-catalog.js";
+import { readClawHubTemplatesOverview, searchClawHubTemplates } from "./clawhub-catalog.js";
+import {
+  officialPackage,
+  communityPackage,
+  packageName,
+  personalPackageName,
+} from "./clawhub-catalog.test-support.js";
 
 const baseUrl = "https://registry.example";
 const item = (name: string, installs = 1) => ({
@@ -175,4 +181,133 @@ describe("public Template result continuations", () => {
       "100",
     ]);
   });
+});
+
+describe("public Template overview certification", () => {
+  it.each([
+    { optIn: undefined, marker: true }, // A plain overview ignores an unsolicited certificate.
+    { optIn: false, marker: true },
+    { optIn: true, marker: undefined }, // Legacy or over-budget registry: only shelves are known.
+    { optIn: true, marker: "true" },
+  ])(
+    "keeps the bounded overview when optIn=$optIn and marker=$marker",
+    async ({ optIn, marker }) => {
+      const official = { ...officialPackage(), stats: { installs: 20 } };
+      const community = { ...communityPackage(), stats: { installs: 1 } };
+      const impostor = officialPackage("@other/impostor");
+      const extra = officialPackage("@openclaw/extra");
+      const items = [community, impostor, official, extra];
+      const fetch = vi.fn(async (_input: unknown) =>
+        Response.json({
+          complete: true,
+          completeCategoryEntries: marker,
+          featured: items,
+          sections: [{ category: "research", items }],
+        }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const overview = await readClawHubTemplatesOverview({
+        baseUrl: "https://registry.example",
+        limit: 2,
+        timeoutMs: 1234,
+        ...(optIn === undefined ? {} : { includeCategoryEntries: optIn }),
+      });
+      expect(overview?.featured.map((entry) => entry.packageName)).toEqual([
+        personalPackageName,
+        packageName,
+      ]);
+      expect(overview?.sections[0]?.entries.map((entry) => entry.packageName)).toEqual([
+        packageName,
+        personalPackageName,
+      ]);
+      expect(overview?.sections[0]).not.toHaveProperty("additionalEntries");
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(String(fetch.mock.calls[0]?.[0])).toBe(
+        "https://registry.example/api/v1/templates/overview?limit=2" +
+          (optIn ? "&include=categoryEntries" : ""),
+      );
+    },
+  );
+
+  it("splits each certified category after filtering, last-valid de-duplication and ranking", async () => {
+    const older = { ...officialPackage(), stats: { installs: 100 } };
+    const current = { ...older, displayName: "Current release", stats: { installs: 7 } };
+    const community = { ...communityPackage(), stats: { installs: 20 } };
+    const tie = { ...officialPackage("@openclaw/zebra"), stats: { installs: 7 } };
+    const items = [older, tie, community, current, { ...older, ownerHandle: "impostor" }];
+    const fetch = vi.fn(async (_input: unknown) =>
+      Response.json({
+        complete: true,
+        completeCategoryEntries: true,
+        featured: [current, community],
+        sections: [
+          { category: "research", items },
+          { category: "coding", items: [current] },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const overview = await readClawHubTemplatesOverview({
+      baseUrl: "https://registry.example",
+      limit: 1,
+      includeCategoryEntries: true,
+    });
+    expect(overview).toMatchObject({
+      featured: [{ packageName }],
+      sections: [
+        {
+          category: "research",
+          entries: [{ packageName: personalPackageName }],
+          additionalEntries: [
+            { packageName, displayName: "Current release", installs: 7 },
+            { packageName: "@openclaw/zebra", installs: 7 },
+          ],
+        },
+        { category: "coding", entries: [{ packageName }], additionalEntries: [] },
+      ],
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(String(fetch.mock.calls[0]?.[0])).toBe(
+      "https://registry.example/api/v1/templates/overview?limit=1&include=categoryEntries",
+    );
+    const legacy = vi.fn(async (input: URL | string) => {
+      const url = new URL(input);
+      if (url.pathname === "/api/v1/templates/catalog-page") {
+        return new Response(null, { status: 404 });
+      }
+      expect(url.pathname).toBe("/api/v1/packages");
+      return Response.json({ items, nextCursor: null });
+    });
+    vi.stubGlobal("fetch", legacy);
+    const { entries: category } = await searchClawHubTemplates({ category: "research", baseUrl });
+    const research = overview?.sections[0];
+    expect([...(research?.entries ?? []), ...(research?.additionalEntries ?? [])]).toEqual(
+      category,
+    );
+  });
+
+  it.each([
+    { status: 404, body: {}, fallback: true },
+    { status: 200, body: { complete: false, completeCategoryEntries: true }, fallback: true },
+    { status: 200, body: { complete: true, featured: [] }, fallback: false },
+    ...[401, 403, 429, 500].map((status) => ({ status, body: {}, fallback: false })),
+  ])(
+    "uses legacy shelves only for 404/incomplete, not $status failures ($fallback)",
+    async ({ status, body, fallback }) => {
+      const fetch = vi.fn(async () =>
+        Response.json(body, { status, headers: { "retry-after": "61" } }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const result = readClawHubTemplatesOverview({
+        baseUrl: "https://registry.example",
+        includeCategoryEntries: true,
+      });
+      if (fallback) {
+        await expect(result).resolves.toBeUndefined();
+      } else {
+        await expect(result).rejects.toThrow();
+      }
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
 });

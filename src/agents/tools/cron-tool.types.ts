@@ -50,6 +50,8 @@ export type CronCreatorToolAuthoritySnapshot = Omit<
 };
 
 export type CronToolOptions = {
+  /** A model-facing chat add must identify its slot before the scheduler can mutate. */
+  requireCreationPlan?: boolean;
   agentSessionKey?: string;
   agentId?: string;
   /** Authenticated source account; authority must not be inferred from delivery. */

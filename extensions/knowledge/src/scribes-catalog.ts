@@ -193,6 +193,15 @@ const MEMORY_WORDS: Record<MemorySource, string> = {
   dreams: "the Dreaming diary (DREAMS.md)",
 };
 
+/** Schedules Change schedule offers an ongoing scribe by name; any other is a custom one. */
+export const SCHEDULE_CHOICES: Partial<Record<ScribeId, readonly string[]>> = {
+  "claim-consolidation": [REVIEW_WEEKLY_SCHEDULE, REVIEW_NIGHTLY_SCHEDULE],
+  conversations: [CONVERSATIONS_SCHEDULE],
+  granola: [GRANOLA_SCHEDULE],
+};
+/** An offered cron schedule in words ("weekly, Sundays at 3:45 AM"); undefined for any other. */
+export const scheduleWords = (expr: string): string | undefined => SCHEDULE_WORDS[expr];
+
 /** "Runs weekly, Sundays at 3:45 AM UTC (cron `45 3 * * 0`)." for a cron schedule. */
 function scheduleLine(expr: string, timezone: string) {
   const words = SCHEDULE_WORDS[expr];
@@ -584,6 +593,31 @@ export function checkRunMessage(
   return { state: "differs", current: generate(target) };
 }
 
+/**
+ * The run message an automation moving from `from` to `to` should carry. Only a consolidation
+ * message names run amounts by schedule: one Knowledge generated, now or earlier, becomes the
+ * current one for the new schedule (without amounts on a custom schedule). Any other is kept.
+ */
+export function rescheduledRunMessage(
+  id: ScribeId,
+  message: string,
+  from: RunSchedule,
+  to: RunSchedule,
+) {
+  const state = checkRunMessage(id, message, from).state;
+  if (id !== "claim-consolidation" || (state !== "current" && state !== "outdated")) {
+    return message;
+  }
+  const options = settingsChoices(id).find(
+    (choice) => to.kind === "cron" && "schedule" in choice && choice.schedule === to.expr,
+  );
+  return runPrompt(
+    { scribe: id, mode: "ongoing", options: options ?? defaultOptions(id), timezone: "UTC" },
+    CURRENT_WORDING,
+    options !== undefined,
+  );
+}
+
 /** First words of every repair prompt; the page never forces a first run after one. */
 export const REPAIR_HEADING = "Repair the Knowledge scribe";
 /** First words of every update prompt; the page never forces a first run after one either. */
@@ -607,13 +641,15 @@ export type RepairSource = {
  * It does no work.
  * - repair: take the automation over and turn it back on.
  * - update: bring it up to this version (fresh session per run, the given run message) and keep
- *   it paused or on as it is. A turn in the conversation re-declares it, so the automation keeps
+ *   it paused or on as it is.
+ * - reschedule: an update that also moves it to `current.schedule`, a new one, from the page's
+ *   Change schedule. A turn in the conversation re-declares it, so the automation keeps
  *   the authority of the owner's authenticated turn; an edit from the page would drop it.
  */
 export function repairPrompt(
   id: ScribeId,
   current: RepairSource,
-  purpose: "repair" | "update" = "repair",
+  purpose: "repair" | "update" | "reschedule" = "repair",
 ) {
   const scribe = scribeById(id)!;
   const { schedule } = current;
@@ -639,7 +675,9 @@ export function repairPrompt(
   return [
     `${repair ? REPAIR_HEADING : UPDATE_HEADING} "${scribe.title}" in this conversation. Don't do its work in this turn. ${UNATTENDED}`,
     "",
-    "Settings, kept from its current automation:",
+    purpose === "reschedule"
+      ? "Settings, kept from its current automation except the new schedule:"
+      : "Settings, kept from its current automation:",
     `- ${scheduleSetting}`,
     "- Run message: the text below.",
     "",
@@ -654,10 +692,12 @@ export function repairPrompt(
           : "Leave `enabled` out: an update keeps a paused automation paused.",
         repair
           ? ` If exactly one exists, ${healthy} and it is enabled, leave it as it is and go to the last step.`
-          : ` If exactly one exists and ${healthy}, leave it as it is and go to the last step.`,
+          : purpose === "update"
+            ? ` If exactly one exists and ${healthy}, leave it as it is and go to the last step.`
+            : "",
         saved,
       ),
-      endStep("on", `one sentence: what the ${purpose} changed`),
+      endStep("on", `one sentence: what the ${repair ? "repair" : "update"} changed`),
     ]),
     "",
     FAILED,

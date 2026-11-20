@@ -179,6 +179,7 @@ async function resolveAuthenticatedProfile(
     recipient: {
       profileId: authority.profileId,
       role: authority.role,
+      openclawIdAccountIds: authority.openclawIdAccountIds,
       githubLogin: authority.githubLogin ?? null,
       aliases: new Set(authority.aliases),
     },
@@ -232,6 +233,7 @@ export async function resolveGatewayConnectProfileAdmission(params: {
   const profileRequired =
     Boolean(state.authResult.delegation) ||
     isNamedOperatorRoleEnforcementEnabled(context.configSnapshot) ||
+    Boolean(context.configSnapshot.gateway?.openclawId?.enabled) ||
     hasGatewayOperatorAccessPolicies(context.configSnapshot, {
       openclawIdPrincipal:
         state.authMethod === "trusted-proxy" ? state.authResult.openclawId : undefined,

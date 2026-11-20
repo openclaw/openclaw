@@ -3,6 +3,7 @@ import type {
   TemplatePluginAcknowledgement,
   TemplateSkillAcknowledgement,
 } from "@openclaw/gateway-protocol";
+import type { ClawHubTemplateCatalogOverview } from "../../../../src/templates/clawhub-catalog-types.js";
 import type {
   ClawHubTemplateCatalogDetail,
   ClawHubTemplateCatalogEntry,
@@ -28,12 +29,12 @@ function isPublicEntry(entry: TemplateCatalogEntry): boolean {
   return entry.channel === "official" || entry.channel === "community";
 }
 
-export const TEMPLATE_SEARCH_PAGE_SIZE = 20;
+const TEMPLATE_SEARCH_PAGE_SIZE = 20;
 
 export async function searchTemplates(
   client: GatewayBrowserClient,
   query: string,
-  options: { category?: string; limit?: number; cursor?: string } = {},
+  options: { category?: string; featured?: boolean; limit?: number; cursor?: string } = {},
 ): Promise<{ entries: TemplateCatalogEntry[]; nextCursor?: string | null }> {
   const trimmed = query.trim();
   const result = await client.request<{
@@ -43,9 +44,30 @@ export async function searchTemplates(
     ...(trimmed ? { query: trimmed } : {}),
     limit: options.limit ?? TEMPLATE_SEARCH_PAGE_SIZE,
     ...(options.cursor ? { cursor: options.cursor } : {}),
+    ...(options.featured ? { featured: true } : {}),
     ...(options.category ? { category: options.category } : {}),
   });
   return { entries: result.entries.filter(isPublicEntry), nextCursor: result.nextCursor };
+}
+
+export async function readTemplatesOverview(
+  client: GatewayBrowserClient,
+  limit: number,
+): Promise<ClawHubTemplateCatalogOverview | undefined> {
+  const result = await client.request<{ overview?: ClawHubTemplateCatalogOverview }>(
+    "templates.catalog.search",
+    { overview: true, limit, includeCategoryEntries: true },
+  );
+  return result.overview
+    ? {
+        featured: result.overview.featured.filter(isPublicEntry),
+        sections: result.overview.sections.map((section) => ({
+          category: section.category,
+          entries: section.entries.filter(isPublicEntry),
+          additionalEntries: section.additionalEntries?.filter(isPublicEntry),
+        })),
+      }
+    : undefined;
 }
 
 export async function readTemplateDetail(
@@ -76,12 +98,15 @@ export async function readTemplateDetail(
 export async function readTemplatePreview(
   client: GatewayBrowserClient,
   source: TemplateCatalogSource,
-  request: Pick<ClawHubTemplateCatalogPreview, "kind" | "name">,
+  request: Pick<ClawHubTemplateCatalogPreview, "kind" | "name"> & { automationIndex?: number },
 ): Promise<ClawHubTemplateCatalogPreview> {
   const result = await client.request<{ preview: ClawHubTemplateCatalogPreview }>(
     "templates.catalog.preview",
     { ...source, ...request },
   );
+  if (result.preview.kind !== request.kind || result.preview.name !== request.name) {
+    throw new Error("ClawHub returned a different Template preview.");
+  }
   return result.preview;
 }
 

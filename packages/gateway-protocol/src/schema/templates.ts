@@ -20,6 +20,7 @@ const TemplateCatalogCursor = Type.String({ minLength: 1, maxLength: 4096 });
 export const TemplatesCatalogSearchParamsSchema = closedObject({
   cursor: Type.Optional(TemplateCatalogCursor),
   overview: Type.Optional(Type.Boolean()),
+  includeCategoryEntries: Type.Optional(Type.Boolean()),
   query: Type.Optional(Type.String({ maxLength: 200 })),
   category: Type.Optional(Type.String({ maxLength: 40 })),
   featured: Type.Optional(Type.Boolean()),
@@ -51,6 +52,7 @@ export const TemplatesCatalogSearchResultSchema = closedObject({
         closedObject({
           category: NonEmptyString,
           entries: Type.Array(TemplatesCatalogEntrySchema),
+          additionalEntries: Type.Optional(Type.Array(TemplatesCatalogEntrySchema)),
         }),
       ),
     }),
@@ -139,14 +141,24 @@ export const TemplatesCatalogDetailSchema = closedObject({
 export const TemplatesCatalogDetailResultSchema = closedObject({
   detail: TemplatesCatalogDetailSchema,
 });
-export const TemplatesCatalogPreviewParamsSchema = closedObject({
+const templatePreviewCoordinate = {
   ...TemplateCatalogCoordinateSchema.properties,
-  kind: stringLiteralUnion(["instruction", "skill"]),
   name: NonEmptyString,
-});
+};
+export const TemplatesCatalogPreviewParamsSchema = Type.Union([
+  closedObject({
+    ...templatePreviewCoordinate,
+    kind: stringLiteralUnion(["instruction", "skill"]),
+  }),
+  closedObject({
+    ...templatePreviewCoordinate,
+    kind: Type.Literal("automation"),
+    automationIndex: Type.Integer({ minimum: 0 }),
+  }),
+]);
 export const TemplatesCatalogPreviewResultSchema = closedObject({
   preview: closedObject({
-    kind: stringLiteralUnion(["instruction", "skill"]),
+    kind: stringLiteralUnion(["instruction", "skill", "automation"]),
     name: NonEmptyString,
     content: Type.String(),
   }),

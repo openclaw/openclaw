@@ -99,10 +99,26 @@ export function createPage(options: PageOptions = {}) {
       return { subscribed: true };
     }
     if (method === "templates.catalog.search") {
+      if ("overview" in args && args.overview) {
+        return {
+          entries: [],
+          overview: {
+            featured: [],
+            sections: [
+              {
+                category: "productivity",
+                entries: [{ ...workflowOperator, iconUrl: options.templateIconUrl }],
+              },
+            ],
+          },
+        };
+      }
       const query = "query" in args ? String(args.query).trim().toLowerCase() : "";
       const category = "category" in args ? String(args.category) : "";
+      const featured = "featured" in args ? Boolean(args.featured) : false;
       return {
         entries:
+          featured ||
           (category && category !== "productivity") ||
           (query &&
             !workflowOperator.displayName.toLowerCase().includes(query) &&
