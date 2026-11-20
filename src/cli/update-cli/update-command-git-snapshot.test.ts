@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as diskSpace from "../../infra/disk-space.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import * as gitRunner from "../../infra/update-runner-git.js";
 import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -129,7 +130,9 @@ it.each(snapshotCases)(
           expect(errors).toContainEqual(
             expect.objectContaining({
               exitCode: 1,
-              stderrTail: expect.stringMatching(/^Update refused: [\s\S]*have not been migrated/u),
+              stderrTail: expect.stringMatching(
+                /^Update refused: A database migration may need up to [\s\S]*nothing has changed\./u,
+              ),
             }),
           );
         } else {
@@ -166,6 +169,55 @@ it.each(snapshotCases)(
       } finally {
         process.argv = originalArgv;
       }
+    });
+  },
+);
+
+it.each([false, true])(
+  "hands Git staging a snapshot-space check only outside release mode (release=%s)",
+  async (gitReleases) => {
+    await withTestDir({ prefix: "git-update-release-snapshot-" }, async (base) => {
+      const root = path.join(base, "checkout");
+      await fs.mkdir(root);
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.9.1" }),
+      );
+      // The runner owns everything after this boundary; it reports what it was handed.
+      const runner = vi.spyOn(gitRunner, "updateGitCheckout").mockResolvedValue({
+        status: "skipped",
+        mode: "git",
+        root,
+        reason: "already-current",
+        steps: [],
+        durationMs: 0,
+      });
+      const getSnapshotSource = vi.fn(async () => ({ config: {}, env: { HOME: base } }));
+
+      await updateGitInstall({
+        root,
+        switchToGit: false,
+        installKind: "git",
+        gitReleases,
+        timeoutMs: undefined,
+        startedAt: Date.now(),
+        progress: {},
+        channel: "dev",
+        beforeGitMutation: async () => {},
+        validateCandidate: async () => [],
+        inspectGitTarget: async () => {},
+        getManagedServiceEnv: () => undefined,
+        getSnapshotSource,
+        jsonMode: true,
+      });
+
+      const staging = runner.mock.calls[0]?.[0].opts.beforeGitStaging;
+      // A release takes no database image, so nothing measures space for one.
+      expect(staging === undefined).toBe(gitReleases);
+      // Running what the runner would run at staging measures the in-place image.
+      const admission = await staging?.();
+      expect(admission?.step.name).toBe(gitReleases ? undefined : "snapshot-space-preflight");
+      expect(getSnapshotSource).toHaveBeenCalledTimes(gitReleases ? 0 : 1);
     });
   },
 );

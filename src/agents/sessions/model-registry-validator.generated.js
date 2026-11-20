@@ -329,6 +329,9 @@ var isModelsConfig = (() => {
                 (unique_1.compat.supportsInstructions === void 0 ||
                   !("supportsInstructions" in unique_1.compat) ||
                   typeof unique_1.compat.supportsInstructions == "boolean") &&
+                (unique_1.compat.cachesInstructions === void 0 ||
+                  !("cachesInstructions" in unique_1.compat) ||
+                  typeof unique_1.compat.cachesInstructions == "boolean") &&
                 (unique_1.compat.sendSessionIdHeader === void 0 ||
                   !("sendSessionIdHeader" in unique_1.compat) ||
                   typeof unique_1.compat.sendSessionIdHeader == "boolean") &&
@@ -766,6 +769,9 @@ var isModelsConfig = (() => {
                         (unique_10.compat.supportsInstructions === void 0 ||
                           !("supportsInstructions" in unique_10.compat) ||
                           typeof unique_10.compat.supportsInstructions == "boolean") &&
+                        (unique_10.compat.cachesInstructions === void 0 ||
+                          !("cachesInstructions" in unique_10.compat) ||
+                          typeof unique_10.compat.cachesInstructions == "boolean") &&
                         (unique_10.compat.sendSessionIdHeader === void 0 ||
                           !("sendSessionIdHeader" in unique_10.compat) ||
                           typeof unique_10.compat.sendSessionIdHeader == "boolean") &&

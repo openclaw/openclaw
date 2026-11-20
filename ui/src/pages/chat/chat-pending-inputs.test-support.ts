@@ -1,6 +1,6 @@
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { createInitializationContext } from "./chat-application-context.test-support.ts";
-import { makeChatHost } from "./chat-host.test-support.ts";
+import { makeChatHost, registerChatHostCleanup } from "./chat-host.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 
@@ -32,5 +32,6 @@ export function makeChatPageHost({
     { dispatchEvent: () => true },
   );
   Object.assign(host, { client, hello, connected: true }, overrides);
+  registerChatHostCleanup(host);
   return Object.assign(host, { request });
 }

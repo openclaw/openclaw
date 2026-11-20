@@ -477,40 +477,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       };
 
       const respond = expectedProfileBinding?.guardResponse(publishResponse) ?? publishResponse;
-      const agentRuntimeIdentity = client.internal?.agentRuntimeIdentity;
-      const hasCurrentRuntimeAuthority = () => {
-        if (
-          agentRuntimeIdentity &&
-          context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) !== true
-        ) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
-          );
-          setCloseCause("agent-runtime-authority-closed", { method: req.method });
-          close(4001, "agent runtime authority closed");
-          return false;
-        }
-        return true;
-      };
-      const respondWithAuthority: typeof respond = (ok, payload, error, meta) => {
-        try {
-          if (hasCurrentRuntimeAuthority()) {
-            respond(ok, payload, error, meta);
-          }
-        } catch (cause) {
-          if (!isOperatorAuthorityUnavailable(cause)) {
-            throw cause;
-          }
-          publishResponse(false, undefined, errorShapeFromError(ErrorCodes.UNAVAILABLE, cause));
-        }
-      };
-      const policyResponse = registerGatewayPolicyResponse(
-        req.method,
-        client,
-        respondWithAuthority,
-      );
+      const policyResponse = registerGatewayPolicyResponse(req.method, client, respond);
 
       const executeRequest = async () => {
         diagnostics?.bindTrace();
@@ -557,7 +524,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               return;
             }
           }
-          if (!hasCurrentClientAuthority() || !hasCurrentRuntimeAuthority()) {
+          if (!hasCurrentClientAuthority()) {
             return;
           }
           const { handleGatewayRequest } = await loadGatewayServerMethods();
@@ -574,7 +541,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               context.requestEntryLifetime?.signal,
             );
             if (!start) {
-              respondWithAuthority(
+              respond(
                 false,
                 undefined,
                 errorShape(
@@ -596,7 +563,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           entry?.assertOpen();
           // Waiting never grants authority. Ordinary requests may outlive their socket;
           // only request-owned cancellation and current authority fence their start.
-          if (signal?.aborted || !hasCurrentClientAuthority() || !hasCurrentRuntimeAuthority()) {
+          if (signal?.aborted || !hasCurrentClientAuthority()) {
             return;
           }
           await runOutsideGatewayRootWorkAdmission(() =>
@@ -604,7 +571,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               bindWebSocketRequestMutationAuthority(
                 {
                   req,
-                  respond: respondWithAuthority,
+                  respond,
                   acceptsSerializedJson: true,
                   acceptsDeflatedSegments: params.handler.socket.acceptsDeflatedSegments,
                   client,
@@ -631,11 +598,14 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           const startTimedOut = err instanceof GatewayRequestStartTimeoutError;
           dispatchOutcome = startTimedOut ? "returned" : "threw";
           // Failure diagnostics and responses belong to the same request trace as the handler.
-          if (!startTimedOut) {
+          if (!startTimedOut && client.connectionSignal?.aborted) {
+            // The requester has gone and its close is already logged; nobody can act on this.
+            logGateway.debug(`request handler failed after disconnect: ${formatForLog(err)}`);
+          } else if (!startTimedOut) {
             logGateway.error(`request handler failed: ${formatForLog(err)}`);
           }
           const staleInstall = classifyGatewayStaleInstall(err);
-          respondWithAuthority(
+          respond(
             false,
             undefined,
             staleInstall?.error ??

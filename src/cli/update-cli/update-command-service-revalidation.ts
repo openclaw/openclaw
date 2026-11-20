@@ -356,23 +356,30 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
     (inspection.kind === "foreign" || inspection.kind === "unresolved") &&
     (params.state.definitionMutationCapability?.kind ?? "writable") === "writable"
   ) {
-    const retained = await inspectManagedGatewayServiceBeforeUpdate({
-      state: params.state,
-      root: verdict.root,
-      retainedCommand: true,
-      allowIncompleteInspection: params.allowIncompleteInspection,
-    });
+    const stopped = { ...before, serviceUpdateVerdict: { ...verdict, refreshDefinition: false } };
+    const retainedAt = (root: string | undefined) =>
+      inspectManagedGatewayServiceBeforeUpdate({
+        state: params.state,
+        root,
+        retainedCommand: true,
+        allowIncompleteInspection: params.allowIncompleteInspection,
+      });
     // A verified core install can replace its root before rewriting the launcher.
     // Pin the original command even when pnpm has removed its old package directory.
-    if (
-      matchesStoppedService(
-        { ...before, serviceUpdateVerdict: { ...verdict, refreshDefinition: false } },
-        params.state,
-        retained,
-        params.allowIncompleteInspection,
-      )
-    ) {
-      return { ...verdict, requiresInstallRootRefresh: true };
+    // The admitted root can be a link the update repointed (a pnpm global entry into
+    // its versioned store, or into a Git checkout); the unchanged definition still runs
+    // the installation admitted before the stop, so match it by its own root as well.
+    for (const root of [verdict.root, undefined]) {
+      if (
+        matchesStoppedService(
+          stopped,
+          params.state,
+          await retainedAt(root),
+          params.allowIncompleteInspection,
+        )
+      ) {
+        return { ...verdict, requiresInstallRootRefresh: true };
+      }
     }
   }
   if (

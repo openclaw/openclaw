@@ -121,9 +121,8 @@ export async function retainAgentTurnOperatorRun({
   let retained: Awaited<ReturnType<typeof retainGatewayOperatorRun>> | undefined;
   try {
     assertInputCurrent();
-    retained = await retainGatewayOperatorRun({ ...operator, invocationAuthority });
     // A returned result starts another turn; only host-held receipts identify peer returns.
-    if (
+    const returnedResult =
       privateCompletion ||
       (inputProvenance?.kind === "inter_session" &&
         readSessionSendDeliveryAdmission({
@@ -131,28 +130,34 @@ export async function retainAgentTurnOperatorRun({
           sessionKey: resolvedSessionKey,
           sessionId: getAdmittedSessionId(),
           agentId: activeSessionAgentId,
-        })?.delivery.returnedResult)
-    ) {
-      try {
+        })?.delivery.returnedResult);
+    try {
+      retained = await retainGatewayOperatorRun({ ...operator, invocationAuthority });
+      if (returnedResult) {
         retained.authority?.reauthorize?.();
-      } catch (error) {
-        if (resolvedSessionKey && lifecycleStorePath && !isOperatorAuthorityUnavailable(error)) {
-          await recordGatewaySessionRunFailure({
-            target: {
-              agentId: activeSessionAgentId,
-              sessionKey: resolvedSessionKey,
-              sessionId: getAdmittedSessionId(),
-              storePath: lifecycleStorePath,
-            },
-            runId: operator.runId,
-            error,
-            notice:
-              "withheld: The returned result could not start under your current access. Send a new message to continue.",
-            assertCommitAllowed: assertInputCurrent,
-          });
-        }
-        throw error;
       }
+    } catch (error) {
+      if (
+        returnedResult &&
+        resolvedSessionKey &&
+        lifecycleStorePath &&
+        !isOperatorAuthorityUnavailable(error)
+      ) {
+        await recordGatewaySessionRunFailure({
+          target: {
+            agentId: activeSessionAgentId,
+            sessionKey: resolvedSessionKey,
+            sessionId: getAdmittedSessionId(),
+            storePath: lifecycleStorePath,
+          },
+          runId: operator.runId,
+          error,
+          notice:
+            "withheld: The returned result could not start under your current access. Send a new message to continue.",
+          assertCommitAllowed: assertInputCurrent,
+        });
+      }
+      throw error;
     }
     return retained;
   } catch (error) {

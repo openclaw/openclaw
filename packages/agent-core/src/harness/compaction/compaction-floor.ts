@@ -1,5 +1,6 @@
 /** Model-free record of a compacted region: the whole record without a summary, an appendix beside one. */
 import type { AgentMessage } from "../../types.js";
+import { copyString } from "../utils/truncate.js";
 import { parseCompactionDetails } from "./compaction-details.js";
 import {
   capCompactionSummary,
@@ -96,61 +97,109 @@ export function prepareCompactionFloor(
   messages: readonly AgentMessage[],
   maxChars = MAX_COMPACTION_FLOOR_CHARS,
 ): PreparedCompactionFloor {
-  const users: Array<{ label: string; text: string }> = [];
-  const assistants: string[] = [];
-  const anchors = new Map<string, { kind: string; value: string; score: number; last: number }>();
-  messages.forEach((message, index) => {
-    if (message.role !== "user" && message.role !== "assistant") {
-      return;
+  function* facts() {
+    for (const message of messages) {
+      yield collectCompactionFloorMessageFact(message);
     }
-    // Extraction redacts credentials before excerpts and anchors are cut from it.
-    const text = extractCompactionMessageText(message);
-    if (!text) {
-      return;
-    }
-    // Keep recorded origin and sender: user-role rows also carry internal and inter-session input.
-    if (message.role === "user") {
-      users.push({ label: formatCompactionUserLabel(message), text });
-    } else {
-      assistants.push(text);
-    }
-    const weight = message.role === "user" ? 5 : 1;
-    for (const [kind, pattern] of ANCHOR_PATTERNS) {
-      for (const match of text.matchAll(pattern)) {
-        const value = (match[1] ?? "").replace(/[.,;:]+$/, "");
-        if (!value || !isUsefulAnchor(kind, value)) {
-          continue;
-        }
-        const key = `${kind}\u0000${value}`;
-        const row = anchors.get(key) ?? { kind, value, score: 0, last: index };
-        row.score += weight;
-        row.last = index;
-        anchors.set(key, row);
+  }
+  return prepareCompactionFloorFromFacts(facts(), maxChars);
+}
+
+export type CompactionFloorMessageFact = {
+  userLine?: string;
+  outcome?: string;
+  anchors: Array<{ kind: string; value: string; score: number }>;
+};
+
+/** Excerpts own their backing strings; no slice keeps a removed message alive. */
+export function collectCompactionFloorMessageFact(
+  message: AgentMessage,
+): CompactionFloorMessageFact {
+  const anchors: CompactionFloorMessageFact["anchors"] = [];
+  if (message.role !== "user" && message.role !== "assistant") {
+    return { anchors };
+  }
+  const text = extractCompactionMessageText(message);
+  if (!text) {
+    return { anchors };
+  }
+  const score = message.role === "user" ? 5 : 1;
+  for (const [kind, pattern] of ANCHOR_PATTERNS) {
+    for (const match of text.matchAll(pattern)) {
+      const value = (match[1] ?? "").replace(/[.,;:]+$/, "");
+      if (value && isUsefulAnchor(kind, value)) {
+        anchors.push({ kind, value: copyString(value), score });
       }
     }
-  });
+  }
+  return {
+    anchors,
+    ...(message.role === "user"
+      ? {
+          userLine: copyString(
+            `- [${formatCompactionUserLabel(message)}]: ${clip(text, MAX_FLOOR_USER_MESSAGE_CHARS)}`,
+          ),
+        }
+      : { outcome: copyString(`- ${clip(text, MAX_FLOOR_OUTCOME_CHARS)}`) }),
+  };
+}
+
+/** Reduce a selected source range after its cut is known, without rereading source payloads. */
+export function prepareCompactionFloorFromFacts(
+  facts: Iterable<CompactionFloorMessageFact>,
+  maxChars = MAX_COMPACTION_FLOOR_CHARS,
+): PreparedCompactionFloor {
+  const userLines: string[] = [];
+  let userCount = 0;
+  let userChars = 120;
+  const userBudget = Math.floor(maxChars * USER_SHARE);
+  const outcomes: string[] = [];
+  const anchors = new Map<string, { kind: string; value: string; score: number; last: number }>();
+  let index = 0;
+  for (const fact of facts) {
+    if (fact.userLine !== undefined) {
+      userCount++;
+      userLines.unshift(fact.userLine);
+      userChars += fact.userLine.length + 1;
+      // Only the newest fitting prefix can survive any later addition or smaller budget.
+      while (userChars > userBudget) {
+        const line = userLines.pop();
+        if (line === undefined) {
+          break;
+        }
+        userChars -= line.length + 1;
+      }
+    }
+    if (fact.outcome !== undefined) {
+      outcomes.push(fact.outcome);
+      if (outcomes.length > FLOOR_OUTCOMES) {
+        outcomes.shift();
+      }
+    }
+    for (const anchor of fact.anchors) {
+      const key = `${anchor.kind}\u0000${anchor.value}`;
+      const row = anchors.get(key) ?? { ...anchor, score: 0, last: index };
+      row.score += anchor.score;
+      row.last = index;
+      anchors.set(key, row);
+    }
+    index++;
+  }
   const ranked = [...anchors.values()].toSorted(
     (left, right) =>
       right.score - left.score || right.last - left.last || left.value.localeCompare(right.value),
   );
   return {
     maxChars,
-    userCount: users.length,
-    userLines: fitFloorLines(
-      users.toReversed(),
-      Math.floor(maxChars * USER_SHARE),
-      120,
-      ({ label, text }) => `- [${label}]: ${clip(text, MAX_FLOOR_USER_MESSAGE_CHARS)}`,
-    ),
+    userCount,
+    userLines,
     anchorLines: fitFloorLines(
       ranked,
       Math.floor(maxChars * ANCHOR_SHARE),
       80,
       (anchor) => `- ${anchor.kind}: ${anchor.value}`,
     ),
-    outcomes: assistants
-      .slice(-FLOOR_OUTCOMES)
-      .map((text) => `- ${clip(text, MAX_FLOOR_OUTCOME_CHARS)}`),
+    outcomes,
   };
 }
 
@@ -239,10 +288,10 @@ type SummaryFloorReduction = Readonly<{
  */
 export function commitCompactionSummary(
   result: Pick<CompactionResult, "summary" | "details">,
-  preparation: Pick<
-    CompactionPreparation,
-    "messagesToSummarize" | "turnPrefixMessages" | "summaryTokenBudget"
-  > & { settings: { maxSummaryChars?: number } },
+  preparation: Pick<CompactionPreparation, "summaryTokenBudget"> &
+    Partial<Pick<CompactionPreparation, "messagesToSummarize" | "turnPrefixMessages">> & {
+      settings: { maxSummaryChars?: number };
+    },
   withoutSummary: boolean,
   replayTokenBudget?: () => number | undefined,
   onFloorReduced?: (reduction: SummaryFloorReduction) => void,
@@ -263,7 +312,10 @@ export function commitCompactionSummary(
   const prepared =
     preparedFloor ??
     prepareCompactionFloor(
-      [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages],
+      [
+        ...requireFloorMessages(preparation.messagesToSummarize),
+        ...requireFloorMessages(preparation.turnPrefixMessages),
+      ],
       maxFloorChars,
     );
   const renderFloor = (maxChars: number) =>
@@ -300,4 +352,11 @@ export function commitCompactionSummary(
 export function stripSummaryFloor(summary: string): string {
   const index = summary.lastIndexOf(SUMMARY_FLOOR_HEADING);
   return index < 0 ? summary : summary.slice(0, index);
+}
+
+function requireFloorMessages(messages: CompactionPreparation["messagesToSummarize"] | undefined) {
+  if (!messages) {
+    throw new Error("Transcript-view compaction requires its prepared floor");
+  }
+  return messages;
 }

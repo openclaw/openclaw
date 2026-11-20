@@ -250,6 +250,7 @@ async function prepareGatewayServerBootstrapSelected(input: {
   const seededMemberRoles = await startupTrace.measure("openclaw-id.member-roles", () =>
     memberRolePresets.reconcile(
       isOpenClawIdEnabled(startupConfigLoad.snapshot.config.gateway?.openclawId),
+      startupConfigLoad.snapshot.config,
     ),
   );
   if (seededMemberRoles) {

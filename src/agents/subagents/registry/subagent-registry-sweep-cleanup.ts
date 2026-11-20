@@ -150,7 +150,7 @@ export function mutateCleanup(
   runs: Map<string, SubagentRunRecord>,
   entry: SubagentRunRecord,
   ready: (current: SubagentRunRecord) => boolean,
-  update: (draft: SubagentRunRecord) => void | null,
+  update: ((draft: SubagentRunRecord) => void) | null,
 ) {
   return mutateSubagentRuns(
     [entry.runId],
@@ -160,14 +160,16 @@ export function mutateCleanup(
         return { value: undefined };
       }
       // Cleanup changes only top-level bookkeeping and the frozen execution record.
-      const draft = { ...current, execution: { ...current.execution } };
-      const next = update(draft) === null ? null : draft;
+      const next = update ? { ...current, execution: { ...current.execution } } : null;
+      if (update && next) {
+        update(next);
+      }
       return {
         value: next,
         postimages: new Map([[entry.runId, next]]),
         removalReason: "retention",
       };
     },
-    { runs },
+    { runs, deleteOnly: update === null },
   );
 }

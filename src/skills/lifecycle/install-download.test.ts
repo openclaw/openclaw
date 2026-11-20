@@ -7,7 +7,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { __setFsSafeTestHooksForTest, getFsSafeTestHooks } from "@openclaw/fs-safe/test-hooks";
 import JSZip from "jszip";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {

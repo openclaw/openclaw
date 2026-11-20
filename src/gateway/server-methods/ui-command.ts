@@ -20,7 +20,6 @@ import {
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import type {
   GatewayClient,
   GatewayRequestHandlerOptions,
@@ -180,7 +179,6 @@ export const uiCommandHandlers: GatewayRequestHandlers = {
     "ui.command",
     validateUiCommandParams,
     async (options) => {
-      assertActiveAgentRuntimeAuthority(options.client, options.context);
       const command = options.params.command;
       const requestId =
         command.kind === "panel" && command.panel === "portal" && command.open
@@ -208,7 +206,6 @@ export const uiCommandHandlers: GatewayRequestHandlers = {
       });
       if (result.ok) {
         const presentation = observation ? await observation : undefined;
-        assertActiveAgentRuntimeAuthority(options.client, options.context);
         resolveGatewayPersonalToolParticipant(
           options.client?.internal?.agentRuntimeIdentity,
         )?.assertCurrent();

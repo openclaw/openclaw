@@ -331,3 +331,21 @@ export const navigationIconData = {
     ],
   ]),
 } as const satisfies Record<string, IconData>;
+
+/** Navigation icons swap to these filled forms while their page is current. */
+export const navigationFilledIconNames = {
+  access: "accessFilled",
+  atSign: "atSignFilled",
+  automations: "automationsFilled",
+  clawrouter: "clawrouterFilled",
+  customize: "customizeFilled",
+  dashboards: "dashboardsFilled",
+  knowledge: "knowledgeFilled",
+  meetings: "meetingsFilled",
+  portals: "portalsFilled",
+  sessions: "sessionsFilled",
+  systems: "systemsFilled",
+  usage: "usageFilled",
+  users: "usersFilled",
+  workboard: "workboardFilled",
+} as const satisfies Record<string, keyof typeof navigationIconData>;

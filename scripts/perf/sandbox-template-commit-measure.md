@@ -118,3 +118,25 @@ installer, template registry, manifests, projection synchronization, agent DB,
 and Gateway. Peak RSS is not allocated bytes. Record exact fixture commit IDs
 and ancestry with results; an ancestor transition does not prove divergent
 commit behavior merely because its file diff has the same size.
+
+## Lockfile-change checkout writes
+
+Use `--fixture --lock-change` with a new fixture and output directory to create
+62,000 payload files and one commit changing the local dependency version,
+implementation, and lockfile generation comment. The local file dependency's
+resolution key itself is unchanged. Reuse that fixture with `--lock-change` and
+frozen baseline/candidate owners to measure cold creation, the three-file advance,
+and same-commit reuse separately. The real frozen-lockfile installer must expose
+the selected dependency implementation. Run two baseline controls followed by
+five serial counterbalanced pairs; report owner wall time, CPU, and allocation.
+
+The native Python probe accepts the same `--lock-change` fixture. Its baseline
+creates a fresh source checkout; its candidate snapshots the prior generation
+before importing the delta. Git checkout counters come from `/proc/<pid>/io`
+after exit and before reaping, with Trace2 file-write counts and unchanged-file
+stat identities. It retains 5,000 synthetic dependency files and reports Btrfs
+shared extents after refresh. `--database-gib 35` creates 5,000 synthetic
+session-shaped rows in an independent SQLite file beside the templates. Reserve
+at least 45 GiB of physical free space; the backing image has additional sparse
+headroom. This models storage occupancy, not concurrent Gateway traffic or a
+production database schema. Neither probe reads production state.

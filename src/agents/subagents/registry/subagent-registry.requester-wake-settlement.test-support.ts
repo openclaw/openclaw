@@ -1,12 +1,39 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import * as sessionEvents from "../../../auto-reply/reply/session-event-handoff.js";
+import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { readTranscriptEventRows } from "../../../config/sessions/session-accessor.sqlite-read.js";
+import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
+import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
+import { resumeMarkedSessions } from "../../../gateway/session-restart-resume.js";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
+import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
+import {
+  registerRequesterFinalAttachment,
+  promoteRequesterFinalAttachment,
+} from "../requester-final-attachment.js";
+import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
 import { buildScopedSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import {
   createRequesterYieldTool,
@@ -18,6 +45,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function registerRequesterWakeSettlementBoundaryTests<Response>({
   requesterSessionKey,
+  getFixture,
   prepareChildSession,
   wakeRequester,
   flushAsync,
@@ -39,6 +67,378 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
   setReleaseAgentCallGate: (release: () => void) => void;
   useGlobalSessionScope: () => void;
 }): void {
+  it("wakes a yielded parent when startup fails its child's unreachable yield", async () => {
+    const child = visibleChild("restart-lost-yield");
+    const parentRunId = "parent-before-restart";
+    await spawnVisibleChild({ ...child, requesterTurnRunId: parentRunId });
+    await createRequesterYieldTool(requesterSessionKey, parentRunId).execute("yield", {});
+    await settleTurn(parentRunId, [child]);
+    const entry = getFixture().sessionStore[child.childSessionKey]!;
+    // The child's own awaited completion disappeared with the previous Gateway.
+    getLifecycleHandler()!({
+      stream: "lifecycle",
+      runId: child.runId,
+      seq: 1,
+      ts: Date.now(),
+      sessionKey: child.childSessionKey,
+      data: { phase: "end", yielded: true },
+    });
+    await flushOwnedWork();
+    expect(subagentRuns.get(child.runId)?.pauseReason).toBe("sessions_yield");
+    const restartInput = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
+    onTestFinished(() => restartInput.mockRestore());
+    const parent = getFixture().sessionStore[requesterSessionKey]!;
+    for (const data of [
+      { phase: "start" },
+      { phase: "end", yielded: true, livenessState: "paused", stopReason: "end_turn" },
+    ]) {
+      await persistGatewaySessionLifecycleEvent({
+        sessionKey: requesterSessionKey,
+        agentId: "main",
+        event: { runId: parentRunId, sessionId: parent.sessionId, ts: Date.now(), data },
+      });
+    }
+    for (const data of [
+      { phase: "start" },
+      { phase: "end", yielded: true, livenessState: "paused", stopReason: "end_turn" },
+    ]) {
+      await persistGatewaySessionLifecycleEvent({
+        sessionKey: child.childSessionKey,
+        agentId: "main",
+        event: { runId: child.runId, sessionId: entry.sessionId, ts: Date.now(), data },
+      });
+    }
+    await resumeMarkedSessions({
+      context: createGatewayContext(),
+      signal: new AbortController().signal,
+      log: { warn: vi.fn() },
+    });
+    await flushOwnedWork();
+    expect(
+      loadExactSessionEntryReadOnly({
+        agentId: "main",
+        sessionKey: child.childSessionKey,
+      })?.entry.status,
+    ).toBe("failed");
+    expect(
+      loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: requesterSessionKey })?.entry
+        .status,
+    ).not.toBe("failed");
+    expect(restartInput).not.toHaveBeenCalled();
+    expect(subagentRuns.get(child.runId)?.execution.outcome).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("no registered continuation can resume it"),
+    });
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()[0]?.params).toMatchObject({
+      inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+    });
+    await waitForDeliveredCleanup(child.runId);
+  });
+
+  it.each(["never bound", "binding retired", "restored"])(
+    "delivers the bound member of a frozen batch with a %s member",
+    async (binding) => {
+      const context = createGatewayContext();
+      await registry.initSubagentRegistry();
+      await registry.activateSubagentRegistry(() => context);
+      const batchRunIds = ["run-unbound", "run-bound"];
+      for (const runId of batchRunIds) {
+        const childSessionKey = `agent:main:subagent:${runId}`;
+        const sessionEntry = await prepareChildSession(childSessionKey, `sess-${runId}`);
+        await registry.addSubagentRunForTests({
+          runId,
+          childSessionKey,
+          childAgentId: "main",
+          childSessionIdentity: sessionEntry,
+          requesterSessionKey,
+          requesterAgentId: "main",
+          completionRequesterSessionId: "sess-main",
+          expectsCompletionMessage: true,
+          endedAt: Date.now() - 32 * 60_000,
+          outcome: { status: "ok" },
+          completion: {
+            required: true,
+            resultText: `saved result ${runId}`,
+            capturedAt: Date.now(),
+          },
+          delivery: { status: "pending" },
+          cleanupCompletedAt: Date.now(),
+          requesterSettleWake: {
+            status: "pending",
+            attemptCount: 0,
+            requesterYieldBatch: true,
+            batchRunIds,
+            rearmGeneration: 1,
+            retireAfterSettle: binding === "restored" && runId === "run-unbound",
+          },
+        });
+        const entry = subagentRuns.get(runId)!;
+        if (runId === "run-bound" || binding === "binding retired") {
+          bindGatewayContextResolver(entry, context.resolveGatewayContext);
+        }
+        if (runId === "run-unbound") {
+          if (binding === "binding retired") {
+            retireSubagentGatewayBinding(entry);
+          } else if (binding === "restored") {
+            subagentRuns.delete(runId);
+            await restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true });
+            expect(subagentRuns.isCompletionAuthorityRetired(subagentRuns.get(runId)!)).toBe(true);
+          }
+        }
+      }
+      const append = vi.fn(() => true);
+      const owner = {
+        requesterAgentId: "main",
+        requesterSessionKey,
+        requesterSessionId: "sess-main",
+        requesterTurnRunId: "yielded-requester",
+      };
+      const attachment = registerRequesterFinalAttachment({
+        ...owner,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        timeoutMs: 60_000,
+        append,
+      });
+      onTestFinished(() => attachment.revoke());
+      expect(promoteRequesterFinalAttachment({ ...owner, batchRunIds, rearmGeneration: 1 })).toBe(
+        true,
+      );
+      registry.resumeSubagentRun(binding === "restored" ? "run-unbound" : "run-bound");
+      await flushOwnedWork();
+      expect(registry.getSubagentRunByRunId("run-bound")?.delivery).toMatchObject({
+        status: "delivered",
+      });
+      expect(
+        getRequesterWakeCalls().some((call) =>
+          String(call.params?.message).includes("saved result run-bound"),
+        ),
+      ).toBe(true);
+      expect(append).toHaveBeenCalledWith("completion delivered");
+      expect(append).toHaveBeenCalledTimes(binding === "restored" ? 1 : 2);
+      const unbound = registry.getSubagentRunByRunId("run-unbound");
+      if (binding === "restored") {
+        expect(unbound).toBeUndefined();
+        const notices = readTranscriptEventRows(
+          openOpenClawAgentDatabase({ agentId: "main" }),
+          "sess-main",
+        )
+          .map((row) => JSON.parse(row.eventJson))
+          .filter((event) => event.customType === "run-failed-before-reply");
+        expect(notices).toEqual([expect.objectContaining({ display: true })]);
+        return;
+      }
+      expect(unbound?.requesterSettleWake).toBeUndefined();
+      expect(unbound?.delivery?.status).toMatch(/^(delivered|failed)$/);
+      expect(unbound?.delivery?.disposition).not.toBe("intentional_non_delivery");
+    },
+  );
+
+  it.each([
+    ...["alpha", "beta"].flatMap((firstCompleted) =>
+      ["same", "distinct", "mixed-unbound", "yielded"].map((mode) => ({
+        firstCompleted,
+        binding: mode === "yielded" ? "same" : mode,
+        yieldedParent: mode === "yielded" ? "alpha" : undefined,
+        rawChild: false,
+        visible: false,
+      })),
+    ),
+    {
+      firstCompleted: "alpha",
+      binding: "same",
+      yieldedParent: "alpha",
+      rawChild: true,
+      visible: false,
+    },
+    {
+      firstCompleted: "alpha",
+      binding: "same",
+      yieldedParent: "alpha",
+      rawChild: false,
+      visible: true,
+    },
+  ])(
+    "settles overlapping caller turns with $firstCompleted first ($binding ownership, yielded=$yieldedParent, raw=$rawChild, visible=$visible)",
+    async ({ firstCompleted, binding, yieldedParent, rawChild, visible }) => {
+      vi.setSystemTime(100_000);
+      const context = createGatewayContext();
+      const otherContext = createGatewayContext();
+      await registry.initSubagentRegistry();
+      const activate = async () => {
+        // Standalone registration can be wholly unbound, but cannot mix ambient
+        // routing with a captured owner. Each live run retains its admitting owner.
+        if (binding !== "mixed-unbound") {
+          await registry.activateSubagentRegistry(() => context);
+        }
+      };
+      await activate();
+      const children = ["alpha", "beta"].map((name) => ({
+        name,
+        runId: `run-${name}`,
+        childSessionKey: rawChild && name === "alpha" ? "global" : `agent:main:subagent:${name}`,
+      }));
+      const resolvers: Array<GatewayRequestContext["resolveGatewayContext"]> = [];
+      for (const child of children) {
+        const sessionEntry = await prepareChildSession(child.childSessionKey, `sess-${child.name}`);
+        const requesterTurnRunId = `requester-${child.name}`;
+        const admission = prepareSystemAgentRunAdmission(
+          {},
+          requesterTurnRunId,
+          "main",
+          "requester-wake-test",
+        );
+        try {
+          const admitted = await admission.admit("embedded");
+          bindGatewayContextResolver(
+            admitted,
+            binding !== "same" && child.name === "beta"
+              ? binding === "distinct"
+                ? otherContext.resolveGatewayContext
+                : undefined
+              : context.resolveGatewayContext,
+          );
+          await withGatewayToolCallerIdentity(
+            createAdmittedGatewayToolCallerIdentity({
+              admittedRunContext: admitted,
+              agentId: "main",
+              sessionKey: requesterSessionKey,
+            }),
+            async () => {
+              const gatewayContextResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
+              resolvers.push(gatewayContextResolver);
+              if (visible) {
+                await spawnVisibleChild({ ...child, requesterTurnRunId });
+                return;
+              }
+              await registry.registerSubagentRun(
+                createSubagentRunParams({
+                  ...child,
+                  childAgentId: "main",
+                  sessionEntry,
+                  requesterTurnRunId,
+                  requesterAgentId: "main",
+                  expectsCompletionMessage: true,
+                  gatewayContextResolver,
+                }),
+              );
+            },
+          );
+          if (child.name === yieldedParent) {
+            await createRequesterYieldTool(requesterSessionKey, requesterTurnRunId).execute(
+              `yield-${child.name}`,
+              {},
+            );
+          }
+          await registry.settleRequesterAfterSessionSpawns({
+            requesterSessionKey,
+            requesterAgentId: "main",
+            requesterTurnRunId,
+            requesterYielded: child.name === yieldedParent,
+            acceptedSessionSpawns: [child],
+          });
+        } finally {
+          admission.close();
+        }
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      expect(resolvers[0]).not.toBe(resolvers[1]);
+      expect(resolvers[0]?.()).toBe(context);
+      expect(resolvers[1]?.()).toBe(
+        binding === "same" ? context : binding === "distinct" ? otherContext : undefined,
+      );
+      await activate();
+      await activate();
+      children.forEach((child, index) => {
+        expect(getGatewayContextResolver(registry.getSubagentRunByRunId(child.runId)!)).toBe(
+          resolvers[index],
+        );
+      });
+      const completionOrder = firstCompleted === "alpha" ? children : children.toReversed();
+      const first = completionOrder[0]!;
+      const second = completionOrder[1]!;
+      emitCompleted(first.runId, first.childSessionKey, `${first.name} complete`);
+      await flushOwnedWork();
+      await waitForDeliveredCleanup(first.runId, {
+        allowPendingRequesterSettleWake: first.name !== yieldedParent,
+      });
+      if (rawChild) {
+        const settled = registry.getSubagentRunByRunId(first.runId);
+        expect(settled).toMatchObject({
+          childAgentId: "main",
+          childSessionIdentity: { sessionId: "sess-alpha", lifecycleRevision: "original" },
+          execution: { status: "terminal" },
+          delivery: { status: "delivered" },
+        });
+        expect(settled?.execution.suppressSessionEffects).not.toBe(true);
+        expect(settled?.requesterSettleWake).toBeUndefined();
+        expect(settled?.cleanupCompletedAt).toBeTypeOf("number");
+        expect(settled?.browserCleanupDispatchedAt).toBeTypeOf("number");
+      }
+      expect(registry.getSubagentRunByRunId(second.runId)).toMatchObject({
+        execution: { status: "running" },
+        delivery: { status: "pending" },
+      });
+      expect(getRequesterWakeCalls()).toHaveLength(first.name === yieldedParent ? 1 : 0);
+      if (first.name === yieldedParent) {
+        const wake = getRequesterWakeCalls()[0]?.params;
+        expect(wake?.inputProvenance?.sourceSessionKey).toBe(first.childSessionKey);
+        expect(wake?.message).toContain(`${first.name} complete`);
+        expect(wake?.message).not.toContain(`${second.name} complete`);
+        const completed = registry.getSubagentRunByRunId(first.runId)!;
+        expect(completed.execution.status).toBe("terminal");
+        expect(getGatewayContextResolver(completed)).toBeUndefined();
+      }
+      await activate();
+      await activate();
+      children.forEach((child, index) => {
+        const row = registry.getSubagentRunByRunId(child.runId)!;
+        if (child === first) {
+          // Ordinary delivered singletons release their source just like yielded batches.
+          expect(getGatewayContextResolver(row)).toBeUndefined();
+        } else {
+          expect(getGatewayContextResolver(row)).toBe(resolvers[index]);
+        }
+        expect(row.requesterTurnRunId).toBeUndefined();
+      });
+      emitCompleted(second.runId, second.childSessionKey, `${second.name} complete`);
+      await flushOwnedWork();
+      await waitForDeliveredCleanup(second.runId, { allowPendingRequesterSettleWake: true });
+      await activate();
+      await registry.testing.sweepOnceForTests();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flushOwnedWork();
+      // Separately delivered singletons do not mint a redundant aggregate continuation.
+      expect(getRequesterWakeCalls()).toHaveLength(yieldedParent ? 1 : 0);
+      for (const child of children) {
+        const entry = registry.getSubagentRunByRunId(child.runId);
+        expect(entry).toMatchObject({
+          delivery: { status: "delivered" },
+        });
+        expect(entry?.requesterSettleWake).toBeUndefined();
+      }
+      if (rawChild) {
+        const retained = loadSubagentRegistryFromSqlite().get(first.runId);
+        expect(retained).toMatchObject({
+          childSessionKey: "global",
+          childAgentId: "main",
+          delivery: { status: "delivered" },
+        });
+        expect(retained?.execution.suppressSessionEffects).not.toBe(true);
+        expect(retained?.requesterSettleWake).toBeUndefined();
+        expect(retained?.cleanupCompletedAt).toBeTypeOf("number");
+        expect(retained?.browserCleanupDispatchedAt).toBeTypeOf("number");
+        expect(
+          loadExactSessionEntryReadOnly({
+            agentId: "main",
+            storePath: getFixture().sessionStorePath,
+            sessionKey: "global",
+          })?.entry,
+        ).toMatchObject({ sessionId: "sess-alpha", lifecycleRevision: "original" });
+      }
+    },
+  );
+
   it("delivers an adopted self-yield follow-up once while ordinary announce is in flight", async () => {
     vi.setSystemTime(100_000);
     const context = createGatewayContext();

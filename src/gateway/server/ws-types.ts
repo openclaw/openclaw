@@ -1,6 +1,5 @@
 import type { WebSocket } from "ws";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
-import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { PairedDeviceTokenIdentity } from "../../infra/device-pairing-core.types.js";
 import type { SystemPresence } from "../../infra/system-presence.js";
 import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
@@ -95,12 +94,13 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     operatorDeviceTokenIdentity?: Readonly<PairedDeviceTokenIdentity> | null;
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Handshake-attested non-remote gateway-client backend; never accepted from wire params. */
+    localBackendClient?: true;
     /** Device key W of a connection relayed by the OpenClaw ID tunnel child; never from wire params. */
     openclawIdPeerKey?: string;
     /** Original peer admission; every later grant checks the live membership owner. */
     openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
     /** Definition used for this member's hello; reload reconnects when it changes. */
-    openclawIdRolePolicy?: GatewayOperatorRoleDefinition;
     /** Authenticated Control UI operator ingress; never accepted from wire params. */
     authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */

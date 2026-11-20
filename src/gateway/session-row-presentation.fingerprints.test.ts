@@ -6,19 +6,22 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectForRetentionCheck } from "../test-utils/retention.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { ConnectionSessionRows } from "./session-ancestor-references.js";
+import { withPreparedEventRow } from "./session-event-prepared-row.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
 import {
   createSessionRowDeltaDiffer,
   prepareSessionRowDeltaFields,
 } from "./session-row-delta-fields.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
-import { reuseSessionRowFields } from "./session-row-identity.js";
+import { freezeSessionRow } from "./session-row-identity.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import {
   createTestProjection,
@@ -31,6 +34,86 @@ import type { GatewaySessionRow } from "./session-utils.types.js";
 vi.mock("node:crypto", async (importOriginal) => {
   const crypto = await importOriginal<typeof import("node:crypto")>();
   return { ...crypto, hash: vi.fn(crypto.hash) };
+});
+
+it("prepares one display clock per event and reuses unchanged rows across streaming audiences", async () => {
+  using clock = vi.spyOn(Date, "now");
+  clock.mockReturnValue(1_800_000_000_000);
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    cfg.agents = { entries: { main: {} }, defaults: { utilityModel: "" } };
+    const keys = ["root", "parent", "child"].map((key) => `agent:main:display-${key}`);
+    for (const [index, key] of keys.entries()) {
+      seedRow(key, {
+        sessionId: key,
+        updatedAt: Date.now(),
+        visibility: "shared",
+        parentSessionKey: keys[index - 1],
+      });
+    }
+    const profiles = Array.from({ length: 8 }, (_, index) =>
+      ensureProfileForEmail(`display-${index}@publication.test`),
+    );
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "display-publication",
+      cfg,
+    });
+    const peers = Array.from({ length: 32 }, (_, index) => {
+      const peer = createSessionRowEventPeer(
+        profiles[index % profiles.length]!,
+        `display-${index}`,
+        Date.now(),
+      );
+      connection.clients.add(peer.client);
+      connection.sessionMessageSubscribers.subscribe(peer.client.connId, keys[2]!);
+      return peer;
+    });
+    const detach = connection.attachSessionRowProjection(projection);
+    try {
+      const query = { key: keys[2]!, agentId: "main" };
+      for (let event = 0; event < 3; event++) {
+        await withPreparedEventRow(projection, query, (read, ancestors) => {
+          using prepareClock = vi.spyOn(read!.state.rowContext.subagentRuns, "atTime");
+          using present = vi.spyOn(projection, "present");
+          connection.broadcast(
+            "session.message",
+            {
+              sessionKey: query.key,
+              agentId: query.agentId,
+              session: { key: query.key, sessionId: query.key },
+              message: { role: "assistant", content: `Synthetic chunk ${event}` },
+            },
+            {
+              prepareSessionProjection: prepareSessionEventProjection(projection, read, {
+                ancestors,
+                encodeMessage: true,
+                reuseEnvelope: true,
+              }),
+            },
+          );
+          if (event > 0) {
+            expect(prepareClock).toHaveBeenCalledOnce();
+            expect(present).not.toHaveBeenCalled();
+          }
+        });
+        for (const peer of peers) {
+          const payload = JSON.parse(peer.send.mock.lastCall![0]).payload;
+          expect(payload.message.content).toBe(`Synthetic chunk ${event}`);
+          expect(payload.session.key).toBe(query.key);
+          expect(
+            (event === 0 ? payload.ancestorSessions : payload.ancestorSessionRefs).map(
+              (row: { key: string }) => row.key,
+            ),
+          ).toEqual([keys[1], keys[0]]);
+        }
+      }
+    } finally {
+      detach();
+      await connection.mentionInbox.dispose();
+    }
+  });
 });
 
 it("retains nested publication facts across real transcript writes without hiding replacements", async () => {
@@ -79,6 +162,7 @@ it("retains nested publication facts across real transcript writes without hidin
         ],
       });
     await append();
+    using deleted = vi.spyOn(Reflect, "deleteProperty");
     using projection = await createTestProjection({ cfg, modelCatalog: [] });
     const read = async (unchanged = false) => {
       await projection.ensureMaterialized();
@@ -120,6 +204,9 @@ it("retains nested publication facts across real transcript writes without hidin
     };
     // The first delivery owns the weak fingerprint sample throughout this reuse proof.
     const initial = await read();
+    expect(
+      deleted.mock.calls.filter(([row]) => Reflect.get(row, "key") === query.key),
+    ).toHaveLength(0);
     let previous = initial;
     for (let update = 0; update < 3; update++) {
       await collectForRetentionCheck("session-row-fingerprint-sample", 1);
@@ -171,13 +258,33 @@ it("retains nested publication facts across real transcript writes without hidin
       { a: ["a"], b: ["b"] },
       { b: ["b"], a: ["a"] },
     ]) {
-      record.materialized = replaceSessionRowFacts(record.materialized, {
-        toolOverrides: { mcpToolsDeny },
-      });
+      {
+        using keys = vi.spyOn(Object, "keys");
+        record.materialized = replaceSessionRowFacts(record.materialized, {
+          toolOverrides: { mcpToolsDeny },
+        });
+        expect(keys.mock.calls.some(([value]) => Reflect.get(value, "key") === query.key)).toBe(
+          false,
+        );
+      }
       expect(JSON.stringify((await read())[0]!.row.toolOverrides)).toBe(
         JSON.stringify({ mcpToolsDeny }),
       );
     }
+    const retained = record.materialized;
+    const cleared = replaceSessionRowFacts(retained, {
+      toolOverrides: undefined,
+      lastAssistantMessage: undefined,
+    });
+    expect(Object.hasOwn(cleared.row, "toolOverrides")).toBe(false);
+    expect(Object.hasOwn(cleared.row, "lastAssistantMessage")).toBe(false);
+    expect(Object.isFrozen(cleared.row)).toBe(true);
+    expect(Object.keys(cleared.row)).toEqual(
+      Object.keys(retained.row).filter(
+        (field) => !["toolOverrides", "lastAssistantMessage"].includes(field),
+      ),
+    );
+    expect(retained.row.toolOverrides).toBeDefined();
   });
 });
 
@@ -191,8 +298,13 @@ it.each([
     updatedAt: 0,
     pluginExtensions: [{ pluginId: "fixture", namespace: "values", value }],
   });
-  const previous = row(before);
+  const previous = freezeSessionRow(row(before));
   const next = row(after);
   const expected = JSON.stringify(next);
-  expect(JSON.stringify(reuseSessionRowFields(next, previous))).toBe(expected);
+  expect(JSON.stringify(freezeSessionRow(next, previous))).toBe(expected);
+  expect(Object.isFrozen(next)).toBe(true);
+  expect(Object.isFrozen(next.pluginExtensions)).toBe(true);
+  expect(Object.isFrozen(next.pluginExtensions?.[0])).toBe(true);
+  expect(Object.isFrozen(after)).toBe(true);
+  expect(Reflect.set(after, "length", 3)).toBe(false);
 });

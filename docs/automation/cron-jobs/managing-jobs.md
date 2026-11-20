@@ -13,6 +13,8 @@ Day-to-day operation of stored jobs: copy-ready CLI examples, the management com
 
 In the Control UI, **Start now** starts an automation immediately. Open **Activity history** to review its activity. **Delete** removes the automation and stops future activity; the confirmation explains that this can’t be undone. An automation’s owner needs automation access to edit it. Admins can also edit it.
 
+When you ask an agent to create automations in chat, its creation plan appears in the assistant’s response. A Template that installs automations shows the same card. Each planned automation keeps its place: a pending row has no controls, a saved row links to its settings and shows its current on/off switch, and a failed row says **Not created**. You can pause or resume a saved automation from the conversation if you have permission to edit it.
+
 Deleting a conversation does not remove its linked automations. Command automations can continue running after their creating conversation is deleted. The conversation's deletion confirmation warns that automations may continue; disable or remove them separately to stop future runs.
 
 Run links from automation messages and notifications open the exact recorded run, even when newer runs fill the first history page. Choose **Show all activity** to return to that automation's full history. Links with a reused session or start-time identity do not select an ambiguous run.
