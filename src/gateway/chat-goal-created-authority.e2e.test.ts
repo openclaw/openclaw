@@ -207,9 +207,11 @@ it(
           });
           reply(scenario.settledText + " The remaining Goal item is unfinished.");
         } else if (scenario.parentCalls === 6) {
+          expect(scenario.revoke).toBe(false);
           expect(text).toContain("Advance the active goal");
           writeToolCall(response, "update_goal", { status: "complete" });
         } else if (scenario.parentCalls === 7) {
+          expect(scenario.revoke).toBe(false);
           reply(scenario.finalText);
         } else {
           throw new Error("Unexpected Goal authority provider request");
@@ -408,7 +410,7 @@ it(
         expect(
           loadSessionEntry({ agentId: "main", sessionKey: scenario.sessionKey })?.goal,
         ).toMatchObject(
-          scenario.stop
+          scenario.stop || scenario.revoke
             ? { status: "paused", continuationTurns: 0 }
             : { status: "complete", continuationTurns: 1 },
         );
@@ -428,7 +430,7 @@ it(
         expect(finals).toHaveLength(scenario.revoke || scenario.stop ? 0 : 1);
         expect(
           history.messages.filter((message) => assistantText(message) === scenario.finalText),
-        ).toHaveLength(scenario.stop ? 0 : 1);
+        ).toHaveLength(scenario.revoke || scenario.stop ? 0 : 1);
         if (scenario.revoke) {
           // The administrator may still inspect the canonical history; only the
           // revoked requester's publication stream is required to be silent.
@@ -443,6 +445,10 @@ it(
               assistantText(message)?.includes(scenario.settledText),
             ),
           ).toBe(true);
+          expect(
+            loadSessionEntry({ agentId: "main", sessionKey: scenario.sessionKey })?.goal
+              ?.lastStatusNote,
+          ).toContain("Paused after an error. Resume to continue.");
           expect(
             events.slice(beforeRevocation.events).filter((event) => {
               const payload = asOptionalRecord(event.payload);
@@ -497,7 +503,7 @@ it(
               );
             }),
           ).toEqual([]);
-          expect(scenario.parentCalls).toBe(7);
+          expect(scenario.parentCalls).toBe(5);
           const revoked = await connectGatewayClient({
             ...connection,
             url: `wss://127.0.0.1:${gateway.port}`,
@@ -517,7 +523,7 @@ it(
           ).rejects.toThrow("missing scope: operator.write");
           const refusedDrained = await wait(waitForGatewayActiveWork(30_000));
           expect(refusedDrained.drained).toBe(true);
-          expect(scenario.parentCalls).toBe(7);
+          expect(scenario.parentCalls).toBe(5);
           expect(scenario.childCalls).toBe(beforeRevocation.child);
         } else if (scenario.stop) {
           expect(scenario.parentCalls).toBe(beforeRevocation.parent);
