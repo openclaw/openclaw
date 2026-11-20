@@ -106,13 +106,32 @@ jobs:
               held=$((held + 1)); continue
             fi
 
+            # Require explicit release-maintainer opt-in, not only a green CI board.
+            labels="$(echo "${info}" | jq -r '[.labels[].name] | join(",")')"
+            if ! echo ",${labels}," | grep -q ',automerge-approved,'; then
+              echo "- **#${pr}** ${title} — held: requires \`automerge-approved\` label." >> "$GITHUB_STEP_SUMMARY"
+              held=$((held + 1)); continue
+            fi
+
+            # A review approval is required in addition to CI checks.
+            approvals="$(gh api "repos/${REPO}/pulls/${pr}/reviews?per_page=100" --jq '[.[] | select(.state == "APPROVED")] | length')"
+            if [ "${approvals}" -lt 1 ]; then
+              echo "- **#${pr}** ${title} — held: requires at least one approval." >> "$GITHUB_STEP_SUMMARY"
+              held=$((held + 1)); continue
+            fi
+
             # Collect check runs on the head SHA.
             checks="$(gh api "repos/${REPO}/commits/${sha}/check-runs?per_page=100")"
+            valid_count="$(echo "${checks}" | jq --arg re "${ADVISORY_RE}" '[.check_runs[] | select((.name | test($re)) | not)] | length')"
+            if [ "${valid_count}" -lt 1 ]; then
+              echo "- **#${pr}** ${title} — held: no required CI checks found." >> "$GITHUB_STEP_SUMMARY"
+              held=$((held + 1)); continue
+            fi
             failing="$(echo "${checks}" | jq -r --arg re "${ADVISORY_RE}" '
               [.check_runs[]
                | select((.name | test($re)) | not)
                | select(.status == "completed")
-               | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled")
+               | select(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")
                | "\(.name)|\(.conclusion)|\(.id)|\(.html_url)"] | .[]')"
             pending="$(echo "${checks}" | jq -r --arg re "${ADVISORY_RE}" '
               [.check_runs[]
