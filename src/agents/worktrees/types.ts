@@ -103,6 +103,7 @@ export type WorktreeWorkerAuthority = {
 };
 
 export type WorktreeMutationGuard = Pick<CreateManagedWorktreeParams, "signal" | "commitGuard"> & {
+  idleIoPriority?: boolean;
   workerAuthority?: WorktreeWorkerAuthority;
 };
 

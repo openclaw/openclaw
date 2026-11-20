@@ -28,6 +28,7 @@ import {
   resolveReplyExpectation,
   shouldDeliverMissingReplyNotice,
 } from "../../reply-completion.js";
+import { hasPendingSessionToolHandoff } from "../../tools/session-tool-handoff.js";
 import { log } from "../logger.js";
 import type { EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
@@ -167,16 +168,15 @@ export async function resolveEmbeddedRunTerminal(input: {
   });
   const authoredSilenceRequiresResult =
     replyExpectation === "result-required" && classifyAssistantTurn(terminalFacts).silent;
-  const acceptedSessionSpawnContinuation = shouldContinueInteractiveAcceptedSessionSpawns({
-    attempt,
-    run: runParams,
-  });
+  const continuationPending =
+    hasPendingSessionToolHandoff(runParams.replyOperation) ||
+    shouldContinueInteractiveAcceptedSessionSpawns({ attempt, run: runParams });
   const replyRecoverySuppressed =
     !authoredSilenceRequiresResult &&
     // Optional replies may be silent, but a rejected call is not authored silence.
     ((replyExpectation === "optional" && !isRejectedBeforeDispatch(attempt)) ||
       emptyAssistantReplyIsSilent ||
-      acceptedSessionSpawnContinuation ||
+      continuationPending ||
       input.prepared.replyDeliveryState !== "missing");
   const replyRecoveryAllowed = !replyRecoverySuppressed && !settledTurnFinalizationAttempted;
   const [nextReasoningOnlyRetryInstruction, nextEmptyResponseRetryInstruction] =
@@ -310,7 +310,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
     return completeEmbeddedRun({
       ...input,
-      acceptedSessionSpawnContinuation,
+      continuationPending,
       incompleteTurnText: MISSING_REPLY_NOTICE_TEXT,
       payloadCount: 0,
       incompleteTurnFallbackSafe,
@@ -342,7 +342,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
     return completeEmbeddedRun({
       ...input,
-      acceptedSessionSpawnContinuation,
+      continuationPending,
       incompleteTurnText,
       payloadCount: terminalFacts.payloadCount,
       incompleteTurnFallbackSafe,
@@ -376,7 +376,7 @@ export async function resolveEmbeddedRunTerminal(input: {
 
   return completeEmbeddedRun({
     ...input,
-    acceptedSessionSpawnContinuation,
+    continuationPending,
     payloadCount: terminalFacts.payloadCount,
     payloadsForTerminalPath,
     emptyAssistantReplyIsSilent,
@@ -386,7 +386,7 @@ export async function resolveEmbeddedRunTerminal(input: {
 
 async function completeEmbeddedRun(
   input: Parameters<typeof resolveEmbeddedRunTerminal>[0] & {
-    acceptedSessionSpawnContinuation: boolean;
+    continuationPending: boolean;
     payloadCount: number;
     payloadsForTerminalPath?: EmbeddedAgentRunResult["payloads"];
     emptyAssistantReplyIsSilent?: boolean;
@@ -499,7 +499,7 @@ async function completeEmbeddedRun(
     });
     input.runParams.onSuccessfulAuthProfile?.(input.authProfileId);
   }
-  const acceptedSessionSpawnContinuation = !error && input.acceptedSessionSpawnContinuation;
+  const continuationPending = !error && input.continuationPending;
   // Label only partial assistant prose: terminal tool output already completes
   // the reply, and a silent cron result must not gain a visible notice.
   const hasPartialAssistantText =
@@ -608,7 +608,7 @@ async function completeEmbeddedRun(
               ...(input.attempt.yieldAcknowledgment
                 ? { yieldAcknowledgment: input.attempt.yieldAcknowledgment }
                 : {}),
-              ...(acceptedSessionSpawnContinuation ? { continuationPending: true as const } : {}),
+              ...(continuationPending ? { continuationPending: true as const } : {}),
               ...(input.intentionalTerminalCompletion
                 ? { intentionalTerminalCompletion: "tool-batch" as const }
                 : {}),

@@ -507,7 +507,8 @@ export function* assembleOpenClawCodingTools(
             cwd: sandbox
               ? (capabilityProfile.workspace.spawnWorkspaceRoot ?? runtimeRoot)
               : runtimeRoot,
-            gatewayConfigReadAllowed: capabilityProfile.policy.gatewayConfigReadAllowed,
+            gatewayManagementActionsAllowed:
+              capabilityProfile.policy.gatewayManagementActionsAllowed,
             cronCreatorToolAllowlist,
             cronCreatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
             resolveCronCreatorToolAuthority: cronCreatorAuthorityResolver,

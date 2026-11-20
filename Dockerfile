@@ -464,6 +464,7 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 # NOTE: /home/node/.config must be created with node ownership first so that
 # the leaf /home/node/.config/openclaw inherits the correct parent permissions.
 # Without this, install -d leaves /home/node/.config as root:root (issue #85968).
+RUN chmod 0755 /home/node
 RUN install -d -m 0755 -o node -g node /home/node/.config && \
     install -d -m 0700 -o node -g node \
       /home/node/.openclaw \

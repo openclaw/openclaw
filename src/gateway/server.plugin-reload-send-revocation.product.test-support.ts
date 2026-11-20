@@ -348,6 +348,9 @@ it.for(["allowed", "revoked"] as const)(
             if (raw.includes(MESSAGE) && agentTurn) {
               effects++;
               targetEffect.resolve();
+              if (revoked) {
+                failure.reject(new Error("Revoked retained send reached the target effect"));
+              }
               reply(DONE);
               return;
             }
