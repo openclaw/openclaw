@@ -9,7 +9,7 @@ if (!directory) {
   throw new Error("Retired checkout path is required");
 }
 
-const hasIoPressure = createHostIoPressureProbe();
+const hasIoPressure = createHostIoPressureProbe(directory);
 let entries = 0;
 let bytes = 0;
 const MAX_ENTRIES = 128;

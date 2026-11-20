@@ -410,6 +410,13 @@ Quote `--prefix` and `--git-dir` values containing spaces or shell characters wh
     `openclaw gateway install --force`, which activates the replacement service,
     and then checks gateway health best-effort.
   </Step>
+  <Step title="Show PATH setup">
+    If `<prefix>/bin` was not on `PATH` when the installer started, prints a
+    shell-specific command that adds it for the current shell and, unless the
+    installer starts onboarding itself, the full-path `openclaw onboard` command.
+    The installer does not add it to shell startup files, and `--json` output is
+    unchanged.
+  </Step>
 </Steps>
 
 On FreeBSD, use the default npm method (`--install-method npm`) with a published

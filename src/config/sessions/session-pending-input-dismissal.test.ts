@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,

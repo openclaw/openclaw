@@ -336,7 +336,7 @@ it.each(["operator", "gateway"] as const)(
 );
 
 it.for(["guest-involvement", "guest-role-involvement"] as const)(
-  "preserves accepted guest writes but fences revoked authority across a late receipt (%s)",
+  "keeps committed guest receipts without overriding role admission or source abort (%s)",
   async (revoke, { signal }) => {
     const { proveStoppedSandboxAuthority } =
       await import("./local-workspace-cancellation.test-support.js");

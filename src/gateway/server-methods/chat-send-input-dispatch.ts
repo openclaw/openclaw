@@ -9,22 +9,19 @@ import {
   composeSessionSourceAssertion,
   createDynamicSessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
-import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   emitDiagnosticsTimelineEvent,
   withDiagnosticsTimelineObserver,
 } from "../../infra/diagnostics-timeline.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { settleUserTurnPendingInput } from "../../sessions/user-turn-transcript-processing.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
 import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { captureQueuedOperatorRecoverySource } from "../operator-run-recovery-source.js";
@@ -35,6 +32,7 @@ import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-proj
 import { recordSessionOperatorSource } from "../session-operator-sources.js";
 import { resolveSessionChildController } from "../session-utils-core.js";
 import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
+import { finishActiveSteerInput } from "./chat-send-active-steer.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
 import {
@@ -50,7 +48,10 @@ import {
   createChatSendGoalCommitGuard,
   requiresRuntimeApprovedChatInput,
 } from "./chat-send-goal-admission.js";
-import { createChatSendMessageInjectionStarter } from "./chat-send-message-injection.js";
+import {
+  createChatSendMessageInjectionStarter,
+  prepareChatSendSteerDocumentContext,
+} from "./chat-send-message-injection.js";
 import type { ChatSendInternalOptions } from "./chat-send-options.js";
 import { readChatSendRetryComparison } from "./chat-send-retry-comparison.js";
 import { createChatSendSessionInitialization } from "./chat-send-session-binding.js";
@@ -64,10 +65,6 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-const mediaDocumentContextLoader = createLazyImportLoader(
-  () => import("../../media-understanding/file-context.js"),
-);
 
 /** Owns input custody and ACK timing through the detached dispatch handoff. */
 export async function handleChatSendWithStorage(
@@ -533,27 +530,12 @@ export async function handleChatSendWithStorage(
         client?.internal?.syntheticClient ? undefined : client?.authenticatedUserProfile?.profileId,
       );
     }
-    // Rendering can fail independently of admission; preserve the raw steer on failure.
-    const steerDocumentContext =
-      messageInjectionTarget && !isInternalTextSlashCommandTurn && ctx.media?.length
-        ? await mediaDocumentContextLoader
-            .load()
-            .then(async (runtime) => ({
-              status: "rendered" as const,
-              ...(await runtime.renderInboundDocumentContext({
-                ctx,
-                cfg: session.cfg,
-              })),
-            }))
-            .catch((err: unknown) => {
-              // A poisoned lazy import must not be served to later steers.
-              mediaDocumentContextLoader.clear();
-              logVerbose(
-                `steer document render failed, injecting raw content: ${formatErrorMessage(err)}`,
-              );
-              return { status: "failed" as const };
-            })
-        : undefined;
+    const steerDocumentContext = await prepareChatSendSteerDocumentContext({
+      steering: Boolean(messageInjectionTarget),
+      isInternalTextSlashCommandTurn,
+      ctx,
+      cfg: session.cfg,
+    });
     if (settleInterruptedPreparation()) {
       return;
     }
@@ -597,6 +579,18 @@ export async function handleChatSendWithStorage(
         },
       });
       assertInputAdmissionCurrent();
+    }
+    if (request.activeSteer) {
+      await finishActiveSteerInput(setup, {
+        context,
+        ctx,
+        userTurnRecorder,
+        begin: beginCapturedMessageInjection,
+        persist: persistGatewayUserTurnTranscriptBestEffort,
+        assertCurrent: assertInputAdmissionCurrent,
+        respond,
+      });
+      return;
     }
     context.addChatRun(clientRunId, {
       sessionKey,
