@@ -25,7 +25,7 @@ function CatalogLoading() {
           <div class="plugin-catalog-detail__loading-card skeleton" />
         </div>
         <aside class="plugin-catalog-detail__sidebar">
-          {renderPackageMetadata({ loading: true })}
+          {renderPackageMetadata({ loading: true, rail: { links: undefined } })}
         </aside>
       </div>
     </>
@@ -61,7 +61,7 @@ export function TemplatesCatalogView(props: TemplatesCatalogViewProps) {
         fallback={
           <SettingsPage wide>
             <section
-              class="plugin-catalog-detail plugin-catalog-detail--loading"
+              class="plugin-catalog-detail plugin-catalog-detail--rail plugin-catalog-detail--loading"
               aria-label={t("templatesCatalog.title")}
             >
               <a

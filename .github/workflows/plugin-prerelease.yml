@@ -289,9 +289,9 @@ jobs:
             if (limits.teamId !== org) throw new Error("account scope mismatch");
             budget = resolveBoatNodeJobBudget(limits);
           } catch {
-            console.warn("::warning::Boat limits unavailable; using Blacksmith for hourly tests.");
+            console.warn("::warning::Boat limits unavailable; using GitHub-hosted runners for hourly tests.");
           }
-          console.log(`Boat admission: up to ${budget} hourly jobs; remaining jobs use Blacksmith.`);
+          console.log(`Boat admission: up to ${budget} hourly jobs; remaining jobs use GitHub-hosted runners.`);
           appendFileSync(process.env.GITHUB_OUTPUT, `job_limit=${budget}\n`);
           EOF
 
@@ -327,10 +327,10 @@ jobs:
             include: include.map((row) => {
               const physicalLabel = row.runner_label ?? blacksmithRunnerLabel(row.runner);
               const boatLabel = boatRunners[physicalLabel];
-              // Mixed extension batches can exhaust Boat RAM and swap; retain their Blacksmith route.
+              // Mixed extension batches can exhaust Boat RAM and swap; keep them on hosted runners.
               const useBoat = active && row.task === "extension-file-shard" && boatJobsRemaining > 0 && boatLabel;
               if (useBoat) boatJobsRemaining -= 1;
-              const label = useBoat ? boatLabel : physicalLabel;
+              const label = useBoat ? boatLabel : hourlyBoat ? "ubuntu-24.04" : physicalLabel;
               return label ? { ...row, runner_label: label } : row;
             }),
           });

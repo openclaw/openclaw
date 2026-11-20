@@ -8,7 +8,14 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workflow = readFileSync(".github/workflows/website-installer-sync.yml", "utf8");
-type Step = { id?: string; name?: string; if?: string; run?: string; with?: { script?: string } };
+type Step = {
+  id?: string;
+  name?: string;
+  if?: string;
+  run?: string;
+  env?: Record<string, string>;
+  with?: { script?: string };
+};
 const config = parse(workflow) as {
   jobs: Record<string, { if?: string; needs?: string[]; steps: Step[] }>;
 };
@@ -125,6 +132,13 @@ ${stepRun("fedora-installer", "install.sh on Fedora")}`,
     expect(config.jobs["sync-website"]?.needs?.toSorted()).toEqual(scopedJobs.toSorted());
     expect(workflow).toContain("OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}");
     expect(workflow).toContain("token: ${{ env.OPENCLAW_GH_TOKEN }}");
+  });
+
+  it("authenticates the website build's GitHub release lookup", () => {
+    const build = config.jobs["sync-website"]?.steps.find(
+      (step) => step.name === "Verify website with synced installers",
+    );
+    expect(build?.env?.GITHUB_TOKEN).toBe("${{ github.token }}");
   });
 });
 

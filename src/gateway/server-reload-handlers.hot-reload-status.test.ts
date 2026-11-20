@@ -102,7 +102,12 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
   expect(hoisted.invalidateConfigGetResponseCache).toHaveBeenCalledOnce();
   expect(broadcast).toHaveBeenCalledWith(
     "config.changed",
-    { path: "/tmp/openclaw.json", hash: "opaque:persisted-1", ts: expect.any(Number) },
+    {
+      path: "/tmp/openclaw.json",
+      hash: "opaque:persisted-1",
+      changedPaths: ["gateway.port"],
+      ts: expect.any(Number),
+    },
     { dropIfSlow: true },
   );
   expect(invalidateMentions).not.toHaveBeenCalled();

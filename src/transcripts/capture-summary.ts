@@ -9,12 +9,12 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { assertTranscriptCaptureEnabled } from "./capture-startup.js";
 import type { resolveTranscriptsConfig } from "./config.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { TranscriptsSummaryChangedError } from "./store-errors.js";
 import type { TranscriptSummarySnapshot, TranscriptsStore } from "./store.js";
 import { summarizeTranscriptsWithModel } from "./summary-model.js";
 import { runSummaryWork } from "./summary-work.js";
 import { summarizeTranscripts } from "./summary.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 type SummaryParams = {
   config: ReturnType<typeof resolveTranscriptsConfig>;

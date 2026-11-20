@@ -123,7 +123,7 @@ export type GatewayOperatorRoleDefinition = NonNullable<
   GatewayConfigInput["roles"]
 >["definitions"][string];
 
-/** Role definitions; setting a default enables named-role enforcement for identified people. */
+/** Role definitions for identified people, with an optional fallback role. */
 export type GatewayOperatorRolesConfig = NonNullable<GatewayConfigInput["roles"]>;
 
 export type GatewayConfig = Omit<

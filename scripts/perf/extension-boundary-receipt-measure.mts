@@ -3,11 +3,12 @@
  * Run with node --import ./scripts/tsx.mjs scripts/perf/extension-boundary-receipt-measure.mts
  * [baseline-ref|-]. Alternate revisions in fresh processes; compare record digests
  * and use external time for total CPU and peak RSS. This does not measure compilation.
+ * Add --count-relative-paths for separate work counts, not timing qualification.
  */
-import { execFileSync } from "node:child_process";
+import childProcess, { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { registerHooks } from "node:module";
+import { registerHooks, syncBuiltinESMExports } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -16,16 +17,24 @@ import { isRecord } from "../lib/record-shared.mjs";
 import { resolveRepoRoot } from "../lib/repo-root.mjs";
 
 const root = resolveRepoRoot(import.meta.url);
-const revision = process.argv[2] ?? "-";
-const owner = "scripts/lib/extension-boundary-inputs.mts";
-const ownerUrl = pathToFileURL(path.join(root, owner)).href;
-const source =
-  revision === "-"
-    ? undefined
-    : execFileSync("git", ["show", `${revision}:${owner}`], { cwd: root, encoding: "utf8" });
+const revision = process.argv.slice(2).find((arg) => arg !== "--count-relative-paths") ?? "-";
+const countRelativePaths = process.argv.includes("--count-relative-paths");
+const sources = new Map<string, string>();
+if (revision !== "-") {
+  for (const owner of [
+    "scripts/lib/extension-boundary-inputs.mts",
+    "scripts/lib/compiler-input-snapshot.mts",
+  ]) {
+    sources.set(
+      pathToFileURL(path.join(root, owner)).href,
+      execFileSync("git", ["show", `${revision}:${owner}`], { cwd: root, encoding: "utf8" }),
+    );
+  }
+}
 const hook = registerHooks({
   load(url, context, nextLoad) {
-    return url === ownerUrl && source !== undefined
+    const source = sources.get(url);
+    return source !== undefined
       ? { format: "module-typescript", shortCircuit: true, source }
       : nextLoad(url, context);
   },
@@ -53,7 +62,30 @@ if (ids.length === 0 || missing.length > 0) {
 }
 const projects = prepareExtensionBoundaryProjects(root, ids);
 const metadata = projects.flatMap((project) => project.metadataInputs);
-const counts = { exists: 0, realpath: 0, nativeRealpath: 0 };
+const counts = {
+  exists: 0,
+  realpath: 0,
+  nativeRealpath: 0,
+  compilerProcesses: 0,
+  relativePaths: 0,
+};
+childProcess.spawn = new Proxy(childProcess.spawn, {
+  apply(target, receiver, args) {
+    if (Array.isArray(args[1]) && args[1].includes("--api")) {
+      counts.compilerProcesses++;
+    }
+    return Reflect.apply(target, receiver, args);
+  },
+});
+if (countRelativePaths) {
+  path.relative = new Proxy(path.relative, {
+    apply(target, receiver, args) {
+      counts.relativePaths++;
+      return Reflect.apply(target, receiver, args);
+    },
+  });
+}
+syncBuiltinESMExports();
 fs.existsSync = new Proxy(fs.existsSync, {
   apply(target, receiver, args) {
     counts.exists++;
@@ -74,6 +106,9 @@ fs.realpathSync = new Proxy(fs.realpathSync, {
 });
 const started = performance.now();
 const snapshot = new BoundaryInputSnapshot(root, metadata);
+if (revision === "-") {
+  snapshot.prepareConfigs(projects.map((project) => project.config));
+}
 const digest = createHash("sha256");
 for (const { extensionId, config } of projects) {
   const receipt = path.join(directory, `${extensionId}.inputs.json`);
@@ -92,6 +127,7 @@ for (const { extensionId, config } of projects) {
 console.log(
   JSON.stringify({
     revision,
+    countRelativePaths,
     projects: projects.length,
     elapsedMs: performance.now() - started,
     counts,

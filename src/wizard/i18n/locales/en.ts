@@ -1137,6 +1137,8 @@ export const en = {
     channelsPrimer: {
       approveWith: "Approve with: {command}",
       docs: "Docs: {link}",
+      credentialStorage:
+        "Entering a supported credential saves it in the shared secret store. If you run the CLI while the Gateway is running, this requires local Gateway admin access. Without that access, use an existing secret reference where supported, or stop the Gateway before entering the credential.",
       inboundSafety:
         "Inbound DM safety defaults to pairing: unknown senders get a pairing code first.",
       multiUserDm:

@@ -2708,14 +2708,10 @@ select.data-table-pagination__size {
 }
 
 .agent-select__menu.oc-menu {
+  --oc-overlay-enter-opacity: 1;
+
   width: min(320px, calc(100vw - 24px));
   max-height: 320px;
-}
-
-@starting-style {
-  .agent-select__menu.oc-menu.oc-overlay:popover-open {
-    opacity: 1;
-  }
 }
 
 .agent-select__trigger {
@@ -3509,7 +3505,6 @@ select.data-table-pagination__size {
 .activity-pill__spinner::before,
 .chat-details-processes__spinner::before,
 .chat-details-subagents__spinner::before,
-.session-worker-stop__spinner::before,
 .approval-page__spinner::before,
 .custodian__history-spinner::before,
 .device-pair-setup__spinner::before,
@@ -3570,7 +3565,6 @@ select.data-table-pagination__size {
   .chat-details-subagents__spinner,
   .chat-processes__spinner::before,
   .subagents-desktop__spinner::before,
-  .session-worker-stop__spinner,
   .approval-page__spinner,
   .config-loading__spinner,
   .custodian__history-spinner,

@@ -629,6 +629,11 @@ last commit checksum are unchanged, and automatic restoration stays available.
 Any commit after admission, including one that restores identical content, still
 refuses. The Doctor of the version being installed owns this check, so updates
 from older releases benefit once the target contains it.
+Each migration also needs every other connection to its database closed. Doctor
+waits up to 5 seconds for an outside reader or probe to close before it gives
+up; a tool that keeps the database open for the whole update still stops the
+migration, and the error names the database it could not take over. Close that
+tool, then run `openclaw update repair`.
 
 The post-plugin Doctor runs for plugin changes, deferred model retirement, and
 pending deferred plugin migrations. Before each Doctor, the updater observes its
@@ -1844,11 +1849,16 @@ the retention phase already running in an older updater.
 
 Post-activation schema inspection preserves captured SQLite database, WAL, and shared-memory
 artifacts so the final Doctor can verify the same migration source.
-A Git checkout update that switches the release link captures no databases and runs no
-Doctor: the previous Gateway keeps serving, and the Gateway that starts from the new
-release migrates state. Its inspection reads each agent and local store's schema version
-directly, in milliseconds and without a copy, even while the serving Gateway writes; the
-shared state database keeps its consistent online-backup read.
+A Git checkout update that switches the release link runs no Doctor before activation.
+Its schema inspection reads each agent and local store's schema version directly, in
+milliseconds and without a copy, even while the serving Gateway writes. The shared
+state database keeps its consistent online-backup read.
+
+The new Gateway can apply supported SQLite migrations at startup. For PostgreSQL
+shared-state and agent schema upgrades, use Doctor with writers stopped. Before
+starting the Gateway directly on a release that needs one of these migrations,
+stop the Gateway and embedded writers and run the target release's `openclaw doctor --fix`.
+See [PostgreSQL updates and schema migrations](/gateway/postgresql#updates-and-schema-migrations).
 
 A Git checkout that runs from releases keeps each release at
 `<state dir>/git-install/releases/<release>/openclaw`, behind the link
@@ -1868,15 +1878,15 @@ The inspection reports data at risk only on evidence: a schema that moved, or a 
 cannot read after a new-version Doctor or boot check may have written it. When no
 new-version process has opened state yet, an unreadable store is a recorded warning
 (`state-schema-verification`), not data at risk, and the update continues or fails for its
-own recorded reason. On a Git release the new release migrates state when it starts, and its
-trial switches back if it fails to start. The Git release inspection also does not
-require the new schema before that start: "migration did not finish" applies only to
-installs whose updater runs Doctor before restarting. Installed updaters that run Git
+own recorded reason. A Git release trial switches back if the candidate fails to start.
+The Git release inspection does not require the new schema before that start.
+"Migration did not finish" applies only to installs whose updater runs Doctor
+before restarting. Installed updaters that run Git
 releases without this change (main builds since the release layout landed) fail
 every Git update that changes a schema in their own process, before the new release runs;
 rebuild the checkout once to get an updater with the fix.
 
-When the new release's Gateway starts, its state upgrade can replace
+When the new release's Gateway starts, a SQLite state upgrade can replace
 `state/openclaw.sqlite` and keep the previous file as `openclaw.sqlite.pre-<buildId>`.
 The updater closes its own shared-state handles before it restarts the Gateway and
 reopens the database by path once the new Gateway is verified serving, so plugin
@@ -2485,14 +2495,24 @@ progress report remains available through that Gateway's restart. The dialog sho
 a temporary disconnect.
 
 Ask the agent to update OpenClaw, or send `/update` from Discord or another
-connected chat. Natural-language requests use the existing `gateway` tool's
-`update.run` action. The same tool exposes `restart` for a runtime-coordinated safe
-restart and `update.cleanup` for explicit recovery cleanup without stopping the
-Gateway. The minimal, coding, and messaging profiles expose these maintenance
-actions without granting configuration reads. Explicit tool restrictions still apply.
+connected chat. For natural-language owner requests on standard installations,
+the agent uses the built-in updater through the `gateway` tool’s `update.run`
+action. If the running Gateway is served directly from a Git checkout, the
+agent can use the host’s documented in-place procedure without an exact
+revision, but only if the host independently authorizes maintenance for that
+caller. Otherwise, Git on a source install still requires an explicitly
+requested exact revision and host maintenance authorization. If the agent
+can’t identify the serving installation or confirm an authorized procedure,
+it reports the blocker instead of guessing. A request to update does not by
+itself authorize switching installation methods.
 
-On an explicit owner request, the agent performs the supported action itself; it
-does not send the owner to a slash command or terminal. Restart requests can be
+The `gateway` tool also exposes `restart` for a runtime-coordinated safe restart
+and `update.cleanup` for explicit recovery cleanup without stopping the Gateway.
+The minimal, coding, and messaging profiles expose these maintenance actions
+without granting configuration reads. Explicit tool restrictions still apply.
+
+On an explicit owner request, the agent performs the supported, authorized
+action itself when available. Restart requests can be
 deferred until active work settles; an accepted schedule is not a completed restart.
 Cleanup uses the serving Gateway's owner-bound worker and the existing manual
 verification, eligibility, and dependency checks. It permanently removes eligible
@@ -2506,8 +2526,9 @@ by external chat users and webhook turns do not gain this authority. External
 chat update requests still require current command-owner authority.
 
 `/update` is the model-independent fallback: it works without a functioning model
-or access to the `gateway` tool. The tool, slash command, and Control UI all use
-the same Gateway update handler and current authorization checks.
+or access to the `gateway` tool. The tool’s `update.run` action, the slash
+command, and the Control UI all use the same built-in update handler and
+current authorization checks; they don’t choose a host-specific procedure.
 
 The new version is checked while the old Gateway serves. An already-current
 update restarts a running Gateway when plugins change or its service points at a

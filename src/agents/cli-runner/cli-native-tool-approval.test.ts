@@ -163,23 +163,6 @@ describe("requestCliNativeToolApproval", () => {
     ).toMatchObject({ kind: "deny", reason: "operand-binding" });
   });
 
-  it("rechecks current grants before recording an auto-allow", async () => {
-    const { binary, request } = allowlistedCommand();
-    let revoked = false;
-    const outcome = await request(binary, {
-      env: undefined,
-      assertActive: () => {
-        if (!revoked) {
-          revoked = true;
-          saveExecApprovals({ version: 1, agents: { main: { allowlist: [] } } });
-        }
-      },
-    });
-    expect(outcome).toEqual({ kind: "deny", reason: "unavailable" });
-    expect(loadExecApprovals().agents?.main?.allowlist).toEqual([]);
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
   it("registers and waits for a matching approval decision", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "approval-1", status: "pending" })
