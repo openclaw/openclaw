@@ -11,6 +11,20 @@ export function buildStatusResourceRows(resources: StatusSummary["resources"]) {
       Item: "Resources",
       Value: `${resources.profile} (${resources.configured}: ${resources.reason}) · ${mib(resources.memoryLimitBytes)} ${resources.memoryLimitSource} · ${resources.cpus} CPUs · ${resources.workerCount} direct workers`,
     },
+    ...(resources.memoryBudget
+      ? [
+          {
+            Item: "Worker memory budget",
+            Value: `${mib(resources.memoryBudget.budgetBytes)} of ${mib(resources.memoryBudget.limitBytes)} · in use ${resources.memoryBudget.usageBytes === null ? "unknown" : mib(resources.memoryBudget.usageBytes)} (${resources.memoryBudget.usageSource}) · floors ${mib(resources.memoryBudget.floorBytes)}${resources.memoryBudget.floorsExceedBudget ? " (exceed budget)" : ""} · pending ${mib(resources.memoryBudget.pendingBytes)} · growth ${resources.memoryBudget.growthAdmissions} admitted / ${resources.memoryBudget.refusals} refused · waits ${resources.memoryBudget.waits} (${resources.memoryBudget.waitingTasks} waiting, max ${Math.round(resources.memoryBudget.maxWaitMs)} ms)`,
+          },
+          ...resources.memoryBudget.families
+            .filter((row) => row.refusals > 0 || row.growthAdmissions > 0)
+            .map((row) => ({
+              Item: `Budget ${row.family}`,
+              Value: `growth ${row.growth} held · ${row.growthAdmissions} admitted / ${row.refusals} refused · waits ${row.waits} (${row.waitingTasks} waiting, ${Math.round(row.waitMs)} ms total, max ${Math.round(row.maxWaitMs)} ms)`,
+            })),
+        ]
+      : []),
     ...resources.workerCensus.map((row) => ({
       Item: `Worker ${row.kind}${row.poolId === undefined ? "" : ` #${row.poolId}`}`,
       Value: `${row.count} ${row.workerClass} · floor ${row.floor ?? "unknown"} · cap ${row.cap ?? "unknown"}${row.pointReadCap === undefined ? "" : ` (point reads ${row.pointReadCap})`} · idle ${row.idlePolicy}${row.idleTimeoutMs === undefined ? "" : ` ${row.idleTimeoutMs}ms`}${row.burstIdleTimeoutMs === undefined ? "" : ` / burst ${row.burstIdleTimeoutMs}ms`} · heap ${row.heapUsedBytes === null ? "unavailable" : mib(row.heapUsedBytes)} (${row.heapSampledCount}/${row.count} sampled)`,
