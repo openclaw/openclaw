@@ -118,7 +118,7 @@ it.each(["accepted", "declined", "noninteractive update"] as const)(
           expectNote(
             scenario === "accepted"
               ? "Restored agents.defaults.sessionStore.agentId"
-              : "openclaw config set agents.defaults.sessionStore.agentId ops",
+              : `openclaw config set agents.defaults.sessionStore.agentId '"ops"' --strict-json`,
           );
         },
       );

@@ -5,9 +5,11 @@ import JSON5 from "json5";
 import { describe, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
+import { prepareSessionStoreOwnerRecovery } from "../commands/doctor-session-store-owner.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { splitShellArgs } from "../utils/shell-argv.js";
 import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import { formatCliCommand } from "./command-format.js";
 import { useConfigCliIntegrationHarness } from "./config-cli.integration.test-harness.js";
@@ -29,6 +31,26 @@ const withConfig = (raw: string, visit: Parameters<typeof withFile>[2]) =>
   withFile("config-cli-", raw, visit);
 
 describe("config cli roster integration", () => {
+  it("restores a numeric session store owner using Doctor's printed command", async () => {
+    const agentId = "123";
+    const entries = { [agentId]: {} };
+    await withConfig(JSON.stringify({ agents: { entries } }), async ({ configPath }) => {
+      writeFixtureJsonSync(`${configPath}.bak`, {
+        agents: { entries, defaults: { sessionStore: { agentId } } },
+      });
+      const snapshot = await readConfigFileSnapshot();
+      const { warnings } = await prepareSessionStoreOwnerRecovery({
+        config: snapshot.config,
+        snapshot,
+      });
+      const command = warnings[0]?.match(/To restore this value, run "(.+)"\.$/)?.[1];
+      const argv = splitShellArgs(command ?? "");
+      expect(argv?.shift()).toBe("openclaw");
+      await invoke(argv ?? []);
+      expect(load(configPath).agents.defaults.sessionStore.agentId).toBe(agentId);
+    });
+  });
+
   it("preserves a shorthand subagent primary through an indexed roster edit", async () => {
     const raw = JSON.stringify({
       agents: { entries: { main: { subagents: { model: "fixture-model/allowed" } } } },
