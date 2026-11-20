@@ -70,20 +70,21 @@ function proof(label: string, value: unknown) {
   );
 }
 
-/** First 16 hex of the sha256 of the CLI's own transcript of a native session. */
-async function nativeSessionSha(sessionId: string | undefined): Promise<string> {
-  if (!sessionId) {
-    return "none";
-  }
+/**
+ * The CLI's own transcript of a native session: first 16 hex of its sha256, and how many native
+ * sessions its project folder holds (a kept fork successor would add one).
+ */
+async function nativeSession(sessionId: string | undefined) {
   const projects = path.join(os.homedir(), ".claude", "projects");
-  for (const project of await fs.readdir(projects).catch(() => [])) {
-    const file = path.join(projects, project, `${sessionId}.jsonl`);
-    const bytes = await fs.readFile(file).catch(() => undefined);
+  for (const project of sessionId ? await fs.readdir(projects).catch(() => []) : []) {
+    const dir = path.join(projects, project);
+    const bytes = await fs.readFile(path.join(dir, `${sessionId}.jsonl`)).catch(() => undefined);
     if (bytes) {
-      return createHash("sha256").update(bytes).digest("hex").slice(0, 16);
+      const files = (await fs.readdir(dir)).filter((name) => name.endsWith(".jsonl")).length;
+      return { sha: createHash("sha256").update(bytes).digest("hex").slice(0, 16), files };
     }
   }
-  return "missing";
+  return { sha: "missing", files: 0 };
 }
 
 describeLive("gateway live (plugin forks on a CLI session)", () => {
@@ -207,7 +208,7 @@ describeLive("gateway live (plugin forks on a CLI session)", () => {
               .digest("hex")
               .slice(0, 16),
             native,
-            nativeSha: await nativeSessionSha(native),
+            nativeTranscript: await nativeSession(native),
           };
         };
         const before = await readSource();
@@ -267,7 +268,12 @@ describeLive("gateway live (plugin forks on a CLI session)", () => {
         proof("source transcript unchanged", before.historySha === after.historySha);
         proof(
           "source native session and binding unchanged",
-          before.native === after.native && before.nativeSha === after.nativeSha,
+          before.native === after.native &&
+            before.nativeTranscript.sha === after.nativeTranscript.sha,
+        );
+        proof(
+          "no fork session kept on disk",
+          before.nativeTranscript.files === after.nativeTranscript.files,
         );
 
         expect(JSON.stringify(forkA)).toContain("PELICAN-42");
