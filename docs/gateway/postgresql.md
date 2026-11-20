@@ -548,8 +548,10 @@ state directory for each Gateway. Each database may use the default
 Alternatively, independent installations can share a database with distinct
 prefixes such as `installation_a` and `installation_b`. Prefixes contain 1–27
 lowercase letters, digits, or underscores, beginning with a letter or underscore.
-New schemas have the shape `<prefix>_<store>_<uuid-prefix>`. Existing anchors keep
-their recorded namespace when the configured prefix changes.
+New schemas have the shape `<prefix>_<store>_<uuid-prefix>`. PostgreSQL reserves
+schema names starting with `pg_`, so OpenClaw rejects the prefix `pg` and prefixes
+starting with `pg_`. Existing anchors keep their recorded namespace when the
+configured prefix changes.
 
 A prefix is a naming convention, not an access-control boundary. Use separate
 roles and appropriate schema permissions if sharing a database. Extensions in
@@ -886,7 +888,9 @@ procedure; there is no automatic discard or migration.
 
 ### Disaster recovery from Git
 
-Prepare explicit Git recovery points while offline, alongside the full archive:
+Prepare explicit Git recovery points alongside the full archive. Capture works
+while the Gateway runs, including scheduled Git backups; each store uses its own
+read-only snapshot, as with archive capture. Restore still requires offline custody:
 
 ```bash
 openclaw backup git init --repository ~/Backups/openclaw-git
@@ -1296,6 +1300,11 @@ transparent replay of every operation. The shared-state worker retires its faile
 connection so a subsequent operation can reopen the store once PostgreSQL is
 available. The interrupted operation is not replayed. Recover server connectivity
 and inspect the operation's recorded result before repeating an external effect.
+State-lease heartbeats can reopen a failed connection and retry once. These
+reads and conditional renewals have no external effects; renewal still requires
+the same current owner and an unexpired row. If reconnection or the retry fails,
+the heartbeat reports lease loss as before.
+
 If another store remains unavailable, restart the Gateway through its service owner.
 
 The 120-second bridge deadline also has an unknown outcome and resets the whole
@@ -1318,7 +1327,13 @@ import: the agent 36 exact-path indexes support indexed lookup even before
 ## Roll back to SQLite
 
 Use the current compatible binary, keep the PostgreSQL secret available, and
-stop all writers. Run a **new reverse port**:
+stop all writers. [Installation ownership](/reference/database-engines#gateway-ownership-in-postgresql)
+requires every configurable family to use PostgreSQL. If you enabled it, set
+`database.postgres.ownership` to `state-directory` or remove the setting before
+porting any family to SQLite. If an earlier port is interrupted,
+[roll it back](#recover-an-interrupted-port) before editing the config.
+
+Run a **new reverse port**:
 
 ```bash
 openclaw database port --to sqlite --dry-run

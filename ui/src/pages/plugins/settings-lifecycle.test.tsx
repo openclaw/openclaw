@@ -119,7 +119,7 @@ it("does not offer enablement or Settings for an uninstalled plugin", () => {
   const { find } = mount({
     result: createResult(createPlugin({ installed: false, state: "not-installed" })),
   });
-  expect(find('[aria-label="Enable Workboard"], [aria-label="Settings"]')).toBeNull();
+  expect(find('[role="switch"][aria-label="Workboard"], [aria-label="Settings"]')).toBeNull();
 });
 
 it("retains inspection retry focus and uses the current error and callback", async () => {
@@ -165,12 +165,8 @@ it.each(["needs-setup", "disconnected"])("does not dispatch enablement when %s",
     expect(container.textContent).toContain("Agent work queue and session handoff.");
     expect(find("[inert]")).toBeNull();
   }
-  const button = find<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
-  expect(
-    disconnected
-      ? button.disabled
-      : button.disabled || button.getAttribute("aria-disabled") === "true",
-  ).toBe(true);
+  const button = find<HTMLInputElement>('[role="switch"][aria-label="Workboard"]')!;
+  expect(button.getAttribute("aria-disabled")).toBe("true");
   button.click();
   expect(props.onSetEnabled).not.toHaveBeenCalled();
 });
