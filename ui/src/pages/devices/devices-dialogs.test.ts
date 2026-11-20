@@ -80,7 +80,7 @@ describe("Devices dialogs editAlias", () => {
     let canManagePairing = true;
     const { pending, submit } = await openAlias(createHost(request, () => canManagePairing));
     canManagePairing = false;
-    expect(await submit("New name")).toContain("only admins");
+    expect(await submit("New name")).toContain("Only admins can manage paired devices");
     expect(request).not.toHaveBeenCalled();
     await pending;
   });

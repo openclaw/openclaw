@@ -486,7 +486,8 @@ function VersionFacts(props: {
 }
 
 function GatewayEntry(props: { entry: PresenceEntry; devices: DevicesProps }) {
-  const name = () => props.entry.host ?? t("devices.execApprovals.gateway");
+  const name = () =>
+    props.devices.gatewayAlias ?? props.entry.host ?? t("devices.execApprovals.gateway");
   const meta = createMemo(() => {
     const info = props.devices.gatewaySystemInfo;
     return [
@@ -515,8 +516,13 @@ function GatewayEntry(props: { entry: PresenceEntry; devices: DevicesProps }) {
       <DeviceEntryActions
         devices={props.devices}
         desktopEnvironment={deviceDesktopEnvironment(props.devices, "gateway")}
+        onEditAlias={props.devices.onGatewayAlias}
+        browserAlias
       />
       <dl class="device-entry__facts">
+        <Show when={props.devices.gatewayAlias && props.entry.host !== name() && props.entry.host}>
+          {(host) => <DeviceFact label={t("devices.inventory.computerName")}>{host()}</DeviceFact>}
+        </Show>
         <HostStats stats={props.devices.gatewaySystemInfo} />
         <VersionFacts modelIdentifier={props.entry.modelIdentifier} version={props.entry.version} />
         <Show when={props.entry.lastInputSeconds != null}>

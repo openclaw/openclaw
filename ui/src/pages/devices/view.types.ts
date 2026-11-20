@@ -30,6 +30,8 @@ export type DevicesProps = Omit<
   gatewayVersion: string | null;
   basePath: string;
   gatewaySystemInfo?: SystemInfoResult | null;
+  gatewayAlias?: string;
+  onGatewayAlias?: () => void;
   desktopEnvironments?: EnvironmentSummary[];
   canPairDevice: boolean;
   canManagePairing: boolean;

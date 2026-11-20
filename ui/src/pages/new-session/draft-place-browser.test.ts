@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { saveGatewayAlias } from "../../app/gateway-alias.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -587,6 +588,27 @@ describe("DraftGatewayState", () => {
     fixture.update();
     expect(fixture.onInvalidate).toHaveBeenLastCalledWith(true, "gateway-changed");
     expect(fixture.browser.projectId).toBe("");
+  });
+
+  it("uses the current Gateway's browser alias without reloading its places", () => {
+    const request = requestFor({});
+    const fixture = createBrowser(request);
+    const connection = fixture.context.gateway.connection;
+    const first = connection.gatewayUrl;
+    const second = "ws://gateway-b.example";
+    const callsBefore = request.mock.calls.length;
+
+    expect(saveGatewayAlias(first, "Work Mac")).toBeNull();
+    expect(fixture.gateway.gatewayName).toBe("Work Mac");
+    expect(saveGatewayAlias(second, "Home Mac")).toBeNull();
+    expect(fixture.gateway.gatewayName).toBe("Work Mac");
+    expect(request).toHaveBeenCalledTimes(callsBefore);
+
+    connection.gatewayUrl = second;
+    fixture.update();
+    expect(fixture.gateway.gatewayName).toBe("Home Mac");
+    expect(saveGatewayAlias(second, "")).toBeNull();
+    expect(fixture.gateway.gatewayName).toBe("");
   });
 
   it("ignores a late name from the replaced client", async () => {

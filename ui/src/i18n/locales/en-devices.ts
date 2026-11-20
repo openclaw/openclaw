@@ -7,14 +7,13 @@ import { en } from "./en.ts";
 const enDevices = {
   devices: {
     readOnly: {
-      browserPairingRequired:
-        "You can view devices, but this browser needs approval to change them.",
-      pairingRequired: "You can view devices, but only admins can change them.",
+      browserPairingRequired: "This browser needs approval to manage paired devices.",
+      pairingRequired: "Only admins can manage paired devices.",
       pairingRequiredTooltip: "Admin access required to manage devices.",
       adminRequired:
         "You can view command approvals and device bindings, but only admins can change them.",
       pairingAndAdminRequired:
-        "You can view devices, command approvals, and device bindings, but only admins can change them.",
+        "Only admins can manage paired devices, command approvals, and device bindings.",
     },
     binding: {
       loadConfigHint: "Load settings to edit bindings.",
@@ -40,6 +39,12 @@ const enDevices = {
       copyDeviceId: "Copy device ID",
       removeAction: "Remove…",
       editAlias: "Edit alias",
+      gatewayAliasTitle: "Name this computer",
+      gatewayAliasHint: "Only shown in this browser. Leave blank to use the computer’s name.",
+      gatewayAliasTooLong: "Use {max} characters or fewer.",
+      gatewayAliasStorageUnavailable:
+        "This browser couldn’t save the name. Check its site storage settings and try again.",
+      computerName: "Computer name",
       lastKnown: "Last known {time}",
       deviceIdLabel: "Device ID",
       remoteIpLabel: "Remote IP",

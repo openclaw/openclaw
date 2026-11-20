@@ -8,6 +8,7 @@ import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../../../../src/gateway/event
 import type { PresenceEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
+import { readGatewayAlias, subscribeGatewayAliases } from "../../app/gateway-alias.ts";
 import {
   hasOperatorAdminAccess,
   hasOperatorPairingAccess,
@@ -87,13 +88,12 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   let execApprovalsTargetNodeId: string | null = null;
   let routeDataInitialized = false;
   let stopGatewayEvents: (() => void) | undefined;
-  let publishData = () => {};
   // Request admission and policy drafts retain their synchronous mutation contract.
   const pageData = projectMutableSource(
     () => dataState,
     (readState) => readState(),
   );
-  publishData = pageData.publish;
+  const publishData = pageData.publish;
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
   const dialogs = createDevicesDialogs({
     canManagePairing: () => gatewayBinding.connected && canManagePairing,
@@ -233,6 +233,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     syncConfigCustody();
     // Config receipts record which connection owns the accepted policy draft.
     const stopConfig = configProjection.subscribe(syncConfigCustody);
+    const stopGatewayAliases = subscribeGatewayAliases(publishData);
     const stopRoute = context.router.subscribe(() => {
       inventoryActions.retire();
       dataState.devicesDeciding = [];
@@ -247,6 +248,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       inventoryActions.retire();
       stopRoute();
       stopConfig();
+      stopGatewayAliases();
       stopGatewayEvents?.();
       dialogs.cancel();
       presenceTask.cancel();
@@ -640,6 +642,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       gatewayVersion: gatewaySnapshot.hello?.server?.version?.trim() || null,
       basePath: context.basePath,
       gatewaySystemInfo: gatewaySystemInfo(),
+      gatewayAlias: readGatewayAlias(context.gateway.connection.gatewayUrl),
+      onGatewayAlias: () => void dialogs.editGatewayAlias(),
       desktopEnvironments: desktopEnvironments(),
       lastError: devices.lastError,
       devicesLoading: devices.devicesLoading,

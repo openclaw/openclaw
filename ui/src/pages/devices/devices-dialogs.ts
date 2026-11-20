@@ -1,5 +1,11 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  GATEWAY_ALIAS_MAX_LENGTH,
+  readGatewayAlias,
+  saveGatewayAlias,
+} from "../../app/gateway-alias.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
+import type { InputDialogOptions } from "../../components/input-dialog.tsx";
 import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
@@ -74,44 +80,73 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     }
     await run();
   }
+  // Both editors share the Devices page's identity-scoped dialog slot.
+  async function openAliasEditor(options: Omit<InputDialogOptions, "signal">): Promise<void> {
+    if (pending) {
+      return;
+    }
+    const controller = new AbortController();
+    pending = controller;
+    try {
+      const { showInputDialog } = await import("../../components/input-dialog.tsx");
+      await showInputDialog({ ...options, signal: controller.signal });
+    } catch (error) {
+      host.setDevicesError(formatUiError(error));
+    } finally {
+      if (pending === controller) {
+        pending = null;
+      }
+    }
+  }
+
   return {
     cancel() {
       pending?.abort();
       pending = null;
     },
-    // Alias edits and destructive confirmations share one identity-scoped slot.
-    async editAlias(device: { id: string; name: string; operatorLabel?: string }): Promise<void> {
-      if (!host.canManagePairing() || pending) {
+    async editGatewayAlias(): Promise<void> {
+      if (!host.gatewayConnected()) {
         return;
       }
-      const controller = new AbortController();
-      pending = controller;
-      try {
-        const { showInputDialog } = await import("../../components/input-dialog.tsx");
-        await showInputDialog({
-          signal: controller.signal,
-          title: t("devices.inventory.renameTitle", { name: device.name }),
-          label: t("devices.inventory.renamePrompt"),
-          defaultValue: device.operatorLabel ?? "",
-          requireValue: true,
-          requireChange: true,
-          canSubmit: host.canManagePairing,
-          submit: (label) => {
-            if (!host.canManagePairing()) {
-              return Promise.resolve(t("devices.readOnly.pairingRequired"));
-            }
-            return host.runPageTask((pageState) =>
-              renameDevice(pageState, { deviceId: device.id, label }),
-            );
-          },
-        });
-      } catch (error) {
-        host.setDevicesError(formatUiError(error));
-      } finally {
-        if (pending === controller) {
-          pending = null;
-        }
+      const gatewayUrl = host.gatewayUrl();
+      return openAliasEditor({
+        title: t("devices.inventory.gatewayAliasTitle"),
+        label: t("devices.inventory.gatewayAliasHint"),
+        defaultValue: readGatewayAlias(gatewayUrl) ?? "",
+        requireChange: true,
+        canSubmit: () => host.gatewayUrl() === gatewayUrl,
+        submit: async (alias) => {
+          const result = saveGatewayAlias(gatewayUrl, alias);
+          if (result === "too-long") {
+            return t("devices.inventory.gatewayAliasTooLong", {
+              max: String(GATEWAY_ALIAS_MAX_LENGTH),
+            });
+          }
+          return result ? t("devices.inventory.gatewayAliasStorageUnavailable") : null;
+        },
+      });
+    },
+    // Alias edits and destructive confirmations share one identity-scoped slot.
+    async editAlias(device: { id: string; name: string; operatorLabel?: string }): Promise<void> {
+      if (!host.canManagePairing()) {
+        return;
       }
+      return openAliasEditor({
+        title: t("devices.inventory.renameTitle", { name: device.name }),
+        label: t("devices.inventory.renamePrompt"),
+        defaultValue: device.operatorLabel ?? "",
+        requireValue: true,
+        requireChange: true,
+        canSubmit: host.canManagePairing,
+        submit: (label) => {
+          if (!host.canManagePairing()) {
+            return Promise.resolve(t("devices.readOnly.pairingRequired"));
+          }
+          return host.runPageTask((pageState) =>
+            renameDevice(pageState, { deviceId: device.id, label }),
+          );
+        },
+      });
     },
     confirmInventoryRemoval(prompt: InventoryRemovalPrompt): Promise<void> {
       return confirmDestructiveAction(

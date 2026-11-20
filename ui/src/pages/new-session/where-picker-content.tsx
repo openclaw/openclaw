@@ -106,6 +106,7 @@ export function WherePickerContent(props: Omit<WhereChipProps, "ref">) {
       t("newSession.local"),
       t("newSession.gatewayHost"),
       props.params.gateway.gatewayName,
+      props.params.gateway.gatewayMachineName,
     );
     const devices = props.state.devices
       .filter((device) =>

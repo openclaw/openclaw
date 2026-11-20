@@ -5,6 +5,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { readGatewayAlias, subscribeGatewayAliases } from "../../app/gateway-alias.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
@@ -67,6 +68,8 @@ export class DraftGatewayState {
   #stopPreferences: (() => void) | undefined;
 
   #gatewayNameValue = "";
+  #gatewayAlias: string | undefined;
+  #stopGatewayAliases: (() => void) | undefined;
   #gatewayNameArgs: readonly unknown[] = [];
   #gatewayNameRequest: AbortController | undefined;
   #cloudProfileArgs: readonly unknown[] = [];
@@ -220,11 +223,15 @@ export class DraftGatewayState {
   }
 
   get gatewayName(): string {
+    return (this.#gatewayConnectedValue ? this.#gatewayAlias : undefined) ?? this.#gatewayNameValue;
+  }
+
+  get gatewayMachineName(): string {
     return this.#gatewayNameValue;
   }
 
   get gatewayNamePending(): boolean {
-    return !this.#gatewayNameValue && this.#gatewayNameRequest !== undefined;
+    return !this.gatewayName && this.#gatewayNameRequest !== undefined;
   }
 
   get cloudProfiles(): readonly DraftCloudProfile[] {
@@ -418,6 +425,13 @@ export class DraftGatewayState {
     this.#gatewayRecoveryScopeValue = recoveryScope;
     this.#gatewayRecoveryScopeReady = snapshot.client?.recoveryScopeReady === true;
     this.#gatewayConnectedValue = connected;
+    if (firstBind || gatewayUrlChanged) {
+      this.#gatewayAlias = readGatewayAlias(this.#gatewayUrlValue);
+    }
+    this.#stopGatewayAliases ??= subscribeGatewayAliases(() => {
+      this.#gatewayAlias = readGatewayAlias(this.#gatewayUrlValue);
+      this.callbacks.changed();
+    });
     if (
       gatewayUrlChanged ||
       gatewayBootChanged ||
@@ -631,6 +645,8 @@ export class DraftGatewayState {
   }
 
   disconnect() {
+    this.#stopGatewayAliases?.();
+    this.#stopGatewayAliases = undefined;
     this.#preferences.disconnect();
     this.#stopPreferences?.();
     this.#stopPreferences = undefined;

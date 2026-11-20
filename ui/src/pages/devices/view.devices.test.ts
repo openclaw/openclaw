@@ -1015,7 +1015,7 @@ describe("devices access gating", () => {
     });
 
     expect(container.querySelectorAll(".callout.info")).toHaveLength(1);
-    expect(container.textContent).toContain("only admins can change them");
+    expect(container.textContent).toContain("Only admins can manage paired devices");
     for (const label of ["Approve", "Reject", "Rotate", "Revoke"]) {
       expect(findButton(container, label).disabled).toBe(true);
     }

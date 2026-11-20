@@ -54,6 +54,7 @@ export function DeviceEntryActions(props: {
   devices: DevicesProps;
   desktopEnvironment?: string;
   onEditAlias?: () => void;
+  browserAlias?: boolean;
   onRemove?: () => void;
 }) {
   const disabled = () =>
@@ -84,8 +85,8 @@ export function DeviceEntryActions(props: {
             <button
               class="btn btn--sm device-entry__alias"
               data-device-action="editAlias"
-              disabled={disabled()}
-              title={deniedTitle()}
+              disabled={props.browserAlias ? !props.devices.connected : disabled()}
+              title={props.browserAlias ? undefined : deniedTitle()}
               onClick={() => onEditAlias()()}
             >
               {t("devices.inventory.editAlias")}

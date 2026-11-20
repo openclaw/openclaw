@@ -525,7 +525,9 @@ describe("DevicesPage gateway lifecycle", () => {
       });
       fixture.emitEvent("device.pair.changed", {});
       expect(page.container.textContent).toContain(
-        roleAllowsAdmin === true ? "this browser needs approval" : "only admins can change them",
+        roleAllowsAdmin === true
+          ? "This browser needs approval"
+          : "Only admins can manage paired devices",
       );
       await Promise.resolve();
       flush();
