@@ -1,4 +1,4 @@
-1477
+1478
 # Issue #201526 part D: invitation-only permission ceilings and approval raiser
 # boundaries across real Gateway RPC, pending/terminal events and all approval kinds.
 # The role/membership compatibility matrix preserves main for creator/admin,
@@ -14,3 +14,4 @@
 # profile metadata and excluded-writer reset completion after adopted cleanup.
 # The restored device-ownership case lives in a coherent sibling test to satisfy
 # the line-cap ratchet; its imports/default config setup add 15 net test lines.
+# One additional line preserves real lookup exports in the lazy approval fixture.
