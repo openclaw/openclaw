@@ -40,8 +40,9 @@ describe.each(["host", "sandbox"] as const)("%s append", (backend) => {
   const saved =
     "# Daily notes\n\n- Project Alder uses port 7319.\n\n## Deployment\nUse staging first.\n\n---\n";
   const added = "- Project Birch uses port 8421.\n";
-  const backendTool = () =>
+  const backendTool = (options: Parameters<typeof wrap>[0] = {}) =>
     wrap({
+      ...options,
       sandbox:
         backend === "sandbox" ? { root, bridge: createHostSandboxFsBridge(root) } : undefined,
     });
@@ -68,6 +69,30 @@ describe.each(["host", "sandbox"] as const)("%s append", (backend) => {
     await write(tool, content);
     expect(await read()).toBe(saved + content);
   });
+
+  it.each(["\r\n", "\r"])(
+    "preserves a leading %j separator and exact novel Markdown bytes",
+    async (lineEnding) => {
+      const existing = "Saved note without a final newline.";
+      const content = `${lineEnding}  - New 🪴 note with a hard break.  ${lineEnding}`;
+      const expected = existing + content;
+      await seed(existing);
+      let provenanceContent: string | undefined;
+      const tool = backendTool({
+        memoryWriteProvenance: {
+          classifies: async () => true,
+          write: async ({ contentAfter, commit }) => {
+            provenanceContent = contentAfter;
+            await commit();
+          },
+          clearAfterDelete: async () => {},
+        },
+      });
+      await write(tool, content);
+      expect(await read()).toBe(expected);
+      expect(provenanceContent).toBe(expected);
+    },
+  );
 });
 
 it("rechecks source authority after provenance work before appending", async () => {
