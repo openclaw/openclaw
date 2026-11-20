@@ -118,6 +118,52 @@ export function registerWaitingStatusCases({
     expect(result).toBeUndefined();
   });
 
+  it("retains channel-visible progress when yielding without an explicit acknowledgment", async () => {
+    const text = "I’m checking the implementation and will return with the result.";
+    await mockAcceptedWaitingStatusRun(runEmbeddedAgentMock, {
+      payloads: [],
+      meta: { durationMs: 0, yielded: true },
+    });
+    const { run } = createMinimalRun({ opts: { getVisibleProgressText: () => text } });
+
+    const result = await run();
+
+    expect(result).toMatchObject({ text, replyToId: "msg" });
+    assert(result && !Array.isArray(result));
+    expect(getReplyPayloadMetadata(result)?.progressContinuation).toBeDefined();
+  });
+
+  it.each([
+    { label: "deliberate silence", silent: true },
+    { label: "background room event", roomEvent: true },
+    { label: "empty preview", text: "" },
+  ])("does not turn $label into a visible waiting reply", async (testCase) => {
+    await mockAcceptedWaitingStatusRun(runEmbeddedAgentMock, {
+      payloads: [],
+      meta: {
+        durationMs: 0,
+        yielded: true,
+        ...(testCase.silent ? { terminalReply: { disposition: "silent" as const } } : {}),
+      },
+    });
+    const { run } = createMinimalRun({
+      currentInboundEventKind: testCase.roomEvent ? "room_event" : undefined,
+      opts: { getVisibleProgressText: () => testCase.text ?? "Checking the implementation." },
+    });
+    expect(await run()).toBeUndefined();
+  });
+
+  it("uses one explicit acknowledgment instead of replaying the visible preview", async () => {
+    await mockAcceptedWaitingStatusRun(runEmbeddedAgentMock, {
+      payloads: [],
+      meta: { durationMs: 0, yielded: true, yieldAcknowledgment: "The review is underway." },
+    });
+    const { run } = createMinimalRun({
+      opts: { getVisibleProgressText: () => "Checking the implementation." },
+    });
+    expect(await run()).toMatchObject({ text: "The review is underway.", replyToId: "msg" });
+  });
+
   it.each([
     {
       label: "implicit continuation",

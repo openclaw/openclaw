@@ -416,6 +416,7 @@ async function dispatchSlackMessageWithSetup(
         progressPreambleEnabled:
           progress.progressDraftActive && slackStreaming.mode === "progress" ? true : undefined,
         commentaryPayloadsEnabled: progress.commentaryProgressEnabled ? true : undefined,
+        getVisibleProgressText: () => progress.getVisibleProgressText(),
         shouldDeliverCommentaryPayloads: progress.commentaryProgressEnabled
           ? () => turnCommentaryVisible
           : undefined,

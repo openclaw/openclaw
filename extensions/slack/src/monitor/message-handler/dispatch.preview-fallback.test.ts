@@ -890,6 +890,22 @@ it.each(["final", "block"] as const)("settles Block Kit work links after %s", as
   expectNoCalls(draftStream.clear, startSlackStreamMock);
 });
 
+it("retains a native card preamble without commentary narration or an explicit acknowledgment", async () => {
+  useDraftStream();
+  const text = "Checking **bold** labels & inline code with delegated reviewers.";
+  await dispatchNativeProgressScenario(
+    [
+      preamble(text, "yield-ack", "end"),
+      toolStart({ command: "inspect" }),
+      checkpoint(async () => {
+        expect(await capturedReplyOptions?.getVisibleProgressText?.()).toBe(text);
+      }),
+    ],
+    { finalPayload: null },
+  );
+  expect(JSON.stringify(nativeChunks(startSlackStreamMock.mock.calls))).toContain("Checking");
+});
+
 it("completes native sources with one visible work session before final text", async () => {
   const draft = useDraftStream();
   const session = workSession(1, "Review");

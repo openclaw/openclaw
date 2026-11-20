@@ -134,8 +134,10 @@ export function createDiscordDraftPreviewController(params: {
       if (options?.flush) {
         await draftStream.flush();
       }
-      // REST-backed draft work is pending until Discord returns a message id.
-      return Boolean(draftStream.messageId());
+      // A previous message id does not confirm this queued replacement.
+      return Boolean(
+        draftStream.messageId() && draftStream.lastDeliveredText() === previewText.trimEnd(),
+      );
     },
     deleteCurrent: async () => {
       lastPartialText = "";
@@ -239,6 +241,18 @@ export function createDiscordDraftPreviewController(params: {
     },
     get isProgressDraftVisible() {
       return progressDraft.isVisible;
+    },
+    async getVisibleProgressText() {
+      if (!draftStream || lifecycle.previewFinalized) {
+        return undefined;
+      }
+      if (discordStreamMode === "progress") {
+        return await progressDraft.getVisibleAuthoredText();
+      }
+      await flush();
+      return draftStream.messageId() && hasStreamedAssistantText
+        ? draftStream.lastDeliveredText()
+        : undefined;
     },
     setProgressNarratorLifecycle(narratorLifecycle: {
       beginTurn: () => void;

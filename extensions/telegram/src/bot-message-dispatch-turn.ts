@@ -293,6 +293,18 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             commentaryProgressEnabled:
               turn.streamMode === "progress" ? turn.commentaryProgressEnabled : undefined,
             progressPreambleEnabled: turn.progressPreambleEnabled,
+            getVisibleProgressText: async () => {
+              await turn.draftEventQueue;
+              const stream = turn.answerLane.stream;
+              if (!stream || turn.answerLane.finalized) {
+                return undefined;
+              }
+              if (turn.streamMode === "progress") {
+                return await turn.progressCompositor.getVisibleAuthoredText();
+              }
+              await stream.flush();
+              return stream.lastDeliveredText() || undefined;
+            },
             commentaryPayloadsEnabled: turn.progressPreambleEnabled,
             // The progress draft is the only commentary owner and retires before
             // the clean final. A durable copy would restore the queue burst this

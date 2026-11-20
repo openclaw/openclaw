@@ -161,6 +161,7 @@ function assertAuthority(message: string, isOpen = () => false) {
 async function deliverWaitingReply(
   harness: Harness,
   adopt: NonNullable<ReplyDispatchRuntimeInfo["adoptProgressDraft"]>,
+  text = "Waiting for delegated work.",
 ) {
   const { controller, rest } = harness;
   const onError = vi.fn();
@@ -192,7 +193,7 @@ async function deliverWaitingReply(
   });
   dispatcher.sendFinalReply(
     setReplyPayloadMetadata(
-      { text: "Waiting for delegated work." },
+      { text },
       {
         continuationStatus: true,
         progressContinuation: { adopt, close: () => {} },
@@ -226,6 +227,77 @@ function pushTool(
 }
 
 describe("Discord draft preview REST lifecycle", () => {
+  it.each([
+    { narration: false, text: "Checking the implementation with delegated reviewers." },
+    { narration: true, text: "Checking the implementation with delegated reviewers." },
+    { narration: false, text: "Checking the implementation. ".repeat(14).trimEnd() },
+  ])(
+    "retains the visible preamble after delayed startup without explicit acknowledgment (narration=$narration)",
+    async ({ narration, text }) => {
+      const harness = createContinuationHarness({
+        discordConfig: { streaming: { mode: "progress", progress: { narration } } },
+      });
+      const { controller, visible, requests } = harness;
+      await controller.pushItemEvent({
+        kind: "preamble",
+        itemId: "ack",
+        phase: "end",
+        progressText: text,
+      });
+      expect(await controller.getVisibleProgressText()).toBeUndefined();
+      await pushTool(controller, "sessions_spawn", "spawn");
+      await advancePreview(controller);
+      expect(await controller.getVisibleProgressText()).toBe(text);
+      await deliverWaitingReply(harness, harness.adopt, await controller.getVisibleProgressText());
+      await controller.cleanup();
+      expectCard(visible, [text.slice(0, 100)]);
+      expect(requests.filter((method) => method === "POST")).toHaveLength(1);
+      harness.draft.retire();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(visible.size).toBe(0);
+    },
+  );
+
+  it("preserves the confirmed acknowledgment when its replacement edit fails", async () => {
+    const harness = createContinuationHarness();
+    const { controller, visible, failures } = harness;
+    await stageDelegation(controller);
+    await advancePreview(controller);
+    const text = await controller.getVisibleProgressText();
+    expect(text).toBe("Checking the implementation with delegated reviewers.");
+    failures.edit = true;
+    await controller.pushItemEvent({
+      kind: "preamble",
+      itemId: "replacement",
+      phase: "end",
+      progressText: "New unconfirmed acknowledgment.",
+    });
+    await advancePreview(controller);
+    expect(await controller.getVisibleProgressText()).toBe(text);
+    await deliverWaitingReply(harness, harness.adopt, text);
+    await controller.cleanup();
+    expectCard(visible, [text!], ["New unconfirmed acknowledgment."]);
+  });
+
+  it("never offers suppressed reasoning as a yielded acknowledgment", async () => {
+    const { controller, visible } = createContinuationHarness({ mode: "partial" });
+    controller.updateFromPartial("Reasoning:\nPrivate planning");
+    await advancePreview(controller);
+    expect(await controller.getVisibleProgressText()).toBeUndefined();
+    expect(visible.size).toBe(0);
+    controller.updateFromPartial("Public progress: checking the implementation.");
+    await advancePreview(controller);
+    expect(await controller.getVisibleProgressText()).toBe(
+      "Public progress: checking the implementation.",
+    );
+    controller.updateFromPartial("Reasoning:\nLater private planning");
+    expect(await controller.getVisibleProgressText()).toBe(
+      "Public progress: checking the implementation.",
+    );
+    await controller.cleanup();
+    expect(visible.size).toBe(0);
+  });
+
   it("keeps ambient room events private even with default progress", async () => {
     const { controller, visible } = createContinuationHarness({
       discordConfig: {},
