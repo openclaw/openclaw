@@ -382,7 +382,8 @@ export function flattenReleaseDocs(sourceText, source, { version } = {}) {
     }
     const title = /^(#{1,6})(\s+.*)$/.exec(text);
     if (title) {
-      heading = Math.min(6, title[1].length + 2);
+      const accordion = stack.findLast((entry) => entry.name === "Accordion");
+      heading = Math.min(6, Math.max(title[1].length + 2, (accordion?.heading ?? 0) + 2));
       text = `${"#".repeat(heading)}${title[2]}`;
     }
     const entry = stack.at(-1);
