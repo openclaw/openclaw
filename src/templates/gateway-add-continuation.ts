@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import type { StatelessTemplateAddOptions } from "./add-stateless.js";
+import type { StatelessTemplateAddOptions } from "./add-stateless-contract.js";
 import type { ClawHubCoordinate } from "./clawhub-source.js";
 import type { ChatTemplateAddInput, PreparedAgentChat } from "./gateway-add-input.js";
 

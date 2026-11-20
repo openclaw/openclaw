@@ -82,22 +82,22 @@ function TemplateCard(
     <article class="agents-home__template-card oc-card" data-templates-entry>
       <button
         type="button"
-        class="agents-home__template-card-link"
+        class="plugin-catalog-card__primary-link agents-home__template-card-link"
         aria-label={`${t("templatesCatalog.review")} ${props.entry.displayName}`}
         disabled={!props.entry.latestVersion}
         onClick={() => props.onSelect?.(props.entry)}
       />
-      <div class="agents-home__template-head">
-        <span class="agents-home__template-art" aria-hidden="true">
+      <header class="installed-plugins-card__head agents-home__template-head">
+        <span class="template-art agents-home__template-art" aria-hidden="true">
           <TemplateArtwork src={props.entry.iconUrl} />
         </span>
-        <div class="agents-home__template-content">
-          <div class="agents-home__template-identity">
+        <div class="plugin-catalog-card__content">
+          <div class="plugin-card-title-row agents-home__template-identity">
             <h3>{props.entry.displayName}</h3>
-            <span>{`@${props.entry.ownerHandle}`}</span>
+            <span class="plugin-card-author">{`@${props.entry.ownerHandle}`}</span>
           </div>
           {/* Reserve both lines even when a Template has no summary. */}
-          <p class="agents-home__template-summary">{props.entry.summary}</p>
+          <p class="installed-plugins-card__summary">{props.entry.summary}</p>
         </div>
         <button
           type="button"
@@ -119,7 +119,7 @@ function TemplateCard(
               : "templatesCatalog.add",
           )}
         </button>
-      </div>
+      </header>
       <Show when={props.addFailure?.entry.packageName === props.entry.packageName}>
         <p class="agents-home__template-error" role="alert">
           {props.addFailure?.message}
@@ -158,14 +158,16 @@ function TemplateCatalogSkeleton(props: { overview: boolean }) {
               <Repeat count={props.overview ? SECTION_SIZE : FIRST_SCREEN_SIZE}>
                 {() => (
                   <div class="agents-home__template-card oc-card" data-templates-placeholder>
-                    <div class="agents-home__template-head">
-                      <span class="agents-home__template-art" />
-                      <div class="agents-home__template-content">
-                        <div class="agents-home__template-identity">
+                    <header class="installed-plugins-card__head agents-home__template-head">
+                      <span class="template-art agents-home__template-art" />
+                      <div class="plugin-catalog-card__content">
+                        <div class="plugin-card-title-row agents-home__template-identity">
                           <h3 style={placeholderBar("70%")}>{"\u00a0"}</h3>
-                          <span style={placeholderBar("40%")}>{"\u00a0"}</span>
+                          <span class="plugin-card-author" style={placeholderBar("40%")}>
+                            {"\u00a0"}
+                          </span>
                         </div>
-                        <p class="agents-home__template-summary">
+                        <p class="installed-plugins-card__summary">
                           <span style={{ display: "block", ...placeholderBar("100%") }}>
                             {"\u00a0"}
                           </span>
@@ -174,7 +176,7 @@ function TemplateCatalogSkeleton(props: { overview: boolean }) {
                           </span>
                         </p>
                       </div>
-                    </div>
+                    </header>
                   </div>
                 )}
               </Repeat>
@@ -407,7 +409,7 @@ export function TemplatesExplore(
                             result().sections.length === 0
                           }
                         >
-                          <p class="agents-home__template-empty">
+                          <p class="muted agents-home__template-empty">
                             {t(
                               view.query.trim() || view.category
                                 ? "templatesCatalog.empty"

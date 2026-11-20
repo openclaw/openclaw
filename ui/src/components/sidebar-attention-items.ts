@@ -1,4 +1,4 @@
-import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
+import type { CronCompactJob, CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { isCronJobActiveFailure, isCronJobRunning } from "../lib/cron-status.ts";
@@ -24,6 +24,23 @@ export type CronAttentionJob = Pick<
     "lastRunStatus" | "lastStatus" | "lastRunAtMs" | "nextRunAtMs" | "runningAtMs" | "autoDisabled"
   >;
 };
+
+export function compactCronAttentionJob(job: CronCompactJob): CronAttentionJob {
+  return {
+    id: job.id,
+    name: job.name,
+    agentId: job.agentId,
+    enabled: job.enabled,
+    updatedAtMs: job.updatedAtMs,
+    state: {
+      nextRunAtMs: job.nextRunAtMs ?? undefined,
+      lastRunAtMs: job.lastRunAtMs ?? undefined,
+      lastRunStatus: job.lastRunStatus ?? undefined,
+      runningAtMs: job.runningAtMs,
+      autoDisabled: job.autoDisabled,
+    },
+  };
+}
 
 export function cronOverdueAt(job: CronAttentionJob, schedulerEnabled: boolean | null): number {
   return schedulerEnabled !== false &&
