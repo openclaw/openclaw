@@ -27,7 +27,10 @@ import {
 import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-compaction-runtime.test-support.ts";
 import { agentProcessTestEntrypoints } from "../../src/agents/process-runtime.test-support.ts";
 import { sdkStateOwnerFixtureEntrypoint } from "../../src/agents/sandbox/sdk-state-owner-runtime.test-support.ts";
-import { managedWorktreeGcEntrypoint } from "../../src/agents/worktrees/service-gc-runtime.test-support.ts";
+import {
+  managedWorktreeGcEntrypoint,
+  managedWorktreeRemovalEntrypoint,
+} from "../../src/agents/worktrees/service-gc-runtime.test-support.ts";
 import {
   adminStateOwnerFixtureEntrypoint,
   cliMessageExitEntrypoints,
@@ -361,6 +364,7 @@ export const vitestWorkerBuildEntries = {
     codeModeDescriptionRetentionEntrypoint,
     ...cliCompactionBackendEntrypoints,
     managedWorktreeGcEntrypoint,
+    managedWorktreeRemovalEntrypoint,
     ...publishedSdkBridgeEntrypoints,
     mcpProviderCatalogEntrypoint,
     mcpPluginToolsServeEntrypoint,
