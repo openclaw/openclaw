@@ -265,7 +265,6 @@ it.for<Revocation>(["none", "requester reset", "explicit stop", "model error"])(
         } else if (revocation === "explicit stop") {
           await gateway.client.request("sessions.abort", {
             key: runner.childSessionKey,
-            userInitiated: true,
           });
         }
       };
@@ -291,7 +290,7 @@ it.for<Revocation>(["none", "requester reset", "explicit stop", "model error"])(
           return rows.every(
             (row) =>
               row?.delivery?.requesterDelivery?.state === "waiting" &&
-              row.delivery.requesterDelivery.blockingRunId,
+              row.delivery.requesterDelivery.runId === settleRun.runId,
           )
             ? rows[0]
             : undefined;
