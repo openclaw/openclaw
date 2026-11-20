@@ -487,13 +487,9 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
     assertCurrent: () => void,
   ) => Promise<void>;
 }): Promise<MigrationMessages> {
-  const stateDir = resolveStateDir(params.env);
-  const input: PluginDoctorInput = {
-    config: params.config,
-    env: params.env,
-    stateDir,
-    oauthDir: resolveOAuthDir(params.env, stateDir),
-  };
+  const { config, env } = params;
+  const stateDir = resolveStateDir(env);
+  const input = { config, env, stateDir, oauthDir: resolveOAuthDir(env, stateDir) };
   const inspectDisabled = Boolean(params.inspectPluginIds && params.inspectDisabled);
   const run = async (
     repairAuthority?: PluginDoctorRepairAuthority,
@@ -593,7 +589,7 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
     recordDeferredPluginMigrations,
   } = await import("./deferred-plugin-migrations.js");
   maintenance.assertCurrent();
-  const expectedPending = readDeferredPluginMigrations({ env: params.env });
+  let expectedPending = readDeferredPluginMigrations({ env: params.env });
   // Certification resolves deferred obligations and settles retained session sources.
   // A fresh install has neither, so it skips the second detector pass and its stores.
   const certifyCompletion = expectedPending.length > 0 || params.beforeCompletion !== undefined;
@@ -605,6 +601,10 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
   // Gateways older than 2026.11.5 (including 2026.10 extended-stable) record no process
   // namespace, so a lease their failed release or stop left behind ends only at expiry.
   const pluginLeaseOptions = { env: params.env, assertCurrent: () => maintenance.assertCurrent() };
+  const settle = (settlement: Parameters<typeof recordDeferredPluginMigrations>[0]) =>
+    withPluginLifecycleLease(pluginLeaseOptions, () =>
+      recordDeferredPluginMigrations({ ...settlement, env, expectedPending }),
+    );
   try {
     const result = await withAgentDatabaseMaintenanceLease(
       { env: params.env },
@@ -639,20 +639,30 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
           }
         }),
     );
-    if (result.completedPluginIds?.length) {
-      assertCompletionCurrent();
-      await params.beforeCompletion?.(result.completedPluginIds, assertCompletionCurrent);
-      assertCompletionCurrent();
-      await withPluginLifecycleLease(
-        { env: params.env, assertCurrent: () => maintenance.assertCurrent() },
-        async () =>
-          recordDeferredPluginMigrations({
-            env: params.env,
-            pending: [],
-            resolvedPluginIds: result.completedPluginIds,
-            expectedPending,
+    const { completedPluginIds, deferredPluginMigrations } = result;
+    if (deferredPluginMigrations?.length) {
+      const { resolveDeferredPluginMigrationConfigPaths } =
+        await import("../config/deferred-plugin-migration-config.js");
+      for (const migration of deferredPluginMigrations) {
+        Object.assign(
+          migration,
+          resolveDeferredPluginMigrationConfigPaths({
+            config: params.config,
+            pluginId: migration.pluginId,
+            compatibilityMigrationPaths: params.inventory?.records?.find(
+              ({ id }) => id === migration.pluginId,
+            )?.configContracts?.compatibilityMigrationPaths,
           }),
-      );
+        );
+      }
+      // Publish new holds before completion can retire retained session sources.
+      expectedPending = (await settle({ pending: deferredPluginMigrations })) ?? expectedPending;
+    }
+    if (completedPluginIds?.length) {
+      assertCompletionCurrent();
+      await params.beforeCompletion?.(completedPluginIds, assertCompletionCurrent);
+      assertCompletionCurrent();
+      await settle({ pending: [], resolvedPluginIds: completedPluginIds });
     }
     return result;
   } catch (error) {

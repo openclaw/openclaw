@@ -357,6 +357,61 @@ export const stateMigrations = ${JSON.stringify(runtimeIds)}.map((id) => ({
     });
   });
 
+  it("persists a contract failure first discovered in post-session repair and settles it on retry", async () => {
+    const fixture = await makeFixture();
+    fixture.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    const pluginId = "post-session-owner";
+    const pluginRoot = path.join(fixture.root, pluginId);
+    const source = path.join(fixture.stateDir, "pending-plugin-state");
+    writeFixtureFile(source, "retained input");
+    writePlugin(pluginRoot, pluginId, [
+      [
+        "post-session",
+        source,
+        "migrated plugin state",
+        { phase: "after-session-repair", pending: "present", remove: true },
+      ],
+    ]);
+    const cfg = pluginConfig(pluginId, pluginRoot, { enabled: true, config: { retention: true } });
+    writeJson(fixture.configPath, cfg);
+    const contract = path.join(pluginRoot, "doctor-contract-api.cjs");
+    const restored = fs.readFileSync(contract);
+    fs.writeFileSync(contract, `throw new Error(${JSON.stringify(loadFailure)});\n`);
+    const params = {
+      config: cfg,
+      env: fixture.env,
+      maintenanceAuthority: { assertCurrent() {} },
+      plannedActions: [{ pluginId, id: "post-session" }],
+    };
+
+    expect(readDeferredPluginMigrations({ env: fixture.env })).toEqual([]);
+    await expect(runPostSessionPluginDoctorStateRepairs(params)).resolves.toMatchObject({
+      changes: [],
+      warnings: [expect.stringContaining(loadFailure)],
+      warningDisposition: "recoverable",
+    });
+    expect(readDeferredPluginMigrations({ env: fixture.env })).toEqual([
+      {
+        pluginId,
+        reason: loadFailure,
+        command: "openclaw update repair",
+        requiresStateMigration: true,
+        configPaths: [["plugins", "entries", pluginId, "config"]],
+      },
+    ]);
+    expect(fs.readFileSync(source, "utf8")).toBe("retained input");
+
+    fs.writeFileSync(contract, restored);
+    clearPluginDoctorContractRegistryCache();
+    await expect(runPostSessionPluginDoctorStateRepairs(params)).resolves.toMatchObject({
+      changes: ["migrated plugin state"],
+      completedPluginIds: [pluginId],
+      warnings: [],
+    });
+    expect(fs.existsSync(source)).toBe(false);
+    expect(readDeferredPluginMigrations({ env: fixture.env })).toEqual([]);
+  });
+
   it.each([
     // legacy root, install index, phase, direct entry, old schema, ordinary-only
     [true, true, undefined, false, false, false],
