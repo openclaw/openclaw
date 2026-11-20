@@ -26,8 +26,9 @@ export function resolveEligibleManifestCatalogPlugins(
 }
 
 /**
- * Known manifest inventory for the caller's admitted providers. Captured publications show it
- * until live discovery replaces that provider's rows.
+ * Manifest rows that declare existence for the caller's admitted providers: only static
+ * providers, whose catalog is the list. A runtime or refreshable provider's models come only
+ * from its account listing; its manifest and hosted rows describe, never list.
  */
 export function loadManifestModelProviderConfigs(params: {
   config: OpenClawConfig;
@@ -43,6 +44,7 @@ export function loadManifestModelProviderConfigs(params: {
     },
     config: params.config,
     providerFilters: params.providerIds,
+    selection: "static",
   });
   const rowsByProvider = new Map<string, NormalizedModelCatalogRow[]>();
   for (const row of rows) {
