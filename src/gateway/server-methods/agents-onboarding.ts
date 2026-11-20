@@ -23,6 +23,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { buildAgentOnboardingGreeting } from "../../shared/agent-onboarding.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import { resolveNavigatorLocale } from "../../shared/control-ui-locale.js";
 import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
@@ -46,6 +47,12 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { createSystemAgentGatewayRuntime } from "./system-agent-execution.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+function creationLocale({ params, client }: GatewayRequestHandlerOptions) {
+  return resolveNavigatorLocale(
+    typeof params.locale === "string" ? params.locale : (client?.connect.locale ?? ""),
+  );
+}
 
 export type PreparedAgentOnboarding = {
   expectedConfigHash: string | null;
@@ -193,7 +200,10 @@ export async function completeAgentOnboarding(
                     content: [
                       {
                         type: "text",
-                        text: buildAgentOnboardingGreeting(cfg.agents?.entries?.[agentId]?.name),
+                        text: buildAgentOnboardingGreeting(
+                          cfg.agents?.entries?.[agentId]?.name,
+                          creationLocale(options),
+                        ),
                       },
                     ],
                     stopReason: "stop",
@@ -373,6 +383,7 @@ export async function startAgentOnboardingConversation(
               opening === "template"
                 ? (templateSetupPrompt ?? TEMPLATE_AGENT_OPENING_MESSAGE)
                 : [
+                    `Write the question, role names and descriptions in the user’s selected language (${creationLocale(options)}). Use the wording below for meaning, not as text to repeat verbatim. Continue in that language unless the user indicates otherwise.`,
                     "A short introduction has already been saved in this agent’s conversation. Ask the user in plain text: What role would you like me to take on?",
                     "Offer these four single-agent roles: Chief of staff (coordinates work and priorities), Researcher (finds and summarizes evidence), Writer (turns notes and sources into drafts), and Reviewer (checks work against requirements). Invite the user to describe a different role if they prefer. Do not offer a team. Ask only about the role in this opening turn; do not ask for their goal or mention a later follow-up yet. End the message there and wait for their reply.",
                     "After the user replies, ask one open-ended follow-up that invites a little detail about the specific thing they want to achieve. Tailor it to their answer, but do not provide another list or hard-code the follow-up wording. Then continue normally after they answer.",
