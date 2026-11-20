@@ -173,17 +173,18 @@ export function createGatewayLoadResources(parent: string, memoryLimitBytes?: nu
     const swapMaxBytes = Number(memoryController("memory.swap.max"));
     const peakBytes = Number(memoryController("memory.peak"));
     const events = parseGatewayCounters(memoryController("memory.events"));
+    const { oom, oom_kill: oomKill } = events;
     if (
       maxBytes !== memoryLimitBytes ||
       swapMaxBytes !== 0 ||
       !Number.isSafeInteger(peakBytes) ||
       peakBytes < 0 ||
-      events.oom === undefined ||
-      events.oom_kill === undefined
+      oom === undefined ||
+      oomKill === undefined
     ) {
       throw new Error("Gateway cgroup memory limits or OOM counters could not be verified");
     }
-    return { maxBytes, swapMaxBytes, peakBytes, events };
+    return { maxBytes, swapMaxBytes, peakBytes, events: { ...events, oom, oom_kill: oomKill } };
   };
   try {
     if (memoryLimitBytes !== undefined) {
