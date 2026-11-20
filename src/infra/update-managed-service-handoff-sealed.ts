@@ -30,6 +30,7 @@ import { readUpdateRunRecord } from "./update-run-read.kernel.js";
 routeLogsToStderr();
 registerSealedRuntimeProcessEntrypoints("managedHandoff", import.meta.url);
 
+export { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 export { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 export { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
 export { resolveImmutableSqliteFileUri } from "./node-sqlite.js";
