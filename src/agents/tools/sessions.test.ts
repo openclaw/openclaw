@@ -1,6 +1,7 @@
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -25,6 +26,7 @@ import {
   registerSessionsSendFixedOwnerTests,
   registerSessionsSendMaterializationTests,
 } from "./sessions-send-materialization.test-support.js";
+import { SessionsSendToolSchema } from "./sessions-send-tool.schema.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-exact-session-send-");
 
@@ -383,6 +385,41 @@ describe("sessions_send gating", () => {
       error,
     });
     expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts text as an alias for message, matching the message tool", async () => {
+    const targetSessionKey = "agent:main:other";
+    mockTargetRun(targetSessionKey, "run-text-alias", {});
+    const tool = createMainSessionsSendTool({ config: createAllSessionsConfig() });
+
+    const result = await tool.execute("send-text-alias", {
+      sessionKey: targetSessionKey,
+      text: "hello via text alias",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: "accepted",
+      sessionKey: targetSessionKey,
+    });
+    expect(gatewayParams("agent")).toMatchObject({
+      message: expect.stringContaining("hello via text alias"),
+    });
+  });
+
+  it("accepts a text-alias payload at the schema boundary", () => {
+    expect(
+      Value.Check(SessionsSendToolSchema, {
+        sessionKey: "agent:main:other",
+        text: "hello via text alias",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SessionsSendToolSchema, {
+        sessionKey: "agent:main:other",
+        message: "hi",
+      }),
+    ).toBe(true);
   });
 
   it.each([

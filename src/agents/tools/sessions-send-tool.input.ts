@@ -24,11 +24,14 @@ export function readSessionsSendTarget(params: Record<string, unknown>) {
 }
 
 export function readSessionsSendMessage(params: Record<string, unknown>): string {
-  const message = readToolStringParam(params, "message", { required: true, trim: false });
-  if (!message.trim()) {
+  // The message tool already accepts text as an alias; keep the two tools consistent.
+  const message = readToolStringParam(params, "message", { trim: false });
+  const alias = readToolStringParam(params, "text", { trim: false });
+  const resolved = message?.trim() ? message : alias;
+  if (!resolved || !resolved.trim()) {
     throw new ToolInputError("message required");
   }
-  return message;
+  return resolved;
 }
 
 export function readSessionsSendTimeout(
