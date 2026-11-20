@@ -460,7 +460,8 @@ it("reviews a draft as a diff against the live skill, applies it, and follows th
       return { changes: [] };
     },
   });
-  const page = await mount(request, draftAccess);
+  const context = createContext(request, draftAccess);
+  const page = await mount(context);
   await click(page, "Drafts 1");
   // The selected draft opens its diff in place on the list.
   await waitForSolid(() => {
@@ -480,6 +481,7 @@ it("reviews a draft as a diff against the live skill, applies it, and follows th
     }),
   );
   await waitForSolid(() => {
+    expect(context.router.getState().location.search).toBe(`?skill=${SKILL}`);
     expect(title(page)).toBe(SKILL);
     expect(button(page, "Apply")).toBeNull();
   });
@@ -547,4 +549,65 @@ it.each([
     expect(page.querySelector(".sw-detail")).toBeNull();
     expect(page.textContent).not.toContain("Select a skill to view it.");
   });
+});
+
+it("names the open page in the URL so Back returns to the list and a reload keeps the page", async () => {
+  const draft = draftFor(SKILL);
+  const request = gateway({ list: { ...list, drafts: [draft] }, read: skillRead });
+  const context = createContext(request, draftAccess);
+  const page = await mount(context);
+  await openSkill(page, SKILL);
+  await waitForSolid(() => expect(title(page)).toBe(SKILL));
+  expect(context.navigate).toHaveBeenLastCalledWith("skill-workshop", {
+    search: `?skill=${SKILL}`,
+  });
+
+  // Back: the router drops the query and notifies the page.
+  context.navigate("skill-workshop", { search: "" });
+  await waitForSolid(() => expect(page.querySelector(".sw-detail")).toBeNull());
+  expect(page.querySelector(".sw-library")).not.toBeNull();
+
+  // A reload on a draft page opens that draft again.
+  const reloaded = await mount(
+    createContext(request, { ...draftAccess, search: `?draft=${draft.id}` }),
+  );
+  await waitForSolid(() => expect(summary(reloaded)).toBe(draft.summary));
+});
+
+it("shows the list for a page link whose skill is gone", async () => {
+  const context = createContext(gateway({ read: skillRead }), { search: "?skill=missing-skill" });
+  const page = await mount(context);
+  await waitForSolid(() => expect(page.querySelector(".sw-library")).not.toBeNull());
+  expect(page.querySelector(".sw-detail")).toBeNull();
+  expect(context.replace).toHaveBeenCalledWith("skill-workshop", { search: "" });
+});
+
+it("returns to the list when Back revisits a discarded draft", async () => {
+  const draft = draftFor(SKILL);
+  let drafts = [draft];
+  const context = createContext(
+    gateway({
+      list: () => ({ ...list, drafts }),
+      read: skillRead,
+      discardDraft: () => {
+        drafts = [];
+        return { changes: [] };
+      },
+    }),
+    draftAccess,
+  );
+  const page = await mount(context);
+  await click(page, "Drafts 1");
+  await click(page, "Open draft");
+  await waitForSolid(() => expect(summary(page)).toBe(draft.summary));
+  const draftSearch = context.router.getState().location.search;
+  getByRole<HTMLAnchorElement>(page, "link", { name: "Skill workshop" }).click();
+  await click(page, "Discard");
+  await waitForSolid(() => expect(button(page, "Drafts 0", true)).not.toBeNull());
+  await click(page, "Active 1");
+
+  context.navigate("skill-workshop", { search: draftSearch });
+
+  await waitForSolid(() => expect(context.router.getState().location.search).toBe(""));
+  expect(page.querySelector(".sw-detail")).toBeNull();
 });
