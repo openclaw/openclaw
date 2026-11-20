@@ -37,6 +37,7 @@ import { createLazyProcessTool } from "./lazy-process-tool.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import { relativePathInsideSandboxRoot, resolvePathFromInput } from "./path-policy.js";
 import { buildSandboxFsMounts } from "./sandbox/fs-paths.js";
+import { resolveSandboxHostPathViaExistingAncestor } from "./sandbox/host-paths.js";
 import type { SandboxContext } from "./sandbox/types.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import { createLsTool, type LsOperations } from "./sessions/tools/ls.js";
@@ -266,7 +267,8 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
           sandboxWorkspaceMounts.includes(mount) ||
           (mount.containerRoot === SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT &&
             options.attachmentReadRoot !== undefined &&
-            path.resolve(mount.hostRoot) === path.resolve(options.attachmentReadRoot)),
+            resolveSandboxHostPathViaExistingAncestor(mount.hostRoot) ===
+              resolveSandboxHostPathViaExistingAncestor(options.attachmentReadRoot)),
       )
     : sandboxFileMounts;
 
