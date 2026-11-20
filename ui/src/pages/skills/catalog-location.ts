@@ -1,4 +1,4 @@
-import { createMemo } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -48,21 +48,30 @@ export function createSkillCatalogNavigation(
     (router) => router.getState().location.search,
     Object.is,
   );
-  const catalog = createMemo(() => readSkillCatalogLocation(location.read()));
+  // Navigation seeds the draft (including Back and reload); typing edits it without
+  // running the route loader or replacing the currently focused element.
+  const [catalog, setCatalog] = createSignal(() => readSkillCatalogLocation(location.read()));
+  const updateBrowse = (query: string, section: SkillCatalogSection) => {
+    setCatalog({ query, section, target: null });
+    const url = new URL(window.location.href);
+    // Only replace this catalog's history entry, preserving the agent, hash, and embed state.
+    if (url.pathname.replace(/\/$/u, "") !== pathForRoute("skills", context.basePath)) return;
+    if (query) url.searchParams.set("q", query);
+    else url.searchParams.delete("q");
+    if (section !== "all") url.searchParams.set("section", section);
+    else url.searchParams.delete("section");
+    window.history.replaceState(window.history.state, "", url);
+  };
   const requestedAgent = createMemo(() => new URLSearchParams(location.read()).get("agent"));
   const catalogTarget = createMemo(() => (surface() === "discovery" ? catalog().target : null), {
     equals: (a, b) => a?.kind === b?.kind && a?.key === b?.key,
   });
-  const locationFor = (
-    target?: SkillCatalogTarget,
-    query = catalog().query,
-    section: SkillCatalogSection = catalog().section,
-  ) =>
+  const locationFor = (target?: SkillCatalogTarget) =>
     skillCatalogLocation(
       context.basePath,
       target ? selectedAgent() : requestedAgent(),
-      query,
-      section,
+      catalog().query,
+      catalog().section,
       target,
     );
   const catalogHref = (target?: SkillCatalogTarget) => {
@@ -71,5 +80,5 @@ export function createSkillCatalogNavigation(
   };
   const openCatalogTarget = (target?: SkillCatalogTarget) =>
     context.navigate("skills", locationFor(target));
-  return { catalog, requestedAgent, catalogTarget, locationFor, catalogHref, openCatalogTarget };
+  return { catalog, requestedAgent, catalogTarget, updateBrowse, catalogHref, openCatalogTarget };
 }

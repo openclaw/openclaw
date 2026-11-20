@@ -100,7 +100,7 @@ export function SkillsPage(props: SkillsPageProps) {
     },
   });
   const data = skills.state;
-  const { catalog, requestedAgent, catalogTarget, locationFor, catalogHref, openCatalogTarget } =
+  const { catalog, requestedAgent, catalogTarget, updateBrowse, catalogHref, openCatalogTarget } =
     createSkillCatalogNavigation(context, surface, () => skills.read().skillsAgentId);
   const runtimeConfig = projectOwner(context.runtimeConfig, (owner) => owner.state);
   const verdictCompletion = createMemo(() => skills.read().clawhubVerdictsRead);
@@ -569,9 +569,7 @@ export function SkillsPage(props: SkillsPageProps) {
                 surface={surface()}
                 libraryEntries={library.state.list ? library.entries() : undefined}
                 catalogSection={catalog().section}
-                onCatalogSectionChange={(section) =>
-                  context.replace("skills", locationFor(undefined, "", section))
-                }
+                onCatalogSectionChange={(section) => updateBrowse("", section)}
                 catalogHref={catalogHref}
                 onCatalogOpen={openCatalogTarget}
                 library={
@@ -652,10 +650,7 @@ export function SkillsPage(props: SkillsPageProps) {
                   if (query === catalog().query) {
                     search.retry(query);
                   } else {
-                    context.replace(
-                      "skills",
-                      locationFor(undefined, query, query.trim() ? "all" : catalog().section),
-                    );
+                    updateBrowse(query, query.trim() ? "all" : catalog().section);
                   }
                 }}
                 onClawHubDetailClose={closeDetail}
