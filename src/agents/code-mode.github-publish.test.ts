@@ -19,6 +19,7 @@ afterEach(async () => {
 it.each(["node", "quickjs"] as const)(
   "%s returns a catchable publication timeout instead of an unbounded bridge wait",
   async (executor) => {
+    await import("./session-placement-admission.js");
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const harness = createSubscribedCodeModeHarness({ name: "github-deadline", executor });
     const started = createDeferred();
@@ -44,6 +45,10 @@ it.each(["node", "quickjs"] as const)(
     const surface = applyCodeModeCatalog({
       ...harness,
       tools: [...harness.tools, target],
+      toolHookContext: {
+        runId: harness.runId,
+        watchdogAttempt: harness.replyOperation.watchdog.attachAttempt({ assertCurrent() {} }),
+      },
     });
     const exec = expectDefined(
       surface.tools.find((tool) => tool.name === "exec"),
@@ -67,6 +72,7 @@ it.each(["node", "quickjs"] as const)(
         await parked.promise;
       }
       await vi.advanceTimersByTimeAsync(600_001);
+      expect(harness.replyOperation.abortSignal.reason).toBeUndefined();
       await vi.waitFor(() =>
         expect(result, JSON.stringify(result)).toMatchObject({ status: "completed" }),
       );
