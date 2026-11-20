@@ -15,36 +15,27 @@ import { createPaneHeaderWorkspaceFixture, createTestChatPane } from "../chat-pa
 import type { ChatPageHost } from "../chat-state-host.ts";
 import {
   chatPaneHeaderSessionRow as row,
+  openNativeMenu,
   renderPaneHeaderInto,
   selectNativeMenu,
 } from "./chat-pane-header.test-support.ts";
 import "./chat-header-session-menu.ts";
 
-it("moves into the chosen project with the detected checkout", async () => {
-  installDialogPolyfill();
-  const request = vi.fn<GatewayRequestHandler>(async (method) => {
-    if (method === "projects.moveSessionOptions") {
-      return {
-        available: true,
-        projects: [
-          { id: "project-1", name: "Website", checkouts: [] },
-          {
-            id: "project-2",
-            name: "Billing",
-            checkouts: [{ path: "billing" }],
-          },
-        ],
-      };
-    }
-    return method === "projects.moveSession" ? { status: "pending", projectId: "project-2" } : {};
-  });
+function renderMenu(request: GatewayRequestHandler) {
   const { pane, state } = createTestChatPane({
-    client: createGatewayBrowserClientFixture({ request }),
+    client: createGatewayBrowserClientFixture({
+      request: (method, params) =>
+        method === "sessions.list" ? { sessions: [] } : request(method, params),
+    }),
   });
   state.settings = {} as ChatPageHost["settings"];
   pane.applyGatewaySnapshot({
     ...pane.context.gateway.snapshot,
-    hello: gatewayHelloForMethods([...SESSION_MUTATION_TEST_METHODS, "projects.moveSession"]),
+    hello: gatewayHelloForMethods([
+      ...SESSION_MUTATION_TEST_METHODS,
+      "projects.list",
+      "projects.moveSession",
+    ]),
   });
   const container = document.body.appendChild(document.createElement("div"));
   const header = pane.renderPaneHeader(
@@ -56,16 +47,57 @@ it("moves into the chosen project with the detected checkout", async () => {
     null,
   );
   renderPaneHeaderInto(header, container);
-  const menu = expectDefined(container.querySelector("openclaw-chat-header-session-menu"), "menu");
+  return expectDefined(container.querySelector("openclaw-chat-header-session-menu"), "menu");
+}
+
+const projects = [
+  { id: "project-1", name: "Website", checkouts: [] },
+  { id: "project-2", name: "Billing", checkouts: [{ path: "billing" }] },
+];
+
+it("omits Move when the catalog contains only the agent workspace", async () => {
+  const request = vi.fn<GatewayRequestHandler>(async () => ({
+    projects: [{ id: "workspace:main", source: "workspace" }],
+  }));
+  const menu = renderMenu(request);
+  await openNativeMenu(menu, "submenu:view");
+  expect(request).toHaveBeenCalledWith("projects.list", {});
+  expect(menu.querySelector('button[data-value="quick:move-to-project"]')).toBeNull();
+});
+
+it("moves into the existing project selected in the dropdown with its detected checkout", async () => {
+  installDialogPolyfill();
+  const request = vi.fn<GatewayRequestHandler>(async (method) => {
+    if (method === "projects.list") {
+      return {
+        projects: projects.map(({ id, name }) => ({ id, displayName: name, source: "registered" })),
+      };
+    }
+    if (method === "projects.moveSessionOptions") {
+      return { available: true, projects };
+    }
+    return method === "projects.moveSession" ? { status: "pending", projectId: "project-2" } : {};
+  });
+  const menu = renderMenu(request);
   await selectNativeMenu(menu, "quick:move-to-project");
 
-  const billing = await waitForSolid(() =>
+  const picker = await waitForSolid(() =>
     expectDefined(
-      document.body.querySelector<HTMLInputElement>('input[name="project"][value="project-2"]'),
-      "Billing option",
+      document.body.querySelector<HTMLButtonElement>(
+        '.move-to-project-dialog [aria-haspopup="listbox"]',
+      ),
+      "project dropdown",
     ),
   );
-  billing.click();
+  picker.click();
+  const options = await waitForSolid(() => {
+    const choices = [
+      ...document.querySelectorAll<HTMLElement>('.move-to-project-dialog [role="option"]'),
+    ];
+    expect(choices.map((choice) => choice.textContent?.trim())).toEqual(["Website", "Billing"]);
+    return choices;
+  });
+  options[1]!.click();
   flush();
   expectDefined(
     document.body.querySelector<HTMLFormElement>("openclaw-modal-dialog form"),

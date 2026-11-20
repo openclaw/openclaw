@@ -1,5 +1,6 @@
 import type { ApplicationContext } from "../../app/context-types.ts";
 import type { profileDirectory } from "../profile-directory.ts";
+import type { ProjectCatalog } from "../projects.ts";
 import type { SessionPullRequestSnapshotStore } from "../session-pull-requests.ts";
 import { createSharedOwnerProjection } from "./shared-owner-projection.ts";
 
@@ -11,6 +12,11 @@ export const sharedRuntimeConfigProjection = createSharedOwnerProjection(
     canPatch: config.canPatch,
     canOpenFile: config.canOpenFile,
   }),
+);
+
+export const hasMoveProjects = createSharedOwnerProjection(
+  (catalog: ProjectCatalog) =>
+    catalog.snapshot.result?.projects.some((project) => project.source !== "workspace") ?? false,
 );
 
 export const sharedAgentsProjection = createSharedOwnerProjection(

@@ -322,6 +322,7 @@ export function buildAgentSystemPrompt(params: {
   sandboxInfo?: EmbeddedSandboxInfo;
   /** Whether read/write/edit/apply_patch are restricted to the workspace root. */
   fsWorkspaceOnly?: boolean;
+  sessionProjectGuidance?: string;
   /** Reaction guidance for the agent (for Telegram minimal/extensive modes). */
   reactionGuidance?: {
     level: "minimal" | "extensive";
@@ -499,10 +500,6 @@ export function buildAgentSystemPrompt(params: {
     deferredToolsDirectlyCallable: params.deferredToolsDirectlyCallable,
   });
   params.onRenderedSkillsPrompt?.(renderedSkillsPrompt);
-  const toolGuidanceSection = listToolPromptGuidance(availableTools).flatMap((section) => [
-    section,
-    "",
-  ]);
   const memorySection =
     isMinimal || params.includeMemorySection === false
       ? []
@@ -658,7 +655,8 @@ export function buildAgentSystemPrompt(params: {
       setupIssue: params.openClawSetupIssue,
     }),
     ...skillsSection,
-    ...toolGuidanceSection,
+    ...listToolPromptGuidance(availableTools).flatMap((section) => [section, ""]),
+    params.sessionProjectGuidance && [params.sessionProjectGuidance, ""],
     ...memorySection,
     params.modelAliasLines &&
       params.modelAliasLines.length > 0 &&

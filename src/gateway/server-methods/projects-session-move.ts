@@ -11,7 +11,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { parseProjectGitUrl } from "../../projects/project-git-url.js";
 import type { GatewaySessionAccessAuthority } from "../session-access-authority.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { listSessionProjects, moveSessionIntoProject } from "../session-project-move.js";
+import { isUnboundProjectSession, listSessionProjects } from "../session-project-move-policy.js";
+import { moveSessionIntoProject } from "../session-project-move.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { listCarryCheckouts, type CarrySource } from "../session-workspace-carry.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -45,10 +46,10 @@ async function resolveCarrySource(
     key: sessionKey,
     projection: "full",
   });
-  if (entry?.projectId || entry?.worktree || entry?.repositoryWorkspaceId) {
-    return { reason: "This conversation already has a project." };
-  }
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  if (!entry || !isUnboundProjectSession(entry, workspaceDir)) {
+    return { reason: "Only a conversation in the general workspace can move into a project." };
+  }
   const sandbox = await resolveSandboxContext({
     config: cfg,
     agentId,
@@ -105,7 +106,7 @@ export const projectsSessionMoveHandlers: GatewayRequestHandlers = {
       }
       using carrySource = resolved;
       const [projects, checkouts] = await Promise.all([
-        listSessionProjects(context, requester(client)),
+        listSessionProjects(context.getRuntimeConfig(), requester(client)),
         listCarryCheckouts(carrySource.source, signal),
       ]);
       target.assertCurrent();

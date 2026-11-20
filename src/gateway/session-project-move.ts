@@ -1,61 +1,21 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
-import { listProjectRegistry } from "../projects/project-registry.js";
-import {
-  filterProjectsForRequester,
-  hasFullProjectAccess,
-  resolveRequesterProject,
-  type ProjectRequester,
-} from "./project-access.js";
+import { resolveRequesterProject } from "./project-access.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import { prepareSessionWorkspaceForRun } from "./server-methods/session-create-project.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionFileWorkspace } from "./session-file-workspace.js";
+import {
+  canChooseSessionProject,
+  isUnboundProjectSession,
+  projectRequester,
+  type SessionProjectRequester,
+} from "./session-project-move-policy.js";
 import { resolveSessionProjectRootForRecord } from "./session-project-source.js";
-import { isSessionOwnRequester } from "./session-sharing-policy.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { describeSessionWorkspaceBlocker } from "./session-work-blocker.js";
 import { deleteCarryRef, importCarriedWork, type CarrySource } from "./session-workspace-carry.js";
-
-/** Who asks: the operator driving the run, or the Gateway itself for owner runs. */
-type SessionProjectRequester =
-  | { profileId: string | undefined; scopes: readonly string[] }
-  | undefined;
-
-function projectRequester(requester: SessionProjectRequester): ProjectRequester {
-  return requester ? { kind: "operator", scopes: requester.scopes } : { kind: "internal" };
-}
-
-/** Registered projects this requester may move a conversation into. */
-export async function listSessionProjects(
-  context: GatewayRequestContext,
-  requester: SessionProjectRequester,
-) {
-  const cfg = context.getRuntimeConfig();
-  // An unbound conversation already works in its agent workspace.
-  const registered = (await listProjectRegistry(cfg)).filter(
-    (project) => project.source !== "workspace",
-  );
-  const projects = await filterProjectsForRequester(cfg, registered, projectRequester(requester));
-  return projects.map(({ id, displayName, originUrl }) =>
-    originUrl ? { id, name: displayName, originUrl } : { id, name: displayName },
-  );
-}
-
-function isUnbound(entry: Partial<InternalSessionEntry>, workspaceDir: string) {
-  return !(
-    entry.worktree ||
-    entry.repositoryWorkspaceId ||
-    entry.projectId ||
-    entry.deviceFolder ||
-    entry.execNode ||
-    entry.pendingWorktree ||
-    entry.pendingProjectGitUrl ||
-    (entry.sessionRoot !== undefined && entry.sessionRoot !== workspaceDir)
-  );
-}
 
 /**
  * Record a project and a pending checkout on a conversation that has neither. The
@@ -92,7 +52,7 @@ export async function moveSessionIntoProject(params: {
     storePath: loaded.storePath,
   };
   const workspaceDir = resolveAgentWorkspaceDir(cfg, target.agentId);
-  if (!isUnbound(entry, workspaceDir)) {
+  if (!isUnboundProjectSession(entry, workspaceDir)) {
     // A retried move of the same conversation returns its recorded intent.
     if (
       entry.projectId === params.projectId &&
@@ -105,15 +65,7 @@ export async function moveSessionIntoProject(params: {
     );
   }
   const access = projectRequester(requester);
-  if (
-    requester &&
-    !hasFullProjectAccess(access) &&
-    !isSessionOwnRequester(
-      { cfg, client: null },
-      { canonicalKey: loaded.canonicalKey, entry },
-      requester.profileId,
-    )
-  ) {
+  if (!canChooseSessionProject(cfg, loaded.canonicalKey, entry, requester)) {
     throw new Error(
       "Only the person who started this conversation, or someone with full operator write permission, can move it into a project.",
     );
@@ -168,7 +120,7 @@ export async function moveSessionIntoProject(params: {
     target,
     (current) => {
       assertCurrent();
-      if (!isUnbound(current, workspaceDir)) {
+      if (!isUnboundProjectSession(current, workspaceDir)) {
         throw new Error("This conversation already has a project or workspace; nothing was moved.");
       }
       oldFiles.assertCurrent(context.getRuntimeConfig(), current);

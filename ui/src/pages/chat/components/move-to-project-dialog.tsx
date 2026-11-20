@@ -1,13 +1,13 @@
-import { createMemo, createSignal, Errored, For, Loading, Show } from "solid-js";
+import { createMemo, createSignal, Errored, Loading, Show } from "solid-js";
 import type {
   ProjectsMoveSessionOptionsResult,
   ProjectsMoveSessionResult,
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
+import { Picker } from "../../../components/select-picker.ts";
 import { DialogHeader } from "../../../components/solid/dialog-header.tsx";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
-import { Radio } from "../../../components/solid/radio.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -130,7 +130,7 @@ function renderMoveToProjectDialog(
               fallback={
                 <>
                   <div class="oc-dialog__body">
-                    <p>{options().reason}</p>
+                    <p>{options().reason ?? t("chat.sessionHeader.moveToProject.noProjects")}</p>
                   </div>
                   <openclaw-modal-actions class="oc-dialog__footer">
                     <button type="button" class="btn primary" onClick={close}>
@@ -141,25 +141,19 @@ function renderMoveToProjectDialog(
               }
             >
               <div class="oc-dialog__body">
-                <fieldset disabled={moving()} aria-label={title}>
-                  <For each={options().projects} keyed={(entry) => entry.id}>
-                    {(entry) => (
-                      <Radio
-                        name="project"
-                        value={entry().id}
-                        checked={project()?.id === entry().id}
-                        onChange={() => setProjectChoice(entry().id)}
-                      >
-                        <span>
-                          {entry().name}
-                          <Show when={entry().originUrl}>
-                            {(origin) => <span class="muted"> · {origin()}</span>}
-                          </Show>
-                        </span>
-                      </Radio>
-                    )}
-                  </For>
-                </fieldset>
+                <Picker
+                  params={{
+                    label: title,
+                    disabled: moving(),
+                    value: project()?.id ?? null,
+                    options: options().projects.map(({ id, name, originUrl }) => ({
+                      value: id,
+                      label: name,
+                      description: originUrl,
+                    })),
+                    onChange: setProjectChoice,
+                  }}
+                />
                 <Show when={moving()}>
                   <p role="status">{t("chat.sessionHeader.moveToProject.moving")}</p>
                 </Show>

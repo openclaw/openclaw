@@ -70,10 +70,12 @@ export function createSessionProjectTool(options: {
       if (!options.senderIsOwner && !currentRequester()) {
         throw new ToolInputError("Only the owner can move this conversation into a project.");
       }
-      const { listSessionProjects, moveSessionIntoProject, openMovedSession } =
-        await import("../../gateway/session-project-move.js");
       if (input.action === "list") {
-        return jsonResult({ projects: await listSessionProjects(context, currentRequester()) });
+        const { listSessionProjects } =
+          await import("../../gateway/session-project-move-policy.js");
+        return jsonResult({
+          projects: await listSessionProjects(context.getRuntimeConfig(), currentRequester()),
+        });
       }
       const { projectId } = input;
       const { sessionId } = options;
@@ -85,6 +87,8 @@ export function createSessionProjectTool(options: {
         agentId: caller.agentId,
         sessionKey: caller.sessionKey,
       };
+      const { moveSessionIntoProject, openMovedSession } =
+        await import("../../gateway/session-project-move.js");
       const { handoffSessionTool } = await import("./session-tool-handoff.js");
       return handoffSessionTool({
         name: "Project move",

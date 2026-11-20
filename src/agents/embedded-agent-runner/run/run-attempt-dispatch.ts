@@ -295,7 +295,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     params.execOverrides ??= {};
     params.execOverrides.mode = resolveSessionPermissionExecMode({ mode: params.permissionMode });
   }
-  const { extraSystemPrompt, gitCoauthorPrompt } = await prepareAttemptSystemPromptAdditions({
+  const promptAdditions = await prepareAttemptSystemPromptAdditions({
+    entry: runInput.sessionAdmission?.entry,
+    senderIsOwner: params.senderIsOwner,
+    admittedRunContext: params.admittedRunContext,
     agentId: workspaceResolution.agentId,
     authProfileId: runtime.lastProfileId,
     config: params.config,
@@ -399,10 +402,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     operation: "attempt",
     sessionId,
     sessionKey: resolvedSessionKey,
-    toolUsageRankingSeed:
-      runInput.sessionAdmission?.entry.sessionId === sessionId
-        ? runInput.sessionAdmission.entry.toolUsageRankingSeed
-        : undefined,
     memoryAudience,
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
@@ -605,9 +604,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,
     onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
     onExecutionPhase: params.onExecutionPhase,
-    extraSystemPrompt,
+    ...promptAdditions,
     extraSystemPromptTurnContext: params.extraSystemPromptTurnContext,
-    gitCoauthorPrompt,
     preparedTtsPreferences: params.preparedTtsPreferences,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     messageToolFinalByDefault: params.messageToolFinalByDefault,

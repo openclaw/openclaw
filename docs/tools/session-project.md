@@ -13,7 +13,9 @@ the project, so `github_publish` can open a pull request from it. People no
 longer have to pick the project before they start.
 
 The tool is off by default. Existing agents see no new tool and no prompt change
-until you enable it.
+until you enable it. In the general workspace, an agent with this tool and access to
+a registered project is prompted to list projects before coding or when the task fits
+a project.
 
 ## Enable
 
@@ -63,6 +65,10 @@ include it; a wildcard (`"*"`, or the `full` profile) does.
   `projectId`).
 - Running background exec, unfinished children, an open terminal or another run
   of the conversation refuse the move. Nothing is stopped or moved.
+
+In the Control UI, open the conversation menu and choose **Move to project…**.
+Select an existing project from the dropdown, then choose **Move**. The menu
+offers this action only when you have a project to move into.
 
 ## Who can move a conversation
 
