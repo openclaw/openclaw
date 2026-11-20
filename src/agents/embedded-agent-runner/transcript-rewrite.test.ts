@@ -123,9 +123,9 @@ function findAssistant(sessionManager: SessionManager, text: string) {
 describe("rewriteTranscriptEntriesInSessionManager", () => {
   it("shares sealed history during rewrite and detaches only writable SDK exposure", async () => {
     const { directory, target } = await persistedTarget("sealed-rewrite");
-    const seed = SessionManager.open(target, directory);
-    const first = seed.appendMessage(toolResult("read", "unchanged", 1));
-    const last = seed.appendMessage(toolResult("read", "replace", 2));
+    const seed = await SessionManager.openAsync(target, directory);
+    const first = await seed.appendMessageAsync(toolResult("read", "unchanged", 1));
+    const last = await seed.appendMessageAsync(toolResult("read", "replace", 2));
     const manager = await SessionManager.openAsync(target);
     const original = manager[sessionManagerReadTranscriptBranch]()[0];
     if (original?.type !== "message" || original.message.role !== "toolResult") {
