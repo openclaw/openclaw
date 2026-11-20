@@ -7,6 +7,7 @@ import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { reserveSubagentCompletionControllerSource } from "../announce/subagent-announce-controller-source.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
+import { settleConsumedRequesterDelivery } from "../completion/subagent-completion-notice.js";
 import {
   matchesSubagentChildSessionOwner,
   resolveRecordedRequester,
@@ -20,7 +21,6 @@ import {
   isDeliverySuspended,
   clearSubagentPendingDelivery,
   loadPendingFinalDeliveryPayload,
-  resolveRequesterDeliveryOutcome,
   recordRequesterDelivery,
   recordRequesterHandoff,
 } from "./subagent-delivery-state.js";
@@ -220,7 +220,12 @@ export const startSubagentAnnounceCleanupFlow = (
       ...options,
     });
   if (!checkDescendants && alreadyDelivered()) {
-    runCleanup(() => finalizeDelivered());
+    runCleanup(async () => {
+      if (entry.delivery?.status !== "delivered" && !entry.delivery?.announcedAt) {
+        await settleConsumedRequesterDelivery([entry], { delivered: false, path: "none" });
+      }
+      await finalizeDelivered();
+    });
     return true;
   }
   const suppressChildSessionEffects = async () => {
@@ -482,11 +487,11 @@ export const startSubagentAnnounceCleanupFlow = (
         return;
       }
       assertCurrent();
-      const delivery = resolveRequesterDeliveryOutcome([entry], observedDelivery)!;
       // A stale announce cannot replace a delivery already committed by requester-settle.
       if (entry.delivery?.status === "delivered") {
         return;
       }
+      const delivery = await settleConsumedRequesterDelivery([entry], observedDelivery);
       // A late failure cannot rearm an announcement transferred to the batch.
       // Committed sends still retain their delivery evidence.
       if (!delivery.delivered && requesterTookCompletion(entry)) {
