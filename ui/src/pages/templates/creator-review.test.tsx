@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
-import type { TemplatesDraftsReviewResult } from "@openclaw/gateway-protocol";
 import { fireEvent } from "@solidjs/testing-library";
 import { createSignal, Show } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { reviewed } from "../../e2e/template-chat-review.test-support.ts";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -18,67 +18,10 @@ import { TemplateCreatorReview } from "./creator-review.tsx";
 
 const skillContent = "Read the release history and cite the source for each finding.";
 const pluginContent = "Connect to GitHub issues, pull requests, and checks.";
-const reviewed: TemplatesDraftsReviewResult = {
-  revision: "a".repeat(64),
-  reviewToken: "b".repeat(64),
-  publisher: "maker",
-  name: "@maker/release-brief",
-  displayName: "Release Brief",
-  version: "0.1.0",
-  description: "Summarizes releases",
-  scope: { input: "Repository", job: "Summarize", output: "Brief", authority: "Read only" },
-  items: [
-    {
-      id: "skill:release",
-      kind: "skill",
-      requirement: { source: "clawhub", ref: "@maker/release-notes", version: "1.2.3" },
-      label: "Release notes",
-      detail: "Read releases",
-      included: true,
-    },
-    {
-      id: "plugin:github",
-      kind: "plugin",
-      requirement: { source: "clawhub", ref: "@maker/github", version: "2.0.0" },
-      label: "GitHub",
-      detail: "github@1.0.0",
-      included: true,
-    },
-    {
-      id: "mcp:docs",
-      kind: "mcp",
-      label: "Docs",
-      detail: JSON.stringify({
-        transport: "streamable-http",
-        url: "https://example.test/mcp",
-        auth: "oauth",
-      }),
-      included: true,
-    },
-    {
-      id: "automation:brief",
-      kind: "automation",
-      automation: {
-        message:
-          "Read the latest repository releases, cite their sources, and prepare a concise morning brief. Never publish without human review.",
-        schedule: { cron: "0 9 * * 1-5", timezone: "America/Los_Angeles" },
-        session: "isolated",
-        enabled: true,
-      },
-      label: "Morning brief",
-      detail: "0 9 * * *",
-      included: true,
-    },
-  ],
-  files: [
-    { path: "CLAW.md", content: "Portable behavior" },
-    { path: "AGENTS.md", content: "Read only instructions" },
-  ],
-};
 const pendingPublication = {
   name: reviewed.name,
   version: reviewed.version,
-  url: "https://example.test/maker/templates/release-brief",
+  url: "https://example.test/maker/templates/research-brief",
   publicationStatus: "pending",
 };
 const target = {
@@ -87,15 +30,22 @@ const target = {
   sessionKey: "agent:research:main",
 };
 function mountInline(context: ReturnType<typeof createContext>) {
-  const { agentId, sessionKey } = target;
   return mountSolid(() => (
-    <TemplateCreatorInlineReview
-      context={context}
-      payload={target}
-      agentId={agentId}
-      sessionKey={sessionKey}
-    />
+    <TemplateCreatorInlineReview context={context} payload={target} {...target} />
   ));
+}
+function creatorContext(request: ReturnType<typeof vi.fn>, signIn = false) {
+  return createContext(request, {
+    methods: [
+      "templates.drafts.create",
+      "chat.send",
+      ...(signIn ? ["templates.drafts.signIn"] : []),
+    ],
+    scopes: ["operator.admin"],
+    runtimeConfig: createRuntimeConfigStub({
+      sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
+    }),
+  });
 }
 async function fixture(review = reviewed) {
   const request = vi.fn(
@@ -127,12 +77,7 @@ async function fixture(review = reviewed) {
       throw new Error("Unexpected " + method);
     },
   );
-  const context = createContext(request, {
-    methods: ["templates.drafts.create", "chat.send"],
-    runtimeConfig: createRuntimeConfigStub({
-      sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
-    }),
-  });
+  const context = creatorContext(request);
   context.router.subscribe = () => () => false;
   const flow = templateCreatorFlow(context);
   flow.open(target.agentId, target.draftId);
@@ -148,77 +93,116 @@ beforeEach(async () => {
   vi.useFakeTimers();
 });
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.clearAllTimers();
   vi.useRealTimers();
 });
 
-it("offers one sign-in action before drafting is complete and opens review without chat or publish", async () => {
-  let approved = false;
-  const call = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-    if (method === "templates.drafts.signIn") {
-      expect(params).toMatchObject({
-        agentId: target.agentId,
-        draftId: target.draftId,
-        sourceSessionKey: target.sessionKey,
-      });
-      if (params?.action === "status") {
-        return { status: "required" };
+it.each(["copied", "denied", "blocked"])(
+  "hands the code to ClawHub (%s), then resumes the same draft",
+  async (outcome) => {
+    const verificationUrl = "https://clawhub.example/cli/device";
+    const userCode = "ZYXW-2345";
+    const { agentId, draftId, sessionKey: sourceSessionKey } = target;
+    const started = createDeferred<void>();
+    let approved = false;
+    const call = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === "templates.drafts.signIn") {
+        expect(params).toMatchObject({ agentId, draftId, sourceSessionKey });
+        switch (params.action) {
+          case "status":
+            return { status: "required" };
+          case "start":
+            await started.promise;
+            return {
+              status: "pending",
+              requestId: "one",
+              verificationUrl,
+              userCode,
+              pollAfterMs: 20,
+              expiresAt: Date.now() + 60000,
+            };
+          case "poll":
+            expect(params.requestId).toBe("one");
+            approved = true;
+            return { status: "connected" };
+        }
       }
-      if (params?.action === "start") {
+      if (method === "templates.drafts.read") {
         return {
-          status: "pending",
-          requestId: "request-1",
-          verificationUrl: "https://clawhub.example/cli/device",
-          userCode: "ZYXW-2345",
-          pollAfterMs: 20,
-          expiresAt: Date.now() + 60_000,
+          revision: approved ? "ready" : "drafting",
+          content: JSON.stringify({ scope: approved ? reviewed.scope : {} }),
         };
       }
-      expect(params).toMatchObject({ action: "poll", requestId: "request-1" });
-      approved = true;
-      return { status: "connected" };
-    }
-    if (method === "templates.drafts.read") {
-      return {
-        revision: approved ? "ready" : "drafting",
-        content: JSON.stringify({ scope: approved ? reviewed.scope : {} }),
-      };
-    }
-    if (method === "templates.drafts.review") {
-      expect(approved).toBe(true);
-      expect(params).toEqual({ agentId: target.agentId, draftId: target.draftId });
-      return reviewed;
-    }
-    throw new Error("Unexpected " + method);
-  });
-  const context = createContext(call, {
-    scopes: ["operator.admin"],
-    methods: ["templates.drafts.create", "chat.send", "templates.drafts.signIn"],
-    runtimeConfig: createRuntimeConfigStub({
-      sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
-    }),
-  });
-  const open = vi.spyOn(window, "open").mockReturnValue(null);
-  const page = mountInline(context);
-  try {
+      if (method === "templates.drafts.review") {
+        expect(approved).toBe(true);
+        expect(params).toEqual({ agentId, draftId });
+        return reviewed;
+      }
+      throw new Error("Unexpected " + method);
+    });
+    const page = mountInline(creatorContext(call, true));
+    const write = createDeferred<void>();
+    const writeText = vi.fn(() => write.promise);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const replace = vi.fn();
+    const close = vi.fn();
+    const tab = { location: { replace }, close } as unknown as Window;
+    const open = vi.spyOn(window, "open").mockReturnValue(outcome === "blocked" ? null : tab);
     await vi.advanceTimersByTimeAsync(1);
-    await waitForSolid(() => expect(page.getByRole("button", { name: "Sign in" })).toBeTruthy());
-    expect(page.getAllByRole("button")).toHaveLength(1);
-    fireEvent.click(page.getByRole("button", { name: "Sign in" }));
+    expect(page.getByRole("status").textContent).toBe("Sign in to ClawHub");
+    const button = page.getByRole("button", { name: "Sign in" });
+    expect(page.getAllByRole("button")).toEqual([button]);
+    fireEvent.click(button);
+    fireEvent.click(button);
     await vi.advanceTimersByTimeAsync(1);
-    expect(page.getByRole("link", { name: "Open ClawHub" })).toBeTruthy();
-    expect(page.getByText("ZYXW-2345", { exact: true })).toBeTruthy();
+    expect(page.getByRole("button", { name: "Sign in", busy: true })).toBe(button);
+    expect(page.getByRole("status").textContent).toBe("Sign in to ClawHub");
+    started.resolve();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(call.mock.calls.filter(([, p]) => p.action === "start")).toHaveLength(1);
+    expect(page.getByRole("status").textContent).toBe(userCode);
+    expect(open).not.toHaveBeenCalled();
+    expect(writeText).not.toHaveBeenCalled();
+    expect(page.getAllByRole("button")).toEqual([
+      page.getByRole("button", { name: "Copy & open ClawHub" }),
+    ]);
+    expect(page.queryByRole("link")).toBeNull();
+    fireEvent.click(button);
+    expect(writeText).toHaveBeenCalledWith(userCode);
+    expect(writeText).toHaveBeenCalledBefore(open);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(replace).not.toHaveBeenCalled();
+    if (outcome === "denied") {
+      write.reject(new Error("Permission denied"));
+    } else {
+      write.resolve();
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    if (outcome === "copied") {
+      expect(replace).toHaveBeenCalledWith(verificationUrl);
+      expect(page.queryByRole("alert")).toBeNull();
+    } else {
+      expect(replace).not.toHaveBeenCalled();
+      expect(page.getByRole("alert").textContent).toContain(
+        outcome === "denied" ? "Copy the code manually" : "Code copied",
+      );
+      expect(page.getByRole("link", { name: "Open ClawHub" }).getAttribute("href")).toBe(
+        verificationUrl,
+      );
+      if (outcome === "denied") {
+        expect(close).toHaveBeenCalledOnce();
+      }
+    }
     await vi.advanceTimersByTimeAsync(30);
-    await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
+    expect(page.getByRole("button", { name: "Publish" })).toBeTruthy();
     const methods = call.mock.calls.map(([method]) => method);
     expect(methods.filter((m) => m === "templates.drafts.review")).toHaveLength(1);
     expect(methods).not.toContain("chat.send");
     expect(methods).not.toContain("templates.drafts.publish");
-  } finally {
-    page.unmount();
-    open.mockRestore();
-  }
-});
+  },
+);
 
 it.each(["skill", "plugin"] as const)("previews pinned and bundled %s", async (kind) => {
   for (const bundled of [false, true]) {
