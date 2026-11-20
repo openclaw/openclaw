@@ -358,12 +358,12 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
 
 /** Explains a string sent where the schema wants an object or array, including its JSON parse error. */
 function describeStringForContainer(args: unknown, error: TLocalizedValidationError): string {
-  const expected = (error.params as { type?: unknown }).type;
+  if (error.keyword !== "type") {
+    return "";
+  }
+  const expected = error.params.type;
   const expectedTypes = Array.isArray(expected) ? expected : [expected];
-  if (
-    error.keyword !== "type" ||
-    !expectedTypes.some((type) => type === "object" || type === "array")
-  ) {
+  if (!expectedTypes.some((type) => type === "object" || type === "array")) {
     return "";
   }
   const value: unknown = Pointer.Get(args, error.instancePath);
