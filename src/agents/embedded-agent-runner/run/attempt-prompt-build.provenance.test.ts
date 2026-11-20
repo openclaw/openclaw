@@ -5,19 +5,30 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as decisionDiagnostics from "../../../decisions/diagnostics.js";
-import type { PluginHookBeforePromptBuildResult } from "../../../plugins/hook-before-agent-start.types.js";
+import type {
+  PluginHookBeforePromptBuildEvent,
+  PluginHookBeforePromptBuildResult,
+} from "../../../plugins/hook-before-agent-start.types.js";
 import type { PluginHookAgentContext } from "../../../plugins/hook-types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
+import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
 import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
 import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { createMcpStubTool, createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { resolveToolSearchConfig } from "../../tool-search-config.js";
+import { ToolSearchRuntime } from "../../tool-search-runtime.js";
+import type { AnyAgentTool } from "../../tools/common.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
+import { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
+import { applyEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PromptAssemblyInput = Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0];
@@ -37,6 +48,9 @@ async function assembleWithCapturedHookCtx({
   attempt: attemptOverrides = {},
   hookResult,
   requiresToolAuthority,
+  toolSearch,
+  narrowToolsAllow,
+  tools: toolOverrides,
   ...promptPolicy
 }: {
   attempt?: Partial<EmbeddedRunAttemptParams>;
@@ -44,12 +58,61 @@ async function assembleWithCapturedHookCtx({
   applyPromptBuildToolsAllow?: PromptAssemblyInput["applyPromptBuildToolsAllow"];
   prepareSystemPrompt?: PromptAssemblyInput["prepareSystemPrompt"];
   requiresToolAuthority?: true;
+  toolSearch?: boolean;
+  narrowToolsAllow?: string[];
+  tools?: AnyAgentTool[];
 } = {}) {
   const runId = "provenance-hook-test";
   const config = attemptOverrides.config ?? {};
   setRuntimeConfigSnapshot(config);
+  const toolSurface =
+    toolSearch === undefined
+      ? undefined
+      : createAgentHarnessToolSurfaceRuntimeCore({
+          config: {
+            ...config,
+            tools: {
+              ...config.tools,
+              codeMode: false,
+              toolSearch: {
+                ...resolveToolSearchConfig(config),
+                enabled: toolSearch,
+                mode: "tools",
+              },
+            },
+          },
+          modelToolsEnabled: true,
+        });
+  onTestFinished(() => toolSurface?.cleanup());
+  const remote = createStubTool("mcp_notes_lookup");
+  const deniedRemote = createStubTool("mcp_notes_delete");
+  for (const tool of [remote, deniedRemote]) {
+    setPluginToolMeta(tool, {
+      pluginId: "notes",
+      optional: false,
+      mcp: {
+        serverName: "notes",
+        safeServerName: "notes",
+        toolName: tool.name,
+        operation: "tool",
+      },
+    });
+  }
+  const tools = applyEmbeddedAttemptToolsAllow(
+    toolOverrides ?? [createStubTool("read"), remote, deniedRemote],
+    attemptOverrides.toolsAllow,
+  );
+  const compactedTools = toolSurface?.compactTools(tools).tools;
   const { session, sessionManager } = await createTestSession({
-    customTools: [createStubTool("read")],
+    customTools: compactedTools ?? [createStubTool("read")],
+  });
+  const toolPolicy = createPromptBuildToolPolicy({
+    session,
+    effectiveTools: compactedTools ?? [],
+    uncompactedEffectiveTools: tools,
+    tools,
+    catalogRef: toolSurface?.toolSearchCatalogRef,
+    codeModeControlsEnabled: false,
   });
   const admission = prepareSystemAgentRunAdmission(config, runId, "main", "provenance-hook-test");
   onTestFinished(() => {
@@ -74,22 +137,32 @@ async function assembleWithCapturedHookCtx({
   const captured: PluginHookAgentContext[] = [];
   const prompts: string[] = [];
   const continuities: unknown[] = [];
+  const events: PluginHookBeforePromptBuildEvent[] = [];
   const hookRunner = createHookRunner({
     hooks: [],
     plugins: [],
     typedHooks: [
+      ...(narrowToolsAllow !== undefined
+        ? [
+            {
+              pluginId: "narrowing-hook-test",
+              hookName: "before_prompt_build" as const,
+              source: "test",
+              priority: 10,
+              handler: () => ({ toolsAllow: narrowToolsAllow }),
+            },
+          ]
+        : []),
       {
         pluginId: "provenance-hook-test",
         hookName: "before_prompt_build",
         source: "test",
         requiresToolAuthority,
-        handler: async (
-          event: { prompt: string; continuity?: unknown },
-          ctx: PluginHookAgentContext,
-        ) => {
+        handler: async (event: PluginHookBeforePromptBuildEvent, ctx: PluginHookAgentContext) => {
           captured.push(ctx);
           prompts.push(event.prompt);
           continuities.push(event.continuity);
+          events.push(event);
           return hookResult;
         },
       },
@@ -108,17 +181,122 @@ async function assembleWithCapturedHookCtx({
     sessionAgentId: "main",
     runtimeModel: testModel.id,
     systemPromptText: "Base system prompt",
+    toolSearchCatalogRef: toolSurface?.toolSearchCatalogRef,
     runAbortSignal: new AbortController().signal,
     hasBaselineTools: () => session.getActiveToolNames().length > 0,
-    applyPromptBuildToolsAllow: promptPolicy.applyPromptBuildToolsAllow ?? (() => []),
+    applyPromptBuildToolsAllow:
+      promptPolicy.applyPromptBuildToolsAllow ??
+      ((allow) => toolPolicy.apply(allow).callableToolNames),
     prepareSystemPrompt: promptPolicy.prepareSystemPrompt,
     setActiveSessionSystemPrompt: (prompt) => {
       systemPrompt = prompt;
     },
   });
   expect(session.messages).toEqual(priorMessages);
-  return { captured, prompts, continuities, systemPrompt };
+  return {
+    captured,
+    prompts,
+    continuities,
+    systemPrompt,
+    events,
+    catalogNames: toolSurface?.toolSearchCatalogRef?.current?.entries.map((entry) => entry.name),
+    activeToolNames: session.getActiveToolNames(),
+    toolSearchCatalogRef: toolSurface?.toolSearchCatalogRef,
+  };
 }
+
+describe("prompt-build tool scope", () => {
+  it.each(["direct", "deferred"] as const)(
+    "reports callable exact IDs for %s name collisions",
+    async (collision) => {
+      const remote = createMcpStubTool("notes", "lookup");
+      const native = createStubTool("notes__lookup");
+      vi.spyOn(remote, "execute").mockResolvedValue({ content: [], details: {} });
+      vi.spyOn(native, "execute").mockResolvedValue({ content: [], details: {} });
+      const config: OpenClawConfig = {
+        tools: {
+          toolSearch: {
+            enabled: true,
+            mode: "tools",
+            ...(collision === "direct" ? { include: [{ source: "mcp" as const }] } : {}),
+          },
+        },
+      };
+      const { events, toolSearchCatalogRef } = await assembleWithCapturedHookCtx({
+        attempt: { config, toolsAllow: ["notes__lookup"] },
+        tools: [native, remote],
+        toolSearch: true,
+      });
+      const identifiers = events[0]?.deferredToolNames;
+      expect(identifiers).toEqual([
+        "mcp:notes:notes__lookup",
+        ...(collision === "deferred" ? ["openclaw:core:notes__lookup"] : []),
+      ]);
+      const runtime = new ToolSearchRuntime(
+        { catalogRef: toolSearchCatalogRef },
+        resolveToolSearchConfig(config),
+      );
+      await expect(runtime.call("notes__lookup", {})).rejects.toThrow("Ambiguous tool name");
+      for (const id of identifiers ?? []) {
+        await runtime.call(id, {});
+      }
+      expect(remote.execute).toHaveBeenCalledOnce();
+      expect(native.execute).toHaveBeenCalledTimes(collision === "deferred" ? 1 : 0);
+    },
+  );
+
+  it.each([
+    { allow: undefined, toolSearch: false, deferred: [] },
+    {
+      allow: undefined,
+      toolSearch: true,
+      deferred: ["mcp_notes_delete", "mcp_notes_lookup"],
+    },
+    { allow: [], toolSearch: true, deferred: [] },
+    { allow: ["read", "mcp_notes_lookup"], toolSearch: false, deferred: [] },
+    { allow: ["read", "mcp_notes_lookup"], toolSearch: true, deferred: ["mcp_notes_lookup"] },
+  ])(
+    "reports incoming $allow with Tool Search=$toolSearch",
+    async ({ allow, toolSearch, deferred }) => {
+      const { events, activeToolNames } = await assembleWithCapturedHookCtx({
+        attempt: { toolsAllow: allow },
+        toolSearch,
+      });
+      expect(events).toHaveLength(1);
+      if (allow === undefined) {
+        expect(events[0]).not.toHaveProperty("toolsAllow");
+      } else {
+        expect(events[0]?.toolsAllow).toEqual(allow);
+        expect(events[0]?.toolsAllow).not.toBe(allow);
+      }
+      expect(events[0]?.deferredToolNames).toEqual(deferred);
+      if (allow !== undefined) {
+        expect(activeToolNames).not.toContain("mcp_notes_delete");
+      }
+      if (deferred.length && allow !== undefined) {
+        expect(activeToolNames).toContain("tool_search");
+        expect(activeToolNames).not.toContain("mcp_notes_lookup");
+      }
+    },
+  );
+
+  it.each([undefined, true] as const)(
+    "keeps the incoming snapshot after narrowing for authority=%s",
+    async (requiresToolAuthority) => {
+      const allow = ["read", "mcp_notes_lookup"];
+      const { events, catalogNames } = await assembleWithCapturedHookCtx({
+        attempt: { toolsAllow: allow, toolAuthorityFingerprint: "tool-scope-test" },
+        toolSearch: true,
+        narrowToolsAllow: ["read", "mcp_notes_delete"],
+        requiresToolAuthority,
+      });
+      expect(events[0]?.toolsAllow).toEqual(allow);
+      expect(events[0]?.deferredToolNames).toEqual(["mcp_notes_lookup"]);
+      expect(catalogNames).toEqual(["read"]);
+      expect(allow).toEqual(["read", "mcp_notes_lookup"]);
+    },
+  );
+});
 
 describe("prompt-build hook context input provenance", () => {
   it("bounds plugin system context using the resolved attempt budget before assembly", async () => {

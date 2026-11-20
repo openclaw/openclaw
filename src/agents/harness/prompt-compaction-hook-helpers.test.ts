@@ -134,6 +134,8 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       expect(result.promptInputRange).toEqual({ start: 0, end: result.prompt.length });
       expect(handler).toHaveBeenCalledTimes(2);
       for (const [event] of handler.mock.calls) {
+        expect(event).not.toHaveProperty("toolsAllow");
+        expect(event).not.toHaveProperty("deferredToolNames");
         expect(event).toMatchObject({
           currentUserMessage: expected,
           currentUserMessageId: content === undefined ? "message-1" : "original:user",

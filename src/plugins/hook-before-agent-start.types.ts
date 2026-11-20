@@ -49,6 +49,19 @@ export type PluginHookBeforePromptBuildEvent = {
   messages: unknown[];
   /** Authorized phase only, on runtimes that report it. Omitted means unknown. */
   continuity?: PluginHookPromptContinuity;
+  /**
+   * Incoming run allowlist, before runtime-added tools or hook restrictions.
+   * Omitted means unrestricted or unreported; [] is an explicit empty allowlist.
+   * Informational only, not authorization. Frozen when supplied by the host.
+   */
+  readonly toolsAllow?: readonly string[];
+  /**
+   * Allowed deferred tool names, or exact catalog IDs where a name is ambiguous.
+   * Excludes directly visible tools; keep exact IDs intact in prompt hints.
+   * Pre-hook snapshot, not authorization; later hook restrictions may remove tools.
+   * Frozen; [] means none, omission means the runtime does not report this view.
+   */
+  readonly deferredToolNames?: readonly string[];
 };
 
 export type PluginHookBeforePromptBuildResult = {
