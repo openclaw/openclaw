@@ -81,7 +81,12 @@ export function normalizeChatHumanMentions(
     if (start < 0 || end > trimmed.length || trimmed[start] !== "@") {
       return { ok: false, error: INVALID_MENTIONS };
     }
-    normalized.push({ profileId: mention.profileId, start, end });
+    normalized.push({
+      profileId: mention.profileId,
+      start,
+      end,
+      ...(mention.access ? { access: mention.access } : {}),
+    });
     previousEnd = mention.end;
   }
   return { ok: true, value: normalized };

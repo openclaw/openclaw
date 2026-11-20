@@ -465,6 +465,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["session.visibility.set", "sessions-sharing", "operator.write", "2026.7"],
   ["session.members.list", "sessions-sharing", "operator.read", "2026.7"],
   ["session.members.add", "sessions-sharing", "operator.write", "2026.7"],
+  ["session.members.setAccess", "sessions-sharing", "operator.write", "2026.11"],
   ["session.members.remove", "sessions-sharing", "operator.write", "2026.7"],
   ["session.suggestions.add", "sessions-suggestions", "operator.write", "2026.7"],
   ["session.suggestions.list", "sessions-suggestions", "operator.read", "2026.7"],

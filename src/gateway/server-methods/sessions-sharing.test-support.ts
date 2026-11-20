@@ -41,6 +41,7 @@ export async function callSessionSharingHandler(
     | "session.members.list"
     | "session.members.listEvidence"
     | "session.members.add"
+    | "session.members.setAccess"
     | "session.members.remove",
   params: Record<string, unknown>,
   requestContext: GatewayRequestContext,
