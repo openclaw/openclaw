@@ -438,6 +438,9 @@ available from `native-command-registry`. Their synchronous compatibility APIs
 remain deprecated through 2026-12-31. See
 [session and command preparation](/plugins/sdk-migration#session-and-command-preparation).
 
+Official channel plugins load the published model catalog for these menus through
+`loadCommandArgMenuModelCatalog` on the private `command-surface` entrypoint.
+
 For descriptive metadata, use `listSessionEntriesAsync`. For bounded disclosure
 after awaited preparation, use
 `runtime.agent.session.withSessionEntriesAsync` (also exported by

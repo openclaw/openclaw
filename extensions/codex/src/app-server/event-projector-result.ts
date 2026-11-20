@@ -1,7 +1,9 @@
-import { AgentHarnessProjectionSettlement } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
+import {
+  AgentHarnessProjectionSettlement,
+  AgentHarnessRuntimeUpdateRequiredError,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   AgentHarnessModelRequestPolicyError,
-  AgentHarnessRuntimeUpdateRequiredError,
   classifyAgentHarnessTerminalOutcome,
   prepareAgentRunTerminalReply,
   type AgentMessage,

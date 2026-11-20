@@ -15,8 +15,8 @@ import {
   resolveFastModeState,
   resolveStoredModelOverrideAsync,
 } from "openclaw/plugin-sdk/command-auth-native";
+import { loadCommandArgMenuModelCatalog } from "openclaw/plugin-sdk/command-surface";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { loadCommandArgMenuModelCatalog } from "openclaw/plugin-sdk/native-command-registry";
 import {
   getSessionEntryAsync,
   resolveStorePath,

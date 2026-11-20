@@ -1,6 +1,6 @@
+import { AgentHarnessRuntimeUpdateRequiredError } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   AgentHarnessModelRequestPolicyError,
-  AgentHarnessRuntimeUpdateRequiredError,
   embeddedAgentLog,
   formatErrorMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,

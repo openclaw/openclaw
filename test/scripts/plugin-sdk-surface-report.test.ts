@@ -21,6 +21,23 @@ beforeEach(() => {
   surfaceReport = structuredClone(baseReport);
 });
 
+it("keeps bundled harness and command menu helpers out of the public SDK", () => {
+  const publicEntries = surfaceReport.publicStats.byEntrypoint;
+  const privateEntries = surfaceReport.localOnlyStats.byEntrypoint;
+  expect(publicEntries.get("agent-harness-runtime")?.exportNames).not.toContain(
+    "AgentHarnessRuntimeUpdateRequiredError",
+  );
+  expect(privateEntries.get("agent-harness-attempt-runtime")?.exportNames).toContain(
+    "AgentHarnessRuntimeUpdateRequiredError",
+  );
+  expect(publicEntries.get("native-command-registry")?.exportNames).not.toContain(
+    "loadCommandArgMenuModelCatalog",
+  );
+  expect(privateEntries.get("command-surface")?.exportNames).toContain(
+    "loadCommandArgMenuModelCatalog",
+  );
+});
+
 it("accepts frozen named facades while rejecting missing deprecated reexports", () => {
   expect(surfaceReport.deprecatedBarrelWithoutReexports).toEqual([]);
   surfaceReport.deprecatedBarrelWithoutReexports = ["fixture-facade"];

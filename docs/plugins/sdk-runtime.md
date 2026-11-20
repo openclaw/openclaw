@@ -1097,9 +1097,9 @@ deployment-policy denial.
 
 ## Harness runtime updates
 
-A native harness whose own runtime is too old for the requested model can return
-`AgentHarnessRuntimeUpdateRequiredError` from
-`openclaw/plugin-sdk/agent-harness-runtime` as its prompt error. Its message must
+An official native harness whose own runtime is too old for the requested model
+can return `AgentHarnessRuntimeUpdateRequiredError` from the private
+`openclaw/plugin-sdk/agent-harness-attempt-runtime` as its prompt error. Its message must
 name the update. The host records the code `harness_update_required` in the
 run's failure notice, and Control UI then offers **Start a new session**, which
 starts a session on the OpenClaw harness that asks the agent to perform the
