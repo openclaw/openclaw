@@ -6,7 +6,7 @@ import type {
 import { stripFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import "../../components/modal-dialog.tsx";
-import { DialogHeader } from "../../components/solid/dialog-header.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
@@ -33,7 +33,13 @@ type SkillDocument =
   | { status: "ready"; content: string }
   | { status: "error"; message: string; retryable: boolean };
 
-type PluginSkillPreviewState = { request: SkillRequest; document: SkillDocument };
+type SkillPreviewIdentity = { description?: string; publisher?: string };
+const skillSummarySegmenter = new Intl.Segmenter(undefined, { granularity: "sentence" });
+type PluginSkillPreviewState = {
+  request: SkillRequest;
+  identity?: SkillPreviewIdentity;
+  document: SkillDocument;
+};
 
 export function createPluginPreview(gateway: Pick<GatewayPageBinding, "capture" | "isCurrent">) {
   // Preview changes must not rerender the invoking row while the modal owns its focus.
@@ -58,10 +64,14 @@ function createPluginPreviewOwner(
     get state() {
       return active;
     },
-    async open(request: SkillRequest): Promise<void> {
+    async open(request: SkillRequest, identity?: SkillPreviewIdentity): Promise<void> {
       toolAbort.abort();
       toolAbort = new AbortController();
-      const pending: PluginSkillPreviewState = { request, document: { status: "loading" } };
+      const pending: PluginSkillPreviewState = {
+        request,
+        identity,
+        document: { status: "loading" },
+      };
       active = pending;
       onChange();
       const connection = gateway.capture();
@@ -99,7 +109,7 @@ function createPluginPreviewOwner(
         }
       }
       if (active === pending && (!connection || gateway.isCurrent(connection))) {
-        active = { request: selected, document: skill };
+        active = { request: selected, identity, document: skill };
         onChange();
       }
     },
@@ -111,7 +121,7 @@ function createPluginPreviewOwner(
 
     retry(): void {
       if (active?.document.status === "error" && active.document.retryable) {
-        void preview.open(active.request);
+        void preview.open(active.request, active.identity);
       }
     },
 
@@ -143,6 +153,16 @@ export function PluginSkillPreview(props: {
           return current.status === "ready" ? current : undefined;
         };
         const close = () => props.preview.close();
+        const summary = () => {
+          const description = state().identity?.description?.trim();
+          if (!description) {
+            return undefined;
+          }
+          for (const { segment } of skillSummarySegmenter.segment(description)) {
+            return segment.trim();
+          }
+          return undefined;
+        };
         return (
           <openclaw-modal-dialog
             label={state().request.skillName}
@@ -156,7 +176,71 @@ export function PluginSkillPreview(props: {
                 "overflow-wrap": "anywhere",
               }}
             >
-              <DialogHeader title={state().request.skillName} onClose={close} />
+              <header
+                class="oc-dialog__header"
+                style={{
+                  "align-items": "start",
+                  margin: "0 var(--overlay-modal-padding)",
+                  padding: "18px 0 14px",
+                  "border-block-end": "1px solid var(--border)",
+                }}
+              >
+                <div class="plugin-catalog-row__main" style={{ gap: "12px" }}>
+                  <span
+                    class="plugin-capability__icon"
+                    aria-hidden="true"
+                    style={{
+                      width: "40px",
+                      height: "40px",
+                      flex: "none",
+                      border: "0",
+                      "border-radius": "calc(10px * var(--openclaw-corner-radius-scale))",
+                      background: "color-mix(in srgb, var(--text) 5%, transparent)",
+                      color: "var(--muted)",
+                    }}
+                  >
+                    <Icon name="bookOpenText" />
+                  </span>
+                  <div class="plugin-catalog-row__text" style={{ gap: "3px" }}>
+                    <div
+                      class="plugin-card-title-row"
+                      style={{ "flex-wrap": "wrap", gap: "2px 8px" }}
+                    >
+                      <h2
+                        class="oc-dialog__title"
+                        style={{
+                          "font-size": "var(--control-ui-text-lg)",
+                          "min-height": "0",
+                          "line-height": "1.2",
+                        }}
+                      >
+                        {state().request.skillName}
+                      </h2>
+                      <Show when={state().identity?.publisher}>
+                        {(publisher) => <span class="plugin-card-author">@{publisher()}</span>}
+                      </Show>
+                    </div>
+                    <Show when={summary()}>
+                      {(description) => (
+                        <p
+                          class="installed-plugins-card__summary"
+                          style={{ "min-height": "0", "line-height": "1.35", overflow: "hidden" }}
+                        >
+                          {description()}
+                        </p>
+                      )}
+                    </Show>
+                  </div>
+                </div>
+                <IconButton
+                  size={28}
+                  class="oc-dialog__close"
+                  icon="x"
+                  label={t("common.close")}
+                  tooltip={false}
+                  onClick={close}
+                />
+              </header>
               <div
                 class="oc-dialog__body plugin-skill-dialog__body"
                 aria-busy={skill().status === "loading" ? "true" : "false"}
@@ -203,13 +287,13 @@ export function PluginSkillPreview(props: {
 
 export function renderPluginSkillsSection(
   skills: ReadonlyArray<{ name: string; description?: string }>,
-  onOpen: (name: string) => void,
+  onOpen: (skill: { name: string; description?: string }) => void,
 ) {
   return (
     <div class="plugin-skills-section">
       {PluginCapabilitySection(
         t("pluginsPage.detailTabs.skills"),
-        skills.map((skill) => ({ ...skill, onOpen: () => onOpen(skill.name) })),
+        skills.map((skill) => ({ ...skill, onOpen: () => onOpen(skill) })),
         () => (
           <Icon name="bookOpenText" />
         ),

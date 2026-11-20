@@ -17,9 +17,10 @@ import {
   teardownPluginsE2e,
 } from "./plugins.e2e.test-support.ts";
 
+const skillSummary = "Configure your calendar and plan your week.";
 const skill = {
   name: "Calendar guide",
-  description: "Configure your calendar and plan your week. ".repeat(16),
+  description: skillSummary + " Use the included guide for calendar setup and troubleshooting.",
 };
 const catalogId = "ch_Y2FsZW5kYXI";
 const readMethod = "plugins.skills.read";
@@ -98,6 +99,7 @@ function responses(installed: boolean) {
     detail: {
       origin: "clawhub",
       packageName: "@acme/calendar",
+      ...(installed ? { author: { handle: "acme" } } : {}),
       topics: [],
       configuration: [],
       mcpServers: [],
@@ -141,6 +143,10 @@ describeControlUiE2e("Plugin skill document routes", () => {
         : { source: "catalog", catalogId, version: "2.1.0", skillName: skill.name },
     );
     await heading.waitFor();
+    const header = dialog.locator("header");
+    expect(await header.getByRole("heading").textContent()).toBe(skill.name);
+    expect(await header.locator("p").textContent()).toBe(skillSummary);
+    expect(await header.getByText("@acme", { exact: true }).count()).toBe(installed ? 1 : 0);
     expect(await dialog.getByRole("link", { name: "Calendar help" }).getAttribute("href")).toBe(
       "https://example.com/calendar",
     );
@@ -175,6 +181,8 @@ describeControlUiE2e("Plugin skill document routes", () => {
     await read();
     await dialog.getByRole("status", { name: "Loading…" }).waitFor();
     const originalDialog = await dialog.elementHandle();
+    const header = dialog.locator("header");
+    const originalHeader = await header.textContent();
     const originalBounds = await dialog.boundingBox();
     await captureScreenshot(page, "plugin-skill-loading-narrow.png", "viewport");
     await gateway.resolveDeferred(readMethod, {
@@ -192,6 +200,7 @@ describeControlUiE2e("Plugin skill document routes", () => {
     await dialog.getByRole("status", { name: "Loading…" }).waitFor();
     await gateway.resolveDeferred(readMethod, bundle(longDocument));
     await heading.waitFor();
+    expect(await header.textContent()).toBe(originalHeader);
     expect(await dialog.evaluate((element, original) => element === original, originalDialog)).toBe(
       true,
     );
