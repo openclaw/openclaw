@@ -65,12 +65,13 @@ import {
   normalizeEnvVarKey,
 } from "../../infra/host-env-security.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
-import { parseTcpPort, parseTcpPortFromArgs } from "../../infra/tcp-port.js";
+import { parseTcpPort } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
 import { omitSecretEgressProxyEnvironment } from "../../secrets/egress-proxy/environment.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
+import { resolveUnappliedInstalledOptions } from "./install-option-guard.js";
 import { assertExpectedRuntimePin, resolveRestoreServiceCli } from "./install-restore-cli.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
 import { createDaemonInstallActionContext, resolveDaemonInstallBlockMessage } from "./shared.js";
@@ -569,26 +570,14 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   if (loaded && !opts.force && !autoRefreshMessage) {
-    const currentCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);
-    const unapplied: string[] = [];
-    const hints: string[] = [];
-    if (currentCommand && opts.port !== undefined) {
-      const installedPort = parseTcpPortFromArgs(currentCommand.programArguments);
-      if (installedPort !== port) {
-        unapplied.push(`--port ${port}`);
-        hints.push(
-          `Reinstall with: ${formatCliCommand(`openclaw gateway install --force --port ${port}`)}.`,
-        );
-      }
-    }
-    if (currentCommand && opts.token !== undefined) {
-      if (readEmbeddedGatewayToken(currentCommand) !== opts.token) {
-        unapplied.push("--token");
-        hints.push(
-          `Set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN, then run ${formatCliCommand("openclaw gateway install --force")}; install does not persist --token.`,
-        );
-      }
-    }
+    const { unapplied, hints } = await resolveUnappliedInstalledOptions({
+      command: resolveManagedGatewayServiceCommand(existingServiceCommand),
+      port,
+      portExplicit: opts.port !== undefined,
+      token: opts.token,
+      cfg,
+      env: installEnv,
+    });
     if (unapplied.length > 0) {
       fail(
         `Gateway service already ${service.loadedText}; ${unapplied.join(" and ")} would not be applied.`,
