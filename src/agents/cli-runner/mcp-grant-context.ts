@@ -207,6 +207,7 @@ export function buildCliMcpGrantContext(params: {
     workspaceDir: params.run.workspaceDir,
     ...(normalizeOptionalString(params.run.cwd) ? { cwd: params.run.cwd?.trim() } : {}),
     ...(params.run.toolOverrides?.webSearch === false ? { webSearchDisabled: true as const } : {}),
+    ...(params.run.toolBindings ? { toolBindings: structuredClone(params.run.toolBindings) } : {}),
     // Compaction lists the session's tools only so its request prefix matches the turns'.
     ...(params.run.controlOperation ? { toolCallsRefused: true as const } : {}),
     // Same enforcement point for the fallback delegation gate, so an

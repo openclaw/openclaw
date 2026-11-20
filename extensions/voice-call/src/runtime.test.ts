@@ -129,7 +129,7 @@ function setConsultCall(overrides: Record<string, unknown> = {}) {
   });
 }
 
-function createConsultRuntime<T>(runEmbeddedAgent: T, sessionStore: Record<string, unknown> = {}) {
+function createConsultRuntime<T>(runAgentTurn: T, sessionStore: Record<string, unknown> = {}) {
   return {
     defaults: { provider: "openai", model: "gpt-5.4" },
     resolveAgentDir: vi.fn(() => "/tmp/agent"),
@@ -139,12 +139,15 @@ function createConsultRuntime<T>(runEmbeddedAgent: T, sessionStore: Record<strin
     resolveAgentTimeoutMs: vi.fn(() => 30_000),
     ensureAgentWorkspace: vi.fn(async () => {}),
     session: createMockSessionRuntime(sessionStore),
-    runEmbeddedAgent,
+    runEmbeddedAgent: vi.fn(),
+    runCommandFromIngress: runAgentTurn,
   };
 }
 
 function answeringAgent(text: string) {
-  type Agent = Parameters<typeof createVoiceCallRuntime>[0]["agentRuntime"]["runEmbeddedAgent"];
+  type Agent = Parameters<
+    typeof createVoiceCallRuntime
+  >[0]["agentRuntime"]["runCommandFromIngress"];
   return vi.fn(async (_params: Parameters<Agent>[0]) => ({ payloads: [{ text }], meta: {} }));
 }
 
@@ -459,8 +462,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentId: "inbound-route",
       responseModel: "openai/gpt-5.5",
     };
-    const runEmbeddedAgent = answeringAgent("Use the shipment status.");
-    const agentRuntime = createConsultRuntime(runEmbeddedAgent);
+    const runAgentTurn = answeringAgent("Use the shipment status.");
+    const agentRuntime = createConsultRuntime(runAgentTurn);
     setConsultCall({
       agentId: "support",
       direction: "outbound",
@@ -486,18 +489,23 @@ describe("createVoiceCallRuntime lifecycle", () => {
       text: "Use the shipment status.",
     });
     expect(agentRuntime.resolveThinkingDefault).not.toHaveBeenCalled();
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    const consultParams = consultParamsFrom(runEmbeddedAgent);
+    expect(runAgentTurn).toHaveBeenCalledOnce();
+    const consultParams = consultParamsFrom(runAgentTurn);
+    expect(agentRuntime.runEmbeddedAgent).not.toHaveBeenCalled();
+    // The consult is a turn of the call session: no responseModel applies to this outbound
+    // call, so the agent's own model selection (and its runtime) decides.
     expect(consultParams).toMatchObject({
       agentId: "support",
       sessionKey: "agent:support:voice:15550009999",
-      spawnedBy: "agent:main:discord:channel:general",
       messageProvider: "voice",
       lane: "voice",
-      provider: "anthropic",
-      model: "claude-opus-5-5",
-      thinkLevel: "ultra",
+      senderIsOwner: false,
+      allowModelOverride: false,
+      provider: undefined,
+      model: undefined,
+      thinkingOnce: "ultra",
       fastMode: true,
+      deliver: false,
     });
     expect(consultParams.toolsAllow).toEqual([
       "read",
@@ -519,10 +527,29 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "Ask for tomorrow delivery",
     );
     expectIncludes(
-      consultParams.prompt,
+      consultParams.message,
       "Caller: Can you check shipment status?",
       "Caller: Also check the ETA.",
     );
+  });
+
+  it("applies an explicit responseModel as the consult turn's model override", async () => {
+    const config = createRealtimeConfig({}, { inboundPolicy: "allowlist" });
+    config.numbers["+15550009999"] = { responseModel: "openai/gpt-5.5" };
+    const runAgentTurn = answeringAgent("Routed answer.");
+    setConsultCall({ direction: "inbound", to: "+15550009999" });
+
+    const handler = await startConsult(config, createConsultRuntime(runAgentTurn));
+
+    await expect(handler({ question: "Who is this?" }, "call-1", {})).resolves.toEqual({
+      text: "Routed answer.",
+    });
+    expect(consultParamsFrom(runAgentTurn)).toMatchObject({
+      allowModelOverride: true,
+      provider: "openai",
+      model: "gpt-5.5",
+      thinkingOnce: undefined,
+    });
   });
 
   it("always exposes the built-in end-call tool without allowing configured replacement", async () => {
@@ -554,7 +581,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
   it.each(["aborted", "model-locked"] as const)(
     "rejects %s consults before context or dispatch",
     async (state) => {
-      const runEmbeddedAgent = vi.fn();
+      const runAgentTurn = vi.fn();
       const sessionStore: Record<string, unknown> = {};
       if (state === "model-locked") {
         sessionStore["agent:main:voice:15550001234"] = {
@@ -567,7 +594,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       setConsultCall();
       const handler = await startConsult(
         createRealtimeConfig(),
-        createConsultRuntime(runEmbeddedAgent, sessionStore),
+        createConsultRuntime(runAgentTurn, sessionStore),
       );
       const controller = new AbortController();
       if (state === "aborted") {
@@ -583,7 +610,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
           : "Model selection is locked for this session.",
       );
       expect(mocks.resolveRealtimeFastContextConsult).not.toHaveBeenCalled();
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(runAgentTurn).not.toHaveBeenCalled();
     },
   );
 
@@ -592,8 +619,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       {},
       { inboundPolicy: "allowlist", sessionScope: "per-call" },
     );
-    const runEmbeddedAgent = answeringAgent("Per-call consult answer.");
-    const agentRuntime = createConsultRuntime(runEmbeddedAgent);
+    const runAgentTurn = answeringAgent("Per-call consult answer.");
+    const agentRuntime = createConsultRuntime(runAgentTurn);
     setConsultCall({ sessionKey: "voice:call:call-1" });
 
     const handler = await startConsult(config, agentRuntime);
@@ -601,8 +628,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
     await expect(handler({ question: "What should I say?" }, "call-1", {})).resolves.toEqual({
       text: "Per-call consult answer.",
     });
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    expect(consultParamsFrom(runEmbeddedAgent).sessionKey).toBe("agent:main:voice:call:call-1");
+    expect(runAgentTurn).toHaveBeenCalledOnce();
+    expect(consultParamsFrom(runAgentTurn).sessionKey).toBe("agent:main:voice:call:call-1");
   });
 
   it.each([
@@ -663,6 +690,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
               ? "Model selection is locked"
               : "no longer active",
       );
+      expect(agent.runCommandFromIngress).not.toHaveBeenCalled();
       expect(agent.runEmbeddedAgent).not.toHaveBeenCalled();
       if (!scenario.startsWith("final-")) {
         expect(mocks.resolveRealtimeFastContextConsult).not.toHaveBeenCalled();
@@ -679,10 +707,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
         expectDefined(mocks.actualRealtimeFastContextConsult, "actual fast context consult"),
       );
       setConsultCall({ state: "active" });
-      const runEmbeddedAgent = vi.fn();
+      const runAgentTurn = vi.fn();
       const handler = await startConsult(
         createRealtimeConfig({ fastContext: fastContextConfig(1_000) }),
-        { session: createMockSessionRuntime({}), runEmbeddedAgent } as never,
+        { session: createMockSessionRuntime({}), runCommandFromIngress: runAgentTurn } as never,
       );
       const consult = new AbortController();
       const pending = handler({ question: "Are the lights on?" }, "call-1", {
@@ -709,7 +737,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       }
       expect(open).toHaveBeenCalledTimes(state === "live" ? 1 : 0);
       expect(search).toHaveBeenCalledTimes(state === "live" ? 1 : 0);
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(runAgentTurn).not.toHaveBeenCalled();
     },
   );
 });

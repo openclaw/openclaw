@@ -296,6 +296,8 @@ export function createRuntimeAgent(
             {
               ...identity.sanitizePublicAgentCommandIngressOpts(opts),
               senderIsOwner: opts.senderIsOwner === true,
+              // The plugin-scoped wrapper admitted these bindings for the caller's own tools.
+              toolBindings: opts.toolBindings,
             },
             runtime,
             undefined,
