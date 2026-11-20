@@ -726,8 +726,10 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           attemptCount: 0,
           batchRunIds,
           requesterYieldBatch: true,
+          requesterRunId: REQUESTER_TURN,
           yieldedFinalDeliverable: true,
           rearmGeneration: 1,
+          progressOperationId: undefined,
           ...(kind === "running" ? {} : { afterRequesterYield: true }),
           ...(kind === "delete" ? { retireAfterSettle: true } : {}),
         });
@@ -737,7 +739,12 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       expect(loadSubagentRegistryFromSqlite().get(first.runId)).toMatchObject({
         requesterTurnRunId: undefined,
         requesterTurnYielded: undefined,
-        requesterSettleWake: { status: "pending", requesterYieldBatch: true, batchRunIds },
+        requesterSettleWake: {
+          status: "pending",
+          requesterYieldBatch: true,
+          requesterRunId: REQUESTER_TURN,
+          batchRunIds,
+        },
       });
       if (kind === "running") {
         expect(schedule).not.toHaveBeenCalled();
