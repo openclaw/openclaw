@@ -43,6 +43,10 @@ import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
 const log = createSubsystemLogger("agent/tool-handoff");
 const pending = new WeakSet<object>();
 
+export function hasPendingSessionToolHandoff(operation: ReplyOperation | undefined): boolean {
+  return operation !== undefined && pending.has(operation);
+}
+
 type HandoffScope = { assertCurrent: () => void; signal: AbortSignal };
 type HandoffWork =
   | { run: (scope: HandoffScope) => Promise<Record<string, unknown>>; request?: never }
@@ -337,6 +341,7 @@ export async function handoffSessionTool(
         })
         .finally(() => {
           handoffSettled.resolve(undefined);
+          pending.delete(operation);
           retained.release();
         }),
     );

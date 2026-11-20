@@ -133,6 +133,17 @@ sum is not the container's frozen duration. The record follows finalization
 attempts, including failures that retain a pause. `accepted=true` means
 synchronization returned successfully; it does not certify that resume succeeded.
 
+Managed source checkouts also prepare new default-branch tips in the existing idle
+pass after a successful accelerated create. The Gateway remembers up to 32 active
+checkout recipes in memory for 24 hours, including source-only checkouts used by
+sandboxes. It discovers repositories serially, at most once per repository every
+two minutes, and defers for foreground work or host I/O pressure. Background
+preparation uses the ordinary template single flight and generation retention;
+a create arriving during preparation joins that build. Linux Git and native clone
+children use idle I/O priority, and macOS children use background task policy.
+Restarting the Gateway clears these recipes; the next successful create registers
+the repository again. Background work does not extend the 24-hour window.
+
 On Btrfs, APFS, and ReFS, new private checkouts with a committed `pnpm-lock.yaml`
 can reuse installed dependencies. OpenClaw prepares the dependencies once in a
 disposable sandbox, then clones the prepared checkout for each session. After the

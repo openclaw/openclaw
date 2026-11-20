@@ -120,7 +120,8 @@ describe("session organizer nested archive choice", () => {
     expect(harness.patch).not.toHaveBeenCalled();
     expect(harness.request).not.toHaveBeenCalled();
     answerConfirmDialog(actions, "confirm");
-    expect(await pending).toMatchObject({
+    const result = await pending;
+    expect(result).toMatchObject({
       kind: "tree",
       rows: [
         {
@@ -128,9 +129,12 @@ describe("session organizer nested archive choice", () => {
           archiveGuard: { expectedSidebarAncestors: [guardedTarget(2), guardedTarget(0)] },
         },
         { key: child.key, archiveGuard: { expectedSidebarAncestors: [guardedTarget(0)] } },
-        { key: root.key, archiveGuard: { expectedSidebarAncestors: [] } },
+        { key: root.key, archiveGuard: { expectedCategory: null, expectedArchived: false } },
       ],
     });
+    expect(result?.kind === "tree" && result.rows.at(-1)?.archiveGuard).not.toHaveProperty(
+      "expectedSidebarAncestors",
+    );
     expect(reads.refreshList.mock.calls.map(([query]) => query?.spawnedBy)).toEqual([
       root.key,
       worker.key,
@@ -240,9 +244,13 @@ describe("session organizer nested archive choice", () => {
           targets: Array.from({ length: count }, (_, index) => count - index - 1).map((index) =>
             Object.assign(guardedTarget(index), {
               expectedArchived: false,
-              expectedSidebarAncestors: Array.from({ length: index }, (_, ancestor) =>
-                guardedTarget(index - ancestor - 1),
-              ),
+              ...(index > 0
+                ? {
+                    expectedSidebarAncestors: Array.from({ length: index }, (_, ancestor) =>
+                      guardedTarget(index - ancestor - 1),
+                    ),
+                  }
+                : {}),
             }),
           ),
           patch: { archived: true },

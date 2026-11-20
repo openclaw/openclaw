@@ -117,7 +117,7 @@ const { pathToFileURL } = require("node:url");
 
 ${MANAGED_HANDOFF_BOOTSTRAP_SOURCE}
 
-const { parseLaunchctlJob, classifyUpdateOutcome, OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, inspectManagedHandoffSentinelRowSync, recordManagedHandoffSentinelOutcomeRowSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches, prepareManagedHandoffLedger, packageActivationIdentity, resolveUpdateInstallRoot, recoverInterruptedManagedUpdate, readManagedHandoffGatewayStop, findUpdateGatewayStop } =
+const { formatErrorMessage, parseLaunchctlJob, classifyUpdateOutcome, OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, inspectManagedHandoffSentinelRowSync, recordManagedHandoffSentinelOutcomeRowSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches, prepareManagedHandoffLedger, packageActivationIdentity, resolveUpdateInstallRoot, recoverInterruptedManagedUpdate, readManagedHandoffGatewayStop, findUpdateGatewayStop } =
   require("./runtime/${MANAGED_HANDOFF_RUNTIME_ENTRY}");
 if (!params.updateLeaseDatabaseIdentity) {
   throw new Error("Managed handoff requires its prepared lease database identity");
@@ -834,7 +834,7 @@ async function collectUpdateFailureTriage() {
         (childStatus === "skipped" && restored && !exit.signal && !reportedFailure ? 0 : 1);
     }
   } catch (err) {
-    appendLog("handoff failed: " + (err && err.stack ? err.stack : String(err)));
+    appendLog("handoff failed: " + formatErrorMessage(err, { includeCode: true }) + "\n" + (err && err.stack ? err.stack : String(err)));
     const reason = err?.code === "owner_required" ? "owner_required" : "managed-service-handoff-helper-failed";
     if (params.action === "update") runOutcome = { status: "failed", reason };
     if (hasManagedUpdateLease()) {
@@ -864,7 +864,7 @@ async function collectUpdateFailureTriage() {
     process.exitCode = finalExitCode;
   }
 })().catch((err) => {
-  appendLog("handoff setup failed: " + (err && err.stack ? err.stack : String(err)));
+  appendLog("handoff setup failed: " + formatErrorMessage(err, { includeCode: true }) + "\n" + (err && err.stack ? err.stack : String(err)));
   cleanupSensitiveFiles();
   stopTriageScope();
   process.stdin.destroy();

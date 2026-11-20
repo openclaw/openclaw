@@ -1,7 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { listNodeTestConfigFiles } from "../../scripts/lib/ci-node-test-inventory.mts";
+import {
+  listNodeTestConfigFiles,
+  listNodeTestVolumeConfigFiles,
+} from "../../scripts/lib/ci-node-test-inventory.mts";
 import * as planOwner from "../../scripts/lib/ci-node-test-plan.mts";
 import {
   createNodeTestShardBundles,
@@ -11,6 +14,8 @@ import {
   type NodeTestShardGroup,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
+import { createRuntimeConfigVitestConfig } from "../vitest/vitest.runtime-config.config.ts";
+import { listMatchedTestFiles } from "./ci-node-test-plan.test-support.js";
 
 const prepareNodeTestVolumes = planOwner.prepareNodeTestVolumes;
 
@@ -231,4 +236,90 @@ it("keeps direct volume bound to the real source config instead of its canonical
       volume: expect.objectContaining({ entries: [] }),
     },
   ]);
+});
+
+it("matches runtime-config execution inventory without changing canonical ownership", () => {
+  const config = "test/vitest/vitest.runtime-config.config.ts";
+  const files = expectDefined(listNodeTestVolumeConfigFiles(config), "runtime-config inventory");
+  expect(files.toSorted()).toEqual(
+    listMatchedTestFiles(createRuntimeConfigVitestConfig({})).toSorted(),
+  );
+  expect(files).toContain("src/config/io.load-async.test.ts");
+  expect(files).not.toContain("src/config/sessions/session-canonical-key.test.ts");
+  expect(files).not.toContain("src/plugins/loader.runtime-registry.test.ts");
+  expect(listNodeTestConfigFiles(config)).toBeUndefined();
+});
+
+it.each(["node", "bun-all", "dual-all"] as const)(
+  "measures runtime-config only against its scheduled full profile under %s",
+  (policy) => {
+    const config = "test/vitest/vitest.runtime-config.config.ts";
+    const target = "src/config/io.load-async.test.ts";
+    const full = createNodeTestShardBundles({
+      compactMode: "pull-request",
+      runnerBackend: "hybrid",
+      changedPaths: [target],
+      includeReleaseOnlyRuntimeTests: false,
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyToolingShards: false,
+      includeProofTests: false,
+    });
+    const scheduled = expectDefined(
+      full
+        .flatMap((job) => job.groups)
+        .find(
+          (group) =>
+            group.configs.includes(config) &&
+            (!group.includePatterns || group.includePatterns.includes(target)),
+        ),
+      "scheduled runtime-config group",
+    );
+    const selected = { ...scheduled, configs: [config], includePatterns: [target] };
+    const context = {
+      ...volumeContextFor([], policy),
+      eligibility: {
+        changedPaths: [target],
+        includeReleaseOnlyRuntimeTests: false,
+        includePrExemptRuntimeTests: false,
+      },
+      fullPlan: () => full,
+    };
+    const describe = prepareNodeTestVolumes(context);
+    const entries = describe(selected, [target]).entries;
+    expect(entries.map((entry) => entry.runtime).toSorted()).toEqual(
+      policy === "dual-all" ? ["bun", "node"] : [policy === "node" ? "node" : "bun"],
+    );
+    for (const entry of entries) {
+      expect(entry.selected?.count).toBe(1);
+      expect(entry.full?.count).toBeGreaterThan(0);
+      expect(entry.full?.id).toMatch(/^[a-f0-9]{64}$/u);
+    }
+    expect(
+      describe({ ...selected, env: { ...selected.env, SCENARIO: "other" } }, [target]).entries.map(
+        (entry) => entry.full,
+      ),
+    ).toEqual(entries.map(() => null));
+    const missing = prepareNodeTestVolumes({ ...context, fullPlan: undefined });
+    expect(missing(selected, [target]).entries).toEqual(
+      entries.map((entry) => Object.assign({}, entry, { full: null })),
+    );
+  },
+);
+
+it("does not invent runtime-config membership or an infra baseline for direct targets", () => {
+  const config = "test/vitest/vitest.runtime-config.config.ts";
+  const target = "src/config/io.load-async.test.ts";
+  const other = volumeGroup([config], ["src/config/io.compat.test.ts"]);
+  const describe = prepareNodeTestVolumes(volumeContextFor([other]));
+  const selected = describe(volumeGroup([config], [target]), [target]).entries;
+  expect(selected).toHaveLength(1);
+  expect(selected[0]?.selected?.count).toBe(1);
+  expect(selected[0]?.full).toBeNull();
+  const excluded = "src/config/sessions/session-canonical-key.test.ts";
+  expect(describe(volumeGroup([config], [excluded]), [excluded]).entries).toEqual([]);
+  const plugin = "src/plugins/loader.runtime-registry.test.ts";
+  expect(
+    describe(volumeGroup(["test/vitest/vitest.infra.config.ts"], [plugin]), [plugin]).entries,
+  ).toEqual([]);
 });

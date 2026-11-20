@@ -118,7 +118,7 @@ it("records a revoked queued request for the owner without channel delivery", as
     await seed();
     const secret = "synthetic-revoked-request-secret";
     const notice =
-      "This request was not started because the requester no longer has access to this channel.";
+      "This request was not started because the requester no longer has access to this channel. Review the channel access settings; once access is restored, ask the requester to send the request again.";
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       new ChannelRunAuthorizationError(
         new Error("private policy detail", { cause: new Error(secret) }),
