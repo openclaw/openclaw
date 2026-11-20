@@ -520,6 +520,7 @@ export async function executeWorkerTurn(
           isAuthorized,
           userMessageAlreadyPersisted,
           baseLeafId,
+          modelPromptProjection: promptContext.modelPromptProjection,
         });
         return baseLeafId;
       };
