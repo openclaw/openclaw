@@ -196,6 +196,7 @@ it.each(["single cell", "separate cells"] as const)(
       outcome = beginReplyMessageInjectionTarget(target, "Refresh progress", {
         queueIdentity,
         waitForTranscriptCommit: true,
+        deliveryTimeoutMs: 120_000,
         onQueueAccepted: (value) => {
           if (value) {
             accepted.resolve();
@@ -210,7 +211,7 @@ it.each(["single cell", "separate cells"] as const)(
         // Do not advance the worker checkpoint watchdog along with the delivery deadline.
         await awaitGateBeforeSettlement(parked.promise, active, "Second poll never parked");
         // Nested poll completion is not a native agent-loop checkpoint. The actual
-        // default delivery deadline withdraws input while the same cell continues.
+        // explicit delivery deadline withdraws input while the same cell continues.
         expect(requests).toBe(1);
         expect(session.getSteeringMessages()).toEqual(["Refresh progress"]);
         await vi.advanceTimersByTimeAsync(120_000);
