@@ -118,9 +118,7 @@ async function fixture(review = reviewed) {
   );
   const context = createContext(request, {
     methods: ["templates.drafts.create", "chat.send"],
-    runtimeConfig: createRuntimeConfigStub({
-      sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
-    }),
+    runtimeConfig: createRuntimeConfigStub({ sourceConfig: {} }),
   });
   context.router.subscribe = () => () => false;
   const flow = templateCreatorFlow(context);

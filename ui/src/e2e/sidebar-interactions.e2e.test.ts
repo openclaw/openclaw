@@ -357,7 +357,7 @@ suite.define(() => {
 
   it("shares an agent from its menu row by asking in its main session", async () => {
     await suite.withPage(desktop, async ({ page }) => {
-      const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+      const config = {};
       const gateway = await installMockGateway(page, {
         featureMethods: [...defaultControlUiFeatureMethods, "templates.drafts.create"],
         methodResponses: {

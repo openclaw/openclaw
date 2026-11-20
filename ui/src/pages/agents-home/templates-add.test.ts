@@ -95,7 +95,6 @@ describe("Template Add", () => {
     async (surface) => {
       const apply = createDeferredCore();
       const { find, request, navigate, context, addSelector } = createAddSurface(surface, {
-        templatesEnabled: true,
         applyWait: apply.promise,
       });
       await waitForSolid(() => expect(find(addSelector)).toHaveProperty("disabled", false));
@@ -141,10 +140,8 @@ describe("Template Add", () => {
       const toast = document.createElement("openclaw-toast-host");
       document.body.append(toast);
       await toast.updateComplete;
-      const { find, request, context, replace, publishEvent, addSelector } = createAddSurface(
-        surface,
-        { templatesEnabled: true },
-      );
+      const { find, request, context, replace, publishEvent, addSelector } =
+        createAddSurface(surface);
       await waitForSolid(() => expect(find(addSelector)).toHaveProperty("disabled", false));
       const original = request.getMockImplementation()!;
       const apply = createDeferredCore<unknown>();
@@ -199,7 +196,7 @@ describe("Template Add", () => {
   );
 
   it("shows a rolled-back Add on the catalog page opened after it failed", async () => {
-    const { request, context, wrapper, unmountPage } = createPage({ templatesEnabled: true });
+    const { request, context, wrapper, unmountPage } = createPage();
     await waitForSolid(() => expect(context.agents.state.agentsList).not.toBeNull());
     // The catalog page that started an Add closes when the new chat opens.
     unmountPage();
@@ -244,7 +241,6 @@ describe("Template Add", () => {
     "returns a flagged %s release for the user's decision and applies once on duplicate confirmation",
     async (surface) => {
       const { find, request, navigate, replace, context, addSelector } = createAddSurface(surface, {
-        templatesEnabled: true,
         riskConsentRequired: true,
       });
       await waitForSolid(() => expect(find(addSelector)).toHaveProperty("disabled", false));
@@ -271,7 +267,7 @@ describe("Template Add", () => {
   );
 
   it("isolates a successor pending chat from a disconnected Add's late result", async () => {
-    const { find, request, navigate, context, setPhase } = createDetail({ templatesEnabled: true });
+    const { find, request, navigate, context, setPhase } = createDetail();
     await waitForSolid(() =>
       expect(find("[data-templates-confirm] button")).toHaveProperty("disabled", false),
     );
@@ -319,7 +315,7 @@ describe("Template Add", () => {
   });
 
   it("opens the created chat without waiting for a roster refresh", async () => {
-    const { find, request, navigate, context } = createDetail({ templatesEnabled: true });
+    const { find, request, navigate, context } = createDetail();
     await waitForSolid(() =>
       expect(find("[data-templates-confirm] button")).toHaveProperty("disabled", false),
     );
@@ -348,9 +344,7 @@ describe("Template Add", () => {
       const toast = document.createElement("openclaw-toast-host");
       document.body.append(toast);
       await toast.updateComplete;
-      const { find, request, context, replace, publishEvent } = createDetail({
-        templatesEnabled: true,
-      });
+      const { find, request, context, replace, publishEvent } = createDetail();
       await waitForSolid(() =>
         expect(find("[data-templates-confirm] button")).toHaveProperty("disabled", false),
       );
@@ -417,7 +411,7 @@ describe("Template Add", () => {
   );
 
   it("retains the selected Template on revalidation and clears it when the package changes", async () => {
-    const { detail, request, setPackageName } = createDetail({ templatesEnabled: true });
+    const { detail, request, setPackageName } = createDetail();
 
     await vi.waitFor(() =>
       expect(detail.querySelector(".plugin-capabilities")?.textContent).toContain(
@@ -447,7 +441,6 @@ describe("Template Add", () => {
   it("keeps an admitted Add app-owned across package route changes without stealing navigation", async () => {
     const apply = createDeferredCore();
     const { find, request, navigate, replace, context, setPackageName } = createDetail({
-      templatesEnabled: true,
       applyWait: apply.promise,
     });
     await waitForSolid(() =>
@@ -477,7 +470,6 @@ describe("Template Add", () => {
 
   it("asks again after a cancelled ClawHub trust warning", async () => {
     const { detail, request, navigate } = createDetail({
-      templatesEnabled: true,
       riskConsentRequired: true,
       clawHubTrustWarning: "Review this release before adding it.",
     });

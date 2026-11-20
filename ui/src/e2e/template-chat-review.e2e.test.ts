@@ -29,9 +29,9 @@ const publication = {
   publicationStatus: "pending",
   attemptId: "attempt-1",
 };
-it.skipIf(!available).each([true, false])(
+it.skipIf(!available).each(["default", "opt-out"] as const)(
   "hydrates native read-only review in the original transcript, Templates=%s",
-  async (templatesEnabled) => {
+  async (setting) => {
     const prebuilt = inject("controlUiE2eDeploymentAssets");
     const server = prebuilt
       ? await startBuiltControlUiE2eServer(prebuilt.root)
@@ -41,7 +41,7 @@ it.skipIf(!available).each([true, false])(
       : await chromium.launch({ executablePath });
     const proof =
       process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-        ? createControlUiE2eArtifactDir("template-inline-native-" + templatesEnabled)
+        ? createControlUiE2eArtifactDir("template-inline-native-" + setting)
         : null;
     const context = await browser.newContext({
       ...createDarkDesktopControlUiContextOptions(),
@@ -51,7 +51,10 @@ it.skipIf(!available).each([true, false])(
     const page = await context.newPage();
     const video = page.video();
     try {
-      const config = { gateway: { controlUi: { experimental: { templates: templatesEnabled } } } };
+      const config =
+        setting === "opt-out"
+          ? { gateway: { controlUi: { experimental: { templates: false } } } }
+          : {};
       const gateway = await installMockGateway(page, {
         assistantName: "Harbor",
         agentModel: "openai/gpt-4o",
@@ -106,10 +109,10 @@ it.skipIf(!available).each([true, false])(
       await waitForControlUiGatewayReady(page);
       const inline = page.locator('[data-plugin-inline-view="review-template-1"]');
       await inline.scrollIntoViewIfNeeded();
-      if (!templatesEnabled) {
+      if (setting === "opt-out") {
         await inline
           .getByText(
-            "Your private draft is saved. Turn on Templates in Settings → Labs to review it.",
+            "Your private draft is saved. Your Gateway administrator has turned off Templates.",
             { exact: true },
           )
           .waitFor();
@@ -286,7 +289,7 @@ it.skipIf(!available)(
         : null;
     const measurements: unknown[] = [];
     try {
-      const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+      const config = {};
       const longPath =
         "workspace/reference/repository-release-review-and-source-attribution-guide.md";
       const gateway = await installMockGateway(page, {

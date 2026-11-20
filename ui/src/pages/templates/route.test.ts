@@ -9,7 +9,10 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -70,41 +73,61 @@ it("rejects a direct visit when Templates is known-disabled", async () => {
 });
 
 it.each([
-  ["/templates", true],
+  ["/templates", undefined],
   ["/templates/workflow-operator", false],
-] as const)("gates cold %s until Labs=%s", async (pathname, enabled) => {
-  const fixture = await setup(pathname);
-  expect(fixture.router.getState().matches[0]).toMatchObject({
-    routeId: "templates",
-    status: "success",
-    data: { location: { pathname } },
-  });
-  const view = mountSolid(
-    () =>
-      createComponent(TemplatesPage, {
-        routeData: { basePath: "", location: fixture.history.location() },
-      }),
-    { wrapper: createSolidApplicationContextProvider(fixture.context).wrapper },
-  );
-  const loading = () => view.container.querySelector(".plugin-catalog-detail--loading");
-  const explore = () => view.container.querySelector("[data-templates-explore]");
-  expect(loading()).not.toBeNull();
-  expect(view.container.textContent).not.toContain("Templates is turned off");
-  expect(explore()).toBeNull();
+] as const)(
+  "resolves cold %s for a read-only viewer with Templates=%s",
+  async (pathname, enabled) => {
+    const fixture = await setup(pathname);
+    expect(fixture.router.getState().matches[0]).toMatchObject({
+      routeId: "templates",
+      status: "success",
+      data: { location: { pathname } },
+    });
+    const view = mountSolid(
+      () =>
+        createComponent(TemplatesPage, {
+          routeData: { basePath: "", location: fixture.history.location() },
+        }),
+      { wrapper: createSolidApplicationContextProvider(fixture.context).wrapper },
+    );
+    const loading = () => view.container.querySelector(".plugin-catalog-detail--loading");
+    const explore = () => view.container.querySelector("[data-templates-explore]");
+    expect(loading()).not.toBeNull();
+    expect(view.container.textContent).not.toContain(
+      "Your Gateway administrator has turned off Templates.",
+    );
+    expect(explore()).toBeNull();
 
-  const request = vi.fn(async () => ({ entries: [] }));
-  fixture.publishConfig(templatesConfig(enabled));
-  fixture.publish({
-    ...fixture.gateway.snapshot,
-    phase: "connected",
-    client: createTestGatewayClient(request),
-    hello: gatewayHelloForMethods(["templates.catalog.search"], ["operator.read"]),
-  });
-  await vi.waitFor(() => expect(loading()).toBeNull());
-  await vi.waitFor(() => expect(explore() !== null).toBe(enabled));
-  if (!enabled) {
-    expect(view.container.textContent).toContain("Templates is turned off");
-    expect(request).not.toHaveBeenCalled();
-  }
-  expect(fixture.history.location().pathname).toBe(pathname);
-});
+    const request = createGatewayRequestMock(async () => ({
+      overview: { featured: [], sections: [] },
+    }));
+    const client = createTestGatewayClient(request);
+    const hello = gatewayHelloForMethods(["templates.catalog.search"], ["operator.read"]);
+    vi.spyOn(client, "auth", "get").mockReturnValue(hello.auth);
+    fixture.publishConfig(enabled === undefined ? {} : templatesConfig(enabled));
+    fixture.publish({
+      ...fixture.gateway.snapshot,
+      phase: "connected",
+      client,
+      hello,
+    });
+    await vi.waitFor(() => expect(loading()).toBeNull());
+    await vi.waitFor(() => expect(explore() !== null).toBe(enabled !== false));
+    if (enabled !== false) {
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "templates.catalog.search",
+          expect.objectContaining({ overview: true }),
+        ),
+      );
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("config.get");
+    } else {
+      expect(view.container.textContent).toContain(
+        "Your Gateway administrator has turned off Templates.",
+      );
+      expect(request).not.toHaveBeenCalled();
+    }
+    expect(fixture.history.location().pathname).toBe(pathname);
+  },
+);

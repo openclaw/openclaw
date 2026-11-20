@@ -48,7 +48,7 @@ async function fixture() {
   const context = createContext(request, {
     methods: ["templates.drafts.create", "chat.send"],
     runtimeConfig: createRuntimeConfigStub({
-      sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
+      sourceConfig: {},
     }),
   });
   Object.assign(context.gateway, { connectionRevision: 0 });
@@ -123,11 +123,11 @@ it("keeps a pending review quiet without starting it before config is known", as
   expect(f.request).not.toHaveBeenCalled();
 });
 
-it.each(["Labs", "role"])(
+it.each(["configuration", "role"])(
   "explains a chat review blocked by %s without touching its draft",
   async (reason) => {
     const f = await fixture();
-    if (reason === "Labs") {
+    if (reason === "configuration") {
       Object.assign(f.context.runtimeConfig.state.configSnapshot!, {
         sourceConfig: { gateway: { controlUi: { experimental: { templates: false } } } },
       });
@@ -143,12 +143,11 @@ it.each(["Labs", "role"])(
     expect(f.owner.loading).toBe(false);
     expect(f.request).not.toHaveBeenCalled();
     const notice = toast.mock.calls[0]?.[0];
-    expect(notice?.message).toContain(reason === "Labs" ? "Settings → Labs" : "administrator");
+    expect(notice?.message).toContain(
+      reason === "configuration" ? "has turned off Templates" : "administrator",
+    );
     expect(notice?.message).toContain("private draft");
-    if (reason === "Labs") {
-      notice!.onAction!();
-      expect(f.context.navigate).toHaveBeenCalledWith("labs");
-    }
+    expect(notice?.onAction).toBeUndefined();
   },
 );
 
@@ -228,7 +227,7 @@ it("reserves the first clicked agent before import, then navigates only after se
   expect(f.owner.flow?.hasActiveDraft).toBe(true);
 });
 
-it.each(["client", "revision", "disconnected", "create", "send", "Lab"])(
+it.each(["client", "revision", "disconnected", "create", "send", "configuration"])(
   "rejects a held import after %s authority changes, then permits a fresh attempt",
   async (change) => {
     const f = await fixture();
@@ -243,7 +242,7 @@ it.each(["client", "revision", "disconnected", "create", "send", "Lab"])(
       Object.assign(f.context.gateway, { connectionRevision: 1 });
     } else if (change === "disconnected") {
       snapshot.phase = "reconnecting";
-    } else if (change === "Lab") {
+    } else if (change === "configuration") {
       Object.assign(f.context.runtimeConfig.state.configSnapshot!, {
         sourceConfig: { gateway: { controlUi: { experimental: { templates: false } } } },
       });
@@ -259,7 +258,7 @@ it.each(["client", "revision", "disconnected", "create", "send", "Lab"])(
     expect(f.owner.flow).toBeNull();
     Object.assign(snapshot, { client, hello, phase: "connected" });
     Object.assign(f.context.runtimeConfig.state.configSnapshot!, {
-      sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
+      sourceConfig: {},
     });
     f.action();
     await vi.waitFor(() => expect(f.context.navigate).toHaveBeenCalledOnce());

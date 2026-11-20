@@ -9,12 +9,17 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PluginsHubHeader } from "./plugins-hub-header.tsx";
 import type { PluginsHubTab } from "./plugins-hub.ts";
 
-function templatesFlag(templates: boolean) {
+function templatesConfig(templates?: boolean) {
   const context = {
     runtimeConfig: {
       state: {
         configForm: null,
-        configSnapshot: { config: { gateway: { controlUi: { experimental: { templates } } } } },
+        configSnapshot: {
+          config:
+            templates === undefined
+              ? {}
+              : { gateway: { controlUi: { experimental: { templates } } } },
+        },
       },
       subscribe: () => () => undefined,
     },
@@ -38,21 +43,21 @@ it("leaves the Customize pages to the sidebar outside the native apps", () => {
   Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_EMBED__");
   const view = mountSolid(
     () => <PluginsHubHeader active="plugins" onSelect={() => {}} />,
-    templatesFlag(true),
+    templatesConfig(true),
   );
   expect(view.getByRole("heading", { level: 1 }).textContent).toBe("Plugins");
   expect(view.queryAllByRole("tab")).toEqual([]);
 });
 
-it("lists Templates as a Customize tab only while its experimental flag is on", () => {
-  const tabs = (templates: boolean) =>
+it("lists Templates as a Customize tab by default unless the administrator disabled it", () => {
+  const tabs = (templates?: boolean) =>
     mountSolid(
       () => <PluginsHubHeader active="plugins" onSelect={() => {}} />,
-      templatesFlag(templates),
+      templatesConfig(templates),
     )
       .getAllByRole("tab")
       .map((tab) => tab.textContent);
-  expect(tabs(true)).toEqual(["Plugins", "Skills", "Skill workshop", "Templates"]);
+  expect(tabs()).toEqual(["Plugins", "Skills", "Skill workshop", "Templates"]);
   expect(tabs(false)).toEqual(["Plugins", "Skills", "Skill workshop"]);
 });
 
@@ -68,7 +73,7 @@ it("keeps Plugins hub tabs and actions live in the shared hub header", () => {
         secondaryAction={{ label: "Manage plugins", onClick: onSettings }}
       />
     ),
-    templatesFlag(false),
+    templatesConfig(false),
   );
 
   expect(view.container.querySelector(".plugins-hub-header.hub-page-header h1")?.textContent).toBe(
@@ -96,7 +101,7 @@ it("restores keyboard focus to the destination tab when its route replaces the h
         {(tab) => <PluginsHubHeader active={tab} onSelect={setActive} />}
       </Show>
     ),
-    templatesFlag(false),
+    templatesConfig(false),
   );
   const workshop = view.getByRole("tab", { name: "Skill workshop" });
   workshop.focus();

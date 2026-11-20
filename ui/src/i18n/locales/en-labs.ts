@@ -61,10 +61,6 @@ const enLabs = {
       description:
         "Try speech bubbles with compact tool activity. Home uses bubbles by default while enabled; each browser keeps its explicit conversation choices. Disabling this lab restores the standard view without clearing those choices.",
     },
-    templates: {
-      title: "Templates",
-      description: "Templates are ready-made agents for specific tasks.",
-    },
     hostDesktop: {
       title: "Desktop on the computer running OpenClaw",
       description:

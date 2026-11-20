@@ -155,17 +155,20 @@ it("shows the read-only banner only for the serving Gateway while its configurat
   expect(getBanner()).toBeNull();
 });
 
-it("exposes the Templates navigation entry only while its Labs toggle is enabled", async () => {
+it("exposes Templates navigation by default and honors an explicit Gateway opt-out", async () => {
   const { owner, runtime } = await mountShell();
   const initial = runtime.context.runtimeConfig.state;
   const config = vi.spyOn(runtime.context.runtimeConfig, "state", "get");
-  for (const enabled of [false, true, false]) {
+  for (const enabled of [undefined, false, true]) {
     config.mockReturnValue({
       ...initial,
-      bootstrapConfig: { gateway: { controlUi: { experimental: { templates: enabled } } } },
+      bootstrapConfig:
+        enabled === undefined
+          ? {}
+          : { gateway: { controlUi: { experimental: { templates: enabled } } } },
     });
     expect(readShellView(owner).sidebarProperties.enabledRouteIds.includes("templates")).toBe(
-      enabled,
+      enabled !== false,
     );
     expect(readShellView(owner).sidebarProperties.enabledRouteIds).toContain("agents");
   }

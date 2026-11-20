@@ -30,7 +30,6 @@ export const publishedAtMs = 1_780_000_000_000;
 export const soulExcerpt = "Keep the owner informed about approved workflows. ".repeat(24);
 export const skillExcerpt =
   "Research trips and compare destinations against the approved itinerary. ".repeat(24);
-const config = { gateway: { controlUi: { experimental: { templates: true } } } };
 export const agentsList = makeBootRoster({ agents: [{ id: "main", name: "Main" }] });
 
 export function createTemplateCatalogFixture(runtime: () => { browser: Browser; baseUrl: string }) {
@@ -113,7 +112,7 @@ async function installTemplateCatalogGateway(
           },
         },
       } satisfies PluginDiscoveryDetailResult,
-      "config.get": sourceConfigSnapshot(config),
+      "config.get": sourceConfigSnapshot(),
       "agents.list": agentsList,
       "templates.catalog.search": {
         entries: [entry],

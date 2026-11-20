@@ -64,7 +64,6 @@ it.skipIf(!available)(
       };
       const config = {
         ui: { prefs: { theme: id, themeMode: "dark" } },
-        gateway: { controlUi: { experimental: { templates: true } } },
       };
       const gateway = await installMockGateway(page, {
         sessionKey,
@@ -178,15 +177,10 @@ it.skipIf(!available).each([true, false, "failed", "bootstrap"] as const)(
     const context = await browser.newContext(createDarkDesktopControlUiContextOptions());
     const page = await context.newPage();
     try {
-      const config = {
-        gateway: {
-          controlUi: {
-            experimental: {
-              templates: templatesEnabled === true || templatesEnabled === "bootstrap",
-            },
-          },
-        },
-      };
+      const config =
+        typeof templatesEnabled === "boolean"
+          ? { gateway: { controlUi: { experimental: { templates: templatesEnabled } } } }
+          : {};
       const snapshot = {
         config,
         sourceConfig: config,
@@ -237,7 +231,7 @@ it.skipIf(!available).each([true, false, "failed", "bootstrap"] as const)(
       const inline = page.locator('[data-plugin-inline-view="review-template-1"]');
       await inline.waitFor({ state: "attached" });
       const warning = inline.getByText(
-        "Your private draft is saved. Turn on Templates in Settings → Labs to review it.",
+        "Your private draft is saved. Your Gateway administrator has turned off Templates.",
         { exact: true },
       );
       await inline.evaluate((element) => element.scrollIntoView());

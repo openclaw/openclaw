@@ -83,9 +83,7 @@ it("invokes the bundled skill in the existing main session, then reviews and pub
   });
   const context = createContext(request, {
     methods: ["templates.drafts.create", "chat.send"],
-    runtimeConfig: createRuntimeConfigStub({
-      sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
-    }),
+    runtimeConfig: createRuntimeConfigStub({ sourceConfig: {} }),
   });
   const flow = new TemplateCreatorFlow(context);
   await flow.start("research");
@@ -151,9 +149,7 @@ it.each(["published", "failed"] as const)(
     const flow = new TemplateCreatorFlow(
       createContext(request, {
         methods: ["templates.drafts.create", "chat.send"],
-        runtimeConfig: createRuntimeConfigStub({
-          sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
-        }),
+        runtimeConfig: createRuntimeConfigStub({ sourceConfig: {} }),
       }),
     );
     const session = "agent:research:main";

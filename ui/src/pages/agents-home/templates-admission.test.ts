@@ -30,7 +30,7 @@ const template = {
 };
 
 /** A catalog page is never shown before the roster that names the main session. */
-function createLoadedPage(options: Parameters<typeof createPage>[0]) {
+function createLoadedPage(options?: Parameters<typeof createPage>[0]) {
   const page = createPage(options);
   return waitForSolid(() => expect(page.context.agents.state.agentsList).not.toBeNull()).then(
     () => page,
@@ -40,9 +40,7 @@ function createLoadedPage(options: Parameters<typeof createPage>[0]) {
 it.each(["ready", "initialization-failed"] as const)(
   "retains buffered input after durable admission until initialization: %s",
   async (outcome) => {
-    const { request, context, replace, publishEvent } = await createLoadedPage({
-      templatesEnabled: true,
-    });
+    const { request, context, replace, publishEvent } = await createLoadedPage();
     const original = request.getMockImplementation()!;
     const apply = createDeferredCore<unknown>();
     request.mockImplementation((method, params, options) => {
@@ -132,7 +130,6 @@ it.each([false, true])(
   "retries retained Template setup in the same chat and composer (reconnect=%s)",
   async (reconnect) => {
     const { request, context, navigate, replace, publishEvent, setPhase } = await createLoadedPage({
-      templatesEnabled: true,
       riskConsentRequired: true,
     });
     const original = request.getMockImplementation()!;
@@ -246,9 +243,7 @@ it.each([false, true])(
 it.each([false, true])(
   "recovers Template A after creating B while A fails (live: %s)",
   async (live) => {
-    const { request, context, navigate, publishEvent } = await createLoadedPage({
-      templatesEnabled: true,
-    });
+    const { request, context, navigate, publishEvent } = await createLoadedPage();
     const original = request.getMockImplementation()!;
     const first = createDeferredCore<unknown>();
     const retry = createDeferredCore<unknown>();
@@ -355,7 +350,7 @@ it.each([false, true])(
 it.each([false, true])(
   "retires settled partial routing with its Gateway scope (background=%s)",
   async (background) => {
-    const { request, context, setPhase } = await createLoadedPage({ templatesEnabled: true });
+    const { request, context, setPhase } = await createLoadedPage();
     const original = request.getMockImplementation()!;
     const saved = { agentId: "workflow-operator", sessionKey: "agent:workflow-operator:team-room" };
     request.mockImplementation((method, params, options) =>
@@ -405,7 +400,7 @@ it.each([false, true])(
 );
 
 it("asks for an id its roster does not use and retries the id the Gateway admitted", async () => {
-  const { request, context, navigate } = await createLoadedPage({ templatesEnabled: true });
+  const { request, context, navigate } = await createLoadedPage();
   const original = request.getMockImplementation()!;
   // Another client took harbor-2 first, so the Gateway chose the next unused id.
   const saved = { agentId: "harbor-3", sessionKey: "agent:harbor-3:team-room" };
@@ -438,7 +433,7 @@ it("asks for an id its roster does not use and retries the id the Gateway admitt
 it.each([false, true])(
   "keeps live setup custody and same-agent Retry (canonical route=%s)",
   async (canonical) => {
-    const { request, context, publishEvent } = await createLoadedPage({ templatesEnabled: true });
+    const { request, context, publishEvent } = await createLoadedPage();
     const original = request.getMockImplementation()!;
     const first = createDeferredCore<unknown>();
     const second = createDeferredCore<unknown>();

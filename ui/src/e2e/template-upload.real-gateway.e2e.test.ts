@@ -79,7 +79,6 @@ const suite = createControlUiE2eSuite({
             controlUi: {
               enabled: true,
               root: path.resolve("dist/control-ui"),
-              experimental: { templates: true },
             },
             reload: { mode: "hybrid" },
           },

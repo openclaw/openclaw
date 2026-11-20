@@ -6,7 +6,7 @@ import { TemplatesPage } from "../templates/page.tsx";
 import { createPage, workflowOperator } from "./agents-home-page.test-helpers.ts";
 import { TemplatesCatalogDialog } from "./templates-catalog-dialog.tsx";
 
-export function createDetail(options: Parameters<typeof createPage>[0], version?: string) {
+export function createDetail(options?: Parameters<typeof createPage>[0], version?: string) {
   const fixture = createPage(options);
   const initialLocation = {
     pathname: pathForTemplateCatalogEntry(workflowOperator.packageName, ""),
@@ -43,7 +43,7 @@ export function createDetail(options: Parameters<typeof createPage>[0], version?
 
 export function createAddSurface(
   surface: "card" | "detail" | "modal",
-  options: Parameters<typeof createPage>[0],
+  options?: Parameters<typeof createPage>[0],
 ) {
   if (surface === "detail") {
     return { ...createDetail(options), addSelector: "[data-templates-confirm] button" };

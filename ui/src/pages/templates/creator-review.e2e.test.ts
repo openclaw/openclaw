@@ -43,7 +43,7 @@ async function withHeldCreator(
     browser = await connectCreatorBrowser();
     const page = await browser.newPage(createDarkDesktopControlUiContextOptions());
     await seedSidebarSettings(page, server.baseUrl, { sidebarAgentsMode: "roster" });
-    const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+    const config = {};
     const scope = { input: "Repository", job: "Summarize", output: "Brief", authority: "Read" };
     const gateway = await installMockGateway(page, {
       assistantName: "Harbor",
@@ -291,7 +291,7 @@ it.skipIf(!chromiumAvailable).each([
         ],
         scope,
       };
-      const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+      const config = {};
       const gateway = await installMockGateway(page, {
         sessionKey,
         agentModel: "demo/local",
@@ -522,7 +522,6 @@ it.skipIf(!process.env.OPENCLAW_TEMPLATE_CREATOR_AUTHORITY_PROOF)(
             gateway: {
               controlUi: {
                 enabled: true,
-                experimental: { templates: true },
                 ...(instances[0]
                   ? { allowedOrigins: [`http://127.0.0.1:${instances[0].port}`] }
                   : {}),

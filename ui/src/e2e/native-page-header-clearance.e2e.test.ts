@@ -113,7 +113,7 @@ suite.define(() => {
   ])(
     "keeps the Templates heading and discovery search reachable at $width×$height (native: $native, narrow: $narrowColumn)",
     async ({ width, height, native, narrowColumn }) => {
-      const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+      const config = {};
       const { page, gateway, toolbar } = await openPage(
         "templates",
         native ? installNativeWebChrome : undefined,

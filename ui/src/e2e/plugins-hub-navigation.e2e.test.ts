@@ -563,21 +563,12 @@ suite.define(() => {
       }
     },
   );
-  it("lists the Customize pages in its sidebar", async () => {
+  it("lists Templates in the Customize sidebar by default", async () => {
     const context = await createContext({ width: 1280, height: 800 });
     const page = await context.newPage();
-    const config = { gateway: { controlUi: { experimental: { templates: true } } } };
     await installMockGateway(page, {
       featureMethods: ["config.get", "plugins.list", "plugins.catalog.browse"],
-      methodResponses: {
-        ...methodResponses,
-        "config.get": {
-          ...methodResponses["config.get"],
-          config,
-          sourceConfig: config,
-          raw: JSON.stringify(config),
-        },
-      },
+      methodResponses,
     });
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -592,7 +583,6 @@ suite.define(() => {
           .evaluateAll((rows) => rows.map((row) => row.textContent)),
       ).toEqual(["Plugins", "Skills", "Skill workshop", "Templates"]);
       expect(await customize.row("Plugins").getAttribute("aria-current")).toBe("page");
-      // Templates follows its experimental flag; selection follows the open page.
       await customize.open("Templates");
       await waitForControlUiRoute(page, { pathname: "/templates", routeId: "templates" });
       expect(await customize.row("Templates").getAttribute("aria-current")).toBe("page");

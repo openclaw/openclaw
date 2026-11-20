@@ -2,6 +2,7 @@ import { createRouter } from "@openclaw/uirouter";
 import { createComponent } from "solid-js";
 import { vi } from "vitest";
 import { retainGatewayResponsePayload } from "../../../../packages/gateway-client/src/protocol-request.js";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
@@ -10,6 +11,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { i18n } from "../../i18n/index.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createContext } from "../../test-helpers/app-sidebar.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
@@ -58,26 +60,8 @@ type PageOptions = {
 const disposers: Array<() => void> = [];
 
 export function createPage(options: PageOptions = {}) {
-  const ensureConfigLoaded = vi.fn(async () => undefined);
   const addedAgents: Array<{ id: string; name: string }> = [];
   const lifetime = new AbortController();
-  const runtimeConfigListeners = new Set<() => void>();
-  const runtimeConfig = {
-    state: {
-      configSnapshot: {
-        sourceConfig: {
-          gateway: {
-            controlUi: { experimental: { templates: options.templatesEnabled ?? false } },
-          },
-        },
-      },
-    },
-    ensureLoaded: ensureConfigLoaded,
-    subscribe: (listener: () => void) => {
-      runtimeConfigListeners.add(listener);
-      return () => runtimeConfigListeners.delete(listener);
-    },
-  };
   const request = createGatewayRequestMock(async (method, params) => {
     const args = params && typeof params === "object" ? params : {};
     if (method === "agents.list") {
@@ -234,6 +218,14 @@ export function createPage(options: PageOptions = {}) {
   source.gateway.setSessionKey = vi.fn((sessionKey: string) => {
     source.publish({ ...source.gateway.snapshot, sessionKey });
   });
+  const templatesConfig = (templates?: boolean) =>
+    templates === undefined ? {} : { gateway: { controlUi: { experimental: { templates } } } };
+  let config = templatesConfig(options.templatesEnabled);
+  const configChanges = createChangeListeners();
+  const runtimeConfig = createRuntimeConfigCapability(source.gateway, {
+    current: () => config,
+    subscribe: configChanges.subscribe,
+  });
   const agents = createAgentCapability(source.gateway);
   const agentSelection = createAgentSelectionCapability(source.gateway, agents);
   const agentIdentity = createAgentIdentityCapability(source.gateway);
@@ -266,7 +258,7 @@ export function createPage(options: PageOptions = {}) {
     replace,
     agents,
     agentSelection,
-    runtimeConfig: runtimeConfig as unknown as ApplicationContext["runtimeConfig"],
+    runtimeConfig,
     navigate,
   };
   void router.navigate(
@@ -291,6 +283,7 @@ export function createPage(options: PageOptions = {}) {
     lifetime.abort();
     context.chatSubmissions.clear();
     view.unmount();
+    runtimeConfig.dispose();
     agentSelection.dispose();
     agents.dispose();
     sessionCapability.dispose();
@@ -304,15 +297,11 @@ export function createPage(options: PageOptions = {}) {
     navigate,
     replace,
     publishEvent: source.publishEvent,
-    ensureConfigLoaded,
     setPhase: (phase: ApplicationGatewaySnapshot["phase"]) =>
       source.publish({ ...source.gateway.snapshot, phase }),
     setTemplatesEnabled: (enabled: boolean) => {
-      runtimeConfig.state.configSnapshot.sourceConfig.gateway.controlUi.experimental.templates =
-        enabled;
-      for (const listener of runtimeConfigListeners) {
-        listener();
-      }
+      config = templatesConfig(enabled);
+      configChanges.publish();
     },
   };
 }

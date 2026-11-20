@@ -76,7 +76,7 @@ describe("Templates discovery", () => {
       "schemas/report.json",
       "avatars/agent.svg",
     ];
-    const { detail, request } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
+    const { detail, request } = createDetail({ workspaceFileNames: names });
     await vi.waitFor(() =>
       expect(detail.querySelector(".templates-personality__file")?.textContent).toBe("SOUL.md"),
     );
@@ -103,7 +103,7 @@ describe("Templates discovery", () => {
   });
 
   it("releases a closed preview before transport settles and isolates its replacement", async () => {
-    const { detail, request } = createDetail({ templatesEnabled: true });
+    const { detail, request } = createDetail();
     await waitForSolid(() =>
       expect(detail.querySelector(".templates-personality__file")).not.toBeNull(),
     );
@@ -145,31 +145,31 @@ describe("Templates discovery", () => {
     "/templates",
     "/templates/workflow-operator",
     "/templates/packages/%40openclaw%2Fworkflow-operator",
-  ])("rejects direct visits to %s while Labs is disabled", async (pathname) => {
-    const { context, page, request, ensureConfigLoaded } = createPage({ pathname });
+  ])("rejects direct visits to %s when the administrator turns Templates off", async (pathname) => {
+    const { context, page, request } = createPage({ pathname, templatesEnabled: false });
     const location = { pathname, search: "", hash: "" };
     const result = await templatesRoute.loader!(
       context,
       createRouteLoaderOptions(location, templatesRoute.loaderDeps!(context, location)),
     );
     expect(result).toEqual({ type: "notFound", data: undefined });
-    expect(ensureConfigLoaded).not.toHaveBeenCalled();
-    expect(page.textContent).toContain("Templates is turned off");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("config.get");
+    expect(page.textContent).toContain("Your Gateway administrator has turned off Templates.");
     expect(page.querySelector("[data-templates-explore]")).toBeNull();
     expect(page.querySelector("[data-templates-confirm]")).toBeNull();
     expect(request.mock.calls.some(([method]) => method.startsWith("templates."))).toBe(false);
   });
 
-  it("removes discovery when the Labs toggle is disabled during a visit", async () => {
-    const { page, setTemplatesEnabled } = createPage({ templatesEnabled: true });
+  it("removes discovery when the administrator turns Templates off during a visit", async () => {
+    const { page, setTemplatesEnabled } = createPage();
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
     setTemplatesEnabled(false);
     await vi.waitFor(() => expect(page.querySelector("[data-templates-explore]")).toBeNull());
-    expect(page.textContent).toContain("Templates is turned off");
+    expect(page.textContent).toContain("Your Gateway administrator has turned off Templates.");
   });
 
-  it("shows official Templates and opens their dedicated route", async () => {
-    const { page, navigate, request } = createPage({ templatesEnabled: true });
+  it("shows official Templates by default and opens their dedicated route", async () => {
+    const { page, navigate, request } = createPage();
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
     expect(page.querySelector(".hub-page-header h1.page-title")?.textContent).toBe("Templates");
     const subtitle = page.querySelector(".hub-page-header .page-subtitle");
@@ -198,7 +198,6 @@ describe("Templates discovery", () => {
   it("shows the full category without preloading decorative artwork a second time", async () => {
     const decode = stubImageDecode(async () => {});
     const { page, request } = createPage({
-      templatesEnabled: true,
       templateIconUrl: `https://clawhub.ai/api/v1/skill-icons/${"e".repeat(64)}`,
     });
     const shelf = '[data-catalog-section="productivity"]';
@@ -285,7 +284,7 @@ describe("Templates discovery", () => {
   );
 
   it("lists the category chips in catalog order and filters by the selected slug", async () => {
-    const { page, request } = createPage({ templatesEnabled: true });
+    const { page, request } = createPage();
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
 
     const chips = [...page.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")];
@@ -312,7 +311,7 @@ describe("Templates discovery", () => {
   });
 
   it("updates Explore results when the search changes", async () => {
-    const { page, request } = createPage({ templatesEnabled: true });
+    const { page, request } = createPage();
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
 
     const search = page.querySelector<HTMLInputElement>("[data-templates-search]");
@@ -402,7 +401,7 @@ describe("Templates discovery", () => {
   });
 
   it("refreshes a selected Template after reconnect and ignores the retired detail reply", async () => {
-    const { request, setPhase, find } = createDetail({ templatesEnabled: true });
+    const { request, setPhase, find } = createDetail();
     await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
     const original = request.getMockImplementation()!;
     const stale = createDeferredCore<unknown>();
@@ -480,7 +479,7 @@ describe("Templates discovery", () => {
   );
 
   it("retries a failed detail read without replacing the shell or admitting Add early", async () => {
-    const { request, setPhase, find } = createDetail({ templatesEnabled: true });
+    const { request, setPhase, find } = createDetail();
     await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
     const addButton = find("[data-templates-confirm] button");
     const original = request.getMockImplementation()!;
@@ -520,7 +519,7 @@ describe("Templates discovery", () => {
   });
 
   it("retires pending detail loading immediately on disconnect and ignores its late failure", async () => {
-    const { request, setPhase, find } = createDetail({ templatesEnabled: true });
+    const { request, setPhase, find } = createDetail();
     await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
     const original = request.getMockImplementation()!;
     const stale = createDeferredCore<unknown>();
@@ -553,7 +552,7 @@ describe("Templates discovery", () => {
   });
 
   it("falls back to legacy shelves only for an unsupported overview and retires pending probes", async () => {
-    const { page, request, setPhase } = createPage({ templatesEnabled: true });
+    const { page, request, setPhase } = createPage();
     await waitForSolid(() =>
       expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1),
     );
@@ -600,7 +599,7 @@ describe("Templates discovery", () => {
   });
 
   it("cancels superseded Explore debounce and ignores an older search result", async () => {
-    const { page, request } = createPage({ templatesEnabled: true });
+    const { page, request } = createPage();
     await waitForSolid(() =>
       expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1),
     );
@@ -658,7 +657,7 @@ describe("Templates discovery", () => {
   });
 
   it("retries the current Explore query after a failed search", async () => {
-    const { page, request } = createPage({ templatesEnabled: true });
+    const { page, request } = createPage();
     await waitForSolid(() =>
       expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1),
     );
@@ -702,7 +701,7 @@ it.each(["card", "detail"])(
     const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`;
     stubImageDecode(() => Promise.resolve());
     const create = (iconUrl?: string) => {
-      const options = { templateIconUrl: iconUrl, templatesEnabled: true };
+      const options = { templateIconUrl: iconUrl };
       return surface === "card" ? createPage(options).page : createDetail(options).detail;
     };
     const selector =
@@ -732,7 +731,7 @@ it.each(["decoded", "failed"] as const)(
     const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`;
     const artwork = createDeferredCore();
     const decode = stubImageDecode(() => artwork.promise);
-    const { page } = createPage({ templateIconUrl, templatesEnabled: true });
+    const { page } = createPage({ templateIconUrl });
     await waitForSolid(() => expect(decode).toHaveBeenCalledOnce());
     const preloaded = decode.mock.contexts[0] as HTMLImageElement;
     // The preload must share the card image's request mode to reuse its response.
@@ -761,7 +760,7 @@ it("stops waiting for slow artwork after the reveal budget", async () => {
   try {
     const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"c".repeat(64)}`;
     stubImageDecode(() => new Promise<void>(() => {}));
-    const { page } = createPage({ templateIconUrl, templatesEnabled: true });
+    const { page } = createPage({ templateIconUrl });
     await vi.advanceTimersByTimeAsync(499);
     expect(page.querySelector("[data-templates-entry]")).toBeNull();
     await vi.advanceTimersByTimeAsync(1);

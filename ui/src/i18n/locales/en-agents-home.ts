@@ -16,10 +16,9 @@ const enAgentsHome = {
   templatesDraft: {
     title: "Create template",
     reviewDisabled:
-      "Your private draft is saved. Turn on Templates in Settings → Labs to review it.",
+      "Your private draft is saved. Your Gateway administrator has turned off Templates.",
     reviewUnavailable:
       "Your private draft is saved. Template review requires a connected administrator session with Template creation and chat access.",
-    openLabs: "Open Labs",
   },
 } satisfies TranslationMap;
 

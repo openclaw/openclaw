@@ -160,6 +160,12 @@ afterEach(() => {
 });
 
 describe("LabsPage", () => {
+  it("does not offer a Templates switch, even with a configured opt-out", async () => {
+    const { page } = await mountPage(experimental({ templates: false }));
+    expect(page.textContent).not.toContain("Templates");
+    expect(labToggle(page, "Speech bubbles")).toBeDefined();
+  });
+
   it("defaults predictions off with Utility and saves each model without enabling the lab", async () => {
     const { page, runtimeConfig } = await mountPage({});
     const toggle = labToggle(page, "Composer predictions");
@@ -214,13 +220,6 @@ describe("LabsPage", () => {
   it.each([
     ["Code Mode", "codeMode", false, codeMode({ enabled: true }), codeMode({ enabled: null })],
     [
-      "Templates",
-      "templates",
-      false,
-      experimental({ templates: true }),
-      experimental({ templates: null }),
-    ],
-    [
       "Desktop on the computer running OpenClaw",
       "hostDesktop",
       false,
@@ -231,7 +230,6 @@ describe("LabsPage", () => {
     ["Code Mode", "codeMode", true, codeMode({ enabled: false }), codeMode({ enabled: "auto" })],
     ["Code Mode", "codeMode", true, codeMode(false), codeMode(null)],
     ["Speech bubbles", "chatBubbles", true, {}, experimental({ chatBubbles: true })],
-    ["Templates", "templates", true, {}, experimental({ templates: true })],
     [
       "Desktop on the computer running OpenClaw",
       "hostDesktop",

@@ -29,7 +29,7 @@ suite.define(() => {
       suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
         async ({ page }) => {
-          const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+          const config = {};
           await installMockGateway(page, {
             methodResponses: {
               "config.get": {

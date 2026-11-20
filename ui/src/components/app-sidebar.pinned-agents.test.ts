@@ -140,9 +140,7 @@ it("offers agent sessions and settings without a create action, and confirms age
 
 it("offers Create Template from the pinned agent menu", async () => {
   const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
-  context.runtimeConfig.state.configForm = {
-    gateway: { controlUi: { experimental: { templates: true } } },
-  };
+  context.runtimeConfig.state.configForm = {};
   context.navigation.update({ pinnedAgentIds: ["main"] });
   gatewayHarness.publish({
     hello: gatewayHelloForMethods([
