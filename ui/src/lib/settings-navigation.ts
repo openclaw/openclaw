@@ -22,7 +22,7 @@ export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): Naviga
 }
 
 /** The page one level up, or null when this page is already a top-level section. */
-export function settingsParentRoute(
+function settingsParentRoute(
   routeId: NavigationRouteId,
   pathname = "",
   basePath = "",
