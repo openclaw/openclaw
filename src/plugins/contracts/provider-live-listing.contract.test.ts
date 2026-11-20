@@ -177,13 +177,20 @@ describe("OpenAI subscription models list and run without a release", () => {
     vi.unstubAllEnvs();
   });
 
-  it("lists with the Responses version, and OpenClaw turns pass the model gate", async () => {
+  it("lists with the newest published Codex, and OpenClaw turns pass the model gate", async () => {
     clearLiveCatalogCacheForTests();
     vi.stubEnv("OPENCLAW_VERSION", "2026.11.5");
     const minimumCodex = "0.999.0";
     const listedAs: string[] = [];
     fetchWithSsrFGuard.mockImplementation(async ({ url }) => {
       const target = new URL(url);
+      if (target.hostname === "registry.npmjs.org") {
+        return {
+          response: Response.json({ version: "0.999.0" }),
+          finalUrl: url,
+          release: async () => {},
+        };
+      }
       const clientVersion = target.searchParams.get("client_version") ?? "0.0.0";
       listedAs.push(clientVersion);
       const gated = {
@@ -220,12 +227,12 @@ describe("OpenAI subscription models list and run without a release", () => {
     ].flatMap((entry) => entry?.models ?? []);
 
     expect(published.map((model) => model.id)).toContain(PROBE_MODEL_ID);
-    expect(listedAs).toEqual(["2026.11.5"]);
+    expect(listedAs).toEqual(["0.999.0"]);
     const turnVersion = resolveProviderRequestPolicy({
       provider: "openai",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     }).attributionHeaders?.version;
-    expect(turnVersion).toBe(listedAs[0]);
+    expect(turnVersion).toBe("2026.11.5");
     expect(compareReleaseVersions(turnVersion!, minimumCodex)).toBeGreaterThanOrEqual(0);
   });
 });
