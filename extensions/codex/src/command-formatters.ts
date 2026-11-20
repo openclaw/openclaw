@@ -273,6 +273,10 @@ export function formatStartedCodexReview(threadId: string, target: CodexReviewTa
       return `Started Codex review of commit ${target.sha} ${thread}`;
     case "custom":
       return `Started Codex review with custom instructions ${thread}`;
+    default: {
+      const exhaustive: never = target;
+      return exhaustive;
+    }
   }
 }
 
