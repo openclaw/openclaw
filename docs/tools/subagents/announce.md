@@ -69,8 +69,25 @@ the original result.
 Results that no turn committed stay owed. Cancellation before dispatch, worker
 timeout, preparation invalidation and other retryable refusals keep the wake pending
 with its last error, and the sweeper wakes it again. There is no attempt limit,
-retry ladder or expiry. A permanent refusal withholds the result with that error;
-it stays readable in the child session and is not dispatched again.
+retry ladder or expiry. A permanent refusal stops automatic dispatch and records a visible failure notice
+with captured child results that owe a visible reply. Revoked authority or a changed
+source lifecycle uses this same notice without running a revoked continuation.
+Expiry notices include the same results, including when a drain-interrupted child
+reaches its delivery deadline while the requester remains idle. Both idle expiry
+and suspended-delivery retirement record the notice and an operator warning. Private-only handoffs retain identity/status notices without exposing
+their captured answers; an admitted visible-final yield retains its fallback. These
+notices sort children by run ID, cap each result at 2,000 characters, and cap the
+entire notice at 32,000 characters including framing and recovery instructions.
+Oversized batches share the space between result heads; any omitted children are
+counted explicitly. Truncation is marked, and the stored result is unchanged.
+The normal visible-result fallback keeps its existing behavior.
+
+For a truncated result, use the existing Gateway `chat.history` read with the child
+session key and `maxChars: 500000`; page with `offset` to locate the run's final
+message. Use `chat.message.get` with that message's `messageId`, `sessionId`, and
+`maxChars: 8000000` to retrieve retained full text. These reads retain normal
+session access and retention limits. `sessions_history` alone still truncates
+text fields to 4,000 characters and cannot retrieve an omitted tail losslessly.
 A requester bound to a removed managed worktree is a permanent refusal and needs
 an explicit worktree restore before it can accept new work. An in-progress removal
 is transient and keeps the wake pending.
@@ -235,6 +252,11 @@ the original requester turn and use after-turn self-archive when appropriate,
 rather than asking a notification-only turn to acquire owner privileges.
 Use `sessions_send` with `mode: "notify"` for context-only updates; a normal peer
 follow-up still follows the destination conversation’s reply requirements.
+
+Child follow-up results retain access to the same requester session when its
+lifecycle revision advances. Each delivery attempt still checks current session
+access and requester authority; revoked authority cannot receive the continuation.
+Private completions continue to wait behind an active requester turn.
 
 Use a build that supports this option throughout the run. Older builds cannot
 resume private completion handoffs and may discard them after a downgrade;

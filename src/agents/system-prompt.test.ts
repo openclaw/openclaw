@@ -380,7 +380,7 @@ describe("buildAgentSystemPrompt", () => {
       { toolNames: ["openclaw", "gateway"] },
       [
         "For this Gateway's config writes, channels, plugins, agents, or models/providers: use `openclaw`",
-        "`gateway` runs `update.run` (supervised restart)",
+        "`gateway`: use update.run only when the installation uses the built-in updater",
         "`update.cleanup` (`dryRun` previews; permanently removes rollback copies",
       ],
       ["models/providers, updates: ask `openclaw`"],

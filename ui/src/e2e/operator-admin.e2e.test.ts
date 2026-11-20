@@ -233,6 +233,10 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
+      await page
+        .locator(".skill-discovery")
+        .getByRole("button", { name: "Installed", exact: true })
+        .click();
       const skillCard = page.locator(".skill-discovery .plugin-catalog-card", {
         hasText: "Deploy Helper",
       });
@@ -241,10 +245,10 @@ suite.define(() => {
       await page.getByRole("button", { name: "Skill settings", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
-      const skillDialog = page.locator("openclaw-modal-dialog", { hasText: "Deploy Helper" });
-      const globalSkillToggle = skillDialog.getByRole("switch");
+      const skillPage = page.locator(".skill-page", { hasText: "Deploy Helper" });
+      const globalSkillToggle = skillPage.getByRole("switch");
       await expectDenied(globalSkillToggle, gateway, "skills.update");
-      const install = skillDialog.getByRole("button", { name: "Install Deploy Helper" });
+      const install = skillPage.getByRole("button", { name: "Install Deploy Helper" });
       await expectDenied(install, gateway, "skills.install");
 
       await page.goto(`${suite.server.baseUrl}skills/workshop`);
@@ -300,9 +304,13 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
+      await page
+        .locator(".skill-discovery")
+        .getByRole("button", { name: "Installed", exact: true })
+        .click();
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
       const install = page
-        .locator("openclaw-modal-dialog", { hasText: "Deploy Helper" })
+        .locator(".skill-page", { hasText: "Deploy Helper" })
         .getByRole("button", { name: "Install Deploy Helper" });
       await expectDenied(install, gateway, "skills.install");
     });
