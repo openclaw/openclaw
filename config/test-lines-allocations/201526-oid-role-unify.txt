@@ -34,5 +34,6 @@
 # covering disabled ID, removed membership and the installation-wide default boundary.
 # Mocked user-turn providers declare ordered creation plans before saving automations,
 # preserving suspension and read-boundary assertions under the merged main contract.
-# Measured against merged main 72b63a35495e: 4035 net test lines; 400 + 3635 allocated.
-3635
+# PostgreSQL publication conformance retains its canonical profile catalog for all engine pairs.
+# Measured against merged main 72b63a35495e: 4037 net test lines; 400 + 3637 allocated.
+3637
