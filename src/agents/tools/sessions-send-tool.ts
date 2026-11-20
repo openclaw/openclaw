@@ -85,7 +85,7 @@ async function executeSessionsSendWithDeadline(
     // Stop new sender effects without cancelling input already owned by the receiver.
     controller.abort(new Error(error));
     const target = readSessionsSendTarget(params);
-    return sendFailure("timeout", error, target.ok ? target.sessionKeyParam : undefined, runId);
+    return sendFailure("error", error, target.ok ? target.sessionKeyParam : undefined, runId);
   };
   const deadlineAtMs = Date.now() + timeoutMs;
   const releaseDeadline = registerDiagnosticToolExecutionDeadline(deadlineAtMs);

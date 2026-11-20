@@ -14,6 +14,7 @@ import type { IconName } from "./components/icon-data.ts";
 import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
+export type ShellNavigationIntent = "sidebar-section";
 
 type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtitleKey?: string];
 
@@ -258,7 +259,8 @@ export type SettingsSearchBlock = {
 // Management surfaces (sessions, worktrees, activity, memory import) are
 // workspace destinations, not settings; model setup is a subpage of Models.
 const SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
+  { labelKey: null, routes: ["custodian"] },
+  { labelKey: "nav.settingsGroupPreferences", routes: ["profile", "appearance", "notifications"] },
   { labelKey: "nav.settingsGroupDevice", routes: ["device", "device-permissions"] },
   {
     labelKey: "nav.settingsGroupConnections",

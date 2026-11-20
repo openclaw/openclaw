@@ -1,8 +1,16 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { operatorRoleSubject } from "../gateway/operator-role-enforcement.js";
+import { resolveOperatorRoleSelection } from "../gateway/operator-role-policy.js";
 import { prepareCorePluginStateReplacement } from "../plugin-state/plugin-state-store.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
+import { readOpenClawIdUserProfiles } from "../state/user-profile-openclaw-id.js";
 
 /** Read raw stored membership for Doctor without normalizing or writing any claw rows. */
-export async function readDoctorMemberRoles(env?: NodeJS.ProcessEnv): Promise<Map<string, string>> {
+export async function readDoctorMemberRoles(
+  cfg: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): Promise<Map<string, string>> {
   const rows = await prepareCorePluginStateReplacement<unknown>({
     ownerId: "core:openclaw-id",
     namespace: "claw",
@@ -49,6 +57,26 @@ export async function readDoctorMemberRoles(env?: NodeJS.ProcessEnv): Promise<Ma
       }
       members.set(accountId, member.role);
     }
+  }
+  const profiles = await readOpenClawIdUserProfiles([...members.keys()], { env });
+  const snapshot = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "userProfiles.catalog" },
+  );
+  const catalog = new Map(snapshot?.profiles ?? []);
+  const initialized = isRecord(record.member_profile_roles) ? record.member_profile_roles : {};
+  for (const [accountId, label] of members) {
+    const profile = catalog.get(profiles[accountId]?.id ?? "");
+    // Offline upgrades preview the one-time import without writing either store.
+    const assigned = profile?.role ?? (initialized[accountId] ? null : label);
+    const selected = resolveOperatorRoleSelection(
+      profile?.id ?? accountId,
+      assigned,
+      cfg,
+      profile?.githubLogin ?? null,
+      operatorRoleSubject(profile),
+    );
+    members.set(accountId, selected.effectiveRole ?? assigned ?? "unassigned");
   }
   return members;
 }

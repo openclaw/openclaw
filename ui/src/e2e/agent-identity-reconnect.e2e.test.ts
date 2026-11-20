@@ -52,7 +52,31 @@ suite.define(() => {
           details: { reason: "gateway-restarting" },
         },
       });
-      await gateway.emitGatewayEvent("config.changed", { hash: "synthetic-restart" });
+      const unaffected = [
+        "models.list",
+        "session.members.listEvidence",
+        "sessions.processes.list",
+        "sessions.describe",
+        "agents.list",
+        "agent.identity.get",
+      ];
+      const beforeProfiles = await Promise.all(
+        unaffected.map(async (method) => (await gateway.getRequests(method)).length),
+      );
+      for (const changedPaths of [["browser.profiles.temporary"], ["browser.profiles"]]) {
+        await gateway.emitGatewayEvent("config.changed", { changedPaths });
+        await page.clock.runFor(1_000);
+      }
+      expect(
+        await Promise.all(
+          unaffected.map(async (method) => (await gateway.getRequests(method)).length),
+        ),
+      ).toEqual(beforeProfiles);
+
+      await gateway.emitGatewayEvent("config.changed", {
+        hash: "synthetic-restart",
+        changedPaths: ["agents.entries.main.identity"],
+      });
       await page.clock.runFor(1_000);
       const beforeDrain = await counts();
       await gateway.emitGatewayEvent("shutdown", { restartExpectedMs: 1_500 });

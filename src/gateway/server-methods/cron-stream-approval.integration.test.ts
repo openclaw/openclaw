@@ -461,6 +461,9 @@ describe("agent stream approval through the automation tool", () => {
             expect(await manager.resolveAutoReview(request.id)).toBe(true);
           } else {
             revokeRun();
+            await vi.waitFor(async () => {
+              expect((await manager.getSnapshot(request.id))?.status).toBe("cancelled");
+            });
             await expect(decide(request.id, "allow-once")).rejects.toThrow();
           }
           if (outcome === "deny" || outcome === "expire" || outcome === "cancel") {

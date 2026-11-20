@@ -6,6 +6,7 @@ import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
+import type { PersistedUserTurnMessage } from "../sessions/user-turn-input.types.js";
 import {
   attachRuntimeUserTurnTranscriptRecorder,
   takeRuntimeUserTurnTranscriptContext,
@@ -14,7 +15,6 @@ import {
 import {
   mergePreparedUserTurnMessageForRuntime,
   restorePreparedUserTurnOperationalMetaForRuntime,
-  type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";

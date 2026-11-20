@@ -4,8 +4,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -34,13 +33,15 @@ import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createSandboxHostHttpRequestHandler } from "./mcp-app-sandbox-http.js";
 import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
-import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import * as operatorRunAuthority from "./operator-run-authority.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import { defineIdMemberPluginHttpTests } from "./remote-control-ui-ingress-http.test-support.js";
 import {
   connect,
+  prepareIngressMember,
+  heldReadBarrier,
+  heldMutationBarrier,
   request,
   expectHello,
   PNG_BYTES,
@@ -91,13 +92,6 @@ const SHARED_TOKEN = "remote-control-ui-integration-shared-token";
 const TOKEN_AUTH = { mode: "token", token: SHARED_TOKEN, allowTailscale: false } as const;
 const SCOPES = ["operator.read", "operator.write"] as const;
 const OWNER_SESSION_KEY = "agent:main:ingress-owner-chat";
-
-function heldReadBarrier() {
-  return { entered: createDeferred(), release: createDeferred() };
-}
-function heldMutationBarrier(count: number) {
-  return { ...heldReadBarrier(), remaining: count, unsettled: count, settled: createDeferred() };
-}
 
 describe("remote Control UI ingress production composition", () => {
   let state: OpenClawTestState;
@@ -794,19 +788,20 @@ describe("remote Control UI ingress production composition", () => {
     configureAuth,
   }));
 
-  it("uses the original ID membership for roleless app RPC, browser access, and recovery", async () => {
+  it("uses the original ID membership and profile role for app RPC, browser access, and recovery", async () => {
     await configureAuth(TOKEN_AUTH, {
       definitions: {
         ...structuredClone(MEMBER_ROLE_PRESETS),
         viewer: { ...MEMBER_ROLE_PRESETS.viewer, scopes: ["operator.read"] },
       },
     });
-    const claw = await linkedClaw();
-    const profile = await ensureCanonicalUserProfileForEmail("id-member@ingress.example.test");
-    const peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(172));
-    const accountId = "ingress-id-member";
+    const { claw, profile, peerKey, accountId, release } = await prepareIngressMember(
+      config,
+      (next) => configure(next, TOKEN_AUTH),
+    );
     try {
       for (const role of ["operator", "viewer"] as const) {
+        await setIngressRole(profile.id, role);
         expect(
           await claw.authority.submit(
             await claw.sign({
@@ -877,7 +872,8 @@ describe("remote Control UI ingress production composition", () => {
               assertCurrent() {},
             });
           recovered = await restore();
-          expect(recovered.authority.readCurrentRoleFacts?.()?.policy?.sessions.others).toBe(
+          expect(recovered.authority.readCurrentRoleFacts?.().assignedRole).toBe(role);
+          expect(recovered.authority.rolePolicy?.sessionAccessCap).toBe(
             role === "operator" ? "write" : "view",
           );
           expect(recovered.authority.scopes).not.toContain("operator.admin");
@@ -936,6 +932,7 @@ describe("remote Control UI ingress production composition", () => {
       }
     } finally {
       setOpenClawIdTunnelPrincipalLookup(undefined);
+      await release();
     }
   });
 

@@ -44,6 +44,7 @@ function createChatComposerState(): ChatComposerState {
     textareaRef: null,
     composerInputRef: null,
     stopRunFromEscape: null,
+    sendDraft: null,
     dictation: null,
     composerDraftScope: null,
     dictationSelection: null,
@@ -52,7 +53,7 @@ function createChatComposerState(): ChatComposerState {
     loadTasks: () =>
       loadComposerTasksRuntime().then(({ createComposerTasks }) => {
         if (!owner) {
-          const created = createComposerTasks(() => state.taskPresenters > 0);
+          const created = createComposerTasks(state);
           owner = created;
           setTasks(() => created);
         }

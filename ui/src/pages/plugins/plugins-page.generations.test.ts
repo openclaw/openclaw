@@ -15,6 +15,8 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { pageFixture, queryWithin, runtimeFixture } from "./plugins-page.lifecycle-test-support.ts";
 import {
   clickPluginAction,
+  clickPluginSwitch,
+  findPluginSwitch,
   createClient,
   createDiscoveryDetail,
   createInspectResult,
@@ -351,9 +353,7 @@ it("targets the selected installed route after its inventory refresh fails", asy
       ]),
     );
     expect(page.textContent).toContain("Inventory unavailable");
-    await waitForSolid(() => expect(find('[aria-label="Enable Beta"]')).not.toBeNull());
-    await page.updateComplete;
-    find<HTMLButtonElement>('[aria-label="Enable Beta"]')!.click();
+    await clickPluginSwitch(page, "Beta", false);
     await harness.waitForCall("plugins.setEnabled");
     expect(harness.calls("plugins.setEnabled")).toEqual([
       ["plugins.setEnabled", { pluginId: beta.id, enabled: true }],
@@ -430,7 +430,7 @@ it.each(["settings", "failure"] as const)(
       const action = find("openclaw-plugin-install-action");
       await settlePlugins();
       expect(action?.textContent).toContain("Installing");
-      expect(find('[aria-label="Disable Calendar Plus"]')).toBeNull();
+      expect(findPluginSwitch(page, "Calendar Plus")).toBeUndefined();
       expect(find('[aria-label="Uninstall Calendar Plus"]')).toBeNull();
       if (surface === "failure") {
         install.reject(
@@ -444,7 +444,7 @@ it.each(["settings", "failure"] as const)(
         await waitForSolid(() =>
           expect(page.textContent).toContain("Final installation check failed"),
         );
-        await clickPluginAction(page, "Disable Calendar Plus");
+        await clickPluginSwitch(page, "Calendar Plus", true);
         expect(harness.request).toHaveBeenCalledWith("plugins.setEnabled", {
           pluginId: plugin.id,
           enabled: false,
@@ -453,9 +453,7 @@ it.each(["settings", "failure"] as const)(
         install.resolve({ ok: true, plugin, restartRequired: false });
       }
       await waitForSolid(() =>
-        expect(
-          find(`[aria-label="${surface === "failure" ? "Enable" : "Disable"} Calendar Plus"]`),
-        ).not.toBeNull(),
+        expect(findPluginSwitch(page, "Calendar Plus")?.checked).toBe(surface !== "failure"),
       );
       expect(find("openclaw-plugin-install-action")).toBeNull();
     } finally {

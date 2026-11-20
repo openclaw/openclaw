@@ -44,6 +44,7 @@ import {
 } from "../gateway/client-bootstrap.js";
 import { GatewayClient } from "../gateway/client.js";
 import {
+  GATEWAY_PAIRING_APPROVAL_HINT,
   resolveGatewayDeviceAuthRoute,
   type GatewaySshRoute,
 } from "../gateway/connection-details.js";
@@ -268,10 +269,7 @@ export class GatewayChatClient implements TuiBackend {
         ConnectErrorDetailCodes.PAIRING_REQUIRED &&
       !error.message.includes("Pairing request sent.")
     ) {
-      error.message = [
-        error.message,
-        "Pairing request sent. Approve it in that gateway's Control UI (Settings -> Devices), or run `openclaw devices approve --latest` on the gateway host, then retry.",
-      ].join("\n");
+      error.message = `${error.message}\nPairing request sent. ${GATEWAY_PAIRING_APPROVAL_HINT}`;
     }
     materializeErrorStack(error);
     this.pendingConnectError = error;

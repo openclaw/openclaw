@@ -111,7 +111,6 @@ function DesktopRow(props: {
         class="subagents-desktop__open"
         ref={[elementRef(props.registerOpen.bind(undefined, props.row.session.key))]}
         type="button"
-        title={[name(), metadata()].filter(Boolean).join("\n")}
         onClick={(event) => props.onOpen(props.row, event.currentTarget)}
       >
         <SubagentDesktopAvatar sessionKey={props.row.session.key} working={group() === "active"} />

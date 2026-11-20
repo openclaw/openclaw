@@ -1844,25 +1844,44 @@ the retention phase already running in an older updater.
 
 Post-activation schema inspection preserves captured SQLite database, WAL, and shared-memory
 artifacts so the final Doctor can verify the same migration source.
-A Git checkout update that switches the release link captures no databases and runs no
-Doctor: the previous Gateway keeps serving, and the Gateway that starts from the new
-release migrates state. Its inspection reads each agent and local store's schema version
-directly, in milliseconds and without a copy, even while the serving Gateway writes; the
-shared state database keeps its consistent online-backup read.
+A Git checkout update that switches the release link runs no Doctor before activation.
+Its schema inspection reads each agent and local store's schema version directly, in
+milliseconds and without a copy, even while the serving Gateway writes. The shared
+state database keeps its consistent online-backup read.
+
+The new Gateway can apply supported SQLite migrations at startup. For PostgreSQL
+shared-state and agent schema upgrades, use Doctor with writers stopped. Before
+starting the Gateway directly on a release that needs one of these migrations,
+stop the Gateway and embedded writers and run the target release's `openclaw doctor --fix`.
+See [PostgreSQL updates and schema migrations](/gateway/postgresql#updates-and-schema-migrations).
+
+A Git checkout that runs from releases keeps each release at
+`<state dir>/git-install/releases/<release>/openclaw`, behind the link
+`<state dir>/git-install/openclaw` that the service's launcher starts. Each release is
+built and checked at that path, so the update proves the release loads from where it
+serves. Dev-channel installs on `main` builds from 2026-11-17 until this change (they report
+version 2026.11.5; no published release has the release layout) keep the link and releases under
+`git-install/lib/node_modules/openclaw`, where Node refuses to load a bundled plugin's
+TypeScript sources ([#201874](https://github.com/openclaw/openclaw/issues/201874)). When a
+web search provider is configured, their Gateway fails at startup. The old release cannot run
+its own updater either, so update from a terminal with the checkout's `openclaw`, not from the
+Control UI or another Gateway-started update. Run `openclaw update` twice: the older build
+runs the first update and moves the checkout to this change; the second, run by this change,
+rebuilds the serving commit at the new path and removes the old link.
 
 The inspection reports data at risk only on evidence: a schema that moved, or a store it
 cannot read after a new-version Doctor or boot check may have written it. When no
 new-version process has opened state yet, an unreadable store is a recorded warning
 (`state-schema-verification`), not data at risk, and the update continues or fails for its
-own recorded reason. On a Git release the new release migrates state when it starts, and its
-trial switches back if it fails to start. The Git release inspection also does not
-require the new schema before that start: "migration did not finish" applies only to
-installs whose updater runs Doctor before restarting. Installed updaters that run Git
+own recorded reason. A Git release trial switches back if the candidate fails to start.
+The Git release inspection does not require the new schema before that start.
+"Migration did not finish" applies only to installs whose updater runs Doctor
+before restarting. Installed updaters that run Git
 releases without this change (main builds since the release layout landed) fail
 every Git update that changes a schema in their own process, before the new release runs;
 rebuild the checkout once to get an updater with the fix.
 
-When the new release's Gateway starts, its state upgrade can replace
+When the new release's Gateway starts, a SQLite state upgrade can replace
 `state/openclaw.sqlite` and keep the previous file as `openclaw.sqlite.pre-<buildId>`.
 The updater closes its own shared-state handles before it restarts the Gateway and
 reopens the database by path once the new Gateway is verified serving, so plugin
