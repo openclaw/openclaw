@@ -73,7 +73,10 @@ function elevationFixture(gate = createGate()) {
   handler.registerToolHandler("openclaw_agent_consult", consult);
   const connect = async () => {
     const count = requests.length;
-    const { ws } = await connectCarrierStream(handler);
+    const { ws } = await connectCarrierStream(
+      handler,
+      expectDefined(call.providerCallId, "test call provider ID"),
+    );
     sendCarrierStart(ws, "MZ-1", call.providerCallId);
     await vi.waitFor(() => expect(requests).toHaveLength(count + 1), { interval: 1 });
     return {
