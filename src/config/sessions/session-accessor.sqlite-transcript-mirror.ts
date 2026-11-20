@@ -147,11 +147,12 @@ export function readTranscriptMirrorFacts(
           "active.message_position",
           "rewrite.generation",
         ]);
+      // Later batches have no UNION type context; a literal keeps false numeric on PostgreSQL.
       for (const batch of batches) {
         let query = events
           .where("identity.session_id", "=", resolved.sessionId)
           .where("identity.message_idempotency_key", "in", batch)
-          .select((eb) => eb.val(0).as("is_source"));
+          .select((eb) => eb.lit<number>(0).as("is_source"));
         if (params.activeBranchOnly) {
           query = query.where("active.event_seq", "is not", null);
         }

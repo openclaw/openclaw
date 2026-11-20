@@ -1,6 +1,8 @@
 import type { SQLInputValue, SQLOutputValue } from "node:sqlite";
 import type { MessagePort } from "node:worker_threads";
 
+export const POSTGRES_REQUEST_TIMEOUT_MS = 120_000;
+
 export type PostgresBridge = {
   port: MessagePort;
   control: Int32Array;
@@ -234,7 +236,7 @@ export function decodePostgresRows(
 }
 
 export function isPostgresConnectionError(sqlState?: string): boolean {
-  return !sqlState || sqlState.startsWith("08") || /^57P0[123]$/.test(sqlState);
+  return !sqlState || sqlState.startsWith("08") || /^57P0[123]$|^25P0[34]$/.test(sqlState);
 }
 
 export const POSTGRES_QUERY_CANCELED_ERROR_NAME = "PostgresQueryCanceledError";

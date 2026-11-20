@@ -4,7 +4,7 @@ import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   retainSqliteWriteAdmissionService,
   withSqliteWriteAdmissionService,
-} from "../../infra/sqlite-transaction.js";
+} from "../../infra/sqlite-write-admission.js";
 
 const COMMIT_DECISION_TIMEOUT_MS = 5_000;
 const WAITING = 0;

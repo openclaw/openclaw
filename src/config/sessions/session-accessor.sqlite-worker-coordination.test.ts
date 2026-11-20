@@ -8,9 +8,9 @@ import {
   nextEventLoopTurn,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import * as sqliteTransactions from "../../infra/sqlite-transaction.js";
 import { holdCreatedFileCallback } from "../../infra/sqlite-worker-fixture.test-support.js";
 import * as operationAdmissions from "../../infra/sqlite-worker-operation-admission.js";
+import * as writeAdmission from "../../infra/sqlite-write-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { seedOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.test-support.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
@@ -222,9 +222,9 @@ it.for([false, true])(
       const failure = new Error("Synthetic coordination operation failure");
       const completed = vi.fn();
       const serviceReleased = vi.fn();
-      const retainService = sqliteTransactions.retainSqliteWriteAdmissionService;
+      const retainService = writeAdmission.retainSqliteWriteAdmissionService;
       using registration = vi
-        .spyOn(sqliteTransactions, "retainSqliteWriteAdmissionService")
+        .spyOn(writeAdmission, "retainSqliteWriteAdmissionService")
         .mockImplementation((locations, service) => {
           const releaseService = retainService(locations, service);
           return () => {
