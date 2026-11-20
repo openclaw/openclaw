@@ -2,8 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
+import { readSqliteBusyTimeout, runWithSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { SqliteCoordinatorError } from "./sqlite-lifecycle-errors.js";
 import { beginSqliteConnectionExclusion } from "./sqlite-native-exclusion.js";
 import { runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
@@ -87,8 +90,26 @@ export function runUpdateDoctorAttributedStateWrite<T>(
     // Attach WAL coordination in normal mode first, then retain exclusion through
     // the existing owner's transaction, checkpoint, and exact one-shot close.
     readSqliteSchemaCookie(db);
-    beginSqliteConnectionExclusion(db);
-    db.exec("ROLLBACK"); // sqlite-allow-raw -- Retain connection exclusion while the ledger starts its own transaction.
+    try {
+      runWithSqliteBusyTimeout(
+        db,
+        Math.max(readSqliteBusyTimeout(db), OPENCLAW_SQLITE_BUSY_TIMEOUT_MS),
+        () => {
+          beginSqliteConnectionExclusion(db);
+          db.exec("ROLLBACK"); // sqlite-allow-raw -- Retain connection exclusion while the ledger starts its own transaction.
+        },
+      );
+    } catch (error) {
+      if (!isSqliteLockError(error)) {
+        throw error;
+      }
+      throw new Error(
+        "Update migration could not take exclusive access to " +
+          pathname +
+          ": another connection still has it open.",
+        { cause: error },
+      );
+    }
     const locked = readUpdateDoctorGeneration(pathname);
     assertCurrent();
     if (

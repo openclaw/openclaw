@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -14,6 +15,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { readSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
   adoptCandidateManagedServiceStop,
   stopSupervisedPredecessorGateway,
@@ -23,6 +25,7 @@ import { readUpdateDatabaseGenerations } from "./update-database-generations.js"
 import {
   readUpdateDoctorGeneration,
   runUpdateDoctorAttributedStateWrite,
+  runWithUpdateDoctorMigrationCapture,
 } from "./update-doctor-migration-attribution.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "./update-doctor-result.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
@@ -371,5 +374,82 @@ it
       fs.unlinkSync(aliasRoot);
     }
     expect(readUpdateDoctorGeneration(pathname).generation).toMatch(/^[a-f0-9]{64}$/u);
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "waits for an independent short-lived reader before writing the update receipt",
+  async () => {
+    const root = directories.make("receipt-reader-");
+    const pathname = path.join(root, "source.sqlite");
+    const release = path.join(root, "release");
+    const db = new DatabaseSync(pathname, { timeout: 0 });
+    db.exec(
+      "PRAGMA journal_mode=WAL; CREATE TABLE retained(value); INSERT INTO retained VALUES(7)",
+    );
+    const expected = readUpdateDoctorGeneration(pathname).generation;
+    const child = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        'import { DatabaseSync } from "node:sqlite"; import { existsSync } from "node:fs"; const db = new DatabaseSync(process.argv[1], { readOnly: true }); db.exec("BEGIN"); db.prepare("SELECT * FROM retained").all(); process.stdout.write("ready"); const poll = setInterval(() => { if (existsSync(process.argv[2])) { clearInterval(poll); setTimeout(() => db.close(), 200); } }, 10);',
+        pathname,
+        release,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const exited = once(child, "exit");
+    const scope = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent() {},
+      assertDatabaseAccess() {},
+    });
+    try {
+      expect(
+        String((await once(child.stdout, "data", { signal: AbortSignal.timeout(5_000) }))[0]),
+      ).toBe("ready");
+      let checks = 0;
+      const accept = vi.fn();
+      const capture = {
+        expected: () => expected,
+        assertCurrent() {
+          // The generation observation has completed; keep the reader live until exclusion starts.
+          if (++checks === 2) {
+            fs.writeFileSync(release, "release");
+          }
+        },
+        accept,
+        refuse: vi.fn(),
+      };
+      scope.run(() =>
+        runWithUpdateDoctorMigrationCapture(capture, () =>
+          runUpdateDoctorAttributedStateWrite(
+            db,
+            pathname,
+            () => {
+              expect(readSqliteBusyTimeout(db)).toBe(0);
+              db.exec("INSERT INTO retained VALUES(9)");
+            },
+            () => db.close(),
+          ),
+        ),
+      );
+      await expect(exited).resolves.toEqual([0, null]);
+      expect(accept).toHaveBeenCalledExactlyOnceWith(
+        pathname,
+        expected,
+        expect.stringMatching(/^[a-f0-9]{64}$/u),
+      );
+    } finally {
+      if (child.exitCode === null) {
+        child.kill();
+        await exited;
+      }
+      if (db.isOpen) {
+        db.close();
+      }
+      await scope.close();
+    }
   },
 );
