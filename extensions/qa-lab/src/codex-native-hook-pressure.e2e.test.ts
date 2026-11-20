@@ -241,6 +241,8 @@ describe.skipIf(process.platform !== "linux")(
           await fs.readFile(path.join(REPO_ROOT, "extensions/codex/package.json"), "utf8"),
         ) as { dependencies: { "@openai/codex": string } };
         const expectedCodexVersion = `codex-cli ${codexManifest.dependencies["@openai/codex"]}`;
+        const require = createRequire(path.join(REPO_ROOT, "extensions/codex/package.json"));
+        const codexLauncher = require.resolve("@openai/codex/bin/codex.js");
         const root = tempDirs.make("openclaw-native-hook-pressure-");
         const pluginDir = path.join(root, "plugin");
         await fs.mkdir(pluginDir);
@@ -442,7 +444,10 @@ export default {
                 ...plugins.entries,
                 codex: {
                   enabled: true,
-                  config: { appServer: { sandbox: "workspace-write" } },
+                  // This pressure proof attests the shipped binary, not a newer PATH install.
+                  config: {
+                    appServer: { command: codexLauncher, sandbox: "workspace-write" },
+                  },
                 },
                 [PLUGIN_ID]: { enabled: true },
               };
