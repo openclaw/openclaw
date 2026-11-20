@@ -1,0 +1,5 @@
+126
+# Cron announce.inspectLinks policy regressions: schema modes, shared delivery
+# append suppression for completions/failure alerts, isolated agent-run
+# announcements, and gateway completion/failure-alert presentation.
+# Exact measured net test LF growth; shared scalar unchanged and no spare ceiling credit.
