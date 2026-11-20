@@ -20,6 +20,50 @@ function createRunner(options: Pick<RunnerOptions, "getClient"> & Partial<Runner
 }
 
 describe("ModelSetupWizardRunner", () => {
+  it.each(["models.authLogin", "openclaw.setup.auth.start"] as const)(
+    "retains %s admission for first-run recovery without replaying sign-in",
+    async (method) => {
+      const sessionId = "00000000-0000-4000-8000-000000000003";
+      const generateUUID = vi.spyOn(uuid, "generateUUID").mockReturnValue(sessionId);
+      const client = new GatewayBrowserClient({ url: "ws://gateway.example.test" });
+      const request = vi
+        .spyOn(client, "request")
+        .mockImplementation(async (rpc) =>
+          rpc === method
+            ? { done: false, status: "running" }
+            : { done: false, status: "running", step: { id: "consent", type: "confirm" } },
+        );
+      const onStart = vi.fn();
+      const runner = createRunner({ getClient: () => client, getAgentId: () => "main", onStart });
+      try {
+        await runner.start("meta/muse-code", method, {
+          completeFirstAgent: true,
+          selectModel: true,
+        });
+        expect(onStart).toHaveBeenCalledWith(
+          method,
+          expect.objectContaining({
+            kind: "provider-auth",
+            wizard: { sessionId, authChoice: "meta/muse-code", authKind: undefined },
+          }),
+        );
+        runner.suspend();
+        await runner.resume();
+        expect(request.mock.calls.filter(([rpc]) => rpc === method)).toHaveLength(1);
+        expect(request.mock.calls.at(-1)).toMatchObject([
+          "wizard.next",
+          { sessionId },
+          expect.anything(),
+        ]);
+      } finally {
+        request.mockResolvedValue({ status: "cancelled" });
+        await runner.cancel();
+        request.mockRestore();
+        generateUUID.mockRestore();
+      }
+    },
+  );
+
   it("binds runtime enablement to its explicit agent and cancels late admission on the original client", async () => {
     const sessionId = "00000000-0000-4000-8000-000000000002";
     const generateUUID = vi.spyOn(uuid, "generateUUID").mockReturnValue(sessionId);

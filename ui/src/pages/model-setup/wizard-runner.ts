@@ -262,7 +262,8 @@ export class ModelSetupWizardRunner {
         startMethod,
         "kind" in params
           ? params
-          : startMethod === "openclaw.setup.auth.start" && "authChoice" in params
+          : (startMethod === "openclaw.setup.auth.start" || startMethod === "models.authLogin") &&
+              "authChoice" in params
             ? {
                 ...params,
                 kind: "provider-auth",
