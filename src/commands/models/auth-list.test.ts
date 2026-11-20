@@ -257,6 +257,60 @@ describe("modelsAuthListCommand", () => {
     expect(JSON.stringify(json)).not.toMatch(/secret|legacy-model-must-not-leak/u);
   });
 
+  it("hides expired cooldown and disabled windows, keeping active-window reasons", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const credential = createOAuthRefreshCredential({
+      provider: "openai",
+      access: "secret",
+      refresh: "secret",
+      expires: 1_900_000_000_000,
+    });
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      ...createAuthProfileStoreFixture({
+        "openai:expired-cooldown": credential,
+        "openai:expired-disabled": credential,
+        "openai:active-cooldown": credential,
+      }),
+      usageStats: {
+        "openai:expired-cooldown": { cooldownUntil: NOW - 1_000, cooldownReason: "rate_limit" },
+        "openai:expired-disabled": {
+          disabledUntil: NOW - 1_000,
+          disabledReason: "billing",
+          cooldownUntil: NOW + 60_000,
+          cooldownReason: "auth",
+        },
+        "openai:active-cooldown": { cooldownUntil: NOW + 60_000, cooldownReason: "rate_limit" },
+      },
+    } satisfies AuthProfileStore);
+
+    const { text, json } = await listBoth();
+    const { profiles } = json as { profiles: Array<Record<string, unknown> & { id: string }> };
+    const byId = Object.fromEntries(profiles.map((entry) => [entry.id, entry]));
+    const lineFor = (id: string) => text.find((line) => line.includes(id)) ?? "";
+
+    expect(lineFor("openai:expired-cooldown")).not.toContain("cooldown:");
+    expect(lineFor("openai:expired-cooldown")).not.toContain(" — ");
+    expect(byId["openai:expired-cooldown"]).toEqual(
+      summary("openai:expired-cooldown", "oauth", { expiresAt: "2030-03-17T17:46:40.000Z" }),
+    );
+
+    expect(lineFor("openai:expired-disabled")).not.toContain("disabled:");
+    expect(lineFor("openai:expired-disabled")).toContain(
+      "cooldown:auth until 2026-08-30T00:01:00.000Z",
+    );
+    expect(byId["openai:expired-disabled"]).toMatchObject({
+      cooldownUntil: "2026-08-30T00:01:00.000Z",
+      cooldownReason: "auth",
+    });
+    expect(byId["openai:expired-disabled"]).not.toHaveProperty("disabledUntil");
+    expect(byId["openai:expired-disabled"]).not.toHaveProperty("disabledReason");
+
+    expect(lineFor("openai:active-cooldown")).toContain(
+      "cooldown:rate_limit until 2026-08-30T00:01:00.000Z",
+    );
+    expect(JSON.stringify(json)).not.toMatch(/secret/u);
+  });
+
   it.each([
     [1_800_000_000_000, { expiresAt: "2027-01-15T08:00:00.000Z" }],
     [8_700_000_000_000_000, {}],

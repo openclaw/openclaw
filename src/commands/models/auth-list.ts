@@ -40,15 +40,17 @@ export async function modelsAuthListCommand(
     const usage = readAuthProfileUsageStats(store, profileId);
     const expiresAt =
       profile.type === "api_key" ? undefined : timestampMsToIsoString(profile.expires);
-    const blockedActive = isActiveUnusableWindow(usage?.blockedUntil, Date.now());
+    const now = Date.now();
+    const blockedActive = isActiveUnusableWindow(usage?.blockedUntil, now);
     const blockedUntil = blockedActive ? timestampMsToIsoString(usage?.blockedUntil) : undefined;
     const blockedModel = usage?.blockedScope === "model" ? usage.blockedModel : undefined;
-    const cooldownUntil = timestampMsToIsoString(usage?.cooldownUntil);
-    const disabledUntil = timestampMsToIsoString(usage?.disabledUntil);
-    const disabledActive = Boolean(disabledUntil);
+    const cooldownActive = isActiveUnusableWindow(usage?.cooldownUntil, now);
+    const cooldownUntil = cooldownActive ? timestampMsToIsoString(usage?.cooldownUntil) : undefined;
+    const disabledActive = isActiveUnusableWindow(usage?.disabledUntil, now);
+    const disabledUntil = disabledActive ? timestampMsToIsoString(usage?.disabledUntil) : undefined;
     const reason = disabledActive
       ? usage?.disabledReason
-      : cooldownUntil
+      : cooldownActive
         ? usage?.cooldownReason
         : undefined;
     const recoveryHint =
@@ -79,11 +81,11 @@ export async function modelsAuthListCommand(
         : {}),
       ...(cooldownUntil ? { cooldownUntil } : {}),
       ...(disabledUntil ? { disabledUntil } : {}),
-      ...(usage?.cooldownReason ? { cooldownReason: usage.cooldownReason } : {}),
-      ...(usage?.cooldownClassification
+      ...(cooldownActive && usage?.cooldownReason ? { cooldownReason: usage.cooldownReason } : {}),
+      ...(cooldownActive && usage?.cooldownClassification
         ? { cooldownClassification: usage.cooldownClassification }
         : {}),
-      ...(usage?.disabledReason ? { disabledReason: usage.disabledReason } : {}),
+      ...(disabledActive && usage?.disabledReason ? { disabledReason: usage.disabledReason } : {}),
       ...(recoveryHint ? { recoveryHint } : {}),
     });
   }
