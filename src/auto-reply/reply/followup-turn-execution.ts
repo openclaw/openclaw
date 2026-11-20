@@ -4,6 +4,7 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
+import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -318,7 +319,10 @@ export async function executeFollowupTurn(params: {
     return pendingWorkDrain;
   };
   const sessionCtx = buildFollowupTemplateContext(turn);
-  if (turn.preflightError && !turn.preflightFailurePayload) {
+  // Canonical execution settles this memoized failure through the existing refusal owner.
+  const channelAdmissionFailure =
+    turn.preflightError !== undefined && isChannelRunAuthorizationError(turn.preflightError);
+  if (turn.preflightError && !turn.preflightFailurePayload && !channelAdmissionFailure) {
     throw turn.preflightError instanceof Error
       ? turn.preflightError
       : new Error(formatErrorMessage(turn.preflightError));
@@ -357,7 +361,7 @@ export async function executeFollowupTurn(params: {
     await admitFollowupRunLifecycle(turn.queued);
     turn.operation.abortSignal.throwIfAborted();
     setChannelSourceTurnId(sessionCtx, sourceTurnId);
-    if (turn.preflightFailurePayload) {
+    if (turn.preflightFailurePayload && !channelAdmissionFailure) {
       turn.operation.fail("run_failed", turn.preflightError);
       execution = {
         runId: turn.runId,
