@@ -52,7 +52,10 @@ import { prepareWorkerPlacementSessionRuntime } from "../gateway/worker-environm
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
+import {
+  applyModelOverrideWithAuthProfileCompatibility,
+  shouldPreserveSessionAuthProfileForSelection,
+} from "../sessions/auth-profile-preservation.js";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
@@ -222,13 +225,33 @@ export async function applySessionModelSelectionInternal(
     return rejectNotAllowed(request.provider, request.model);
   }
 
+  const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  const pinnedProfile = !request.profileOverride && startingEntry.authProfileOverride?.trim();
+  const recordedProvider = pinnedProfile
+    ? await prepareAuthProfileProvider({ agentDir, profileId: pinnedProfile })
+    : undefined;
+  // Only an account that survives this selection is an explicit Gateway pin:
+  // the compatibility owner drops another provider's pin before persistence.
+  const retainedAuthProfile =
+    request.profileOverride ??
+    (pinnedProfile &&
+    shouldPreserveSessionAuthProfileForSelection({
+      cfg: params.cfg,
+      agentDir,
+      entry: startingEntry,
+      currentProvider: params.currentProvider,
+      selection: request,
+      recordedProvider,
+    })
+      ? pinnedProfile
+      : undefined);
   if (
     !resetToDefault &&
     !request.isDefault &&
     params.authReadinessMenu &&
     !isProviderAuthOwnedByRequiredWorker({
       cfg: params.cfg,
-      authProfileOverride: request.profileOverride ?? startingEntry.authProfileOverride,
+      authProfileOverride: retainedAuthProfile,
     })
   ) {
     // Shared picker policy (adapters opt in by passing menu facts): never
@@ -267,11 +290,6 @@ export async function applySessionModelSelectionInternal(
   if (prepared.status === "rejected") {
     return prepared;
   }
-  const agentDir = resolveAgentDir(params.cfg, params.agentId);
-  const pinnedProfile = !request.profileOverride && startingEntry.authProfileOverride?.trim();
-  const recordedProvider = pinnedProfile
-    ? await prepareAuthProfileProvider({ agentDir, profileId: pinnedProfile })
-    : undefined;
   const validateSelection = () =>
     validateOperatorSelection() ??
     params.validateAuthProfileSelection?.() ??
