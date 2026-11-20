@@ -79,10 +79,10 @@ it("resolves @lid quoted sender labels when authDir has a reverse mapping", () =
       quotedMessage: { conversation: "hello" },
     });
     expect(describeReplyContext(msg, { authDir })).toMatchObject({
-      sender: { jid: "9876543210@lid", label: "+15555550123" },
+      sender: { lid: "9876543210@lid", label: "+15555550123" },
     });
     expect(describeReplyContext(msg)).toMatchObject({
-      sender: { jid: "9876543210@lid", label: "9876543210@lid" },
+      sender: { lid: "9876543210@lid", label: "9876543210@lid" },
     });
   } finally {
     fs.rmSync(authDir, { recursive: true, force: true });
