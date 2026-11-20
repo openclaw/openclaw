@@ -1,0 +1,14 @@
+# Railway build/deploy configuration for open-claw.
+# Force the DOCKERFILE (BuildKit) builder: the repo Dockerfile uses BuildKit
+# cache mounts (--mount=type=cache) and RUN --network=none, which the default
+# RAILPACK builder rejects. BuildKit supports both.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "node openclaw.mjs gateway --allow-unconfigured --bind lan --port $PORT"
+healthcheckPath = "/healthz"
+healthcheckTimeout = 60
+restartPolicyType = "ALWAYS"
+numReplicas = 1

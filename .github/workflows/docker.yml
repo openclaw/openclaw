@@ -1,4 +1,4 @@
-name: Docker
+name: Docker Build & Push
 
 on:
   push:
@@ -6,37 +6,30 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+env:
+  IMAGE: hillstreet/open-claw
+
 jobs:
-  build-push:
-    name: Multi-arch build and push
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Log in to Docker Hub
-        uses: docker/login@v3
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: hillstreet/open-claw
-          tags: |
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=ref,event=tag
-      - name: Build and push multi-arch image
-        uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
