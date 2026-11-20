@@ -4,6 +4,7 @@ import { isMainThread } from "node:worker_threads";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { GatewayLockNamespaceError } from "../infra/gateway-lock-payload.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import { hasVerifiedLiveSqliteOwner } from "../infra/sqlite-live-owner.js";
 import { retainSnapshotWork } from "../infra/sqlite-readonly-location-cleanup.js";
@@ -68,6 +69,7 @@ import type {
   OpenClawStateReadOptions,
   OpenClawStateReadCommand,
   OpenClawStateReadOnlyDatabase,
+  StateReadScopeOptions,
   RetainedReadScope,
 } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
@@ -155,16 +157,6 @@ export async function forkActiveOpenClawStateDatabaseReadSnapshot(
   signal?.throwIfAborted();
   return current.work.track(() => current.forkSource(signal));
 }
-
-type StateReadScopeOptions = OpenClawStateDatabaseOptions & {
-  admissionTimeoutMs?: number;
-  /** Only startup may inspect a hot journal privately before guarded canonical recovery. */
-  allowStartupRollbackRecovery?: true;
-  /** Selected reports acquire shared bytes only when a reader actually needs them. */
-  lazy?: boolean;
-  /** Command owners may cancel preparation before the callback acquires its read scope. */
-  signal?: AbortSignal;
-};
 
 /** Retain private inspection bytes or live read admission without redirecting writers. */
 export async function withOpenClawStateDatabaseReadSnapshot<T>(
@@ -276,11 +268,18 @@ function requiresArtifactPreservingSnapshot(pathname: string): boolean {
     return false;
   }
   // Live owners already hold the WAL family; explicit snapshots select their own source.
-  const required =
+  let required =
     isArtifactPreservingStateRead("shared", pathname) &&
     !isUpdateRehearsalPrivateDatabase(pathname, process.env) &&
-    !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname) &&
-    !hasVerifiedLiveSqliteOwner(pathname);
+    !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname);
+  try {
+    required &&= !hasVerifiedLiveSqliteOwner(pathname);
+  } catch (error) {
+    // An unverifiable owner cannot permit a live read; preserve offline inspection.
+    if (!(error instanceof GatewayLockNamespaceError)) {
+      throw error;
+    }
+  }
   if (required) {
     assertStateFileSnapshotAllowed();
   }
