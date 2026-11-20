@@ -147,12 +147,14 @@ afterEach(async () => {
 
 describe("legacy state migration caller plugin execution", () => {
   const orderedIds = ["first-action", "second-action"];
+  const loadFailure = "Doctor contract initialization failed";
   it.each([
     ["reordered", orderedIds, orderedIds.toReversed(), ["second-action"], true],
     ["missing", ["first-action"], [], [], true],
     ["matching", orderedIds, orderedIds, ["second-action"], false],
+    ["unavailable", ["first-action"], null, [], false],
   ] as const)(
-    "validates %s runtime exports against the immutable manifest order",
+    "handles %s Doctor contracts with immutable manifest actions",
     async (_name, manifestIds, runtimeIds, pendingIds, refused) => {
       const fixture = await makeFixture();
       const candidateRoot = path.join(fixture.root, "surprise-candidate");
@@ -173,7 +175,8 @@ describe("legacy state migration caller plugin execution", () => {
       );
       fs.writeFileSync(
         path.join(pluginRoot, "doctor-contract-api.ts"),
-        `import fs from "node:fs";
+        runtimeIds
+          ? `import fs from "node:fs";
 export const stateMigrations = ${JSON.stringify(runtimeIds)}.map((id) => ({
   id,
   label: id,
@@ -183,7 +186,8 @@ export const stateMigrations = ${JSON.stringify(runtimeIds)}.map((id) => ({
     return { changes: [id + " migrated"], warnings: [] };
   },
 }));
-`,
+`
+          : `throw new Error(${JSON.stringify(loadFailure)});\n`,
       );
       fixture.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
 
@@ -203,8 +207,39 @@ export const stateMigrations = ${JSON.stringify(runtimeIds)}.map((id) => ({
         refusal: { code: "blocked-by-prior-refusal" },
       });
 
-      const result = await fixture.migrate({});
+      const cfg: OpenClawConfig = runtimeIds ? {} : { agents: { entries: { main: {} } } };
+      const legacyAgentFile = path.join(fixture.stateDir, "agent", "settings.json");
+      if (!runtimeIds) {
+        writeJson(fixture.configPath, cfg);
+        writeFixtureFile(legacyAgentFile, "{}\n");
+      }
+      const result = await fixture.migrate(cfg);
 
+      if (!runtimeIds) {
+        expect(byId(result.stepReceipts, "plugin-doctor-state")).toMatchObject({
+          source: plannedSources,
+          outcome: "warning",
+          warnings: [`Deferred state migrations for plugin "surprise-owner": ${loadFailure}`],
+        });
+        expect(result.requiredPluginIds).toContain("surprise-owner");
+        expect(result.deferredPluginMigrations).toEqual([
+          {
+            pluginId: "surprise-owner",
+            requiresStateMigration: true,
+            reason: loadFailure,
+            command: "openclaw update repair",
+          },
+        ]);
+        expect(result.completedPluginIds ?? []).not.toContain("surprise-owner");
+        expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).not.toThrow();
+        for (const id of ["sessions", "acp-session-metadata", "agent-dir"]) {
+          expect(expectDefined(byId(result.stepReceipts, id), id).refusal).toBeUndefined();
+        }
+        expect(byId(result.stepReceipts, "agent-dir")?.outcome).toBe("completed");
+        expect(fs.existsSync(legacyAgentFile)).toBe(false);
+        expect(fs.existsSync(mutationPath)).toBe(false);
+        return;
+      }
       if (!refused) {
         expect(byId(result.stepReceipts, "plugin-doctor-state")).toMatchObject({
           source: plannedSources,
