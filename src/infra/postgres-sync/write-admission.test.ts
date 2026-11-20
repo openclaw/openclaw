@@ -15,15 +15,15 @@ function fixture(options: { lock?: number; statement?: number; transaction?: num
   let nativeFailure: Error | undefined;
   const lockError = Object.assign(new Error("lock timeout"), { code: "55P03" });
   vi.spyOn(performance, "now").mockImplementation(() => now);
-  vi.spyOn(db, "prepare").mockReturnValue({
-    all: () => [
-      { name: "lock_timeout", setting: String(options.lock ?? 1000) },
-      { name: "statement_timeout", setting: String(options.statement ?? 2000) },
-      ...(options.transaction === undefined
-        ? []
-        : [{ name: "transaction_timeout", setting: String(options.transaction) }]),
-    ],
-  } as ReturnType<typeof db.prepare>);
+  const settings = db.anchor.prepare("SELECT 1");
+  vi.spyOn(settings, "all").mockReturnValue([
+    { name: "lock_timeout", setting: String(options.lock ?? 1000) },
+    { name: "statement_timeout", setting: String(options.statement ?? 2000) },
+    ...(options.transaction === undefined
+      ? []
+      : [{ name: "transaction_timeout", setting: String(options.transaction) }]),
+  ]);
+  vi.spyOn(db, "prepare").mockReturnValue(settings);
   const exec = vi.spyOn(db, "exec").mockImplementation((sql) => {
     if (sql.startsWith("BEGIN")) db.isTransaction = true;
     if (sql === "ROLLBACK" || sql === "COMMIT") db.isTransaction = false;

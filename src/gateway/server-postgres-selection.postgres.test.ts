@@ -131,7 +131,7 @@ it.skipIf(!connection)(
         const text = "龘 selection mirror";
         const append = (index: number, slot: number) =>
           appendAssistantMessageToSessionTranscript({
-            ...scopes[index],
+            ...scopes[index]!,
             expectedSessionId: scopes[index]!.sessionId,
             config: preflight.snapshot.config,
             text: slot === 0 ? "selection first mirror" : text,
@@ -160,7 +160,7 @@ it.skipIf(!connection)(
         );
         expect([...facts.existingIdempotencyKeys]).toEqual(idempotencyKeys);
         expect([...facts.anchorsByIdempotencyKey.values()]).toEqual([first.anchor, last.anchor]);
-        expect(facts.sourceEvents?.map((event) => event.id)).toEqual([last.messageId]);
+        expect(facts.sourceEvents).toEqual([expect.objectContaining({ id: last.messageId })]);
         withEngineStoreAdmission(() => {
           const database = openOpenClawAgentDatabase({ agentId: "main" });
           markCanonicalSessionValidationPending(database, [keys[1]!]);
