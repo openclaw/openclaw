@@ -98,7 +98,6 @@ export async function admitCliHistoryAccount(
             resolvePreparedChildEnv(params, preparedBackend),
           )
         ).owner;
-  params.assertCurrent?.();
   // Use the resolved static credential or a named OAuth account, never a profile name,
   // reference, or identity-less OAuth token that rotates.
   const owner =
@@ -159,7 +158,6 @@ export async function admitCliHistoryAccount(
     },
     { preserveActivity: true, skipMaintenance: true },
   );
-  params.assertCurrent?.();
   return {
     replaysHistory,
     ...(replaysHistory ? { target: source } : {}),
