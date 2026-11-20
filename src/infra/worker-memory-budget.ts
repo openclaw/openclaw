@@ -63,8 +63,8 @@ type PoolEntry = {
   pool: WeakRef<object>;
   script: string;
   estimate: number;
-  /** Ordinary floor workers that need their own isolate. */
-  physicalFloor: number;
+  url: string;
+  floor: number;
   pointReadFloor: boolean;
   growth: number;
   family: Family;
@@ -174,7 +174,8 @@ export function createWorkerMemoryBudget(params: {
   /** Floors are reserved whether or not they run; only reservations not yet live are pending. */
   const ledger = () => {
     const live = params.countLive();
-    const floors = directFloors(params.hosted());
+    const hosted = params.hosted();
+    const floors = directFloors(hosted);
     let floorBytes = 0;
     let pendingBytes = 0;
     for (const entry of pools) {
@@ -183,7 +184,8 @@ export function createWorkerMemoryBudget(params: {
         release(entry);
         continue;
       }
-      const floor = entry.physicalFloor + Number(entry.pointReadFloor);
+      // The shared host serves at most the first endpoint of a kind.
+      const floor = entry.floor - Number(hosted(entry.url)) + Number(entry.pointReadFloor);
       const running = live.pools.get(params.poolId(pool)) ?? 0;
       floorBytes += floor * entry.estimate;
       pendingBytes += Math.max(0, floor + entry.growth - running) * entry.estimate;
@@ -261,8 +263,8 @@ export function createWorkerMemoryBudget(params: {
         pool: new WeakRef(pool),
         script,
         estimate: estimateBytes(script),
-        // The shared host serves at most the first endpoint of a kind.
-        physicalFloor: floor - Number(params.hosted()(url.href)),
+        url: url.href,
+        floor,
         pointReadFloor: false,
         growth: 0,
         family: family(script),
