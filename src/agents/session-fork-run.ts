@@ -536,24 +536,26 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
   // A CLI backend keeps the conversation in its own native session, so the fork branches that
   // session. A CLI turn records its runtime as the provider (`claude-cli/<model>`): that ref keeps
   // the CLI as owner and runs its canonical provider's model. Plugin tool grants do not reach a
-  // CLI backend's MCP surface; those forks stay on the built-in runtime.
+  // CLI backend's MCP surface, and a CLI process takes no output-token cap; forks that need either
+  // stay on the built-in runtime, which enforces them.
   const canonicalProvider = resolveCliRuntimeCanonicalProvider({
     runtime: params.model.provider,
     config,
     includeSetupRegistry: true,
   });
-  const cliRuntime = params.runtimePluginToolGrant?.toolNames.length
-    ? undefined
-    : canonicalProvider
-      ? { provider: params.model.provider }
-      : resolveSessionCliRuntime({
-          cfg: config,
-          agentId,
-          sessionKey,
-          provider: params.model.provider,
-          model: params.model.model,
-          sessionEntry: entry ?? {},
-        });
+  const cliRuntime =
+    params.runtimePluginToolGrant?.toolNames.length || params.maxTokens !== undefined
+      ? undefined
+      : canonicalProvider
+        ? { provider: params.model.provider }
+        : resolveSessionCliRuntime({
+            cfg: config,
+            agentId,
+            sessionKey,
+            provider: params.model.provider,
+            model: params.model.model,
+            sessionEntry: entry ?? {},
+          });
   const cliEntry = cliRuntime
     ? await readSessionEntryReadOnlyInWorker({ agentId, sessionKey, storePath: source.storePath })
     : undefined;

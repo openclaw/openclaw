@@ -226,10 +226,11 @@ native session is not kept.
   (`before_model_request` with `requestKind: "side_question"`) and fires no
   other turn hooks.
 - `forkSession` forks the same way, with no tools.
-- A `runForkedTurn` call that grants the plugin's own tools still runs on the
-  built-in runtime: plugin tool grants and `toolContext.backgroundRun` do not
-  reach a CLI backend's tools. Without a credential for the model's provider,
-  that fork fails with the provider's missing-credential error.
+- A `runForkedTurn` call that grants the plugin's own tools or sets
+  `maxTokens` still runs on the built-in runtime: plugin tool grants and
+  `toolContext.backgroundRun` do not reach a CLI backend's tools, and a CLI
+  process takes no output-token cap. Without a credential for the model's
+  provider, that fork fails with the provider's missing-credential error.
 
 #### Tool-free forks
 

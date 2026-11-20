@@ -264,21 +264,24 @@ it.each([
   }, row.options);
 });
 
-it("keeps plugin-tool forks and built-in sessions on the built-in runtime", async () => {
+it("keeps plugin-tool forks, capped forks and built-in sessions on the built-in runtime", async () => {
   await withCliSession(async ({ anchor, workspaceDir }) => {
     await fork(anchor, workspaceDir, {
       tools: ["skill_workshop"],
       runtimePluginToolGrant: { pluginId: "skill-workshop", toolNames: ["skill_workshop"] },
     });
+    // A CLI process takes no output-token cap; the built-in runtime enforces the caller's.
+    await fork(anchor, workspaceDir, { tools: ["read"], maxTokens: 64 });
     await fork(anchor, workspaceDir, {
       config: {},
       model: { provider: "openai", model: "gpt-test" },
     });
     expect(runCliAgent).not.toHaveBeenCalled();
-    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
       agentHarnessId: "openclaw",
       agentHarnessRuntimeOverride: "openclaw",
     });
+    expect(runEmbeddedAgent.mock.calls[1]?.[0].streamParams).toEqual({ maxTokens: 64 });
   });
 });
