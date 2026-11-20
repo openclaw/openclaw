@@ -230,9 +230,10 @@ export async function runTelegramIngressWorkerRuntime(params: {
               queued: result.length,
             });
           });
-          if (lastUpdateId === null || updateId > lastUpdateId) {
-            lastUpdateId = updateId;
-          }
+          // Confirm exactly this response. Telegram restarts update ids at a random number
+          // after a week without updates and serves an offset past its queue tail from the
+          // queue head, so keeping a higher stale offset would never confirm them.
+          lastUpdateId = updateId;
           port.postMessage({ type: "spooled", updateId, queued: result.length });
         }
         pollingConfirmed = true;

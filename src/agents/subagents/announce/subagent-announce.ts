@@ -11,6 +11,7 @@ import { waitForSessionRunEnd } from "../../../sessions/session-controller.nativ
 import { isSessionRunActive } from "../../../sessions/session-controller.queries.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import { createLazyPromise } from "../../../shared/lazy-promise.js";
+import { subagentCompletionForOutcome } from "../../../shared/subagent-completion.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
   isDeliverableMessageChannel,
@@ -583,6 +584,13 @@ async function runSubagentAnnounceFlowBound(
           requesterAgentId: targetRequesterAgentId,
           triggerMessage,
           internalEvents,
+          subagentCompletions: [
+            subagentCompletionForOutcome(
+              { runId: params.childRunId, sessionKey: params.childSessionKey, label: params.label },
+              outcome.status,
+              killed,
+            ),
+          ].filter((completion) => completion !== undefined),
           requesterSessionOrigin: targetRequesterOrigin,
           completionDirectOrigin,
           directOrigin,

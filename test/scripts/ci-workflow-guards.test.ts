@@ -1097,14 +1097,14 @@ AFTER_CD
       "client-id": "${{ inputs.contents-client-id }}",
       "private-key": "${{ inputs.contents-private-key }}",
       owner: "${{ github.repository_owner }}",
-      repositories: "${{ github.event.repository.name }}",
+      repositories: "${{ inputs.repository || github.event.repository.name }}",
       "permission-contents": "write",
     });
     expect(pullRequest.with).toEqual({
       "client-id": "${{ inputs.pull-request-client-id }}",
       "private-key": "${{ inputs.pull-request-private-key }}",
       owner: "${{ github.repository_owner }}",
-      repositories: "${{ github.event.repository.name }}",
+      repositories: "${{ inputs.repository || github.event.repository.name }}",
       "permission-contents": "${{ inputs.pull-request-contents-permission }}",
       "permission-pull-requests": "write",
     });
@@ -1118,6 +1118,7 @@ AFTER_CD
     const tokens = publisher.runs.steps.find((step: WorkflowStep) => step.id === "tokens");
     expect(tokens.uses).toBe("./.github/actions/create-generated-pr-tokens");
     expect(tokens.with).toEqual({
+      repository: "${{ inputs.repository }}",
       "contents-client-id": "${{ inputs.contents-client-id }}",
       "contents-private-key": "${{ inputs.contents-private-key }}",
       "pull-request-client-id": "${{ inputs.pull-request-client-id }}",
@@ -1156,11 +1157,25 @@ AFTER_CD
   const staleInputs = "Deferred stale generated output because generator inputs changed on main.";
   const staleOutput =
     "Deferred stale generated output because owned generated paths changed on main.";
-  const convergingHead = "Generated pull request head has not converged yet; rechecking";
+  const convergingHead =
+    "Generated pull request head or mergeability has not converged yet; rechecking";
   const preservedHead = { reference: "initialBranch", equals: true } as const;
   const stalePullRequest = { generatedA: "stale-pr-a", mergeCalls: "" };
 
   it.skipIf(process.platform === "win32").each<PublicationCase>([
+    {
+      name: "publishes and merges in the selected destination repository",
+      options: { repository: "openclaw/clawgrit-reports", autoMerge: true },
+      expected: { branchExists: true, generatedA: "desired-a" },
+      contains: [
+        [
+          "mergeCalls",
+          "pr merge https://github.com/openclaw/clawgrit-reports/pull/1 --repo openclaw/clawgrit-reports",
+        ],
+        ["mergeCalls", "--auto --squash --match-head-commit"],
+        ["summary", "Generated pull request: https://github.com/openclaw/clawgrit-reports/pull/1"],
+      ],
+    },
     {
       name: "enables auto-merge for the exact generated pull request head",
       options: { autoMerge: true },
@@ -1168,7 +1183,15 @@ AFTER_CD
       contains: [
         ["mergeCalls", "pr merge https://github.com/openclaw/openclaw/pull/1"],
         ["mergeCalls", "--auto --squash --match-head-commit"],
-        ["summary", "Enabled squash auto-merge for exact generated head"],
+        ["summary", "Requested squash merge for exact generated head"],
+      ],
+    },
+    {
+      name: "waits for known mergeability before requesting the exact-head merge",
+      options: { autoMerge: true, unknownMergeabilityOnce: true },
+      contains: [
+        ["mergeCalls", "--auto --squash --match-head-commit"],
+        ["publishOutput", convergingHead],
       ],
     },
     {
@@ -3086,7 +3109,15 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     const check = () =>
       runWorkflowShellScript(expectDefined(budget.run, "budget script"), {
         cwd: selected,
-        env: { ...process.env, BASE_SHA: base },
+        env: {
+          ...process.env,
+          BASE_SHA: base,
+          OPENCLAW_RELEASE_CONTEXT_REF: "",
+          GITHUB_ACTIONS: "true",
+          GITHUB_EVENT_NAME: "pull_request",
+          GITHUB_BASE_REF: "main",
+          GITHUB_REF: "refs/pull/1/merge",
+        },
       });
     const unallocated = check();
     expect(unallocated.status, unallocated.stdout + unallocated.stderr).toBe(1);
@@ -6893,6 +6924,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBeUndefined();
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
+    expect(runStep.env.OPENCLAW_NODE_TEST_TARGET_VOLUMES_GZIP_BASE64).toBe(
+      "${{ matrix.target_volumes_gzip_base64 || '' }}",
+    );
     expect(runStep.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64).toBe(
       "${{ matrix.groups_pool && steps.node-test-groups.outputs.groups_gzip_base64 || matrix.groups_gzip_base64 || '' }}",
     );

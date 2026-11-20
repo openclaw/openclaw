@@ -180,6 +180,11 @@ export function createComposerMobileInteraction(
       );
     };
     let pointerOrigin: EventTarget | undefined;
+    const retargetedEditorTap = (event: MouseEvent) =>
+      props.mobileComposer &&
+      isEditorTarget(pointerOrigin) &&
+      !isEditorTarget(event.composedPath()[0]) &&
+      event.detail > 0;
     let disposed = false;
     const stops = [
       listen(
@@ -217,16 +222,24 @@ export function createComposerMobileInteraction(
       ),
       listen(
         doc,
+        "mousedown",
+        (event) => {
+          // Chrome hit-tests the compatibility mouse events after touchend. The
+          // keyboard can move the entire composer before then; click is too
+          // late to prevent mousedown's default action from blurring the editor.
+          if (retargetedEditorTap(event)) {
+            event.preventDefault();
+          }
+        },
+        true,
+      ),
+      listen(
+        doc,
         "click",
         (event) => {
           // Expansion can move the toolbar under the first textarea tap. That tap
           // belongs to the editor, never to the action now occupying its position.
-          if (
-            props.mobileComposer &&
-            isEditorTarget(pointerOrigin) &&
-            event.composedPath()[0] !== pointerOrigin &&
-            event.detail > 0
-          ) {
+          if (retargetedEditorTap(event)) {
             event.preventDefault();
             event.stopPropagation();
           }

@@ -51,11 +51,12 @@ export const recoveryCleanupStep = () => ({
   cwd: "",
   durationMs: expect.any(Number),
   exitCode: 0,
-  diagnostics: [
+  // The summary comes first; one line per removed or kept item follows.
+  diagnostics: expect.arrayContaining([
     expect.stringMatching(
-      /^Recovery cleanup removed [1-9]\d* files \([1-9]\d* logical bytes\); protected recovery artifacts were retained\.$/,
+      /^Update backup cleanup removed [1-9]\d* items? \([1-9]\d* logical bytes, .+\)\./,
     ),
-  ],
+  ]),
 });
 
 export function registerForegroundFailureRecoveryTests(deps: {

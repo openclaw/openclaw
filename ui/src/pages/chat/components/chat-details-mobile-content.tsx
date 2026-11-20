@@ -28,7 +28,6 @@ import {
   MobileTaskProgressControls,
   type MobileTaskProgressProps,
 } from "./chat-details-progress.tsx";
-import { ChatDetailsSkills } from "./chat-details-skills.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import type { GitHubPublicationMobileProps } from "./chat-github-publication-mobile.tsx";
 import "../../../styles/chat/github-publication-mobile.css";
@@ -88,7 +87,6 @@ type ChatDetailsMobileRootContent = {
     | "publicationEntry"
     | "context"
     | "processes"
-    | "skills"
     | "subagents"
     | "taskProgress"
     | "taskProgressNotice"
@@ -305,7 +303,6 @@ function MobileRoot(
       publicationEntry={
         props.details.githubPublication ? props.content.publicationEntry : undefined
       }
-      skills={<ChatDetailsSkills details={props.details} presented={props.presented} mobile />}
       processes={
         props.content.processes ? (
           <ChatDetailsMobileProcesses

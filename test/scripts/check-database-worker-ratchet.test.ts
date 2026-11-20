@@ -59,6 +59,12 @@ it.each([
       `(await import('../../src/config/sessions/${file.replace(/\.ts$/, ".js")}')).${operation}();`,
     );
     expect(tiers()).toEqual(["T3"]);
+    sources.delete("scripts/perf/session-cold-selection.ts");
+    sources.set(
+      "scripts/perf/session-cold-writer.mjs",
+      `(await import('../../src/config/sessions/${file.replace(/\.ts$/, ".js")}')).${operation}();`,
+    );
+    expect(tiers()).toEqual(["T3"]);
     sources.set(
       "src/plugin-sdk/runtime.ts",
       `import { ${operation} } from '../config/sessions/${file.replace(/\.ts$/, ".js")}';

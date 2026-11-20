@@ -1,12 +1,6 @@
 /** Owns captured destinations and cancellation for background exec completion notifications. */
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { enqueueBatchedSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-batch.js";
 import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../auto-reply/reply/session-event-handoff.js";
-import {
-  followSessionEventTargetForHost,
-  type SessionEventTargetFollow,
-} from "../auto-reply/reply/session-event-target.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
@@ -20,6 +14,7 @@ import { logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isOneShotRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import {
+  listFinishedSessions,
   listRunningSessions,
   processSessionInstanceId,
   recordNotifyOnExitRemoval,
@@ -106,6 +101,8 @@ const execYieldResumes = new Map<string, ExecYieldResume>();
 
 /** A chat is its agent plus session key; a raw key such as `global` is shared across agents. */
 type ExecChat = { agentId: string; sessionKey: string };
+// Completion admission can outlive process retention and its start-time routing fields.
+const pendingExitWakes = new Set<ExecChat>();
 const execChatKey = (chat: ExecChat) => `${chat.agentId}\0${chat.sessionKey}`;
 const processChat = (session: ProcessSession) =>
   session.sessionKey && session.agentId
@@ -128,6 +125,22 @@ export function listYieldAwaitableExecs(chat: ExecChat | undefined): ProcessSess
   }
   return listChatRunningSessions(chat).filter(
     (session) => !session.cancellationRequested && hasExitWake(session),
+  );
+}
+
+/** The notification owner keeps a wake alive through finalization and receipt settlement. */
+export function hasExecYieldWake(chat: ExecChat): boolean {
+  if (listYieldAwaitableExecs(chat).length > 0) {
+    return true;
+  }
+  for (const wake of pendingExitWakes) {
+    if (wake.agentId === chat.agentId && wake.sessionKey === chat.sessionKey) {
+      return true;
+    }
+  }
+  const key = execChatKey(chat);
+  return listFinishedSessions().some(
+    (session) => session.finalizing && session.resumesYieldedRun && processChat(session) === key,
   );
 }
 
@@ -248,58 +261,6 @@ function prepareExecExitWake(
   return appendExecTimeoutRetryGuidance(summary, session.exitReason);
 }
 
-/** A new conversation does not get the old command's wake; it gets a visible note instead. */
-async function withholdExecExitNotification(
-  session: ProcessSession,
-  target: NonNullable<ProcessSession["notifySessionTarget"]>,
-  followed: Exclude<SessionEventTargetFollow, { status: "current" }>,
-) {
-  const reason =
-    followed.status === "deleted"
-      ? "the conversation was deleted"
-      : "the conversation was reset, rewound or moved to a new session after the command started";
-  logWarn(`exec: completion ${session.id} withheld (${reason}); inspect the process result.`);
-  if (followed.status === "deleted") {
-    return;
-  }
-  const runId = `exec-withheld:${processSessionInstanceId(session)}`;
-  try {
-    // Transcript storage stays lazy: almost every completion is delivered.
-    const { appendSessionTranscriptReport } =
-      await import("../config/sessions/session-accessor.js");
-    const appended = await runWithoutOwnedSessionTranscriptWrites(() =>
-      appendSessionTranscriptReport(
-        {
-          agentId: target.agentId!,
-          sessionKey: target.sessionKey!,
-          storePath: target.storePath,
-          sessionId: followed.sessionId,
-          expectedLifecycleRevision: followed.lifecycleRevision,
-        },
-        {
-          kind: "custom",
-          customTypes: ["run-failed-before-reply"],
-          selectReport: (latest) =>
-            isRecord(latest?.details) && latest.details.runId === runId
-              ? undefined
-              : {
-                  customType: "run-failed-before-reply",
-                  display: true,
-                  excludeFromContext: true,
-                  content: `Background command result withheld (${session.id}, ${renderExecExitLabel(session)}): ${reason}. Its output stays in process log.`,
-                  details: { runId, processId: session.id },
-                },
-        },
-      ),
-    );
-    if (!appended.ok) {
-      throw new Error(`transcript refused the note: ${appended.error.code}`);
-    }
-  } catch (error) {
-    logWarn(`exec: completion ${session.id} withheld note failed (${formatErrorMessage(error)}).`);
-  }
-}
-
 async function notifyOnExit(
   session: ProcessSession,
   status: "completed" | "failed",
@@ -330,28 +291,19 @@ async function notifyOnExit(
       );
       return;
     }
-    const target = session.notifySessionTarget;
     try {
-      const followed = await followSessionEventTargetForHost(target);
-      if (followed.status !== "current") {
-        await withholdExecExitNotification(session, target, followed);
-        return;
-      }
-    } catch (error) {
-      // Admission still checks the captured generation and refuses a stale one.
-      logWarn(
-        `exec: completion ${session.id} could not read its session (${formatErrorMessage(error)}).`,
-      );
-    }
-    try {
+      // Admission resolves the chat by key: a deleted chat refuses the wake.
       const receipt = enqueueExecExitNotification(
         eventText,
-        target,
+        session.notifySessionTarget,
         processSessionInstanceId(session),
         { ...eventOptions, sourceRunId: session.startedByRunId },
       );
       recordNotifyOnExitRemoval(session, receipt.cancel);
-      void receipt.settled.then(async (outcome) => {
+      const wake = { agentId, sessionKey: eventSessionKey };
+      pendingExitWakes.add(wake);
+      void receipt.settled.then((outcome) => {
+        pendingExitWakes.delete(wake);
         if (outcome.status === "failed") {
           logWarn(
             `exec: completion delivery failed (${outcome.error}); inspect the process result.`,

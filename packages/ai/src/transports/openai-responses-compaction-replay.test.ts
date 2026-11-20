@@ -218,7 +218,7 @@ describe("OpenAI Responses compaction replay", () => {
     },
   );
 
-  it("provider-owned keeps instructions, owner output after compaction, and later messages", () => {
+  it("provider-owned puts instructions after compaction, then owner output and later messages", () => {
     const prefixCall = createAssistant([
       {
         type: "toolCall",
@@ -267,8 +267,8 @@ describe("OpenAI Responses compaction replay", () => {
     });
 
     expect(input.map((item) => item.type)).toEqual([
-      "message",
       "compaction",
+      "message",
       "reasoning",
       "message",
       "function_call",
@@ -277,8 +277,13 @@ describe("OpenAI Responses compaction replay", () => {
       "message",
       "message",
     ]);
-    expect(input[0]).toMatchObject({ type: "message", role: "developer" });
-    expect(input[1]).toMatchObject({ type: "compaction", id: "cmp_replay" });
+    // OpenAI drops input placed before the compaction item; the prompt must follow it.
+    expect(input[0]).toMatchObject({ type: "compaction", id: "cmp_replay" });
+    expect(input[1]).toMatchObject({
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "current system instructions" }],
+    });
     expectTranscript(
       input,
       [
@@ -294,7 +299,6 @@ describe("OpenAI Responses compaction replay", () => {
   });
 
   it.each<[string, Partial<ProviderReplayState>, { sessionId?: string }]>([
-    ["model", { model: "other-model" }, replayIdentity],
     ["base route", { baseUrlHash: "0000000000000000" }, replayIdentity],
     ["session", {}, { ...replayIdentity, sessionId: "session-b" }],
     ["missing identity", {}, {}],
@@ -325,6 +329,22 @@ describe("OpenAI Responses compaction replay", () => {
       "newer incompatible assistant",
       "active user",
     ]);
+  });
+
+  it("replays a checkpoint written by another model in the same session", () => {
+    const owner = createAssistant(
+      "checkpoint from gpt-6-astra",
+      compactionState(model, { replayIndex: 0, model: "gpt-6-astra" }),
+    );
+    const input = convertTransport({
+      messages: [
+        fixtures.userMessage("first user", 1),
+        owner,
+        fixtures.userMessage("active user", 2),
+      ],
+    });
+
+    expect(input.filter((item) => item.type === "compaction")).toHaveLength(1);
   });
 
   it("ignores a newer foreign-route suppression tombstone", () => {

@@ -24,7 +24,6 @@ import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { updateChatReasoning } from "./chat-reasoning.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import { getChatRunOwner, getChatRunProjection } from "./history-merge.ts";
-import { resolveChatSnapshotKey } from "./session-message-cache.ts";
 import { observedRunInputSendId } from "./stream-causal-boundary.ts";
 import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
@@ -46,7 +45,6 @@ const PROVIDER_POLICY_PRECEDENCE = {
   escalated: 3,
   unavailable: 3,
 } as const;
-const TOOL_STREAM_LIMIT = 50;
 const RUN_USAGE_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
@@ -135,12 +133,8 @@ function publishToolStreamEntry(
   } else {
     refreshToolStreamMessage(entry);
   }
-  if (host.toolStreamOrder.length > TOOL_STREAM_LIMIT) {
-    const overflow = host.toolStreamOrder.length - TOOL_STREAM_LIMIT;
-    for (const id of host.toolStreamOrder.splice(0, overflow)) {
-      host.toolStreamById.delete(id);
-    }
-  }
+  // Live calls stay until durable history or run cleanup replaces them. Dropping
+  // a prefix here removes visible operations before their saved rows are loaded.
   if (force) {
     flushToolStreamSync(host);
     return;
@@ -156,17 +150,6 @@ function publishToolStreamEntry(
     },
     Math.max(0, TOOL_STREAM_THROTTLE_MS - elapsed),
   );
-}
-
-// Tool chrome is preloaded; skill decoding is not needed until a real skill result.
-async function recordLiveSkillLoad(host: ToolStreamHost, message: Record<string, unknown>) {
-  const scope = [
-    resolveChatSnapshotKey(host, { sessionKey: host.sessionKey }),
-    host.currentSessionId,
-    host.chatDisplayedLeafEntryId,
-  ] as const;
-  const { retainLiveConversationSkillLoad } = await import("../../lib/chat/skills-used.ts");
-  retainLiveConversationSkillLoad(host, scope, message);
 }
 
 function toolReviewSequenceIdentity(ownerIdentity: string, reviewId: string): string {
@@ -625,6 +608,22 @@ export function handleAgentEvent(
   }
   entry.name = name;
   entry.parentToolCallId ??= parentToolCallId;
+  if (phase === "start" && !entry.parentToolCallId) {
+    // Bind completed commentary to the next root call, not to nested work or
+    // a replayed start that predates it. Saved call timestamps may be earlier.
+    const introducesCall = (segment: (typeof host.chatStreamSegments)[number]) =>
+      Boolean(segment.itemId) &&
+      !segment.toolCallId &&
+      segment.runId === payload.runId &&
+      (segment.afterUserSendId === undefined ||
+        segment.afterUserSendId === entry.afterUserSendId) &&
+      segment.ts <= entry.startedAt;
+    if (host.chatStreamSegments.some(introducesCall)) {
+      host.chatStreamSegments = host.chatStreamSegments.map((segment) =>
+        introducesCall(segment) ? { ...segment, toolCallId } : segment,
+      );
+    }
+  }
   if (args !== undefined) {
     entry.args = args;
   }
@@ -659,6 +658,7 @@ export function handleAgentEvent(
   if (phase === "result") {
     entry.liveDiffStat = undefined;
     entry.resultReceived = true;
+    entry.resultTimestamp ??= payload.ts;
   }
 
   if (approvalReview) {
@@ -699,11 +699,5 @@ export function handleAgentEvent(
     );
   }
   publishToolStreamEntry(host, entry, phase === "result" || approvalReview !== null, outputOnly);
-  if (source === "live" && phase === "result" && entry.name === "skills_read") {
-    void recordLiveSkillLoad(host, entry.message).catch((error: unknown) => {
-      // The next authoritative history read still reconstructs this receipt.
-      console.warn("Could not retain live skill usage; history will reconcile it.", error);
-    });
-  }
   return true;
 }

@@ -79,6 +79,7 @@ async function validateTemplate(
     directory,
     true,
     {
+      idleIoPriority: guard.idleIoPriority,
       signal: guard.signal,
       beforeRun: guard.commitGuard,
       stateOwnerPath: guard.workerAuthority?.stateOwnerPath,
@@ -96,6 +97,7 @@ async function validateTemplate(
           "--ignored=matching",
         ],
         {
+          idleIoPriority: guard.idleIoPriority,
           signal: guard.signal,
           beforeRun: guard.commitGuard,
           stateOwnerPath: guard.workerAuthority?.stateOwnerPath,
@@ -161,12 +163,12 @@ type LocalWorkspaceTemplateParams = {
   backgroundUsedAt?: number;
   buildCacheInputs?: string[];
   guard: Pick<WorktreeAllocationGuard, "commitGuard" | "rollbackGuard" | "requireDiskSpace"> &
-    Pick<WorktreeFilesystemOptions, "workerAuthority"> & {
+    Pick<WorktreeFilesystemOptions, "workerAuthority" | "idleIoPriority"> & {
       signal: AbortSignal;
     };
 };
 
-export function sandboxTemplateCacheKey(commonDir: string, templateRoot: string, identity: string) {
+function sandboxTemplateCacheKey(commonDir: string, templateRoot: string, identity: string) {
   return digest(`sandbox-v1\n${commonDir}\n${templateRoot}\n${identity}`);
 }
 
@@ -206,6 +208,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
               previous: prior && changedPaths ? { ...prior, changedPaths } : undefined,
             },
             options.signal,
+            guard.idleIoPriority,
           ),
         );
       },
@@ -218,6 +221,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     return undefined;
   }
   const gitOptions = {
+    idleIoPriority: guard.idleIoPriority,
     signal: guard.signal,
     beforeRun: guard.commitGuard,
     stateOwnerPath: guard.workerAuthority?.stateOwnerPath,
@@ -248,6 +252,8 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     params.source,
     await requireGit(params.source, ["rev-parse", "--git-common-dir"], gitOptions),
   );
+  const cacheKey = sandboxTemplateCacheKey(commonDir, params.templateRoot, identity.key);
+  const contentKey = digest(`${params.baseCommit}\n${digest(lockfile.stdout)}\n${identity.key}`);
   const prepareSource = async (
     directory: string,
     templateGuard: typeof guard,
@@ -271,6 +277,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
         signal: templateGuard.signal,
         assertCurrent: templateGuard.commitGuard,
         workerAuthority: templateGuard.workerAuthority,
+        idleIoPriority: templateGuard.idleIoPriority,
       }),
     );
   };
@@ -292,6 +299,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
       // Refreshes retain the template row, but must not reuse its retired builder.
       scopeKey: randomUUID(),
       identity,
+      idleIoPriority: templateGuard.idleIoPriority,
       signal: templateGuard.signal,
       assertCurrent: templateGuard.commitGuard,
       rollbackGuard: templateOptions.rollbackGuard,
@@ -309,7 +317,9 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
       ),
     );
     if (contained && valid) {
-      log.info("sandbox dependency template prepared for the selected commit");
+      log.info(
+        `sandbox dependency template prepared for the selected commit identity=sandbox-${backend.id}:${cacheKey}:${contentKey}`,
+      );
       return;
     }
     const reason = result.installed
@@ -332,8 +342,8 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     now: Date.now,
     backgroundUsedAt: params.backgroundUsedAt,
     options: guard,
-    cacheKey: sandboxTemplateCacheKey(commonDir, params.templateRoot, identity.key),
-    contentKey: digest(`${params.baseCommit}\n${digest(lockfile.stdout)}\n${identity.key}`),
+    cacheKey,
+    contentKey,
     repoRoot: params.repoRoot,
     commonDir,
     worktreeRoot: params.templateRoot,
@@ -376,9 +386,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
           : undefined;
       if (
         !changedPaths ||
-        changedPaths.some(
-          (entry) => entry === "pnpm-lock.yaml" || path.posix.basename(entry) === ".gitattributes",
-        )
+        changedPaths.some((entry) => path.posix.basename(entry) === ".gitattributes")
       ) {
         return false;
       }

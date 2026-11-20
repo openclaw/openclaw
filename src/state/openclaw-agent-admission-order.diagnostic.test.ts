@@ -202,23 +202,23 @@ describe("physical-open admission ordering", () => {
   });
 
   it.each(["agent-id", "role", "version"] as const)(
-    "rejects %s replacement before exposure, with version drift after physical checks",
+    "rejects %s replacement before exposure",
     (replacement) => {
-      const { options, pathname, writer } = seed(replacement !== "version");
+      const { options, pathname, writer } = seed(true);
       // Ownership is immutable once admitted; reject incompatible replacement files on load.
       if (replacement === "agent-id") {
         writer.exec("UPDATE schema_meta SET agent_id='replacement' WHERE meta_key='primary'");
       } else if (replacement === "role") {
         writer.exec("UPDATE schema_meta SET role='global' WHERE meta_key='primary'");
+      } else {
+        // A replacement must be newer before admission captures its schema facts.
+        writer.exec("PRAGMA user_version=9999;");
       }
-      const trace = tracePhysicalChecks(pathname, () => writer.exec("PRAGMA user_version=9999;"));
+      const trace = tracePhysicalChecks(pathname);
       expect(() => withFullIntegrity(() => openOpenClawAgentDatabase(options))).toThrow(
         /belongs to agent replacement|schema role global|schema version 9999/,
       );
-      expect(trace.didCommit()).toBe(replacement === "version");
-      if (replacement !== "version") {
-        expect(trace.events).toEqual([]);
-      }
+      expect(trace.events).toEqual([]);
       expect(
         writer.prepare("SELECT count(*) AS n FROM cache_entries WHERE scope='synthetic'").get(),
       ).toEqual({ n: 0 });
@@ -567,25 +567,22 @@ describe("asynchronous canonical admission", () => {
   });
 
   it.each(["agent-id", "role", "version"] as const)(
-    "rejects %s replacement before async exposure, with version drift after Worker completion",
+    "rejects %s replacement before async exposure",
     async (replacement) => {
-      const { options, writer } = seed(replacement !== "version");
+      const { options, writer } = seed(true);
       if (replacement === "agent-id") {
         writer.exec("UPDATE schema_meta SET agent_id='replacement'");
       } else if (replacement === "role") {
         writer.exec("UPDATE schema_meta SET role='global'");
+      } else {
+        // Foreign writes after admission are outside the runtime ownership contract.
+        writer.exec("PRAGMA user_version=9999;");
       }
-      const check = integrityWorker.assertSqliteIntegrityInWorker;
-      const worker = vi
-        .spyOn(integrityWorker, "assertSqliteIntegrityInWorker")
-        .mockImplementation(async (...args) => {
-          await check(...args);
-          writer.exec("PRAGMA user_version=9999;");
-        });
+      const worker = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
       await expect(openOpenClawAgentDatabaseAsync(options, "full")).rejects.toThrow(
         /belongs to agent replacement|schema role global|schema version 9999/,
       );
-      expect(worker).toHaveBeenCalledTimes(replacement === "version" ? 1 : 0);
+      expect(worker).not.toHaveBeenCalled();
       expect(() =>
         assertNoOpenClawAgentDatabaseLeases(options.agentId, { env: options.env }),
       ).not.toThrow();

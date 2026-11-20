@@ -13,6 +13,17 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
+Session discovery settlement compares prepared physical paths directly. Exact
+targets already retained by the lane need no worker cleanup request. Family
+discovery still closes unretained siblings; revocation, native-close qualification,
+worker retirement, and admission byte accounting keep their existing owners.
+
+Plugin model catalog publication uses the agent database writer queue. Credential
+cleanup joins those same queues before inspecting candidate catalogs, so an earlier
+publication settles before a clean-catalog decision. Later publications revalidate
+credentials in their transaction. No catalog sidecar lock is needed under Gateway
+database custody; catalog refresh never creates or removes one on the event loop.
+
 Retained session-generation and prepared entry-source guards keep the SQLite
 admission owner's lifetime and check its recorded generation without filesystem
 polling. Database retirement or a replacement observed at admission invalidates
@@ -61,14 +72,12 @@ stores and cross-store conversation guards retain their existing discovery check
 Profile authority readers retain shared-cell views, never a cached allow decision;
 each use checks the exact lifetime, generation, and mutation publication.
 
-Host file writes prepare retained session-generation authority at their final
-effect boundary, after overwrite rollback capture. The existing session worker
-validates physical sources and refreshes facts after committed native mutations;
-the final host assertion checks the retained generation, native handle and revision,
-and live owner. Lifecycle adapters preserve that preparation through indirect
-settings reads. Ordinary synchronous assertions, opaque callback sources, and
-uncommitted native transactions retain their existing checks; an async wrapper
-alone does not move those callbacks off the main thread.
+Host file writes prepare retained database custody at their final effect boundary,
+after overwrite rollback capture. The existing session worker validates physical
+sources; the final host assertion checks the retained owner's lifetime and database
+admission identity without synchronous filesystem probes or SQL. Lifecycle adapters
+preserve this explicit storage capability. An admitted tool call can finish after a
+permission change; storage preparation does not replay policy or opaque callbacks.
 
 Finished worker admissions release publication observers and request callbacks.
 Committed facts remain available for lost-reply recovery, which runs
@@ -92,6 +101,13 @@ context while preserving the selected database engine. Each reclamation request
 keeps its own current-source and commit-authority checks.
 
 ## Choose the execution owner
+
+Transcript-facts backfill discovery and covered-window probes use the session-store
+read worker, independently of writer admission. Only bounded fact-publication
+batches reserve the writer, at background priority after queued foreground work.
+Read delays scale with their own elapsed request time; write delays include
+preparation, commit and reply delivery, with the existing bounded contention backoff.
+The in-memory position cursor and transactional coverage checks preserve resumability.
 
 Shared-state worker contexts carry installed-service migration restrictions only
 for the admitted database. An unrelated older global installation does not change
@@ -270,6 +286,12 @@ The writable lifecycle alone opens and publishes those handles and owns leases,
 migrations, timers, and closure. Borrowers prevent idle eviction; explicit disposal
 can still close the connection and invalidate its claims immediately. Maintenance
 closes cached handles before migrating or replacing their storage.
+
+Retained PostgreSQL connections use the same pre-query reconnect owner as pooled
+connections when the server's last completed status was idle. After one second
+of wall-clock inactivity, including VM suspension, transport validation runs
+before caller SQL. A lost active transaction or uncertain statement outcome still
+fails; reconnect never replays caller SQL or claims an uncertain commit rolled back.
 
 If PostgreSQL schema publication invalidates admission, connection opening,
 shared-state reads before their callback, and standalone feature-schema ensures
@@ -765,12 +787,13 @@ reads scan transiently and retain no full-history navigation cache. Payload-size
 projections remain in SQL, and the bounded reader's limits and output are unchanged.
 
 Cold input preparation uses the turn planner instead of fetching a full actor
-replica first. The planner carries its recovery expectation into the input
-command; prepared, explicit, and warm replica expectations remain fixed across
-version retries. Transcript input and restart recovery still
-commit atomically under the existing writer FIFO, source checks, final host
-COMMIT authorization, and receipt settlement. Schemas, durability, and update
-behavior are unchanged.
+replica first. Ordinary transcript input selects its implicit lifecycle expectation
+inside the owning actor command, after preceding run completion can settle. This
+applies to durable and memory sessions. Caller-supplied lifecycle expectations stay
+fixed, including restart recovery and queued-input adoption. Transcript input and
+restart recovery still commit atomically under the existing writer FIFO, source
+checks, final host COMMIT authorization, and receipt settlement. Schemas,
+durability, and update behavior are unchanged.
 
 Pending-input staging selects its lifecycle expectation inside the same writer
 FIFO. A current published entry supplies those fields without a preliminary full
@@ -1858,6 +1881,7 @@ registry hints for durable children go through the entry worker. The Gateway tru
 the child owner's selection without repeating its parent checks. A reparenting
 after the read appears on the next lookup. There is no synchronous batch fallback.
 
+Filtered SQLite transcript search generates snippets as its visibility cursor consumes ordered candidates, and retains its connection in the worker's read scope.
 Transcript search returns its read snapshot and obtains indexing readiness from
 the projection owner. It does not reread a connection revision after awaiting
 readiness; an intervening append appears on the next search. Projection rebuilds
@@ -6242,6 +6266,10 @@ Persisted-turn replay admission validates the exact session writer row and the
 prepared transcript version in the anchor reader's single snapshot. Each scan
 retains its physical source through validation and cleanup; later preparation
 phases must select that same physical file and obtain fresh reader authority.
+Initial preparation and final consumption share one bounded refresh when a
+concurrent append invalidates selection. The refreshed current user must retain
+the original entry ID and generation; a newer user or completed turn still fails.
+Once consumption starts, its callback is never retried.
 Final consumption retains writer FIFO custody and the native mutation witness
 through synchronous prompt publication and core entry. Current run ownership,
 permission generation, cancellation, and one-time replay consumption remain live

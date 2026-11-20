@@ -360,37 +360,44 @@ it.each(["delete", "drained-wal", "journal"])(
   },
 );
 
-it("rejects stale auth identity before transferring credentials from a replaced database", async () => {
-  const { source } = createAuthDatabase("original");
-  const replacement = createAuthDatabase("replacement");
-  const expectedIdentity = readDatabasePathIdentitySync(source).key;
-  await withSqliteReadOnlyWorkerScope(async () => {
-    await read(source, "canonical");
-    const child: ChildProcess = vi.mocked(spawn).mock.results[0]?.value;
-    const replies: unknown[] = [];
-    child.on("message", (message: unknown) => replies.push(message));
-    fs.renameSync(source, `${source}.retired`);
-    fs.renameSync(replacement.source, source);
-    await expect(
-      runSqliteReadOnlyWorker(source, {
-        mode: "auth-profile-rows",
-        source: "canonical",
-        expectedIdentity,
-        env: { ...process.env },
-      }),
-    ).rejects.toThrow("identity changed");
-    expect(replies).toEqual([
-      {
-        id: expect.any(Number),
-        result: { ok: false, message: expect.stringContaining("identity changed") },
-      },
-    ]);
-    expect((await read(source, "canonical")).store).toEqual({
-      status: "readable",
-      raw: replacement.store,
+it.each(["file", "birthtime"] as const)(
+  "rejects stale auth %s identity before transferring credentials",
+  async (changed) => {
+    const { source, store } = createAuthDatabase("original");
+    const replacement = createAuthDatabase("replacement");
+    const identity = readDatabasePathIdentitySync(source);
+    await withSqliteReadOnlyWorkerScope(async () => {
+      await read(source, "canonical");
+      const child: ChildProcess = vi.mocked(spawn).mock.results[0]?.value;
+      const replies: unknown[] = [];
+      child.on("message", (message: unknown) => replies.push(message));
+      if (changed === "file") {
+        fs.renameSync(source, `${source}.retired`);
+        fs.renameSync(replacement.source, source);
+      }
+      await expect(
+        runSqliteReadOnlyWorker(source, {
+          mode: "auth-profile-rows",
+          source: "canonical",
+          expectedIdentity: identity.key,
+          expectedBirthtime:
+            changed === "birthtime" ? String(BigInt(identity.birthtime!) + 1n) : identity.birthtime,
+          env: { ...process.env },
+        }),
+      ).rejects.toThrow("identity changed");
+      expect(replies).toEqual([
+        {
+          id: expect.any(Number),
+          result: { ok: false, message: expect.stringContaining("identity changed") },
+        },
+      ]);
+      expect((await read(source, "canonical")).store).toEqual({
+        status: "readable",
+        raw: changed === "file" ? replacement.store : store,
+      });
     });
-  });
-});
+  },
+);
 
 it("observes agent initialization after a cold auth read in the same worker", async () => {
   const root = tempDirs.make("openclaw-auth-bootstrap-");

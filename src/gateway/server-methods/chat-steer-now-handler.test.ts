@@ -263,7 +263,7 @@ async function fixture(interruptible: boolean, signal: AbortSignal, fallback = f
       await attempt.outcome;
       operation.complete();
       retireSessionControllerInput(input);
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await receipt.settled?.();
       await disposeSessionReadContexts();
     },

@@ -33,6 +33,8 @@ import {
 import { readUserProfileGitAttribution } from "./user-profile-git-attribution.read.js";
 import { projectStoredGitHubIdentities } from "./user-profile-github-projection.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
+import { readOpenClawIdProfileLinksInDatabase } from "./user-profile-openclaw-id.read.js";
+import { openClawIdProfileProvider } from "./user-profile-openclaw-id.types.js";
 import {
   selectProfileDisplayEntries,
   selectUserProfileEmailAlias,
@@ -117,23 +119,37 @@ export function selectUserProfileRoleAuthority(
           .leftJoin("user_profile_identities as identity", (join) =>
             join
               .onRef("identity.profile_id", "=", "profile.id")
-              .on("identity.provider", "=", GITHUB_PROVIDER)
-              .on("identity.canonical_login", "is not", null),
+              .on((eb) =>
+                eb.or([
+                  eb.and([
+                    eb("identity.provider", "=", GITHUB_PROVIDER),
+                    eb("identity.canonical_login", "is not", null),
+                  ]),
+                  eb("identity.provider", "=", openClawIdProfileProvider),
+                ]),
+              ),
           )
-          .select(["identity.subject", "identity.canonical_login"])
+          .select(["identity.provider", "identity.subject", "identity.canonical_login"])
           .orderBy("identity.subject", "asc")
       : query.select((eb) => [
+          eb.val<string | null>(null).as("provider"),
           eb.val<string | null>(null).as("subject"),
           eb.val<string | null>(null).as("canonical_login"),
         ]),
   ).rows;
   const profile = rows[0];
+  const openclawIdAccountIds = rows.flatMap((row) =>
+    row.provider === openClawIdProfileProvider && row.subject ? [row.subject] : [],
+  );
   return profile
     ? {
         profileId: profile.profile_id,
+        ...(openclawIdAccountIds.length ? { openclawIdAccountIds } : {}),
         role: profile.role ?? null,
         githubLogin:
-          projectStoredGitHubIdentities(rows).get(profile.profile_id)?.primary?.login ?? null,
+          projectStoredGitHubIdentities(rows.filter((row) => row.provider === GITHUB_PROVIDER)).get(
+            profile.profile_id,
+          )?.primary?.login ?? null,
       }
     : undefined;
 }
@@ -147,6 +163,15 @@ export function selectProfileAccessEntries(
     return rows;
   }
   const identities = selectStoredGitHubIdentities(db, profileIds);
+  const openclawIdLinks = new Map<string, string[]>();
+  for (const link of readOpenClawIdProfileLinksInDatabase(
+    db,
+    rows.flatMap(([id, row]) => (row.hasOpenClawIdIdentity ? [id] : [])),
+  )) {
+    const accounts = openclawIdLinks.get(link.profileId) ?? [];
+    accounts.push(link.accountId);
+    openclawIdLinks.set(link.profileId, accounts);
+  }
   const verified = selectVerifiedEnterpriseGitHubIdentities(db, profileIds);
   const githubIdentities = projectUserProfileGitHubIdentities(
     identities,
@@ -160,6 +185,7 @@ export function selectProfileAccessEntries(
       id,
       {
         ...row,
+        ...(openclawIdLinks.has(id) ? { openclawIdAccountIds: openclawIdLinks.get(id) } : {}),
         ...(accounts?.length
           ? {
               githubAccountIds: accounts.map(({ accountId }) => accountId),

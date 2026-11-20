@@ -7,6 +7,12 @@ const payloads = (text = "parent answer") => [{ text }];
 const visibleResult = { payloads: payloads(), deliveryStatus: { status: "sent", resultCount: 1 } };
 const silentResult = { payloads: [], meta: { terminalReply: { disposition: "silent" } } };
 const missingReply = { delivered: false, reason: "visible_reply_missing" };
+const abortedReply = {
+  delivered: false,
+  reason: "requester_aborted",
+  disposition: "permanent_failure",
+};
+const timedOutReply = { ...abortedReply, reason: "requester_timed_out" };
 const visibleReply = { delivered: true, requesterVisibleFinalDelivered: true };
 const intentionalNonDelivery = {
   delivered: false,
@@ -47,17 +53,17 @@ it.each`
   ${"required public reply"}                                | ${ok(visibleResult)}                                                | ${visibleReply}           | ${publicGroup}
   ${"required public silence"}                              | ${ok(silentResult)}                                                 | ${{ delivered: true }}    | ${publicGroup}
   ${"normalized silent result: ok"}                         | ${ok(normalizedSilence)}                                            | ${{ delivered: true }}    | ${undefined}
-  ${"normalized silent result: timeout"}                    | ${{ status: "timeout", result: normalizedSilence }}                 | ${missingReply}           | ${undefined}
-  ${"runtime timeout"}                                      | ${{ status: "timeout", summary: "aborted", stopReason: "timeout" }} | ${missingReply}           | ${undefined}
+  ${"normalized silent result: timeout"}                    | ${{ status: "timeout", result: normalizedSilence }}                 | ${timedOutReply}          | ${undefined}
+  ${"runtime timeout"}                                      | ${{ status: "timeout", summary: "aborted", stopReason: "timeout" }} | ${timedOutReply}          | ${undefined}
   ${"failed turn"}                                          | ${{ status: "error" }}                                              | ${missingReply}           | ${undefined}
   ${"empty successful optional turn"}                       | ${ok({ payloads: [] })}                                             | ${{ delivered: true }}    | ${undefined}
   ${"optional silence promoted to a required human reply"}  | ${ok(requiredSilence)}                                              | ${{ delivered: true }}    | ${undefined}
-  ${"failed silence"}                                       | ${ok(failedSilence)}                                                | ${missingReply}           | ${undefined}
+  ${"failed silence"}                                       | ${ok(failedSilence)}                                                | ${abortedReply}           | ${undefined}
   ${"undelivered text"}                                     | ${ok({ payloads: payloads("unsent answer") })}                      | ${missingReply}           | ${undefined}
   ${"private room: plain final suppressed by policy"}       | ${ok(policySuppression)}                                            | ${intentionalNonDelivery} | ${undefined}
   ${"public room: plain final suppressed by policy"}        | ${ok(policySuppression)}                                            | ${intentionalNonDelivery} | ${{ public: true }}
   ${"policy suppression cannot settle error"}               | ${partial({ error: { kind: "incomplete_turn" } })}                  | ${missingReply}           | ${undefined}
-  ${"policy suppression cannot settle aborted"}             | ${partial({ aborted: true })}                                       | ${missingReply}           | ${undefined}
+  ${"policy suppression cannot settle aborted"}             | ${partial({ aborted: true })}                                       | ${abortedReply}           | ${undefined}
   ${"policy suppression cannot settle yielded"}             | ${partial({ yielded: true })}                                       | ${missingReply}           | ${undefined}
   ${"policy suppression cannot settle continuationPending"} | ${partial({ continuationPending: true })}                           | ${missingReply}           | ${undefined}
 `(

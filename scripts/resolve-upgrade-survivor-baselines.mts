@@ -10,7 +10,6 @@ import {
   assertSupportedUpgradeSurvivorBaselineSpec,
   MINIMUM_UPGRADE_SURVIVOR_BASELINE,
   normalizeUpgradeSurvivorBaselineSpec,
-  OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE,
 } from "./lib/upgrade-survivor-policy.mjs";
 
 type ReleaseRecord = Partial<Record<"isPrerelease" | "publishedAt" | "tagName", unknown>>;
@@ -205,11 +204,6 @@ function resolveSupportedLines(args: Map<string, string>) {
   if (!previous) {
     throw new Error(`no previous stable npm version before ${latest}`);
   }
-  if (!versions.has(OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE)) {
-    throw new Error(
-      `oldest supported baseline is not published: ${OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE}`,
-    );
-  }
   const extended = "extended-stable" in tags ? tags["extended-stable"] : undefined;
   if (
     extended !== undefined &&
@@ -223,12 +217,7 @@ function resolveSupportedLines(args: Map<string, string>) {
   }
   return omitUnpublishedCandidateBaseline(
     args,
-    dedupeSpecs([
-      latest,
-      previous,
-      ...(typeof extended === "string" ? [extended] : []),
-      OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE,
-    ]),
+    dedupeSpecs([latest, previous, ...(typeof extended === "string" ? [extended] : [])]),
   );
 }
 

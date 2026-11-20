@@ -120,6 +120,8 @@ it("windows skill discovery while preserving keyboard traversal, notices, detail
   const cards = () => [...container.querySelectorAll<HTMLElement>("[data-skill-id]")];
   const card = (index: number) =>
     container.querySelector<HTMLElement>(`[data-skill-id="local:window-skill-${index}"]`)!;
+  // Installed skills open as their own list from the Installed chip.
+  await page.getByRole("button", { name: "Installed", exact: true }).click();
   await waitForSolid(() => {
     expect(cards().length).toBeGreaterThan(4);
     expect(cards().length).toBeLessThan(100);
@@ -210,24 +212,22 @@ describe("ClawHub detail content", () => {
       container,
     );
     await expect
-      .element(page.getByRole("button", { name: "Install Guide", exact: true }))
+      .element(page.getByRole("button", { name: "Add Guide", exact: true }))
       .toBeVisible();
     const body = container.querySelector<HTMLElement>(".skill-reader-dialog__body")!;
-    const footer = container.querySelector<HTMLElement>(
-      "openclaw-modal-actions.skill-reader-dialog__actions",
-    )!;
-    expect(footer.parentElement?.lastElementChild).toBe(footer);
-    expect(body.contains(footer)).toBe(false);
+    // The Add action sits in the page header, outside the scroller.
+    const actions = container.querySelector<HTMLElement>(".skill-page__actions")!;
+    expect(body.contains(actions)).toBe(false);
     await Promise.all(
-      footer
+      actions
         .closest("dialog")!
         .getAnimations()
         .map((animation) => animation.finished),
     );
-    const footerTop = footer.getBoundingClientRect().top;
+    const actionsTop = actions.getBoundingClientRect().top;
     body.scrollTop = body.scrollHeight;
     await nextFrame();
-    expect(footer.getBoundingClientRect().top).toBe(footerTop);
+    expect(actions.getBoundingClientRect().top).toBe(actionsTop);
     expect(body.clientWidth).toBeGreaterThan(0);
     expect(body.scrollWidth).toBeLessThanOrEqual(body.clientWidth);
     for (const child of body.children) {

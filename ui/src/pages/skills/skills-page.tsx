@@ -44,7 +44,7 @@ import {
   type SkillsState,
 } from "../../lib/skills/index.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
-import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
+import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
 import { createSkillLibrary } from "./library-state.ts";
 import { SkillLibraryNavigation, SkillLibraryPageMenu } from "./library-toolbar.tsx";
 import { SkillLibrary, SkillLibraryDialogs, SkillLibraryFeedback } from "./library-view.tsx";
@@ -255,6 +255,7 @@ export function SkillsPage(props: SkillsPageProps) {
       ensureInitialData();
     }
   };
+  const cardReport = createMemo(() => skills.read().skillsReport);
   // Route receipts admit loader data; changing surface only retargets its selection owner.
   createEffect(
     () => ({
@@ -264,6 +265,8 @@ export function SkillsPage(props: SkillsPageProps) {
       connected: gateway.connected,
       epoch: gateway.epoch,
       query: local.clawhubSearchQuery,
+      cardKey: local.skillsDetailKey,
+      cardReport: cardReport(),
     }),
     (current, previous) => {
       if (!previous || current.route !== previous.route || current.surface !== previous.surface) {
@@ -276,6 +279,10 @@ export function SkillsPage(props: SkillsPageProps) {
           applyRouteData(current.route);
         }
         ensureInitialData();
+      }
+      // An open card follows the report; its loader deduplicates the unchanged revision.
+      if (current.connected && current.cardKey) {
+        void loadSkillCard(data, current.cardKey);
       }
       syncSearch(
         [current.client, current.connected, current.epoch, current.surface],
@@ -603,9 +610,7 @@ export function SkillsPage(props: SkillsPageProps) {
         <div
           // Bound layout work for the large installed inventory without containing discovery.
           style={{ contain: surface() === "settings" ? "layout" : undefined }}
-          id={surface() === "discovery" ? PLUGINS_HUB_PANEL_ID : undefined}
-          role={surface() === "discovery" ? "tabpanel" : undefined}
-          aria-labelledby={surface() === "discovery" ? "plugins-tab-skills" : undefined}
+          {...(surface() === "discovery" ? pluginsHubPanel("skills") : {})}
         >
           <Skills
             state={viewState()}

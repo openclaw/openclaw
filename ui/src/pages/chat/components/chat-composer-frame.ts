@@ -40,7 +40,7 @@ import {
   scheduleTextareaHeightAdjustment,
 } from "./chat-composer-dom.ts";
 import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
-import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
+import { createComposerKeyDownHandler, stopRunFromEscape } from "./chat-composer-keydown.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
 import type { ComposerPrediction } from "./chat-composer-prediction.ts";
@@ -302,20 +302,21 @@ export function createChatComposerContext(
     draft: string,
     submissionAction?: Event,
     followUpModeOverride?: ChatFollowUpMode,
-  ) => {
+  ): boolean => {
     if (state.composerDraftScope !== draftScope || !canSubmitDraft(draft)) {
-      return;
+      return false;
     }
     state.composerComposing = false;
+    state.tasks()?.clearAccepted();
     interaction.setComposition(null);
     commitComposerDraft(props, draft);
     props.onTypingChange?.(false);
     if (goalComposer.activateDraft(draft, true)) {
-      return;
+      return true;
     }
     if (goalComposer.active) {
       void goalComposer.submit(submissionAction);
-      return;
+      return true;
     }
     const completion = props.onSend(followUpModeOverride, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
@@ -324,6 +325,7 @@ export function createChatComposerContext(
     } else {
       settleSubmittedCommandMenus();
     }
+    return true;
   };
 
   const queuedSubmit = createQueuedSubmit(props, state, visibleDraft, canSubmitDraft, submitDraft);
@@ -334,9 +336,16 @@ export function createChatComposerContext(
     }
     prediction?.acceptInto(state.composerTextarea);
   };
+  const acceptProposal = () => {
+    if (state.composerComposing || !canCompose) {
+      return false;
+    }
+    return state.tasks()?.accept(state.composerTextarea) ?? false;
+  };
   const handleKeyDown = createComposerKeyDownHandler({
     prediction,
     acceptPrediction,
+    acceptProposal,
     state,
     props,
     skillMenuHost,
@@ -361,6 +370,7 @@ export function createChatComposerContext(
     );
   const syncComposerValue = (target: HTMLTextAreaElement, typedAtSign = false) => {
     prediction?.dismiss();
+    state.tasks()?.clearAccepted();
     adjustTextareaHeight(target, { nativeInput: true });
     target.dir = detectTextDirection(target.value);
     const mentions = getMentions();
@@ -662,6 +672,7 @@ export function createChatComposerContext(
     questionPanelProps,
     showComposerProgress,
     handleKeyDown,
+    stopRunFromEscape: () => stopRunFromEscape({ state, props, showAbortableUi }),
     handleBeforeInput,
     handleInput,
     handleSelect,

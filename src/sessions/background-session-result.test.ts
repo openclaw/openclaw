@@ -81,7 +81,6 @@ async function createTarget() {
     commitBackgroundResultToSession({
       agentId: "main",
       sessionKey,
-      expectedLifecycleRevision: generation.lifecycleRevision,
       text: "Automation finished while the chat was active.",
       idempotencyKey: "cron-current-completion:cron:job-1:1000",
       provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
@@ -669,20 +668,13 @@ it("does not commit when cancelled during display preparation", async () => {
   expect(await loadTranscriptEvents(target.scope)).toEqual([]);
 });
 
-it.each<[string, Partial<SessionEntry>, string]>([
-  ["archived conversation", { archivedAt: 2 }, "archived"],
-  [
-    "same-id lifecycle replacement",
-    { lifecycleRevision: "replacement-revision" },
-    "session rebound",
-  ],
-])("refuses %s", async (_, replacement, reason) => {
+it("refuses an archived conversation", async () => {
   const target = await createTarget();
-  await target.replace(replacement);
+  await target.replace({ archivedAt: 2 });
 
   await expect(target.commit()).resolves.toMatchObject({
     ok: false,
-    reason: expect.stringContaining(reason),
+    reason: expect.stringContaining("archived"),
   });
 
   await expect(loadTranscriptEvents(target.scope)).resolves.toEqual([]);
@@ -703,15 +695,51 @@ it("follows a message edit to the conversation's current transcript", async () =
   ).toContain(automationResult.model);
 });
 
-it("follows the conversation key through a reset when no revision is pinned", async () => {
+it("follows the conversation key through a reset", async () => {
   const target = await createTarget();
   await target.replace({ lifecycleRevision: "reset-revision" });
 
   await expect(
     target.commit({
-      expectedLifecycleRevision: undefined,
       idempotencyKey: "cron-current-completion:cron:job-key:5000",
       provenance: { kind: "cron", jobId: "job-key", runId: "cron:job-key:5000" },
     }),
   ).resolves.toMatchObject({ ok: true });
+});
+
+it("writes a display-only row while the producing turn holds the session", async () => {
+  const target = await createTarget();
+  await withSessionTurn(target, async () => {
+    await expect(target.commit({ displayOnly: true })).resolves.toEqual({ ok: true });
+    await expect(
+      target.commit({
+        text: "A foreign result while the turn runs.",
+        idempotencyKey: "cron-current-completion:cron:job-2:2000",
+        provenance: { kind: "cron", jobId: "job-2", runId: "cron:job-2:2000" },
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+  const rows = (await loadTranscriptEvents(target.scope)).flatMap((event) => {
+    const message = readTranscriptEventMessage(event) as Record<string, unknown> | undefined;
+    if (!message) {
+      return [];
+    }
+    return {
+      key: message?.idempotencyKey,
+      excludeFromContext: message?.excludeFromContext,
+      placement: message?.openclawModelPlacement,
+    };
+  });
+  expect(rows).toEqual([
+    {
+      key: "cron-current-completion:cron:job-1:1000",
+      excludeFromContext: true,
+      placement: undefined,
+    },
+    {
+      key: "cron-current-completion:cron:job-2:2000",
+      excludeFromContext: true,
+      placement: "pending",
+    },
+  ]);
 });

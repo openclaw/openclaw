@@ -22,8 +22,6 @@ const enChatDetails = {
       changes: "Changes",
       subagents: "Subagents",
       processes: "Processes",
-      skillsUsed: "Skills used",
-      skillLoads: "Loaded {count} times",
       allSubagents: "All subagents",
       planSteps: "{completed} of {total} steps",
       showMore: "Show {count} more",

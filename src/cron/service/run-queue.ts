@@ -47,6 +47,7 @@ import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import {
   busyConversationCronJobIds,
   busyCronConversation,
+  cronMemoryAllowsExtraRun,
   preparingCronAgentIds,
 } from "./scheduler-config.js";
 import {
@@ -366,6 +367,7 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
             schedulingPaused: state.schedulingPaused || isGatewayRestartDraining(),
             preparingAgentIds: preparingCronAgentIds(state.deps.env),
             busyConversationJobIds: busyConversationCronJobIds(state),
+            memoryAllowsExtraRun: cronMemoryAllowsExtraRun(),
             requests: getCronRunQueueRequests(state, { includePendingEvents: true }),
             hostProcessId: currentPluginCommandHostProcessId(),
             pluginCommandHosts: state.deps.resolvePluginCommandScheduleHosts?.(),

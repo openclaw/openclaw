@@ -12,10 +12,15 @@ import { sendMessage as sendSubagentAnnounceMessage } from "../../../infra/outbo
 import { normalizeOutboundReplyPayloadCore } from "../../../infra/outbound/reply-payload-normalize.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { splitMediaFromOutput } from "../../../media/parse.js";
+import {
+  getCanonicalGatewayContextResolver,
+  getGatewayContextLifetime,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
+import type { SubagentCompletion } from "../../../shared/subagent-completion.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import {
@@ -47,6 +52,7 @@ import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 export async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
   controllerInput?: SessionControllerInput;
+  subagentCompletions?: readonly SubagentCompletion[];
   privateCompletion?: true;
   replyExpectation?: ReplyExpectation;
   agentToolCaller?: import("../../../gateway/server-methods/client-types.js").TrustedAgentToolCaller;
@@ -72,9 +78,14 @@ export async function runAnnounceAgentCall(params: {
   const deadline = new AbortController();
   const sourceLifecycle = new AbortController();
   const isSourceSessionAdmissionAllowed = params.isSourceSessionAdmissionAllowed;
-  const lifecycleSignal = params.signal
-    ? AbortSignal.any([params.signal, sourceLifecycle.signal])
-    : sourceLifecycle.signal;
+  const gatewayOwner =
+    params.resolveGatewayContext &&
+    getCanonicalGatewayContextResolver(params.resolveGatewayContext);
+  const lifecycleSignal = AbortSignal.any([
+    sourceLifecycle.signal,
+    ...(params.signal ? [params.signal] : []),
+    ...(gatewayOwner ? [getGatewayContextLifetime(gatewayOwner).signal] : []),
+  ]);
   const signal = AbortSignal.any([lifecycleSignal, deadline.signal]);
   // A private input stays owned by Gateway admission when an observer times out.
   // Caller or source lifecycle cancellation still stops that underlying turn.
@@ -101,6 +112,7 @@ export async function runAnnounceAgentCall(params: {
         }
         return dispatchGatewayMethodInProcess("agent", params.agentParams, {
           controllerInput: params.controllerInput,
+          subagentCompletions: params.subagentCompletions,
           cancelOnDeadline: true,
           privateCompletion: params.privateCompletion,
           replyExpectation: params.replyExpectation,
@@ -456,7 +468,6 @@ export async function deliverCompletionDirect(params: {
         ? {
             transcriptExpectedGeneration: {
               sessionKey: params.requesterSessionKey,
-              lifecycleRevision: params.requesterLifecycleRevision,
             },
           }
         : {}),

@@ -4,7 +4,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { SqliteSnapshotCleanupError } from "../infra/sqlite-lifecycle-errors.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import {
   assertSqliteSchemaContains,
   createSqliteTableContractReader,

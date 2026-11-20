@@ -624,7 +624,7 @@ export function createPluginNativeCaptureRoot(
     let disposed = false;
     return {
       directory: root.directory,
-      commit() {
+      commit(): void {
         if (disposed) {
           throw new Error("Plugin native capture has been disposed");
         }

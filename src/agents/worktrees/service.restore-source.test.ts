@@ -36,7 +36,7 @@ let snapshotFailure: Error | undefined;
 const events: string[] = [];
 
 const withRollback: NonNullable<CreateManagedWorktreeParams["withRollback"]> = async (run) => {
-  expect(allocationDepth).toBe(1);
+  expect(allocationDepth).toBe(0);
   checkoutDepth += 1;
   try {
     return await run(() => expect(checkoutDepth).toBe(1));
@@ -101,7 +101,7 @@ beforeEach(async () => {
   });
   const claim = runLease.claimWorktreeRemoval;
   vi.spyOn(runLease, "claimWorktreeRemoval").mockImplementation((...args) => {
-    expect(allocationDepth).toBe(1);
+    expect(allocationDepth).toBe(0);
     expect(checkoutDepth).toBe(1);
     events.push("removal-claimed");
     return claim(...args);

@@ -7,7 +7,10 @@ import { collectPluginSourceEntries } from "../scripts/lib/bundled-plugin-build-
 import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff-build-config.mts";
 import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
-import { readUpdateCompatibilityInventory } from "../scripts/lib/update-compat-chunks.mts";
+import {
+  isInlineUpdateCompatibilityExport,
+  readUpdateCompatibilityInventory,
+} from "../scripts/lib/update-compat-chunks.mts";
 import { ModuleGraph } from "../scripts/lib/update-compat-module-graph.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import {
@@ -31,7 +34,11 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/perf/ui-e2e-worker-affinity-measure.mts",
+  "scripts/perf/isolated-completion-registry-measure.ts!",
+  "scripts/perf/audit-retention-fixture.mjs!",
   "scripts/perf/file-log-main-thread-measure.mjs!",
+  "scripts/perf/session-history-page-reads-measure.ts!",
   "scripts/diagnostics/windows-link-service.mjs!",
   "scripts/boat-release-runner.mjs!",
   "scripts/build-iroh.mjs!",
@@ -40,12 +47,14 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-deletion-cancellation-measure.ts",
   "scripts/perf/template-retirement-measure.mts",
   "scripts/windows-release-promotion.mjs!",
+  "scripts/windows-gateway-release.mjs!",
   // Offline composition is documented; Docker executes the staged finalizer by path.
   "scripts/compose-installed-runtime.mts!",
   "scripts/finalize-installed-runtime.mjs!",
   // Performance drivers and their preloads are invoked directly from documented commands.
   "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
   "scripts/perf/decision-tool-catalog-measure.ts!",
+  "scripts/perf/persisted-turn-admission-measure.ts!",
   "scripts/perf/exec-safe-bin-io-measure.mjs!",
   "scripts/perf/usage-cost-source-measure.mjs!",
   "scripts/perf/clickclack-account-snapshot.ts!",
@@ -58,6 +67,8 @@ const repositoryScriptEntries = [
   "test/scripts/fixtures/mantis-telegram-failure.mts",
   // Spawned directly by beam-handoff.joined.e2e.test.ts.
   "test/fixtures/beam-live-handoff-client/beam.mjs",
+  // Forked by update-command-doctor-child.test.ts to model the successor's state swap.
+  "src/cli/update-cli/update-command-state-handoff.process.test-support.ts!",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-ci-lint-plan.mts!",
   "scripts/bench-ci-planner.mts!",
@@ -102,6 +113,7 @@ const repositoryScriptEntries = [
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
   "scripts/lib/plugin-npm-build-and-pack.mts!",
+  "scripts/lib/plugin-npm-build-and-pack-batch.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
   "scripts/generate-postgres-schema.mts!",
   // Package scripts execute these maintained generators, whose inputs are production contracts.
@@ -143,6 +155,8 @@ const repositoryScriptEntries = [
   "scripts/perf/operator-role-source-policy-measure.mjs!",
   // CI preflight executes the manifest from its trusted harness checkout.
   "scripts/ci-build-manifest.mjs!",
+  // Full release validation invokes child-evidence reuse through a shell variable.
+  "scripts/find-reusable-release-child.mjs!",
   // CI security-fast runs this from its trusted harness checkout.
   "scripts/ci-production-audit.mjs!",
   // tsdown builds this private macOS app worker protocol entry by path.
@@ -155,8 +169,12 @@ const repositoryScriptEntries = [
   ".github/workflows/plugin-prerelease.yml!",
   // Labeler steps import their shared helper through workspace file URLs.
   ".github/workflows/labeler.yml!",
+  // Stable closeout imports its recovery verifier from the trusted tooling checkout.
+  ".github/workflows/openclaw-stable-main-closeout.yml!",
   // Prepared publication imports its verifier from the frozen release harness.
   ".github/workflows/openclaw-release-publish.yml!",
+  // Release validation imports shared policy from its trusted workflow checkout.
+  ".github/workflows/full-release-validation.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
@@ -405,6 +423,7 @@ const repositoryScriptEntries = [
   // Installed recovery launches its driver/access probe and preloads its fault observer by path.
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/installed-recovery-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-terminal-dependencies.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-terminal-reference.mts!",
@@ -427,6 +446,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
   // published-driver-update-docker.sh launches this managed-update proof inside Docker.
   "scripts/e2e/lib/upgrade-survivor/published-driver.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/published-driver-plugin-publication.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // The compiler below exposes the runner's inline Node imports.
@@ -486,6 +506,8 @@ const repositoryScriptEntries = [
   "scripts/openclaw-release-ready.mjs!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
+  // Standalone Linux workload compares pinned boundary-reference initialization.
+  "scripts/perf/boundary-reference-measure.mts!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
@@ -568,8 +590,9 @@ const repositoryScriptEntries = [
   "security/opengrep/compile-rules.mjs!",
   // create-blobster/SKILL.md invokes this CLI bridge to render validated Blobster designs.
   "skills/create-blobster/scripts/cli.mjs!",
-  // create-template/SKILL.md invokes this CLI bridge for skills and plugin inventory.
+  // create-template/SKILL.md runs inventory.mjs, which calls the bundled CLI bridge.
   "skills/create-template/scripts/cli.mjs!",
+  "skills/create-template/scripts/inventory.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
 ] as const;
 
@@ -592,15 +615,23 @@ function listScriptShimEntries(dir = "scripts"): string[] {
 }
 
 function compileWorkflowConsumers(source: string, filePath: string): string {
-  if (path.resolve(filePath) === path.resolve(".github/workflows/openclaw-release-publish.yml")) {
+  const stagedToolingRoot =
+    path.resolve(filePath) === path.resolve(".github/workflows/openclaw-release-publish.yml")
+      ? ".release-harness"
+      : path.resolve(filePath) ===
+          path.resolve(".github/workflows/openclaw-stable-main-closeout.yml")
+        ? ".closeout-tooling"
+        : path.resolve(filePath) === path.resolve(".github/workflows/full-release-validation.yml")
+          ? "workflow"
+          : undefined;
+  if (stagedToolingRoot) {
     return [
       ...source.matchAll(
-        /\bimport\s*\{([^}]+)\}\s*from\s*["']\.\/\.release-harness\/(scripts\/[^"'\r\n]+)["']/gu,
+        /\b(?:import|const)\s*\{([^}]+)\}\s*(?:from\s*|=\s*await\s+import\(\s*)["']\.\/(\.(?:release-harness|closeout-tooling)|workflow)\/(scripts\/[^"'\r\n]+)["']/gu,
       ),
     ]
-      .map(
-        ([, names, specifier]) => `import {${names}} from ${JSON.stringify(`../../${specifier}`)};`,
-      )
+      .filter((match) => match[2] === stagedToolingRoot)
+      .map((match) => `import {${match[1]}} from ${JSON.stringify(`../../${match[3]}`)};`)
       .join("\n");
   }
   if (path.resolve(filePath) === path.resolve(".github/workflows/labeler.yml")) {
@@ -1026,6 +1057,10 @@ function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
     `${left.module}:${left.symbol}`.localeCompare(`${right.module}:${right.symbol}`),
   );
   for (const [index, origin] of origins.entries()) {
+    // Inline historical implementations consume no current source binding.
+    if (isInlineUpdateCompatibilityExport(origin)) {
+      continue;
+    }
     const sourceFile = path.join(rootDir, origin.module);
     if (graph.names(sourceFile).includes(origin.symbol)) {
       imports.push(
@@ -1181,6 +1216,11 @@ const config = {
   // Script exports are checked with every script as an entry and entry-export
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
+    // These in-module helpers are direct seams in compaction-floor.test.ts and
+    // package-release-retention.test.ts. The full-tree scan verifies those consumers.
+    "packages/agent-core/src/harness/compaction/compaction-floor.ts": ["exports"],
+    "src/infra/package-release-retention.ts": ["exports"],
+    "src/infra/package-release-slot.ts": ["exports"],
     // P3-6c.1 stages manifest write/archive and typed replacement outcomes for P3-6c.2.
     // Remove these production-only exceptions when the offline port caller lands;
     // the full-tree audit still checks all exports against their boundary tests.
@@ -1337,6 +1377,8 @@ const config = {
         "btrfs",
         // doctor-sqlite-inspection.mjs compiles its native read counter with the host compiler.
         "cc",
+        // worktree-preservation-measure.ts sets its btrfs fixtures to no-copy-on-write.
+        "chattr",
         "ffmpeg",
         // sqlite-snapshot-retirement.mts inspects its btrfs fixture with this host tool.
         "filefrag",

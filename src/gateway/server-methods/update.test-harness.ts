@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { validateUpdateRunResult } from "../../../packages/gateway-protocol/src/index.js";
+import { installPrivateUpdateHandoffWorker } from "../../../test/helpers/private-update-handoff-store.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -87,7 +88,7 @@ export const startManagedServiceUpdateHandoffMock = vi.fn<
 }));
 export const claimManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").claimManagedServiceUpdateHandoff
->(() => true);
+>(async () => true);
 export const transferManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").transferManagedServiceUpdateHandoff
 >(async () => true);
@@ -130,6 +131,7 @@ export async function withTransferredUpdateHandoff(
   );
   const tempRoot = await import("../../infra/tmp-openclaw-dir.js");
   const tmp = vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+  const leaseWorker = installPrivateUpdateHandoffWorker(root);
   const handoff = await vi.importActual<
     typeof import("../../infra/update-managed-service-handoff.js")
   >("../../infra/update-managed-service-handoff.js");
@@ -231,6 +233,7 @@ require(process.argv[1]);`,
       await fs.rm(path.dirname(helper.logPath), { recursive: true, force: true });
     }
     tmp.mockRestore();
+    leaseWorker.mockRestore();
   }
 }
 
@@ -497,7 +500,7 @@ beforeEach(() => {
   recordLatestUpdateRestartSentinelMock.mockClear();
   startManagedServiceUpdateHandoffMock.mockReset();
   transferManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue(true);
-  claimManagedServiceUpdateHandoffMock.mockReset().mockReturnValue(true);
+  claimManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue(true);
   cancelManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue("restored-in-process");
   startManagedServiceUpdateHandoffMock.mockImplementation(async (params) => ({
     status: "started",

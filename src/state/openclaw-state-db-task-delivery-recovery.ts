@@ -8,10 +8,8 @@ import {
   createPrivateSqliteTempDirectorySync,
 } from "../infra/sqlite-private-directory.js";
 import { withPreparedSqliteSnapshot } from "../infra/sqlite-readonly-location-cleanup.js";
-import {
-  resolveSqliteInspectionSignal,
-  runSqliteReadOnlyWorker,
-} from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
+import { runSqliteReadOnlyWorker } from "../infra/sqlite-readonly-worker.js";
 import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,

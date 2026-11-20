@@ -50,7 +50,6 @@ import {
   prepareSessionWorktree,
   resolveSessionWorktreeBase,
 } from "../session-worktree-preparation.js";
-import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayClient } from "./client-types.js";
@@ -225,8 +224,7 @@ export function prepareSessionWorkspace(params: {
       getRpcSourceLifecycleGeneration(activeRun) !== admission.lifecycleGeneration ||
       getRpcSourceProjectSessionActive(activeRun) === false ||
       activeRun.adapter.projectSessionTerminalPending === true ||
-      activeRun.adapter.projectSessionTerminalPersisted === true ||
-      !hasActiveAgentRuntimeAuthority(client, context)
+      activeRun.adapter.projectSessionTerminalPersisted === true
     ) {
       throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
     }

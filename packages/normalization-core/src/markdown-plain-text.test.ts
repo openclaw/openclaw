@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { flattenMarkdownToPlainText } from "./markdown-plain-text.js";
+import { flattenMarkdownToPlainText, stripInlineLinks } from "./markdown-plain-text.js";
 
 describe("flattenMarkdownToPlainText", () => {
   it.each([
@@ -137,5 +137,25 @@ describe("flattenMarkdownToPlainText", () => {
     const depth = 20_000;
     const input = `${"[".repeat(depth)}deep${"](https://example.com)".repeat(depth)} end`;
     expect(flattenMarkdownToPlainText(input)).toBe("deep end");
+  });
+});
+
+describe("stripInlineLinks", () => {
+  // Baseline outputs for the existing linked-image, escaped-bang and empty-label
+  // cases when composed, plus a nested image that contains edits of its own.
+  it.each([
+    [
+      String.raw`[![build](https://example.com/badge[.svg)](https://ci.example.com)\![important](note.md)\\![diagram](image.png)[](https://example.com)`,
+      String.raw`build\!important\\diagram[](https://example.com)`,
+      String.raw`\!important\\[](https://example.com)`,
+    ],
+    [
+      "![Check [docs](guide.md) and ![badge](build.svg)](checks.png)[next](guide.md)",
+      "Check docs and badgenext",
+      "next",
+    ],
+  ])("preserves label and omit output for %s", (input, labels, omitted) => {
+    expect(stripInlineLinks(input)).toBe(labels);
+    expect(stripInlineLinks(input, { images: "omit" })).toBe(omitted);
   });
 });
