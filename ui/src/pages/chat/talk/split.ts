@@ -66,6 +66,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
 
   private async listen(handoff?: SpeechInterruptHandoff | null): Promise<void> {
     if (this.closed) {
+      handoff?.release();
       return;
     }
     const capture = new ComposerDictationSession(
@@ -81,7 +82,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
         sessionKey: this.sessionKey,
         inputDeviceId: this.inputDeviceId,
         silenceTimeoutMs: this.options.silenceTimeoutMs,
-        ...(handoff ? { adoptStream: handoff.stream, seedAudio: handoff.buffered } : {}),
+        ...(handoff ? { handoff } : {}),
       },
     );
     this.capture = capture;
@@ -110,6 +111,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
         }
       }
       if (this.closed) {
+        handoff?.release();
         return;
       }
       await this.listen(handoff);
