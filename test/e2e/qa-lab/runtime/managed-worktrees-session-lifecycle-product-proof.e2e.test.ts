@@ -213,10 +213,11 @@ describe("managed worktrees session-owner product proof", () => {
       expect(cleanDeleted.deleted).toBe(true);
       expect(cleanDeleted).not.toHaveProperty("worktreePreserved");
       await expect(fs.access(clean.worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
-      const cleanSnapshotRef = `refs/openclaw/snapshots/${clean.worktree.id}`;
+      const cleanSnapshotRef = `refs/openclaw/snapshots/clean-v1/${clean.worktree.id}`;
       await expect(git(repo, "show-ref", "--verify", cleanSnapshotRef)).resolves.toContain(
         cleanSnapshotRef,
       );
+      expect(await git(repo, "rev-parse", cleanSnapshotRef)).toBe(baseCommit);
       expect((await listWorktrees()).worktrees).toContainEqual(
         expect.objectContaining({
           id: clean.worktree.id,

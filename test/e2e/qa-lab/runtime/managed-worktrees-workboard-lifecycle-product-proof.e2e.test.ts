@@ -368,15 +368,19 @@ describe("managed worktrees Workboard-owner product proof", () => {
           record?.removedAt !== undefined && record.runEndCleanup?.outcome === "removed-lossless",
         timeoutMs: 30_000,
       });
+      const cleanSnapshotRef = `refs/openclaw/snapshots/clean-v1/${activeRecord?.id}`;
       expect(removed).toMatchObject({
         id: activeRecord?.id,
-        snapshotRef: `refs/openclaw/snapshots/${activeRecord?.id}`,
+        snapshotRef: cleanSnapshotRef,
         removedAt: expect.any(Number),
         runEndCleanup: {
           outcome: "removed-lossless",
           at: expect.any(Number),
         },
       });
+      expect(await git(repo, "rev-parse", cleanSnapshotRef)).toBe(
+        await git(repo, "rev-parse", "main"),
+      );
       await expect(fs.access(materializedPath)).rejects.toMatchObject({ code: "ENOENT" });
 
       // The mock provider reaches terminal without calling the Workboard worker protocol.
