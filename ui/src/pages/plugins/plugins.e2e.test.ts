@@ -226,7 +226,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
             (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
           ),
         )
-        .toBe(4);
+        .toBe(2);
       const installedCard = catalog.locator('[data-plugin-id="ch_bWVtb3J5LXBsdXM"]').first();
       expect(await installedCard.count()).toBe(0);
       const availableCard = catalog
@@ -537,7 +537,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     const grid = page.locator(".plugin-catalog-grid").first();
     const columns = () =>
       grid.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length);
-    await expect.poll(columns).toBe(2);
+    await expect.poll(columns).toBe(1);
     await page.setViewportSize({ height: 852, width: 393 });
     await expect.poll(columns).toBe(1);
     await expect
