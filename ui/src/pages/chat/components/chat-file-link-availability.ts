@@ -26,7 +26,15 @@ function unlink(anchor: HTMLAnchorElement) {
   const text = document.createElement("span");
   text.dataset.filePath = anchor.dataset.filePath;
   text.append(...anchor.childNodes);
+  // A focused link keeps the reader's place without re-entering the tab order.
+  const focused = anchor.ownerDocument.activeElement === anchor;
+  if (focused) {
+    text.tabIndex = -1;
+  }
   anchor.replaceWith(text);
+  if (focused) {
+    text.focus({ preventScroll: true });
+  }
 }
 
 /** Checks which settled transcript file links `openSessionWorkspaceFile` would open. */

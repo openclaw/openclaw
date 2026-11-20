@@ -207,9 +207,12 @@ export function checkSessionWorkspaceFileLinks(
   links: HTMLAnchorElement[],
 ) {
   const workspace = getSessionWorkspace(state);
-  void readWorkspaceContent(state, workspace, (runtime) =>
+  readWorkspaceContent(state, workspace, (runtime) =>
     runtime.checkFileLinkAvailability(state, workspace, links),
-  );
+  ).catch(() => {
+    // Links stay usable when the check cannot load. main.ts owns lazy-chunk fetch
+    // recovery through the Vite preload-error listener.
+  });
 }
 
 /** Resolve a chat reference without moving the original attachment's history ownership. */

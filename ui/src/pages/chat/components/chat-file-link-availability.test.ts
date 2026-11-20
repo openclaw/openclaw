@@ -62,6 +62,17 @@ it("turns links the Gateway cannot open into text and reuses answers", async () 
   expect(document.body.getElementsByTagName("a")).toHaveLength(0);
 });
 
+it("keeps keyboard focus on a link that turns into text", async () => {
+  const workspace = { sessionKey: "agent:main:main", agentId: "main" } as SessionWorkspaceState;
+  const { state } = host(missingFor(["~/remote/reset.sh"]));
+  const links = render('<a tabindex="0" data-file-path="~/remote/reset.sh">reset.sh</a>');
+  links[0]!.focus();
+  await checkFileLinkAvailability(state, workspace, links);
+  expect(document.activeElement?.outerHTML).toBe(
+    '<span data-file-path="~/remote/reset.sh" tabindex="-1">reset.sh</span>',
+  );
+});
+
 it("keeps links when the Gateway cannot answer or answers out of order", async () => {
   const workspace = { sessionKey: "agent:main:main", agentId: "main" } as SessionWorkspaceState;
   for (const answer of [
