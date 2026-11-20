@@ -206,6 +206,11 @@ export type AuthenticatedGatewayConnect = {
 
 export type DeviceAuthorizedGatewayConnect = AuthenticatedGatewayConnect & {
   publicationReader?: import("../../publication-reader.js").PublicationReaderAdmission;
+  isDeviceTokenSubjectCurrent?: () => boolean;
+  prepareDeviceTokens?: (
+    subject: import("../../operator-role-enforcement.js").OperatorRoleSubject,
+    isSubjectCurrent: () => boolean,
+  ) => Promise<Pick<DeviceAuthorizedGatewayConnect, "deviceToken" | "bootstrapDeviceTokens">>;
   deviceToken: DeviceAuthToken | null;
   bootstrapDeviceTokens: Array<{
     deviceToken: string;

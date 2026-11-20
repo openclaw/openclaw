@@ -2,6 +2,11 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
+// mock-isolation: Registry lookup behavior is covered by openai-codex-discovery.test.ts.
+vi.mock("./codex-client-version.js", () => ({
+  resolveOpenAICodexClientVersion: async () => "0.169.0",
+}));
+
 const fetchMock = vi.fn<typeof fetch>();
 const grants = new Map<string, unknown>();
 let now = 1_000_000;
