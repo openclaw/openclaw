@@ -20,13 +20,13 @@ import {
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
   historyLane,
-  projectionLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
 import { prepareCronSession } from "../../cron/isolated-agent/session.js";
 import { refreshCostUsageCacheForAgent } from "../../infra/session-cost-usage-aggregation.js";
+import * as usageWorkerRuntime from "../../infra/session-cost-usage-worker-runtime.js";
 import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import { buildUsageOverview } from "../../shared/usage-overview.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
@@ -327,6 +327,18 @@ it("uses committed metadata for selected usage and families with an empty curren
       { key, sessionId: firstId, label: "Before rename", usage: { totalTokens: 17 } },
     ]);
 
+    const before = await readUsage(params);
+    const worker = vi.spyOn(usageWorkerRuntime, "runUsageCostWorker");
+    const now = performance.now.bind(performance);
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now() + 31_000);
+    try {
+      expect(await readUsage(params)).toEqual(before);
+      expect(worker).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+      worker.mockRestore();
+    }
+
     await patchSessionEntryCore(scope, () => ({ label: "After rename" }));
     expect((await readUsage(params)).sessions).toMatchObject([
       { key, sessionId: firstId, label: "After rename", usage: { totalTokens: 17 } },
@@ -356,7 +368,10 @@ it("uses committed metadata for selected usage and families with an empty curren
   });
 });
 
-it("keeps a rewound window in its session's usage family", async () => {
+// A rewind keeps its transcript identity, so there is no retired window to
+// re-attach: the single window keeps the usage it already accrued. Multi-id
+// families still cover real rollovers (/new, compaction branch, cron).
+it("keeps a rewound session's usage on its own window", async () => {
   await withUsageState(async (state) => {
     const key = "agent:main:usage-rewind";
     const scope = sessionScope(state, "main", key);
@@ -392,10 +407,11 @@ it("keeps a rewound window in its session's usage family", async () => {
         {
           key,
           currentSessionId: currentId,
-          includedSessionIds: [currentId, firstId],
+          includedSessionIds: [firstId],
           usage: { totalTokens: 23 },
         },
       ]);
+      expect(currentId).toBe(firstId);
       expect(result.totals.totalTokens).toBe(23);
     }
   });
@@ -463,7 +479,7 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
     for (const [selected, includeContextWeight, filters = {}] of scenarios) {
       let payload: unknown;
       const transferredPrompts = new Set<string>();
-      const transfers = [historyLane, projectionLane, targetDiscoveryLane].map(({ pool }) => {
+      const transfers = [historyLane, sessionStoreLane].map(({ pool }) => {
         const run = pool.run.bind(pool);
         return vi.spyOn(pool, "run").mockImplementation(async (...args) => {
           const reply = await run(...args);

@@ -7,7 +7,6 @@ import {
   closeGatewayDeviceRevocation as closeGateway,
   hasPreparedGatewayDeviceAuthority as hasAuthority,
   invalidateGatewayDeviceRevocation as invalidate,
-  onGatewayDeviceSourceRevoked as onRevoked,
   retainGatewayDeviceRevocation as retain,
   readGatewayDeviceSourceAuthority as readSource,
   readAcceptedGatewayDeviceSourceAuthority as readAccepted,
@@ -66,16 +65,13 @@ describe("Gateway device revocation", () => {
     const context = {};
     const releaseSource = vi.fn();
     const request = capture(context, device, live, undefined, makeSource(live, releaseSource));
-    const revoked = vi.fn();
-    const unsubscribe = onRevoked(request.isCurrent, revoked);
     const releaseRun = hold(request.isCurrent);
     const releaseQueuedTurn = hold(request.isCurrent);
     request.release();
     expect(request.isCurrent()).toBe(true);
     releaseRun();
-    expect([releaseSource.mock.calls, revoked.mock.calls]).toEqual([[], []]);
+    expect(releaseSource).not.toHaveBeenCalled();
     invalidate(context, "device", "operator");
-    expect(revoked).toHaveBeenCalledOnce();
     expect(acceptSource(request.isCurrent)).toBe(false);
     expectInactive(request.isCurrent);
     const replacement = capture(context, device, live);
@@ -85,7 +81,6 @@ describe("Gateway device revocation", () => {
     expect(releaseSource).toHaveBeenCalledOnce();
     expect([request.isCurrent(), replacement.isCurrent()]).toEqual([false, true]);
     replacement.release();
-    unsubscribe?.();
   });
 
   it("preserves exact device and optional role matching", () => {
@@ -109,8 +104,6 @@ describe("Gateway device revocation", () => {
     expectCurrent(true, request.isCurrent);
     expect(acceptSource(request.isCurrent)).toBe(false);
     expect(readAccepted(request.isCurrent)).toBeUndefined();
-    const revoked = vi.fn();
-    const unsubscribe = onRevoked(request.isCurrent, revoked);
     request.release();
     request.release();
     expect(request.isCurrent()).toBe(connected);
@@ -120,8 +113,6 @@ describe("Gateway device revocation", () => {
     clientInvalidated = false;
     connection.abort();
     expect(request.isCurrent()).toBe(false);
-    expect(revoked).not.toHaveBeenCalled();
-    unsubscribe?.();
   });
 
   it("transfers the same caller through a queued commit guard", () => {
@@ -156,15 +147,11 @@ describe("Gateway device revocation", () => {
     const otherContext = {};
     const request = capture(context, device, live);
     const other = capture(otherContext, device, live);
-    const revoked = vi.fn();
-    const unsubscribe = onRevoked(request.isCurrent, revoked);
     closeGateway(context);
     closeGateway(context);
     expect([request.isCurrent(), other.isCurrent()]).toEqual([false, true]);
-    expect(revoked).not.toHaveBeenCalled();
     const late = capture(context, device, live);
     expectInactive(late.isCurrent);
     [request, late, other].forEach((entry) => entry.release());
-    unsubscribe?.();
   });
 });

@@ -1,0 +1,4 @@
+# Read-only pinned release source CLI regressions: missing and docs-mirrored working trees, once-resolved source provenance, invalid refs/versions, historical-write rejection, and artifact/alias collision protection. Also covers optional missing-user omission, retained verified credit, and mixed/wrong-path/non-null GraphQL refusal (PR #199961 automated review). Includes a real Git canonical-history CLI regression above the former 16 MiB buffer. Existing historical recovery cases remain intact.
+# Cumulative stable recovery adds three CLI cases: preserved historical range, mismatched ledger rejection, and conflicting cherry-pick provenance rejection. The cumulative fixture also includes an unrelated malformed historical ledger to prove selection does not validate other releases.
+# Existing shipped-PR subtraction fixture now verifies orphan removal while retaining shared and direct-commit references.
+266

@@ -29,17 +29,13 @@ describe("system prompt messaging routing", () => {
       });
 
       expect(prompt).toContain(
-        "OpenClaw messaging: use available messaging tools, never shell commands, the CLI, curl, or direct RPC.",
+        "OpenClaw messaging: use messaging tools only—never shell/CLI/curl/RPC even if messaging tools are absent.",
       );
-      expect(prompt).toContain("Missing messaging tools are not permission to use another route.");
-      expect(prompt).toContain("Subagents return results through their accepted completion path");
+      expect(prompt).toContain("Subagents return results via their accepted completion path");
       expect(prompt).toContain(
-        "Other services (e.g. email): user-authorized CLI/API use is allowed",
+        "External services (e.g. email) may use authorized CLI/API under normal approvals.",
       );
-      expect(prompt).toContain("normal tool permissions and approvals still apply");
-      expect(prompt).toContain(
-        "or a final reaction to the current source message: `message(action=react, final=true)`",
-      );
+      expect(prompt).toContain("`message(action=react, final=true)`");
       expect(prompt).not.toContain("Provider messaging: never exec/curl");
       expect(prompt).not.toContain("NO_REPLY");
       expect(prompt).not.toContain("user explicitly requests only a reaction");

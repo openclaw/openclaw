@@ -185,6 +185,7 @@ export function createPluginsPage(options: {
       context: {
         pluginId: detail.pluginId,
         baseHash: runtime.state.configSnapshot?.hash ?? null,
+        configState: runtime.state,
         gateway,
         canInspect: hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
         getPresentationLifetime: () => credentialPresentation.lifetime,

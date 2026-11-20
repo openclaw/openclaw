@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
-import { hasKnownPricing } from "../../model-catalog/pricing.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { providerOwnsDynamicModelPreparation } from "../../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
-import { hasAuthoredProviderModelCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
+import { assertModelSupportsChat } from "../failover/error.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
@@ -58,6 +58,8 @@ type AsyncModelResolutionOptions = {
   agentRuntimeId?: string;
   skipAgentDiscovery?: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  /** Core simple completions need one row; SDK resolvers and agent sessions need full stores. */
+  selectedModelStores?: boolean;
   /** Resolve local provider facts without starting asynchronous catalog discovery. */
   deferProviderDynamicModelPreparation?: boolean;
 };
@@ -72,14 +74,20 @@ type AsyncModelResolutionOptions = {
  * price. Accepted edge: one authored row keeps that provider's other priced rows on their bundled
  * snapshot, as before.
  */
-function withResolvedPricing(model: Model, cfg: OpenClawConfig | undefined, agentDir: string) {
-  const owner = { provider: model.provider, config: cfg, agentDir };
-  if (hasKnownPricing(model.cost) && hasAuthoredProviderModelCost(owner)) {
-    return model;
-  }
-  const cost = resolveModelCostConfig({ ...owner, model: model.id });
+async function withResolvedPricing(
+  model: Model,
+  cfg: OpenClawConfig | undefined,
+  agentDir: string,
+) {
+  const cost = await resolveModelCostConfig({
+    provider: model.provider,
+    model: model.id,
+    config: cfg,
+    agentDir,
+    runtimeCost: model.cost,
+  });
   // The owner answers all-zero only for authored or publisher-validated free pricing.
-  return cost ? { ...model, cost } : model;
+  return cost && cost !== model.cost ? { ...model, cost } : model;
 }
 
 /** Creates isolated model/auth stores for harnesses that own model discovery themselves. */
@@ -162,7 +170,13 @@ export async function resolveModelAsync(
     const logicalRef = { provider: normalizedRef.provider, model: normalizedRef.model };
     let { authStorage, modelRegistry } = options ?? {};
     if (!authStorage || !modelRegistry) {
-      const stores = preparedModelRuntime?.createStores() ?? createEmptyAgentDiscoveryStores();
+      const stores =
+        preparedModelRuntime?.createStores(
+          undefined,
+          options?.selectedModelStores
+            ? { provider: normalizedRef.provider, modelId: normalizedRef.model }
+            : undefined,
+        ) ?? createEmptyAgentDiscoveryStores();
       authStorage ??= stores.authStorage;
       modelRegistry ??= options?.authStorage
         ? stores.modelRegistry.fork(authStorage)
@@ -177,13 +191,9 @@ export async function resolveModelAsync(
       readCapturedPreparedModelRuntimeCatalog(preparedModelRuntime)?.entries.find(
         (entry) => matchesSelectedModel(entry) && modelTransportRoutesMatch(entry, declared ?? {}),
       );
-    if ((captured?.inference?.chat ?? declared?.inference?.chat) === false) {
-      return {
-        error: `Model ${normalizedRef.provider}/${normalizedRef.model} does not support chat inference`,
-        authStorage,
-        modelRegistry,
-      };
-    }
+    // Typed-only veto (#184996). Accepted edge: a main/nightly catalog saved under #198288 can refuse a
+    // listed model until the first restart after upgrading; releases never saved that value.
+    assertModelSupportsChat(captured?.inference?.chat ?? declared?.inference?.chat, normalizedRef);
     const runtimeHooks = resolveRuntimeHooks(options);
     let staticCatalogResolved = false;
     let staticCatalogModel: ProviderRuntimeModel | undefined;
@@ -240,8 +250,14 @@ export async function resolveModelAsync(
           : undefined;
       options?.assertCurrent?.();
       if (suppressedRuntimeModel) {
+        const pricedModel = await withResolvedPricing(
+          suppressedRuntimeModel,
+          cfg,
+          resolvedAgentDir,
+        );
+        options?.assertCurrent?.();
         return {
-          model: withResolvedPricing(suppressedRuntimeModel, cfg, resolvedAgentDir),
+          model: pricedModel,
           logicalRef,
           authStorage,
           modelRegistry,
@@ -342,8 +358,10 @@ export async function resolveModelAsync(
       }
     }
     if (model) {
+      const pricedModel = await withResolvedPricing(model, cfg, resolvedAgentDir);
+      options?.assertCurrent?.();
       return {
-        model: withResolvedPricing(model, cfg, resolvedAgentDir),
+        model: pricedModel,
         logicalRef,
         authStorage,
         modelRegistry,

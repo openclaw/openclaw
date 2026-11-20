@@ -1,4 +1,5 @@
 import { expect, expectTypeOf, onTestFinished, test } from "vitest";
+import { makeMissingToolResult } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
   emitAgentActivityEvent,
@@ -275,15 +276,22 @@ test.each([
 });
 
 test.each([true, false])("does not expose a child assignment in progress (named: %s)", (named) => {
-  const item = projectAgentToolActivity({
+  const tool = {
     toolCallId: "spawn-worker",
     name: "sessions_spawn",
-    phase: "start",
     args: {
       ...(named ? { label: "Maple", taskName: "verify-release" } : {}),
       task: "PRIVATE_CHILD_ASSIGNMENT: inspect an internal document and report its contents",
     },
-  });
+  };
+  const item = projectAgentToolActivity({ ...tool, phase: "start" });
+  const result = {
+    details: { childSessionKey: "agent:demo:subagent:00000000-0000-4000-8000-000000002633" },
+  };
+  const ended = projectAgentToolActivity({ ...tool, phase: "result", result, isError: false });
+  expect(ended.meta).toBe(named ? "Maple …2633" : "…2633");
+  expect(result.details.childSessionKey).toContain("00000000-0000-4000-8000-000000002633");
+  expect(JSON.stringify(ended)).not.toContain("PRIVATE_CHILD_ASSIGNMENT");
   if (named) {
     expect(`${item.title} ${item.meta ?? ""}`).toContain("Maple");
   }
@@ -295,6 +303,17 @@ test("marks only unpaired history calls as provisional, including terminal unkno
   expect(missing).toMatchObject({ phase: "end", unpairedCall: true });
   expect(missing).not.toHaveProperty("summary");
   expect(missing?.status).toBeUndefined();
+  const repaired = projectAgentHistoryActivity([
+    unpaired,
+    {
+      messageId: "repair",
+      message: makeMissingToolResult({ toolCallId: "command", toolName: "exec", text: "aborted" }),
+    },
+  ]);
+  for (const entry of repaired) {
+    expect(entry.items[0]).toMatchObject({ unpairedCall: true });
+    expect(entry.items[0]?.status).toBeUndefined();
+  }
   const result = resultEntry("result", "command", {
     details: {
       status: "completed",

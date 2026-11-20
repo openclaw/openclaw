@@ -24,6 +24,7 @@ import {
   detectImageReferences,
   hasHydratableMediaImages,
 } from "../embedded-agent-runner/run/images.js";
+import { prepareAgentExecScratch } from "../exec-scratch.js";
 import { resolveFastModeForElapsed } from "../fast-mode.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
@@ -41,6 +42,7 @@ import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
 import { resolveCliChildEnv } from "./execution-env.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
+import { readCliStreamRefusalOutput, recordCliStreamRefusalToolEffects } from "./exit-error.js";
 import {
   buildCliArgs,
   isClaudeCliBackendId,
@@ -53,6 +55,7 @@ import {
 } from "./helpers.js";
 import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
+import { readCliPromptContext, toCliModelRequestPayload } from "./model-request-hook.js";
 import {
   recallNativeSessionSystemPrompt,
   rememberNativeSessionSystemPrompt,
@@ -148,10 +151,14 @@ export async function executePreparedCliRun(
     !params.forkCliSessionOnResume
       ? context.resumeContext
       : undefined;
+  const turnContext = [context.contextEngineSystemPromptAddition, resumeContext]
+    .filter(Boolean)
+    .join("\n\n");
   const basePrompt = usePluginOwnedExecution
     ? attemptPrompt
-    : composeCliPromptContext(attemptPrompt, { prependContext: resumeContext });
+    : composeCliPromptContext(attemptPrompt, { prependContext: turnContext });
   const privatePrependContext = [
+    usePluginOwnedExecution ? context.contextEngineSystemPromptAddition : undefined,
     context.promptContext?.prependContext,
     usePluginOwnedExecution ? resumeContext : undefined,
   ]
@@ -161,7 +168,7 @@ export async function executePreparedCliRun(
     params.controlOperation !== undefined
       ? basePrompt
       : applyPluginTextReplacements(basePrompt, context.backendResolved.textTransforms?.input);
-  const promptContext =
+  let promptContext: PreparedCliRunContext["promptContext"] =
     privatePrependContext || context.promptContext?.appendContext
       ? {
           ...(privatePrependContext
@@ -182,6 +189,15 @@ export async function executePreparedCliRun(
             : {}),
         }
       : undefined;
+  // Last text a plugin can screen before the CLI owns it; image paths stay host-owned.
+  if (context.beforeModelRequest) {
+    const request = await context.beforeModelRequest(
+      toCliModelRequestPayload(prompt, promptContext),
+    );
+    assertCurrent();
+    prompt = request.prompt;
+    promptContext = readCliPromptContext(request);
+  }
   if (
     nodePlacement &&
     ((params.images?.length ?? 0) > 0 ||
@@ -339,10 +355,16 @@ export async function executePreparedCliRun(
           });
       cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
       const preparedBackendEnv = context.preparedBackend.env ?? {};
-      const { env, selectedClaudeClearEnv } = resolveCliChildEnv(context.preparedBackend, params, {
-        ...mcpCaptureAttempt.env,
-        ...localProcessEnv,
-      });
+      const { env, selectedClaudeClearEnv } = resolveCliChildEnv(
+        context.preparedBackend,
+        params,
+        { ...mcpCaptureAttempt.env, ...localProcessEnv },
+        !nodePlacement
+          ? await prepareAgentExecScratch(
+              params.sessionEntry?.sessionRoot ?? context.cwd ?? context.workspaceDir,
+            )
+          : undefined,
+      );
       const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
         NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
       );
@@ -581,6 +603,14 @@ export async function executePreparedCliRun(
       }
     }
     if (runFailed) {
+      const refused = readCliStreamRefusalOutput(runError);
+      if (refused) {
+        const { acceptedSessionSpawns } = toolTracking.withExecutionEvidence(refused);
+        recordCliStreamRefusalToolEffects(runError, {
+          toolSummary: events.getToolSummary(),
+          ...(acceptedSessionSpawns ? { acceptedSessionSpawns } : {}),
+        });
+      }
       throw toolTracking.attachDeliveryEvidence(runError);
     }
     if (!runOutput) {

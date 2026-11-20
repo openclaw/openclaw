@@ -93,13 +93,19 @@ enum MacNodeOpenClawIDBridgeWebSocketCodec {
         }
     }
 
-    /// Validates a dedicated worker upgrade, without making any tunnel side effect.
-    static func upgrade(_ request: MacNodeOpenClawIDBridgeRequest) throws -> Data {
+    /// Validates a WebSocket upgrade, without making any tunnel side effect.
+    /// `path` is the only WebSocket target the caller serves: the worker route for the node
+    /// bridge, the Gateway root for the operator dashboard proxy.
+    static func upgrade(
+        _ request: MacNodeOpenClawIDBridgeRequest,
+        path: String = "/__openclaw__/worker") throws -> Data
+    {
+        let target = request.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first
         let keys = request.values("sec-websocket-key")
         let connection = request.values("connection").flatMap {
             $0.lowercased().split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         }
-        guard request.method == "GET", request.path == "/__openclaw__/worker", request.body == .length(0),
+        guard request.method == "GET", target.map(String.init) == path, request.body == .length(0),
               request.values("upgrade").map({ $0.lowercased() }) == ["websocket"], connection.contains("upgrade"),
               request.values("sec-websocket-version") == ["13"], keys.count == 1,
               let decoded = Data(base64Encoded: keys[0]), decoded.count == 16, decoded.base64EncodedString() == keys[0],

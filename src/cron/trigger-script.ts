@@ -16,7 +16,6 @@ import {
   rewrapToolWithBeforeToolCallHook,
   type HookContext,
 } from "../agents/agent-tools.before-tool-call.js";
-import { hasAnyAuthProfileStoreSourceAsync } from "../agents/auth-profiles/source-check.js";
 import { createHeadlessDeadlineScope } from "../agents/code-mode-headless.js";
 import type {
   CodeModeNamespaceDescriptor,
@@ -44,7 +43,6 @@ import {
   resolveScheduledToolPolicyContext,
   type ScheduledToolPolicyContext,
 } from "../agents/scheduled-tool-policy.js";
-import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
@@ -85,7 +83,9 @@ import {
   MAX_CRON_SCRIPT_TOOL_BUDGET,
 } from "./script-payload.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { observePrAutoFix, prAutoFixFailureCode } from "./session-pr-auto-fix.js";
 import { resolveCronAuthenticatedChannelRequester } from "./tools-allow-provenance.js";
+import { cronScriptReferencesMcp } from "./tools-allow.js";
 import { acquireCronScriptMcpTools, type CronScriptMcpTools } from "./trigger-script-mcp.js";
 import {
   parseScriptPayloadResult,
@@ -238,8 +238,6 @@ async function prepareTriggerRuntime(
         toolsEnabled: true,
         toolsAllow: params.toolsAllow,
       });
-      const authProfileStoreSource =
-        toolPlan.constructTools && (await hasAnyAuthProfileStoreSourceAsync(agentDir));
       preparationSignal?.throwIfAborted();
       const scheduledToolPolicy = resolveScheduledToolPolicyContext({
         toolsAllow: params.toolsAllow,
@@ -291,7 +289,6 @@ async function prepareTriggerRuntime(
               trigger: "cron",
               jobId: params.jobId,
               agentDir,
-              authProfileStoreSource,
               cwd: effectiveWorkspace,
               workspaceDir: effectiveWorkspace,
               spawnWorkspaceDir: workspaceDir,
@@ -315,7 +312,6 @@ async function prepareTriggerRuntime(
         cwd: effectiveWorkspace,
         workspaceDir: effectiveWorkspace,
         sessionKey,
-        loopDetection: resolveToolLoopDetectionConfig({ cfg: config, agentId }),
       };
       const acquireMcpTools: PreparedTriggerRuntime["acquireMcpTools"] = async (
         admitted,
@@ -581,6 +577,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         approvalSignals: [evaluationScope.signal],
       });
       assertActive();
+      const triggerState = await observePrAutoFix(params, caller, evaluationScope, assertActive);
       // Reload during setup is best effort; the next invocation refreshes its cache.
       let tools = await withPluginRuntimeRegistryScope(runtime.pluginRegistry, () =>
         runtime.createTools(
@@ -590,8 +587,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         ),
       );
       assertActive();
-      // A script that never names MCP cannot reach it, so it starts no server.
-      if (/\bMCP\b/.test(params.script)) {
+      if (cronScriptReferencesMcp(params.script)) {
         const reservedToolNames = tools.map((tool) => tool.name);
         mcp = await withPluginRuntimeRegistryScope(runtime.pluginRegistry, () =>
           runtime.acquireMcpTools?.(admitted, reservedToolNames),
@@ -648,7 +644,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           code: params.script,
           wallClockMs: remainingWallClockMs,
           maxToolCalls: params.maxToolCalls,
-          extraNamespaces: [triggerStateNamespace(params.state, params.streamBatch)],
+          extraNamespaces: [triggerStateNamespace(triggerState, params.streamBatch)],
           signal: evaluationScope.signal,
         });
         if (result.status === "failed") {
@@ -668,7 +664,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           ? "timeout"
           : error instanceof CodeModeHeadlessAbortError
             ? "aborted"
-            : "internal_error",
+            : prAutoFixFailureCode(params, error),
       );
     } finally {
       try {

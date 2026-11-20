@@ -99,7 +99,7 @@ function hasSensitiveProseContent(value: string): boolean {
     ) {
       return true;
     }
-    mediaContext ||= isDiagnosticMediaPayload((field) => (field === key ? assigned : undefined));
+    mediaContext ||= isDiagnosticMediaPayload({ [key]: assigned });
     contextualPayload ||= Boolean(extractDiagnosticMediaField(key, normalized, undefined, true));
     if (mediaContext && contextualPayload) {
       return true;
@@ -160,13 +160,26 @@ function diagnosticBytes(value: unknown, numericArrays = false): Uint8Array | un
         : undefined;
 }
 
-function isDiagnosticMediaPayload(field: (key: string) => unknown): boolean {
-  const type = field("type");
+// An inline captured reader allocates a context even for recursive scalar leaves.
+function readDiagnosticField(
+  value: object,
+  descriptors: PropertyDescriptorMap | undefined,
+  key: string,
+): unknown {
+  return descriptors
+    ? descriptors[key]?.value
+    : Object.hasOwn(value, key)
+      ? Reflect.get(value, key)
+      : undefined;
+}
+
+function isDiagnosticMediaPayload(value: object, descriptors?: PropertyDescriptorMap): boolean {
+  const type = readDiagnosticField(value, descriptors, "type");
   if (typeof type === "string" && MEDIA_TYPE_RE.test(normalizeDiagnosticFieldName(type))) {
     return true;
   }
   for (const key of MEDIA_MIME_FIELDS) {
-    const mime = field(key);
+    const mime = readDiagnosticField(value, descriptors, key);
     if (typeof mime === "string" && MEDIA_MIME_RE.test(mime)) {
       return true;
     }
@@ -313,26 +326,24 @@ function projectValue(
       }
       descriptors = snapshot;
     }
-    const field = (key: string): unknown =>
-      descriptors
-        ? descriptors[key]?.value
-        : Object.hasOwn(value, key)
-          ? Reflect.get(value, key)
-          : undefined;
     state.changed ||= keys.length > maxKeys;
     seen.add(value);
     const out = (Array.isArray(value) ? (trusted && !policy.omitField ? value : []) : {}) as Record<
       string,
       unknown
     >;
-    const name = field("name");
-    const rawName = typeof name === "string" ? name : field("key");
-    const redactValueField =
-      policy.redactCredentials !== false &&
-      (keys.length > maxKeys ||
+    let redactValueField = false;
+    if (policy.redactCredentials !== false) {
+      const name = readDiagnosticField(value, descriptors, "name");
+      const rawName =
+        typeof name === "string" ? name : readDiagnosticField(value, descriptors, "key");
+      redactValueField =
+        keys.length > maxKeys ||
         (typeof rawName === "string" &&
-          isCredentialFieldName(normalizeDiagnosticFieldName(rawName))));
-    const redactMedia = mediaPayload || keys.length > maxKeys || isDiagnosticMediaPayload(field);
+          isCredentialFieldName(normalizeDiagnosticFieldName(rawName)));
+    }
+    const redactMedia =
+      mediaPayload || keys.length > maxKeys || isDiagnosticMediaPayload(value, descriptors);
     for (const key of descriptors ? Object.keys(descriptors) : keys) {
       if (typeof key !== "string" || key === "length") {
         continue;

@@ -2,10 +2,7 @@ import fs from "node:fs/promises";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import {
-  isSessionHistoryWorkerCold,
-  prewarmSessionHistoryWorker,
-} from "../config/sessions/session-transcript-worker-runtime.js";
+import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -20,10 +17,6 @@ export async function prewarmGatewaySessionHistory(
   } = {},
 ): Promise<void> {
   try {
-    // Recovery already starts fully prepared history workers; warming again can spawn a sibling.
-    if (!isSessionHistoryWorkerCold()) {
-      return;
-    }
     for (const agentId of listConfiguredSessionStoreAgentIds(config)) {
       if (options.isCancelled?.()) {
         return;

@@ -1,12 +1,19 @@
 import childProcess, { spawn } from "node:child_process";
 import { once } from "node:events";
-import { syncBuiltinESMExports } from "node:module";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { findCommandReservationCandidates } from "./command-reservation-census.js";
 
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:child_process") & { default: typeof import("node:child_process") }
+  >();
+  const overrides = { spawnSync: vi.fn(actual.spawnSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
-  syncBuiltinESMExports();
+  vi.mocked(childProcess.spawnSync).mockReset();
 });
 
 // Orphaned by its shell, like a command whose killed spawner never bound it.
@@ -47,7 +54,7 @@ describe.skipIf(process.platform === "win32")("command reservation census", () =
   it.each([1_000, 4_294_967_294])("reads signed Darwin account rows for uid %i", (uid) => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     vi.spyOn(process, "getuid").mockReturnValue(uid);
-    vi.spyOn(childProcess, "spawnSync").mockReturnValue({
+    vi.mocked(childProcess.spawnSync).mockReturnValue({
       pid: 900,
       output: [],
       stdout: "600 1 -2 S Sun Oct 25 19:58:03 2026\n700 600 1000 S Sun Oct 25 19:58:03 2026\n",
@@ -55,7 +62,6 @@ describe.skipIf(process.platform === "win32")("command reservation census", () =
       status: 0,
       signal: null,
     });
-    syncBuiltinESMExports();
     const reservedAtMs = Date.UTC(2026, 9, 25, 19, 58, 3);
     expect(findCommandReservationCandidates(reservedAtMs)).toEqual([uid === 1_000 ? 700 : 600]);
   });

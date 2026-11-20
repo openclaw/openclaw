@@ -13,7 +13,7 @@ import {
   ABANDONED_UPDATE_RUN_MS,
   UPDATE_RUN_HEARTBEAT_MS,
 } from "../../infra/update-run-timeouts.js";
-import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { getLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -84,19 +84,79 @@ it("reports standalone repair as repairing before Doctor maintenance", () => {
 });
 
 it("writes successful finalization progress to stderr and failures as errors", async () => {
+  const info = vi.spyOn(getLogger(), "info");
+  const warn = vi.spyOn(getLogger(), "warn");
+  const error = vi.spyOn(getLogger(), "error");
   const { lifecycle } = finalization(5_000, false, false);
   await lifecycle.run("doctor", async () => undefined);
-  expectMessages(stderrWrite, '"status":"in_progress"', '"status":"completed"');
+  expectMessages(stderrWrite, "finalize:doctor: in_progress", "finalize:doctor: completed");
+  expect(info).toHaveBeenCalledWith(
+    expect.objectContaining({ step: "finalize:doctor", status: "completed" }),
+    "[update finalize] finalize:doctor: completed",
+  );
   expect(defaultRuntime.error).not.toHaveBeenCalled();
-  lifecycle.recordWarnings(["A plugin update was deferred."]);
-  expectMessages(console.warn, '"step":"warning:finalize:doctor:0"');
+  const warning = "A plugin update was deferred. password=fixture-private-value";
+  lifecycle.recordWarnings([warning]);
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({
+      step: "warning:finalize:doctor:0",
+      detail: warning,
+    }),
+    expect.stringContaining("A plugin update was deferred."),
+  );
+  expect(stderrWrite.mock.calls.flat().join("\n")).not.toContain("fixture-private-value");
   await expect(
     lifecycle.run("plugins", async () => {
       throw new Error("fixture failure");
     }),
   ).rejects.toThrow("fixture failure");
-  expectMessages(defaultRuntime.error, '"status":"failed"');
+  expect(error).toHaveBeenCalledWith(
+    expect.objectContaining({ step: "finalize:plugins", status: "failed" }),
+    expect.stringContaining("fixture failure"),
+  );
+  expectMessages(stderrWrite, "finalize:plugins: failed");
   lifecycle.fail();
+});
+
+it("summarizes parent-held plugin deferrals once while preserving actionable warnings and history", () => {
+  const info = vi.spyOn(getLogger(), "info");
+  const warn = vi.spyOn(getLogger(), "warn");
+  const { lifecycle, read } = finalization(5_000);
+  const deferred = ["alpha", "beta"].map(
+    (pluginId) =>
+      `Plugin "${pluginId}" data/settings upgrade is unfinished: Package convergence must wait until the updating parent releases its install records. Your existing data and settings have been kept. Let the current update or repair finish.`,
+  );
+  const security =
+    "core/doctor/security: WARNING: openclaw.json contains plaintext secret-bearing config fields.";
+  const unresolved =
+    'Plugin "gamma" data/settings upgrade is unfinished: The configured plugin package is missing or has not converged.';
+  const warnings = [...deferred, security, unresolved];
+
+  lifecycle.recordWarnings(warnings);
+  lifecycle.recordWarnings(warnings);
+
+  expect(info).toHaveBeenCalledExactlyOnceWith(
+    { count: 2 },
+    "[update finalize] 2 plugins will converge after the parent releases install records.",
+  );
+  expectMessages(stderrWrite, "2 plugins will converge after the parent releases install records.");
+  expect(warn.mock.calls.map(([step]) => step)).toEqual(
+    [security, unresolved, security, unresolved].map((detail) =>
+      expect.objectContaining({ detail }),
+    ),
+  );
+  expect(stderrWrite.mock.calls.flat().join("\n")).not.toContain("Package convergence must wait");
+  expect(
+    read()
+      .steps.filter(({ step }) => step.startsWith("warning:"))
+      .map(({ detail }) => detail),
+  ).toEqual(warnings);
+
+  lifecycle.recordWarnings([security, unresolved]);
+  expect(info).toHaveBeenCalledTimes(1);
+  expect(read().steps).toContainEqual(
+    expect.objectContaining({ step: "warning:finalize:doctor:3", status: "skipped" }),
+  );
 });
 
 it("preserves Doctor duration and section diagnostics in run history", () => {
@@ -140,7 +200,7 @@ it("records a nested Doctor refusal before reporting standalone finalization", a
     }),
   ).rejects.toThrow("Doctor result recording failed");
   lifecycle.fail();
-  expect(vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n")).not.toContain(privatePath);
+  expect(stderrWrite.mock.calls.flat().join("\n")).not.toContain(privatePath);
   closeOpenClawStateDatabaseForTest();
   const run = read();
   expect(run).toMatchObject({

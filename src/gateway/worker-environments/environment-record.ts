@@ -9,6 +9,7 @@ import type {
   WorkerEnvironmentRetention,
   WorkerRetentionPolicy,
 } from "../../plugins/worker-retention.types.js";
+import type { QueuedOperatorRecoverySource } from "../operator-run-recovery-source.codec.js";
 import type { WorkerSessionPlacementDispatchIdentity } from "./placement-record.js";
 import type { WorkerEnvironmentLeasedState, WorkerEnvironmentUnleasedState } from "./state.js";
 
@@ -47,6 +48,8 @@ type RecordBase = RecordIdentity & {
   profileSnapshot: WorkerProfile;
   preparation: WorkerEnvironmentPreparation | null;
   provisionOperationId: string;
+  /** Original caller evidence; absent only for independently owned internal acquisition. */
+  provisionSource?: QueuedOperatorRecoverySource;
   resourceReceipt: WorkerResourceReceipt | null;
   retention: WorkerEnvironmentRetention | null;
   nodeSetupId: string | null;
@@ -81,4 +84,5 @@ export type WorkerEnvironmentIntentInput = RecordIdentity & {
   retention?: WorkerRetentionPolicy;
   profileSnapshot: WorkerProfile;
   provisionOperationId: string;
+  provisionSource?: QueuedOperatorRecoverySource;
 };

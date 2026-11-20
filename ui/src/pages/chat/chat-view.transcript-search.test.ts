@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { getComposerTextarea, renderChatInto } from "./chat-view.test-helpers.ts";
+import {
+  resetTranscriptSession,
+  toggleTranscriptSearch,
+} from "./components/chat-thread-interactions.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -44,6 +48,8 @@ function createPane() {
   async function openSearch(query?: string, origin: HTMLElement = composer) {
     origin.focus();
     origin.dispatchEvent(key("f", true));
+    flush();
+    await vi.dynamicImportSettled();
     await waitForSolid(() => expect(document.activeElement).toBe(search()));
     if (query !== undefined) {
       search().value = query;
@@ -96,4 +102,144 @@ it("closes from the search button after its tooltip and restores focus without c
   expect(pane.onAbort).not.toHaveBeenCalled();
   await pane.openSearch();
   expect(pane.search().value).toBe("");
+});
+
+describe("per-pane chat presentation state", () => {
+  it.each(["MacIntel"])(
+    "uses the platform search shortcut on %s without consuming text navigation",
+    async (platform) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const primary = platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true };
+      const other = platform === "MacIntel" ? { ctrlKey: true } : { metaKey: true };
+      const container = createComposerContainer();
+      document.body.append(container);
+      try {
+        renderChatInto(container);
+        const composer = getComposerTextarea(container);
+        composer.focus();
+        for (const character of ["f", "а"]) {
+          const navigationEvent = new KeyboardEvent("keydown", {
+            key: character,
+            code: "KeyF",
+            ...other,
+            bubbles: true,
+            cancelable: true,
+          });
+          composer.dispatchEvent(navigationEvent);
+          expect(navigationEvent.defaultPrevented).toBe(false);
+          expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
+          expect(document.activeElement).toBe(composer);
+          const event = new KeyboardEvent("keydown", {
+            key: character,
+            code: "KeyF",
+            ...primary,
+            bubbles: true,
+            cancelable: true,
+          });
+
+          composer.dispatchEvent(event);
+          expect(event.defaultPrevented).toBe(true);
+          flush();
+          await vi.dynamicImportSettled();
+          await waitForSolid(() =>
+            expect(document.activeElement).toBe(
+              container.querySelector<HTMLInputElement>(
+                '.agent-chat__search-bar input[type="text"]',
+              ),
+            ),
+          );
+
+          const closeEvent = new KeyboardEvent("keydown", {
+            key: character,
+            code: "KeyF",
+            ...primary,
+            bubbles: true,
+            cancelable: true,
+          });
+          document.activeElement?.dispatchEvent(closeEvent);
+          expect(closeEvent.defaultPrevented).toBe(true);
+          await waitForSolid(() => {
+            expect(document.activeElement).toBe(composer);
+            expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
+          });
+          expect(getComposerTextarea(container)).toBe(composer);
+        }
+      } finally {
+        container.remove();
+      }
+    },
+  );
+
+  it("returns focus to the composer when the original target disappears", async () => {
+    const container = createComposerContainer();
+    document.body.append(container);
+    try {
+      renderChatInto(container);
+      const composer = getComposerTextarea(container);
+      const transientTarget = document.createElement("button");
+      const chat = container.querySelector<HTMLElement>(".chat");
+      if (!chat) {
+        throw new Error("expected chat section");
+      }
+      chat.append(transientTarget);
+      transientTarget.focus();
+
+      transientTarget.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "f",
+          code: "KeyF",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      flush();
+      await vi.dynamicImportSettled();
+      await waitForSolid(() =>
+        expect(document.activeElement).toBe(
+          container.querySelector('.agent-chat__search-bar input[type="text"]'),
+        ),
+      );
+
+      transientTarget.remove();
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "f",
+          code: "KeyF",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await waitForSolid(() => expect(document.activeElement).toBe(composer));
+      expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
+      expect(getComposerTextarea(container)).toBe(composer);
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("keeps search state and resets scoped to its pane", async () => {
+    const paneA = createComposerContainer();
+    const paneB = createComposerContainer();
+    const selector = ".agent-chat__search-bar";
+    const renderPane = (container: HTMLElement, paneId: string) =>
+      renderChatInto(container, { paneId, draft: "", getDraft: () => "" });
+    const open = async (container: HTMLElement, paneId: string) => {
+      toggleTranscriptSearch(paneId);
+      renderPane(container, paneId);
+      await vi.dynamicImportSettled();
+    };
+    renderPane(paneA, "pane-a");
+    renderPane(paneB, "pane-b");
+    await open(paneA, "pane-a");
+    expect(paneA.querySelector(selector)).not.toBeNull();
+    expect(paneB.querySelector(selector)).toBeNull();
+    await open(paneB, "pane-b");
+    resetTranscriptSession("pane-a");
+    renderPane(paneA, "pane-a");
+    renderPane(paneB, "pane-b");
+    expect(paneA.querySelector(selector)).toBeNull();
+    expect(paneB.querySelector(selector)).not.toBeNull();
+  });
 });

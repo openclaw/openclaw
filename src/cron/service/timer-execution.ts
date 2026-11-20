@@ -216,12 +216,14 @@ export async function executeJobCore(
         !sessionPreparation?.notices.events.length &&
         isCronScratchEffectivelyEmpty(snapshot?.state.scratch?.content)
       ) {
+        // An empty checklist is a quiet check, not a failure: complete with nothing to deliver.
         return {
-          status: "skipped",
+          status: "ok",
           summary: "Automation scratch is explicitly empty",
           executionStarted: false,
           delivered: false,
           deliveryAttempted: false,
+          deliverySuppressionReason: "empty",
         };
       }
     }
@@ -302,7 +304,39 @@ export async function executeJobCore(
       if (!evaluation.fire) {
         return { status: "ok", triggerEval };
       }
-      await options?.onConditionFired?.();
+      // The wait for a run slot pauses the run's time budget, like a lane wait.
+      const runSlot = await options?.onConditionFired?.({
+        signal: abortSignal,
+        onWait: (waiting) => options.onLaneWait?.({ waiting }),
+      });
+      if (abortSignal?.aborted) {
+        return resolveAbortError();
+      }
+      if (runSlot === "stopped") {
+        return {
+          status: "error",
+          error: "Automation stopped while waiting for a run slot",
+          errorClassification: { kind: "aborted" },
+        };
+      }
+      if (
+        runSlot === "taken-after-wait" &&
+        !isCronWithinActiveHours(
+          job.activeHours,
+          state.deps.nowMs(),
+          state.deps.resolveUserTimezone?.(),
+        )
+      ) {
+        // The window closed during the wait; the check already spent this occurrence.
+        return {
+          status: "skipped",
+          summary: "Outside this automation's active hours",
+          executionStarted: false,
+          delivered: false,
+          deliveryAttempted: false,
+          triggerEval,
+        };
+      }
       if (evaluation.message !== undefined) {
         effectiveJob = { ...job, payload: appendCronPayloadText(job.payload, evaluation.message) };
       }

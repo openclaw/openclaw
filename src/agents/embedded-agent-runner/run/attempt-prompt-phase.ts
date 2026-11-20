@@ -15,21 +15,15 @@ import {
   resolvePendingRuntimeContextReplay,
 } from "../../internal-runtime-context.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
-import {
-  createCompactionRequestBudget,
-  type CompactionRequestBudget,
-} from "../../sessions/compaction/request-budget.js";
-import {
-  SAFETY_MARGIN,
-  createFixedRequestTokenEstimator,
-} from "../../sessions/context-token-pressure.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/preparation.types.js";
+import { createCompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
+import { SAFETY_MARGIN } from "../../sessions/context-token-pressure.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
 import {
   persistToolResultProjections,
   persistSessionSystemPrompt,
-  persistSessionToolSurface,
 } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { createAbortableError, isOpenClawAbortableWrapper } from "./abortable.js";
@@ -112,14 +106,17 @@ export async function runEmbeddedAttemptPromptPhase(
   } = sessionRuntime;
   const { effectiveFsWorkspaceOnly, effectiveWorkspace, sandbox, sessionAgentId } = input.setup;
   const {
-    history: { contextEnginePromptAuthority, unwindowedContextEngineMessagesForPrecheck },
+    history: {
+      contextEnginePromptAuthority,
+      unwindowedContextEngineMessagesForPrecheck,
+      estimateFixedRequest,
+    },
     promptActiveSession,
     stream: { stopAcceptingSteerMessages },
   } = preparedStreamRuntime;
   const { withOwnedTranscriptWrite } = input.sessionLock;
   const withTranscriptWrite = <T>(write: () => Promise<T>) =>
     withOwnedTranscriptWrite(() => withSessionManagerAppend(sessionManager, write));
-  const estimateFixedRequest = createFixedRequestTokenEstimator();
   const { diagnosticTrace, runTrace } = input.diagnostics;
   const { systemPromptReport, runtimeInfo } = prepared.systemPrompt;
   let systemPromptText = sessionRuntimeState.systemPromptText;
@@ -465,6 +462,8 @@ export async function runEmbeddedAttemptPromptPhase(
                 config: attempt.config,
                 contextTokenBudget: promptContext.contextTokenBudget,
                 reserveTokens,
+                runId: attempt.runId,
+                isToolBoundarySafe: () => preparedStreamRuntime.isToolBoundarySafe?.() ?? false,
                 timeoutMs: input.sessionLock.compactionTimeoutMs,
                 authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
                 ...(attempt.sessionKey
@@ -539,8 +538,10 @@ export async function runEmbeddedAttemptPromptPhase(
         persistToolResultProjections: async () => {
           if (
             !isRawModelRun &&
-            (inHistorySystemUpdates ||
+            (sessionRuntime.prepareSystemPromptUpdate ||
               sessionPromptState.pendingToolSurface ||
+              sessionPromptState.usageRanking?.snapshot !==
+                sessionPromptState.persistedUsageRanking ||
               toolResultPromptProjectionState.frozen.size > 0)
           ) {
             await withTranscriptWrite(async () => {
@@ -549,11 +550,9 @@ export async function runEmbeddedAttemptPromptPhase(
                 toolResultPromptProjectionState,
                 (customType, data) => sessionManager.appendCustomEntryAsync(customType, data),
               );
-              const appendEntry = (customType: string, data: unknown) =>
-                sessionManager.appendCustomEntryAsync(customType, data);
-              await (sessionRuntime.prepareSystemPromptUpdate
-                ? persistSessionSystemPrompt(sessionPromptState, appendEntry)
-                : persistSessionToolSurface(sessionPromptState, appendEntry));
+              await persistSessionSystemPrompt(sessionPromptState, (customType, data) =>
+                sessionManager.appendCustomEntryAsync(customType, data),
+              );
             });
           }
         },

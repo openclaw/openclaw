@@ -516,7 +516,7 @@ export async function copySessionCatalogToGateway(params: {
                     text: wrapExternalContent(item.text, {
                       source: "unknown",
                       includeWarning: false,
-                    }),
+                    }).trim(),
                   })
                 : item,
             ),

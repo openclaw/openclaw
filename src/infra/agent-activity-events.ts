@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isSyntheticMissingToolResult } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import type { AgentActivityItem } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
+  formatSubagentProgressReference,
   projectAgentActivityItem,
   resolveCompletedActivityWrappers,
 } from "../agents/agent-activity-presentation.js";
@@ -91,9 +92,17 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
       ? { name: tool.presentationName, args: tool.args }
       : unwrapped;
   const display = resolveToolDisplay(call);
-  const meta = display.progress ? display.progress.detail : (tool.meta ?? display.detail);
-  const label = display.progress?.label ?? display.label;
   const details = asOptionalRecord(asOptionalRecord(tool.result)?.details);
+  const meta =
+    [
+      display.progress ? display.progress.detail : (tool.meta ?? display.detail),
+      call.name === "sessions_spawn"
+        ? formatSubagentProgressReference(normalizeOptionalString(details?.childSessionKey))
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join(" ") || undefined;
+  const label = display.progress?.label ?? display.label;
   const approval =
     tool.phase === "result" &&
     (details?.status === "approval-pending" || details?.status === "approval-unavailable");
@@ -317,7 +326,8 @@ export function projectAgentHistoryActivity(
         normalizeOptionalString(block.toolName) ??
         normalizeOptionalString(block.name) ??
         "Tool";
-      const failed = isError === true || isToolResultError(block);
+      const synthetic = isSyntheticMissingToolResult(block);
+      const failed = !synthetic && (isError === true || isToolResultError(block));
       const details = asOptionalRecord(block.details);
       const exitReasonLost =
         (name === "exec" || name === "bash" || name === "process") &&
@@ -339,8 +349,9 @@ export function projectAgentHistoryActivity(
         name,
         phase: "result",
         args: executedArgs ?? call?.args,
-        result: block,
-        isError: failed ? true : poll ? false : isError,
+        // Repair receipts keep provider pairing valid; they record no execution outcome.
+        result: synthetic ? undefined : block,
+        isError: synthetic ? undefined : failed ? true : poll ? false : isError,
         // The existing persistence cap can remove the distinction between a
         // requested stop and a failed command. Do not invent that outcome.
         ...(!failed && exitReasonLost ? { status: "unknown" as const } : {}),

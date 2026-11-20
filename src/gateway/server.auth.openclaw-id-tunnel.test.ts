@@ -19,16 +19,27 @@ import {
 } from "../infra/device-pairing.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
-import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
+import {
+  ensureCanonicalUserProfileForOpenClawIdIdentity,
+  linkCanonicalOpenClawIdUserProfile,
+  unlinkCanonicalOpenClawIdUserProfile,
+} from "../state/user-profile-openclaw-id.js";
 import * as profileWrites from "../state/user-profile-writes.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
-import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
+import {
+  checkDeviceTokenPeer,
+  setDeviceTokenBindingOwner,
+} from "./openclaw-id/device-token-binding.js";
+import { MEMBER_ROLE_PRESETS as PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
+import { setOpenClawIdOwnerAccountResolver } from "./openclaw-id/owner-account.js";
 import {
   setOpenClawIdTunnelPrincipalResolver,
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { useAuthIdentityFixture } from "./server.auth.identity-fixture.test-support.js";
 import { BROWSER_ORIGIN, CONTROL_UI_CLIENT, openWs } from "./server.auth.test-helpers.js";
 import {
@@ -54,6 +65,7 @@ const TEST_PEER_HEADER = "x-test-openclaw-id-peer";
 const OWNER_KEY = `iroh:${"0a".repeat(32)}`;
 const OPERATOR_KEY = `iroh:${"0b".repeat(32)}`;
 const VIEWER_KEY = `iroh:${"0c".repeat(32)}`;
+const GUEST_KEY = `iroh:${"0e".repeat(32)}`;
 const REMOVED_KEY = `iroh:${"0d".repeat(32)}`;
 const CONTROL_UI_SCOPES = [
   "operator.admin",
@@ -63,13 +75,21 @@ const CONTROL_UI_SCOPES = [
   "operator.pairing",
   "operator.questions",
 ];
+
 const PRINCIPALS: Record<string, OpenClawIdTunnelPrincipal> = {
   [OWNER_KEY]: { kind: "owner", peerKey: OWNER_KEY },
   [OPERATOR_KEY]: { kind: "member", peerKey: OPERATOR_KEY, accountId: "acct_op", role: "operator" },
   [VIEWER_KEY]: { kind: "member", peerKey: VIEWER_KEY, accountId: "acct_view", role: "viewer" },
+  [GUEST_KEY]: {
+    kind: "member",
+    peerKey: GUEST_KEY,
+    accountId: "acct_guest",
+    role: "unconfigured-role",
+  },
 };
 
 let started: Awaited<ReturnType<typeof createGatewaySuiteHarness>> | undefined;
+let failNextBindingWrite = false;
 
 // Stands in for the ingress listener: marks the request relayed from the peer
 // named by the test header before the Gateway's listener sees it.
@@ -96,16 +116,27 @@ beforeAll(async () => {
     gateway: {
       auth: { mode: "token", token: TOKEN },
       controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
+      roles: { definitions: PRESETS },
+      openclawId: { enabled: true },
     },
   });
   started = await createGatewaySuiteHarness();
   setOpenClawIdTunnelPrincipalResolver(async (peerKey) => PRINCIPALS[peerKey]);
   setOpenClawIdTunnelPrincipalLookup((peerKey) => PRINCIPALS[peerKey]);
+  setOpenClawIdMemberAccountLookup((id) =>
+    Object.values(PRINCIPALS).some(
+      (principal) => principal.kind === "member" && principal.accountId === id,
+    ),
+  );
   // The service publishes its binding writer before the tunnel admits a device.
   const bindings = new Map<string, string>();
   setDeviceTokenBindingOwner({
     lookup: (deviceId, role) => bindings.get(`${deviceId}:${role}`),
     record: async (deviceId, role, peerKey) => {
+      if (failNextBindingWrite) {
+        failNextBindingWrite = false;
+        throw new Error("Synthetic binding write failed");
+      }
       bindings.set(`${deviceId}:${role}`, peerKey);
     },
     forget: async (tokens) => {
@@ -121,11 +152,22 @@ afterAll(async () => {
   setDeviceTokenBindingOwner(undefined);
   setOpenClawIdTunnelPrincipalResolver(undefined);
   setOpenClawIdTunnelPrincipalLookup(undefined);
+  setOpenClawIdMemberAccountLookup(undefined);
   await started?.close();
   vi.restoreAllMocks();
 });
 
 beforeEach(async () => {
+  failNextBindingWrite = false;
+  // The simulated admission owner grants the same canonical assignments as real invitation approval.
+  for (const principal of Object.values(PRINCIPALS)) {
+    if (principal.kind === "member") {
+      const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+        accountId: principal.accountId,
+      });
+      await profileWrites.setCanonicalUserProfileRole(profile.id, principal.role);
+    }
+  }
   const pairing = await listDevicePairing();
   for (const pending of pairing.pending) {
     await rejectDevicePairing(pending.requestId);
@@ -142,6 +184,7 @@ async function connectTunnel(
     bootstrapToken?: string;
     identityPath?: string;
     scopes?: string[];
+    client?: NonNullable<Parameters<typeof connectReq>[1]>["client"];
   } = {},
 ) {
   const ws: WebSocket = await openWs(started!.port, {
@@ -149,7 +192,7 @@ async function connectTunnel(
     ...(peerKey ? { [TEST_PEER_HEADER]: peerKey } : {}),
   });
   const res = await connectReq(ws, {
-    client: CONTROL_UI_CLIENT,
+    client: options.client ?? CONTROL_UI_CLIENT,
     scopes: options.scopes ?? CONTROL_UI_SCOPES,
     deviceIdentityPath:
       options.identityPath ?? makeIdentityPath(`openclaw-tunnel-${randomUUID()}.sqlite`),
@@ -190,6 +233,42 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     }
   });
 
+  test("an owner device of a linked account arrives as that person, keeping owner authority", async () => {
+    const person = await profileWrites.ensureCanonicalUserProfileForTailscaleIdentity({
+      login: "owner-person@example.test",
+      name: "Owner Person",
+    });
+    setOpenClawIdOwnerAccountResolver(() => "acct_owner");
+    const self = async () => {
+      const { ws, res } = await connectTunnel(OWNER_KEY);
+      try {
+        expect(res.ok).toBe(true);
+        // Owner authority comes from the certificate: no role ceiling either way.
+        expect(grantedScopes(res)).toContain("operator.admin");
+        expect(helloAuth(res)?.roleAllowsAdmin).toBe(true);
+        expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(true);
+        const reply = await rpcReq(ws, "users.self", {});
+        return (reply.payload as { profile?: { id?: string } } | undefined)?.profile?.id;
+      } finally {
+        ws.close();
+      }
+    };
+    try {
+      const shared = await self();
+      expect(shared).not.toBe(person.id);
+      await linkCanonicalOpenClawIdUserProfile({
+        profileId: person.id,
+        accountId: "acct_owner",
+        email: "owner-person@id.test",
+      });
+      expect(await self()).toBe(person.id);
+      await unlinkCanonicalOpenClawIdUserProfile({ profileId: person.id });
+      expect(await self()).toBe(shared);
+    } finally {
+      setOpenClawIdOwnerAccountResolver(undefined);
+    }
+  });
+
   test("an operator member chats but is refused admin, config and pairing", async () => {
     const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
       accountId: "acct_op",
@@ -218,7 +297,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     }
   });
 
-  test("a downgrade during profile preparation prevents the pending operator connection", async () => {
+  test("a profile downgrade during preparation applies the current role ceiling", async () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const ensure = profileWrites.ensureCanonicalUserProfileForOpenClawIdIdentity;
@@ -234,14 +313,17 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     const pending = connectTunnel(OPERATOR_KEY);
     try {
       await entered.promise;
-      PRINCIPALS[OPERATOR_KEY] = {
-        kind: "member",
-        peerKey: OPERATOR_KEY,
+      const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
         accountId: "acct_op",
-        role: "viewer",
-      };
+      });
+      await profileWrites.setCanonicalUserProfileRole(profile.id, "viewer", {
+        onCommitted: (id) => invalidateOperatorRolePolicy(id, { roleOnly: true }),
+      });
       release.resolve();
-      await expect(pending).rejects.toThrow("closed 4001: gateway auth changed");
+      const connected = await pending;
+      connected.ws.close();
+      expect(connected.res.ok).toBe(true);
+      expect(grantedScopes(connected.res)).toEqual(["operator.sessions.read"]);
     } finally {
       release.resolve();
       PRINCIPALS[OPERATOR_KEY] = original;
@@ -249,7 +331,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     }
   });
 
-  test("a connected operator cannot use even a read request after its membership role changes", async () => {
+  test("a display-only membership label cannot override a connected profile grant", async () => {
     const original = expectDefined(PRINCIPALS[OPERATOR_KEY], "operator principal");
     const { ws, res } = await connectTunnel(OPERATOR_KEY);
     try {
@@ -261,20 +343,30 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
         accountId: "acct_op",
         role: "viewer",
       };
-      await expect(rpcReq(ws, "health", {})).rejects.toThrow(/closed 4001.*membership changed/);
+      expect((await rpcReq(ws, "health", {})).ok).toBe(true);
     } finally {
       PRINCIPALS[OPERATOR_KEY] = original;
       ws.close();
     }
   });
 
-  test.each(["removed", "reassigned"] as const)(
-    "a tokenless browser is Access-managed and loses RPC access when its peer is %s",
-    async (change) => {
+  test.each([
+    { client: CONTROL_UI_CLIENT, change: "removed", bindingFailure: false },
+    { client: CONTROL_UI_CLIENT, change: "reassigned", bindingFailure: false },
+    {
+      client: { id: "openclaw-ios", version: "1.0", platform: "ios", mode: "ui" },
+      change: "removed",
+      bindingFailure: true,
+    },
+  ] as const)(
+    "a tokenless $client.id has ID-bound operator approval and loses RPC access when its peer is $change",
+    async ({ client, change, bindingFailure }) => {
       const original = expectDefined(PRINCIPALS[OPERATOR_KEY], "operator principal");
       const gateway = {
         auth: { mode: "token" as const, token: TOKEN },
         controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
+        roles: { definitions: PRESETS },
+        openclawId: { enabled: true },
       };
       await writeConfigFile({
         gateway: {
@@ -283,6 +375,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
           roles: {
             default: "member",
             definitions: {
+              ...PRESETS,
               member: {
                 sessions: { others: "none" },
                 agents: "*",
@@ -294,8 +387,25 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
       });
       let browser: WebSocket | undefined;
       let admin: WebSocket | undefined;
+      const identityPath = makeIdentityPath(`tokenless-${randomUUID()}.sqlite`);
       try {
-        const connected = await connectTunnel(OPERATOR_KEY);
+        if (bindingFailure) {
+          failNextBindingWrite = true;
+          const failed = await connectTunnel(OPERATOR_KEY, { client, identityPath });
+          try {
+            expect(failed.res).toMatchObject({
+              ok: false,
+              error: {
+                code: "UNAVAILABLE",
+                message: expect.stringContaining("Synthetic binding write failed"),
+              },
+            });
+            expect((await listDevicePairing()).paired).toEqual([]);
+          } finally {
+            failed.ws.close();
+          }
+        }
+        const connected = await connectTunnel(OPERATOR_KEY, { client, identityPath });
         browser = connected.ws;
         expect(connected.res.ok, JSON.stringify(connected.res.error)).toBe(true);
         expect(helloAuth(connected.res)?.deviceToken).toBeUndefined();
@@ -318,9 +428,21 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
           "device.pair.list",
           {},
         );
-        expect(list.payload?.paired.find((entry) => entry.deviceId === deviceId)?.managedBy).toBe(
-          "openclaw-id",
-        );
+        if (client.id === CONTROL_UI_CLIENT.id) {
+          expect(list.payload?.paired.find((entry) => entry.deviceId === deviceId)?.managedBy).toBe(
+            "openclaw-id",
+          );
+        } else {
+          expect(
+            await checkDeviceTokenPeer({ deviceId, role: "operator", peerKey: OPERATOR_KEY }),
+          ).toEqual({ ok: true });
+          expect(
+            await checkDeviceTokenPeer({ deviceId, role: "operator", peerKey: undefined }),
+          ).toEqual({
+            ok: false,
+            reason: "device-token-peer-mismatch",
+          });
+        }
         expect((await rpcReq(browser, "health", {})).ok).toBe(true);
         expect((await rpcReq(browser, "exec.approvals.get", {})).ok).toBe(false);
         if (change === "removed") {
@@ -345,11 +467,17 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     },
   );
 
-  test("a viewer member reads but is refused chat.send", async () => {
+  test("a viewer reads conversations but cannot read logs or the user directory or send", async () => {
     const { ws, res } = await connectTunnel(VIEWER_KEY);
     try {
       expect(res.ok).toBe(true);
-      expect(grantedScopes(res)).toEqual(["operator.read"]);
+      expect(grantedScopes(res)).toEqual(["operator.sessions.read"]);
+      for (const method of ["users.self", "sessions.list"]) {
+        expect((await rpcReq(ws, method, {})).ok, method).toBe(true);
+      }
+      for (const method of ["logs.tail", "users.list"]) {
+        expect((await rpcReq(ws, method, {})).error?.message, method).toMatch(/missing scope/);
+      }
       const send = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         message: "hi",
@@ -366,7 +494,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     const { ws, res } = await connectTunnel(VIEWER_KEY, { token: TOKEN });
     try {
       expect(res.ok).toBe(true);
-      expect(grantedScopes(res)).toEqual(["operator.read"]);
+      expect(grantedScopes(res)).toEqual(["operator.sessions.read"]);
     } finally {
       ws.close();
     }
@@ -378,7 +506,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     try {
       expect(res.ok).toBe(true);
       expect(helloAuth(res)?.method).toBe("trusted-proxy");
-      expect(grantedScopes(res)).toEqual(["operator.read"]);
+      expect(grantedScopes(res)).toEqual(["operator.sessions.read"]);
       expect((await rpcReq(ws, "config.patch", {})).ok).toBe(false);
     } finally {
       ws.close();
@@ -459,11 +587,16 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     }
   });
 
-  test("a key the authority no longer admits is refused", async () => {
-    const { ws, res } = await connectTunnel(REMOVED_KEY);
+  test.each([
+    ["removed", REMOVED_KEY],
+    ["unknown role", GUEST_KEY],
+  ])("a %s member is refused even with the Gateway token", async (_reason, peerKey) => {
+    const { ws, res } = await connectTunnel(peerKey, { token: TOKEN });
     try {
       expect(res.ok).toBe(false);
-      expect(res.error?.message).toMatch(/no longer has access to this claw/);
+      expect(res.error?.message).toMatch(
+        _reason === "removed" ? /no longer has access to this claw/ : /access-record-inactive/,
+      );
     } finally {
       ws.close();
     }
@@ -490,6 +623,8 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     const gateway = {
       auth: { mode: "token" as const, token: TOKEN },
       controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
+      roles: { definitions: PRESETS },
+      openclawId: { enabled: true },
     };
     const browserIdentity = makeIdentityPath(`openclaw-tunnel-managed-${randomUUID()}.sqlite`);
     const tunnel = await connectTunnel(OWNER_KEY, { identityPath: browserIdentity });
@@ -530,7 +665,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
       )!.deviceId;
       expect((await rpcReq(admin.ws, "device.pair.remove", { deviceId: otherId })).ok).toBe(true);
       // With OpenClaw ID off there is no Access page, so the browser is an ordinary device again.
-      await writeConfigFile({ gateway });
+      await writeConfigFile({ gateway: { ...gateway, openclawId: { enabled: false } } });
       expect((await rpcReq(admin.ws, "device.pair.remove", { deviceId })).ok).toBe(true);
       // The deleted pairing's binding goes with it: the same identity, paired again on
       // ordinary ingress, starts as an ordinary device.
@@ -561,6 +696,8 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     const gateway = {
       auth: { mode: "token" as const, token: TOKEN },
       controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
+      roles: { definitions: PRESETS },
+      openclawId: { enabled: true },
     };
     await writeConfigFile({ gateway: { ...gateway, nodes: { pairing } } });
     sshProbe.mockClear();

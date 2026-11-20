@@ -11,12 +11,16 @@ import {
   transferCoreTtsToolResultProvenance,
 } from "../../tools/tts-tool-result-provenance.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
+import { hasRunContinuationEvidence, YIELD_DIAGNOSTIC_TEXT } from "./incomplete-turn-resolution.js";
 import type { buildEmbeddedRunPayloads } from "./payloads.js";
 import {
   assistantMessage,
   attemptResult,
   prepareAttempt,
 } from "./terminal-preparation.test-support.js";
+import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
+import { expectComplete, makeTerminalInput } from "./terminal-resolution.test-support.js";
+
 function hardTimeoutState(): NonNullable<Parameters<typeof prepareAttempt>[0]["terminalState"]> {
   return {
     outcome: {
@@ -446,6 +450,143 @@ describe("prepareEmbeddedRunTerminal", () => {
 
     expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
       expect.objectContaining({ lastAssistant: undefined, currentAssistant: null }),
+    );
+  });
+
+  describe("yield completion guards", () => {
+    beforeEach(async () => {
+      const actual = await vi.importActual<typeof import("./payloads.js")>("./payloads.js");
+      payloadMocks.buildEmbeddedRunPayloads.mockImplementation(actual.buildEmbeddedRunPayloads);
+    });
+    it.each([true, false])(
+      "preserves paused payloads and reports missing continuation (%s)",
+      async (continuation) => {
+        const assistant = {
+          ...assistantMessage("aborted"),
+          errorMessage: continuation ? "Agent run aborted" : undefined,
+          content: [
+            { type: "toolCall" as const, id: "yield-call", name: "sessions_yield", arguments: {} },
+          ],
+        };
+        const lastToolError = continuation
+          ? { toolName: "sessions_send", error: "Gateway delivery is unconfirmed" }
+          : { toolName: "exec", error: "Command exited with code 1" };
+        const attempt = attemptResult({
+          terminal: { kind: "aborted", source: "yield_cleanup" },
+          assistantTexts: [],
+          lastAssistant: assistant,
+          currentAttemptAssistant: undefined,
+          currentAttemptCompletedAssistant: assistant,
+          yieldDetected: true,
+          runtimeContinuationStarted: continuation,
+          lastToolError,
+          toolMetas: [{ toolName: "exec", isError: true }],
+        });
+        const terminal = makeTerminalInput({
+          attempt,
+          runParams: { authProfileStateMode: "read-only" },
+        });
+        const prepared = await prepareAttempt({
+          runParams: terminal.runParams,
+          attempt,
+          model: "mock-1",
+          activeErrorContext: { provider: "openai", model: "mock-1" },
+          terminalState: terminal.terminalState,
+        });
+        expect(attempt.lastToolError).toBe(lastToolError);
+        expect(terminal.terminalState.outcome.status).toBe("ok");
+        expect(prepared.payloadsWithToolMedia ?? []).toEqual([]);
+        expect(prepared.attemptToolSummary).toMatchObject({
+          unresolvedError: { toolName: lastToolError.toolName },
+        });
+        const result = await resolveEmbeddedRunTerminal({ ...terminal, prepared });
+        expectComplete(result);
+        expect(result.result.meta).toMatchObject({
+          yielded: true,
+          aborted: false,
+          livenessState: "paused",
+        });
+        expect(result.result.meta.error).toBeUndefined();
+        expect(result.result.payloads ?? []).toEqual(
+          continuation ? [] : [{ text: YIELD_DIAGNOSTIC_TEXT }],
+        );
+        expect(terminal.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+      },
+    );
+    it.each([undefined, "  ", "The existing task is still running."])(
+      "prefers an explicit waiting acknowledgment %j without inventing continuation evidence",
+      async (yieldAcknowledgment) => {
+        const assistant = {
+          ...assistantMessage("aborted"),
+          content: [
+            { type: "toolCall" as const, id: "yield-call", name: "sessions_yield", arguments: {} },
+          ],
+        };
+        const attempt = attemptResult({
+          terminal: { kind: "aborted", source: "yield_cleanup" },
+          assistantTexts: [],
+          lastAssistant: assistant,
+          currentAttemptAssistant: undefined,
+          currentAttemptCompletedAssistant: assistant,
+          yieldDetected: true,
+          yieldAcknowledgment,
+          runtimeContinuationStarted: false,
+          lastToolError: { toolName: "exec", error: "Command exited with code 1" },
+          toolMetas: [{ toolName: "exec", isError: true }],
+        });
+        const terminal = makeTerminalInput({
+          attempt,
+          runParams: { authProfileStateMode: "read-only" },
+        });
+        const prepared = await prepareAttempt({
+          runParams: terminal.runParams,
+          attempt,
+          model: "mock-1",
+          activeErrorContext: { provider: "openai", model: "mock-1" },
+          terminalState: terminal.terminalState,
+        });
+        expect(hasRunContinuationEvidence(attempt)).toBe(false);
+        const result = await resolveEmbeddedRunTerminal({ ...terminal, prepared });
+        expectComplete(result);
+        expect(result.result.payloads ?? []).toEqual(
+          yieldAcknowledgment?.trim() ? [] : [{ text: YIELD_DIAGNOSTIC_TEXT }],
+        );
+        if (yieldAcknowledgment?.trim()) {
+          expect(result.result.meta).toMatchObject({ yielded: true, yieldAcknowledgment });
+        }
+      },
+    );
+    it.each([
+      {
+        errorCode: "SYSTEM_RUN_DENIED",
+        error: "SYSTEM_RUN_DENIED: approval required",
+        fatal: true,
+      },
+      {
+        errorCode: undefined,
+        error: "The fetched page says SYSTEM_RUN_DENIED in its troubleshooting section.",
+        fatal: false,
+      },
+    ])(
+      "classifies typed cron denial without trusting fetched prose ($fatal)",
+      async ({ errorCode, error, fatal }) => {
+        const prepared = await prepareAttempt({
+          runParams: { trigger: "cron" },
+          attempt: attemptResult({ lastToolError: { toolName: "exec", errorCode, error } }),
+        });
+        expect(prepared.failureSignal).toEqual(
+          fatal
+            ? {
+                kind: "execution_denied",
+                source: "tool",
+                toolName: "exec",
+                code: errorCode,
+                message: error,
+                fatalForCron: true,
+              }
+            : undefined,
+        );
+      },
     );
   });
 });

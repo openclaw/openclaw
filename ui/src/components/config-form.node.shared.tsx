@@ -43,18 +43,16 @@ export function SensitiveToggleButton(props: {
   return (
     <>
       {props.state.canReveal && props.onToggleSensitivePath && (
-        <openclaw-tooltip prop:content={label()}>
-          <button
-            type="button"
-            class="settings-secret__toggle"
-            aria-label={label()}
-            aria-pressed={props.state.isRevealed ? "true" : "false"}
-            disabled={props.disabled}
-            onClick={() => props.onToggleSensitivePath?.(props.path)}
-          >
-            <Icon name={props.state.isRevealed ? "eye" : "eyeOff"} />
-          </button>
-        </openclaw-tooltip>
+        <button
+          type="button"
+          class="settings-secret__toggle"
+          aria-label={label()}
+          aria-pressed={props.state.isRevealed ? "true" : "false"}
+          disabled={props.disabled}
+          onClick={() => props.onToggleSensitivePath?.(props.path)}
+        >
+          <Icon name={props.state.isRevealed ? "eye" : "eyeOff"} />
+        </button>
       )}
     </>
   );
@@ -148,7 +146,10 @@ function ConfigUnsupportedNote(props: { message: string; onOpenRaw?: () => void 
   const parts = () => props.message.split(t("configView.raw"));
   return (
     <span class="settings-row__desc">
-      <Show when={props.onOpenRaw && parts().length === 2} fallback={props.message}>
+      <Show
+        when={props.onOpenRaw && parts().length === 2}
+        fallback={props.onOpenRaw ? props.message : t("configForm.editInAdvancedRaw")}
+      >
         {parts()[0]}
         <button type="button" class="config-field__raw-link" onClick={() => props.onOpenRaw?.()}>
           {t("configView.raw")}
@@ -309,19 +310,17 @@ export function CollectionRemoveButton(props: {
   let button!: HTMLButtonElement;
   onSettled(() => props.focus.register(button));
   return (
-    <openclaw-tooltip prop:content={props.label}>
-      <button
-        ref={(element) => (button = element)}
-        type="button"
-        class="btn btn--icon"
-        style={{ width: "28px", height: "28px", padding: "0" }}
-        aria-label={props.label}
-        disabled={props.disabled}
-        onClick={(event) => removeCollectionRow(event, props.remove, props.focus.destinations())}
-      >
-        <Icon name="trash" />
-      </button>
-    </openclaw-tooltip>
+    <button
+      ref={(element) => (button = element)}
+      type="button"
+      class="btn btn--icon"
+      style={{ width: "28px", height: "28px", padding: "0" }}
+      aria-label={props.label}
+      disabled={props.disabled}
+      onClick={(event) => removeCollectionRow(event, props.remove, props.focus.destinations())}
+    >
+      <Icon name="trash" />
+    </button>
   );
 }
 

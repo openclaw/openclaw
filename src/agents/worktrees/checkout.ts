@@ -1,11 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  normalizeGitPathForFilesystem,
-  requireGitCommandOutput,
-  type GitCommandOptions,
-} from "../../infra/git-exec.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { requireGitCommandOutput, type GitCommandOptions } from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
@@ -26,6 +23,7 @@ import {
   commandError,
   worktreePathExists,
   requireGit,
+  requireGitPath,
   resolveGitMetadataPath,
   runGit,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
@@ -49,6 +47,7 @@ type CheckoutOptions = WorktreeFilesystemOptions & {
   enabled: boolean;
   /** Pool builders must not consume another ready slot or schedule themselves. */
   useWarmPool?: boolean;
+  backgroundUsedAt?: number;
   repoRoot: string;
   commonDir: string;
   worktreeRoot: string;
@@ -77,8 +76,13 @@ function assertOwned(options: WorktreeFilesystemOptions) {
 
 function gitOptions(options: WorktreeFilesystemOptions) {
   return {
+    idleIoPriority: options.idleIoPriority,
     signal: options.signal,
-    beforeRun: () => assertOwned(options),
+    beforeRun: composeSessionSourceAssertion([options.commitGuard], (assertSource) => {
+      options.signal?.throwIfAborted();
+      assertSource();
+    }),
+    stateOwnerPath: options.workerAuthority?.stateOwnerPath,
     killProcessTree: true,
   };
 }
@@ -99,7 +103,7 @@ function checkoutGitOptions(options: CheckoutOptions, cloneBytes?: number): GitC
   };
 }
 
-async function prepareTemplate(options: CheckoutOptions) {
+export async function prepareManagedWorktreeTemplate(options: CheckoutOptions) {
   const backend = await detectWorktreeFilesystemBackend(path.dirname(options.destination), options);
   if (!backend) {
     return undefined;
@@ -126,7 +130,13 @@ async function prepareTemplate(options: CheckoutOptions) {
         .update(`${options.commonDir}\n${options.worktreeRoot}\n${git.sourceOnly}`)
         .digest("hex");
       if (options.useWarmPool !== false && !options.deferGitCheckout) {
-        const existing = await readTemplateAsync(options.env, cacheKey, options.commitGuard);
+        const existing = await readTemplateAsync(
+          options.env,
+          cacheKey,
+          options.commitGuard,
+          contentKey,
+          options.workerAuthority,
+        );
         if (
           existing?.status === "ready" &&
           existing.backend === backend.id &&
@@ -141,7 +151,10 @@ async function prepareTemplate(options: CheckoutOptions) {
           );
           if (warm) {
             // The slot owns independent, validated bytes. Its unused source needs no reader.
-            setWorktreePreparationTemplate("warm", { reason: "ready" });
+            setWorktreePreparationTemplate("warm", {
+              reason: "ready",
+              identity: `${backend.id}:${cacheKey}:${contentKey}`,
+            });
             return { ...warm, backend, poolTemplate: existing, warm: true };
           }
         }
@@ -179,6 +192,7 @@ async function prepareTemplate(options: CheckoutOptions) {
         commonDir: options.commonDir,
         worktreeRoot: options.worktreeRoot,
         sourceCommit: commit,
+        backgroundUsedAt: options.backgroundUsedAt,
         backend: backend.id,
         reuseOnly: options.deferGitCheckout,
         requireSpace: options.requireSpace,
@@ -426,7 +440,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     }
     return result.code === 0 ? added : result;
   };
-  let retainedTemplate: Awaited<ReturnType<typeof prepareTemplate>>;
+  let retainedTemplate: Awaited<ReturnType<typeof prepareManagedWorktreeTemplate>>;
   const prepare = async (): Promise<CheckoutResult> => {
     if (profile && commit !== profile.commit) {
       preserve = true;
@@ -437,7 +451,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     const checkoutBytes = await timeWorktreePreparationPhase("commitPrepare", async () =>
       options.prepareCommit?.(commit),
     );
-    let template: Awaited<ReturnType<typeof prepareTemplate>>;
+    let template: Awaited<ReturnType<typeof prepareManagedWorktreeTemplate>>;
     let cloneBytes: number | undefined;
     setWorktreePreparationTemplate("unavailable", {
       reason: !options.enabled
@@ -451,7 +465,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     if (options.enabled && checkoutBytes !== 0 && !profile) {
       try {
         template = retainedTemplate = await timeWorktreePreparationPhase("templatePrepare", () =>
-          prepareTemplate(options),
+          prepareManagedWorktreeTemplate(options),
         );
         const preparedTemplate = template;
         cloneBytes = preparedTemplate
@@ -542,12 +556,10 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     const destinationIndex = await timeWorktreePreparationPhase("indexLocate", async () =>
       path.resolve(
         options.repoRoot,
-        normalizeGitPathForFilesystem(
-          await requireGit(
-            options.repoRoot,
-            ["--git-dir", gitDir, "rev-parse", "--git-path", "index"],
-            gitOptions(options),
-          ),
+        await requireGitPath(
+          options.repoRoot,
+          ["--git-dir", gitDir, "rev-parse", "--git-path", "index"],
+          gitOptions(options),
         ),
       ),
     );

@@ -19,11 +19,20 @@ import type { InternalChannelThreadingToolContext } from "../../channels/threadi
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
+import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
+import { runInAgentRunWriteContext } from "../agent-run-terminal-writes.js";
 import { resolveImplicitMessageActionTarget } from "./message-action-normalization.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
+
+const loadManagedMedia = createLazyRuntimeModule(
+  () => import("../../gateway/managed-image-attachments.js"),
+);
 
 type SourceReplyTranscriptMirrorParams = {
   action: string;
@@ -42,7 +51,11 @@ type SourceReplyTranscriptMirrorParams = {
   deliveredPayload?: unknown;
   /** Actual local delivery content; absent for legacy Gateway request projections. */
   deliveredPayloads?: readonly ReplyPayload[];
+  mediaAccess?: OutboundMediaAccess;
+  abortSignal?: AbortSignal;
   replyToIsExplicit?: boolean;
+  /** The agent run whose message tool made this delivery. */
+  runId?: string;
 };
 
 type MirrorableSourceReplyTranscriptParams = SourceReplyTranscriptMirrorParams & {
@@ -426,6 +439,12 @@ function isDeliveredCurrentSourceReplyAction(params: SourceReplyTranscriptMirror
 export async function mirrorDeliveredSourceReplyToTranscript(
   params: SourceReplyTranscriptMirrorParams,
 ): Promise<boolean> {
+  // The run's own reply: its CLI history writer must cover the row, or the gap refuses saved
+  // history to the next fresh CLI session.
+  return await runInAgentRunWriteContext(params.runId, () => mirrorSourceReply(params));
+}
+
+async function mirrorSourceReply(params: SourceReplyTranscriptMirrorParams): Promise<boolean> {
   const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
   if (
     (deliveryFact && (deliveryFact.status !== "settled" || deliveryFact.partialDelivery)) ||
@@ -462,33 +481,91 @@ export async function mirrorDeliveredSourceReplyToTranscript(
   }
   const sourceTurnId = normalizeOptionalString(params.toolContext?.currentSourceTurnId);
   const writerFence = getOwnedSessionTranscriptWriterFence({ sessionKey: params.sessionKey });
-  const result = await appendAssistantMessageToSessionTranscript({
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    ...(params.sessionId ? { expectedSessionId: params.sessionId } : {}),
-    ...(writerFence?.expectedLifecycleRevision !== undefined
-      ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
-      : {}),
-    ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
-    text: mirror.text,
-    mediaUrls: mirror.mediaUrls.length ? mirror.mediaUrls : undefined,
-    // Progress and terminal mirrors may share provider idempotency. Keep their transcript
-    // receipts distinct so a progress row cannot mask the terminal marker.
-    idempotencyKey:
-      params.sourceReplyFinal === true && params.idempotencyKey && sourceTurnId
-        ? `${params.idempotencyKey}:terminal-receipt:${sourceTurnId}`
-        : params.idempotencyKey,
-    ...(params.sourceReplyFinal !== undefined
-      ? {
-          deliveryMirror: {
-            kind: "message-tool-source-reply" as const,
-            final: params.sourceReplyFinal,
-            ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
-            ...(sourceTurnId ? { sourceTurnId } : {}),
-          },
+  // Only the local send owner supplies its original reader. Gateway projections
+  // must not infer broader file authority from a successful delivery receipt.
+  const mediaRuntime =
+    params.mediaAccess && mirror.mediaUrls.length ? await loadManagedMedia() : undefined;
+  const contentRuntime = mediaRuntime
+    ? await import("../../gateway/server-methods/chat-assistant-content.js")
+    : undefined;
+  let preparedBlocks: Record<string, unknown>[] = [];
+  let committed = false;
+  return await withChannelReadAuthority(
+    mediaRuntime ? () => params.abortSignal?.throwIfAborted() : undefined,
+    async () => {
+      try {
+        const result = await appendAssistantMessageToSessionTranscript({
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          ...(params.sessionId ? { expectedSessionId: params.sessionId } : {}),
+          ...(writerFence?.expectedLifecycleRevision !== undefined
+            ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
+            : {}),
+          ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
+          text: mirror.text,
+          mediaUrls: mirror.mediaUrls.length ? mirror.mediaUrls : undefined,
+          // Progress and terminal mirrors may share provider idempotency. Keep their transcript
+          // receipts distinct so a progress row cannot mask the terminal marker.
+          idempotencyKey:
+            params.sourceReplyFinal === true && params.idempotencyKey && sourceTurnId
+              ? `${params.idempotencyKey}:terminal-receipt:${sourceTurnId}`
+              : params.idempotencyKey,
+          ...(params.sourceReplyFinal !== undefined
+            ? {
+                deliveryMirror: {
+                  kind: "message-tool-source-reply" as const,
+                  final: params.sourceReplyFinal,
+                  ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+                  ...(sourceTurnId ? { sourceTurnId } : {}),
+                },
+              }
+            : {}),
+          config: params.cfg,
+          ...(mediaRuntime && contentRuntime
+            ? {
+                assertCurrent: () => params.abortSignal?.throwIfAborted(),
+                prepareDisplayContent: async () => {
+                  const { assistantContent } = await contentRuntime.buildAssistantReplyContent({
+                    sessionKey: params.sessionKey,
+                    agentId: params.agentId,
+                    payloads: plan.map(({ payload }) => payload),
+                    mediaAccess: params.mediaAccess,
+                    assertCurrent: () => params.abortSignal?.throwIfAborted(),
+                    abortSignal: params.abortSignal,
+                    includeSensitiveMedia: false,
+                  });
+                  preparedBlocks = assistantContent ?? [];
+                  return assistantContent;
+                },
+                onMessageCommitted: (message, acceptCompletion) => {
+                  committed = message.appended;
+                  const blocks = readAssistantDisplayContent(message.message);
+                  if (contentRuntime.hasManagedOutgoingAssistantContent(blocks)) {
+                    acceptCompletion(async () => {
+                      if (
+                        !(await mediaRuntime.attachManagedOutgoingMediaToMessage({
+                          messageId: message.messageId,
+                          blocks,
+                        }))
+                      ) {
+                        throw new Error("Source reply media ownership could not be persisted");
+                      }
+                    });
+                  }
+                },
+              }
+            : {}),
+        });
+        return result.ok;
+      } finally {
+        if (!committed && preparedBlocks.length && mediaRuntime) {
+          await mediaRuntime.removeManagedOutgoingMediaBlocks({
+            blocks: preparedBlocks,
+            messageId: null,
+          });
         }
-      : {}),
-    config: params.cfg,
-  });
-  return result.ok;
+      }
+    },
+    mediaRuntime ? params.abortSignal : undefined,
+  );
 }

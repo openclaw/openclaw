@@ -191,6 +191,8 @@ export function createMattermostThreadBackfill(params: {
     ) {
       return {};
     }
+    const pendingRecovery = recoveries.get(turn.historyKey);
+    const pendingHistory = pendingRecovery?.completion;
     let identity: string | null;
     try {
       identity = await readIdentity(turn);
@@ -199,6 +201,10 @@ export function createMattermostThreadBackfill(params: {
       return {};
     }
     const previous = recoveries.get(turn.historyKey);
+    if (previous === pendingRecovery && previous?.identity === identity && pendingHistory) {
+      // Preserve this caller's in-flight result while its session identity is checked.
+      return { history: await pendingHistory };
+    }
     let recovery = previous;
     if (!recovery || recovery.identity !== identity) {
       recovery = {

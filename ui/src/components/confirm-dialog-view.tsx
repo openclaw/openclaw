@@ -98,6 +98,7 @@ export function ConfirmDialogView(props: {
 
   return (
     <openclaw-modal-dialog
+      class={initialOptions.compact ? "confirm-dialog--compact" : undefined}
       prop:initialFocus={() => cancelButton}
       label={initialOptions.title}
       description={initialOptions.message}
@@ -107,7 +108,7 @@ export function ConfirmDialogView(props: {
         <DialogHeader
           title={initialOptions.title}
           description={<p>{initialOptions.message}</p>}
-          onClose={() => props.finish(null)}
+          onClose={initialOptions.compact ? undefined : () => props.finish(null)}
         />
         {initialOptions.details ||
         initialOptions.requiredAcknowledgement ||

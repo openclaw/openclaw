@@ -563,23 +563,30 @@ it("keeps a delayed source off the catalog RPC path", async () => {
       },
     },
   });
-  let service: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
+  const services: Array<
+    Extract<Parameters<OpenClawPluginApi["registerService"]>[0], { apiVersion: 2 }>
+  > = [];
   const api = createTestPluginApi({
     runtime,
     registerService: (registered) => {
-      service = registered;
+      if (registered.apiVersion !== 2) {
+        throw new Error("Expected catalog service API version 2");
+      }
+      services.push(registered);
     },
     registerSessionCatalog: (registeredCatalog) => {
       useCatalogs(registeredCatalog);
     },
   });
   sessionSharePlugin.register(api);
-  if (service?.apiVersion !== 2) {
+  if (services.length === 0) {
     throw new Error("Expected catalog service API version 2");
   }
   const scheduler = createTestPluginServiceScheduler();
   const context = { config, logger: api.logger, stateDir: "/unused", invokeNode, scheduler };
-  await service?.start(context);
+  for (const service of services) {
+    await service.start(context);
+  }
   bindPluginRegistryRuntime(hoisted.activeRegistry as PluginRegistry, runtime);
   hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
   const clients = Array.from({ length: 6 }, (_, index) => ({
@@ -691,7 +698,9 @@ it("keeps a delayed source off the catalog RPC path", async () => {
     source.resolve();
     refresh.resolve();
     try {
-      await service?.stop?.(context);
+      for (const service of services.toReversed()) {
+        await service.stop?.(context);
+      }
     } finally {
       await scheduler.stop();
     }

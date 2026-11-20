@@ -19,7 +19,6 @@ import {
   isSubagentSessionKey,
   isToolResultError,
   resolveEmbeddedAttemptToolConstructionPlan,
-  resolveModelAuthModeAsync,
   sanitizeToolResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -346,14 +345,6 @@ async function buildOpenClawCodingToolsOptions(
     modelApi: model?.api,
     modelContextWindowTokens: a.contextTokenBudget ?? model?.contextWindow,
     delegationCapability: a.delegationCapability,
-    modelAuthMode: await resolveModelAuthModeAsync(
-      input.modelProvider,
-      a.config,
-      a.toolAuthProfileStore ?? a.authProfileStore,
-      {
-        workspaceDir,
-      },
-    ),
     modelHasVision,
     requireExplicitMessageTarget:
       a.requireExplicitMessageTarget ?? isSubagentSessionKey(liveSessionKey),

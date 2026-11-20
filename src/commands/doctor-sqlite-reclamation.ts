@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
-import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store.js";
+import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store-inspection.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";

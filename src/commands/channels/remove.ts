@@ -12,6 +12,7 @@ import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { withCommandPluginMetadata } from "../config-validation.js";
@@ -31,6 +32,8 @@ export async function channelsRemoveCommand(
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   parseAccountSelector(opts.account);
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
@@ -155,12 +158,15 @@ export async function channelsRemoveCommand(
               mode: GATEWAY_CLIENT_MODES.BACKEND,
               clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
               deviceIdentity: null,
+              signal,
             });
           } catch (error) {
+            signal?.throwIfAborted();
             runtime.log(
               `Could not stop running ${channelLabel(resolvedChannel)} account "${accountId}" before removing it: ${formatErrorMessage(error)}`,
             );
           }
+          signal?.throwIfAborted();
         },
       });
       if (!removal.ok) {

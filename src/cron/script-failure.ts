@@ -11,6 +11,10 @@ function classifyCronScriptFailure(code: CronTriggerFailureCode): CronRunErrorCl
   if (code === "runtime_unavailable") {
     return { kind: "reason", reason: "server_error" };
   }
+  // An abort ends this attempt; it says nothing about the job, so the job stays scheduled.
+  if (code === "aborted") {
+    return { kind: "aborted" };
+  }
   return { kind: "permanent" };
 }
 

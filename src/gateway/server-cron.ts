@@ -1,8 +1,7 @@
 import { captureSessionMcpRuntimeRetirement } from "../agents/agent-bundle-mcp-manager-api.js";
 import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
-import { abortAndDrainEmbeddedAgentRunByRunId } from "../agents/embedded-agent-runner/runs.js";
-import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
+import * as embeddedRuns from "../agents/embedded-agent-runner/runs.js";
 import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
 import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-handoff.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -28,7 +27,7 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { emitLegacyHeartbeatCronOutcome } from "../infra/heartbeat-events.js";
 import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
 import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
-import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging.js";
+import { getChildLogger, getFileLogLevel, toPinoLikeLogger } from "../logging.js";
 import type {
   PluginHookCronChangedEvent,
   PluginHookGatewayCronService,
@@ -104,7 +103,7 @@ export function buildGatewayCronService(params: {
   resolvePluginRegistry?: () => PluginRegistry | undefined;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
-  const cronServiceLogger = toPinoLikeLogger(cronLogger, getResolvedLoggerSettings().level);
+  const cronServiceLogger = toPinoLikeLogger(cronLogger, getFileLogLevel());
   const scheduledGatewayContextResolver = fenceScheduledGatewayContextResolver(
     params.resolveGatewayContext,
   );
@@ -490,8 +489,8 @@ export function buildGatewayCronService(params: {
         reason: "cron_timeout",
       };
       const result = await (execution.runId
-        ? abortAndDrainEmbeddedAgentRunByRunId({ ...cleanup, runId: execution.runId })
-        : abortAndDrainEmbeddedAgentRun(cleanup));
+        ? embeddedRuns.abortAndDrainEmbeddedAgentRunByRunId({ ...cleanup, runId: execution.runId })
+        : embeddedRuns.abortAndDrainEmbeddedAgentRun(cleanup));
       if (!result) {
         cronLogger.warn(
           { jobId: job.id, sessionId: execution.sessionId, sessionKey: execution.sessionKey },
@@ -542,7 +541,7 @@ export function buildGatewayCronService(params: {
     ...createGatewayCronFailureRepair(params.cfg, scheduledGatewayContextResolver),
     log: toPinoLikeLogger(
       getChildLogger({ module: "cron", storeKey: storePath }),
-      getResolvedLoggerSettings().level,
+      getFileLogLevel(),
     ),
     onDefinitionChange: publishCronInventoryChange,
     onEvent: (evt, eventContext) => {

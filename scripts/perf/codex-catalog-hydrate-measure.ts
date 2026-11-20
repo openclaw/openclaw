@@ -8,7 +8,6 @@
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg, tmpdir } from "node:os";
 import path from "node:path";
@@ -17,6 +16,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { CodexCatalogIndexRow } from "../../extensions/codex/src/session-catalog-index-row.js";
 import { CodexCatalogIndex } from "../../extensions/codex/src/session-catalog-index.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -76,9 +76,6 @@ const pauses: number[] = [];
 const observer = new PerformanceObserver((list) =>
   pauses.push(...list.getEntries().map((e) => e.duration)),
 );
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 try {
   await index.initialize();
   await index.reconcile();
@@ -125,7 +122,7 @@ try {
   pauses.push(...observer.takeRecords().map((e) => e.duration));
   observer.disconnect();
   const allocationBytes = inspector
-    ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+    ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
     : undefined;
   assert.equal(reads, 625 * walks);
   console.log(

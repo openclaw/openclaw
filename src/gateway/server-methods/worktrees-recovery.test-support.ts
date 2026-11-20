@@ -123,20 +123,23 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
             ownerId,
             runSetupScript: false,
           });
-        const worktree = await createWorktree("recovery", sessionKey);
-        const replacement = await createWorktree("replacement", sessionKey + "-replacement");
-        const binding = ({ id, branch, repoRoot }: typeof worktree) => ({ id, branch, repoRoot });
-        const entry = {
-          sessionId: randomUUID(),
-          updatedAt: Date.now(),
-          worktree: binding(worktree),
-        };
         const session = {
           agentId: "main",
           sessionKey,
           storePath:
             cfg.session?.store ?? state.statePath("agents", "main", "sessions", "sessions.json"),
         };
+        const initialEntry = { sessionId: randomUUID(), updatedAt: Date.now() };
+        // Startup maintenance must see live session owners while their checkouts are created.
+        await replaceSessionEntry(session, initialEntry);
+        await replaceSessionEntry(
+          { ...session, sessionKey: sessionKey + "-replacement" },
+          { sessionId: randomUUID(), updatedAt: Date.now() },
+        );
+        const worktree = await createWorktree("recovery", sessionKey);
+        const replacement = await createWorktree("replacement", sessionKey + "-replacement");
+        const binding = ({ id, branch, repoRoot }: typeof worktree) => ({ id, branch, repoRoot });
+        const entry = { ...initialEntry, worktree: binding(worktree) };
         await replaceSessionEntry(session, entry);
         const prepared = await prepareLocalSandboxWorkspace({
           cfg,

@@ -13,7 +13,6 @@ import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
-  resolvePluginMetadataSnapshot,
   resolvePluginMetadataSnapshotAsync,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
@@ -167,7 +166,16 @@ function buildPricingContext(
   // Hosted aliases are policy-resolved against installed manifests. If that metadata is
   // unavailable, fail closed instead of treating every provider as policy-free.
   const remoteCatalog = snapshot ? getActiveRemoteModelCatalog(config) : undefined;
-  const hosted = remoteCatalog?.pricing ?? {};
+  // A provider without static rows (a refreshable gateway such as Vercel) admits no hosted row, so
+  // its row prices count as its own standalone prices rather than as refused rows.
+  const plannedProviders = new Set([...rowKeys].map((key) => key.slice(0, key.indexOf("/"))));
+  const hosted = Object.fromEntries(
+    Object.entries(remoteCatalog?.pricing ?? {}).map(([key, price]) =>
+      price.explicit && !plannedProviders.has(key.slice(0, key.indexOf("/")))
+        ? [key, { ...price, explicit: false }]
+        : [key, price],
+    ),
+  );
   const upstream = remoteCatalog?.upstreamPricing ?? {};
   // Policy-free providers read both tables like v1's merged map; stable sort keeps hosted first.
   const policyFree: Array<[string, RemoteModelCatalogPrice]> = [
@@ -219,38 +227,17 @@ function buildPricingContext(
   };
 }
 
-/** Reuses policy and prices for the config's exact accepted catalog generation. */
-export function resolveModelPricingContext(config: OpenClawConfig = EMPTY_CONFIG): PricingContext {
-  const catalog = getActiveRemoteModelCatalog(config);
-  const existing = readPricingContext(config, catalog);
-  if (existing) {
-    return existing;
-  }
-  let snapshot: PluginMetadataSnapshot | undefined;
-  try {
-    snapshot = resolvePluginMetadataSnapshot({
-      config,
-      env: process.env,
-      allowWorkspaceScopedCurrent: true,
-    });
-  } catch {
-    snapshot = undefined;
-  }
-  const context = buildPricingContext(config, snapshot);
-  retainPricingContext(config, getActiveRemoteModelCatalog(config), context);
-  return context;
-}
-
 /** Prepare the existing config-owned context before synchronous per-record pricing. */
 export async function prepareModelPricingContext(
   config: OpenClawConfig = EMPTY_CONFIG,
-): Promise<void> {
-  if (readPricingContext(config, getActiveRemoteModelCatalog(config))) {
-    return;
+): Promise<PricingContext> {
+  const existing = readPricingContext(config, getActiveRemoteModelCatalog(config));
+  if (existing) {
+    return existing;
   }
   const env = cloneEnvWithPlatformSemantics(process.env);
   const cache = getPluginCache();
-  await withPluginCache(cache, async () => {
+  return withPluginCache(cache, async () => {
     let snapshot: PluginMetadataSnapshot | undefined;
     try {
       snapshot = await resolvePluginMetadataSnapshotAsync({
@@ -268,11 +255,13 @@ export async function prepareModelPricingContext(
       await prepareRemoteModelCatalogStartupSnapshot({ env });
     }
     const catalog = getActiveRemoteModelCatalog(config);
-    // A synchronous reader may have prepared this exact pair while metadata awaited I/O.
-    if (!readPricingContext(config, catalog)) {
-      const context = buildPricingContext(config, snapshot);
+    // Another preparation may have completed this exact pair while metadata awaited I/O.
+    let context = readPricingContext(config, catalog);
+    if (!context) {
+      context = buildPricingContext(config, snapshot);
       retainPricingContext(config, catalog, context);
     }
+    return context;
   });
 }
 

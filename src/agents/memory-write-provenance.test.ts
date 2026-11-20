@@ -43,7 +43,11 @@ it.each([
     await fs.writeFile(target, "before");
     let active = true;
     const operations = withMemoryWriteProvenance(
-      { readFile: fs.readFile, writeFile: fs.writeFile, remove: fs.rm },
+      {
+        readFile: (file, signal?: AbortSignal) => fs.readFile(file, { signal }),
+        writeFile: (file, content, signal?: AbortSignal) => fs.writeFile(file, content, { signal }),
+        remove: fs.rm,
+      },
       {
         classifies: async () => {
           active &&= phase === "write-observer" || !revoke;
