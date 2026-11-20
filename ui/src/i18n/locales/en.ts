@@ -1570,9 +1570,10 @@ const startupEnglish = {
       openModels: "Open Models",
       failedRepeatCount: "{count} times",
       tryAgain: "Try again",
-      startNewSession: "Start a new session",
+      updateRequiredTitle: "Codex needs an update",
+      updateCodex: "Update Codex",
       harnessUpdatePrompt:
-        "My last message in another session failed with this error:\n\n{summary}\n\nDo the update it asks for on this machine, confirm the installed version, and tell me if I still need to restart the OpenClaw Gateway.",
+        "Update the Codex that OpenClaw uses. My last message in another session failed with:\n\n{summary}\n\n1. Find that Codex. The error says where it is. For the global Codex CLI, use `command -v codex` and `codex --version`, and find which package manager installed it (npm, Homebrew or another).\n2. Update that copy with the same package manager, for example `npm i -g @openai/codex@latest` or `brew upgrade codex`. Do not install a second copy.\n3. Run `codex --version` again and confirm the version is newer.\n4. Restart the OpenClaw Gateway so it starts the new Codex. The restart waits until your reply ends, so do not wait for it. If you cannot restart it, tell me how.\n\nIf the error names a desktop app or a Codex on another machine, do not change it. Tell me what to update instead.\n\nEnd with the old and new versions, and tell me to try my message again after the restart.",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
     },

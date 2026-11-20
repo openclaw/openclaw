@@ -229,7 +229,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       : undefined;
   }
 
-  /** Failure recovery for the visible run; "Start a new session" uses this owner's creation path. */
+  /** Failure recovery for the visible run; "Update Codex" uses this owner's creation path. */
   protected runRecoveryActions(
     state: Parameters<typeof createChatPaneRunRecoveryActions>[0],
     options: Omit<Parameters<typeof createChatPaneRunRecoveryActions>[1], "onStartNewSession">,

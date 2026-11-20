@@ -101,8 +101,8 @@ list a model that the selected Codex binary is too old to run. A Codex-harness
 turn on such a model fails with a message that names the running Codex version
 and asks you to update your global Codex and restart the Gateway. OpenClaw does
 not switch that turn to another harness. In Control UI, the failure offers
-**Start a new session**: a new session on the OpenClaw harness, with the same
-agent and model, that asks the agent to update Codex for you. OpenClaw itself
+**Update Codex**: a new session on the OpenClaw harness, with the same agent and
+model, that asks the agent to update Codex for you. OpenClaw itself
 never installs or updates Codex.
 
 `appServer.command`, `OPENCLAW_CODEX_APP_SERVER_BIN`, and remote app-servers

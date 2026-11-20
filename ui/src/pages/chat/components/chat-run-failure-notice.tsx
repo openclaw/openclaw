@@ -56,14 +56,14 @@ export function ChatRunFailureNotice(props: {
   const [placement, setPlacement] = createSignal<"bottom" | "top">("bottom");
   let panel: PopoverHandle | undefined;
   const fixTitle = () => props.cause && FIX_TITLES.get(props.cause.failoverReason!);
+  const updateRequired = () => props.cause?.code === HARNESS_UPDATE_REQUIRED_CODE;
   const title = () =>
-    t(`chat.recovery.${fixTitle() ?? "failedTitle"}`, {
+    t(`chat.recovery.${updateRequired() ? "updateRequiredTitle" : (fixTitle() ?? "failedTitle")}`, {
       provider: providerDisplayLabel(props.cause?.provider ?? ""),
     });
   const app = useOptionalApplication();
   const openModels = () => (app && fixTitle() ? props.cause?.provider : undefined);
-  const startNewSession = () =>
-    props.cause?.code === HARNESS_UPDATE_REQUIRED_CODE && props.onStartNewSession;
+  const startNewSession = () => updateRequired() && props.onStartNewSession;
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
   const concise = createMemo(() => {
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";
@@ -194,7 +194,8 @@ export function ChatRunFailureNotice(props: {
             class="btn primary btn--sm chat-run-failure__retry"
             onClick={() => props.onStartNewSession?.()}
           >
-            {t("chat.recovery.startNewSession")}
+            <Icon name="download" />
+            {t("chat.recovery.updateCodex")}
           </button>
         </Show>
         <Show when={props.onRetry}>

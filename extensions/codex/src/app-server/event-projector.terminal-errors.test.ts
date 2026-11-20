@@ -235,7 +235,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
           expect(terminal.promptError).toMatchObject({
             message: testCase.expected,
             nativeMessage: testCase.message,
-            // Clients key the "Start a new session" action on this host code.
+            // Clients key the "Update Codex" action on this host code.
             code: "harness_update_required",
           });
         } else {
@@ -419,7 +419,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       await fixture.notify(projector, "turn/completed", {
         turn: { id: TURN_ID, status: "failed", items: [], error: laterError },
       });
-      // Losing the code would drop Control UI's "Start a new session" action.
+      // Losing the code would drop Control UI's "Update Codex" action.
       expect(readAttemptTerminal(fixture.result(projector)).promptError).toMatchObject({
         code: "harness_update_required",
       });

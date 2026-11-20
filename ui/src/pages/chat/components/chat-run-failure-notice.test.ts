@@ -258,7 +258,7 @@ it("starts an OpenClaw update session only for a harness-update failure", async 
   const recovery = { failureActionsRunId: "run-a", ...actions };
   const start = () =>
     Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent === "Start a new session",
+      (button) => button.textContent === "Update Codex",
     );
   // Matching prose alone must not offer an update.
   drawNotice(item, recovery);
@@ -273,6 +273,7 @@ it("starts an OpenClaw update session only for a harness-update failure", async 
   drawNotice(updateItem, { failureActionsRunId: "run-a" });
   expect(start()).toBeUndefined();
   drawNotice(updateItem, recovery);
+  expect(container.textContent).toContain("Codex needs an update");
   expect(start()?.classList.contains("primary")).toBe(true);
   start()?.click();
   await waitForSolid(() => expect(open).toHaveBeenCalledExactlyOnceWith("agent:cx:update-session"));
