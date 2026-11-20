@@ -161,6 +161,8 @@ const repositoryScriptEntries = [
   ".github/workflows/labeler.yml!",
   // Stable closeout imports its recovery verifier from the trusted tooling checkout.
   ".github/workflows/openclaw-stable-main-closeout.yml!",
+  // Full Release Validation launches this reuse lookup by path in its selected checkout.
+  "scripts/find-reusable-release-child.mjs!",
   // Prepared publication imports its verifier from the frozen release harness.
   ".github/workflows/openclaw-release-publish.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
@@ -433,6 +435,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
   // published-driver-update-docker.sh launches this managed-update proof inside Docker.
   "scripts/e2e/lib/upgrade-survivor/published-driver.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/published-driver-plugin-publication.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // The compiler below exposes the runner's inline Node imports.

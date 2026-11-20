@@ -60,7 +60,7 @@ import {
   type BrokerResourceResponse,
 } from "./resource-protocol.js";
 
-export type { BrokerNativeResourceLease, SpawnBrokerHost };
+export type { SpawnBrokerHost };
 
 const RESTART_DELAYS = [100, 250, 500, 1000, 2000];
 const MAX_BOOTSTRAP_BYTES = 1024;

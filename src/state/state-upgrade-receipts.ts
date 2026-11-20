@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
-export const APPLIED_UPGRADE_PREFIX = ".upgraded-";
-export const UPGRADE_WORK_PREFIX = ".upgrade-";
+const APPLIED_UPGRADE_PREFIX = ".upgraded-";
+const UPGRADE_WORK_PREFIX = ".upgrade-";
 
 /** The applied swap plan survives removal of its private copy. Never open a path from its ops. */
 export function readAppliedUpgradeShadowRoots(stateDir: string): string[] {

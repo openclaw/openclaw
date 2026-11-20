@@ -13,7 +13,8 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { markRunningToolCalls, readSessionForkTurn } from "../session-fork-run.js";
+import { readSessionForkTurn } from "../session-fork-run.js";
+import { markRunningToolCalls } from "../session-fork-running-tools.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";

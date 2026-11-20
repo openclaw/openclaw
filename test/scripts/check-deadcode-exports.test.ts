@@ -85,6 +85,8 @@ describe("check-deadcode-exports", () => {
       "config/knip.all-exports.config.ts!",
       "config/knip.scripts-exports.config.ts!",
       "scripts/generate-runtime-script-assets.mjs!",
+      "scripts/find-reusable-release-child.mjs!",
+      "scripts/e2e/lib/upgrade-survivor/published-driver-plugin-publication.mjs!",
       "scripts/generate-static-validators.mts!",
       "scripts/perf/agent-exec-cgroup-proof.ts!",
       "scripts/perf/backup-verify-fixture.mjs!",
