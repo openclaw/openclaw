@@ -31,7 +31,8 @@ them.
 openclaw uninstall
 ```
 
-The interactive prompt preselects only the Gateway service. For complete local
+The interactive prompt preselects only service teardown, which removes both the
+Gateway and any node host service. For complete local
 removal, also select state, workspace, and app in the prompt, or run
 `openclaw uninstall --all`. State removal preserves configured workspace
 directories unless you also select `--workspace`.
@@ -165,7 +166,7 @@ If you used a profile, delete the matching task name and the `gateway.cmd` /
 
 ## Remove the CLI
 
-Remove the Gateway service **before** deleting a checkout, launcher, or prefix. Inspect the resolved command and its target first; if ownership is unclear, leave it in place. Check [Installer internals](/install/installer) for custom checkout and prefix options.
+Remove the Gateway and node host services **before** deleting a checkout, launcher, or prefix. Inspect the resolved command and its target first; if ownership is unclear, leave it in place. Check [Installer internals](/install/installer) for custom checkout and prefix options.
 
 | Installation method                               | CLI owner and removal                                                                                                                                                                                                                                                                                                               |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

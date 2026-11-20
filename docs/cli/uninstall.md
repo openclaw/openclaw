@@ -8,14 +8,14 @@ title: "Uninstall CLI"
 
 # `openclaw uninstall`
 
-Uninstall the Gateway service and/or local data. There is no separate CLI-removal scope.
+Uninstall the Gateway and node host services and/or local data. There is no separate CLI-removal scope.
 Remove any remaining CLI through the [installation-specific steps](/install/uninstall#remove-the-cli).
 
 ## Options
 
 | Flag                | Default | Description                                          |
 | ------------------- | ------- | ---------------------------------------------------- |
-| `--service`         | `false` | Remove the Gateway service.                          |
+| `--service`         | `false` | Remove the Gateway and node host services.           |
 | `--state`           | `false` | Remove state and config.                             |
 | `--workspace`       | `false` | Remove workspace directories.                        |
 | `--app`             | `false` | Remove the macOS app.                                |
@@ -25,7 +25,7 @@ Remove any remaining CLI through the [installation-specific steps](/install/unin
 | `--dry-run`         | `false` | Print planned actions without removing files.        |
 
 With no scope flags, an interactive multiselect prompts for which components
-to remove (defaults to the Gateway service only). Take an archive with
+to remove (defaults to service teardown only: Gateway and node host services). Take an archive with
 [`openclaw backup`](/cli/backup) first if you may want the state back.
 
 ## Examples
