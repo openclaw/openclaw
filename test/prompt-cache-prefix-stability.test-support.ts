@@ -331,6 +331,8 @@ export function usePrefixStabilityJourney() {
       });
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    // The Gateway reports a steer once the target run's queue holds it.
+    let steersTaken = 0;
     let transportEnv: ReturnType<typeof captureEnv> | undefined;
     try {
       const provider = buildFakeProvider(api, await listenProofProvider(server));
@@ -383,6 +385,16 @@ export function usePrefixStabilityJourney() {
         configPath: fixture.configPath,
         token: TOKEN,
         clientDisplayName: "prefix-stability",
+        onEvent: ({ event, payload }) => {
+          const change = payload as { reason?: string; sessionKey?: string } | undefined;
+          if (
+            event === "sessions.changed" &&
+            change?.reason === "agent.input.steering" &&
+            change.sessionKey === TARGET
+          ) {
+            steersTaken++;
+          }
+        },
       });
       const client = gateway.client;
       // Background work (exec wakes, child completions) settles once requests stop arriving.
@@ -396,10 +408,11 @@ export function usePrefixStabilityJourney() {
           });
         }
       };
-      const start = (sessionKey: string, message: string) =>
+      const start = (sessionKey: string, message: string, queueMode?: "steer") =>
         client.request<{ runId?: string }>("chat.send", {
           sessionKey,
           message,
+          ...(queueMode ? { queueMode } : {}),
           deliver: false,
           idempotencyKey: `prefix-stability-${api}-${++ordinal}`,
         });
@@ -446,15 +459,12 @@ export function usePrefixStabilityJourney() {
         await until(() => targetRequests.some((r) => lastMessage(r).includes("INTER-SESSION")));
         // A user message steers into the run while its tool call is still running.
         step = "steer";
+        await client.request("sessions.subscribe", {});
         const steered = await start(TARGET, "STEP-SLOW steer target");
         await reached(() => sentToTarget("STEP-SLOW steer target"));
-        await start(TARGET, "STEER-INPUT arrives mid tool call");
-        // The run offers a queued steer to the active turn asynchronously, and the Gateway exposes
-        // no signal for that offer (the pending input looks the same before and after). Hold the
-        // tool for 3 s, which covered every local run; a release on acceptance alone lost the race.
-        await new Promise((resolve) => {
-          setTimeout(resolve, 3_000);
-        });
+        // A steer from the chat composer; the tool is held until the run has taken it.
+        await start(TARGET, "STEER-INPUT arrives mid tool call", "steer");
+        await reached(() => steersTaken > 0);
         await fs.writeFile(path.join(fixture.workspaceDir, "release-0"), "");
         await wait("steer", steered);
         await until(() => sentToTarget("STEER-INPUT"));
