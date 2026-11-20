@@ -256,7 +256,7 @@ suite.define(() => {
                   ),
                 );
               }
-              await page.goto(`${suite.server.baseUrl}/new`);
+              await page.goto(new URL("new", suite.server.baseUrl).href);
               await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready);
               if (width === 390) {
                 await navigationDrawerToggle(page).click();

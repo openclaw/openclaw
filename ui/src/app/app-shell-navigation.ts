@@ -134,7 +134,11 @@ export class ShellNavigationOwner {
         return true;
       }
     }
-    return this.replaceChatWithCurrentSession();
+    // A failed session can recover its active identity; an unknown URL cannot
+    // establish that intent and must retain its not-found destination.
+    return isSessionRouteId(this.host.routeState.routeId)
+      ? this.replaceChatWithCurrentSession()
+      : true;
   }
 
   replaceChatWithCurrentSession(): boolean {

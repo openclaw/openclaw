@@ -246,6 +246,17 @@ export function routePageSpec<Id extends RouteId>(
 
 export { normalizeBasePath };
 
+export function isApplicationEntryPath(pathname: string, basePath: string): boolean {
+  const path = normalizePath(pathname);
+  const base = normalizeBasePath(basePath);
+  // The served index document and mount root share startup ownership. Other
+  // index.html suffixes remain explicit destinations within this configured mount.
+  return (
+    path === (base || "/") ||
+    (path.startsWith(`${base}/`) && path.slice(base.length).toLowerCase() === "/index.html")
+  );
+}
+
 export function pathForRoute(routeId: RouteId, basePath = ""): string {
   return `${normalizeBasePath(basePath)}${APP_ROUTE_DEFINITIONS[routeId].path}`;
 }
