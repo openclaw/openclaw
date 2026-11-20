@@ -201,7 +201,10 @@ Catalog and trending pages can return `nextCursor`. Filtering can produce an
 empty page with a continuation; continue while that cursor exists. Full catalog
 browsing uses the registry's paginated plugin and native skill catalogs. Trending
 is a bounded ranking feed, not the complete catalog. The existing initial
-`plugins.catalog.browse` overview retains its bounded behavior.
+`plugins.catalog.browse` overview retains its bounded behavior. A category can
+include an opaque `previewCursor`: pass it back with the same `category` and
+`intent: "all"` to continue that shelf’s curated overview selection. Omitting
+the cursor starts the full category listing instead.
 
 Text search returns at most `searchLimit` upstream candidates, equal to the
 requested page size. Official filtering can reduce that count. Upstream search

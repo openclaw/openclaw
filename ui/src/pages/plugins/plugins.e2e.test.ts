@@ -633,6 +633,134 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     expect(await text(page, message).count()).toBe(1);
   });
 
+  it("refills sparse overview shelves without losing their available plugins or category order", async () => {
+    const method = "plugins.catalog.browse";
+    const channels = "Matrix Mattermost Signal IRC Slack Zulip LINE Nextcloud".split(" ");
+    const models = "Ollama Cohere Mistral DeepSeek Groq Fireworks Together Cerebras".split(" ");
+    const memory = "Archive Notes Journal Recall Vault Index Timeline Notebook".split(" ");
+    const entries = (
+      category: string,
+      names: string[],
+      installed = false,
+    ): typeof discoveryResult.items =>
+      names.map((name, index) => {
+        const id = name.toLowerCase();
+        const pinned = !installed && index === 0;
+        return {
+          id: "ch_" + Buffer.from(id).toString("base64url"),
+          catalog: {
+            name,
+            author: "catalog",
+            summary: `Explore ${name} in OpenClaw.`,
+            categories: [category],
+            official: false,
+            // A pinned entry with the fewest downloads must remain first after the merge.
+            downloads: pinned ? 1 : (installed ? 20_000 : 10_000) - index,
+            ...(pinned ? { categoryRanks: { [category]: 0 } } : {}),
+          },
+          local: installed
+            ? {
+                pluginId: id,
+                present: true,
+                installed,
+                enabled: index % 2 === 0,
+                state: index % 2 === 0 ? "enabled" : "disabled",
+                action: "manage",
+              }
+            : matrixDiscoveryPlugin.local,
+        };
+      });
+    const channelItems = entries("channels", channels);
+    const modelItems = entries("models", models);
+    const memoryItems = entries("memory", memory);
+    const categories = discoveryResult
+      .categories!.filter(({ slug }) => ["channels", "models", "memory"].includes(slug))
+      .map(({ slug, label, description, icon, order }) => ({
+        slug,
+        label,
+        description,
+        icon,
+        order,
+        previewCursor: slug + "-next",
+      }));
+    const pageParams = (category: string) => ({
+      intent: "all",
+      category,
+      cursor: category + "-next",
+      pageSize: 100,
+    });
+    const { page, gateway } = await setup(
+      {
+        [method]: {
+          items: [
+            // The mixed overview also contains Zulip, below the category preview cutoff.
+            channelItems[5]!,
+            ...channelItems.slice(0, 2),
+            ...entries("channels", "Telegram Discord Teams WeChat WhatsApp Nostr".split(" "), true),
+            ...modelItems.slice(0, 1),
+            ...entries(
+              "models",
+              ["Bedrock", "OpenAI", "Gemini", "Azure", "Anthropic", "Vertex", "vLLM"],
+              true,
+            ),
+            ...memoryItems,
+          ],
+          categories,
+        },
+      },
+      {
+        deferredRequests: ["channels", "models"].map((category) => ({
+          method,
+          match: { category },
+        })),
+      },
+      { width: 1440, height: 1180 },
+    );
+    const proofDir =
+      process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+        ? createControlUiE2eArtifactDir("plugin-sparse-shelves")
+        : null;
+    await page.goto(server.baseUrl + "plugins");
+    const explore = page.getByRole("region", { name: "Explore plugins" });
+    const shelf = (slug: string) => explore.locator(`[data-catalog-section="${slug}"]`);
+    const cardNames = (slug: string) =>
+      shelf(slug).getByRole("heading", { level: 3 }).allTextContents();
+    const capture = async (stage: "before" | "after") => {
+      if (proofDir) {
+        const sections = [shelf("channels"), shelf("models")];
+        const frame = await takeControlUiScreenshotFrame(page, explore, sections, {
+          animations: "disabled",
+          elements: sections,
+        });
+        await writeFile(path.join(proofDir, stage + ".png"), frame.png);
+        await writeFile(
+          path.join(proofDir, stage + "-bounds.json"),
+          JSON.stringify(frame.elements.map(({ bounds }) => bounds)),
+        );
+      }
+    };
+    await expect.poll(() => cardNames("channels")).toEqual(["Matrix", "Mattermost", "Zulip"]);
+    expect(await cardNames("models")).toEqual(models.slice(0, 1));
+    expect(await cardNames("memory")).toEqual(memory);
+    await capture("before");
+    // No user action: the overview stays readable while its continuation requests are held.
+    for (const [category, remainder] of [
+      ["channels", channelItems.slice(2)],
+      ["models", modelItems.slice(1)],
+    ] as const) {
+      const params = pageParams(category);
+      await expect
+        .poll(() => gateway.getRequests(method, params, { exactParams: true }))
+        .toHaveLength(1);
+      await gateway.resolveDeferred(method, { items: remainder }, { match: params });
+    }
+    await expect.poll(() => cardNames("channels")).toEqual(channels);
+    await expect.poll(() => cardNames("models")).toEqual(models);
+    expect(await cardNames("memory")).toEqual(memory);
+    expect(await gateway.getRequests(method, { category: "memory" })).toHaveLength(0);
+    await capture("after");
+  });
+
   it("renders grouped catalog cards and switches to raw filtered results", async () => {
     const { page, gateway } = await setup();
     await page.goto(`${server.baseUrl}plugins`);
@@ -662,7 +790,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       category: "documents-files",
       pageSize: 100,
     });
-    expect(await explore.locator(".plugin-catalog-section").count()).toBe(0);
+    // Seeing the request does not mean its response has replaced the overview yet.
+    await expect.poll(() => sections.count()).toBe(0);
     await role(explore, "link", "Matrix").waitFor();
     const search = explore.getByRole("searchbox", { name: "Search plugins" });
     await search.fill("matrix");
@@ -672,10 +801,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       pageSize: 100,
       searchSource: "openclaw-control-ui",
     });
-    expect(await explore.locator(".plugin-catalog-section").count()).toBe(0);
-    expect(
-      await explore.locator(".plugin-catalog-grid--results .plugin-catalog-card").count(),
-    ).toBe(1);
+    await expect.poll(() => sections.count()).toBe(0);
+    await expect
+      .poll(() => explore.locator(".plugin-catalog-grid--results .plugin-catalog-card").count())
+      .toBe(1);
     await matrixCard.locator(".plugin-catalog-card__primary-link").click();
     await expect
       .poll(() => new URL(page.url()).pathname)

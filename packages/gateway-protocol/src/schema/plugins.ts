@@ -391,6 +391,8 @@ export const PluginDiscoveryCategorySchema = closedObject({
   icon: PluginDiscoveryIconKeySchema,
   order: Type.Integer({ minimum: 0 }),
   pinnedPackages: Type.Optional(Type.Array(NonEmptyString, { uniqueItems: true })),
+  // Continue the public overview selection, not the unfiltered category listing.
+  previewCursor: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
 });
 
 export const PluginDiscoveryCatalogFactsSchema = closedObject({

@@ -31,6 +31,11 @@ import {
   renderPluginStateStatus,
 } from "./plugin-card.tsx";
 import type { PluginDiscoveryIntent, PluginDiscoveryState } from "./plugin-discovery.ts";
+import {
+  indexInstalledCatalog,
+  installedState,
+  PLUGIN_PREVIEW_SIZE,
+} from "./plugin-overview-previews.ts";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 import { PluginArtTile, resolvePluginCatalogIconUrl } from "./presentation.tsx";
@@ -68,24 +73,12 @@ type CatalogResultsState = PluginCatalogResultsProps & {
   listed: readonly PluginDiscoveryEntry[];
 };
 
-const SECTION_SIZE = 8;
 const NO_ENTRIES: readonly PluginDiscoveryEntry[] = [];
 const sameEntries = (
   left: readonly PluginDiscoveryEntry[],
   right: readonly PluginDiscoveryEntry[],
 ) => left.length === right.length && left.every((entry, index) => entry === right[index]);
 
-function installedState(
-  plugin: PluginDiscoveryEntry,
-  installedByCatalogId: ReadonlyMap<string, PluginCatalogItem>,
-) {
-  // Inventory publishes local state before catalog pages are read again.
-  const entry = installedByCatalogId.get(plugin.id);
-  const state = entry?.state ?? plugin.local.state;
-  return (entry !== undefined || plugin.local.installed) && state !== "not-installed"
-    ? state
-    : null;
-}
 // Estimate the current registry footprint without duplicating its taxonomy.
 // The actual labels, ordering, and count still come only from ClawHub.
 const CATEGORY_SKELETON_COUNT = 22;
@@ -267,10 +260,10 @@ function CatalogSection(params: {
           viewAllLabel={t("pluginsPage.viewAllInstalledPlugins")}
         >
           {params.loading ? (
-            renderCatalogGridSkeleton({ cards: SECTION_SIZE })
+            renderCatalogGridSkeleton({ cards: PLUGIN_PREVIEW_SIZE })
           ) : params.onViewAll ? (
             <div class="plugin-catalog-grid">
-              <For each={params.items.slice(0, SECTION_SIZE)} keyed={(plugin) => plugin.id}>
+              <For each={params.items.slice(0, PLUGIN_PREVIEW_SIZE)} keyed={(plugin) => plugin.id}>
                 {(plugin) => <CatalogCard plugin={plugin()} state={params.state} />}
               </For>
             </div>
@@ -516,17 +509,7 @@ function GroupedCatalog(props: CatalogResultsState & { loading?: boolean }): JSX
 
 export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JSX.Element {
   const inventory = createMemo(() => props.inventory);
-  const installedByCatalogId = createMemo(() => {
-    const entries = new Map<string, PluginCatalogItem>();
-    // Inventory order decides which installed copy supplies a catalog entry's state.
-    for (const plugin of inventory() ?? []) {
-      const catalogId = plugin.catalogId;
-      if (plugin.installed && catalogId !== undefined && !entries.has(catalogId)) {
-        entries.set(catalogId, plugin);
-      }
-    }
-    return entries;
-  });
+  const installedByCatalogId = createMemo(() => indexInstalledCatalog(inventory()));
   const recordedError = createMemo(() => props.error);
   const { ready, receipt } = createCatalogRead(() => props.reads.browse, recordedError);
   const resultAvailable = createMemo(() => props.result !== null);
