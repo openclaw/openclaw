@@ -158,10 +158,14 @@ it("keeps a callable origin factory when an explicit factory is undefined", () =
   expect(poolCtor).not.toHaveBeenCalled();
 });
 it("keeps an explicit custom origin factory when one is provided", () => {
-  const customFactory = vi.fn(() => new MockClient(new URL("https://custom.test"), {}));
+  const customClient = new MockClient(new URL("https://custom.test"), {});
+  const customFactory = vi.fn(() => customClient);
   const agent = createHttp1Agent({ factory: customFactory as never }) as unknown as MockAgent;
-  agent.createOriginDispatcher({ connections: 1 });
+  const client = agent.createOriginDispatcher({ connections: 1 });
 
+  // Identity, not just a call count: the wrapper must return the custom
+  // dispatcher itself rather than discard it after invoking the factory.
+  expect(client).toBe(customClient);
   expect(customFactory).toHaveBeenCalledTimes(1);
 });
 it("handles an internal error from direct agent client before connect", () => {
