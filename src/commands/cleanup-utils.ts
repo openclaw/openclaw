@@ -295,8 +295,9 @@ async function removePathPreserving(
       }
       runtime.log(`Removed contents of ${displayLabel}`);
     } else {
+      const existed = await pathExists(resolved);
       await fs.rm(resolved, { recursive: true, force: true });
-      runtime.log(`Removed ${displayLabel}`);
+      runtime.log(existed ? `Removed ${displayLabel}` : `Not found: ${displayLabel}`);
     }
     return { ok: true };
   } catch (err) {

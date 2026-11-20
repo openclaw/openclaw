@@ -154,7 +154,7 @@ export const UNUSED_ARCHIVE_DAYS = 30;
 const UNUSED_NOTICE_DAYS = 14;
 
 /** Newest change per skill; the feed is newest first. */
-export function latestChanges(changes: readonly SkillWorkshopChange[]) {
+function latestChanges(changes: readonly SkillWorkshopChange[]) {
   const latest = new Map<string, SkillWorkshopChange>();
   for (const change of changes) {
     if (!latest.has(change.skillName)) {
@@ -164,7 +164,7 @@ export function latestChanges(changes: readonly SkillWorkshopChange[]) {
   return latest;
 }
 
-export function lastActivityMs(skill: SkillWorkshopSkillSummary, change?: SkillWorkshopChange) {
+function lastActivityMs(skill: SkillWorkshopSkillSummary, change?: SkillWorkshopChange) {
   return Math.max(skill.updatedAtMs, skill.lastUsedAtMs ?? 0, change?.createdAtMs ?? 0);
 }
 
