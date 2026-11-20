@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
@@ -123,3 +124,66 @@ describe("saved proxy-authenticated operator sources", () => {
       await expect(restoreSaved()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
     }));
 });
+
+it.each(["rotated", "removed"] as const)(
+  "refuses new password-fallback work after its credential is %s without cancelling admitted work",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config = proxyConfig();
+      config.gateway!.auth!.password = "fixture-original-password";
+      setRuntimeConfigSnapshot(config);
+      const profile = ensureProfileForEmail("fallback-automation@example.test");
+      const context = createContext();
+      const generation = proxyGeneration(config);
+      const owner = new SharedGatewaySessionGenerationState({
+        current: generation,
+        required: null,
+      });
+      context.sharedGatewaySessionGenerationState = owner;
+      const fixture = await createOperatorRecoveryFixture({
+        stateDir: state.stateDir,
+        context,
+        profileId: profile.id,
+        config,
+        sharedGeneration: generation,
+      });
+      const source = decodeQueuedOperatorRecoverySource({
+        kind: "gateway",
+        snapshot: {
+          ...fixture.snapshot,
+          authPolicy: {
+            ...captureGatewayAuthPolicy(config, { role: "operator", authMethod: "password" }),
+            generation: "",
+          },
+        },
+      });
+      const admitted = await restoreGatewayQueuedOperatorRecovery({
+        source,
+        context,
+        assertCurrent() {},
+      });
+      try {
+        const next = proxyConfig();
+        if (change === "rotated") {
+          next.gateway!.auth!.password = "fixture-replacement-password";
+        }
+        setRuntimeConfigSnapshot(next);
+        fixture.setConfig(next);
+        enforceSharedGatewaySessionGenerationForConfigWrite({
+          state: owner,
+          nextConfig: next,
+          resolveRuntimeSnapshotGeneration: () => proxyGeneration(next),
+          clients: [],
+        });
+        // The proxy generation deliberately does not identify its local fallback password.
+        expect(owner.requiredGeneration).toBe(generation);
+        await expect(
+          restoreGatewayQueuedOperatorRecovery({ source, context, assertCurrent() {} }),
+        ).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+        expectCurrent(admitted.authority);
+      } finally {
+        admitted.release();
+      }
+    });
+  },
+);

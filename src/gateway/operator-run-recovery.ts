@@ -26,6 +26,7 @@ import {
   readResidentUserProfileRevision,
 } from "../state/user-profile-list.js";
 import type { PreparedUserProfileIdentity } from "../state/user-profiles.types.js";
+import { isGatewayAuthGrantCurrent } from "./auth-policy.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { gatewayPersonPrincipalAuthError } from "./auth.js";
 import { prepareChannelOperatorAuthority } from "./channel-operator-authority.js";
@@ -192,7 +193,10 @@ async function restoreGatewayOperatorSnapshot(params: {
         authOverride: source.authModeOverride ? { mode: source.authModeOverride } : undefined,
         tailscaleMode: config.gateway?.tailscale?.mode,
       });
+      // Proxy session generations omit the local password fallback's credential generation.
       if (
+        ((source.authMethod === "password" || source.authMethod === "token") &&
+          !isGatewayAuthGrantCurrent(source, config)) ||
         (source.authMethod === "trusted-proxy" &&
           (auth.mode !== "trusted-proxy" ||
             !auth.trustedProxy ||
