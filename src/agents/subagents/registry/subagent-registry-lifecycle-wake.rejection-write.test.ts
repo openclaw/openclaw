@@ -58,11 +58,23 @@ vi.mock("../requester-cron-authority.js", () => ({
 }));
 // Upstream 14fe10d01c's registry state module reads immutableSubagentRun at load
 // and the controller resolves owners through getCurrentSubagentRunOwner, so keep
-// the real pure helpers and replace only the process-wide run map.
-vi.mock("./subagent-registry-memory.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./subagent-registry-memory.js")>()),
-  subagentRuns: { confirmRetirement: vi.fn() },
-}));
+// the real pure helpers and replace only the process-wide run map. Upstream #201563
+// admits the wake's batch through the registry's completion-authority policy; this
+// row holds no completion custody, so the real policy runs with none.
+vi.mock("./subagent-registry-memory.js", async (importOriginal) => {
+  const { selectCompletionAuthorityBatch } =
+    await import("./subagent-completion-batch-authority.js");
+  return {
+    ...(await importOriginal<typeof import("./subagent-registry-memory.js")>()),
+    subagentRuns: {
+      confirmRetirement: vi.fn(),
+      selectCompletionAuthorityBatch: (
+        observed: readonly SubagentRunRecord[],
+        anchor: SubagentRunRecord,
+      ) => selectCompletionAuthorityBatch(observed, anchor, new Map(), new WeakSet()),
+    },
+  };
+});
 // mock-isolation: Runtime log lines are dropped instead of writing to the terminal.
 vi.mock("../../../runtime.js", () => ({ defaultRuntime: { log: vi.fn() } }));
 // mock-isolation: Drop subsystem log lines without loading the logging runtime or its process-wide sinks.
