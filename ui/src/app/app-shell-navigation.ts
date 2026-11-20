@@ -1,4 +1,4 @@
-import { isSettingsTakeover } from "../app-navigation.ts";
+import { isSettingsTakeover, type ShellNavigationIntent } from "../app-navigation.ts";
 import {
   isSessionRouteId,
   pluginSlugCandidate,
@@ -36,8 +36,6 @@ import {
   isNativeWebChromeHost,
 } from "./native-web-chrome.ts";
 import type { NavDrawerCloseOptions } from "./navigation-surface.ts";
-
-export type ShellNavigationIntent = "sidebar-section";
 
 export interface ShellNavigationHost {
   readonly context: ApplicationContext | undefined;

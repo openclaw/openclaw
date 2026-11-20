@@ -1,6 +1,9 @@
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
-import type { NavigationRouteId, SidebarNavigationView } from "../app-navigation.ts";
-import type { ShellNavigationIntent } from "../app/app-shell-navigation.ts";
+import type {
+  NavigationRouteId,
+  ShellNavigationIntent,
+  SidebarNavigationView,
+} from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
