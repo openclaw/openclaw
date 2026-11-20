@@ -19,6 +19,7 @@ export async function prepareDiscordQueuedAdmission(params: {
   sessionKey: string;
   messageId: string;
   thread?: boolean;
+  policyUnavailable?: boolean;
 }) {
   setDiscordRuntime(params.runtime);
   const message = createDiscordMessage({
@@ -54,6 +55,9 @@ export async function prepareDiscordQueuedAdmission(params: {
     ...args,
     readPolicy: async () => {
       policyReads += 1;
+      if (params.policyUnavailable) {
+        throw new Error("Discord policy source is unavailable");
+      }
       return readPolicy();
     },
   });

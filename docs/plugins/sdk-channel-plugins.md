@@ -83,11 +83,12 @@ authorization once when an ingress turn starts, including queued user requests
 and room events.
 Despite the field's name, omitting `audience` permits ordinary run admission
 without granting public child sessions. `prepare` reacquires current channel
-policy and returns `null` when access was removed. The host drops the request
-without a model call or a channel reply; operational failures instead produce a
-retryable access-verification error. A started ordinary turn may finish after
-access changes. Its returned assertion should retain cancellation, not recheck
-channel access throughout the run.
+policy and returns `null` when access was removed. The host records the refusal
+for the session owner and drops the request without a model call or a channel
+reply; operational failures instead produce a retryable access-verification
+error. A started ordinary turn may finish after access changes. Its returned
+assertion should retain cancellation, not recheck channel access throughout
+the run.
 
 ## Opted-in public child sessions
 

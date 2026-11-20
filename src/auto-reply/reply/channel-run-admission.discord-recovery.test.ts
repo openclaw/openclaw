@@ -1,35 +1,39 @@
-import { assert, expect, it, vi } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
-import { createHostChannelInboundEventContextBuilder } from "../../channels/inbound-event/host-context-builder.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import {
   copyChildSessionPublication,
   readChildSessionPublication,
 } from "../../channels/message-access/child-session-publication.js";
+import { createHostIngressFixture } from "../../channels/message-access/host-ingress.test-support.js";
 import type { ResolvedChannelMessageIngress } from "../../channels/message-access/runtime-types.js";
-import { createHostChannelIngressRuntime } from "../../channels/message-access/runtime.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
-import { withSessionTurn } from "../../sessions/session-controller.admission.js";
-import { createReplyOperation } from "../../sessions/session-controller.js";
-import * as mailbox from "../../sessions/session-controller.mailbox.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { ReplyPayload } from "../types.js";
 import { setupExecutionSuite } from "./agent-runner-execution-suite.test-support.js";
-import {
-  createFollowupRun,
-  createMinimalRunAgentTurnParams,
-} from "./agent-runner-execution.test-support.js";
+import { createFollowupRun } from "./agent-runner-execution.test-support.js";
+import { enqueueFollowupRun } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
-import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
+import { admitReplyTurn } from "./reply-turn-admission.js";
+import { createTypingController } from "./typing.js";
 
 const { state, terminalEvents } = await setupExecutionSuite();
-// Load after the execution fixture registers its provider and lifecycle module mocks.
-const { executeAgentTurn } = await import("./agent-runner-execution.js");
+// Load these modules after fixture mocks are installed; static imports execute too early.
+const { createFollowupRunner } = await import("./followup-runner.js");
+const { defaultRuntime } = await import("../../runtime.js");
+const maintenance = await import("./agent-runner-memory.js");
 const discord = await loadBundledPluginFacade<{
   loadDiscordQueuedAdmissionFixture: () => Promise<{
     prepareDiscordQueuedAdmission: (params: {
@@ -38,6 +42,7 @@ const discord = await loadBundledPluginFacade<{
       sessionKey: string;
       messageId: string;
       thread?: boolean;
+      policyUnavailable?: boolean;
     }) => Promise<{
       ingress: ResolvedChannelMessageIngress;
       inboundEventKind: InboundEventKind;
@@ -46,22 +51,35 @@ const discord = await loadBundledPluginFacade<{
   }>;
 }>({ pluginId: "discord", artifactBasename: "test-api.js" });
 
-it("renews queued and immediate Discord access without native refetches", async () => {
+it("records revoked Discord followups once without model or channel effects", async () => {
+  const compact = vi.spyOn(maintenance, "runSessionCompactionIfNeeded");
+  const flush = vi.spyOn(maintenance, "runMemoryFlushIfNeeded");
+  onTestFinished(() => {
+    compact.mockRestore();
+    flush.mockRestore();
+  });
   const { prepareDiscordQueuedAdmission } = await discord.loadDiscordQueuedAdmissionFixture();
-  await withOpenClawTestState({ label: "discord-queued-admission" }, async () => {
+  await withOpenClawTestState({ label: "discord-queued-admission" }, async (testState) => {
     for (const scenario of [
       "immediate",
       "queued-allowed",
       "queued-revoked",
       "room-allowed",
       "room-revoked",
+      "queued-unavailable",
     ]) {
       const queued = scenario !== "immediate";
       const revoke = scenario.endsWith("revoked");
       const roomEvent = scenario.startsWith("room-");
+      const unavailable = scenario.endsWith("unavailable");
+      const failed = revoke || unavailable;
       const sessionKey = `agent:main:discord:channel:${scenario}`;
-      const messageId = revoke ? "500000000000000005" : "400000000000000004";
+      const sessionId = `discord-${scenario}`;
+      const messageId = failed ? "500000000000000005" : "400000000000000004";
+      const storePath = testState.statePath("agents", "main", "sessions", "sessions.json");
+      const scope = { agentId: "main", sessionKey, storePath };
       const cfg: OpenClawConfig = {
+        session: { store: storePath },
         messages: {
           groupChat: { unmentionedInbound: roomEvent ? "room_event" : "user_request" },
         },
@@ -83,14 +101,13 @@ it("renews queued and immediate Discord access without native refetches", async 
       };
       let currentConfig = cfg;
       setRuntimeConfigSnapshot(cfg);
-      const gateway = { getRuntimeConfig: () => currentConfig } as GatewayRequestContext;
-      const owner = {
-        channelId: "discord",
-        isLive: () => true,
-        resolveGatewayContext: () => gateway,
-      };
-      const ingress = createHostChannelIngressRuntime(owner);
-      const runtime = { channel: { inbound: { ingress } } } as unknown as PluginRuntime;
+      await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
+      const entry = loadSessionEntry({ ...scope, readConsistency: "latest" });
+      assert(entry);
+      const host = createHostIngressFixture("discord", cfg, {
+        getRuntimeConfig: () => currentConfig,
+      });
+      const runtime = { channel: { inbound: host } } as unknown as PluginRuntime;
       const {
         ingress: channelIngress,
         inboundEventKind,
@@ -101,12 +118,10 @@ it("renews queued and immediate Discord access without native refetches", async 
         sessionKey,
         messageId,
         thread: !queued,
+        policyUnavailable: unavailable,
       });
       expect(inboundEventKind).toBe(roomEvent ? "room_event" : "user_request");
-      const context = await createHostChannelInboundEventContextBuilder(
-        buildChannelInboundEventContext,
-        owner,
-      )({
+      const context = await host.buildContext({
         channel: "discord",
         accountId: "default",
         messageId,
@@ -118,63 +133,109 @@ it("renews queued and immediate Discord access without native refetches", async 
         reply: { to: "channel:200000000000000002", nativeChannelId: "200000000000000002" },
         message: { body: "queued request", rawBody: "queued request", inboundEventKind },
       });
-      const followup = createFollowupRun({ config: cfg, sessionKey });
+      const followup = createFollowupRun({
+        config: cfg,
+        sessionKey,
+        sessionId,
+        messageProvider: "discord",
+        chatType: "channel",
+        senderId: "300000000000000003",
+        agentAccountId: "default",
+      });
+      followup.prompt = "queued request";
+      followup.messageId = messageId;
+      followup.originatingChannel = "discord";
+      followup.originatingChatType = "channel";
       followup.currentInboundEventKind = inboundEventKind;
+      followup.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+        input: { text: "queued request", idempotencyKey: messageId },
+        target: { ...scope, sessionId, sessionEntry: entry },
+        updateMode: "none",
+      });
       copyChildSessionPublication(context, followup.run);
       const beforeAdmission = counts();
-      const model = vi.fn();
-      const deliver = vi.fn(async () => {});
+      const providerRequests = vi.fn();
+      const deliver = vi.fn(async (_payload: ReplyPayload) => {});
       const deliverPrepared = vi.fn(async () => {});
       const dispatcher = createReplyDispatcher({ deliver, deliverPrepared });
       state.runEmbeddedAgentMock.mockImplementation(async (params) => {
         const admitted = await params.preparedRunAdmission.admit("embedded");
         expect(readChildSessionPublication(admitted.operationalRunInstance)).toBeUndefined();
-        model();
+        providerRequests();
         return { payloads: [{ text: "Authorized reply" }], meta: { durationMs: 0 } };
       });
-      const predecessor = queued
-        ? createReplyOperation({
-            sessionKey,
-            sessionId: followup.run.sessionId,
-            resetTriggered: false,
-          })
-        : undefined;
-      const waiting = createDeferred();
-      const submit = mailbox.submitSessionControllerTask;
-      const submission = vi
-        .spyOn(mailbox, "submitSessionControllerTask")
-        .mockImplementation((...args) => {
-          const pending = submit(...args);
-          waiting.resolve();
-          return pending;
-        });
-      const pending = withSessionTurn(
-        { sessionKey, sessionId: followup.run.sessionId },
-        async (replyOperation) =>
-          executeAgentTurn({
-            ...createMinimalRunAgentTurnParams({
-              followupRun: followup,
-              sessionCtx: context,
-              replyOperation,
-              opts: {
-                onBlockReply: async (payload) => {
-                  dispatcher.sendBlockReply(payload);
-                },
-                onPreparedBlockReply: async (plan) => {
-                  dispatcher.sendPreparedReply("block", plan);
-                },
-                onToolResult: async (payload) => {
-                  dispatcher.sendToolResult(payload);
-                },
-              },
+      vi.mocked(defaultRuntime.log).mockClear();
+      compact.mockClear();
+      flush.mockClear();
+      const writes: Promise<void>[] = [];
+      const writeErrors: unknown[] = [];
+      const stop = onAgentEvent((event) => {
+        if (
+          event.sessionKey === sessionKey &&
+          event.stream === "lifecycle" &&
+          (event.data.phase === "end" || event.data.phase === "error")
+        ) {
+          writes.push(
+            persistGatewaySessionLifecycleEvent({ ...scope, event }).catch((error) => {
+              writeErrors.push(error);
             }),
-            sessionKey,
-          }),
-      );
+          );
+        }
+      });
+      onTestFinished(stop);
+      const admitted = queued
+        ? await admitReplyTurn({ ...scope, sessionId, kind: "visible", resetTriggered: false })
+        : undefined;
+      if (admitted) {
+        assert(admitted.status === "owned");
+      }
+      const predecessor = admitted?.status === "owned" ? admitted.operation : undefined;
+      const typing = createTypingController({});
+      const runner = createFollowupRunner({
+        typing,
+        typingMode: "never",
+        defaultModel: "anthropic/claude",
+        sessionKey,
+        storePath,
+        sessionEntry: entry,
+        sessionStore: { [sessionKey]: entry },
+        opts: {
+          onBlockReply: async (payload) => {
+            dispatcher.sendBlockReply(payload);
+            await dispatcher.waitForIdle();
+          },
+          onPreparedBlockReply: async (plan) => {
+            dispatcher.sendPreparedReply("block", plan);
+            await dispatcher.waitForIdle();
+          },
+          onToolResult: async (payload) => {
+            dispatcher.sendToolResult(payload);
+            await dispatcher.waitForIdle();
+          },
+        },
+      });
+      const completed = createDeferred();
       try {
-        await waiting.promise;
+        expect(
+          enqueueFollowupRun(
+            sessionKey,
+            followup,
+            { mode: "followup", debounceMs: 0 },
+            "none",
+            async (run) => {
+              try {
+                await runner(run);
+                completed.resolve();
+              } catch (error) {
+                completed.reject(error);
+              }
+            },
+            true,
+            { storePath },
+          ),
+        ).toBe(true);
         if (queued) {
-          expect(model).not.toHaveBeenCalled();
+          expect(providerRequests).not.toHaveBeenCalled();
         }
         if (revoke) {
           currentConfig = structuredClone(cfg);
@@ -187,19 +248,18 @@ it("renews queued and immediate Discord access without native refetches", async 
           setRuntimeConfigSnapshot(currentConfig);
         }
         predecessor?.complete();
-        const result = await pending;
-        if (result.outcome.kind === "rejected") {
-          dispatcher.sendFinalReply(result.outcome.payload);
-        } else if (
-          result.outcome.kind === "settled" &&
-          resolveSourceReplyDeliveryMode({ cfg: currentConfig, ctx: context }) === "automatic"
-        ) {
-          for (const payload of result.outcome.result.payloads ?? []) {
-            dispatcher.sendFinalReply(payload);
-          }
-        }
+        await completed.promise;
+        await followup.controllerInput?.settlement.promise;
         await dispatcher.waitForIdle();
-        expect(model).toHaveBeenCalledTimes(revoke ? 0 : 1);
+        await Promise.all(writes);
+        expect(writeErrors).toEqual([]);
+        expect(providerRequests).toHaveBeenCalledTimes(failed ? 0 : 1);
+        // The runtime fake covers replies and memory flush; refused input skips maintenance.
+        expect(compact).toHaveBeenCalledTimes(failed ? 0 : 1);
+        if (failed) {
+          expect(flush).not.toHaveBeenCalled();
+          expect(state.runCliAgentMock).not.toHaveBeenCalled();
+        }
         expect(deliver).toHaveBeenCalledTimes(revoke || roomEvent ? 0 : 1);
         expect(deliverPrepared).not.toHaveBeenCalled();
         if (!queued) {
@@ -209,27 +269,41 @@ it("renews queued and immediate Discord access without native refetches", async 
             restCalls: beforeAdmission.restCalls,
           });
         }
-        if (revoke) {
-          expect(result.outcome).toMatchObject({
-            kind: "rejected",
-            payload: { text: SILENT_REPLY_TOKEN },
+        const terminals = terminalEvents().filter((event) => event.sessionKey === sessionKey);
+        const notices = (await loadTranscriptEvents({ ...scope, sessionId })).filter(
+          (event) => isRecord(event) && event.customType === "run-failed-before-reply",
+        );
+        expect(notices).toHaveLength(failed ? 1 : 0);
+        if (failed) {
+          const notice = unavailable
+            ? "⚠️ OpenClaw could not verify current channel access. Please try your request again."
+            : "This request was not started because the requester no longer has access to this channel.";
+          expect(terminals).toHaveLength(1);
+          const terminal = terminals[0];
+          assert(terminal);
+          expect(terminal.data).toMatchObject({ phase: "error", errorNotice: notice });
+          expect(notices[0]).toMatchObject({
+            display: true,
+            content: notice,
+            details: { runId: terminal.runId },
           });
-          expect(terminalEvents(result.runId)).toEqual([
-            expect.objectContaining({
-              data: expect.objectContaining({
-                phase: "error",
-                errorNotice:
-                  "This request was not started because the requester no longer has access to this channel.",
-              }),
-            }),
-          ]);
-        } else {
-          expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
+          if (unavailable) {
+            expect(deliver.mock.calls.map(([payload]) => payload.text)).toEqual([notice]);
+          }
         }
+        expect(
+          vi
+            .mocked(defaultRuntime.log)
+            .mock.calls.filter(
+              ([line]) =>
+                line === "Channel request dropped: source authorization is no longer current.",
+            ),
+        ).toHaveLength(revoke ? 1 : 0);
       } finally {
         predecessor?.complete();
-        await Promise.allSettled([pending]);
-        submission.mockRestore();
+        stop();
+        await Promise.all(writes);
+        typing.cleanup();
       }
     }
   });
