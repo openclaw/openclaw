@@ -75,7 +75,6 @@ export async function recordRequiredCompletionFailure(
   });
   if (
     entry.expectsCompletionMessage !== true ||
-    (entry.completionTarget !== "parent" && !wake?.requesterYieldBatch) ||
     entry.execution.status !== "terminal" ||
     entry.pauseReason === "sessions_yield"
   ) {
@@ -511,10 +510,7 @@ export async function blockSubagentCompletionDelivery(
       },
     },
   );
-  if (
-    result.applied &&
-    (params.suspendedReason === "permanent_failure" || params.disposition === "permanent_failure")
-  ) {
+  if (result.applied && (params.suspendedReason || params.disposition === "permanent_failure")) {
     await recordRequiredCompletionFailure(params.subagent, params.reason, params.requesterBatch);
   }
   return result.applied === true;

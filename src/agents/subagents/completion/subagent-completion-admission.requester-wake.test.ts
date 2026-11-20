@@ -226,6 +226,44 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
+  it.each(["parent", "public", "yielded"] as const)(
+    "records expired delivery in the current requester chat (%s)",
+    async (kind) => {
+      const input = records();
+      input.subagent.completionTarget = kind === "parent" ? "parent" : undefined;
+      if (kind === "yielded") {
+        armRequesterWake(input);
+        input.subagent.requesterSettleWake!.requesterYieldBatch = true;
+      }
+      input.subagent.delivery = { status: "pending", generation: 1 };
+      input.subagent.requesterStorePath = path.join(
+        process.env.OPENCLAW_STATE_DIR!,
+        "sessions.json",
+      );
+      const scope = {
+        agentId: input.subagent.requesterAgentId,
+        sessionKey: input.subagent.requesterSessionKey,
+        storePath: input.subagent.requesterStorePath,
+        sessionId: "resumed-requester-session",
+      };
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+      persistOwner(input);
+      await blockSubagentCompletionDelivery({
+        subagent: input.subagent,
+        reason: "subagent announce delivery expired",
+        suspendedReason: "expiry",
+        databaseOptions: { database: db.value },
+      });
+      db.value = await reopenOwners();
+      expect(currentRun(input).delivery?.status).toBe("suspended");
+      const notices = (await loadTranscriptEvents(scope)).filter((event) =>
+        JSON.stringify(event).includes("The child result couldn't be delivered"),
+      );
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({ customType: "run-failed-before-reply", display: true });
+    },
+  );
+
   it.each(["parent", "yielded"] as const)(
     "records exhausted retryable delivery as a visible terminal failure across reopen (%s)",
     async (kind) => {
