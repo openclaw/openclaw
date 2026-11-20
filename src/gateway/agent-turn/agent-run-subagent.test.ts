@@ -54,6 +54,8 @@ function prepare(overrides: Partial<Parameters<typeof prepareGatewaySubagentRun>
   return prepareGatewaySubagentRun({
     cfg: {},
     activeSessionAgentId: "main",
+    agentDir: "/fixture/agents/main/agent",
+    workspaceDir: "/fixture/workspace",
     client: null,
     resolvedSessionKey: childSessionKey,
     request: { message: "Continue the child" },

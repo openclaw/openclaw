@@ -127,12 +127,12 @@ suite.define(() => {
       await composer.locator('[data-chat-model-select="true"]').click();
       await expect
         .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
-        .toContain("Some models could not be refreshed");
+        .toContain("Couldn’t refresh some models");
       await page.keyboard.press("Escape");
       const retryAfter = await gateway.deferNext("models.list");
       await composer.locator('[data-chat-model-select="true"]').click();
       await gateway.waitForRequest("models.list", { after: retryAfter });
-      await composer.locator("[data-chat-model-refresh]").waitFor({ state: "visible" });
+      expect(await composer.locator("[data-chat-model-refresh]").count()).toBe(0);
       expect(await effort.isVisible()).toBe(true);
       await expectUnreserved(effortPicker);
       await effort.click();
@@ -143,7 +143,7 @@ suite.define(() => {
       await gateway.resolveDeferred("models.list");
       await expect
         .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
-        .toContain("Some models could not be refreshed");
+        .toContain("Couldn’t refresh some models");
       await expect.poll(() => effort.isVisible()).toBe(true);
       await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("xhigh");
       await expectUnreserved(effortPicker);
@@ -263,13 +263,18 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         const model = page.locator("[data-chat-model-select]");
-        await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
-        await model.click();
-        const notice = page.locator("[data-chat-model-catalog-state]");
-        if (["empty", "rejected"].includes(condition)) {
-          await expect.poll(() => notice.isVisible()).toBe(true);
+        if (condition === "empty") {
+          await page.getByRole("button", { name: "Set up a model", exact: true }).waitFor();
+          expect(await model.count()).toBe(0);
         } else {
-          expect(await notice.count()).toBe(0);
+          await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
+          await model.click();
+          const notice = page.locator("[data-chat-model-catalog-state]");
+          if (condition === "rejected") {
+            await expect.poll(() => notice.isVisible()).toBe(true);
+          } else {
+            expect(await notice.count()).toBe(0);
+          }
         }
         await expect
           .poll(async () => {
@@ -277,7 +282,9 @@ suite.define(() => {
             return !effort || effort.reserved === "true" || effort.disabled === "true";
           })
           .toBe(true);
-        await model.click();
+        if (condition !== "empty") {
+          await model.click();
+        }
         await expect
           .poll(async () => {
             const effort = await readEffort(page);

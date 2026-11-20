@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -111,6 +112,7 @@ describe("loadControlUiSessionPullRequests", () => {
     vi.stubEnv("GH_TOKEN", "");
     vi.stubEnv("GITHUB_TOKEN", "");
     cacheEpochMs += 10 * 60_000;
+    vi.advanceTimersByTime(cacheEpochMs);
     vi.setSystemTime(cacheEpochMs);
   });
 
@@ -486,21 +488,50 @@ describe("loadControlUiSessionPullRequests", () => {
       ]),
     );
 
-    const initial = load();
-    await initialPullStarted;
-    const forcedRefresh = load({ refresh: true });
-    await Promise.resolve();
-    const ordinaryFollower = load();
-    const duplicateForcedRefresh = load({ refresh: true });
+    const forcedAdmitted = createDeferred();
+    const followersAdmitted = createDeferred();
+    const diagnostics = channel("openclaw.gateway.session-pr");
+    let admissions = 0;
+    const observeAdmission = (message: unknown) => {
+      if (
+        !message ||
+        typeof message !== "object" ||
+        !("phase" in message) ||
+        message.phase !== "branch-cache-started" ||
+        !("sessionKey" in message) ||
+        message.sessionKey !== "agent:main:main"
+      ) {
+        return;
+      }
+      admissions += 1;
+      if (admissions === 2) {
+        forcedAdmitted.resolve();
+      } else if (admissions === 4) {
+        followersAdmitted.resolve();
+      }
+    };
+    diagnostics.subscribe(observeAdmission);
+    try {
+      const initial = load();
+      await initialPullStarted;
+      const forcedRefresh = load({ refresh: true });
+      // Session preparation is asynchronous; wait for actual cache admission.
+      await forcedAdmitted.promise;
+      const ordinaryFollower = load();
+      const duplicateForcedRefresh = load({ refresh: true });
+      await followersAdmitted.promise;
 
-    resolveInitialPulls(githubJson([]));
-    expect((await initial).pullRequests).toEqual([]);
-    expect(
-      (await Promise.all([forcedRefresh, ordinaryFollower, duplicateForcedRefresh])).map((result) =>
-        result.pullRequests.map((item) => item.number),
-      ),
-    ).toEqual([[103469], [103469], [103469]]);
-    expect(pullListCalls).toBe(2);
+      resolveInitialPulls(githubJson([]));
+      expect((await initial).pullRequests).toEqual([]);
+      expect(
+        (await Promise.all([forcedRefresh, ordinaryFollower, duplicateForcedRefresh])).map(
+          (result) => result.pullRequests.map((item) => item.number),
+        ),
+      ).toEqual([[103469], [103469], [103469]]);
+      expect(pullListCalls).toBe(2);
+    } finally {
+      diagnostics.unsubscribe(observeAdmission);
+    }
   });
 
   it("keeps the proven PR list as state-only chips when detail fetches are rate limited", async () => {
@@ -535,12 +566,16 @@ describe("loadControlUiSessionPullRequests", () => {
     expect(stillLimited.pullRequests.map((item) => item.number)).toEqual([103469]);
   });
 
-  it("finds a renamed fork without changing the base repository", async () => {
+  it("reuses an owner's list while finding a renamed fork among its repositories", async () => {
     const head = { owner: "lonexreb", repo: "paloa-claw" };
-    vi.stubGlobal("fetch", routedFetch(forkRoutes(183571, head)));
-    const result = await loadFork([head]);
+    const fetchImpl = routedFetch(forkRoutes(183571, head));
+    vi.stubGlobal("fetch", fetchImpl);
+    const result = await loadFork([{ ...head, repo: "another-repository" }, head]);
     expect(result.repository).toEqual({ owner: "openclaw", repo: "openclaw" });
     expect(result.pullRequests.map((pull) => pull.number)).toEqual([183571]);
+    expect(
+      fetchImpl.mock.calls.filter(([input]) => requestUrl(input).includes("/pulls?head=lonexreb")),
+    ).toHaveLength(1);
   });
 
   it("continues fork discovery when the origin query returns another head repository", async () => {

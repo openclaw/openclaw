@@ -2,8 +2,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { requestDiscord } from "@openclaw/discord/api.js";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { assertLiveScenarioReply as assertDiscordScenarioReply } from "../shared/live-scenario-reply.js";
 import {
   type DiscordQaScenarioImplementation,
@@ -11,8 +9,8 @@ import {
   sendChannelMessage,
   getCurrentDiscordVoiceState,
   matchesDiscordScenarioReply,
-  waitForDiscordVoiceState,
 } from "./discord-live.runtime.js";
+import { waitForDiscordVoiceState } from "./discord-live.voice.js";
 import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
 export const discordQaTranscriptsVoiceAuthorizationScenario: DiscordQaScenarioImplementation = {
@@ -56,38 +54,6 @@ type TranscriptAuthorizationEvidence = {
 };
 
 const VISIBLE_DENIAL_RE = /\b(?:denied|not allowlisted|not authorized|unauthorized)\b/iu;
-
-async function waitForDiscordVoiceDisconnect(params: {
-  channelId: string;
-  guildId: string;
-  timeoutMs: number;
-  token: string;
-}) {
-  const startedAt = Date.now();
-  let lastChannelId: string | null | undefined;
-  let lastError: string | undefined;
-  while (Date.now() - startedAt < params.timeoutMs) {
-    try {
-      const state = await getCurrentDiscordVoiceState({
-        token: params.token,
-        guildId: params.guildId,
-      });
-      lastChannelId = state?.channel_id;
-      lastError = undefined;
-      if (lastChannelId !== params.channelId) {
-        return state;
-      }
-    } catch (error) {
-      lastError = formatErrorMessage(error);
-    }
-    await sleep(500);
-  }
-  throw new Error(
-    `SUT bot did not leave Discord voice channel ${params.channelId} (last channel=${lastChannelId ?? "none"}${
-      lastError ? `; last error: ${lastError}` : ""
-    })`,
-  );
-}
 
 async function deleteScenarioMessages(params: {
   channelId: string;
@@ -202,7 +168,8 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
   let evidencePath: string;
 
   try {
-    await waitForDiscordVoiceDisconnect({
+    await waitForDiscordVoiceState({
+      expectation: "left",
       ...voice,
       timeoutMs: 5_000,
     });
@@ -226,6 +193,7 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
     await sendTranscriptPrompt("start", run.allowedSessionId, run.positiveMarker);
     evidence.allowed.replyObserved = true;
     await waitForDiscordVoiceState({
+      expectation: "joined",
       ...voice,
       sutBotId: environment.sutIdentity.id,
       timeoutMs: phaseTimeoutMs,
@@ -234,7 +202,8 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
 
     await sendTranscriptPrompt("stop", run.allowedSessionId, run.stopMarker);
     evidence.cleanup.stopReplyObserved = true;
-    await waitForDiscordVoiceDisconnect({
+    await waitForDiscordVoiceState({
+      expectation: "left",
       ...voice,
       timeoutMs: phaseTimeoutMs,
     });
@@ -255,7 +224,8 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
             Math.min(15_000, phaseTimeoutMs),
           ).catch(() => undefined);
         }
-        evidence.cleanup.voiceDisconnected = await waitForDiscordVoiceDisconnect({
+        evidence.cleanup.voiceDisconnected = await waitForDiscordVoiceState({
+          expectation: "left",
           ...voice,
           timeoutMs: Math.min(15_000, phaseTimeoutMs),
         })

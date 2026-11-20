@@ -1,13 +1,16 @@
-import type { StatementSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createReadonlySessionHistoryReader } from "../../gateway/session-history-readonly-reader.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   OpenClawAgentDatabaseReadOnlyScope,
   withScopedOpenClawAgentDatabaseReadOnly,
 } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -16,9 +19,11 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptEvent,
+  appendTranscriptMessage,
   waitForSessionTranscriptProjection,
   type SessionTranscriptReadScope,
 } from "./session-accessor.js";
+import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   insertSyntheticHistory,
@@ -27,6 +32,7 @@ import {
   persistHistory,
   useHistoryEventScope,
 } from "./session-accessor.sqlite-history.test-support.js";
+import { selectTranscriptAppendState } from "./session-accessor.sqlite-transcript-state.queries.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
@@ -198,6 +204,103 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
   }
 });
 
+it.each([false, true])(
+  "looks up background dependency payloads by exact sequence (analyzed=%s)",
+  async (analyzed) => {
+    const { scope, database } = await seedHistory("bounded-dependencies");
+    insertSyntheticHistory(database, scope.sessionId, 2_000);
+    await appendTranscriptMessage(scope, {
+      eventId: "pending-result",
+      message: {
+        ...makeAgentAssistantMessage({
+          provider: "openclaw",
+          model: "automation-result",
+          content: [{ type: "text", text: "Required background result" }],
+        }),
+        excludeFromContext: true,
+        openclawModelPlacement: "pending",
+      },
+    });
+    await persistHistory(scope, [
+      transcriptMessage("tail", "pending-result", { role: "user", content: "Continue" }),
+    ]);
+    await waitForSessionTranscriptProjection(scope);
+    if (analyzed) {
+      await waitForSessionTranscriptIndexReconcile(scope);
+      database.db.exec("ANALYZE");
+    }
+    const nativeDb = requireNativeSqliteDatabase(database.db);
+    const nativeJson = new DatabaseSync(":memory:");
+    const validJson = nativeJson.prepare("SELECT json_valid(?) AS value");
+    let dependencyProjections = 0;
+    nativeDb.function("json_valid", { deterministic: true }, (value) => {
+      if (typeof value === "string" && value.includes('"pending-result"')) {
+        dependencyProjections++;
+      }
+      return validJson.get(value)?.value ?? 0;
+    });
+    clearNodeSqliteKyselyCacheForDatabase(nativeDb);
+    const observed = observeQueries(nativeDb);
+    try {
+      let full: ReturnType<typeof readSessionTranscriptBoundedActiveContextCore> | undefined;
+      nativeDb.exec("SAVEPOINT active_fact_coverage");
+      try {
+        for (const coverage of ["full", "partial", "none"] as const) {
+          if (coverage !== "full") {
+            nativeDb
+              .prepare(
+                coverage === "partial"
+                  ? `DELETE FROM session_transcript_active_event_facts WHERE session_id = ?
+                    AND seq = (SELECT seq FROM transcript_event_identities
+                      WHERE session_id = ? AND event_id = 'pending-result')`
+                  : "DELETE FROM session_transcript_active_event_facts WHERE session_id = ?",
+              )
+              .run(
+                ...(coverage === "partial"
+                  ? [scope.sessionId, scope.sessionId]
+                  : [scope.sessionId]),
+              );
+          }
+          dependencyProjections = 0;
+          const context = runSqliteReadSnapshotSync(nativeDb, () =>
+            readSessionTranscriptBoundedActiveContextCore(scope, {
+              maxEvents: 1,
+              maxBytes: 16_384,
+              transaction: database,
+            }),
+          );
+          expect(context.events.slice(1)).toMatchObject([{ id: "pending-result" }, { id: "tail" }]);
+          full ??= context;
+          expect(context).toEqual(full);
+          // A covered dependency must never execute the native payload projection.
+          expect(dependencyProjections).toBe(coverage === "full" ? 0 : 1);
+        }
+      } finally {
+        nativeDb.exec("ROLLBACK TO active_fact_coverage; RELEASE active_fact_coverage");
+      }
+      const dependencies = [...observed.statements.values()].filter(({ columns }) =>
+        columns.includes("navigation_json"),
+      );
+      expect(dependencies.length).toBeGreaterThanOrEqual(1);
+      const eventSearches = observed
+        .plans(dependencies)
+        .filter((detail) => typeof detail === "string" && detail.startsWith("SEARCH event "));
+      // Dependency discovery must never drive a whole-session payload-index range scan.
+      expect(eventSearches.length).toBeGreaterThan(0);
+      for (const search of eventSearches) {
+        expect(search).toMatch(/\(session_id=\? AND seq=\?\)/u);
+      }
+      expect(observed.plans(dependencies)).toContainEqual(
+        expect.stringMatching(/SEARCH facts USING PRIMARY KEY \(session_id=\? AND seq=\?\)/u),
+      );
+    } finally {
+      observed.restore();
+      await closeOpenClawAgentDatabaseByPathAsync(database.path);
+      nativeJson.close();
+    }
+  },
+);
+
 it("reads only appended metadata for a warm marker-heavy page and quoted messages", async () => {
   const { scope, database } = await seedHistory("incremental-history");
   insertSyntheticHistory(database, scope.sessionId, 2_000, true);
@@ -309,4 +412,31 @@ it("looks up nested activity anchors without scanning unrelated transcript ident
   ).toEqual([1, 1, undefined]);
   expect(anchorSearches).toHaveLength(1);
   expect(anchorSearches[0]).toMatch(/\(session_id=\? AND event_id=\?\)/u);
+});
+
+it("probes the append parent without transcript event statistics", async () => {
+  const { scope, database } = await seedHistory("append-parent-plan");
+  insertSyntheticHistory(database, scope.sessionId, 200);
+  // A long-lived database analyzed identities but never transcript_events, which let
+  // the planner drive the parent probe from every event and sort the projections.
+  database.db.exec("ANALYZE");
+  database.db.exec("DELETE FROM sqlite_stat1");
+  const stat = database.db.prepare("INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES (?, ?, ?)");
+  for (const [idx, value] of [
+    ["sqlite_autoindex_transcript_event_identities_1", "6284704 251 1"],
+    ["idx_agent_transcript_event_identity_sequence", "6284704 251 1"],
+    ["idx_agent_transcript_event_sequence", "6284704 251 48 1"],
+  ] as const) {
+    stat.run("transcript_event_identities", idx, value);
+  }
+  database.db.exec("ANALYZE sqlite_schema");
+  const { sql, parameters } = selectTranscriptAppendState(database, scope, true).compile();
+  const plan = database.db
+    .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+    .all(...(parameters as string[]))
+    .map(({ detail }) => String(detail));
+  expect(plan).not.toContainEqual(expect.stringMatching(/TEMP B-TREE/u));
+  expect(plan).toContainEqual(
+    expect.stringMatching(/^SEARCH te USING INDEX \S+ \(session_id=\? AND seq=\?\)$/u),
+  );
 });

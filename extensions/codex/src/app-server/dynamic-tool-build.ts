@@ -10,7 +10,6 @@ import {
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
-  resolveModelAuthModeAsync,
   resolveSandboxContext,
   supportsModelTools,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -27,7 +26,11 @@ import {
 } from "openclaw/plugin-sdk/time-runtime";
 import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "../../native-tool-policy.js";
 import type { CodexComputerContextEpoch } from "./computer-context.js";
-import { isCodexRemoteExecPlacementSandbox, type CodexPluginConfig } from "./config.js";
+import {
+  isCodexPairedNodeRemoteExecPlacementSandbox,
+  isCodexRemoteExecPlacementSandbox,
+  type CodexPluginConfig,
+} from "./config.js";
 import {
   createCodexHostToolSurface,
   resolveCodexToolConstructionPlan,
@@ -241,7 +244,7 @@ export async function buildDynamicTools(
       config: params.config,
       skillsSnapshot: params.skillsSnapshot,
       ...(params.skillLibraryAuthoring
-        ? { skillWorkshop: { libraryAuthoring: params.skillLibraryAuthoring } }
+        ? { skillLibraryAuthoring: params.skillLibraryAuthoring }
         : {}),
       authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
       abortSignal: input.runAbortController.signal,
@@ -252,14 +255,6 @@ export async function buildDynamicTools(
       modelApi: params.model.api,
       modelContextWindowTokens: params.model.contextWindow,
       delegationCapability: params.delegationCapability,
-      modelAuthMode: await resolveModelAuthModeAsync(
-        params.model.provider,
-        params.config,
-        params.toolAuthProfileStore ?? params.authProfileStore,
-        {
-          workspaceDir: input.effectiveWorkspace,
-        },
-      ),
       suppressManagedWebSearch: false,
       webFetchHostnameAllowlistRef,
       hookChannelId: resolveCodexAppServerHookChannelId(params, input.sandboxSessionKey),
@@ -562,7 +557,14 @@ export function shouldRequireCodexSandboxExecServerEnvironment(params: {
   sandbox?: OpenClawSandboxContext;
   nativeToolSurfaceEnabled: boolean;
   sandboxExecServerEnabled: boolean;
+  pluginConfig?: CodexPluginConfig;
 }): boolean {
+  if (
+    params.pluginConfig?.appServer?.workerHostedCloud &&
+    isCodexPairedNodeRemoteExecPlacementSandbox(params.sandbox)
+  ) {
+    return false;
+  }
   return Boolean(
     isCodexRemoteExecPlacementSandbox(params.sandbox) ||
     (params.sandbox?.enabled && params.nativeToolSurfaceEnabled && params.sandboxExecServerEnabled),

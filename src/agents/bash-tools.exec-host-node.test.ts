@@ -9,6 +9,9 @@ import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { captureProcessUnhandledRejections } from "./bash-tools.exec-runtime.test-support.js";
 
+const pathWarning =
+  "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.";
+
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
 type ExecAutoReviewDecision = Awaited<ReturnType<ExecAutoReviewer>>;
 type ExecAsk = import("../infra/exec-approvals.js").ExecAsk;
@@ -847,7 +850,7 @@ describe("executeNodeHostCommand", () => {
     });
     approvalDecisionMock.mockResolvedValue(null);
 
-    const result = await runNode({ approvalFollowupMode: "agent", ask: "always" });
+    const result = await runNode({ approvalFollowupMode: "agent", warnings: [pathWarning] });
     expect(result.details?.status).toBe("approval-pending");
     await vi.waitFor(() => {
       expect(followupMock).toHaveBeenCalledWith(
@@ -865,22 +868,17 @@ describe("executeNodeHostCommand", () => {
     const stderr = "warning: something\n";
     mockGateway({ stdout, stderr });
 
-    const result = await runNode({ approvalFollowupMode: "direct" });
+    const result = await runNode({ approvalFollowupMode: "direct", warnings: [pathWarning] });
 
     expect(result.details?.status).toBe("approval-pending");
     await vi.waitFor(() => expect(followupMock).toHaveBeenCalled());
-    expect(followupMock).toHaveBeenCalledWith(
-      expect.objectContaining({ direct: true }),
-      expect.any(String),
-    );
+    expect(followupMock.mock.calls[0]?.[0]).toMatchObject({ direct: true });
     const message = followupMock.mock.calls[0]?.[1];
-    if (typeof message !== "string") {
-      throw new Error("expected follow-up message");
-    }
     expect(message).toContain(`[stdout]\n${stdout}`);
     expect(message).toContain(`[stderr]\n${stderr}`);
     // The compact notify formatter would have collapsed every run of whitespace.
     expect(message).not.toContain("first line indented last line");
+    expect(message).toContain(`\n\n${pathWarning}`);
   });
 
   it("returns the reviewer denial to the agent without requesting approval or dispatching", async () => {

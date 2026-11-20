@@ -1,9 +1,10 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { readAgentTerminalPayloadSnapshot } from "../agent-terminal-snapshot.js";
 import { classifyFailoverReason, isProviderRequestSizeCeilingError } from "../failover/classify.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
-import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
+import type { ModelFallbackResultClassification } from "../model-fallback.types.js";
 import { resolveReplyExpectation } from "../reply-completion.js";
 import {
   hasCommittedOutboundDeliveryEvidence,
@@ -42,6 +43,7 @@ export function mergeEmbeddedAgentRunResultForModelFallbackExhaustion(params: {
     meta: {
       ...params.latestResult.meta,
       error: params.preferredResult.meta.error,
+      agentTerminal: params.preferredResult.meta.agentTerminal,
       suppressErrorNotice: params.preferredResult.meta.suppressErrorNotice,
       terminalReply: params.preferredResult.meta.terminalReply,
       finalAssistantRawText: params.preferredResult.meta.finalAssistantRawText,
@@ -111,6 +113,7 @@ function providerErrorPayloadReason(failoverReason: FailoverReason | null) {
     case "billing":
     case "rate_limit":
     case "server_error":
+    case "route_unavailable":
     case "overloaded":
     case "timeout":
       return failoverReason;
@@ -209,13 +212,25 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
   if (fallbackSafeIncompleteTurn) {
-    const terminalErrorText = payloads.find(
+    const terminalErrorPayload = payloads.find(
       (payload) => payload.isError === true && typeof payload.text === "string",
-    )?.text;
+    );
+    const terminalErrorText = terminalErrorPayload?.text;
+    const agentTerminal =
+      !params.result.meta.failureSignal &&
+      !params.result.meta.terminalToolFailure &&
+      !params.result.meta.error?.terminalPresentation
+        ? terminalErrorPayload
+          ? readAgentTerminalPayloadSnapshot(terminalErrorPayload)
+          : !payloads.some((payload) => payload.isError === true)
+            ? params.result.meta.agentTerminal
+            : undefined
+        : undefined;
     return {
       message:
         terminalErrorText ??
         `${params.provider}/${params.model} ended with an incomplete terminal response`,
+      ...(agentTerminal ? { agentTerminal } : {}),
       reason: "format",
       code: "incomplete_result",
       preserveResultOnExhaustion: true,

@@ -45,10 +45,18 @@ function fixture(inference?: ModelCatalogEntry["inference"]) {
     includePluginCatalogs: false,
     pluginMetadataSnapshot: metadataSnapshot,
   });
-  const createStores = vi.fn((publishedModels?: ReadonlyMap<string, readonly Model[]>) => {
-    const authStorage = AuthStorage.inMemory();
-    return { authStorage, modelRegistry: template.fork(authStorage, publishedModels) };
-  });
+  const createStores = vi.fn(
+    (
+      publishedModels?: ReadonlyMap<string, readonly Model[]>,
+      selectedModel?: { provider: string; modelId: string },
+    ) => {
+      const authStorage = AuthStorage.inMemory();
+      return {
+        authStorage,
+        modelRegistry: template.fork(authStorage, publishedModels, selectedModel),
+      };
+    },
+  );
   const source: PreparedModelRuntimeSnapshot = {
     ...createEmptyPreparedModelRuntimeFixture({
       agentDir: "unused:agent",
@@ -75,6 +83,25 @@ function fixture(inference?: ModelCatalogEntry["inference"]) {
 }
 
 describe("captured model catalog generations", () => {
+  it("retains withdrawn chat support when a run adds prompt-project facts", async () => {
+    const f = fixture();
+    f.replaceCatalog({
+      entries: [{ ...f.model, inference: { chat: false } }],
+      routeVariants: [],
+    });
+    const snapshot = { ...f.capture(), activeProjectKeys: ["synthetic-project"] };
+    await expect(
+      resolveModelAsync("synthetic", "first", snapshot.agentDir, snapshot.config, {
+        ...snapshot.createStores(),
+        preparedModelRuntime: snapshot,
+        skipAgentDiscovery: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "model_chat_unsupported",
+      message: "This model doesn't support chat; pick another model.",
+    });
+  });
+
   it("resolves newly granted API chat from the admitted catalog without changing older admissions", async () => {
     const f = fixture({ chat: false });
     const denied = f.capture();
@@ -90,14 +117,18 @@ describe("captured model catalog generations", () => {
         skipAgentDiscovery: true,
       });
 
-    expect(await resolve(denied)).toMatchObject({
-      error: "Model synthetic/first does not support chat inference",
+    await expect(resolve(denied)).rejects.toMatchObject({
+      reason: "format",
+      code: "model_chat_unsupported",
+      message: "This model doesn't support chat; pick another model.",
     });
     expect(await resolve(granted)).toMatchObject({
       model: { provider: "synthetic", id: "first", api: "openai-responses" },
     });
-    expect(await resolve(denied)).toMatchObject({
-      error: "Model synthetic/first does not support chat inference",
+    await expect(resolve(denied)).rejects.toMatchObject({
+      reason: "format",
+      code: "model_chat_unsupported",
+      message: "This model doesn't support chat; pick another model.",
     });
   });
 
@@ -114,18 +145,15 @@ describe("captured model catalog generations", () => {
       const f = fixture({ chat: false });
       f.replaceCatalog({ entries: [{ ...f.model, ...route }], routeVariants: [] });
       const snapshot = f.capture();
-      const result = await resolveModelAsync(
-        "synthetic",
-        "first",
-        snapshot.agentDir,
-        snapshot.config,
-        {
-          ...snapshot.createStores(),
-          preparedModelRuntime: snapshot,
-          skipAgentDiscovery: true,
-        },
-      );
-      expect(result.error).toBe("Model synthetic/first does not support chat inference");
+      const result = resolveModelAsync("synthetic", "first", snapshot.agentDir, snapshot.config, {
+        ...snapshot.createStores(),
+        preparedModelRuntime: snapshot,
+        skipAgentDiscovery: true,
+      });
+      await expect(result).rejects.toMatchObject({
+        code: "model_chat_unsupported",
+        reason: "format",
+      });
     },
   );
 
@@ -134,8 +162,9 @@ describe("captured model catalog generations", () => {
     const first = f.capture();
     const second = f.capture();
     expect(f.createStores).not.toHaveBeenCalled();
-    const a = first.createStores();
-    const b = second.createStores();
+    const selection = { provider: "synthetic", modelId: "first" };
+    const a = first.createStores(undefined, selection);
+    const b = second.createStores(undefined, selection);
     const selected = a.modelRegistry.find("synthetic", "first")!;
     selected.cost.input = 999;
     selected.input.push("image");
@@ -163,8 +192,15 @@ describe("captured model catalog generations", () => {
     const emptyCatalog = { entries: [], routeVariants: [] };
     f.replaceCatalog(emptyCatalog);
     const empty = f.capture();
-    expect(first.createStores().modelRegistry.find("synthetic", "first")).toBeDefined();
-    const secondRegistry = second.createStores().modelRegistry;
+    expect(
+      first
+        .createStores(undefined, { provider: "synthetic", modelId: "first" })
+        .modelRegistry.find("synthetic", "first"),
+    ).toBeDefined();
+    const secondRegistry = second.createStores(undefined, {
+      provider: "synthetic",
+      modelId: "second",
+    }).modelRegistry;
     expect(secondRegistry.find("synthetic", "first")).toBeUndefined();
     expect(secondRegistry.find("synthetic", "second")).toBeDefined();
     expect(empty.createStores().modelRegistry.getAll()).toEqual([]);

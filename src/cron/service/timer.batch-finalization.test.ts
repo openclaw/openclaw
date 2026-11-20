@@ -398,6 +398,7 @@ describe("cron batch outcome finalization", () => {
             sessionKey: undefined,
             createIfMissing: true,
             contextKey: `cron:${job.id}:auto-disabled`,
+            jobId: job.id,
             deliveryContext,
           },
         );
@@ -437,7 +438,6 @@ describe("cron batch outcome finalization", () => {
     state.stopped = true;
     expect(
       await finalizeError(state, job, "setup timed out before runner start", {
-        clearOnFailure: false,
         discardWhenStopped: true,
       }),
     ).toEqual([]);

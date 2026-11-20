@@ -247,6 +247,71 @@ it.each(["new", "stronger"])(
   },
 );
 
+it.each([
+  {
+    field: "guidance",
+    change: { reason: "Waiting for Doctor confirmation", command: "openclaw doctor --fix" },
+  },
+  { field: "pluginId", change: { pluginId: "another-owner" } },
+  { field: "configPaths", change: { configPaths: sessionPath } },
+  { field: "validationExcludedPaths", change: { validationExcludedPaths: sessionPath } },
+  { field: "requiresStateMigration", change: { requiresStateMigration: true as const } },
+  { field: "requiresDoctorInspection", change: { requiresDoctorInspection: true as const } },
+])("fences $field changes at Doctor config publication", async ({ field, change }) => {
+  const { env, readRaw, readConfig, writeSource, recordPending, ioFor } = fixture();
+  const source = {
+    ...gateway(18789),
+    plugins: { entries: { sample: { config: { retained: "authored" } } } },
+  };
+  const original = writeSource(source);
+  const pending = pendingMigration("sample", [pluginPath]);
+  await recordPending([pending]);
+  const io = ioFor([pending]);
+  const commit = io.writeConfigFile(gateway(18790), {
+    ...repairOptions,
+    beforeCommit: () => recordPending([{ ...pending, ...change }]),
+  });
+  if (field === "guidance") {
+    await commit;
+    expect(readConfig()).toMatchObject({ ...source, ...gateway(18790) });
+    expect(readDeferredPluginMigrations({ env })).toEqual([{ ...pending, ...change }]);
+  } else {
+    await expect(commit).rejects.toBeInstanceOf(DeferredPluginMigrationConflictError);
+    expect(readRaw()).toBe(original);
+  }
+});
+
+it.each([false, true])(
+  "publishes recomputed Codex obligations in a different order (guidance changed: %s)",
+  async (rewordGuidance) => {
+    const { env, readConfig, writeSource, recordPending, ioFor } = fixture();
+    const source = {
+      ...gateway(18789),
+      plugins: { entries: { codex: { config: { retained: "authored" } } } },
+    };
+    writeSource(source);
+    const obligation = (confirm: boolean): DeferredPluginMigration => ({
+      pluginId: "codex",
+      configPaths: [["plugins", "entries", "codex", "config"]],
+      reason: confirm
+        ? "The installed plugin has not confirmed that its saved data and settings are ready for this version."
+        : "The configured plugin package is missing or has not converged.",
+      command: confirm ? "openclaw doctor --fix" : "openclaw update repair",
+    });
+    const other = pendingMigration("another-owner");
+    const expected = [obligation(false), other];
+    await recordPending(expected);
+
+    await ioFor(expected).writeConfigFile(gateway(18790), {
+      ...repairOptions,
+      beforeCommit: () => recordPending([other, obligation(rewordGuidance)]),
+    });
+
+    expect(readConfig()).toMatchObject({ ...source, ...gateway(18790) });
+    expect(readDeferredPluginMigrations({ env })).toEqual([other, obligation(rewordGuidance)]);
+  },
+);
+
 it("protects include-owned inputs claimed after mutation planning", async () => {
   const { root, configPath, env, readRaw, recordPending, ioFor } = fixture();
   const includePath = path.join(root, "session.json");

@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { EDITOR_IDS, EDITOR_LABELS } from "../lib/editor-links.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -7,6 +8,7 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatSessionSnoozeWakeTime, isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
+import { nativeListener } from "../lib/solid-native-listener.ts";
 import { useSessionMenuAppearance } from "./session-icon-picker-solid.tsx";
 import type {
   SessionMenuActions,
@@ -16,9 +18,12 @@ import type {
 import type { CompactSessionMenuView } from "./session-menu-compact.ts";
 import { useSessionMenuDetails } from "./session-menu-details-solid.tsx";
 import { useSessionSnoozeEntries } from "./session-menu-snooze.tsx";
+import { HeaderSearch } from "./solid/header-search.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
 import type { MenuControls, MenuEntry, MenuItem } from "./solid/menu.tsx";
+
+registerSessionMenuEnglish();
 
 export function SessionMenuShortcut(props: { shortcut: string; alias?: KeyboardShortcutCombo }) {
   return (
@@ -50,6 +55,8 @@ type SubmenuOptions = {
   disabled?: boolean;
   title?: string;
 };
+
+const GROUP_SEARCH_MIN_COUNT = 8;
 
 const STANDARD_ITEMS = {
   "copy-session-preview-link": ["sessionsView.copySessionPreviewLink", "link"],
@@ -100,7 +107,10 @@ export function useSessionMenuEntries(
   });
   const separator = (id: string) =>
     content(id, <div class="session-menu__separator" role="separator" />);
+  const communicationDivider = separator("communication-divider");
+  const involvementDivider = separator("involvement-divider");
   const deleteDivider = separator("delete-divider");
+  const groupActionsDivider = separator("group-actions-divider");
   const item = (entry: ItemOptions): MenuItem => ({
     id: entry.kind,
     label: entry.label,
@@ -132,6 +142,9 @@ export function useSessionMenuEntries(
       class: {
         "session-menu__item": true,
         "people-menu__submenu": !state.compact && entry.view === "assign-owner",
+        "session-menu__list-submenu":
+          !state.compact &&
+          (entry.view === "assign-owner" || entry.view === "group" || entry.view === "collections"),
         "session-menu__advanced": !state.compact && entry.view === "advanced",
       },
       disabled: entry.disabled,
@@ -153,7 +166,8 @@ export function useSessionMenuEntries(
       ),
       children: state.compact ? undefined : () => body(entry.view),
       closeOnSelect: false,
-      onBeforeShow: entry.view === "icon" ? appearance.prepare : undefined,
+      onBeforeShow:
+        entry.view === "icon" || entry.view === "group" ? () => prepareView(entry.view) : undefined,
     };
   };
   const archive = (): MenuItem =>
@@ -197,14 +211,42 @@ export function useSessionMenuEntries(
       icon: "trash",
       shortcut: "d",
     });
+  const [groupQuery, setGroupQuery] = createSignal("");
+  // Each opening starts from the full list.
+  function prepareView(view: CompactSessionMenuView) {
+    if (view === "group") {
+      setGroupQuery("");
+    } else if (view === "icon") {
+      appearance.prepare();
+    }
+  }
+  const groupSearchEntry: MenuEntry = content(
+    "groups-search",
+    <div
+      class="people-menu__search session-menu__group-search"
+      ref={nativeListener("click", (event) => event.stopPropagation())}
+    >
+      <HeaderSearch
+        label={t("sessionsView.searchGroups")}
+        query={groupQuery()}
+        controlRef={() => options.controls?.ref()}
+        inputProps={{ "data-search": "", "data-form-control": "" }}
+        onQueryChange={setGroupQuery}
+      />
+    </div>,
+  );
   function groupOptions(): MenuEntry[] {
-    const entries = [
-      ...state.groups.map((group) => ({
-        label: group,
-        value: `move-to-group:${encodeURIComponent(group)}`,
-        checked: state.session.category === group,
-        radio: true,
-      })),
+    const terms = groupQuery().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
+    const groups = state.groups.filter((group) =>
+      terms.every((term) => group.toLocaleLowerCase().normalize("NFC").includes(term)),
+    );
+    const choices = groups.map((group) => ({
+      label: group,
+      value: `move-to-group:${encodeURIComponent(group)}`,
+      checked: state.session.category === group,
+      radio: true,
+    }));
+    const commands = [
       ...(state.session.category
         ? [
             {
@@ -221,9 +263,8 @@ export function useSessionMenuEntries(
         : []),
       { label: t("sessionsView.newGroup"), value: "new-group", checked: false, radio: false },
     ];
-    return entries.map((entry, index) => {
+    const row = (entry: (typeof choices)[number]): MenuEntry => {
       const kind = entry.value === "new-group" ? "new-group" : "move-to-group";
-      const shortcut = index < 9 ? String(index + 1) : undefined;
       return {
         id: entry.value,
         label: entry.label,
@@ -231,24 +272,32 @@ export function useSessionMenuEntries(
         type: entry.radio ? "radio" : undefined,
         checked: entry.checked,
         disabled: actions.actionDisabled(kind),
-        attributes: {
-          title: state.actionDisabledReasons[kind],
-          "data-shortcut": shortcut,
-          "aria-keyshortcuts": shortcut,
-        },
+        attributes: { title: state.actionDisabledReasons[kind] },
         content: <span class="session-menu__text">{entry.label}</span>,
-        details: (
-          <>
-            {entry.radio && entry.checked ? (
-              <span class="session-menu__check" aria-hidden="true">
-                <Icon name="check" />
-              </span>
-            ) : undefined}
-            {shortcut ? <SessionMenuShortcut shortcut={shortcut} /> : undefined}
-          </>
-        ),
+        details:
+          entry.radio && entry.checked ? (
+            <span class="session-menu__check" aria-hidden="true">
+              <Icon name="check" />
+            </span>
+          ) : undefined,
       };
-    });
+    };
+    return [
+      // Short lists stay plain; search appears once the list can scroll.
+      ...(state.groups.length > GROUP_SEARCH_MIN_COUNT ? [groupSearchEntry] : []),
+      ...(groups.length || !state.groups.length
+        ? choices.map(row)
+        : [
+            content(
+              "groups-empty",
+              <div class="people-menu__status" role="status">
+                {t("sessionsView.noGroupsMatch")}
+              </div>,
+            ),
+          ]),
+      ...(state.groups.length ? [groupActionsDivider] : []),
+      ...commands.map(row),
+    ];
   }
   const items = (kinds: readonly (keyof typeof STANDARD_ITEMS)[]) =>
     kinds.map((kind) =>
@@ -256,7 +305,8 @@ export function useSessionMenuEntries(
     );
   function body(view: CompactSessionMenuView): MenuEntry[] {
     switch (view) {
-      case "advanced":
+      case "advanced": {
+        const involvementEntries = state.involvingMeContext ? [] : involvement();
         return [
           submenu({
             view: "icon",
@@ -276,21 +326,14 @@ export function useSessionMenuEntries(
               : undefined,
           }),
           submenu({ view: "copy", label: t("sessionsView.copyDetails"), icon: "copy" }),
-          ...(state.navigationAllowed || state.worktreePath || options.openInExtra
-            ? [
-                submenu({
-                  view: "open-in",
-                  label: t("sessionsView.openInEditorMenu"),
-                  icon: "externalLink",
-                }),
-              ]
-            : []),
+          communicationDivider,
           ...details.communication(),
           details.readStatus,
-          ...(!state.involvingMeContext ? involvement() : []),
+          ...(involvementEntries.length ? [involvementDivider, ...involvementEntries] : []),
           deleteDivider,
           deleteAction(),
         ];
+      }
       case "snooze":
         return snoozeEntries()();
       case "copy":
@@ -396,6 +439,16 @@ export function useSessionMenuEntries(
           }),
         ]
       : []),
+    ...(!batch() &&
+    (state.navigationAllowed || state.splitAllowed || state.worktreePath || options.openInExtra)
+      ? [
+          submenu({
+            view: "open-in",
+            label: t("sessionsView.openInEditorMenu"),
+            icon: "externalLink",
+          }),
+        ]
+      : []),
     ...(!batch() && state.session.placementAction
       ? [
           item({
@@ -483,10 +536,7 @@ export function useSessionMenuEntries(
   const backDivider = separator("back-divider");
   const compact = (view: CompactSessionMenuView): MenuEntry[] => [
     {
-      id:
-        view === "icon" || view === "copy" || view === "open-in"
-          ? "compact:back-advanced"
-          : "compact:back",
+      id: view === "icon" || view === "copy" ? "compact:back-advanced" : "compact:back",
       label: t("common.back"),
       class: "session-menu__item session-menu__back",
       icon: icon("arrowLeft"),
@@ -495,5 +545,5 @@ export function useSessionMenuEntries(
     backDivider,
     ...body(view),
   ];
-  return { appearance, primary, organization, advanced, deleteAction, compact };
+  return { appearance, prepareView, primary, organization, advanced, deleteAction, compact };
 }

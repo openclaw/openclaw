@@ -24,10 +24,14 @@ function runTurn(parentToolUseId: string | null, records: number, chars: number)
   };
   push({ type: "assistant", message: { id: "parent-call", content: [agentCall] } });
   for (let index = 0; index < records; index += 1) {
+    // Mixed parent records retain raw accounting; only child attribution earns a discount.
     push({
       type: "user",
       message: {
-        content: [{ type: "tool_result", tool_use_id: `sub-${index}`, content: "r".repeat(chars) }],
+        content: [
+          { type: "tool_result", tool_use_id: `sub-${index}`, content: "r".repeat(chars) },
+          { type: "text", text: "note" },
+        ],
       },
       parent_tool_use_id: parentToolUseId,
     });
@@ -80,8 +84,8 @@ describe("Claude subagent output budget", () => {
     expect(parser.getErrorText()).toMatch(/exceeded 8388608 characters/);
   });
 
-  it("still bounds a subagent flood by frames", () => {
-    const { parser } = runTurn(AGENT_CALL, 20_001, 1);
-    expect(parser.getErrorText()).toMatch(/exceeded 20000 lines/);
+  it("still bounds a subagent flood by its fixed per-record charge", () => {
+    const { parser } = runTurn(AGENT_CALL, Math.floor((8 * 1024 * 1024) / 65) + 1, 1);
+    expect(parser.getErrorText()).toMatch(/exceeded 8388608 characters/);
   });
 });

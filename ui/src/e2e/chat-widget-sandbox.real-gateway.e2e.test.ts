@@ -159,7 +159,10 @@ suite.define(() => {
         await page.addInitScript(installWarmConnectSocketTrace);
         await page.addInitScript(installWarmConnectIdentityGate);
         await page.goto(url);
-        if (await page.getByRole("link", { name: "Log in", exact: true }).isVisible()) {
+        // The entry probe reveals login or redirects into the app asynchronously.
+        const login = page.getByRole("link", { name: "Log in", exact: true });
+        await login.or(page.locator("openclaw-app")).first().waitFor();
+        if (await login.isVisible()) {
           await enterControlUiSession(page);
         }
         await waitForControlUiGatewayReady(page);
@@ -195,12 +198,8 @@ suite.define(() => {
               await page.waitForFunction(() => window.warmConnectIdentityPending === true);
               await transcript.waitFor();
               await page.getByRole("link", { name: "Linked mission", exact: true }).waitFor();
-              observations.push({
-                face,
-                reload,
-                stage: "cached-before-connect",
-                trace: await page.evaluate(() => window.warmConnectSocketTrace),
-              });
+              const trace = await page.evaluate(() => window.warmConnectSocketTrace);
+              observations.push({ face, reload, stage: "cached-before-connect", trace });
             } finally {
               await page.evaluate(() => window.releaseWarmConnectIdentity?.());
             }

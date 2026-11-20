@@ -103,6 +103,21 @@ it.each([0, 1, 32, 33])("bounds native snapshot preparation for %i candidate fil
       createSnapshot: Number(size > 0),
       updateSnapshot: Math.max(0, Math.ceil(size / 32) - 1),
     });
+    if (size > 1) {
+      const file = entries[1]!;
+      const original = fs.readFileSync(path.join(root, file), "utf8");
+      write(file, original + "race(work);\n");
+      calls.createSnapshot = calls.updateSnapshot = 0;
+      expect(main(root, ["--base", "HEAD"])).toBe(1);
+      expect(errors).toHaveBeenNthCalledWith(
+        1,
+        `Wall-clock test timeout races exceed the grandfathered per-file baseline:\n  ${file}: 2 > 1`,
+      );
+      expect(errors).toHaveBeenCalledTimes(2);
+      expect(calls).toEqual({ createSnapshot: 1, updateSnapshot: Math.ceil(size / 32) });
+      write(file, original);
+      errors.mockClear();
+    }
     if (size === 33) {
       write(entries[0]!, "withTestTimeout(\n");
       write(entries[32]!, "raceWithTimeoutResult(\n");

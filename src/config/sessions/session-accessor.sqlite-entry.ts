@@ -8,6 +8,7 @@ import {
   openOpenClawAgentDatabase,
   withOpenClawAgentDatabaseRuntime,
 } from "../../state/openclaw-agent-db.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { prepareSessionMetaPatch } from "./metadata.js";
 import type {
@@ -41,7 +42,7 @@ import { withPreparedSqliteWriteScope } from "./session-accessor.sqlite-write-sc
 import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { patchSessionActorEntryInScope } from "./session-actor-entry-adapter.js";
 import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
-import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import { assertCanonicalSessionKeyWrite } from "./session-canonical-row.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
 import {
   mergeSessionEntryPatch,
@@ -206,34 +207,38 @@ async function patchSessionEntryInScope(
     return (await memory).entry;
   }
   const storePath = resolveSessionStorePathForScope(scope);
-  return withPreparedSqliteWriteScope(scope, (resolved, sharedWriteReserved) => {
-    if (databaseAgentId) {
-      resolved.databaseAgentId = databaseAgentId;
-    }
-    assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);
-    return patchSqliteSessionEntrySnapshot({
-      operationLabel: "session-entry.patch",
-      validateCanonicalKeys: options.replaceEntry !== true,
-      options,
-      selection: {
-        kind: "entry",
+  return withPreparedSqliteWriteScope(
+    scope,
+    (resolved, sharedWriteReserved) => {
+      if (databaseAgentId) {
+        resolved.databaseAgentId = databaseAgentId;
+      }
+      assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);
+      return patchSqliteSessionEntrySnapshot({
+        operationLabel: "session-entry.patch",
+        validateCanonicalKeys: options.replaceEntry !== true,
+        options,
+        selection: {
+          kind: "entry",
+          sessionKey: resolved.sessionKey,
+          exact: options.replaceEntry === true,
+        },
+        readSnapshot: (database, includeWindowFacts) =>
+          readSessionEntrySelectionSnapshot(
+            database,
+            resolved.sessionKey,
+            options.replaceEntry === true,
+            includeWindowFacts,
+          ),
+        resolved,
         sessionKey: resolved.sessionKey,
-        exact: options.replaceEntry === true,
-      },
-      readSnapshot: (database, includeWindowFacts) =>
-        readSessionEntrySelectionSnapshot(
-          database,
-          resolved.sessionKey,
-          options.replaceEntry === true,
-          includeWindowFacts,
-        ),
-      resolved,
-      sessionKey: resolved.sessionKey,
-      storePath,
-      sharedWriteReserved,
-      update,
-    });
-  });
+        storePath,
+        sharedWriteReserved,
+        update,
+      });
+    },
+    options.signal,
+  );
 }
 
 /** Patches one logical entry after validating its canonical lifecycle target. */
@@ -313,7 +318,7 @@ async function patchSessionEntryTargetInScope(
         ownerStorePath: source.path,
         sessionKey: "",
       })
-    : withPreparedSqliteWriteScope(target, patch);
+    : withPreparedSqliteWriteScope(target, patch, options.signal);
 }
 
 /** Callback and fixed-operation patches share source custody, FIFO, and commit publication. */
@@ -399,7 +404,7 @@ async function patchSqliteSessionEntrySnapshot(
       ? withOpenClawAgentDatabaseRuntime(databaseOptions, operation, assertCurrent)
       : operation();
   };
-  let wrote = false;
+  let writtenSource: AgentDatabaseExecutionFileIdentity | undefined;
   // A background owner can retain the same absent store before its first write.
   const creatingExecution =
     useWorker && !options.retainedExecution && targetIdentity.key.startsWith("path:")
@@ -451,7 +456,7 @@ async function patchSqliteSessionEntrySnapshot(
       onCommitted: options.onCommitted,
       onCommittedSource: options.onCommittedSource,
     }).then((result) => {
-      wrote = result.wrote;
+      writtenSource = result.writtenSource;
       return result.entry;
     });
   const sourceAssertion = options.workerGuard?.source;
@@ -539,8 +544,14 @@ async function patchSqliteSessionEntrySnapshot(
                 if (!mutation.identity) {
                   return undefined;
                 }
+                const identity = readOpenClawAgentDatabaseIdentity(writeDatabase);
+                writtenSource = {
+                  kind: "file",
+                  physicalIdentity: identity.identity,
+                  birthtime: identity.birthtime,
+                  nativeLocation: identity.canonicalPath,
+                };
                 if (options.onCommittedSource) {
-                  const identity = readOpenClawAgentDatabaseIdentity(writeDatabase);
                   committedSource = {
                     agentId: writeDatabase.agentId,
                     path: writeDatabase.path,
@@ -548,7 +559,6 @@ async function patchSqliteSessionEntrySnapshot(
                     databaseBirthtime: identity.birthtime,
                   };
                 }
-                wrote = true;
                 return prepareSessionIdentityPublication(
                   writeDatabase,
                   resolved.agentId,
@@ -586,6 +596,7 @@ async function patchSqliteSessionEntrySnapshot(
     params.sharedWriteReserved || options.retainedExecution || (useWorker && !sourceAssertion)
       ? "foreground-reentrant"
       : "foreground",
+    options.signal,
   );
   let committed: SessionEntry | null;
   try {
@@ -593,8 +604,9 @@ async function patchSqliteSessionEntrySnapshot(
   } finally {
     await creatingExecution?.release();
   }
-  if (wrote) {
+  if (writtenSource) {
     kickSessionEntryMaintenanceAfterWrite({
+      source: writtenSource,
       activeSessionKey: sessionKey,
       archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
       maintenanceConfig: options.maintenanceConfig,

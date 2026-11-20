@@ -405,11 +405,11 @@ describe("handleModelsCommand", () => {
     ]);
   });
 
-  it("keeps /models list <provider> as an alias", async () => {
-    const result = await runModels("/models list anthropic");
-
-    expect(result?.reply?.text).toContain("Models (anthropic) — showing 1-2 of 2 (page 1/1)");
-    expect(result?.reply?.text).toContain("- anthropic/claude-opus-4-5");
+  it("follows the list alias's custom-size More hint", async () => {
+    const first = await runModels("/models list anthropic limit=1");
+    const more = /^More: (.+)$/m.exec(first?.reply?.text ?? "")?.[1] ?? "";
+    const result = await runModels(more);
+    expect(result?.reply?.text).toContain("showing 2-2 of 2 (page 2/2)");
   });
 
   it("returns a deprecation message for /models add", async () => {

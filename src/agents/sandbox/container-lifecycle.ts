@@ -299,7 +299,7 @@ export function releaseSandboxContainerSource(
 export async function removeSandboxContainerRuntime(
   engine: SandboxContainerEngine,
   name: string,
-  generation?: { id: string | null; assertCurrent: () => void },
+  generation?: { id: string | null; assertCurrent: () => void; signal?: AbortSignal },
 ): Promise<void> {
   await sandboxContainerLifecycleQueue.enqueue(name, async () => {
     generation?.assertCurrent();
@@ -322,7 +322,10 @@ export async function removeSandboxContainerRuntime(
       }
       return;
     }
-    const result = await execContainer(engine, ["rm", "-f", target], { allowFailure: true });
+    const result = await execContainer(engine, ["rm", "-f", target], {
+      allowFailure: true,
+      signal: generation?.signal,
+    });
     if (result.code !== 0) {
       const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
       if (!/No such (container|object)|does not exist/iu.test(detail)) {

@@ -1,56 +1,48 @@
+import { posix } from "node:path";
+
 // Keep subprocess metadata independent of executable launcher declarations.
 export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
-  function runtimeProcessEntrypoint(
-    modulePath: string,
-    distModulePath = modulePath,
+  const runtimeProcessEntrypoint = (
+    path: string,
+    distModulePath = path,
     extension = ".js",
     sourceExtension?: ".ts" | ".mts" | ".mjs",
-  ) {
-    return {
+  ) =>
+    ({
       currentModuleUrl,
-      sourceModulePath: `src/${modulePath}${sourceExtension ?? ".ts"}`,
+      sourceModulePath: `src/${path}${sourceExtension ?? ".ts"}`,
       sourceExtension,
-      sourceWorkerName: modulePath.startsWith("infra/")
-        ? modulePath.slice("infra/".length)
-        : `../${modulePath}`,
+      sourceWorkerName: posix.relative("/infra", `/${path}`),
       distWorkerPath: `${distModulePath}${extension}`,
-    } as const;
-  }
+    }) as const;
+  const loaderFreeEntrypoint = (modulePath: string) =>
+    runtimeProcessEntrypoint(modulePath, undefined, undefined, ".mjs");
 
   return {
+    workerThreadLoader: loaderFreeEntrypoint("infra/runtime-worker-loader"),
     daemonRuntimeProbe: runtimeProcessEntrypoint("infra/daemon-runtime-probe.entry"),
     pluginToolsServe: runtimeProcessEntrypoint("mcp/plugin-tools-serve"),
     openclawToolsServe: runtimeProcessEntrypoint("mcp/openclaw-tools-serve"),
-    repositoryPublicationRestore: runtimeProcessEntrypoint(
+    repositoryPublicationRestore: loaderFreeEntrypoint(
       "gateway/repository-publication-restore.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    nodeWorkspacePublicationSnapshot: runtimeProcessEntrypoint(
+    nodeWorkspacePublicationSnapshot: loaderFreeEntrypoint(
       "node-host/node-worker-publication-snapshot.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    nodeWorkspaceManifest: runtimeProcessEntrypoint(
+    nodeWorkspaceManifest: loaderFreeEntrypoint(
       "node-host/node-worker-workspace-manifest.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    nodeWorkspaceGitHistory: runtimeProcessEntrypoint(
+    nodeWorkspaceGitHistory: loaderFreeEntrypoint(
       "node-host/node-worker-workspace-git-history.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
     doctorDatabaseEngineInspection: runtimeProcessEntrypoint(
       "commands/doctor-database-engine-inspection.worker",
     ),
+    doctorDatabaseBloat: runtimeProcessEntrypoint("commands/doctor-db-bloat.worker"),
     backupDatabaseDiscovery: runtimeProcessEntrypoint("infra/backup-database-discovery.worker"),
     sqliteHeaderProbe: runtimeProcessEntrypoint("infra/sqlite-header-probe.worker"),
     databaseBackup: runtimeProcessEntrypoint("snapshot/database-backup.worker"),
+    backupGzip: runtimeProcessEntrypoint("infra/backup-gzip.worker"),
     managedHandoffEngine: runtimeProcessEntrypoint(
       "infra/update-managed-service-handoff-engine.worker",
     ),
@@ -58,35 +50,34 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     databasePortCommand: runtimeProcessEntrypoint(
       "infra/database-engine/port-command.entry.worker",
     ),
+    stallObserver: runtimeProcessEntrypoint("logging/diagnostic-stall-observer.worker"),
+    fileLog: runtimeProcessEntrypoint("logging/logger-file.worker"),
     systemCaWarmup: runtimeProcessEntrypoint("gateway/system-ca-warmup.worker"),
-    shutdownHardExit: runtimeProcessEntrypoint("cli/gateway-cli/shutdown-hard-exit.worker"),
+    openclawIdTunnel: runtimeProcessEntrypoint("gateway/openclaw-id/tunnel-child/entry"),
+    shutdownHardExit: loaderFreeEntrypoint("cli/gateway-cli/shutdown-hard-exit.worker"),
     packageIntegrityHasher: runtimeProcessEntrypoint(
       "infra/package-update-integrity-hasher.worker",
     ),
     packageLocalOverrides: runtimeProcessEntrypoint("infra/package-local-overrides.worker"),
     directoryWatchHost: runtimeProcessEntrypoint("infra/directory-watch-host.worker"),
     directoryWatchParent: runtimeProcessEntrypoint("infra/directory-watch-parent.worker"),
-    workspaceQuiescenceAcquire: runtimeProcessEntrypoint(
+    workspaceQuiescenceAcquire: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-acquire.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    workspaceQuiescenceRenew: runtimeProcessEntrypoint(
+    workspaceQuiescenceRenew: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-renew.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    workspaceQuiescenceRelease: runtimeProcessEntrypoint(
+    workspaceQuiescenceRelease: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-release.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
     packageActivationRecovery: runtimeProcessEntrypoint(
       "infra/package-update-activation-sealed",
       "package-update-activation-recovery",
+      ".mjs",
+    ),
+    managedHandoffPostgresBridge: runtimeProcessEntrypoint(
+      "infra/update-managed-service-handoff-postgres.worker",
+      "managed-handoff-postgres-bridge.worker",
       ".mjs",
     ),
     managedHandoffRuntime: runtimeProcessEntrypoint(
@@ -116,15 +107,19 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     fileToolPlanning: runtimeProcessEntrypoint("agents/sessions/tools/file-tool-planning.worker"),
     fileToolRead: runtimeProcessEntrypoint("agents/sessions/tools/read-file.worker"),
     attachmentProcessor: runtimeProcessEntrypoint("media/attachment-processor.worker"),
+    widgetScriptSyntax: runtimeProcessEntrypoint("canvas/widget-script-syntax.worker"),
     gitOperations: runtimeProcessEntrypoint("infra/git-operation.worker"),
     gitPackCleanup: runtimeProcessEntrypoint("agents/worktrees/git-pack-cleanup.worker"),
     fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
+    execRealpath: runtimeProcessEntrypoint("infra/exec-realpath.worker"),
     sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
     clientCredentials: runtimeProcessEntrypoint("infra/client-credential.worker"),
+    secretFileRead: runtimeProcessEntrypoint("infra/secret-file-read.worker"),
     ttsPreferences: runtimeProcessEntrypoint("tts/tts-settings-write.worker"),
     authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
     pluginModelCatalogRead: runtimeProcessEntrypoint("agents/plugin-model-catalog-read.worker"),
     pluginModelCatalogCredentials: runtimeProcessEntrypoint("agents/plugin-model-catalog.worker"),
+    pluginCaptureNativeResource: runtimeProcessEntrypoint("plugins/plugin-capture-native-resource"),
     pluginGenerationPreparation: runtimeProcessEntrypoint(
       "plugins/plugin-generation-preparation.worker",
     ),
@@ -183,6 +178,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     updateRepair: runtimeProcessEntrypoint("infra/update-repair.worker"),
     immutableBuild: runtimeProcessEntrypoint("infra/update-immutable-build.worker"),
     updateMigratedFinalize: runtimeProcessEntrypoint("infra/update-migrated-finalize.worker"),
+    updateConfigProjection: runtimeProcessEntrypoint("infra/update-config-projection.worker"),
     updateAutomaticCleanup: runtimeProcessEntrypoint("infra/update-automatic-cleanup.worker"),
     updateCandidateState: runtimeProcessEntrypoint("infra/update-candidate-state.worker"),
     doctorLint: runtimeProcessEntrypoint("commands/doctor-lint.worker"),
@@ -206,6 +202,9 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     ),
     sessionTranscriptProjectionPublication: runtimeProcessEntrypoint(
       "config/sessions/session-transcript-projection-publication.worker",
+    ),
+    sessionTranscriptActiveFactsBackfill: runtimeProcessEntrypoint(
+      "config/sessions/session-transcript-active-facts-backfill.worker",
     ),
     sessionTranscriptReports: runtimeProcessEntrypoint(
       "config/sessions/session-accessor.sqlite-transcript-reports.worker",
@@ -252,6 +251,10 @@ export const pluginRuntimeProcessManifest = {
     ...pluginRuntimeProcess("browser", "native-host-entry", "relay-daemon-entry"),
     package: { name: "@openclaw/browser-plugin", distWorkerPath: "relay-daemon-entry.js" },
   },
+  browserProfileFilesystem: {
+    ...pluginRuntimeProcess("browser", "profile-filesystem", "profile-filesystem.worker"),
+    package: { name: "@openclaw/browser-plugin", distWorkerPath: "profile-filesystem.worker.js" },
+  },
   browserSetup: {
     ...pluginRuntimeProcess("browser", "setup-entry", "setup-entry"),
     package: { name: "@openclaw/browser-plugin", distWorkerPath: "setup-entry.js" },
@@ -260,6 +263,7 @@ export const pluginRuntimeProcessManifest = {
     ...pluginRuntimeProcess("code-mode-quickjs", "src/executor", "src/code-mode.worker"),
     sourceWorkerName: "code-mode.worker",
   },
+  codexStdio: pluginRuntimeProcess("codex", "stdio-worker-entrypoint", "stdio.worker"),
   codexCatalogPage: pluginRuntimeProcess(
     "codex",
     "catalog-page-worker-entrypoint",
@@ -289,25 +293,32 @@ export const pluginRuntimeProcessManifest = {
       distWorkerPath: "document-extractor.worker.js",
     },
   },
-  fileTransferDirFetch: {
-    plugin: "file-transfer",
-    ownerSource: "extensions/file-transfer/src/node-host/dir-fetch-archive.ts",
-    sourceWorkerName: "dir-fetch-archive.worker",
-    distWorkerPath: "extensions/file-transfer/src/node-host/dir-fetch-archive.worker.js",
+  webReadability: {
+    ...pluginRuntimeProcess(
+      "web-readability",
+      "web-content-extractor-worker.runtime",
+      "web-content-extractor.worker",
+    ),
     package: {
-      name: "@openclaw/file-transfer",
-      distWorkerPath: "src/node-host/dir-fetch-archive.worker.js",
+      name: "@openclaw/web-readability-plugin",
+      distWorkerPath: "web-content-extractor.worker.js",
     },
   },
+  fileTransferDirFetch: {
+    ...pluginRuntimeProcess(
+      "file-transfer",
+      "src/node-host/dir-fetch-archive",
+      "src/node-host/dir-fetch-archive.worker",
+    ),
+    sourceWorkerName: "dir-fetch-archive.worker",
+  },
   fileTransferDirList: {
-    plugin: "file-transfer",
-    ownerSource: "extensions/file-transfer/src/node-host/dir-list-worker-command.ts",
+    ...pluginRuntimeProcess(
+      "file-transfer",
+      "src/node-host/dir-list-worker-command",
+      "src/node-host/dir-list.worker",
+    ),
     sourceWorkerName: "dir-list.worker",
-    distWorkerPath: "extensions/file-transfer/src/node-host/dir-list.worker.js",
-    package: {
-      name: "@openclaw/file-transfer",
-      distWorkerPath: "src/node-host/dir-list.worker.js",
-    },
   },
   iMessageChatDb: {
     ...pluginRuntimeProcess("imessage", "src/chat-db", "src/chat-db.worker"),
@@ -450,6 +461,14 @@ export const pluginRuntimeProcessManifest = {
     sourceWorkerName: "telegram-ingress-worker.runtime",
     distWorkerPath: "telegram-ingress-worker.runtime.js",
   },
+  telegramWidgetCheck: {
+    ...pluginRuntimeProcess(
+      "telegram",
+      "src/widgets/widget-check",
+      "src/widgets/widget-check.worker",
+    ),
+    sourceWorkerName: "widget-check.worker",
+  },
   onnxInference: pluginRuntimeProcess("onnx", "index", "src/inference.worker"),
   teamReportsStore: pluginRuntimeProcess("team-reports", "index", "src/store.worker"),
   teamReportsRun: pluginRuntimeProcess("team-reports", "index", "src/run.worker"),
@@ -471,6 +490,7 @@ export const runtimeProcessDeployManifest = {
     source: "src/worker/worker-deploy-client-credentials.ts",
     split: false,
   },
+  "file-log.worker": { source: "src/worker/worker-deploy-file-log.ts", split: false },
   "file-tool-planning.worker": {
     source: "src/worker/worker-deploy-file-tool-planning.ts",
     split: false,
@@ -511,6 +531,10 @@ export const runtimeProcessHelperManifest = {
 
 // Each sealed bootstrap selects only the sibling entries it owns.
 export const runtimeProcessSealedManifest = {
+  managedHandoff: {
+    ownerSource: "src/infra/update-managed-service-handoff-sealed.ts",
+    entries: [["postgresBridge", "managedHandoffPostgresBridge"]],
+  },
   worker: {
     ownerSource: "src/worker/worker-deploy-runtime.ts",
     entries: [
@@ -518,6 +542,7 @@ export const runtimeProcessSealedManifest = {
       ["codeModeNode", "code-mode-node.worker"],
       ["stateRead", "openclaw-state-read.worker"],
       ["workerNativeLifecycle", "worker-native-lifecycle.worker"],
+      ["fileLog", "file-log.worker"],
       ["fileToolPlanning", "file-tool-planning.worker"],
       ["fileToolRead", "file-tool-read.worker"],
       ["gatewayStateOwnerHeartbeat", "gateway-state-owner-heartbeat.worker"],
@@ -539,20 +564,14 @@ export const runtimeProcessSealedManifest = {
     ownerSource: string;
     entries: readonly (readonly [
       keyof ReturnType<typeof createRuntimeProcessEntrypoints>,
-      keyof typeof runtimeProcessDeployManifest | keyof typeof runtimeProcessHelperManifest,
+      (
+        | keyof typeof runtimeProcessDeployManifest
+        | keyof typeof runtimeProcessHelperManifest
+        | keyof ReturnType<typeof createRuntimeProcessEntrypoints>
+      ),
     ])[];
   }
 >;
-
-export function createSealedRuntimeProcessEntrypoints(
-  group: keyof typeof runtimeProcessSealedManifest,
-  currentModuleUrl: string,
-) {
-  return runtimeProcessSealedManifest[group].entries.map(([name, entry]) => ({
-    name,
-    url: new URL(`./${entry}.mjs`, currentModuleUrl),
-  }));
-}
 
 /** Source-only build workers are declared without entering the packaged runtime graph. */
 export const runtimeProcessToolingEntrypoints = {
@@ -583,34 +602,6 @@ export const runtimeProcessExternalPackageEntrypoints = {
   fsSafePrebuild: "scripts/lib/fs-safe-prebuild.mjs",
 } as const;
 
-/** Dependency programs retain their installed package topology and disk runtime. */
-export const runtimeProcessDependencyEntrypoints = {
-  npm: {
-    specifier: "npm/bin/npm-cli.js",
-    packageJsonSpecifier: "npm/package.json",
-    relativePath: "bin/npm-cli.js",
-    execution: "external-disk",
-    kind: "standalone-package-manager",
-  },
-  npx: {
-    specifier: "npm/bin/npx-cli.js",
-    packageJsonSpecifier: "npm/package.json",
-    relativePath: "bin/npx-cli.js",
-    execution: "external-disk",
-    kind: "standalone-package-manager",
-  },
-  chromeDevtoolsMcp: {
-    specifier: "chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js",
-    execution: "external-disk",
-    kind: "package",
-  },
-  matrixCryptoDownload: {
-    specifier: "@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js",
-    execution: "external-disk",
-    kind: "package",
-  },
-} as const;
-
 // Keep installed CLI recovery compatible with the supported historical entry order.
 export const runtimeProcessGatewayEntrypointNames = [
   "gatewayIndex",
@@ -619,7 +610,7 @@ export const runtimeProcessGatewayEntrypointNames = [
   "gatewayEntryModule",
 ] as const satisfies readonly (keyof typeof runtimeProcessExternalPackageEntrypoints)[];
 
-const runtimeProcessStandaloneModules = [
+const standaloneModulePaths = [
   "../runtime-process-scripts.generated.mjs",
   "../openclaw.mjs",
   "../node-compile-cache.mjs",
@@ -650,13 +641,12 @@ export function createStandaloneRuntimeProcessEntrypoints(
   ];
   return {
     ...createRuntimeProcessEntrypoints(currentModuleUrl),
-    ...Object.fromEntries(plugins.map(([name, entry]) => [`plugin:${name}`, entry])),
-    ...Object.fromEntries(
-      deploy.map((name) => [`deploy:${name}`, { distWorkerPath: `worker/${name}.mjs` }]),
-    ),
-    ...Object.fromEntries(
-      runtimeProcessStandaloneModules.map((name) => [`module:${name}`, { distWorkerPath: name }]),
-    ),
+    // Namespace projections share a packaged path; root descriptors retain their full types.
+    ...Object.fromEntries<{ distWorkerPath: string }>([
+      ...plugins.map(([name, entry]) => [`plugin:${name}`, entry] as const),
+      ...deploy.map((key) => [`deploy:${key}`, { distWorkerPath: `worker/${key}.mjs` }] as const),
+      ...standaloneModulePaths.map((id) => [`module:${id}`, { distWorkerPath: id }] as const),
+    ]),
   };
 }
 

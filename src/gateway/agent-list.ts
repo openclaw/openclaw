@@ -70,13 +70,17 @@ export function resolveGatewayAgentSelectionState(cfg: OpenClawConfig): GatewayA
 }
 
 /** Lists gateway-visible agents with canonical membership, ordering, and semantic kind. */
-export async function listGatewayAgentsBasic(cfg: OpenClawConfig): Promise<
+export async function listGatewayAgentsBasic(
+  cfg: OpenClawConfig,
+  signal?: AbortSignal,
+): Promise<
   GatewayAgentSelectionState & {
     mainKey: string;
     scope: SessionScope;
     agents: GatewayAgentListRow[];
   }
 > {
+  signal?.throwIfAborted();
   const selection = resolveGatewayAgentSelectionState(cfg);
   const defaultId = selection.defaultId;
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
@@ -109,16 +113,21 @@ export async function listGatewayAgentsBasic(cfg: OpenClawConfig): Promise<
 
   const disposition =
     getPreparedAgentDeletionDiscovery(resolveOpenClawStateSqlitePath()) ??
-    (await prepareAgentDatabaseDeletionSnapshotRead({}, "runtime-discovery").read()).snapshot
-      ?.retainedDeletions;
-  const deletions =
+    (await prepareAgentDatabaseDeletionSnapshotRead({}, "runtime-discovery", signal).read())
+      .snapshot?.retainedDeletions;
+  const retained =
     disposition?.status === "present"
-      ? disposition.entries
+      ? disposition
       : disposition?.status === "unavailable"
-        ? disposition.known?.entries
+        ? disposition.known
         : undefined;
+  signal?.throwIfAborted();
   const agents: GatewayAgentListRow[] = orderedIds
-    .filter((id) => !deletions?.some((entry) => entry.agentId === id))
+    .filter(
+      (id) =>
+        !retained?.entries.some((entry) => entry.agentId === id) &&
+        !retained?.held.some((entry) => entry.agentId === id),
+    )
     .map((id) => {
       const admissionRefusal = readAgentDatabaseAdmissionRefusal(id);
       const agent: GatewayAgentListRow = {

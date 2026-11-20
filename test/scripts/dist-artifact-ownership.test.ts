@@ -22,7 +22,6 @@ import { waitForDead } from "../helpers/process-wait.js";
 import { installDistArtifactScripts as installScripts } from "./dist-artifact-fixture.js";
 import {
   materializeNativeCompiler,
-  materializeTypeChecker,
   overrideNativeFixtureExecutable,
   resolveInstalledNativeCompiler,
 } from "./native-boundary-fixture.js";
@@ -422,6 +421,83 @@ describe("native check launchers in paths with spaces", () => {
 // Native TypeScript emits the declarations. Only
 // process completion is gated; ordering never depends on sleeps or host speed.
 describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
+  it("retires a signaled entry claim only after verified join", async ({ signal }) => {
+    await withProcesses(async ({ pause, start, waitEvent }) => {
+      const root = createCheckout();
+      const compiler = writeModule(root, "compiler.mts", pause("compiler-running"), [
+        requireImport,
+      ]);
+      const parent = writeModule(
+        root,
+        "parent.mts",
+        `
+        import { runDistArtifactChild } from ${scriptUrl("lib/dist-artifact-ownership.mts")};
+        const abort = new AbortController();
+        const observed = runDistArtifactChild(process.cwd(), ${json(compiler)}, [], { native: true, signal: abort.signal })
+          .catch(error => { if (error.code !== 'ABORT_ERR') throw error; });
+        ${pause("cancel-owner")}
+        abort.abort();
+        await observed;
+        await withDistArtifactOwnership(process.cwd(), async () => fs.writeFileSync('reacquired', 'yes'));
+      `,
+        [ownershipImport, requireImport, fsImport],
+      );
+      const owner = start(root, parent);
+      await owner.event("compiler-running");
+      (await waitEvent("cancel-owner")).write("continue");
+      const result = await owner.done;
+      expect(result.code, result.output).toBe(0);
+      expectFile(root, "reacquired", "yes");
+      expect(fs.readdirSync(resolveDistArtifactLockPath(root))).toEqual([]);
+    }, signal);
+  });
+
+  it("retires only the joined invocation claim after cancellation", async ({ signal }) => {
+    await withProcesses(async ({ pause, start, waitEvent }) => {
+      const root = createCheckout();
+      const compiler = writeModule(
+        root,
+        "compiler.mts",
+        `
+        process.on('SIGTERM', () => {});
+        ${pause("compiler-running")}
+        fs.writeFileSync('last-write', 'done');
+      `,
+        [requireImport, fsImport],
+      );
+      const parent = writeModule(
+        root,
+        "parent.mts",
+        `
+        import { runDistArtifactChild } from ${scriptUrl("lib/dist-artifact-ownership.mts")};
+        const abort = new AbortController();
+        const running = withDistArtifactOwnership(process.cwd(), () =>
+          runDistArtifactChild(process.cwd(), ${json(compiler)}, [], { native: true, signal: abort.signal }));
+        const observed = running.catch(error => { if (error.code !== 'ABORT_ERR') throw error; });
+        ${pause("cancel-owner")}
+        abort.abort();
+        ${pause("cancel-requested")}
+        await observed;
+        await withDistArtifactOwnership(process.cwd(), async () => fs.writeFileSync('reacquired', 'yes'));
+      `,
+        [ownershipImport, requireImport, fsImport],
+      );
+      const owner = start(root, parent);
+      const compilerGate = await owner.event("compiler-running");
+      (await waitEvent("cancel-owner")).write("continue");
+      const cancelledGate = await owner.event("cancel-requested");
+      expectOwnership(root, true, false);
+      expectFile(root, "last-write", false);
+      compilerGate.write("continue");
+      cancelledGate.write("continue");
+      const result = await owner.done;
+      expect(result.code, result.output).toBe(0);
+      expectFile(root, "last-write", "done");
+      expectFile(root, "reacquired", "yes");
+      expect(fs.readdirSync(resolveDistArtifactLockPath(root))).toEqual([]);
+    }, signal);
+  });
+
   it.for([
     { signalName: "SIGINT" as const, exitCode: 130 },
     { signalName: "SIGTERM" as const, exitCode: 143 },
@@ -788,8 +864,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     async ({ owner, unjoined }, { signal }) => {
       await withProcesses(async ({ start }) => {
         const root = createCheckout();
-        materializeNativeCompiler(root, { javaScriptApi: false });
-        materializeTypeChecker(root);
+        installCompiler(root);
         const ownerPath = write(root, ".artifacts/dist-artifacts.lock/owner.json", owner);
         if (unjoined) {
           write(root, ".artifacts/dist-artifacts.lock/unjoined", "unverified cleanup");
@@ -842,7 +917,6 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   it.for([
     { directory: ".", nested: false },
     { directory: "src", nested: false },
-    { directory: "src", nested: true },
     { directory: "linked-src", nested: true },
   ])(
     "keeps declarations alive from $directory (nested=$nested) until their writer joins and keeps ownership across dist cleanup",

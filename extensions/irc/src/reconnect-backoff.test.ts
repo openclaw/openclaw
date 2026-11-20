@@ -1,53 +1,50 @@
 // Irc tests cover reconnect backoff plugin behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createIrcReconnectBackoff } from "./reconnect-backoff.js";
 
-function createClock(start = 1_000_000) {
-  let current = start;
-  vi.spyOn(Date, "now").mockImplementation(() => current);
-  return {
-    advance: (ms: number) => {
-      current += ms;
-    },
-  };
-}
-
 describe("irc reconnect backoff", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    vi.spyOn(Math, "random").mockReturnValue(0);
+  });
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
-  it("resets after a connection stayed up for a minute", () => {
-    vi.spyOn(Math, "random").mockReturnValue(0);
-    const clock = createClock();
-    const backoff = createIrcReconnectBackoff();
-    backoff.nextDelayMs();
-    backoff.nextDelayMs();
-    expect(backoff.nextDelayMs()).toBe(4_000);
-    backoff.markConnected();
-    clock.advance(60_000);
-    expect(backoff.nextDelayMs()).toBe(1_000);
-  });
+  it.each([0, -3_600_000, 3_600_000])(
+    "resets after a minute despite a %dms wall-clock step",
+    (step) => {
+      const backoff = createIrcReconnectBackoff();
+      backoff.nextDelayMs();
+      backoff.nextDelayMs();
+      expect(backoff.nextDelayMs()).toBe(4_000);
+      backoff.markConnected();
+      vi.advanceTimersByTime(60_000);
+      vi.setSystemTime(Date.now() + step);
+      expect(backoff.nextDelayMs()).toBe(1_000);
+    },
+  );
 
-  it("does not reset just before the stable threshold", () => {
-    vi.spyOn(Math, "random").mockReturnValue(0);
-    const clock = createClock();
-    const backoff = createIrcReconnectBackoff();
-    backoff.nextDelayMs();
-    backoff.markConnected();
-    clock.advance(59_999);
-    expect(backoff.nextDelayMs()).toBe(2_000);
-  });
+  it.each([0, -3_600_000, 3_600_000])(
+    "does not reset before the threshold despite a %dms wall-clock step",
+    (step) => {
+      const backoff = createIrcReconnectBackoff();
+      backoff.nextDelayMs();
+      backoff.markConnected();
+      vi.advanceTimersByTime(59_999);
+      vi.setSystemTime(Date.now() + step);
+      expect(backoff.nextDelayMs()).toBe(2_000);
+    },
+  );
 
   it("does not let a failed connect attempt inherit an earlier connection's uptime", () => {
-    vi.spyOn(Math, "random").mockReturnValue(0);
-    const clock = createClock();
     const backoff = createIrcReconnectBackoff();
     backoff.nextDelayMs();
     backoff.markConnected();
-    clock.advance(10_000);
+    vi.advanceTimersByTime(10_000);
     expect(backoff.nextDelayMs()).toBe(2_000);
-    clock.advance(120_000);
+    vi.advanceTimersByTime(120_000);
     expect(backoff.nextDelayMs()).toBe(4_000);
   });
 });

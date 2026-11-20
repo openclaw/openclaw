@@ -15,6 +15,10 @@ OpenClaw removes XML declarations, external DTD declarations, and generator
 metadata before serving the files as public assets. The SVG geometry and visual
 content otherwise match the cited upstream files.
 
+Every bundled provider icon also uses a square view box centered on its mark,
+without width or height attributes, so marks share one optical size at any icon
+size. Only the view box changes; drawn geometry and colors are untouched.
+
 Provider names and marks remain the property of their respective owners.
 
 ## Abliteration icon
@@ -27,6 +31,16 @@ are combined without changing their geometry. The same mark supplies the plugin
 activity icon and the opaque white package tile.
 
 The name and mark remain the property of Abliteration AI, Inc.
+
+## Particle icon
+
+`ProviderIcon-particle.svg` uses the official Particle symbol from the inline
+SVG wordmark at https://particle.ai/, retrieved on October 29, 2026. The wordmark
+paths are removed and the view box is cropped to the 35 × 35 symbol. The symbol
+paths retain their original geometry and use `currentColor` for light and dark
+themes.
+
+The name and mark remain the property of Particle.
 
 ## Pi icon
 

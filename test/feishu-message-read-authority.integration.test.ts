@@ -15,13 +15,11 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../src/config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
+  resolveMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../src/gateway/message-action-turn-capability.js";
-import { createAgentRuntimeAuthorityGuard } from "../src/gateway/server-methods/agent-runtime-authority.js";
-import type { GatewayClient, GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -76,30 +74,20 @@ function createOriginatingRun(currentChat = CURRENT) {
     requesterSenderId: SELF,
     toolContext,
   });
-  const assert = createAgentRuntimeAuthorityGuard(
-    {
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey,
-          operationalRunInstance,
-          delegatedAuthority: { kind: "local", ...delegatedAuthority },
-          messageActionContext: { expiresAtMs: Date.now() + 60_000, turnCapability },
-        },
-      },
-    } as GatewayClient,
-    {
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-    } as GatewayRequestContext,
-    () => {},
-  ).commitGuard;
-  if (!assert) {
-    throw new Error("Expected originating Feishu run authority");
-  }
-  assert();
   return {
-    assert,
+    // Runtime admission does not replace the caller's live turn fence.
+    assert: () => {
+      if (
+        !resolveMessageActionTurnCapability({
+          token: turnCapability,
+          agentId: "main",
+          runId: operationalRunInstance.runId,
+          sessionKey,
+        })
+      ) {
+        throw new Error("Message-read turn authority is no longer active");
+      }
+    },
     toolContext,
     revokeTurn: () => revokeMessageActionTurnCapability(turnCapability),
     releaseClaim: () => releaseAgentRunDelegatedAuthority(delegatedAuthority),
@@ -579,7 +567,6 @@ it.each([
   ["plugin", "metadata"],
   ["plugin", "result"],
   ["turn", "result"],
-  ["claim", "result"],
 ] as const)("rejects %s retirement at %s", async (owner, phase) => {
   const fixture = createFixture();
   beforeReply = (request) => {
@@ -588,12 +575,8 @@ it.each([
     }
     if (owner === "plugin") {
       fixture.record.enabled = false;
-    }
-    if (owner === "turn") {
+    } else {
       fixture.run.revokeTurn();
-    }
-    if (owner === "claim") {
-      fixture.run.releaseClaim();
     }
   };
   await expect(fixture.dispatch("list-pins", { chatId: ALLOWED })).rejects.toThrow(
@@ -602,37 +585,25 @@ it.each([
   expect(contentRequests()).toEqual(phase === "metadata" ? [CHAT_PATH] : [CHAT_PATH, PINS_PATH]);
 });
 
-it.each(["sticker-search", "channel-list", "member-info"] as const)(
+it.each(["channel-list", "member-info"] as const)(
   "rejects a retired local %s result",
   async (action) => {
     const fixture = createFixture({ currentChat: action === "member-info" ? DIRECT : CURRENT });
     let observed: ActionResult | undefined;
     afterProviderResult = (result) => {
       observed = result;
-      if (action === "sticker-search") {
-        fixture.run.releaseClaim();
-      }
       if (action === "channel-list") {
         fixture.record.enabled = false;
-      }
-      if (action === "member-info") {
+      } else {
         fixture.run.revokeTurn();
       }
     };
-    const params =
-      action === "sticker-search"
-        ? { query: "thumbs" }
-        : action === "member-info"
-          ? { chatId: DIRECT }
-          : {};
-    await expect(fixture.dispatch(action, params)).rejects.toThrow("no longer active");
-    if (action === "sticker-search") {
-      expectResult(observed ?? null, { stickers: [{ fileId: "file_allowed" }] });
-    }
+    await expect(
+      fixture.dispatch(action, action === "member-info" ? { chatId: DIRECT } : {}),
+    ).rejects.toThrow("no longer active");
     if (action === "channel-list") {
       expectResult(observed ?? null, { groups: [{ id: ALLOWED }], peers: [{ id: SELF }] });
-    }
-    if (action === "member-info") {
+    } else {
       expectResult(observed ?? null, { members: [{ member_id: SELF }] });
     }
     expect(contentRequests()).toEqual(

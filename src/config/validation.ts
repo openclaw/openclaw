@@ -1,4 +1,5 @@
 // Owns core preparation and sync/async orchestration for config validation.
+import { openClawIdAccessWarning } from "../gateway/openclaw-id/access-plugin.js";
 import {
   listChannelIdsForOwnershipMigration,
   listChannelIdsForOwnershipMigrationAsync,
@@ -66,7 +67,7 @@ async function validateConfigObjectWithPluginsAsyncInternal(
   if (!prepared.ok) {
     return prepared.result;
   }
-  if (validationParams.pluginValidation === "core-only") {
+  if (validationParams.pluginValidation === "core-only" && !prepareStrictValidation) {
     return finishConfigObjectWithPlugins(prepared, validationParams, true);
   }
   // Raw-reference checks and parsed defaults must describe the same input after the await.
@@ -100,7 +101,7 @@ async function validateConfigObjectWithPluginsAsyncInternal(
     const strict = validatePreparedConfigWithPlugins(pending.migrated, strictConfig, {
       ...preparedParams,
       applyDefaults: false,
-      pluginValidation: "full",
+      pluginValidation: validationParams.pluginValidation === "core-only" ? "core-only" : "full",
       semanticValidation: "strict",
       installedPluginRecordIds: metadata?.installedPluginRecordIds,
     });
@@ -170,13 +171,18 @@ function finishConfigObjectWithPlugins(
   applyDefaults: boolean,
   installedPluginRecordIds?: ReadonlySet<string>,
 ): ValidateConfigWithPluginsResult {
-  return validatePreparedConfigWithPlugins(migrated, parsedConfig, {
+  const result = validatePreparedConfigWithPlugins(migrated, parsedConfig, {
     ...params,
     applyDefaults,
     installedPluginRecordIds,
     pluginValidation: params?.pluginValidation ?? "full",
     semanticValidation: params?.semanticValidation ?? "runtime",
   });
+  const warning = openClawIdAccessWarning(parsedConfig);
+  if (warning) {
+    result.warnings.push({ path: "gateway.openclawId.enabled", message: warning });
+  }
+  return result;
 }
 
 export function materializeLegacyAgentOwnershipForActiveChannelsResult(

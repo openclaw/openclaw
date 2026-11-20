@@ -11,6 +11,7 @@ export function readChild(
   signal?: AbortSignal,
   options?: {
     targetVersion?: string;
+    targetSha?: string;
     readJobLog?: (jobId: number) => string | Promise<string>;
     reuseSelection?: { runAttempt: number };
     readAttemptJobs?: (

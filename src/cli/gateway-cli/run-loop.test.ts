@@ -15,6 +15,7 @@ import {
   registerGracefulGatewayShutdownTests,
   registerShutdownCompletionTests,
 } from "./run-loop-shutdown-completion.test-support.js";
+import { registerGatewayStartupSignalTests } from "./run-loop-startup-signals.test-support.js";
 import { registerGatewayStartupFailureTests } from "./run-loop-startup.test-support.js";
 import { registerHostedUpdateStopTests } from "./run-loop-stop.test-support.js";
 import { registerUpdateRespawnTests } from "./run-loop-update-respawn.test-support.js";
@@ -299,6 +300,7 @@ describe("runGatewayLoop", () => {
   });
 
   registerGatewayStartupFailureTests(mocks.gatewayLog, fixtures);
+  registerGatewayStartupSignalTests(fixtures);
 
   registerGracefulGatewayShutdownTests(fixtures);
 
@@ -820,8 +822,7 @@ describe("runGatewayLoop", () => {
 
       await mocks.withRunningGateway(async ({ captureSignal, start, exited }) => {
         captureSignal("SIGUSR2")();
-        await waitForLoopTurn();
-        await waitForLoopTurn();
+        await waitForCalls(start, 2);
 
         expect(mocks.abortPendingChannelReloads).toHaveBeenCalledOnce();
         expect(mocks.consumeGatewayRestartAuthorization).toHaveBeenCalledOnce();
@@ -1092,7 +1093,7 @@ describe("runGatewayLoop", () => {
     await mocks.withRunningGateway(
       async ({ captureSignal, start, exited }) => {
         captureSignal("SIGUSR2")();
-        await waitForLoopTurn();
+        await waitForCalls(start, 2);
 
         expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
           expect.objectContaining({ port: 18789, probeHosts: ["10.0.0.25"] }),
@@ -1141,50 +1142,45 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("stops quietly when SIGTERM finds state released by an in-place restart", async () => {
-    const closing = createDeferred();
-    const close = vi.fn<GatewayCloseFn>(() => closing.promise);
-    // The restart reads its intent; the later SIGTERM finds the closing owner retired.
-    mocks.consumeGatewayRestartIntentPayload
-      .mockResolvedValueOnce(null)
-      .mockRejectedValueOnce(new Error("OpenClaw state process owner is no longer current"));
-
-    await testLoop.withIsolatedSignals(async ({ captureSignal }) => {
-      const completeBoot = vi.fn();
-      const { start, runtime, exited } = await mocks.createSignaledLoopHarness(undefined, false, {
-        close,
-        completeBoot,
-      });
-      try {
-        captureSignal("SIGUSR2")();
-        await waitForCalls(close, 1);
-        captureSignal("SIGTERM")();
-        closing.resolve();
-        await testLoop.waitForLoopCondition(
-          () => runtime.exit.mock.calls.length > 0 || start.mock.calls.length > 1,
-          "restart drain did not settle",
-        );
-        expect(start).toHaveBeenCalledOnce();
-        await expect(exited).resolves.toBe(0);
-        expect(mocks.gatewayLog.error).not.toHaveBeenCalledWith(
-          expect.stringContaining("failed to handle SIGTERM"),
-        );
-        expect(mocks.gatewayLog.info).toHaveBeenCalledWith(
-          "received SIGTERM after shutdown released Gateway state; stopping without a restart intent",
-        );
-        expect(completeBoot).toHaveBeenLastCalledWith({
-          outcome: "clean_stop",
-          reason: "stop (SIGTERM)",
+  it.each(["SIGUSR2", "SIGTERM"] as const)(
+    "handles SIGTERM during %s shutdown without reopening restart-intent storage",
+    async (signal) => {
+      const closing = createDeferred();
+      const close = vi.fn<GatewayCloseFn>(() => closing.promise);
+      await testLoop.withIsolatedSignals(async ({ captureSignal }) => {
+        const completeBoot = vi.fn();
+        const { start, exited } = await mocks.createSignaledLoopHarness(undefined, false, {
+          close,
+          completeBoot,
         });
-      } finally {
-        closing.resolve();
-        if (start.mock.calls.length > 1) {
-          captureSignal("SIGINT")();
-          await exited;
+        try {
+          captureSignal(signal)();
+          await waitForCalls(close, 1);
+          captureSignal("SIGTERM")();
+          captureSignal("SIGTERM")();
+          expect(
+            mocks.gatewayLog.info.mock.calls.filter(
+              ([message]) => message === "duplicate SIGTERM ignored",
+            ),
+          ).toHaveLength(1);
+          closing.resolve();
+          await expect(exited).resolves.toBe(0);
+          expect(start).toHaveBeenCalledOnce();
+          expect(mocks.consumeGatewayRestartIntentPayload).toHaveBeenCalledOnce();
+          expect(mocks.gatewayLog.error).not.toHaveBeenCalled();
+          expect(completeBoot).toHaveBeenLastCalledWith({
+            outcome: "clean_stop",
+            reason: "stop (SIGTERM)",
+          });
+        } finally {
+          closing.resolve();
+          if (start.mock.calls.length > 1) {
+            captureSignal("SIGINT")();
+          }
         }
-      }
-    });
-  });
+      });
+    },
+  );
 
   it("recloses restart admission after a failed SIGUSR2 handler rolls it back", async () => {
     mocks.markGatewayRestartHandled.mockImplementationOnce(() => {

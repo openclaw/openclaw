@@ -112,8 +112,10 @@ describe("steering input custody", () => {
             ).map((phase) => `chat.send.detail.${phase}`),
           ),
         );
-        expect(names).toContain("chat.send.detail.session.actor.command.queue");
-        expect(names).toContain("chat.send.detail.session.actor.command.execute");
+        if (active) {
+          expect(names).toContain("chat.send.detail.session.actor.command.queue");
+          expect(names).toContain("chat.send.detail.session.actor.command.execute");
+        }
       } finally {
         stop();
         setDiagnosticsEnabledForProcess(previous);
@@ -149,14 +151,21 @@ describe("steering input custody", () => {
     { scenario: "sandboxed same permissions across profiles", allowCollaborativeSteering: false },
     { scenario: "different scopes across profiles", allowCollaborativeSteering: undefined },
     { scenario: "different role session caps across profiles", allowCollaborativeSteering: true },
+    { scenario: "owner into loop", allowCollaborativeSteering: false },
+    { scenario: "owner into cron", allowCollaborativeSteering: false },
+    { scenario: "owner into subagent", allowCollaborativeSteering: false },
+    { scenario: "owner into loop revoked after acceptance", allowCollaborativeSteering: false },
+    { scenario: "nonowner into loop", allowCollaborativeSteering: false },
   ])(
     "preserves authenticated chat.send steering authority across callers ($scenario, collaboration: $allowCollaborativeSteering)",
     async ({ scenario, allowCollaborativeSteering }, { signal }) => {
       const startOwnerTurn = scenario === "same permissions across profiles";
-      const continuation = scenario.startsWith("same requester ");
+      const background = scenario.includes(" into ");
+      const subagent = scenario === "owner into subagent";
+      const nonowner = scenario === "nonowner into loop";
+      const continuation = scenario.startsWith("same requester ") || background;
       const sandboxedSessionWriter = scenario.includes("sandboxed");
-      const revokeAfterAcceptance =
-        scenario === "same requester sandboxed revoked after acceptance";
+      const revokeAfterAcceptance = scenario.endsWith("revoked after acceptance");
       const sharedSecretOwner = scenario === "shared-secret owner";
       const profile = sharedSecretOwner
         ? ensureGatewayOwnerProfile("Gateway Owner")
@@ -167,8 +176,10 @@ describe("steering input custody", () => {
         ? ensureProfileForEmail("other-steering@example.test")
         : profile;
       const fixture = await createBrowserFollowupFixture({
-        // This matrix compares task collaborators; main requester changes have separate coverage.
-        sessionKey: "agent:main:dashboard:steering-collaboration",
+        sessionKey:
+          scenario === "owner into cron"
+            ? "agent:main:cron:steering-automation"
+            : `agent:main:${subagent ? "subagent" : "dashboard"}:steering-collaboration`,
         preserveContent: true,
         active: !startOwnerTurn,
         // Both callers may write here; their caps still differ for other sessions.
@@ -176,7 +187,6 @@ describe("steering input custody", () => {
           ? { createdActor: { type: "human", source: "profile", id: incomingProfile.id } as const }
           : {}),
       });
-      // Naming has separate coverage; this fixture owns only steering and its backing turn.
       await patchSessionEntryCore(fixture.scope, () => ({ displayName: "Steering custody" }));
       const initialConfig = fixture.context.getRuntimeConfig();
       const initialQueue = { ...initialConfig.messages?.queue };
@@ -210,6 +220,7 @@ describe("steering input custody", () => {
         steeringConfig.gateway = {
           ...steeringConfig.gateway,
           roles: {
+            default: "participant",
             definitions: {
               writer: role,
               participant: { ...role, sessions: { others: "view" } },
@@ -228,7 +239,7 @@ describe("steering input custody", () => {
       const accepted =
         sharedSecretOwner ||
         scenario === "same grant" ||
-        continuation ||
+        (continuation && !nonowner) ||
         (collaborative && scenario !== "no native admission across profiles");
       const refused = acrossProfiles && allowCollaborativeSteering !== true;
       const forwarded = !accepted && scenario !== "revoked grant";
@@ -259,6 +270,9 @@ describe("steering input custody", () => {
         incomingGrant,
         scenario === "changed grant" ? "replacement-grant" : "original-grant",
       );
+      if (nonowner) {
+        reconnectedClient.connect.scopes = ["operator.read", "operator.write"];
+      }
       if (acrossProfiles) {
         reconnectedClient.authenticatedUserId = "other-steering@example.test";
         reconnectedClient.authenticatedUserProfile = {
@@ -378,6 +392,22 @@ describe("steering input custody", () => {
             commandAuthorized: true,
           }).senderIsOwner,
         };
+        if (background) {
+          run.operatorAuthority = undefined;
+          run.originatingChannel = undefined;
+          run.run.messageProvider = "internal";
+          // Child launches carry their session lineage, not inter-session report provenance.
+          run.run.spawnedBy = subagent ? "agent:main:dashboard:steering-parent" : undefined;
+          run.run.inputProvenance = subagent
+            ? undefined
+            : {
+                kind: "internal_system",
+                sourceTool: scenario === "owner into cron" ? "cron" : "cron_execution",
+              };
+          if (scenario === "owner into cron") {
+            run.run.scheduledToolPolicy = { version: 1, mode: "trusted" };
+          }
+        }
         const toolAuthority = continuation
           ? prepareReplyRunToolAuthority(run, loadSessionEntry(fixture.scope))
           : prepareReplyToolAuthority(run);
@@ -564,7 +594,9 @@ describe("steering input custody", () => {
           expect(queueMessage).not.toHaveBeenCalled();
           if (forwarded) {
             await withinTest(followupDispatched.promise, signal);
-            expect(operation.personalToolParticipants?.resolve()?.profileId).toBe(profile.id);
+            expect(operation.personalToolParticipants?.resolve()?.profileId).toBe(
+              background ? undefined : profile.id,
+            );
             expect(operation.result).toBeNull();
             expect(provider.isReleased()).toBe(false);
             expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
@@ -600,7 +632,7 @@ describe("steering input custody", () => {
         expect(
           operation.personalToolParticipants?.resolve(undefined, { allowTurnOwner: () => true })
             ?.operatorAuthority,
-        ).toBe(captured.authority);
+        ).toBe(background ? undefined : captured.authority);
         if (accepted && acrossProfiles) {
           const participants = operation.personalToolParticipants;
           expect(participants?.resolve(incomingProfile.id)?.profileId).toBe(incomingProfile.id);
@@ -646,7 +678,7 @@ describe("steering input custody", () => {
               __openclaw: { steerTargetRunId: "original-backing-run" },
             },
           });
-          if (acrossProfiles) {
+          if (acrossProfiles || background) {
             expect(input).toHaveProperty(
               "message.__openclaw.requesterOrigin.operatorProfileId",
               incomingProfile.id,

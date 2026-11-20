@@ -1,4 +1,4 @@
-export { resolveClosestSize } from "../media-generation/runtime-shared.js";
+export { resolveClosestSize } from "../../packages/media-generation-core/src/normalization.js";
 export {
   resolveGeneratedImageDownloadMaxBytes,
   resolveGeneratedMediaMaxBytes,

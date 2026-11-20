@@ -1,4 +1,5 @@
 // Vitest unit fast config wires the unit fast test shard.
+import path from "node:path";
 import { defineConfig } from "vitest/config";
 import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
@@ -36,6 +37,10 @@ export function createUnitFastVitestConfig(
 
   return defineConfig({
     ...sharedVitestConfig,
+    // Keep the pilot's native dependency history private to this invocation.
+    ...(env.OPENCLAW_VITEST_OBSERVATION_DIR
+      ? { cacheDir: path.join(env.OPENCLAW_VITEST_OBSERVATION_DIR, "vite") }
+      : {}),
     test: {
       ...sharedTest,
       name: "unit-fast",

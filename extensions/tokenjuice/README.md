@@ -2,7 +2,7 @@
 
 Official Tokenjuice output compaction plugin for OpenClaw.
 
-Tokenjuice compacts noisy `exec` and `bash` tool results after commands run, before the result is fed back into the active agent session. It does not rewrite commands, rerun commands, or change exit codes.
+Tokenjuice compacts noisy OpenClaw `exec` and `bash` tool results in embedded runs and OpenClaw dynamic tools in the Codex app-server harness. Native codex-rs shell results returned to the model stay unchanged. It does not rewrite commands, rerun commands, or change exit codes.
 
 ## Install
 

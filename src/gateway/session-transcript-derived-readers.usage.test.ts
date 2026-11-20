@@ -27,20 +27,30 @@ const zeroAssistant = {
 afterEach(clearRuntimeConfigSnapshot);
 
 it.each([
-  ["sqlite", true],
-  ["artifact", true],
-  ["artifact", false],
+  ["sqlite", true, true],
+  ["artifact", true, true],
+  ["artifact", false, true],
+  ["artifact", false, false],
 ] as const)(
-  "retains only authoritative zero usage from %s transcripts (report=%s)",
-  (source, authoritative) => {
-    const usageReport = authoritative ? { state: "available" } : undefined;
+  "retains measured zero context from %s transcripts (billing=%s, context=%s)",
+  (source, reported, measured) => {
+    const usageReport = reported ? { state: "available" } : undefined;
     const snapshot = aggregateSessionTranscriptUsage(
-      [{ ...zeroAssistant, usage: { ...zeroAssistant.usage, usageReport } }],
+      [
+        {
+          ...zeroAssistant,
+          usage: {
+            ...zeroAssistant.usage,
+            usageReport,
+            contextUsage: measured ? zeroAssistant.usage.contextUsage : undefined,
+          },
+        },
+      ],
       source,
     );
     expect(snapshot).toMatchObject({ inputTokens: 0, outputTokens: 0 });
-    expect(snapshot?.totalTokens).toBe(authoritative ? 0 : undefined);
-    expect(snapshot?.totalTokensFresh).toBe(authoritative ? true : undefined);
+    expect(snapshot?.totalTokens).toBe(measured ? 0 : undefined);
+    expect(snapshot?.totalTokensFresh).toBe(measured ? true : undefined);
     expect(snapshot?.usageReport).toEqual(usageReport);
   },
 );
@@ -97,7 +107,7 @@ it.each([321, 0, undefined])(
       expect(await snapshot()).toMatchObject({
         inputTokens: 1400,
         outputTokens: 20,
-        totalTokens: 400,
+        totalTokens: 410,
         totalTokensFresh: true,
       });
     }),

@@ -1,6 +1,10 @@
 import path from "node:path";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveGatewayNativeServiceIdentityConflict,
+  resolveGatewaySystemdServiceNameCandidates,
+} from "../daemon/constants.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import {
   buildGatewayConnectionDetails,
@@ -12,7 +16,8 @@ import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.j
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { isLoopbackGatewayUrl } from "../gateway/net.js";
 import { probeGateway } from "../gateway/probe.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
 const STATE_DIR_CHECK_TIMEOUT_MS = 3_000;
@@ -71,6 +76,8 @@ export function compareCliGatewayStateDirs(params: {
   source: "live Gateway" | "installed Gateway service";
   mode: "refuse" | "warn";
   command?: string;
+  /** Inherited `KEY=value` that picked the installed service instead of this profile's own. */
+  serviceSelector?: string;
 }): CliGatewayStateDirOutcome {
   const cliStateDir = resolveIdentityPathViaExistingAncestorSync(params.cliStateDir);
   const cliConfigPath = resolveIdentityPathViaExistingAncestorSync(params.cliConfigPath);
@@ -79,9 +86,9 @@ export function compareCliGatewayStateDirs(params: {
     params.gatewayConfigPath ?? path.join(gatewayStateDir, "openclaw.json"),
   );
   const differences = [
-    cliStateDir !== gatewayStateDir &&
+    path.relative(cliStateDir, gatewayStateDir) !== "" &&
       `state directories (CLI: ${params.cliStateDir}; Gateway: ${gatewayStateDir})`,
-    cliConfigPath !== gatewayConfigPath &&
+    path.relative(cliConfigPath, gatewayConfigPath) !== "" &&
       `config paths (CLI: ${params.cliConfigPath}; Gateway: ${gatewayConfigPath})`,
   ].filter((difference): difference is string => Boolean(difference));
   if (differences.length === 0) {
@@ -102,6 +109,11 @@ export function compareCliGatewayStateDirs(params: {
       params.source === "live Gateway"
         ? "To write another local store intentionally, stop the running Gateway first."
         : "To write another local store intentionally, uninstall or reconfigure the divergent Gateway service first.",
+      ...(params.serviceSelector
+        ? [
+            `This shell selects that service with ${params.serviceSelector}; if it was inherited from another Gateway, remove ${params.serviceSelector.split("=")[0]} from this shell's environment and retry.`,
+          ]
+        : []),
     ].join(" "),
   };
 }
@@ -110,6 +122,7 @@ export async function checkCliGatewayStateDir(params: {
   command: string;
   config?: OpenClawConfig;
 }): Promise<CliGatewayStateDirOutcome> {
+  const signal = getAsyncWorkSignal();
   const cliStateDir = resolveStateDir(process.env);
   const cliConfigPath = resolveConfigPath(process.env);
   const details = buildGatewayConnectionDetails({ config: params.config });
@@ -130,6 +143,7 @@ export async function checkCliGatewayStateDir(params: {
       scopes: [ADMIN_SCOPE],
       sharedStateMode: "read-only",
       timeoutMs: STATE_DIR_CHECK_TIMEOUT_MS,
+      signal,
       onHelloOk: (value) => {
         hello = value;
       },
@@ -137,6 +151,8 @@ export async function checkCliGatewayStateDir(params: {
   } catch (error) {
     connectionError = error;
   }
+  // An interrupted read must not fall through to offline service diagnostics and their output.
+  signal?.throwIfAborted();
   if (hello?.snapshot.stateDir) {
     return compareCliGatewayStateDirs({
       cliStateDir,
@@ -150,10 +166,22 @@ export async function checkCliGatewayStateDir(params: {
   }
 
   const servicePaths = await inspectInstalledGatewayStatePaths();
+  signal?.throwIfAborted();
   if (servicePaths.kind === "unknown") {
     return { kind: "warn", message: GATEWAY_SERVICE_PATHS_UNVERIFIED };
   }
   if (servicePaths.kind === "known") {
+    // Name the active backend's selector only when clearing it would pick this profile's service.
+    const conflict = resolveGatewayNativeServiceIdentityConflict(process.env);
+    const selectorValue = conflict && process.env[conflict.envKey]?.trim();
+    // Systemd discovery also finds this profile's legacy unit name; clearing a selector for it changes nothing.
+    const selectsLegacyUnit =
+      conflict?.envKey === "OPENCLAW_SYSTEMD_UNIT" &&
+      resolveGatewaySystemdServiceNameCandidates(process.env.OPENCLAW_PROFILE).some(
+        (name) => selectorValue === name || selectorValue === `${name}.service`,
+      );
+    const redirectingSelector =
+      conflict && !selectsLegacyUnit ? `${conflict.envKey}=${selectorValue}` : undefined;
     return compareCliGatewayStateDirs({
       cliStateDir,
       cliConfigPath,
@@ -162,6 +190,7 @@ export async function checkCliGatewayStateDir(params: {
       source: "installed Gateway service",
       mode: "refuse",
       command: params.command,
+      serviceSelector: redirectingSelector,
     });
   }
 
@@ -172,7 +201,9 @@ export async function checkCliGatewayStateDir(params: {
       timeoutMs: STATE_DIR_CHECK_TIMEOUT_MS,
       includeDetails: false,
       suppressStoredDeviceAuth: true,
+      signal,
     });
+    signal?.throwIfAborted();
     if (probe.gatewayReached) {
       return {
         kind: "warn",

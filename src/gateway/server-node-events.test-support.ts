@@ -34,7 +34,7 @@ export const buildSessionLookup = (
 });
 
 const runtimeMocks = vi.hoisted(() => ({
-  agentCommandFromIngress: vi.fn().mockResolvedValue(undefined),
+  agentCommandFromGatewayIngress: vi.fn().mockResolvedValue(undefined),
   deleteMediaBuffer: vi.fn(async () => {}),
   enqueueSystemEventEntry: vi.fn(),
   captureSessionEventTargetForHost: vi.fn(async (agentId: string, sessionKey: string) => ({
@@ -112,7 +112,7 @@ vi.mock("../channels/plugins/index.js", async (importOriginal) => ({
 
 vi.mock("../commands/agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/agent.js")>()),
-  agentCommandFromIngress: runtimeMocks.agentCommandFromIngress,
+  agentCommandFromGatewayIngress: runtimeMocks.agentCommandFromGatewayIngress,
 }));
 
 vi.mock("../config/io.js", async (importOriginal) => ({

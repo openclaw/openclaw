@@ -6,10 +6,8 @@ import {
   waitForChatScrollIdle,
 } from "../../ui/src/e2e/chat-flow.test-support.ts";
 import { CONFIG_PAGE_IDS } from "../../ui/src/pages/config/config-sections.ts";
-import type {
-  ControlUiMockGatewayScenario,
-  MockGatewayControls,
-} from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import type { MockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import type { NativeControlUiMockGatewayScenario } from "../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { chatToolScenes } from "./chat-tool-scenes.ts";
 import {
   fixedTime,
@@ -57,7 +55,7 @@ export type Scene = {
   route?: RouteId;
   path: string;
   ready: string;
-  scenario?: ControlUiMockGatewayScenario;
+  scenario?: NativeControlUiMockGatewayScenario;
   prepare?: (page: Page, gateway: MockGatewayControls) => Promise<void>;
   scrollTo?: string;
   loading?: boolean;
@@ -134,7 +132,7 @@ const loadingRoutes: Array<{ route: RouteId; method: string; ready: string }> = 
     ready: "#settings-profile-identity .settings-loading-skeleton",
   },
 ];
-const modelSettingsScenario: ControlUiMockGatewayScenario = {
+const modelSettingsScenario: NativeControlUiMockGatewayScenario = {
   featureMethods: [
     ...baseScenario.featureMethods!,
     "codex.accountUsage",

@@ -27,14 +27,25 @@ const packageContract = "src/plugins/contracts/plugin-sdk-package-contract-guard
 const contractsConfig = "test/vitest/vitest.contracts-plugin.config.ts";
 const channelsConfig = "test/vitest/vitest.channels.config.ts";
 const gatewayMethodsConfig = "test/vitest/vitest.gateway-methods.config.ts";
-const gatewaySubscriptions = "src/gateway/server-runtime-subscriptions.test.ts";
+const gatewaySubscriptions = "src/gateway/server-runtime-config.test.ts";
 const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
 const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
 const agentsCoreConfig = agentVitestProjectOwners.core.config;
+const windowsGitBash = "src/agents/sessions/windows-git-bash-path.test.ts";
+const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
 const discordCapture = "test/e2e/gateway-transcripts-discord-capture.e2e.test.ts";
 const e2eConfig = "test/vitest/vitest.e2e.config.ts";
+const runtimeBuildGraph = "test/scripts/runtime-process-build-graph.test.ts";
+const toolingConfig = "test/vitest/vitest.tooling.config.ts";
 
 it.for([
+  ["runtime build graph shard", toolingConfig, [], true, [runtimeBuildGraph]],
+  [
+    "runtime build graph excluded",
+    toolingConfig,
+    [runtimeBuildGraph, "--exclude", runtimeBuildGraph],
+    false,
+  ],
   ["ordinary infra", infraConfig, ["src/infra/node-sqlite.test.ts"], false],
   ["root config", "vitest.config.ts", [coreWorker], true],
   ["custom config", "custom.config.ts", [coreWorker], false],
@@ -70,9 +81,13 @@ it.for([
     agentsCoreConfig,
     [codeModeWorker],
     false,
-    ["src/agents/code-mode.test.ts"],
+    ["src/agents/code-mode.integrated.test.ts"],
   ],
   ["unrelated agents stay lazy", agentsCoreConfig, ["src/agents/code-mode-runtime.test.ts"], false],
+  ["Git Bash basename filter", unitFastConfig, [path.basename(windowsGitBash, ".test.ts")], true],
+  ["Git Bash shard include", unitFastConfig, [], true, [windowsGitBash]],
+  ["Git Bash excluded", unitFastConfig, [windowsGitBash, "--exclude", windowsGitBash], false],
+  ["unrelated fast unit stays lazy", unitFastConfig, [], false, ["src/infra/errors.test.ts"]],
 ] satisfies Array<[string, string, string[], boolean, string[]?]>)(
   "selects eager worker preparation for %s",
   async ([, config, args, prepare, include]) => {
@@ -89,7 +104,9 @@ subprocess.for([
       : [
           "code-mode",
           "capture",
-          "gateway-subscriptions",
+          "gateway-runtime-config",
+          "windows-git-bash",
+          "runtime-build-graph",
           "failure",
           "cancel",
           "excluded",
@@ -104,28 +121,39 @@ subprocess.for([
     ).map((mode) => ({ route, mode })),
   ),
   { route: "batch", mode: "ready" },
+  { route: "batch-inherited", mode: "ready" },
+  { route: "batch-inherited", mode: "cancel" },
+  { route: "built-source", mode: "ready" },
+  { route: "shim-direct", mode: "ready" },
 ])(
   "$route runner owns worker preparation through $mode",
   ({ route, mode }, { workerArtifacts, signal, onTestFinished }) =>
     inWorkerArtifactFixture(
       { workerArtifacts, signal, onTestFinished },
       async ({ node, directory, write: fixture }) => {
+        const inheritedBatch = route === "batch-inherited";
         const [selectedFile, selectedConfig]: [string, string] = route.startsWith("contracts-")
           ? [packageContract, contractsConfig]
           : mode === "code-mode"
             ? [codeModeWorker, agentsCoreConfig]
             : mode === "capture"
               ? [discordCapture, e2eConfig]
-              : mode === "gateway-subscriptions"
-                ? [gatewaySubscriptions, gatewayServerConfig]
-                : [coreWorker, infraConfig];
+              : mode === "gateway-runtime-config"
+                ? ["src/gateway/server-runtime-config.test.ts", gatewayServerConfig]
+                : mode === "windows-git-bash"
+                  ? [windowsGitBash, unitFastConfig]
+                  : mode === "runtime-build-graph"
+                    ? [runtimeBuildGraph, toolingConfig]
+                    : [coreWorker, infraConfig];
         const compiled = path.join(directory, "compiled.jsonl");
         const launched = path.join(directory, "launched.json");
+        const loans = path.join(directory, "loans.jsonl");
         const compilerReceipt = path.join(directory, "compiler.json");
         const childCacheReceipt = path.join(directory, "child-cache.json");
         const nodeCompileCache = path.join(directory, "node-compile-cache");
         const expectedCache = { path: nodeCompileCache, portable: "1", disabled: null };
         const canceled = path.join(directory, "canceled");
+        const disposed = path.join(directory, "disposed.json");
         const input = fixture("input.mjs", "export const fixture = true;");
         const compiler = fixture(
           "compiler.mjs",
@@ -142,7 +170,7 @@ fs.writeFileSync(${JSON.stringify(compilerReceipt)},JSON.stringify({
   } : {}),
 }));
 if (${JSON.stringify(mode)}==='failure') process.exit(7);
-if (${JSON.stringify(mode)}==='cancel') {
+if (${JSON.stringify(mode === "cancel" && !inheritedBatch)}) {
   const watcher=fs.watch(${JSON.stringify(directory)},()=>{});
   process.once('SIGTERM',()=>{
     fs.writeFileSync(${JSON.stringify(canceled)},'joined');
@@ -158,9 +186,15 @@ await runWorkerFixtureCompiler(generation,${JSON.stringify(input)},${JSON.string
         const leaf = fixture(
           "leaf.mjs",
           `
+import fs from 'node:fs';
 import {requestVitestWorkerArtifacts} from ${JSON.stringify(new URL("../../scripts/lib/vitest-worker-artifacts.mts", import.meta.url).href)};
 if (process.connected) {
   await requestVitestWorkerArtifacts();
+  if (${JSON.stringify(inheritedBatch && mode === "cancel")} && process.argv[2] === 'second.test.ts') {
+    fs.writeFileSync(${JSON.stringify(canceled)}, 'started');
+    process.kill(process.ppid, 'SIGTERM');
+    await new Promise(()=>{});
+  }
   process.disconnect();
 }
 `,
@@ -182,9 +216,16 @@ cp.spawn=(bin,args,options)=>{
   if(args[0]===${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-compiler.mts"))}) {
     return spawn(bin,[${JSON.stringify(compiler)},args[1]],options);
   }
-  if(args.some(arg=>path.basename(arg)==='vitest.mjs')) {
-    const bootstrap=args.indexOf(${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-bootstrap.mts"))});
+  const bootstrap=args.indexOf(${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-bootstrap.mts"))});
+  if(args.some(arg=>path.basename(arg)==='vitest.mjs') ||
+     (${JSON.stringify(["built-source", "shim-direct"].includes(route))} && bootstrap>=0)) {
     const generation=bootstrap<0?undefined:args[bootstrap+1];
+    if(${JSON.stringify(inheritedBatch)}) {
+      fs.appendFileSync(${JSON.stringify(loans)},JSON.stringify({generation,preset:args[bootstrap+2]})+'\\n');
+    }
+    if(${JSON.stringify(["built-source", "shim-direct"].includes(route))}) {
+      fs.appendFileSync(${JSON.stringify(loans)},JSON.stringify({generation})+'\\n');
+    }
     fs.writeFileSync(${JSON.stringify(launched)},JSON.stringify({
       prepared: Boolean(generation && fs.existsSync(path.join(generation,'manifest.json'))),
       ...(probeCache ? {
@@ -194,7 +235,7 @@ cp.spawn=(bin,args,options)=>{
       } : {}),
     }));
     // Keep the selected environment; this fixture proves delivery without requiring Bun.
-    return spawn(probeCache ? process.execPath : bin,[${JSON.stringify(leaf)}],options);
+    return spawn(probeCache ? process.execPath : bin,[${JSON.stringify(leaf)},...(${JSON.stringify(inheritedBatch)} ? [args.at(-1)] : [])],options);
   }
   return spawn(bin,args,options);
 };
@@ -219,27 +260,89 @@ syncFixtureBuiltinExports();
               ? [gatewayMethodsConfig]
               : [selectedConfig, selectedFile];
         const flags = controls[mode] ?? [];
-        const args =
-          route === "batch"
-            ? [
-                "--import",
-                "./scripts/tsx.mjs",
-                fixture(
-                  "batch.mts",
-                  `import {runVitestBatch} from ${JSON.stringify(path.join(root, "scripts/lib/vitest-batch-runner.mts"))};
-process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},args:[${JSON.stringify(coreWorker)}],targets:[],env:process.env});`,
-                ),
-              ]
-            : route === "direct" || route === "contracts-direct"
-              ? ["scripts/run-vitest.mjs", "run", "--config", ...selection, ...flags]
-              : [
+        const inheritedPlan = inheritedBatch
+          ? fixture(
+              "inherited-plan.mts",
+              `import fs from 'node:fs';
+import {runExtensionBatchPlan} from ${JSON.stringify(path.join(root, "scripts/test-extension-batch-run.mts"))};
+const initialDisconnectListeners = process.listenerCount('disconnect');
+const kill = process.kill;
+// Observe the actual owner release immediately before the native signal is re-raised.
+process.kill = function(pid, signal) {
+  if (pid === process.pid && signal === 'SIGTERM') {
+    fs.writeFileSync(${JSON.stringify(disposed)}, JSON.stringify({initialDisconnectListeners, disconnectListeners: process.listenerCount('disconnect')}));
+  }
+  return kill.call(process, pid, signal);
+};
+process.exitCode = await runExtensionBatchPlan({
+  extensionCount:2,extensionIds:['first','second'],estimatedCost:2,hasTests:true,testFileCount:2,
+  planGroups:${JSON.stringify(
+    ["first", "second"].map((name) => ({
+      config: infraConfig,
+      estimatedCost: 1,
+      extensionIds: [name],
+      roots: [`${name}.test.ts`],
+      testFileCount: 1,
+    })),
+  )}
+},{env:process.env,vitestArgs:['--configLoader=native']});`,
+            )
+          : undefined;
+        let args =
+          route === "built-source"
+            ? ["--import", "./scripts/tsx.mjs", "scripts/test-built-source-verifiers.mts"]
+            : route === "shim-direct"
+              ? [
                   "--import",
                   "./scripts/tsx.mjs",
-                  "scripts/test-projects.mts",
-                  selectedFile,
-                  "--",
-                  ...flags,
-                ];
+                  fixture(
+                    "shim.mts",
+                    `import {createVitestWorkerRun} from ${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-run.mts"))};
+import {runNodeCliShim} from ${JSON.stringify(path.join(root, "scripts/lib/tsx-cli-shim.mjs"))};
+const workers=createVitestWorkerRun();
+try {
+  await runNodeCliShim(import.meta.url,{implementation:${JSON.stringify(leaf)},workerRun:workers,executable:process.execPath});
+} finally { await workers.dispose(); }`,
+                  ),
+                ]
+              : route === "batch"
+                ? [
+                    "--import",
+                    "./scripts/tsx.mjs",
+                    fixture(
+                      "batch.mts",
+                      `import {runVitestBatch} from ${JSON.stringify(path.join(root, "scripts/lib/vitest-batch-runner.mts"))};
+process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},args:[${JSON.stringify(coreWorker)}],targets:[],env:process.env});`,
+                    ),
+                  ]
+                : route === "direct" || route === "contracts-direct"
+                  ? ["scripts/run-vitest.mjs", "run", "--config", ...selection, ...flags]
+                  : [
+                      "--import",
+                      "./scripts/tsx.mjs",
+                      "scripts/test-projects.mts",
+                      selectedFile,
+                      "--",
+                      ...flags,
+                    ];
+        if (inheritedPlan) {
+          args = [
+            "--import",
+            "./scripts/tsx.mjs",
+            fixture(
+              "inherited-owner.mts",
+              `import {createVitestWorkerRun} from ${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-run.mts"))};
+import {runVitestShutdownCommand} from ${JSON.stringify(path.join(root, "test/helpers/vitest-shutdown-command.ts"))};
+const workers = createVitestWorkerRun(process.env, undefined, 'tooling');
+try {
+  const result = await runVitestShutdownCommand({args:[${JSON.stringify(inheritedPlan)}],nodeArgs:['--import',${JSON.stringify(path.join(root, "scripts/tsx.mjs"))}],env:process.env,workerRun:workers});
+  process.stdout.write(result.stdout);
+  process.stderr.write(result.stderr);
+  process.exitCode = result.code;
+} finally { await workers.dispose(); }`,
+            ),
+          ];
+        }
         const includeFile = mode.startsWith("include-")
           ? fixture(
               "include.json",
@@ -252,6 +355,18 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
           OPENCLAW_E2E_USE_PREBUILT_DIST: "1",
           ...fixturePreloadEnv(preload, "node"),
+          ...(inheritedBatch
+            ? { OPENCLAW_EXTENSION_BATCH_PARALLEL: "1", OPENCLAW_VITEST_RUNTIME: "node" }
+            : {}),
+          ...(route === "built-source"
+            ? {
+                // This CI runner must not reuse a local cache slot before cleanup is observed.
+                CI: "1",
+                OPENCLAW_VITEST_WORKER_CACHE: undefined,
+                CHANNEL_NODE_OPTIONS: "--max-old-space-size=8192",
+                RUNNER_TEMP: directory,
+              }
+            : {}),
           ...(route === "batch"
             ? {
                 OPENCLAW_VITEST_RUNTIME: "bun",
@@ -272,15 +387,30 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           "gateway-methods",
           "code-mode",
           "capture",
-          "gateway-subscriptions",
+          "gateway-runtime-config",
+          "windows-git-bash",
+          "runtime-build-graph",
         ].includes(mode);
         const prepared = ready || mode === "failure" || mode === "cancel";
         expect(fs.existsSync(compilerReceipt)).toBe(prepared);
-        if (mode === "failure" || mode === "cancel") {
+        if (inheritedBatch) {
+          const receipt = readJson(compilerReceipt);
+          const borrowed = readFixtureLines<{ generation: string; preset: string }>(loans);
+          expect(borrowed).toEqual([
+            { generation: receipt.generation, preset: "--worker-preset=tooling" },
+            { generation: receipt.generation, preset: "--worker-preset=tooling" },
+          ]);
+          expect(readFixtureLines(compiled)).toHaveLength(1);
+          expect(result.stderr).not.toContain("[test] native report set:");
+          if (mode === "cancel") {
+            const disposition = readJson(disposed);
+            expect(disposition.disconnectListeners).toBe(disposition.initialDisconnectListeners);
+          }
+        } else if (mode === "failure" || mode === "cancel") {
           expect(fs.existsSync(launched)).toBe(false);
         } else {
           expect(readJson(launched)).toEqual({
-            prepared: ready && route !== "batch",
+            prepared: ready && !["batch", "built-source", "shim-direct"].includes(route),
             ...(route === "batch"
               ? {
                   command: process.execPath,
@@ -300,6 +430,13 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           const receipt = readJson(compilerReceipt);
           expect(isProcessAlive(receipt.pid)).toBe(false);
           expect(fs.existsSync(receipt.generation)).toBe(false);
+          if (["built-source", "shim-direct"].includes(route)) {
+            const borrowed = readFixtureLines<{ generation: string }>(loans);
+            expect(borrowed).toHaveLength(route === "built-source" ? 2 : 1);
+            expect(new Set(borrowed.map((loan) => loan.generation))).toEqual(
+              new Set([receipt.generation]),
+            );
+          }
           if (route === "batch") {
             expect(receipt).toMatchObject({ runtime: "node", cache: expectedCache });
           }

@@ -8,7 +8,12 @@ import {
   vi,
   type TestContext,
 } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import {
@@ -93,12 +98,18 @@ vi.mock("../infra/approval-turn-source.js", () => ({
 }));
 
 describe("applyPluginNodeInvokePolicy", () => {
+  let authorityScenario: Promise<void> | undefined;
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     hasApprovalTurnSourceRouteMock.mockClear();
   });
 
-  afterEach(() => resetPluginRuntimeStateForTest());
+  afterEach(async () => {
+    // Vitest aborts its wrapper before the fixture finishes; join before resetting policy state.
+    await Promise.allSettled(authorityScenario ? [authorityScenario] : []);
+    authorityScenario = undefined;
+    resetPluginRuntimeStateForTest();
+  });
 
   it("preserves one approval and session identity through streaming readiness recovery", async (testContext) => {
     const nodeSession = createNodeSession({ pairingGeneration: "paired-generation-1" });
@@ -299,37 +310,53 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it.each(["runtime", "bridged approval"] as const)(
-    "rejects plugin dispatch when %s authority closes during pairing recheck",
-    async (authority) => {
-      setDangerousDemoCommandRegistry([createDemoPolicy((ctx) => ctx.invokeNode())]);
-      let active = true;
-      const { promise: pairingCheck, resolve: releasePairingCheck } = createDeferred();
-      const { context, invoke } = createContext(
-        authority === "runtime" ? { validateAgentRuntimeApprovalAuthority: () => active } : {},
-      );
-      const client =
-        authority === "runtime"
-          ? createRuntimeClient("run-node-policy-race")
-          : createOperatorClient();
-      const resultPromise = invokeDemoPolicy(context, client, {
-        isInvocationCurrent: async () => {
-          await pairingCheck;
-          return true;
-        },
-        ...(authority === "bridged approval" ? { isApprovalAuthorityActive: () => active } : {}),
-      });
-      await vi.waitFor(() => expect(releasePairingCheck).toBeTypeOf("function"));
-      active = false;
-      releasePairingCheck?.();
-      await expect(resultPromise).resolves.toMatchObject({
-        ok: false,
-        code: "APPROVAL_AUTHORITY_CLOSED",
-        details: { nodeCommandDispatched: false },
-      });
-      expect(invoke).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects plugin dispatch when bridged approval authority closes during pairing recheck", (testContext) => {
+    let active = true;
+    const entered = createDeferred();
+    const pairingCheck = createDeferred();
+    let operation: Promise<unknown> | undefined;
+    authorityScenario = runQaGatewayTestFixture(
+      testContext,
+      async () => {
+        setDangerousDemoCommandRegistry([createDemoPolicy((ctx) => ctx.invokeNode())]);
+        const { context, invoke } = createContext();
+        const client = createOperatorClient();
+        operation = invokeDemoPolicy(context, client, {
+          isInvocationCurrent: async () => {
+            entered.resolve();
+            await pairingCheck.promise;
+            return true;
+          },
+          isApprovalAuthorityActive: () => active,
+        });
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            operation,
+            "Plugin invocation ended before pairing recheck",
+          ),
+          testContext.signal,
+        );
+        active = false;
+        pairingCheck.resolve();
+        await withinTest(
+          expect(operation).resolves.toMatchObject({
+            ok: false,
+            code: "APPROVAL_AUTHORITY_CLOSED",
+            details: { nodeCommandDispatched: false },
+          }),
+          testContext.signal,
+        );
+        expect(invoke).not.toHaveBeenCalled();
+      },
+      () => {
+        active = false;
+        pairingCheck.resolve();
+      },
+      () => Promise.allSettled(operation ? [operation] : []),
+    );
+    return authorityScenario;
+  });
 
   it.each([false, true])(
     "reports actual dispatch state for a failed policy (dispatched=%s)",
@@ -493,21 +520,14 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
   });
 
-  it("delivers plugin policy approvals to visible iOS reviewers", async (testContext) => {
+  it("passes plugin policy approval bindings to iOS delivery", async (testContext) => {
     const fixture = deliveryFixture(testContext);
     const { manager, context, handleRequested } = fixture;
     await fixture.run(async () => {
       context.pluginApprovalIosPushDelivery = { handleRequested };
       const { record, pending: resultPromise } = await fixture.request();
 
-      expect(handleRequested).toHaveBeenCalledTimes(1);
-      const deliveryOptions = handleRequested.mock.calls[0]?.[1];
-      const visible = (deviceId: string) =>
-        deliveryOptions?.isTargetVisible?.({
-          deviceId,
-          scopes: ["operator.approvals", "operator.read"],
-        });
-      expect([visible("device-owner"), visible("device-other")]).toEqual([true, false]);
+      expect(handleRequested).toHaveBeenCalledExactlyOnceWith(record);
 
       await expectApprovalResolution(resultPromise, manager, record);
     });
@@ -585,6 +605,24 @@ describe("applyPluginNodeInvokePolicy", () => {
       await expectApprovalResolution(resultPromise, manager, record);
     });
   });
+
+  it.for(["before the prompt", "while awaiting the decision"])(
+    "finishes the approval when the upload gate closes %s",
+    async (stage, testContext) => {
+      const fixture = createPolicyApprovalFixture(testContext);
+      let uploadAllowed = stage !== "before the prompt";
+      await fixture.run(async () => {
+        setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+        const { record, pending } = await fixture.request(createOperatorClient(), {
+          isApprovalAuthorityActive: () => uploadAllowed,
+        });
+        uploadAllowed = false;
+
+        await expectApprovalResolution(pending, fixture.manager, record);
+        expect(fixture.invoke).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("fails closed when the allow-once claim cannot be consumed", async (testContext) => {
     const fixture = createPolicyApprovalFixture(testContext);

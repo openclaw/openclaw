@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
+import {
+  createExactAssistantMessage,
+  timedMessageEvent,
+} from "./transcript-message.test-support.js";
 
 function message(
   id: string,
@@ -18,6 +23,48 @@ function message(
 }
 
 describe("reset boundary planning", () => {
+  it("counts a placed background result at its logical slot across repeated resets", () => {
+    const pending = timedMessageEvent("pending", null, "2026-07-22T00:00:00.000Z", {
+      ...createExactAssistantMessage({
+        text: "background",
+        provider: "openclaw",
+        model: "automation-result",
+      }),
+      excludeFromContext: true,
+      openclawModelPlacement: "pending",
+    });
+    const events: unknown[] = [pending];
+    for (let turn = 1; turn <= 3; turn++) {
+      events.push(
+        message(
+          `user-${turn}`,
+          turn === 1 ? pending.id : `assistant-${turn - 1}`,
+          "user",
+          "question",
+          turn * 2,
+        ),
+        message(`assistant-${turn}`, `user-${turn}`, "assistant", "answer", turn * 2 + 1),
+      );
+    }
+    events.push({
+      type: "custom",
+      id: "placement",
+      parentId: "assistant-3",
+      timestamp: pending.timestamp,
+      customType: BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE,
+      data: { afterEntryId: "assistant-3", resultEntryIds: [pending.id] },
+    });
+    for (let reset = 0; reset < 2; reset++) {
+      const boundary = buildSessionResetBoundaryEvent({
+        events,
+        context: "preserve-tail",
+        reason: "daily",
+      });
+      expect(boundary.firstKeptEntryId).toBe("user-2");
+      events.push(boundary);
+    }
+  });
+
   it("cuts prior conversation context for explicit reset boundaries", () => {
     const reason = "reset";
     const user = message("prior-user", null, "user", "discarded", 1);

@@ -10,6 +10,7 @@ import { createPluginCommandRuntime } from "openclaw/plugin-sdk/plugin-command-r
 import { matchPluginCommand, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { expect, it } from "vitest";
 import { buildPluginTelegramMenuCommands } from "./bot-native-command-menu.js";
+import { buildCommandsPaginationKeyboard } from "./command-ui.js";
 import { inputRichBlocksToPlainText } from "./rich-block-model.js";
 import { planTelegramTextDeliveryPages } from "./telegram-text-delivery.js";
 
@@ -86,4 +87,18 @@ it.each([false, true])("encodes delivered command names as code (rich=%s)", (ric
       );
     }
   });
+});
+
+it.each([
+  [4, ":aaaa"],
+  [64, ""],
+])("keeps /commands page buttons within 64 bytes for a %i-char agent id", (length, suffix) => {
+  for (const { callback_data: data } of buildCommandsPaginationKeyboard(
+    99,
+    100,
+    "a".repeat(length),
+  )[0]!) {
+    expect(Buffer.byteLength(data)).toBeLessThanOrEqual(64);
+    expect(data).toMatch(new RegExp(`^commands_page_(\\d+|noop)${suffix}$`));
+  }
 });

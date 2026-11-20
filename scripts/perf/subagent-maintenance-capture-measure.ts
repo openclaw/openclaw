@@ -13,19 +13,16 @@ import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { mock } from "node:test";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { ControlledSubagentRunsReadContext } from "../../src/agents/subagents/registry/subagent-control-scope.js";
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { summarizeDurationDistribution } from "../lib/perf-duration-distribution.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { generateTeamShapeFixture, parseTeamShapeOptions } from "./team-shape-fixture.ts";
 
@@ -80,15 +77,10 @@ const stateDir = values["state-dir"]
   ? path.resolve(values["state-dir"])
   : mkdtempSync(path.join(os.tmpdir(), "subagent-capture-"));
 const profilePath = path.join(stateDir, "allocation.heapprofile");
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
 // Identify the main isolate before any source import can start a worker.
-marker("identify-start");
+writeGatewayGcTraceMarker("identify-start", profilePath);
 global.gc();
-marker("identify-stop");
+writeGatewayGcTraceMarker("identify-stop", profilePath);
 const teamShape = values["team-shape"]
   ? await generateTeamShapeFixture(
       parseTeamShapeOptions([
@@ -168,20 +160,6 @@ function run(index: number, protectedRun = index < 60): SubagentRunRecord {
   };
 }
 
-function distribution(samples: number[]) {
-  const sorted = samples.toSorted((a, b) => a - b);
-  const count = sorted.length;
-  const totalMs = sorted.reduce((sum, value) => sum + value, 0);
-  return {
-    count,
-    totalMs,
-    meanMs: count ? totalMs / count : 0,
-    maxMs: sorted.at(-1) ?? 0,
-    p95: { samples: count, ms: sorted[Math.ceil(count * 0.95) - 1] ?? null },
-    p99: { samples: count, ms: sorted[Math.ceil(count * 0.99) - 1] ?? null },
-  };
-}
-
 function allocation(profile: HeapProfiler.SamplingHeapProfile) {
   let totalBytes = 0;
   let registryBytes = 0;
@@ -205,21 +183,13 @@ function allocation(profile: HeapProfiler.SamplingHeapProfile) {
 let prepared: Awaited<ReturnType<typeof prepareSessionMaintenancePreservation>> | undefined;
 const claims = new Map<string, string>();
 const inspector = new Session();
-const observer = new PerformanceObserver((list) => recordGc(list.getEntries()));
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), collections, measuredStart, measuredEnd),
+);
 const loop = monitorEventLoopDelay({ resolution: 1 });
 const collections: { kind: number; ms: number }[] = [];
 let measuredStart = Infinity;
 let measuredEnd = Infinity;
-function recordGc(entries: PerformanceEntry[]) {
-  for (const entry of entries) {
-    if (entry.startTime >= measuredStart && entry.startTime < measuredEnd) {
-      collections.push({
-        kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-}
 
 try {
   const rows = teamShape
@@ -491,7 +461,7 @@ try {
   const cpu = process.cpuUsage();
   const threadCpu = process.threadCpuUsage();
   loop.reset();
-  marker("heap-start");
+  writeGatewayGcTraceMarker("heap-start", profilePath);
   measuredStart = performance.now();
   let checksum = 0;
   let expectedChecksum = 0;
@@ -515,10 +485,10 @@ try {
   const usedCpu = process.cpuUsage(cpu);
   const usedThreadCpu = process.threadCpuUsage(threadCpu);
   const after = process.memoryUsage();
-  marker("heap-stop");
+  writeGatewayGcTraceMarker("heap-stop", profilePath);
   loop.disable();
   await nextTurn();
-  recordGc(observer.takeRecords());
+  recordGcCollections(observer.takeRecords(), collections, measuredStart, measuredEnd);
   observer.disconnect();
   const profile = values.allocations
     ? (await inspector.post("HeapProfiler.stopSampling")).profile
@@ -532,7 +502,7 @@ try {
     writeFileSync(profilePath, JSON.stringify(profile));
   }
   const gc = (kind?: number) =>
-    distribution(
+    summarizeDurationDistribution(
       collections
         .filter((entry) => kind === undefined || entry.kind === kind)
         .map((entry) => entry.ms),
@@ -579,7 +549,7 @@ try {
     latencyScope: mutateEvery
       ? `${flow} read and periodic committed run replacement`
       : `${flow} read`,
-    captureLatency: distribution(latency),
+    captureLatency: summarizeDurationDistribution(latency),
     elapsedMs: measuredEnd - measuredStart,
     cpuMs: (usedCpu.user + usedCpu.system) / 1000,
     threadCpuMs: (usedThreadCpu.user + usedThreadCpu.system) / 1000,

@@ -9,6 +9,7 @@ import { managedWorktrees } from "../../agents/worktrees/service.js";
 import type { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import type { startProjectsListDiagnostics } from "./projects-list-diagnostics.js";
+import { ProjectListingChangedError } from "./projects-session-store.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type ProjectCandidate = {
@@ -62,6 +63,17 @@ function retainNewestRawProjectCandidate(
   candidates: RawProjectCandidate[],
   candidate: RawProjectCandidate,
 ) {
+  if (candidate.kind === "session") {
+    const previous = candidates.findIndex(
+      (existing) => existing.kind === "session" && existing.checkoutPath === candidate.checkoutPath,
+    );
+    if (previous >= 0) {
+      if (candidates[previous]!.lastUsedAt >= candidate.lastUsedAt) {
+        return;
+      }
+      candidates.splice(previous, 1);
+    }
+  }
   const insertionIndex = candidates.findIndex(
     (existing) => compareRawProjectCandidates(candidate, existing) < 0,
   );
@@ -182,8 +194,15 @@ export async function listObservedProjects(
     if (visibilityFilter && !isVisible(sessionKey)) {
       continue;
     }
-    const checkoutPath = entry.execCwd?.trim();
-    if (checkoutPath && !entry.execNode?.trim()) {
+    // Host sessions persist their task cwd separately from node-only execCwd.
+    const checkoutPath = entry.spawnedCwd?.trim();
+    if (
+      checkoutPath &&
+      !entry.execNode?.trim() &&
+      entry.execHost !== "node" &&
+      !entry.deviceFolder &&
+      !entry.repositoryWorkspaceId
+    ) {
       retainNewestRawProjectCandidate(rawCandidates, {
         kind: "session",
         checkoutPath,
@@ -262,7 +281,7 @@ export async function listObservedProjects(
     assertCurrent() {
       const currentFilter = createSessionListEntryFilter({ client, cfg });
       if (currentFilter && (canSeeAll || [...usedSessions].some((key) => !isVisible(key)))) {
-        throw new Error("Project access changed while preparing the listing. Retry the request.");
+        throw new ProjectListingChangedError();
       }
     },
   };

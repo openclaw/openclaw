@@ -1,12 +1,14 @@
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import { hostname } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, assert, beforeAll } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { captureFullEnv } from "../../test-utils/env.js";
 import { withWorktreeMutationLease } from "./allocation.js";
 import { git } from "./git-fixture.test-support.js";
 import { insertRegistryWorktree } from "./registry.js";
@@ -80,6 +82,13 @@ export function useManagedWorktreeTestRepository(
 ): (root: string) => Promise<string> {
   const templateDirs = useAutoCleanupTempDirTracker(afterAll);
   let templateRoot: string;
+  let environment: ReturnType<typeof captureFullEnv>;
+  beforeEach(() => {
+    environment = captureFullEnv();
+  });
+  afterEach(() => {
+    environment.restore();
+  });
   beforeAll(async () => {
     templateRoot = templateDirs.make("openclaw-worktree-template-");
     const repo = await initializeManagedWorktreeTestRepository(templateRoot);

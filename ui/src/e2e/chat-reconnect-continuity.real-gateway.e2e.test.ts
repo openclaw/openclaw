@@ -197,7 +197,7 @@ suite.define(() => {
         payload: { inFlightRun: { runId, text: opening + offlineTail } },
       });
 
-      const stop = exactButton(page, "Stop generating");
+      const stop = exactButton(page, "Stop");
       await stop.waitFor({ state: "visible" });
       await stop.click();
       const aborts = () =>

@@ -495,22 +495,37 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
           finishUpdateRun(run.runId, { status: "succeeded" }, { env });
           await closeOpenClawStateDatabaseAsync();
           resetDatabaseEngineSelectionForTest();
+          const retained = await Promise.all([
+            fs.readFile(shared),
+            fs.readFile(baseline.ref.manifestPath),
+          ]);
           const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
           const gateway = vi
             .spyOn(await import("../../gateway/call.js"), "callGateway")
             .mockRejectedValue(new Error("Offline status proof"));
           try {
-            for (const broken of [false, true]) {
-              if (broken) {
-                await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{");
-              }
+            for (const broken of [false, true, false]) {
+              await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, broken ? "{" : JSON.stringify(config));
               await updateStatusCommand({ json: true, timeout: "1" });
-              expect(output.mock.lastCall?.[0]).toMatchObject({
-                recoverySets: [{ runId: run.runId, status: broken ? "ambiguous" : "stale" }],
-              });
-              expect(JSON.stringify(output.mock.lastCall?.[0])).toContain(
-                broken ? "update outcome is unreadable" : "stale: its update already succeeded",
+              expect(output.mock.lastCall?.[0]).toHaveProperty(
+                "recoverySets",
+                broken
+                  ? [
+                      {
+                        directory: baseline.ref.directory,
+                        status: "unreadable",
+                        message: expect.stringContaining("Update refused: configuration"),
+                        nextAction: expect.any(String),
+                      },
+                    ]
+                  : [expect.objectContaining({ runId: run.runId, status: "stale" })],
               );
+              expect(JSON.stringify(output.mock.lastCall?.[0])).toContain(
+                broken ? "is unreadable" : "stale: its update already succeeded",
+              );
+              expect(
+                await Promise.all([fs.readFile(shared), fs.readFile(baseline.ref.manifestPath)]),
+              ).toEqual(retained);
             }
           } finally {
             await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));

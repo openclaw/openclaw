@@ -9,13 +9,13 @@ import { resolveLaunchAgentPlistPath } from "../../daemon/launchd-service-files.
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
   inspectPortUsage,
-  createStartupMigrationActivityProbe,
   makeGatewayService,
   monotonicClock,
   callGateway,
   readGatewayOwnerLease,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
+  readBestEffortConfig,
   sleep,
   waitForStoppedFreeGatewayRestart,
   waitForRunningGateway,
@@ -55,9 +55,15 @@ describe("restart health", () => {
     setPlatform("win32");
     listenAfter(90_000);
     serveHealth();
-
-    const result = await waitForRunningGateway({ requireRunningService: true });
-
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    const result = await waitForRunningGateway({
+      requireRunningService: true,
+      service,
+      config: {},
+      probeHosts: ["127.0.0.1"],
+    });
+    expect(service.readCommand).not.toHaveBeenCalled();
+    expect(readBestEffortConfig).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       healthy: true,
       outcome: "ready",
@@ -290,7 +296,7 @@ describe("restart health", () => {
       waitForRunningGateway({
         attempts: 1,
         delayMs: 60_000,
-        isStartupMigrationActive: createStartupMigrationActivityProbe(() => true),
+        isStartupMigrationActive: () => true,
         signal: controller.signal,
       }),
     ).rejects.toBe(aborted);

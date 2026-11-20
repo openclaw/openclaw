@@ -89,6 +89,7 @@ const OpenAICompletionsCompatSchema = Type.Object({
 const OpenAIResponsesCompatSchema = Type.Object({
   supportsTemperature: Type.Optional(Type.Boolean()),
   supportsInstructions: Type.Optional(Type.Boolean()),
+  cachesInstructions: Type.Optional(Type.Boolean()),
   sendSessionIdHeader: Type.Optional(Type.Boolean()),
   supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });
@@ -110,6 +111,7 @@ const ProviderAuthModeSchema = Type.Union([
   Type.Literal("oauth"),
   Type.Literal("token"),
   Type.Literal("none"),
+  Type.Literal("native-command"),
 ]);
 export type ProviderAuthMode = Static<typeof ProviderAuthModeSchema>;
 

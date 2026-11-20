@@ -7,7 +7,6 @@ import type {
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
 import { mapArrayIfChanged } from "../../shared/map-array-if-changed.js";
 import { resolveEffectiveCompactionReserveTokens } from "../agent-compaction-constants.js";
-import { SAFETY_MARGIN } from "../compaction-planning.js";
 import type { Agent, AgentMessage } from "../runtime/index.js";
 import { createFreshLlmBoundaryTokenEstimator } from "../sessions/context-token-pressure.js";
 import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
@@ -78,11 +77,13 @@ function truncateToolResultToChars(
         Math.max(0, maxChars - reservedChars),
         { minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE },
       );
-      return replaceToolResultContent(msg, [
-        // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
-        ...(bounded as { content: unknown[] }).content,
-        ...notice,
-      ]);
+      // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
+      const boundedContent = (bounded as { content: unknown[] }).content;
+      return {
+        message: replaceToolResultContent(msg, [...boundedContent, ...notice]),
+        compactedText: boundedContent.length < retainedContent.length,
+        boundedContent,
+      };
     };
 
     // Image cost alone rules out larger prefixes. The allocator still reserves
@@ -93,21 +94,21 @@ function truncateToolResultToChars(
       const retainedContent = content.filter(
         (block) => !isImage(block) || ++seenImages <= retainedImages,
       );
-      const projected = projectContent(
+      const { message, compactedText, boundedContent } = projectContent(
         retainedContent,
         retainedImages < imageCount ? omissionNotice(retainedImages) : undefined,
       );
-      const projectedContent = (projected as { content: unknown[] }).content;
       if (
+        !compactedText &&
         retainedContent.some((block, index) => {
-          const projectedBlock = projectedContent[index];
+          const projectedBlock = boundedContent[index];
           return isText(block) && block.text && (!isText(projectedBlock) || !projectedBlock.text);
         })
       ) {
         continue;
       }
-      if (estimateMessageCharsCached(projected, cache) <= maxChars) {
-        return projected;
+      if (estimateMessageCharsCached(message, cache) <= maxChars) {
+        return message;
       }
     }
     // Dropping unfit non-text content must not flatten away surviving semantic
@@ -123,7 +124,7 @@ function truncateToolResultToChars(
         : formatContextLimitTruncationNotice(
             Math.max(1, Math.floor(omittedChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE)),
           ),
-    );
+    ).message;
   }
 
   const truncatedText = truncateToolResultText(getToolResultText(msg), maxChars, {
@@ -144,8 +145,7 @@ function resolveMidTurnHistoryTokenBudget(params: {
   tools?: RequestToolSchemas;
   pendingMessages: AgentMessage[];
 }): number {
-  // Mirror the precheck: its reserve cap, and one estimator pricing the system
-  // prompt, tool schemas and pending exchange with the safety margin applied.
+  // Price fixed content and assembled history in the precheck's nominal units.
   // The pending exchange already carries the active prompt.
   const promptBudget =
     Math.max(1, Math.floor(params.tokenBudget)) -
@@ -157,12 +157,12 @@ function resolveMidTurnHistoryTokenBudget(params: {
     systemPrompt: params.systemPrompt,
     tools: params.tools,
     retainCompletionUsage: true,
+    safetyMargin: 1,
   })({
     messages: params.pendingMessages.map((message) => projectRecordedModelPrompt(message)),
     prompt: "",
   });
-  // The precheck also multiplies assembled history by the margin.
-  return Math.max(1, Math.floor((promptBudget - fixedTokens) / SAFETY_MARGIN));
+  return Math.max(1, Math.floor(promptBudget - fixedTokens));
 }
 
 /**
@@ -322,6 +322,9 @@ export function installContextEngineLoopHook(params: {
 
   return () => {
     mutableAgent.transformContext = originalTransformContext;
+    // The removed hook stays reachable from retained run callbacks; drop its assembled history.
+    lastAssembledView = null;
+    lastSourceMessages = null;
   };
 }
 

@@ -86,12 +86,13 @@ it.each([
     expected: "models.providers.<id>.baseUrl: expected string, got number",
   },
   {
-    raw: { skills: { workshop: { approvalPolicy: "private-value" } } },
-    expected: "skills.workshop: unrecognized key approvalPolicy",
+    // Workshop settings moved to plugins.entries.skill-workshop.config.
+    raw: { skills: { workshop: { "private-key": "private-value" } } },
+    expected: "skills: unrecognized key workshop",
   },
   {
-    raw: { skills: { workshop: { "private-key": "private-value" } } },
-    expected: "skills.workshop: unrecognized key <key>",
+    raw: { skills: { "private-key": "private-value" } },
+    expected: "skills: unrecognized key <key>",
   },
   {
     raw: { auth: { profiles: { "private-profile": { mode: "api_key" } } } },

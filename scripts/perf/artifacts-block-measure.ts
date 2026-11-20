@@ -17,6 +17,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -89,12 +90,7 @@ for (let index = 0; index < 100; index++) {
 globalThis.gc();
 const inspector = values.mode === "allocation" ? new Session() : undefined;
 if (inspector) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 1024,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 1024);
 }
 const samples = new Float64Array(iterations);
 const hostLoadBefore = loadavg();

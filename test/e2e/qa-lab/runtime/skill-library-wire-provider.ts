@@ -19,7 +19,7 @@ type ProviderItem = {
   arguments?: string;
   output?: unknown;
 };
-type CatalogSkill = { name: string; location: string };
+type CatalogSkill = { name: string };
 export type SkillLibraryTurnObservation = {
   catalogs: CatalogSkill[][];
   readOutput?: string;
@@ -80,21 +80,9 @@ function catalogSkills(instructions: string): CatalogSkill[] {
   const catalog = [...instructions.matchAll(/<available_skills>([\s\S]*?)<\/available_skills>/gu)]
     .map((match) => match[1])
     .join("\n");
-  const decode = (text: string) =>
-    text
-      .replaceAll("&lt;", "<")
-      .replaceAll("&gt;", ">")
-      .replaceAll("&quot;", '"')
-      .replaceAll("&apos;", "'")
-      .replaceAll("&amp;", "&");
-  return [...catalog.matchAll(/<skill>([\s\S]*?)<\/skill>/gu)].map((match) => {
-    const name = match[1]!.match(/<name>(.*?)<\/name>/u)?.[1];
-    const location = match[1]!.match(/<location>(.*?)<\/location>/u)?.[1];
-    if (!name || !location) {
-      throw new Error("Skill catalog omitted a name or location");
-    }
-    return { name: decode(name), location: decode(location) };
-  });
+  return [...catalog.matchAll(/^- ("(?:\\.|[^"\\])*")/gmu)].map((match) => ({
+    name: JSON.parse(match[1]!) as string,
+  }));
 }
 
 function catalogContext(text: string) {
@@ -295,7 +283,7 @@ export async function startSkillLibraryWireProvider() {
         const { draft, updatedContent } = scenario;
         const observation = authorOutputs.get(authorMarker) ?? {};
         authorOutputs.set(authorMarker, observation);
-        let workshop = body.tools?.find((tool) => tool.name === "skill_workshop");
+        let workshop = body.tools?.find((tool) => tool.name === "skill_library");
         let catalogId: string | undefined;
         const advertisedCall = (callId: string, name: string, args: unknown) => {
           const tool = body.tools?.find((candidate) => candidate.name === name);
@@ -312,7 +300,7 @@ export async function startSkillLibraryWireProvider() {
           const describeId = `${authorMarker}_describe_workshop`;
           const described = output(describeId);
           if (described === undefined) {
-            advertisedCall(describeId, "tool_describe", { id: "skill_workshop" });
+            advertisedCall(describeId, "tool_describe", { id: "skill_library" });
             return;
           }
           const descriptor = JSON.parse(described) as {
@@ -320,8 +308,8 @@ export async function startSkillLibraryWireProvider() {
             name: string;
             parameters: TSchema;
           };
-          if (descriptor.name !== "skill_workshop" || !descriptor.id || !descriptor.parameters) {
-            throw new Error("Tool discovery did not return the personal Workshop schema");
+          if (descriptor.name !== "skill_library" || !descriptor.id || !descriptor.parameters) {
+            throw new Error("Tool discovery did not return the skill_library schema");
           }
           workshop = descriptor;
           catalogId = descriptor.id;
@@ -329,11 +317,11 @@ export async function startSkillLibraryWireProvider() {
         }
         const invoke = (callId: string, args: unknown) => {
           if (!workshop.parameters || !Value.Check(workshop.parameters, args)) {
-            throw new Error("Workshop schema does not accept the requested action");
+            throw new Error("skill_library schema does not accept the requested action");
           }
           advertisedCall(
             callId,
-            catalogId ? "dispatch_action" : "skill_workshop",
+            catalogId ? "dispatch_action" : "skill_library",
             catalogId ? { id: catalogId, args } : args,
           );
         };
@@ -435,13 +423,24 @@ export async function startSkillLibraryWireProvider() {
       }
       const readId = `${marker}_read`;
       const execId = `${marker}_exec`;
-      const readOutput = output(readId);
-      if (readOutput === undefined) {
-        if (!body.tools?.some((tool) => tool.name === "read")) {
-          throw new Error("Direct read tool missing from this runtime's advertised tools");
+      const readResult = output(readId);
+      if (readResult === undefined) {
+        const dispatcher = body.tools?.find((tool) => tool.name === "dispatch_action");
+        const args = { id: "skills_read", args: { name: skillName } };
+        if (!dispatcher?.parameters || !Value.Check(dispatcher.parameters, args)) {
+          throw new Error("Skill reader missing from this runtime's advertised dispatcher");
         }
-        emitTool(readId, "read", { path: selected[0]!.location });
+        emitTool(readId, "dispatch_action", args);
         return;
+      }
+      const envelope = JSON.parse(readResult) as {
+        tool?: { name?: string };
+        result?: { content?: unknown };
+      };
+      const readOutput = contentText(envelope.result?.content);
+      const location = readOutput.match(/^Skill location: (.+)$/mu)?.[1];
+      if (envelope.tool?.name !== "skills_read" || !location) {
+        throw new Error("Skill reader did not return the requested instructions and location");
       }
       observation.readOutput = readOutput;
       const execOutput = output(execId);
@@ -457,8 +456,8 @@ export async function startSkillLibraryWireProvider() {
         if (!body.tools?.some((tool) => tool.name === "exec")) {
           throw new Error("Direct exec tool missing from this runtime's advertised tools");
         }
-        const helper = path.join(path.dirname(selected[0]!.location), "scripts", "report.mjs");
-        // Expand the advertised home on the executing host, never in the provider/Gateway.
+        const helper = path.join(path.dirname(location), "scripts", "report.mjs");
+        // Expand the returned home on the executing host, never in the provider/Gateway.
         const homeRelative = helper.startsWith("~/");
         const helperTail = homeRelative ? helper.slice(2) : helper;
         const quotedHelper = `${homeRelative ? '"$HOME"/' : ""}'${helperTail.replaceAll("'", "'\\''")}'`;

@@ -18,6 +18,10 @@ available: an explicit `agents.defaults.mediaModels.music` config, or an
 auth-configured provider (a set API key, for example).
 </Note>
 
+A key in `models.providers.<provider>.apiKey` also makes the tool available,
+including an env-backed SecretRef. Inline keys in an auth or billing cooldown
+remain unavailable.
+
 For session-backed agent runs, `music_generate` starts as a background task,
 tracks progress in its media runtime, then wakes the agent when the track is
 ready so it can tell the user and attach the finished audio. The completion

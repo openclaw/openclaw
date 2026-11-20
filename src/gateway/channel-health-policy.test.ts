@@ -72,6 +72,8 @@ it.each<[Record<string, unknown>, boolean, string, { now?: number; channelId?: s
   [reconnect({ at: 95_000 }), true, "reconnect-grace"],
   [reconnect({ at: 50_000 }), true, "reconnect-grace", { now: 169_999 }],
   [reconnect({ at: 50_000 }), false, "disconnected", { now: 170_000 }],
+  [{ ...reconnect({ at: 50_000 }), busy: true }, true, "reconnect-grace", { now: 169_999 }],
+  [{ ...reconnect({ at: 50_000 }), busy: true }, false, "disconnected", { now: 170_000 }],
   [reconnect({ at: -20_001 }), false, "disconnected"],
   [reconnect("socket closed"), false, "disconnected"],
   [reconnect({ at: Number.NaN }), false, "disconnected"],
@@ -98,6 +100,15 @@ it("preserves authored terminal detail above the shared blocked projection", () 
   } satisfies Parameters<typeof resolveChannelHealthState>[0];
   expect(evaluateHealth(snapshot)).toEqual({ healthy: false, reason: "terminal-disconnect" });
   expect(resolveChannelHealthState(snapshot, policy)).toBe("conflict");
+});
+
+it("shows reconnect grace in channel status", () => {
+  expect(
+    resolveChannelHealthState(
+      { running: true, connected: false, lastDisconnect: { at: 95_000 } },
+      policy,
+    ),
+  ).toBe("reconnect-grace");
 });
 
 it("maps not-running + high reconnect attempts to gave-up", () => {

@@ -157,8 +157,8 @@ it("refreshes the connected provider without reloading usage or replacing other 
     (method) => request.mock.calls.filter(([name]) => name === method).length,
   );
   const catalogReads = request.mock.calls.filter(([name]) => name === "models.list").length;
-  publishEvent({ type: "event", event: "config.changed", payload: {} });
-  publishEvent({ type: "event", event: "config.changed", payload: {} });
+  publishEvent({ type: "event", event: "chat.metadata.changed", payload: { authChanged: true } });
+  publishEvent({ type: "event", event: "chat.metadata.changed", payload: { authChanged: true } });
   connected = true;
 
   answer.resolve({ done: true, status: "done" });
@@ -253,7 +253,7 @@ it.each(["close", "cancel", "complete"] as const)(
       ["usage.status", "sessions.usage"].includes(method),
     ).length;
     externalUpdate = true;
-    publishEvent({ type: "event", event: "config.changed", payload: {} });
+    publishEvent({ type: "event", event: "chat.metadata.changed", payload: { authChanged: true } });
     expect(page.querySelector('[data-provider-id="openai"]')).toBeNull();
     if (action === "complete") {
       answer.resolve({ done: true, status: "done" });

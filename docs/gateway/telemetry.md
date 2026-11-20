@@ -81,7 +81,9 @@ and other failed checks do not interrupt startup or normal operation.
 A successful response and its timestamp are cached in the existing shared state
 database. Startup reuses the cached result for the next 24 hours, and a running
 Gateway checks again during normal maintenance with a small random delay. Failed
-checks do not count as successful daily checks.
+checks do not count as successful daily checks. On the `stable` channel without
+automatic updates, the Gateway update notice reads this cached result hourly, so
+a newer release appears within an hour of the daily check that found it.
 
 For testing or self-hosting, set `OPENCLAW_TELEMETRY_ENDPOINT` to your complete
 replacement endpoint URL. The public server source is available at
@@ -132,9 +134,9 @@ the update-only GET. Explicit `telemetry.enabled: true` enables both counting an
 optional feature statistics. The whole-update opt-outs below suppress all requests.
 CI's production-host suppression and test-receiver exception remain unchanged.
 
-The existing `config_machine_state` SQLite table holds only the last attempted
+The existing `config_machine_state` table in the selected state database holds only the last attempted
 receiver day per endpoint and physical installation-state root. An endpoint-only
-hash scopes that local key; it is identical for everyone using that endpoint and
+hash scopes that state key; it is identical for everyone using that endpoint and
 is never transmitted. After receiving support, the worker atomically claims the
 advertised day **before the count POST**, then the client rechecks policy.
 A lost response, HTTP failure, crash, revoked policy, or process exit can lose

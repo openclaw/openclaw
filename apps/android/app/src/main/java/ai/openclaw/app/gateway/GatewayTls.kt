@@ -207,6 +207,10 @@ internal fun decideGatewayTlsTrust(
   if (probeResult.failure == GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE) {
     return GatewayTlsTrustDecision.Failed(GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
   }
+  // Recovery comes first; manual pin entry stays reachable from the recovery screen's advanced action.
+  if (probeResult.failure == GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT) {
+    return GatewayTlsTrustDecision.Failed(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT)
+  }
   return GatewayTlsTrustDecision.PromptRequired(
     fingerprintSha256 = null,
     previousFingerprintSha256 = null,

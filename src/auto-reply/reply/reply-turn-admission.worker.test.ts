@@ -16,6 +16,7 @@ import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
+  beginGatewayShutdownCleanup,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
@@ -255,10 +256,6 @@ it("retains one actor per cold/reopened reply admission and drains it without ma
           controller.abort();
           await holder.release();
           result ??= await pending.catch(() => undefined);
-          if (result?.status === "owned") {
-            result.operation.complete();
-            await waitForReplyRunSuccessorAdmission(sessionKey, null);
-          }
           await completeAdmission(result, sessionKey);
           await settlement.done;
         } finally {
@@ -354,7 +351,7 @@ it("cancels a contended persistent admission without claiming the reply or poiso
 });
 
 it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
-  "keeps successors behind physical claim release after %s during executor drain with a full idle cache",
+  "keeps successors behind physical claim release after %s during shutdown cleanup with a full idle cache",
   async (ending) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const activeTarget = makeTarget(state, "completion-close");
@@ -394,8 +391,8 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
         const sql = observeSql();
         let successor: ReturnType<typeof waitForReplyRunSuccessorAdmission> | undefined;
         try {
-          // Drain forces physical retirement of the active owner and the full idle cache.
           markGatewayRestartDraining();
+          beginGatewayShutdownCleanup();
           if (ending !== "complete") {
             operation.setPhase("running");
             operation.attachBackend({

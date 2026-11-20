@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isConfigMachineOutput } from "../config-output-mode.js";
 import { createCronOutputCommand, isCronMachineOutput } from "../cron-cli/output-mode.js";
 import { isDevicesMachineOutput } from "../devices-output-mode.js";
-import { ExpectedCliError, formatCliJsonFailure } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
+import { formatCliJsonFailure } from "../failure-output.js";
 import {
   isJsonOutputModeActive,
   withConsoleLogsRoutedToStderrForJson,
@@ -207,7 +208,7 @@ describe("formatCliParseErrorOutput", () => {
     expect(error).toMatchObject({
       message: 'OpenClaw does not know the command "pairng".',
       humanOutput:
-        'OpenClaw does not know the command "pairng".\nDid you mean this?\n  openclaw pairing\nTry: openclaw --help\nPlugin command? openclaw plugins list\nDocs: https://docs.openclaw.ai/cli\n',
+        'OpenClaw does not know the command "pairng".\nDid you mean this?\n  openclaw pairing\n  openclaw pair\nTry: openclaw --help\nPlugin command? openclaw plugins list\nDocs: https://docs.openclaw.ai/cli\n',
     });
   });
 

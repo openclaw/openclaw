@@ -71,7 +71,14 @@ do {
 } while (mockPort < 40000 || mockPort === port);
 applyMockOpenAiModelConfig(config, { mockPort });
 config.agents.defaults.utilityModel = "openai/gpt-5.6-luna";
-config.skills = { workshop: { autonomous: { mode: "off" } } };
+config.plugins.entries = {
+  ...config.plugins.entries,
+  "skill-workshop": { config: { autonomous: { mode: "off" } } },
+};
+config.meta = {
+  ...config.meta,
+  migrations: { ...config.meta?.migrations, skillWorkshopPlugin: true },
+};
 const report = {
   build: JSON.parse(readFileSync(path.join(root, "dist/build-info.json"), "utf8")),
   port,

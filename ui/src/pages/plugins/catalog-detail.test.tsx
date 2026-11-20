@@ -36,25 +36,6 @@ function mount(result = createDiscoveryDetail(), overrides: Partial<Props> = {})
   return render(() => <Detail {...detailProps(result, overrides)} />);
 }
 
-it.each([undefined, "bundle-plugin"] as const)(
-  "places qualified installation trust before the actions (family=%s)",
-  (family) => {
-    const result = createDiscoveryDetail(
-      createPlugin({ installed: false, state: "not-installed" }),
-    );
-    result.plugin.catalog.family = family;
-    result.detail.uiCapabilities = ["page"];
-    const { container } = mount(result);
-    const notice = container.querySelector(".plugin-native-ui-disclosure");
-    expect(notice?.textContent).toContain(
-      family === "bundle-plugin" ? "Bundles can add content" : "If a plugin includes native web UI",
-    );
-    expect(notice?.textContent).not.toContain("Includes native web UI");
-    const actions = container.querySelector(".plugin-catalog-detail__actions")!;
-    expect(notice!.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
-  },
-);
-
 it.each([false, true])(
   "keeps Ask available when installation is blocked (installed=%s)",
   (installed) => {
@@ -94,12 +75,13 @@ it("renders complete catalog content in capability order", () => {
     iconUrls: { [imageUrl]: "blob:package-icon" },
   });
   expect(query(".plugin-catalog-detail__icon .plugins-tile--white")).not.toBeNull();
-  expect(query(".plugin-capabilities button")).toBeNull();
+  expect(query(".plugin-capabilities button, .plugin-capabilities h2 svg")).toBeNull();
   expect([...all(".plugin-capabilities h2")].map((heading) => heading.textContent)).toEqual([
-    "Capabilities3",
-    "Skills1",
-    "Tools1",
-    "MCP Server1",
+    "Capabilities",
+    "Extensions",
+    "Skills",
+    "Tools",
+    "MCP server",
   ]);
   expect(container.textContent).not.toMatch(/internal-dispatch|heygen-alias/);
 });
@@ -197,8 +179,8 @@ it("normalizes shorthand repositories and keeps documentation separate", () => {
   const { container, all, query, attr, text } = render(() => metadata(result));
   expect(attr(".plugin-metadata__repository", "href")).toBe(repository);
   expect(text(".plugin-metadata__repository")).toContain("Acme/plugin");
-  expect([...all("section")].map((section) => section.querySelector("h2")?.textContent)).toEqual([
-    "Repository",
+  expect([...all(".plugin-metadata__links a")].map((link) => link.textContent)).toEqual([
+    "Acme/plugin",
     "Documentation",
   ]);
   expect(container.textContent).not.toContain("View on ClawHub");
@@ -234,3 +216,23 @@ it.each([
   expect(all(".is-filled")).toHaveLength(count);
   expect(attr("a", "href")).toBe(url);
 });
+
+it.each(["clean", "review", "custom-status"])(
+  "localizes known audit badges but preserves %s protocol values",
+  (status) => {
+    const translate = vi.spyOn(i18n, "t").mockReturnValue("localized audit label");
+    onTestFinished(() => translate.mockRestore());
+    const result = createDiscoveryDetail();
+    result.detail.security = { status, verdict: status, auditUrl: "https://example.com/audit" };
+    const { query } = render(() => metadata(result));
+    expect(query(".plugin-catalog-detail__security-score strong")?.textContent).toBe(
+      status === "custom-status" ? status : "localized audit label",
+    );
+    if (status !== "custom-status") {
+      expect(translate).toHaveBeenCalledWith(
+        status === "clean" ? "pluginsPage.auditClean" : "pluginsPage.auditReview",
+        undefined,
+      );
+    }
+  },
+);

@@ -7,7 +7,11 @@ import type {
   DevicePairSetupStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { t } from "../i18n/index.ts";
+import { registerDevicesEnglish } from "../i18n/locales/en-devices.ts";
 import { formatUiError } from "./format-error.ts";
+
+registerDevicesEnglish();
 
 type GatewayRequestClient = Pick<GatewayBrowserClient, "request">;
 
@@ -146,7 +150,7 @@ async function readGatewaySetupCompletion(
 ): Promise<DevicePairSetupCompletionLookup> {
   const client = state.client;
   if (!client || !state.connected) {
-    return { status: "unavailable", message: "Gateway unavailable" };
+    return { status: "unavailable", message: t("devices.pairing.gatewayUnavailable") };
   }
   try {
     const result = await client.request<DevicePairSetupStatusResult>("device.pair.setupStatus", {
@@ -159,12 +163,12 @@ async function readGatewaySetupCompletion(
       const outcome = parseDevicePairSetupDeliveryUncertain(result.deliveryUncertain);
       return outcome?.setupId === setupId
         ? { status: "delivery-uncertain", outcome }
-        : { status: "unavailable", message: "Invalid setup status response" };
+        : { status: "unavailable", message: t("devices.pairing.invalidStatus") };
     }
     const completion = parseDevicePairSetupCompletion(result.completion);
     return completion?.setupId === setupId
       ? { status: "found", completion }
-      : { status: "unavailable", message: "Invalid setup status response" };
+      : { status: "unavailable", message: t("devices.pairing.invalidStatus") };
   } catch (err) {
     return { status: "unavailable", message: formatUiError(err) };
   }
@@ -343,9 +347,7 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
       return;
     }
     if (!hasDevicePairSetupLifecycle(result)) {
-      throw new Error(
-        "Gateway does not provide pairing lifecycle metadata. Update the Gateway and try again.",
-      );
+      throw new Error(t("devices.pairing.lifecycleUnavailable"));
     }
     const resolvedAccess =
       result.access === "full" || result.access === "limited" || result.access === "node"

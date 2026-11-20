@@ -21,6 +21,7 @@ import {
 } from "../infra/session-delivery-queue-storage.js";
 import { SESSION_DELIVERY_QUEUE_NAME } from "../infra/session-delivery-queue.records.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -56,7 +57,7 @@ describe("registered correlated completion recovery custody", () => {
       resetGatewayWorkAdmission();
       const cfg = {
         agents: { defaults: { heartbeat: { every: "0m" } } },
-        skills: { workshop: { autonomous: { mode: "off" as const } } },
+        ...workshopPluginConfig({ autonomous: { mode: "off" } }),
       };
       setRuntimeConfigSnapshot(cfg);
       const clock = createGatewaySchedulerClock(Date.now());

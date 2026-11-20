@@ -524,6 +524,43 @@ it("bounds repeated work inside a cyclic declaration fanout without sharing part
   expect(print.mock.calls.length).toBeLessThan(100);
 });
 
+it("reuses complete namespace fallbacks without caching partial cycle roots", () => {
+  const repoRoot = tempDirs.make("openclaw-plugin-sdk-namespace-");
+  const files = ["fixture.d.ts", "a.d.ts", "b.d.ts"].map((name) => path.join(repoRoot, name));
+  writeFiles(repoRoot, {
+    "fixture.d.ts": [
+      'export declare const first: typeof import("./a.js");',
+      'export declare const second: typeof import("./a.js");',
+      'export declare const other: typeof import("./b.js");',
+    ].join("\n"),
+    "a.d.ts": 'import type { B } from "./b.js"; export interface A { a: string; b: B }',
+    "b.d.ts": 'import type { A } from "./a.js"; export interface B { b: number; a: A }',
+  });
+  using native = nativeProject(repoRoot, files, tsOptions);
+  const { program, checker } = native.project;
+  void checker.getSymbolAtLocation;
+  const resolve = vi.spyOn(checker, "getSymbolAtLocation");
+  const render = createDeclarationClosureRenderer({
+    project: native.project,
+    printer: native.api.printer,
+    sourceProgram: program,
+    emittedSources: new Set(),
+    repoRoot,
+  });
+  const source = program.getSourceFile(files[0]!)!;
+  const first = render(source, "first");
+  resolve.mockClear();
+  const second = render(source, "second");
+  // Resolve this export's import literal, but do not traverse A -> B -> A again.
+  expect(resolve).toHaveBeenCalledTimes(1);
+  const other = render(source, "other");
+  const wholeFiles = (closure: typeof first) =>
+    closure?.sections.filter(({ name }) => name === "*");
+  expect(wholeFiles(first)).toHaveLength(2);
+  expect(wholeFiles(second)).toEqual(wholeFiles(first));
+  expect(wholeFiles(other)).toEqual(wholeFiles(first));
+});
+
 it("keeps cycle members complete across cached export walks", async () => {
   const render = (optionalMarker: boolean) =>
     renderSourceFixture(

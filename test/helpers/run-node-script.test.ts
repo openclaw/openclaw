@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import { DEFAULT_CHILD_OUTPUT_TAIL_BYTES } from "./bounded-child-output.js";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
 import { waitForDead, waitForPidFile } from "./process-wait.js";
 import { withinTest } from "./promise.js";
@@ -45,14 +46,15 @@ process.on("disconnect", () => {
 process.send("ready");
 `,
     tempDirs.make("openclaw-node-script-output-"),
-    false,
+    // Windows kills non-detached children at parent exit; this writer must outlive it.
+    process.platform === "win32",
     17,
   );
   const result = await runNodeScript(script, process.env, 5_000);
   expectOutput(result, "drained stdout\n", "drained stderr\n", 17);
 });
 
-it.for(["node", "current"] as const)(
+it.for(process.versions.bun ? ["node", "current"] : ["node"])(
   "builds source worker arguments for the selected %s runtime",
   async (runtime) => {
     const script = join(tempDirs.make("openclaw-node-script-runtime-"), "worker.ts");
@@ -78,12 +80,12 @@ console.log(JSON.stringify({ answer: Answer.value, bun: Boolean(process.versions
 );
 
 it.for(["at limit", "stdout overflow", "stderr overflow"])(
-  "preserves independent 2 MiB output failure boundaries: %s",
+  "preserves independent output failure boundaries: %s",
   async (mode) => {
     const directory = tempDirs.make("openclaw-node-script-buffer-");
     const script = join(directory, "output.mjs");
     const pidFile = join(directory, "pid");
-    const maxBuffer = 2 * 1024 * 1024;
+    const maxBuffer = DEFAULT_CHILD_OUTPUT_TAIL_BYTES + 1;
     writeFileSync(
       script,
       `import fs from 'node:fs';

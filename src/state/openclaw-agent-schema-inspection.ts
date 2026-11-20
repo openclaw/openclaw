@@ -35,6 +35,9 @@ export type AgentSchemaInspectionInput = {
   verifyCurrentSchemaShape?: boolean;
   inspectOwnership?: boolean;
   requireStartupMigrationReadiness?: boolean;
+  allowClosedWal?: boolean;
+  /** Read the source only when that changes none of its bytes; otherwise return no result. */
+  preserveSourceArtifacts?: boolean;
   deferRuntimeIntegrity?: boolean;
   startupIntegrityVerification?: { verifiedAt: number };
   inspectEmptyStore?: boolean;

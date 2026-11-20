@@ -60,6 +60,49 @@ describe("renderModelSetup", () => {
     delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
 
+  it("retains the rescan action through readiness and keeps unavailable actions disabled", () => {
+    const view = props({ page: { phase: "loading" }, detecting: true });
+    const container = mount(view);
+    const button = container.querySelector<HTMLButtonElement>(".model-setup__intro button")!;
+    expect(button).not.toBeNull();
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-hidden")).toBe("true");
+    expect(getComputedStyle(button).visibility).toBe("hidden");
+    expect(button.getAttribute("aria-label")).toBe("Checking…");
+    button.click();
+    expect(view.onDetect).not.toHaveBeenCalled();
+
+    view.page = { phase: "ready", result: detected };
+    view.detecting = false;
+    renderSetup(view, container);
+    expect(container.querySelector(".model-setup__intro button")).toBe(button);
+    expect(button.disabled).toBe(false);
+    expect(button.hasAttribute("aria-hidden")).toBe(false);
+    expect(getComputedStyle(button).visibility).toBe("visible");
+    expect(button.getAttribute("aria-label")).toBe("Check again");
+    button.click();
+    expect(view.onDetect).toHaveBeenCalledOnce();
+
+    view.detecting = true;
+    renderSetup(view, container);
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-label")).toBe("Checking…");
+    view.detecting = false;
+    for (const unavailable of [
+      { canAdmin: false },
+      { gatewayTooOld: true },
+      { activation: { phase: "success" as const, modelRef: "openai/gpt-5" } },
+      { page: { phase: "ready" as const, result: ready } },
+    ]) {
+      renderSetup({ ...view, ...unavailable }, container);
+      expect(container.querySelector(".model-setup__intro button")).toBe(button);
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute("aria-hidden")).toBe("true");
+      button.click();
+    }
+    expect(view.onDetect).toHaveBeenCalledOnce();
+  });
+
   it("shows detected authentication without credential values", () => {
     const detail = "logged in · ChatGPT account · alex@example.com";
     const secret = "synthetic-private-token";
@@ -358,7 +401,7 @@ describe("renderModelSetup", () => {
         actionsDisabled: true,
       }),
     );
-    expect(text(container)).toContain("Checking — asking openai/gpt-5 for a quick reply…");
+    expect(text(container)).toContain("Asking openai/gpt-5 for a quick reply…");
     expect(
       container.querySelector<HTMLButtonElement>(".model-setup__current button")?.disabled,
     ).toBe(true);
@@ -429,7 +472,7 @@ describe("renderModelSetup", () => {
     const copy = container.querySelector<HTMLButtonElement>(".wizard-sign-in__code button");
     copy?.click();
 
-    const feedback = copied ? "Copied!" : "Copy failed";
+    const feedback = copied ? "Copied" : "Couldn’t copy. Try again.";
     await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe(feedback));
     expect(copy?.getAttribute("aria-label")).toBeNull();
     expect(execCommand).toHaveBeenCalledWith("copy");
@@ -517,7 +560,7 @@ describe("renderModelSetup", () => {
       });
       const container = mount(viewProps);
       expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
-      expect(text(container.querySelector('[role="status"]')!)).toContain("Testing");
+      expect(text(container.querySelector('[role="status"]')!)).toContain("Asking");
       expect(text(container)).not.toContain("test-only-secret");
       const button = container.querySelector<HTMLButtonElement>(
         entry === "discovered"
@@ -539,7 +582,7 @@ describe("renderModelSetup", () => {
       expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
       expect(text(container.querySelector('[role="alert"]')!)).toContain("No reply received");
       expect(text(container.querySelector('[role="alert"]')!)).toContain(
-        "Warm it or choose a faster model, then retry.",
+        "Try again or choose a faster model.",
       );
       expect(button.disabled).toBe(false);
       if (entry === "discovered") {
@@ -610,7 +653,7 @@ describe("renderModelSetup", () => {
       expect(container.querySelector(".content-header")).toBeNull();
       expect(container.querySelector(".model-setup__current")).toBeNull();
       expect(text(container)).toContain("for Writer");
-      expect(text(container)).toContain("not the global defaults");
+      expect(text(container)).toContain("not the defaults for other agents");
       expect(container.querySelector('[data-auth-choice="openai-oauth"]')).toBeNull();
       expect(container.querySelector('[data-prepare-choice="ollama"]')).not.toBeNull();
       for (const option of [install, custom]) {
@@ -689,12 +732,12 @@ describe("renderModelSetup", () => {
         if (mode === "utility") {
           expect(text(success)).toContain("Setup & utility model ready");
           expect(text(success)).not.toContain("Active model");
-          expect(text(success)).not.toContain("Return to Models");
+          expect(text(success)).not.toContain("Back to Models");
           done.click();
           expect(onOpenSetupAssistant).toHaveBeenCalledOnce();
           expect(onOpenChat).not.toHaveBeenCalled();
         } else {
-          expect(done.textContent).toContain("Return to Models");
+          expect(done.textContent).toContain("Back to Models");
           done.click();
           expect(onOpenChat).toHaveBeenCalledOnce();
         }

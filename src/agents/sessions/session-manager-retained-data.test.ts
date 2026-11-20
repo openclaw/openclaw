@@ -3,6 +3,10 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE,
+  isPendingBackgroundResultMessage,
+} from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
@@ -84,6 +88,50 @@ async function fixture(data: unknown, prefixEntries = 0) {
 }
 
 describe("bounded cleanup retaining opaque custom data", () => {
+  it.each([false, true])(
+    "keeps a background result active through aborted-output cleanup (placed: %s)",
+    async (placed) => {
+      const f = await fixture({ value: "unrelated metadata" });
+      const pending = {
+        ...assistantText("background"),
+        provider: "openclaw",
+        model: "automation-result",
+        excludeFromContext: true,
+        openclawModelPlacement: "pending",
+      };
+      const abortedId = await f.manager.appendMessageAsync({
+        ...assistantText("interrupted"),
+        stopReason: "aborted",
+      });
+      const resultId = await f.manager.appendMessageAsync(pending);
+      const place = () =>
+        f.manager.appendCustomEntryAsync(BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE, {
+          afterEntryId: f.manager.getAppendParentId(),
+          resultEntryIds: [resultId],
+        });
+      let markerId = placed ? await place() : undefined;
+      expect(
+        await f.manager.removeTrailingEntriesAsync((entry) => entry.id === abortedId, {
+          preserveTrailing: (entry) =>
+            entry.type === "custom" ||
+            (entry.type === "message" && isPendingBackgroundResultMessage(entry.message)),
+        }),
+      ).toBe(1);
+      expect(f.manager.getLeafId()).toBe(markerId ?? resultId);
+      expect(f.manager.getEntry(resultId!)).toMatchObject({ message: pending });
+      markerId ??= await place();
+      const data = f.manager.getEntry(markerId);
+      const reopened = await SessionManager.openAsync(f.scope);
+      expect(reopened.getEntry(markerId)).toMatchObject({
+        data: data?.type === "custom" ? data.data : undefined,
+      });
+      expect(reopened.buildSessionContext()).toEqual(f.manager.buildSessionContext());
+      const result = reopened.buildSessionContext().messages.at(-1);
+      assert(result?.role === "assistant");
+      expect(result.content).toEqual(pending.content);
+    },
+  );
+
   it.each([
     { label: "null", data: null },
     { label: "boolean", data: true },

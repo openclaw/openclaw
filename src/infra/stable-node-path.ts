@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import { pathExists } from "@openclaw/fs-safe/advanced";
 import { stableHomebrewNodePathCandidates } from "@openclaw/normalization-core/stable-node-path";
+import { pathExists } from "./fs-safe.js";
 
 /**
  * Homebrew Cellar paths (e.g. /opt/homebrew/Cellar/node/25.7.0/bin/node)
