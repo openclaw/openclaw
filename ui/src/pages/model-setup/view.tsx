@@ -86,6 +86,10 @@ function SetupActionRow(props: {
   option: AuthOption | ModelSetupPrepareOption;
 }) {
   const groupLabel = () => ("kind" in props.option ? props.option.groupLabel : undefined);
+  // Sign-in methods come from manifests; local setup waits for discovery,
+  // which may find the model it would prepare.
+  const disabled = () =>
+    props.view.actionsDisabled || (!("kind" in props.option) && props.view.detecting);
   const actionLabel = () => {
     const option = props.option;
     return "kind" in option
@@ -119,7 +123,7 @@ function SetupActionRow(props: {
       <button
         type="button"
         class="btn"
-        disabled={props.view.actionsDisabled || props.view.detecting}
+        disabled={disabled()}
         onClick={() => {
           const option = props.option;
           if ("kind" in option) {
@@ -264,7 +268,7 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
           <button
             type="button"
             class="btn primary"
-            disabled={props.actionsDisabled || props.detecting || !props.manualProviderId}
+            disabled={props.actionsDisabled || !props.manualProviderId}
             onClick={() => props.onManualConnect()}
           >
             {t(
@@ -408,11 +412,14 @@ function SetupLoading(props: ModelSetupViewProps) {
   );
 }
 
-function DetectionProgress() {
+function DetectionProgress(props: { page: ModelSetupViewProps["page"] }) {
+  // Without detected rows, the candidate slot shows discovery progress instead.
   return (
-    <div class="muted" role="status">
-      {t("modelSetup.loading")}
-    </div>
+    <Show when={props.page.phase === "ready" && props.page.result.candidates.length > 0}>
+      <div class="muted" role="status">
+        {t("modelSetup.loading")}
+      </div>
+    </Show>
   );
 }
 
@@ -524,9 +531,12 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
               </InlineAlert>
             )}
           >
-            <Loading on={props.detectionIdentity()} fallback={<DetectionProgress />}>
+            <Loading
+              on={props.detectionIdentity()}
+              fallback={<DetectionProgress page={props.page} />}
+            >
               <Show when={isPending(detection)} fallback={detection()}>
-                <DetectionProgress />
+                <DetectionProgress page={props.page} />
               </Show>
             </Loading>
           </Errored>
