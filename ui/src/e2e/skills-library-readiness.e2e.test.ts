@@ -60,7 +60,7 @@ suite.define(() => {
       await gateway.waitForRequest("skills.library.list");
       await gateway.resolveDeferred("skills.library.list", accepted);
       await page
-        .getByRole("button", { name: "Open " + own.entry.slug + " details", exact: true })
+        .getByRole("link", { name: "Open " + own.entry.slug + " details", exact: true })
         .waitFor();
       expect(await empty.count()).toBe(0);
       await page.reload();

@@ -50,7 +50,7 @@ async function openSkill(page: Page, missing: string[], install = false) {
       ...(install ? { "skills.install": { message: "Installed Codex CLI" } } : {}),
     },
   });
-  expect((await page.goto(`${suite.server.baseUrl}skills`))?.status()).toBe(200);
+  expect((await page.goto(`${suite.server.baseUrl}settings/skills`))?.status()).toBe(200);
   await page.getByRole("button", { name: "Open Coding Agent details" }).click();
   const dialog = page.locator("openclaw-modal-dialog", { hasText: "Coding Agent" });
   await expect.poll(() => dialog.count()).toBe(1);

@@ -9,13 +9,22 @@ import type { SkillsRouteData } from "./view-types.ts";
 function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discovery" | "settings") {
   return definePage({
     ...routePageSpec(routeId),
-    loaderDeps: (_context: ApplicationContext, location) => location.search,
+    // Browse state and document selection never invalidate the agent inventory.
+    loaderDeps: (context: ApplicationContext, location) => {
+      const params = new URLSearchParams(location.search);
+      const owner =
+        surface === "settings" ? context.settingsAgentSelection : context.agentSelection;
+      return JSON.stringify([
+        params.get("agent") ?? owner.state.selectedId,
+        surface === "settings" ? params.get("clawhub") : null,
+      ]);
+    },
     loader: async (
       context: ApplicationContext,
       options: RouteLoaderOptions,
     ): Promise<SkillsRouteData> => {
       const search = new URLSearchParams(options.location.search);
-      const clawhubRef = search.get("clawhub") ?? undefined;
+      const clawhubRef = surface === "settings" ? (search.get("clawhub") ?? undefined) : undefined;
       const gateway = context.gateway;
       const gatewaySnapshot = gateway.snapshot;
       const agents = context.agents;

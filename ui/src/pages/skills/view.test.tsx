@@ -545,7 +545,7 @@ describe("renderSkills", () => {
 
   it("offers install without a detail card for an install-only search result", async () => {
     const { container, render } = createView();
-    const onClawHubDetailOpen = vi.fn();
+    const onCatalogOpen = vi.fn();
     const onClawHubInstall = vi.fn();
     const icon = `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`;
 
@@ -562,7 +562,7 @@ describe("renderSkills", () => {
         searchResult({ installRef: "@awspace/pdf", summary: "Native PDF integration", icon }),
       ],
       clawhubIconUrls: { [icon]: "blob:clawhub-search-icon" },
-      onClawHubDetailOpen,
+      onCatalogOpen,
       onClawHubInstall,
     });
     await Promise.resolve();
@@ -573,10 +573,10 @@ describe("renderSkills", () => {
     expect(rows[0]!.querySelector(".plugin-catalog-card__primary-link")).toBeNull();
     expect(rows[1]!.querySelector(".plugin-catalog-card__primary-link")).not.toBeNull();
     const native = rows[1]!;
-    const detail = native.querySelector<HTMLButtonElement>(".plugin-catalog-card__primary-link")!;
+    const detail = native.querySelector<HTMLAnchorElement>(".plugin-catalog-card__primary-link")!;
     expect(detail.getAttribute("aria-label")).toBe("Open Pdf details");
     expect(detail.querySelector(".plugin-catalog-card__install")).toBeNull();
-    expect(native.querySelector("h2")?.textContent).toBe("Pdf");
+    expect(native.querySelector("h3")?.textContent).toBe("Pdf");
     expect(native.querySelector(".plugin-card-author")?.textContent).toBe("@awspace/pdf");
     expect(native.textContent).toContain("Native PDF integration");
     expect(native.querySelector<HTMLImageElement>("img")?.src).toBe("blob:clawhub-search-icon");
@@ -594,9 +594,9 @@ describe("renderSkills", () => {
       "skills-sh:openai/skills/pdf",
       "@awspace/pdf",
     ]);
-    expect(onClawHubDetailOpen).not.toHaveBeenCalled();
+    expect(onCatalogOpen).not.toHaveBeenCalled();
     detail.click();
-    expect(onClawHubDetailOpen).toHaveBeenCalledExactlyOnceWith("@awspace/pdf");
+    expect(onCatalogOpen).toHaveBeenCalledExactlyOnceWith({ kind: "remote", key: "@awspace/pdf" });
   });
 
   it("shows one installed external card without another install action", async () => {

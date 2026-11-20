@@ -122,7 +122,9 @@ suite.define(() => {
     (route) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const reader = controlUiE2eBuiltModuleRequest(
-          "ui/src/pages/skills/skill-reader-dialog.tsx",
+          route === "skills"
+            ? "ui/src/pages/skills/catalog-detail.tsx"
+            : "ui/src/pages/skills/skill-reader-dialog.tsx",
         );
         const tooltip = controlUiE2eBuiltModuleRequest("ui/src/components/solid/tooltip.tsx");
         let readerRequests = 0;
@@ -154,15 +156,13 @@ suite.define(() => {
           const held = await holdModuleResponse(page, reader);
           try {
             await page
-              .getByRole("button", { name: "Open Data skill 0000 details", exact: true })
+              .getByRole("link", { name: "Open Data skill 0000 details", exact: true })
               .click();
             await held.request;
             expect(held.requests()).toBeGreaterThan(0);
             expect(await page.locator(".skill-reader-dialog").count()).toBe(0);
             held.release();
-            const dialog = page.locator("openclaw-modal-dialog .skill-reader-dialog");
-            await dialog.waitFor({ state: "visible" });
-            expect(await dialog.locator(".oc-dialog__title").textContent()).toBe("Data skill 0000");
+            await page.getByRole("heading", { level: 1, name: "Data skill 0000" }).waitFor();
           } finally {
             held.release();
           }

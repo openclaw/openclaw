@@ -4,10 +4,11 @@ import {
   createMemo,
   createSignal,
   createStore,
+  lazy,
+  Loading,
   onSettled,
   Show,
 } from "solid-js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import {
   hasOperatorAdminAccess,
@@ -17,7 +18,6 @@ import {
 import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
@@ -25,7 +25,6 @@ import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
 import {
   closeClawHubDetail,
   createSkillsChangeReloader,
@@ -45,6 +44,8 @@ import {
 } from "../../lib/skills/index.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
 import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
+import { createSkillCatalogNavigation } from "./catalog-location.ts";
+import { createSkillCatalogSearch } from "./catalog-search.ts";
 import { createSkillLibrary } from "./library-state.ts";
 import { SkillLibraryNavigation, SkillLibraryPageMenu } from "./library-toolbar.tsx";
 import { SkillLibrary, SkillLibraryDialogs, SkillLibraryFeedback } from "./library-view.tsx";
@@ -60,6 +61,10 @@ import type {
 } from "./view-types.ts";
 import { Skills } from "./view.tsx";
 
+const SkillCatalogDetail = lazy(() => import("./catalog-detail.tsx"), {
+  export: "SkillCatalogDetail",
+});
+
 export function createSkillsRenderer(surface: "discovery" | "settings") {
   return (props: SolidRouteProps<SkillsRouteData>) => (
     <Show when={Boolean(props.data)}>
@@ -73,21 +78,13 @@ export function SkillsPage(props: SkillsPageProps) {
   const surface = () => props.surface ?? "settings";
   // The synchronous request owner admits live surface props at the effect boundary.
   let admittedSurface: ReturnType<typeof surface> | undefined;
-  let lastSearchScope:
-    | readonly [GatewayBrowserClient | null, boolean, number, ReturnType<typeof surface>]
-    | undefined;
-  const [local, setLocal] = createStore<SkillsPresentation>({
+  const [local, setLocal] = createStore<Omit<SkillsPresentation, "clawhubSearchQuery">>({
     skillsFilter: "",
     skillsStatusFilter: "all",
     skillsDetailKey: null,
     skillsDetailTab: "overview",
-    clawhubSearchQuery: "",
   });
   let active = true;
-  let clawhubSearchTimer: {
-    timeout: ReturnType<typeof setTimeout>;
-    resolve: (result: PageReadResult) => void;
-  } | null = null;
   let routeDataInitialized = false;
   let accessSignature = "";
   const skills = observeState<SkillsState>({
@@ -103,6 +100,8 @@ export function SkillsPage(props: SkillsPageProps) {
     },
   });
   const data = skills.state;
+  const { catalog, requestedAgent, catalogTarget, locationFor, catalogHref, openCatalogTarget } =
+    createSkillCatalogNavigation(context, surface, () => skills.read().skillsAgentId);
   const runtimeConfig = projectOwner(context.runtimeConfig, (owner) => owner.state);
   const verdictCompletion = createMemo(() => skills.read().clawhubVerdictsRead);
   const acceptedVerdicts = createMemo(() => skills.read().clawhubVerdicts);
@@ -118,27 +117,9 @@ export function SkillsPage(props: SkillsPageProps) {
     });
   });
   const [detailReceipt, setDetailReceipt] = createSignal<ClawHubDetailReceipt | null>(null);
-  const [searchCompletion, setSearchCompletion] = createSignal<Promise<PageReadResult> | null>(
-    null,
+  const search = createSkillCatalogSearch(data, () =>
+    admittedSurface === "discovery" && data.connected && canReadSkills() ? data.client : null,
   );
-  const searchRequest = createPageRequest(() => {}, {
-    task: ({ client, query }: { client: GatewayBrowserClient; query: string }, { signal }) =>
-      searchClawHub(client, query, signal),
-    onComplete: (results) => {
-      data.clawhubSearchResults = results;
-    },
-    onError: () => {},
-  });
-  const readClawHubSearch = createMemo(() => {
-    const completion = searchCompletion();
-    // First readiness belongs to Loading too, before request admission publishes its receipt.
-    return (completion ?? Promise.resolve(null)).then((result) => {
-      if (result) {
-        throw result.error;
-      }
-      return true;
-    });
-  });
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: resetLoadedSkillState,
@@ -226,7 +207,11 @@ export function SkillsPage(props: SkillsPageProps) {
       return data.clawhubDetail;
     });
   });
-  const viewState = createMemo(() => ({ ...skills.read(), ...local }));
+  const viewState = createMemo(() => ({
+    ...skills.read(),
+    ...local,
+    clawhubSearchQuery: catalog().query,
+  }));
   const config = context.config ? projectApplicationConfig(context.config) : undefined;
   const library = createSkillLibrary(gateway, () => {
     config?.revision();
@@ -263,7 +248,7 @@ export function SkillsPage(props: SkillsPageProps) {
       client: gateway.client,
       connected: gateway.connected,
       epoch: gateway.epoch,
-      query: local.clawhubSearchQuery,
+      query: catalog().query,
     }),
     (current, previous) => {
       if (!previous || current.route !== previous.route || current.surface !== previous.surface) {
@@ -277,7 +262,7 @@ export function SkillsPage(props: SkillsPageProps) {
         }
         ensureInitialData();
       }
-      syncSearch(
+      search.sync(
         [current.client, current.connected, current.epoch, current.surface],
         current.query,
       );
@@ -347,38 +332,11 @@ export function SkillsPage(props: SkillsPageProps) {
       [stopLifecycle, stopNavigation, stopAgents, ...stopSelections, stopSkills].forEach((stop) =>
         stop(),
       );
-      clearClawHubSearchTimer();
-      searchRequest.cancel();
+      search.dispose();
       skills.dispose();
       clawhubIcons.reset();
     };
   });
-
-  function syncSearch(scope: NonNullable<typeof lastSearchScope>, query: string) {
-    if (lastSearchScope?.every((value, index) => value === scope[index])) {
-      return;
-    }
-    lastSearchScope = scope;
-    if (scope[1] && !clawhubSearchTimer) {
-      void setSearchCompletion(performSearch(query));
-    }
-  }
-
-  function performSearch(query: string): Promise<PageReadResult> {
-    searchRequest.reset();
-    const snapshot = context.gateway.snapshot;
-    const client = snapshot.client;
-    if (
-      snapshot.phase !== "connected" ||
-      !canReadSkills() ||
-      admittedSurface !== "discovery" ||
-      !client
-    ) {
-      return Promise.resolve(null);
-    }
-    void searchRequest.run({ client, query });
-    return searchRequest.read!;
-  }
 
   function agentSelection() {
     return admittedSurface === "settings" ? context.settingsAgentSelection : context.agentSelection;
@@ -405,9 +363,7 @@ export function SkillsPage(props: SkillsPageProps) {
     data.skillsAgentRevision++;
     data.skillsLoading = false;
     data.skillOperation = null;
-    setSearchCompletion(null);
-    searchRequest.reset();
-    clearClawHubSearchTimer();
+    search.reset();
     clawhubIcons.reconcileKeys(new Set(Object.keys(data.clawhubIconUrls)));
   }
 
@@ -416,9 +372,7 @@ export function SkillsPage(props: SkillsPageProps) {
     retireSkillsReads(data);
     setDetailReceipt(null);
     library.reset();
-    setSearchCompletion(null);
-    searchRequest.reset();
-    clearClawHubSearchTimer();
+    search.reset();
     selectSkill(null);
     Object.assign(data, createSkillsData(), {
       skillsAgentRevision: data.skillsAgentRevision + 1,
@@ -497,33 +451,6 @@ export function SkillsPage(props: SkillsPageProps) {
     await Promise.all([refreshSkills(data, loadAgents), library.load()]);
   }
 
-  function changeClawHubQuery(query: string) {
-    setLocal((state) => {
-      state.clawhubSearchQuery = query;
-    });
-    data.clawhubSearchResults = null;
-    data.clawhubInstallMessage = null;
-    clearClawHubSearchTimer();
-    searchRequest.reset();
-    void setSearchCompletion(
-      new Promise<PageReadResult>((resolve) => {
-        const timeout = setTimeout(() => {
-          clawhubSearchTimer = null;
-          void performSearch(query).then(resolve);
-        }, 300);
-        clawhubSearchTimer = { timeout, resolve };
-      }),
-    );
-  }
-
-  function clearClawHubSearchTimer() {
-    if (clawhubSearchTimer) {
-      clearTimeout(clawhubSearchTimer.timeout);
-      clawhubSearchTimer.resolve(null);
-      clawhubSearchTimer = null;
-    }
-  }
-
   function selectSkill(key: string | null) {
     if (key) {
       // The dialog needs the stored API key's source; read config only once one opens.
@@ -578,6 +505,19 @@ export function SkillsPage(props: SkillsPageProps) {
     );
   }
 
+  const installFromCatalog = (ref: string, version?: string) => {
+    if (!canInstallFromClawHub()) return;
+    if (!library.showWorkspace()) {
+      closeDetail();
+      library.edit((state) => {
+        state.importSource = { slug: ref, version };
+        state.importSlug = "";
+      });
+      library.setImportOpen(true);
+    } else {
+      void mutations.run(() => installFromClawHub(data, ref, version));
+    }
+  };
   const libraryNavigation = {
     onSearch: () => navigateSkills("skills"),
     onWorkshop: () => context.navigate("skill-workshop"),
@@ -594,124 +534,174 @@ export function SkillsPage(props: SkillsPageProps) {
 
   return (
     <openclaw-skills-page>
-      <SkillsHeader
-        surface={surface()}
-        onNavigate={(tab) => context.navigate(tab)}
-        onSettings={() => navigateSkills("skill-settings")}
-      />
+      <Show when={!catalogTarget()}>
+        <SkillsHeader
+          surface={surface()}
+          onNavigate={(tab) => context.navigate(tab)}
+          onSettings={() => navigateSkills("skill-settings")}
+        />
+      </Show>
       <SettingsWorkspace>
         <div
           // Bound layout work for the large installed inventory without containing discovery.
           style={{ contain: surface() === "settings" ? "layout" : undefined }}
           {...(surface() === "discovery" ? pluginsHubPanel("skills") : {})}
         >
-          <Skills
-            state={viewState()}
-            mutationSkills={mutations.rows()}
-            saving={mutations.saving()}
-            toggleSavingSkillKey={mutations.toggle()?.skillKey}
-            toggleDisabled={
-              agents.read().agentsLoading ||
-              library.state.busy ||
-              ((skills.read().skillsLoading || skills.read().skillOperation !== null) &&
-                skills.read().skillOperation !== mutations.toggle()?.operation)
+          <Show
+            when={catalogTarget()}
+            keyed
+            fallback={
+              <Skills
+                state={viewState()}
+                mutationSkills={mutations.rows()}
+                saving={mutations.saving()}
+                toggleSavingSkillKey={mutations.toggle()?.skillKey}
+                toggleDisabled={
+                  agents.read().agentsLoading ||
+                  library.state.busy ||
+                  ((skills.read().skillsLoading || skills.read().skillOperation !== null) &&
+                    skills.read().skillOperation !== mutations.toggle()?.operation)
+                }
+                readClawHubDetail={readClawHubDetail}
+                readClawHubVerdicts={readClawHubVerdicts}
+                readClawHubSearch={search.read}
+                clawhubSearchEpoch={gateway.epoch}
+                surface={surface()}
+                libraryEntries={library.state.list ? library.entries() : undefined}
+                catalogSection={catalog().section}
+                onCatalogSectionChange={(section) =>
+                  context.replace("skills", locationFor(undefined, "", section))
+                }
+                catalogHref={catalogHref}
+                onCatalogOpen={openCatalogTarget}
+                library={
+                  surface() === "discovery" ? (
+                    <>
+                      <SkillLibraryFeedback library={library} />
+                      <SkillLibraryDialogs library={library} />
+                    </>
+                  ) : (
+                    <SkillLibrary
+                      library={library}
+                      pageMenu={libraryPageMenu}
+                      navigationActions={<SkillLibraryNavigation {...libraryNavigation} />}
+                    />
+                  )
+                }
+                pageMenu={surface() === "discovery" ? undefined : libraryPageMenu}
+                showInventory={library.showWorkspace()}
+                canUpdate={canUpdateSkills()}
+                canInstall={canInstallFromClawHub()}
+                loading={
+                  skills.read().skillsLoading || agents.read().agentsLoading || library.state.busy
+                }
+                error={skills.read().skillsError ?? agents.read().agentsError}
+                onFilterChange={(next) =>
+                  setLocal((state) => {
+                    state.skillsFilter = next;
+                  })
+                }
+                onStatusFilterChange={(next) =>
+                  setLocal((state) => {
+                    state.skillsStatusFilter = next;
+                  })
+                }
+                onRefresh={() => void refreshPage()}
+                onToggle={(key, enabled) => {
+                  if (canUpdateSkills()) {
+                    void mutations.run(
+                      () => updateSkillEnabled(data, key, enabled, canUpdateSkills),
+                      {
+                        skillKey: key,
+                        enabled,
+                      },
+                    );
+                  }
+                }}
+                onEdit={(key, value) => {
+                  if (canUpdateSkills()) {
+                    updateSkillEdit(data, key, value);
+                  }
+                }}
+                apiKeyConfig={{
+                  snapshot: () => runtimeConfig.read().configSnapshot,
+                  error: () => runtimeConfig.read().lastError,
+                  retry: () => void context.runtimeConfig.refreshDisplay(),
+                }}
+                onSaveKey={(key, replaceable) => {
+                  if (canUpdateSkills()) {
+                    // Read at save and again at dispatch, from the owner's current snapshot.
+                    const current = () =>
+                      replaceable(context.runtimeConfig.state.configSnapshot, key);
+                    void mutations.run(() => saveSkillApiKey(data, key, current, canUpdateSkills));
+                  }
+                }}
+                onInstall={(skillKey, name, installId) => {
+                  if (canInstallSkills()) {
+                    void mutations.run(() => installSkill(data, skillKey, name, installId));
+                  }
+                }}
+                onDetailOpen={selectSkill}
+                onDetailClose={() =>
+                  setLocal((state) => {
+                    state.skillsDetailKey = null;
+                  })
+                }
+                onDetailTabChange={changeDetailTab}
+                onClawHubQueryChange={(query) => {
+                  if (query === catalog().query) {
+                    search.retry(query);
+                  } else {
+                    context.replace(
+                      "skills",
+                      locationFor(undefined, query, query.trim() ? "all" : catalog().section),
+                    );
+                  }
+                }}
+                onClawHubDetailClose={closeDetail}
+                onClawHubInstall={installFromCatalog}
+              />
             }
-            readClawHubDetail={readClawHubDetail}
-            readClawHubVerdicts={readClawHubVerdicts}
-            readClawHubSearch={readClawHubSearch}
-            clawhubSearchEpoch={gateway.epoch}
-            surface={surface()}
-            libraryEntries={library.state.list ? library.entries() : undefined}
-            onLibraryOpen={(skillId) => void library.open(skillId)}
-            library={
-              surface() === "discovery" ? (
-                <>
-                  <SkillLibraryFeedback library={library} />
-                  <SkillLibraryDialogs library={library} />
-                </>
-              ) : (
-                <SkillLibrary
-                  library={library}
-                  pageMenu={libraryPageMenu}
-                  navigationActions={<SkillLibraryNavigation {...libraryNavigation} />}
-                />
-              )
-            }
-            pageMenu={surface() === "discovery" ? undefined : libraryPageMenu}
-            showInventory={library.showWorkspace()}
-            canUpdate={canUpdateSkills()}
-            canInstall={canInstallFromClawHub()}
-            loading={
-              skills.read().skillsLoading || agents.read().agentsLoading || library.state.busy
-            }
-            error={skills.read().skillsError ?? agents.read().agentsError}
-            onFilterChange={(next) =>
-              setLocal((state) => {
-                state.skillsFilter = next;
-              })
-            }
-            onStatusFilterChange={(next) =>
-              setLocal((state) => {
-                state.skillsStatusFilter = next;
-              })
-            }
-            onRefresh={() => void refreshPage()}
-            onToggle={(key, enabled) => {
-              if (canUpdateSkills()) {
-                void mutations.run(() => updateSkillEnabled(data, key, enabled, canUpdateSkills), {
-                  skillKey: key,
-                  enabled,
-                });
-              }
-            }}
-            onEdit={(key, value) => {
-              if (canUpdateSkills()) {
-                updateSkillEdit(data, key, value);
-              }
-            }}
-            apiKeyConfig={{
-              snapshot: () => runtimeConfig.read().configSnapshot,
-              error: () => runtimeConfig.read().lastError,
-              retry: () => void context.runtimeConfig.refreshDisplay(),
-            }}
-            onSaveKey={(key, replaceable) => {
-              if (canUpdateSkills()) {
-                // Read at save and again at dispatch, from the owner's current snapshot.
-                const current = () => replaceable(context.runtimeConfig.state.configSnapshot, key);
-                void mutations.run(() => saveSkillApiKey(data, key, current, canUpdateSkills));
-              }
-            }}
-            onInstall={(skillKey, name, installId) => {
-              if (canInstallSkills()) {
-                void mutations.run(() => installSkill(data, skillKey, name, installId));
-              }
-            }}
-            onDetailOpen={selectSkill}
-            onDetailClose={() =>
-              setLocal((state) => {
-                state.skillsDetailKey = null;
-              })
-            }
-            onDetailTabChange={changeDetailTab}
-            onClawHubQueryChange={changeClawHubQuery}
-            onClawHubDetailOpen={openClawHubDetail}
-            onClawHubDetailClose={closeDetail}
-            onClawHubInstall={(ref, version) => {
-              if (!canInstallFromClawHub()) {
-                return;
-              }
-              if (!library.showWorkspace()) {
-                closeDetail();
-                library.edit((state) => {
-                  state.importSource = { slug: ref, version };
-                  state.importSlug = "";
-                });
-                library.setImportOpen(true);
-              } else {
-                void mutations.run(() => installFromClawHub(data, ref, version));
-              }
-            }}
-          />
+          >
+            {(target) => (
+              <>
+                <Loading>
+                  <SkillCatalogDetail
+                    target={target}
+                    client={
+                      hasOperatorReadAccess(gateway.snapshot?.hello?.auth ?? null)
+                        ? gateway.client
+                        : null
+                    }
+                    connected={gateway.connected}
+                    epoch={gateway.epoch}
+                    agentId={
+                      !requestedAgent() || requestedAgent() === skills.read().skillsAgentId
+                        ? skills.read().skillsAgentId
+                        : null
+                    }
+                    report={skills.read().skillsReport}
+                    inventoryError={skills.read().skillsError ?? agents.read().agentsError}
+                    backHref={catalogHref()}
+                    onBack={() => openCatalogTarget()}
+                    onSettings={() => navigateSkills("skill-settings")}
+                    verdicts={skills.read().clawhubVerdicts}
+                    iconUrls={skills.read().clawhubIconUrls}
+                    canInstall={
+                      canInstallFromClawHub() &&
+                      !mutations.saving() &&
+                      !skills.read().skillOperation &&
+                      !library.state.busy
+                    }
+                    personal={!library.showWorkspace()}
+                    installMessage={skills.read().clawhubInstallMessage}
+                    onInstall={installFromCatalog}
+                  />
+                </Loading>
+                <SkillLibraryDialogs library={library} />
+              </>
+            )}
+          </Show>
         </div>
       </SettingsWorkspace>
     </openclaw-skills-page>

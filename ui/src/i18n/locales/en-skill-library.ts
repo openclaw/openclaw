@@ -23,6 +23,8 @@ const enSkillLibrary = {
   skillDiscovery: {
     search: "Search skills",
     settings: "Skill settings",
+    readRequired: "You need read access to view this skill.",
+    documentUnavailable: "SKILL.md is unavailable for this release.",
     libraryStatus: "Library skill. Session selections control when it is used.",
   },
   skillLibrary: {

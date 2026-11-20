@@ -292,7 +292,7 @@ suite.define(() => {
 
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
-      await page.goto(`${suite.server.baseUrl}skills`);
+      await page.goto(`${suite.server.baseUrl}settings/skills`);
       await gateway.waitForRequest("skills.status");
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
       const install = page

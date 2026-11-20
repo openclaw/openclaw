@@ -34,6 +34,28 @@ const remoteSkill = (owner = "alice", slug = "repo", displayName = "Repo") => ({
 });
 
 describe("unified skill discovery", () => {
+  it("browses bounded Trending and Installed shelves and opens the full installed inventory", async () => {
+    const skills = Array.from({ length: 12 }, (_, index) =>
+      createSkill({ name: "Skill " + index, skillKey: "skill-" + index }),
+    );
+    const onCatalogSectionChange = vi.fn();
+    const props = {
+      report: createReport(skills),
+      clawhubResults: [remoteSkill()],
+      onCatalogSectionChange,
+    };
+    const container = renderDiscovery(props);
+    const installed = container.querySelector('[data-catalog-section="installed"]');
+    expect(installed?.querySelectorAll("[data-skill-id]")).toHaveLength(8);
+    expect(container.querySelector('[data-catalog-section="trending"]')?.textContent).toContain(
+      "Repo",
+    );
+    installed!.querySelector<HTMLButtonElement>("button")!.click();
+    expect(onCatalogSectionChange).toHaveBeenCalledWith("installed");
+    renderDiscovery({ ...props, catalogSection: "installed" }, container);
+    expect(container.querySelector('[data-skill-id="local:skill-11"]')).not.toBeNull();
+    expect(container.querySelector('[data-skill-id="remote:@alice/repo"]')).toBeNull();
+  });
   it.each(["", "calendar"])(
     "waits for an accepted library before claiming empty discovery (query=%s)",
     (clawhubQuery) => {
@@ -153,10 +175,10 @@ describe("unified skill discovery", () => {
   });
   it("shows separate personal/team copies and merges only their persisted runtime command identity", () => {
     const libraries = buildSkillLibraryMock().map((item) => item.entry);
-    const onLibraryOpen = vi.fn();
+    const onCatalogOpen = vi.fn();
     const container = renderDiscovery({
       libraryEntries: libraries,
-      onLibraryOpen,
+      onCatalogOpen,
       skill: { name: libraries[0]!.name, source: "openclaw-library" },
     });
     expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(3);
@@ -164,7 +186,7 @@ describe("unified skill discovery", () => {
     expect(cards[0]?.textContent).toContain("Alice");
     expect(cards[1]?.textContent).toContain("Bob");
     cards[1]?.querySelector<HTMLButtonElement>(".plugin-catalog-card__primary-link")!.click();
-    expect(onLibraryOpen).toHaveBeenCalledWith(libraries[1]!.skillId);
+    expect(onCatalogOpen).toHaveBeenCalledWith({ kind: "library", key: libraries[1]!.skillId });
   });
 
   it("does not mistake an invalid namesake for a ClawHub install", () => {
@@ -181,27 +203,25 @@ describe("unified skill discovery", () => {
   it("combines installed and remote skills in one search with exclusive status/install actions", () => {
     const onClawHubQueryChange = vi.fn();
     const onClawHubInstall = vi.fn();
-    const onDetailOpen = vi.fn();
+    const onCatalogOpen = vi.fn();
     const container = renderDiscovery({
       clawhubQuery: "repo",
       clawhubResults: [remoteSkill("alice", "repo-helper", "Repo Helper")],
       onClawHubQueryChange,
       onClawHubInstall,
-      onDetailOpen,
+      onCatalogOpen,
     });
     const inputs = container.querySelectorAll<HTMLInputElement>('input[type="search"]');
     expect(inputs).toHaveLength(1);
     expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(2);
-    expect(
-      container.querySelectorAll(
-        "input.settings-toggle__input, .skills-group, .plugin-catalog-chips",
-      ),
-    ).toHaveLength(0);
+    expect(container.querySelectorAll("input.settings-toggle__input, .skills-group")).toHaveLength(
+      0,
+    );
     const local = container.querySelector('[data-skill-id="local:repo-skill"]')!;
     expect(local.querySelector('[role="img"]')?.getAttribute("title")).toContain("Ready");
     expect(local.querySelector(".plugin-catalog-card__install")).toBeNull();
     local.querySelector<HTMLButtonElement>(".plugin-catalog-card__primary-link")!.click();
-    expect(onDetailOpen).toHaveBeenCalledWith("repo-skill");
+    expect(onCatalogOpen).toHaveBeenCalledWith({ kind: "local", key: "repo-skill" });
     const remote = container.querySelector('[data-skill-id="remote:@alice/repo-helper"]')!;
     remote.querySelector<HTMLButtonElement>(".plugin-catalog-card__install")!.click();
     expect(onClawHubInstall).toHaveBeenCalledWith("@alice/repo-helper");
@@ -233,6 +253,37 @@ describe("unified skill discovery", () => {
     expect(container.querySelector('[data-skill-id="local:repo-skill"]')).not.toBeNull();
     expect(container.querySelector('[data-skill-id="remote:@alice/repo"]')).toBeNull();
     expect(container.querySelector('[data-skill-id="remote:@bob/repo"]')).not.toBeNull();
+  });
+
+  it("groups explicit publisher classes without granting trust or details to install-only results", () => {
+    const community = { ...remoteSkill("bob", "community"), official: false };
+    const official = { ...remoteSkill("openclaw", "official"), official: true };
+    const external = {
+      ...remoteSkill("third", "external"),
+      installOnly: true,
+      trustState: "external",
+    };
+    const container = renderDiscovery({
+      clawhubQuery: "repo",
+      clawhubResults: [community, official, external],
+    });
+    expect(
+      container
+        .querySelector('[data-catalog-section="official"] [data-skill-id]')
+        ?.getAttribute("data-skill-id"),
+    ).toBe("remote:@openclaw/official");
+    expect(
+      container
+        .querySelector('[data-catalog-section="community"] [data-skill-id]')
+        ?.getAttribute("data-skill-id"),
+    ).toBe("remote:@bob/community");
+    const unknown = container.querySelector('[data-catalog-section="registry"] [data-skill-id]')!;
+    expect(unknown.querySelector("a")).toBeNull();
+    expect(unknown.querySelector("button")).not.toBeNull();
+    expect(unknown.textContent).toContain("Not scanned by ClawHub");
+    expect(
+      container.querySelector('[data-catalog-section="installed"] [data-skill-id]'),
+    ).not.toBeNull();
   });
 
   it("keeps local results usable during remote failure and explains missing setup in the dot", () => {

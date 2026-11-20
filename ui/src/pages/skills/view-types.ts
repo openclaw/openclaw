@@ -9,6 +9,7 @@ import type {
   loadClawHubDetail,
   SkillsState,
 } from "../../lib/skills/index.ts";
+import type { SkillCatalogSection, SkillCatalogTarget } from "./catalog-location.ts";
 
 export type SkillsRouteData = {
   gateway: ApplicationContext["gateway"];
@@ -57,7 +58,10 @@ export type SkillsProps = {
   surface?: "discovery" | "settings";
   /** Undefined until the library owner accepts its first inventory. */
   libraryEntries?: SkillLibraryEntry[];
-  onLibraryOpen?: (skillId: string) => void;
+  catalogSection: SkillCatalogSection;
+  onCatalogSectionChange: (section: SkillCatalogSection) => void;
+  catalogHref: (target: SkillCatalogTarget) => string;
+  onCatalogOpen: (target: SkillCatalogTarget) => void;
   library?: JSX.Element;
   pageMenu?: () => JSX.Element;
   showInventory?: boolean;
@@ -86,7 +90,6 @@ export type SkillsProps = {
   onDetailClose: () => void;
   onDetailTabChange: (tab: SkillDetailTab) => void;
   onClawHubQueryChange: (query: string) => void;
-  onClawHubDetailOpen: (ref: string) => void;
   onClawHubDetailClose: () => void;
   onClawHubInstall: (ref: string, version?: string) => void;
 };

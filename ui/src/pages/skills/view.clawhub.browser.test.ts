@@ -94,12 +94,13 @@ it("windows skill discovery while preserving keyboard traversal, notices, detail
   const [notice, setNotice] = createSignal<{ ref: string; kind: "error"; text: string } | null>(
     null,
   );
-  const onDetailOpen = vi.fn();
+  const onCatalogOpen = vi.fn();
   const props = createProps({
     surface: "discovery",
     report: createReport(skills),
     clawhubResults: [],
-    onDetailOpen,
+    onCatalogOpen,
+    catalogSection: "installed",
     onClawHubQueryChange: setQuery,
   });
   renderSkills(
@@ -171,8 +172,8 @@ it("windows skill discovery while preserving keyboard traversal, notices, detail
   await expectEndVisible();
   setNotice(null);
   await expectEndVisible();
-  await page.getByRole("button", { name: "Open Window skill 0999 details", exact: true }).click();
-  expect(onDetailOpen).toHaveBeenLastCalledWith("window-skill-999");
+  await page.getByRole("link", { name: "Open Window skill 0999 details", exact: true }).click();
+  expect(onCatalogOpen).toHaveBeenLastCalledWith({ kind: "local", key: "window-skill-999" });
 
   const search = container.querySelector<HTMLInputElement>('input[name="skills-search"]')!;
   await userEvent.fill(search, "Window skill 0999");
