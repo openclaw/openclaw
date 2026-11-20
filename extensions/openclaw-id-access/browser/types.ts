@@ -90,12 +90,15 @@ export type Invite = {
   };
 };
 
+/** A role's access to other people's sessions (`gateway.roles.definitions.*.sessions.others`). */
+export type RoleSessionAccess = "none" | "invited" | "view" | "suggest" | "write";
+
 /** Small public role summary, not the full permission definition. */
 export type Role = { name: string; requiresSandbox: boolean } & (
   | { defined: false }
   | {
       defined: true;
-      sessions: "none" | "view" | "suggest" | "write";
+      sessions: RoleSessionAccess;
       admin: boolean;
     }
 );
