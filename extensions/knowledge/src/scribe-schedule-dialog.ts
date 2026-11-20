@@ -139,9 +139,10 @@ export function openScheduleDialog(input: ScheduleDialogInput) {
   const dayField = field("On", day);
   customFields.append(field("Repeat", repeat), dayField, field("At", time));
 
-  const zones = Intl.supportedValuesOf?.("timeZone") ?? [];
+  // The supported list names regional zones only; UTC and the current zone are added to it.
+  const zones = new Set([currentTz, "UTC", ...(Intl.supportedValuesOf?.("timeZone") ?? [])]);
   const tz = el("select", undefined, "scribe-select");
-  for (const zone of zones.includes(currentTz) ? zones : [currentTz, ...zones]) {
+  for (const zone of zones) {
     const option = el("option", zone);
     option.value = zone;
     tz.append(option);
@@ -163,20 +164,24 @@ export function openScheduleDialog(input: ScheduleDialogInput) {
     ),
   );
 
+  // One save at a time: editing a field while one is sent must not enable another.
+  let saving = false;
   const submit = button(
     "Save schedule",
     () => {
       const next = expr();
-      if (!next) {
+      if (!next || saving) {
         return;
       }
+      saving = true;
       submit.disabled = true;
       frame.feedback.textContent = "";
       frame.feedback.className = "knowledge-dialog-feedback";
       input.save({ kind: "cron", expr: next, tz: tz.value }).then(
         () => frame.close(),
         (error: unknown) => {
-          submit.disabled = false;
+          saving = false;
+          refresh();
           frame.feedback.textContent = error instanceof Error ? error.message : String(error);
           frame.feedback.classList.add("knowledge-error");
         },
@@ -191,7 +196,7 @@ export function openScheduleDialog(input: ScheduleDialogInput) {
     preview.textContent = next
       ? `New schedule: ${input.describe({ kind: "cron", expr: next, tz: tz.value })}.`
       : "Pick a time.";
-    submit.disabled = !next || (next === currentExpr && tz.value === currentTz);
+    submit.disabled = saving || !next || (next === currentExpr && tz.value === currentTz);
   }
   frame.footer.append(
     button("Cancel", () => frame.close(), "knowledge-quiet"),

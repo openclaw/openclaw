@@ -940,7 +940,13 @@ it("changes a scribe's schedule through a turn in its conversation", async () =>
   expect(save.disabled).toBe(true);
   dialog.querySelector<HTMLInputElement>("#scribe-schedule-45-3-")!.click();
   expect(dialog.textContent).toContain("New schedule: Daily, 3:45 AM · America/Los_Angeles.");
+  const zone = [...dialog.querySelectorAll("select")].at(-1)!;
+  expect([...zone.options].some((option) => option.value === "UTC")).toBe(true);
   save.click();
+  // Editing a field while the save is sent doesn't allow a second one.
+  zone.value = "UTC";
+  zone.dispatchEvent(new Event("change"));
+  expect(save.disabled).toBe(true);
   await vi.waitFor(() => expect(dialog.open).toBe(false));
 
   // The page never edits the automation; the conversation re-declares it with the new schedule.

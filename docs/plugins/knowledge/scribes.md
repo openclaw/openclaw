@@ -161,8 +161,9 @@ Steps:
 
 Each scheduled run receives the automation's run message. To change when it
 runs, use **Change…** next to **Schedule** in the scribe's detail. To change what later runs
-do, edit the scribe's automation on the Automations page: its message is the
-run message.
+do, ask the scribe's conversation to change its run message. Editing the
+message on the Automations page drops the authority of your turn that its runs
+use.
 
 ## After updating OpenClaw
 
