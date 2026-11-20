@@ -60,6 +60,7 @@ it.each([
   const listeners = noForcedProcessExit.create({
     cwd: process.cwd(),
     physicalFilename: `${process.cwd()}/${file}`,
+    sourceCode: { scopeManager: { scopes: [] } },
     report() {
       reported = true;
     },
