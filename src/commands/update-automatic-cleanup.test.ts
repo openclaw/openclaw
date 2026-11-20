@@ -950,16 +950,16 @@ it.each([false, true])(
     const unreadable = path.join(resolveSessionSqliteMigrationRunsDir(env), "unreadable.json");
     fs.mkdirSync(path.dirname(unreadable), { recursive: true });
     fs.writeFileSync(unreadable, "{");
-    // Cleanup runs before the Gateway's health verification is recorded.
-    const first = (await complete(runId, now + 1_000)).steps.at(-1);
-    expect(first?.advisory?.message).toContain("unreadable-manifest");
-    expect([failedCapture, directory].map(fs.existsSync)).toEqual([true, true]);
-    fs.unlinkSync(unreadable);
     recordUpdateRunStep(
       runId,
       { step: "warning:unrelated", status: "completed", detail: "other warning" },
       { env },
     );
+    // Cleanup runs before the Gateway's health verification is recorded.
+    const first = (await complete(runId, now + 1_000)).steps.at(-1);
+    expect(first?.advisory?.message).toContain("unreadable-manifest");
+    expect([failedCapture, directory].map(fs.existsSync)).toEqual([true, true]);
+    fs.unlinkSync(unreadable);
     {
       using clock = vi.spyOn(Date, "now");
       clock.mockReturnValue(now + 30_000);
