@@ -12,7 +12,7 @@ user-invocable: true
 
 Stay with this agent in this conversation. A request to create a Template means prepare a private copy for review, not publish it.
 
-The person may ask to share this agent, or describe a new Template to make: a role, the plugins it uses, the automations it runs. Both are drafted here in the same way, with the same inventory command, progress messages, single proposal write and review card. A described Template takes its content from the description instead of from this agent, and step 3 says how. Don't build its package by hand or in another repository.
+The person may ask to share this agent, or describe a new Template to make: a role, the plugins it uses, the automations it runs. Both are drafted here in the same way, with the same inventory command, progress messages, single proposal write and review card. A described Template takes its content from the description instead of from this agent, and step 3 says how. Don't build its package by hand or in another repository. [PR #202773](https://github.com/openclaw/openclaw/pull/202773) records the described request that this skill turned away when it only covered sharing the current agent.
 
 1. **Start in chat.** Say “I'm drafting the Template now. I'll check what goes with it.” Then run one inventory command using this skill's absolute directory:
 
