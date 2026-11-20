@@ -32,6 +32,22 @@ export async function snapshotReloginAuthProfiles(params: {
   );
 }
 
+/** Match the account in a resolved slot without letting optional name handling fail sign-in. */
+export function isAuthProfileReconnect(
+  incoming: AuthProfileCredential,
+  previous: AuthProfileCredential | undefined,
+  matcher: AccountMatcher,
+): previous is AuthProfileCredential {
+  if (!previous || previous.provider !== incoming.provider || previous.type !== incoming.type) {
+    return false;
+  }
+  try {
+    return matcher?.(incoming, previous) ?? true;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveReloginProfileIdentity(params: {
   profiles: ProviderAuthResult["profiles"];
   requestedProfileId?: string;

@@ -81,6 +81,7 @@ import {
   type ModelAuthRefreshOutcome,
 } from "./auth-refresh.js";
 import {
+  isAuthProfileReconnect,
   resolveReloginProfileIdentity,
   snapshotReloginAuthProfiles,
 } from "./auth-relogin-identity.js";
@@ -315,19 +316,17 @@ async function runProviderAuthMethod(
     matchesPersonalAccount: params.method.matchesPersonalAccount,
     allowMissingReusedProfile: params.allowMissingReusedProfile,
   });
-  const previousProfile = (profileId: string) =>
-    store.profiles[profileId] ?? params.existingProfiles?.[profileId];
+  const reconnectedProfiles = new Set<string>();
   const profiles = resolvedIdentity.profiles.map((profile) => {
-    const previous = previousProfile(profile.profileId);
-    const credential = profile.credential;
-    if (
-      previous?.provider === credential.provider &&
-      previous.type === credential.type &&
-      previous.displayName
-    ) {
-      return { ...profile, credential: { ...credential, displayName: previous.displayName } };
+    const { profileId, credential } = profile;
+    const previous = store.profiles[profileId] ?? params.existingProfiles?.[profileId];
+    if (!isAuthProfileReconnect(credential, previous, params.method.matchesPersonalAccount)) {
+      return profile;
     }
-    return profile;
+    reconnectedProfiles.add(profileId);
+    return previous.displayName
+      ? { ...profile, credential: { ...credential, displayName: previous.displayName } }
+      : profile;
   });
 
   const login = {
@@ -468,10 +467,11 @@ async function runProviderAuthMethod(
     login.prompter.optionalText &&
     saved &&
     persistedProfiles.length === 1 &&
-    !previousProfile(saved.profileId) &&
+    !reconnectedProfiles.has(saved.profileId) &&
     !normalizeOptionalString(login.config.auth?.profiles?.[saved.profileId]?.displayName) &&
-    Object.values(store.profiles).some(
-      (credential) => credential.provider === saved.credential.provider,
+    Object.entries(store.profiles).some(
+      ([id, credential]) =>
+        id !== saved.profileId && credential.provider === saved.credential.provider,
     )
   ) {
     await offerSavedAuthProfileName({

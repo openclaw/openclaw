@@ -57,6 +57,22 @@ it.each([
     name: "Existing work name",
   },
   { scenario: "added explicit profile", offer: true, explicit: true, name: "Work" },
+  {
+    scenario: "reconnect to the same account in an explicit slot",
+    offer: false,
+    reconnect: true,
+    useWorkSlot: true,
+    name: "Existing work name",
+  },
+  {
+    scenario: "replace the account in a named explicit slot",
+    offer: true,
+    reconnect: true,
+    useWorkSlot: true,
+    replace: true,
+    answer: "Replacement",
+    name: "Replacement",
+  },
   { scenario: "cancel the name without losing the account", offer: true, cancel: true },
   { scenario: "failed name prompt leaves the account saved", offer: true, promptError: true },
 ])("keeps sign-in and labeling independent: $scenario", async (test) => {
@@ -82,6 +98,7 @@ it.each([
       });
     }
     const inputId = test.reconnect ? `${provider}:provider-chosen-id` : work;
+    const accountId = test.replace ? "replacement" : "work";
     const savedId = test.explicit ? explicit : work;
     const plugin: ProviderPlugin = {
       id: provider,
@@ -101,7 +118,7 @@ it.each([
               {
                 profileId: inputId,
                 credential: {
-                  ...credential("work", "new-access"),
+                  ...credential(accountId, "new-access"),
                   ...(test.noEmail ? { email: undefined } : {}),
                 },
               },
@@ -132,7 +149,7 @@ it.each([
         prompter,
         credentialOnly: true,
         ...(test.force ? { force: true } : {}),
-        ...(test.explicit ? { profileId: explicit } : {}),
+        ...(test.useWorkSlot ? { profileId: work } : test.explicit ? { profileId: explicit } : {}),
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       }),
     ).resolves.toMatchObject({ profiles: [{ profileId: savedId }] });
