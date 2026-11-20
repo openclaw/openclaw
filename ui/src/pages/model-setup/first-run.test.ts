@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { routeIdFromPath } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -89,6 +88,9 @@ describe("model setup first-run redirect", () => {
     const cases = [
       ["/", "", "", "", true],
       ["/chat", "", "", "", true],
+      ["/openclaw/", "", "", "/openclaw", true],
+      ["/beam/unfinished-share-5", "", "", "", false],
+      ["/settings/unknown/page", "", "", "", false],
       ["/chat", "?session=agent%3Amain%3Amain", "", "", false],
       ["/chat", "", "#session=agent%3Amain%3Amain", "", false],
       ["/chat/main/", "", "", "", true],
@@ -99,9 +101,7 @@ describe("model setup first-run redirect", () => {
       ["/settings/appearance", "", "", "", false],
     ] as const;
     for (const [pathname, search, hash, basePath, expected] of cases) {
-      expect(isDefaultChatLanding({ pathname, search, hash }, basePath, routeIdFromPath)).toBe(
-        expected,
-      );
+      expect(isDefaultChatLanding({ pathname, search, hash }, basePath)).toBe(expected);
     }
   });
 
@@ -120,7 +120,7 @@ describe("model setup first-run redirect", () => {
 
     await startModelSetupFirstRunRedirectAfterLocation({
       context,
-      enabled: isDefaultChatLanding(releasedLocation, "", routeIdFromPath),
+      enabled: isDefaultChatLanding(releasedLocation, ""),
       history: { location: () => currentLocation, replace: replaceLocation },
       initialLocationReady: Promise.resolve(canonicalLocation),
     });

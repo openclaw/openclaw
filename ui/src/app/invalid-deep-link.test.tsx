@@ -63,6 +63,7 @@ it.each(["/beam/unfinished-share-5", "/settings/unknown/page"])(
       router,
       retryContext: context,
       onNotFound: () => navigation.recoverNotFoundRoute(),
+      notFoundRecoveryReady: false,
     });
     onTestFinished(() => {
       outlet.dispose();

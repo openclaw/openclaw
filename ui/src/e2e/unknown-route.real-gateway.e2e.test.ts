@@ -65,7 +65,10 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it.each([{ width: 1280, height: 900 }, { width: 400, height: 820 }])(
+  it.each([
+    { width: 1280, height: 900 },
+    { width: 400, height: 820 },
+  ])(
     "keeps an invalid link separate from a saved session at $width px",
     async (viewport) => {
       await suite.withPage(
@@ -91,9 +94,14 @@ suite.define(() => {
           const notice = page.getByText("Page not found", { exact: true });
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
             const visible = (await notice.isVisible()) ? notice : transcript;
-            const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [visible], {
-              animations: "disabled",
-            });
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              page.locator("body"),
+              [visible],
+              {
+                animations: "disabled",
+              },
+            );
             await writeFile(
               path.join(suite.artifactDir, `unknown-route-${viewport.width}.png`),
               frame.png,
@@ -114,6 +122,8 @@ suite.define(() => {
           await page.goBack();
           await notice.waitFor({ state: "visible" });
           expect(page.url()).toBe(requested.href);
+          await page.goForward();
+          await waitForControlUiRoute(page, { routeId: "chat" });
         },
       );
     },
