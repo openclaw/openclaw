@@ -389,15 +389,16 @@ Reload debounce and in-flight operation deferral are no longer configurable and 
 { gateway: { resources: { profile: "auto" } } }
 ```
 
-- `auto` (default): choose `lean` when effective memory is **at or below 2 GiB**
-  or `availableParallelism()` reports **at or below 2 CPUs**; otherwise choose `standard`.
+- `auto` (default): choose `lean` when effective memory is **below 8 GiB**;
+  exactly 8 GiB or more selects `standard`. Automatic selection is enabled by default
+  and depends only on memory, not CPU count.
 - `standard` or `lean`: explicitly override automatic selection.
 - Memory is the smallest visible cgroup v2 `memory.max` across the process's cgroup
   and ancestors, bounded by total host RAM. Without a finite readable limit,
-  total host RAM is used. `memory.high`, swap and current free memory do not select
+  total host RAM is used. Cgroup v1 limits are not detected and fall back to host RAM.
+  `memory.high`, swap and current free memory do not select
   the profile. CPU affinity, not a CPU quota conversion, supplies the CPU count.
-- The 2 GiB / 2 CPU thresholds are provisional and will be calibrated against
-  measured small-host workloads. Changing the setting requires a Gateway restart.
+- Changing the setting requires a Gateway restart.
 
 **Both profiles currently use identical worker behavior.** This setting is the
 foundation for subsequent lean resource changes, not a memory cap or OOM guarantee.

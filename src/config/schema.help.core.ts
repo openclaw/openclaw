@@ -105,7 +105,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Gateway runtime surface for bind mode, auth, web app, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
   "gateway.resources": "Gateway resource profile selection. Changes require a Gateway restart.",
   "gateway.resources.profile":
-    "Resource profile: auto (default), standard, or lean. Auto provisionally selects lean at or below 2 GiB effective cgroup-v2 memory.max (otherwise host RAM), or at or below 2 available CPUs. Explicit profiles override detection. Both profiles currently use identical worker behavior.",
+    "Resource profile: auto (default), standard, or lean. Auto selects lean below 8 GiB effective memory (the minimum of host RAM and visible cgroup-v2 memory.max limits); exactly 8 GiB selects standard. CPU count does not affect selection. Cgroup v1 limits are not detected; host RAM is used. Explicit profiles override detection. Both profiles currently use identical worker behavior.",
   "gateway.port":
     "TCP port used by the gateway listener for API, web app, and channel-facing ingress paths. Use a dedicated port and avoid collisions with reverse proxies or local developer services.",
   "gateway.mode":

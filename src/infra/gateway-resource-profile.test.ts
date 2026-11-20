@@ -37,11 +37,11 @@ afterEach(async () => {
 
 it.each([
   [1.5 * GiB, 8, "lean", "memory"],
-  [2 * GiB, 8, "lean", "memory"],
-  [2 * GiB + 1, 3, "standard", "capacity"],
-  [4 * GiB, 2, "lean", "cpus"],
-  [2 * GiB, 2, "lean", "memory-and-cpus"],
-  [4 * GiB, 8, "standard", "capacity"],
+  [4 * GiB, 8, "lean", "memory"],
+  [8 * GiB - 1, 8, "lean", "memory"],
+  [8 * GiB, 8, "standard", "capacity"],
+  [8 * GiB, 1, "standard", "capacity"],
+  [16 * GiB, 2, "standard", "capacity"],
 ])("auto resolves memory=%i CPUs=%i to %s", (memory, cpus, profile, reason) => {
   files.set("/sys/fs/cgroup/service/memory.max", String(memory));
   files.set("/sys/fs/cgroup/service/gateway/memory.max", "max");
@@ -71,6 +71,18 @@ it.each(["max", "invalid", undefined])(
     });
   },
 );
+
+it.each([4, 8, 16])("uses host RAM with cgroup v1 (%i GiB)", (memoryGiB) => {
+  files.set("/proc/self/cgroup", "5:memory:/service/gateway\n");
+  files.set("/sys/fs/cgroup/memory/service/gateway/memory.limit_in_bytes", String(GiB));
+  vi.mocked(os.totalmem).mockReturnValue(memoryGiB * GiB);
+  expect(initializeGatewayResourceProfile(undefined)).toMatchObject({
+    configured: "auto",
+    profile: memoryGiB < 8 ? "lean" : "standard",
+    memoryLimitBytes: memoryGiB * GiB,
+    memoryLimitSource: "host",
+  });
+});
 
 it("honors the namespace root and minimum ancestor, but never exceeds host RAM", () => {
   files.set("/proc/self/cgroup", "0::/\n");

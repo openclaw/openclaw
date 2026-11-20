@@ -3,14 +3,12 @@ import type { GatewayConfig } from "../config/types.gateway.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readEffectiveMemoryLimit } from "./host-memory.js";
 
-// Provisional thresholds; calibrate against measured small-host workloads.
-export const LEAN_PROFILE_MEMORY_THRESHOLD_BYTES = 2 * 1024 ** 3;
-export const LEAN_PROFILE_CPU_THRESHOLD = 2;
+export const LEAN_PROFILE_MEMORY_THRESHOLD_BYTES = 8 * 1024 ** 3;
 
 export type GatewayResourceProfile = {
   configured: "auto" | "standard" | "lean";
   profile: "standard" | "lean";
-  reason: "explicit" | "memory" | "cpus" | "memory-and-cpus" | "capacity";
+  reason: "explicit" | "memory" | "capacity";
   memoryLimitBytes: number;
   memoryLimitSource: "cgroup-v2" | "host";
   cpus: number;
@@ -29,21 +27,11 @@ export function initializeGatewayResourceProfile(resources: GatewayConfig["resou
   const configured = resources?.profile ?? "auto";
   const memory = readEffectiveMemoryLimit();
   const cpus = os.availableParallelism();
-  const smallMemory = memory.memoryLimitBytes <= LEAN_PROFILE_MEMORY_THRESHOLD_BYTES;
-  const smallCpu = cpus <= LEAN_PROFILE_CPU_THRESHOLD;
+  const smallMemory = memory.memoryLimitBytes < LEAN_PROFILE_MEMORY_THRESHOLD_BYTES;
   owner.current = Object.freeze({
     configured,
-    profile: configured === "auto" ? (smallMemory || smallCpu ? "lean" : "standard") : configured,
-    reason:
-      configured !== "auto"
-        ? "explicit"
-        : smallMemory && smallCpu
-          ? "memory-and-cpus"
-          : smallMemory
-            ? "memory"
-            : smallCpu
-              ? "cpus"
-              : "capacity",
+    profile: configured === "auto" ? (smallMemory ? "lean" : "standard") : configured,
+    reason: configured !== "auto" ? "explicit" : smallMemory ? "memory" : "capacity",
     ...memory,
     cpus,
   });
